@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<root>
+	<appdef>
+		<appname>MACVIM</appname>
+		<equal>org.vim.MacVim</equal>
+	</appdef>
+	<appdef>
+		<appname>ITERM2</appname>
+		<equal>com.googlecode.iterm2</equal>
+	</appdef>
+	<item>
+		<name>Swap Command and Control in Vim</name>
+		<identifier>private.swap_cmd_and_ctrl_vim</identifier>
+		<only>MACVIM</only>
+		<autogen>--KeyToKey-- KeyCode::COMMAND_L, KeyCode::CONTROL_L</autogen>
+		<autogen>--KeyToKey-- KeyCode::CONTROL_L, KeyCode::COMMAND_L</autogen>
+		<autogen>--KeyToKey-- 
+			KeyCode::TAB, ModifierFlag::CONTROL_L,
+			KeyCode::TAB, ModifierFlag::COMMAND_L
+		</autogen>
+	</item>
+	<item>
+		<name>Swap Command and Control in iTerm2</name>
+		<identifier>private.swap_cmd_and_ctrl_iterm2</identifier>
+		<only>ITERM2</only>
+		<autogen>--KeyToKey-- KeyCode::COMMAND_L, KeyCode::CONTROL_L</autogen>
+		<autogen>--KeyToKey-- KeyCode::CONTROL_L, KeyCode::COMMAND_L</autogen>
+		<autogen>--KeyToKey-- 
+			KeyCode::TAB, ModifierFlag::CONTROL_L,
+			KeyCode::TAB, ModifierFlag::COMMAND_L
+		</autogen>
+	</item>
+</root>
