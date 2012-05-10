@@ -2,22 +2,14 @@
 ZSH=$HOME/.oh-my-zsh
 
 # Set name of the theme to load.
-# Look in ~/.oh-my-zsh/themes/
-# Optionally, if you set this to "random", it'll load a random theme each
-# time that oh-my-zsh is loaded.
+ZSH_THEME=robbyrussell
 
 # Example aliases
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 
-# Set to this to use case-sensitive completion
-# CASE_SENSITIVE="true"
-
 # Comment this out to disable weekly auto-update checks
 # DISABLE_AUTO_UPDATE="true"
-
-# Uncomment following line if you want to disable colors in ls
-# DISABLE_LS_COLORS="true"
 
 # Uncomment following line if you want to disable autosetting terminal title.
 # DISABLE_AUTO_TITLE="true"
@@ -33,9 +25,7 @@ plugins=(git)
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/usr/X11/bin
-
-alias vim="mvim"
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin
 
 # More extensive tab completion
 autoload -U compinit
@@ -47,6 +37,7 @@ compinit
 # case-insensitive tab completion
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 
-# Nice prompt
+# environment variables
+export NODE_PATH='/usr/local/lib/node_modules'
 
-ZSH_THEME="bira"
+PATH=$PATH:$HOME/.rvm/bin # Add RVM to PATH for scripting
