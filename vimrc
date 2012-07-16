@@ -127,3 +127,5 @@ nmap ,t :FufTaggedFile<CR>
 " buffer:tab 1:1
 :tab sball
 :se switchbuf=usetab,newtab
+
+:set timeout timeoutlen=1000 ttimeoutlen=100
