@@ -73,3 +73,5 @@ else
     fi
   fi
 fi
+
+alias afa='af -u admin@appfog.com'

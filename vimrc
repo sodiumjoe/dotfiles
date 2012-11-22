@@ -8,10 +8,10 @@ call pathogen#infect()
 " allow backspacing over everything in insert mode
 set backspace=indent,eol,start
 
-set history=50		" keep 50 lines of command line history
-set ruler		" show the cursor position all the time
-set showcmd		" display incomplete commands
-set incsearch		" do incremental searching
+set history=50        " keep 50 lines of command line history
+set ruler        " show the cursor position all the time
+set showcmd        " display incomplete commands
+set incsearch        " do incremental searching
 
 " Don't use Ex mode, use Q for formatting
 map Q gq
@@ -62,13 +62,13 @@ if has("autocmd")
 
 else
 
-  set autoindent		" always set autoindenting on
+  set autoindent        " always set autoindenting on
 
 endif " has("autocmd")
 
 set guifont=Inconsolata:h16
-set background=dark
-colorscheme solarized
+" set background=dark
+colorscheme Tomorrow-Night-Eighties
 set guioptions-=T
 set guioptions-=m  "remove menu bar
  autocmd BufRead *\.txt setlocal formatoptions=l
@@ -129,3 +129,8 @@ nmap ,t :FufTaggedFile<CR>
 :se switchbuf=usetab,newtab
 
 :set timeout timeoutlen=1000 ttimeoutlen=100
+
+set smartindent
+set tabstop=4
+set shiftwidth=4
+set expandtab
