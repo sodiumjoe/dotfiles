@@ -1,7 +1,7 @@
 let g:netrw_dirhistmax  =10
 let g:netrw_dirhist_cnt =5
-let g:netrw_dirhist_1='/Users/joe/Work/xoxomoon/xoxomoon-quilt'
-let g:netrw_dirhist_2='/Users/joe/Work/xoxomoon'
-let g:netrw_dirhist_3='/Users/joe/Work/xoxomoon-quilt.bak'
-let g:netrw_dirhist_4='/Users/joe/Work/patchwork-quilt'
-let g:netrw_dirhist_5='/Users/joe/Work/af-quilt'
+let g:netrw_dirhist_1='/Users/joe/Work/xoxomoon'
+let g:netrw_dirhist_2='/Users/joe/Work/xoxomoon/blog'
+let g:netrw_dirhist_3='/Users/joe/Work/xoxomoon'
+let g:netrw_dirhist_4='/Users/joe/Work/xoxomoon-quilt'
+let g:netrw_dirhist_5='/Users/joe/Work/xoxomoon'
