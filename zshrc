@@ -32,7 +32,7 @@ autoload -U compinit
 compinit
 
 # tab completion from both ends
- setopt completeinword
+setopt completeinword
 
 # case-insensitive tab completion
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
@@ -45,3 +45,7 @@ PATH=$PATH:$HOME/.rvm/bin # Add RVM to PATH for scripting
 # export PATH="$PATH:$JAVA_HOME/bin"
 # export GRAILS_HOME='/Users/joe/Downloads/grails-2.1.0'
 # export PATH="$PATH:$GRAILS_HOME/bin"
+#
+
+# source passwords
+source ~/.pw
