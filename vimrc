@@ -134,3 +134,9 @@ set smartindent
 set tabstop=4
 set shiftwidth=4
 set expandtab
+
+
+" Highlight trailing whitespace
+
+highlight ExtraWhitespace ctermbg=red guibg=red
+match ExtraWhitespace /\s\+\%#\@<!$/
