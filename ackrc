@@ -1,0 +1,3 @@
+--type-set=jade=.jade
+--type-set=coffee=.coffee
+--type-set=markdown=.md,.markdown

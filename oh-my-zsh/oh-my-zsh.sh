@@ -78,9 +78,3 @@ else
     fi
   fi
 fi
-
-alias afa='af -u admin@appfog.com'
-
-# enable Solarize theme in Vim
-alias tmux="TERM=screen-256color-bce tmux"
-alias pp="python -m json.tool"
