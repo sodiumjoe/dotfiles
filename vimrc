@@ -120,3 +120,6 @@ cnoremap <M-b>  <S-Left>
 cnoremap <M-f>  <S-Right>
 cnoremap <M-d>  <S-right><Delete>
 cnoremap <C-g>  <C-c>
+
+" Ctrl-P
+set runtimepath^=~/.vim/bundle/ctrlp.vim
