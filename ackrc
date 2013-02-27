@@ -1,3 +1,4 @@
 --type-set=jade=.jade
 --type-set=coffee=.coffee
 --type-set=markdown=.md,.markdown
+--ignore-dir=node_modules

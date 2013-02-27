@@ -2,7 +2,7 @@
 " This must be first, because it changes other options as a side effect.
 set nocompatible
 
-"pathogen
+" pathogen
 call pathogen#infect()
 
 " allow backspacing over everything in insert mode
@@ -66,21 +66,17 @@ else
 
 endif " has("autocmd")
 
+" Make Vim pretty
 set guifont=Inconsolata:h16
-" set background=dark
-colorscheme Tomorrow-Night-Eighties
+syntax enable
+set background=dark
+let g:solarized_termtrans = 1
+colorscheme solarized
+
 set guioptions-=T
 set guioptions-=m  "remove menu bar
- autocmd BufRead *\.txt setlocal formatoptions=l
- autocmd BufRead *\.markdown setlocal formatoptions=l
- autocmd BufRead *\.txt setlocal lbr
- autocmd BufRead *\.markdown setlocal lbr
- autocmd BufRead *\.txt map  j gj
- autocmd BufRead *\.markdown map  j gj
- autocmd BufRead *\.txt  map  k gk
- autocmd BufRead *\.markdown map  k gk
- autocmd BufRead *\.txt setlocal smartindent
- autocmd BufRead *\.markdown setlocal smartindent
+nmap j gj
+nmap k gk
 set nobackup
 set nowritebackup
 set enc=utf-8
@@ -98,38 +94,6 @@ set scrolloff=10 "keep buffer of 10 lines above and below cursor
 set fdc=4
 set showtabline=2
 
-" Toggle line numbering modes
-" Default to relativenumber in newer vim, otherwise regular numbering
-"if v:version >= 703
-    set number
-    let s:relativenumber = 1
-    function! <SID>ToggleRelativeNumber()
-        if s:relativenumber == 0
-            set number
-            let s:relativenumber = 1
-       " elseif s:relativenumber == 1
-       "     set relativenumber
-       "     let s:relativenumber = 2
-        else
-            set nonumber
-            let s:relativenumber = 0
-        endif
-    endfunction
-    map <silent><F10> :call <SID>ToggleRelativeNumber()<CR>
-"else
-"    set number
-"endif
-
-nmap ,f :FufFileWithCurrentBufferDir<CR>
-nmap ,b :FufBuffer<CR>
-nmap ,t :FufTaggedFile<CR>
-
-" buffer:tab 1:1
-:tab sball
-:se switchbuf=usetab,newtab
-
-:set timeout timeoutlen=1000 ttimeoutlen=100
-
 set smartindent
 set tabstop=4
 set shiftwidth=4
@@ -137,7 +101,6 @@ set expandtab
 
 
 " Highlight trailing whitespace
-
 highlight ExtraWhitespace ctermbg=red guibg=red
 match ExtraWhitespace /\s\+\%#\@<!$/
 

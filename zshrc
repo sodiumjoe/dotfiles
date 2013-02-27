@@ -40,12 +40,10 @@ zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 # environment variables
 export NODE_PATH='/usr/local/lib/node_modules'
 
-PATH=$PATH:$HOME/.rvm/bin # Add RVM to PATH for scripting
 export JAVA_HOME=$(/usr/libexec/java_home)
-# export PATH="$PATH:$JAVA_HOME/bin"
-# export GRAILS_HOME='/Users/joe/Downloads/grails-2.1.0'
-# export PATH="$PATH:$GRAILS_HOME/bin"
-#
 
 # source passwords
 source ~/.pw
+
+# boxen
+[ -f /opt/boxen/env.sh ] && source /opt/boxen/env.sh
