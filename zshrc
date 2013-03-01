@@ -47,3 +47,6 @@ source ~/.pw
 
 # boxen
 [ -f /opt/boxen/env.sh ] && source /opt/boxen/env.sh
+
+# use macvim in terminal instead of vim to keep system clipboard functionality
+alias vim='mvim -v'
