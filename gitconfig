@@ -1,0 +1,17 @@
+[user]
+	name = Joe
+	email = joe@appfog.com
+[alias]
+	co = checkout
+[core]
+	editor = vim
+    excludesfile = /opt/boxen/config/git/gitignore
+    excludesfile = /Users/joe/.gitignore
+
+[hub]
+protocol = https
+
+[credential]
+# helper = /opt/boxen/bin/boxen-git-credential
+[push]
+	default = matching
