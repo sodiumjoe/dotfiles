@@ -2,7 +2,7 @@
 ZSH=$HOME/.oh-my-zsh
 
 # Set name of the theme to load.
-ZSH_THEME=robbyrussell
+ZSH_THEME=joebadmo
 
 # Example aliases
 # alias zshconfig="mate ~/.zshrc"
@@ -39,6 +39,9 @@ zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 
 # vi mode
 bindkey -v
+
+# reverse search in vi mode
+bindkey "^R" history-incremental-search-backward
 
 # environment variables
 export NODE_PATH='/usr/local/lib/node_modules'
