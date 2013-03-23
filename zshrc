@@ -25,7 +25,7 @@ plugins=(git)
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:~/bin:
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:~/bin:/usr/local/share/npm/bin:
 
 # More extensive tab completion
 autoload -U compinit
@@ -36,6 +36,9 @@ setopt completeinword
 
 # case-insensitive tab completion
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+
+# vi mode
+bindkey -v
 
 # environment variables
 export NODE_PATH='/usr/local/lib/node_modules'
@@ -50,3 +53,12 @@ source ~/.pw
 
 # use macvim in terminal instead of vim to keep system clipboard functionality
 alias vim='mvim -v'
+
+# rbenv
+eval "$(rbenv init -)"
+
+# turn off autocorrect
+unsetopt correct_all
+
+alias ffh="/Users/joe/Work/appfog/appfog-bootstrap/bin/ffh2"
+alias afa="af -u admin@appfog.com"
