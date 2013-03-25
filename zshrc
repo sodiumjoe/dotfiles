@@ -28,6 +28,8 @@ zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 bindkey -v
 bindkey -M viins '^?' backward-delete-char
 bindkey -M viins '^H' backward-delete-char
+bindkey '^[[A' up-line-or-search
+bindkey '^[[B' down-line-or-search
 
 # emacs keybindings in vi mode
 
