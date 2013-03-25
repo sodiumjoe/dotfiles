@@ -12,7 +12,7 @@ plugins=(git)
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:~/bin:/usr/local/share/npm/bin:
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:
 
 # More extensive tab completion
 autoload -U compinit
@@ -26,6 +26,24 @@ zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 
 # vi mode
 bindkey -v
+bindkey -M viins '^?' backward-delete-char
+bindkey -M viins '^H' backward-delete-char
+
+# emacs keybindings in vi mode
+
+### (ins mode)
+bindkey -M viins '^a'    beginning-of-line
+bindkey -M viins '^e'    end-of-line
+
+### (cmd mode)
+bindkey -M vicmd '^a'    beginning-of-line
+bindkey -M vicmd '^e'    end-of-line
+bindkey -M vicmd '^w'    backward-kill-word
+bindkey -M vicmd '/'     vi-history-search-forward
+bindkey -M vicmd '?'     vi-history-search-backward
+bindkey -M vicmd '\ef'   forward-word                      # Alt-f
+bindkey -M vicmd '\eb'   backward-word                     # Alt-b
+bindkey -M vicmd '\ed'   kill-word                         # Alt-d
 
 # reverse search in vi mode
 bindkey "^R" history-incremental-search-backward
