@@ -26,26 +26,28 @@ zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 
 # vi mode
 bindkey -v
-bindkey -M viins '^?' backward-delete-char
-bindkey -M viins '^H' backward-delete-char
 bindkey '^[[A' up-line-or-search
 bindkey '^[[B' down-line-or-search
 
 # emacs keybindings in vi mode
 
 ### (ins mode)
-bindkey -M viins '^a'    beginning-of-line
-bindkey -M viins '^e'    end-of-line
+bindkey -M viins '^?'   backward-delete-char
+bindkey -M viins '^H'   backward-delete-char
+bindkey -M viins '^a'   beginning-of-line
+bindkey -M viins '^e'   end-of-line
+bindkey -M viins '\e^?' backward-kill-word
 
 ### (cmd mode)
-bindkey -M vicmd '^a'    beginning-of-line
-bindkey -M vicmd '^e'    end-of-line
-bindkey -M vicmd '^w'    backward-kill-word
-bindkey -M vicmd '/'     vi-history-search-forward
-bindkey -M vicmd '?'     vi-history-search-backward
-bindkey -M vicmd '\ef'   forward-word                      # Alt-f
-bindkey -M vicmd '\eb'   backward-word                     # Alt-b
-bindkey -M vicmd '\ed'   kill-word                         # Alt-d
+bindkey -M vicmd '^a'   beginning-of-line
+bindkey -M vicmd '^e'   end-of-line
+bindkey -M vicmd '^w'   backward-kill-word
+bindkey -M vicmd '\e^?' backward-kill-word
+bindkey -M vicmd '/'    vi-history-search-forward
+bindkey -M vicmd '?'    vi-history-search-backward
+bindkey -M vicmd '\ef'  forward-word                      # Alt-f
+bindkey -M vicmd '\eb'  backward-word                     # Alt-b
+bindkey -M vicmd '\ed'  kill-word                         # Alt-d
 
 # reverse search in vi mode
 bindkey "^R" history-incremental-search-backward
