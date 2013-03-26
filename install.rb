@@ -11,6 +11,7 @@ Dir['*'].each do |file|
   next if file =~ /install.rb/
   next if file =~ /\^\..*/ # ignore dotfiles
   next if file =~ /readme/i
+  next if file =~ /Icon/i
   target = File.join(home, ".#{file}")
   if File.exists?(target)
     File.directory?(target) ? FileUtils.rm_rf(target) : File.unlink(target)
@@ -28,4 +29,10 @@ if File.exists?('.osx')
     File.chmod(0774, '.osx')
   end
   system('sh ./.osx')
+end
+
+Dir['bin/*'].each do |file|
+  if !File.executable?(file)
+    File.chmod(0774, file)
+  end
 end
