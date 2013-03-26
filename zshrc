@@ -42,7 +42,6 @@ bindkey -M viins '\e^?' backward-kill-word
 bindkey -M vicmd '^a'   beginning-of-line
 bindkey -M vicmd '^e'   end-of-line
 bindkey -M vicmd '^w'   backward-kill-word
-bindkey -M vicmd '\e^?' backward-kill-word
 bindkey -M vicmd '/'    vi-history-search-forward
 bindkey -M vicmd '?'    vi-history-search-backward
 bindkey -M vicmd '\ef'  forward-word                      # Alt-f
