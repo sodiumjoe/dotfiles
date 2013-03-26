@@ -68,6 +68,14 @@ defaults write com.apple.dock autohide -bool true
 # pin dock to top left
 defaults write com.apple.dock pinning -string start
 
+# change default background color to dark gray
+defaults write com.apple.desktop Background '{default = {ImageFilePath = "/Library/Desktop Pictures/Solid Colors/Solid Gray Dark.png"; }; }'
+
+# change login screen background to dark gray
+sudo rm /System/Library/CoreServices/DefaultDesktop.jpg
+sudo ln -s /Library/Desktop\ Pictures/Solid\ Colors/Solid\ Gray\ Dark.png /System/Library/CoreServices/DefaultDesktop.jpg
+
+
 for app in "Dashboard" "Dock" "Finder" "SystemUIServer"; do
 	killall "$app" > /dev/null 2>&1
 done
