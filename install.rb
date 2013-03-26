@@ -22,7 +22,7 @@ end
 %w(env dir_aliases).each {|f| `touch #{home}/.#{f}` }
 `mkdir #{home}/.zsh_cache` unless File.exists?("#{home}/.zsh_cache")
 
- make .osx file executable and run it
+# make .osx file executable and run it
 
 if File.exists?('.osx')
   if !File.executable?('.osx')
