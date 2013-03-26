@@ -1,0 +1,3 @@
+[submodule "rbenv/plugins/rbenv-aliases"]
+	path = rbenv/plugins/rbenv-aliases
+	url = git@github.com:tpope/rbenv-aliases.git
