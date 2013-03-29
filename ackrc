@@ -1,4 +1,11 @@
 --type-set=jade=.jade
 --type-set=coffee=.coffee
+--type-set=less=.less
 --type-set=markdown=.md,.markdown
+
+--type-add=js=coffee,json
+--type-add=css=less,sass,scss,styl
+--type-add=html=jade,html
+
 --ignore-dir=node_modules
+--ignore-dir=vendor
