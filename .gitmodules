@@ -1,3 +1,6 @@
 [submodule "rbenv/plugins/rbenv-aliases"]
 	path = rbenv/plugins/rbenv-aliases
 	url = git@github.com:tpope/rbenv-aliases.git
+[submodule "vim/bundle/ctrlp.vim"]
+	path = vim/bundle/ctrlp.vim
+	url = git@github.com:kien/ctrlp.vim.git
