@@ -10,6 +10,7 @@ set dir=/tmp                                            " swap files go here
 set noswapfile
 set noerrorbells
 set enc=utf-8
+set timeoutlen=1000 ttimeoutlen=10
 
 " PLUGINS
 " ========
