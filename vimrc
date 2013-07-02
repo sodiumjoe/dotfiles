@@ -13,10 +13,17 @@ set enc=utf-8
 set timeoutlen=1000 ttimeoutlen=10
 
 " PLUGINS
-" ========
+" =======
 
 call pathogen#infect()                                  " Pathogen
-set runtimepath^=~/.vim/bundle/ctrlp.vim                " Ctrl-P
+
+" UNITE
+" =====
+
+let g:unite_source_history_yank_enable = 1
+call unite#filters#matcher_default#use(['matcher_fuzzy'])
+nnoremap <C-p> :<C-u>Unite -start-insert file_rec buffer<CR>
+nnoremap <space>y :<C-u>Unite history/yank<CR>
 
 " EDITING
 " =======
