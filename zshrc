@@ -28,6 +28,7 @@ zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
 bindkey -v
 bindkey '^[[A' up-line-or-search
 bindkey '^[[B' down-line-or-search
+KEYTIMEOUT=1
 
 # emacs keybindings in vi mode
 

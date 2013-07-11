@@ -25,6 +25,9 @@
 [submodule "vim/bundle/vim-gitgutter"]
 	path = vim/bundle/vim-gitgutter
 	url = git://github.com/airblade/vim-gitgutter.git
+[submodule "vim/bundle/unite"]
+	path = vim/bundle/unite
+	url = git@github.com:Shougo/unite.vim.git
 [submodule "rbenv/plugins/rbenv-aliases"]
 	path = rbenv/plugins/rbenv-aliases
 	url = git@github.com:tpope/rbenv-aliases.git
