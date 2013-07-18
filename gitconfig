@@ -6,7 +6,7 @@
 [core]
 	editor = vim
     excludesfile = /opt/boxen/config/git/gitignore
-    excludesfile = /Users/joe/.gitignore
+    excludesfile = /opt/boxen/config/git/gitignore
 
 [hub]
 protocol = https
