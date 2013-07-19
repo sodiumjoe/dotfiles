@@ -1,17 +1,16 @@
 [user]
-	name = Joe
-	email = joe@appfog.com
+	name = Joe Moon
+	email = joe@xoxomoon.com
 [alias]
 	co = checkout
 [core]
 	editor = vim
-    excludesfile = /opt/boxen/config/git/gitignore
     excludesfile = /opt/boxen/config/git/gitignore
 
 [hub]
 protocol = https
 
 [credential]
-# helper = /opt/boxen/bin/boxen-git-credential
+    helper = /opt/boxen/bin/boxen-git-credential
 [push]
 	default = matching
