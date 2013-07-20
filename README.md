@@ -1,5 +1,3 @@
-### tmux
+This is my dotfiles repo. There are many like it but this one is mine.
 
-brew install macvim
-
-Install [reattach-to-user-namespace](https://github.com/ChrisJohnsen/tmux-MacOSX-pasteboard)
+For use with [boxen](https://github.com/boxen/boxen).

@@ -5,10 +5,10 @@
 	co = checkout
 [core]
 	editor = vim
-    excludesfile = /opt/boxen/config/git/gitignore
+    excludesfile = /Users/joe/.gitignore
 
 [hub]
-protocol = https
+    protocol = https
 
 [credential]
     helper = /opt/boxen/bin/boxen-git-credential
