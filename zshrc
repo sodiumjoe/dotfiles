@@ -71,3 +71,5 @@ eval "$(rbenv init -)"
 # turn off autocorrect
 unsetopt correct_all
 
+if [ "$TMUX" = "" ]; then tmux; fi
+
