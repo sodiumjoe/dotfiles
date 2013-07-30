@@ -71,5 +71,3 @@ eval "$(rbenv init -)"
 # turn off autocorrect
 unsetopt correct_all
 
-alias ffh="/Users/joe/Work/appfog/appfog-bootstrap/bin/ffh2"
-alias afa="af -u admin@appfog.com"
