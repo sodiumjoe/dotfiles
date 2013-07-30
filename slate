@@ -17,7 +17,7 @@ bind down:ctrl;alt              resize +0   -10% bottom-right
 bind right:ctrl;cmd             push right bar-resize:screenSizeX/2
 bind left:ctrl;cmd              push left  bar-resize:screenSizeX/2
 bind down:ctrl;cmd              push right    bar-resize:screenSizeX*2/3
-bind up:ctrl;cmd                push up  bar-resize:screenSizeY | bar-resize:screenSizeX
+bind up:ctrl;cmd                push up  bar-resize:screenSizeX
 
 # Nudge Bindings
 # bind right:shift;alt          nudge +10% +0
