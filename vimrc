@@ -11,6 +11,8 @@ set noswapfile
 set noerrorbells
 set enc=utf-8
 set timeoutlen=1000 ttimeoutlen=10
+set splitbelow
+set splitright
 
 " PLUGINS
 " =======
