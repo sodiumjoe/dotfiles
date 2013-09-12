@@ -54,7 +54,8 @@ bindkey "^R" history-incremental-search-backward
 
 # environment variables
 export NODE_PATH='/usr/local/lib/node_modules'
-export JAVA_HOME=$(/usr/libexec/java_home)
+export JAVA_HOME=$(/usr/libexec/java_home -v 1.7)
+export VAGRANT_DEFAULT_PROVIDER='vmware_fusion'
 
 # source passwords
 source ~/.pw
