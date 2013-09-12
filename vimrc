@@ -14,10 +14,15 @@ set timeoutlen=1000 ttimeoutlen=10
 set splitbelow
 set splitright
 
+set exrc                                                " enable per-directory .vimrc files
+set secure                                              " disable unsafe commands in local .vimrc files
+
 " PLUGINS
 " =======
 
 call pathogen#infect()                                  " Pathogen
+
+filetype plugin on                                      " For instant markdown: https://github.com/suan/vim-instant-markdown
 
 " UNITE
 " =====
@@ -26,6 +31,7 @@ let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
 nnoremap <C-p> :<C-u>Unite -start-insert file_rec buffer<CR>
 nnoremap <space>y :<C-u>Unite history/yank<CR>
+let g:unite_source_grep_default_opts = '--exclude ''node_modules'''
 
 " EDITING
 " =======
@@ -56,7 +62,7 @@ autocmd Filetype html       setlocal ts=2 sts=2 sw=2    " File type indents
 autocmd Filetype ruby       setlocal ts=2 sts=2 sw=2
 autocmd Filetype jade       setlocal ts=2 sts=2 sw=2
 autocmd Filetype coffee     setlocal ts=2 sts=2 sw=2
-autocmd Filetype javascript setlocal ts=4 sts=4 sw=4
+autocmd Filetype javascript setlocal ts=2 sts=2 sw=2
 
 " DISPLAY
 " =======
@@ -65,6 +71,10 @@ set guifont=Inconsolata:h16
 set background=dark
 let g:solarized_termtrans = 1
 colorscheme solarized
+hi! VertSplit ctermfg=Black                             " split border color
+hi! StatusLine ctermfg=LightGray                        " status line color
+hi! StatusLineNC ctermfg=Black                          " inactive status line color
+set fillchars+=vert:\ 
 syntax enable
 set guioptions-=T
 set guioptions-=m                                       " remove menu bar
@@ -84,3 +94,4 @@ match ExtraWhitespace /\s\+\%#\@<!$/
 
 nmap j gj
 nmap k gk
+
