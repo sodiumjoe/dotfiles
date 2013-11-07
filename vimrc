@@ -29,9 +29,15 @@ filetype plugin on                                      " For instant markdown: 
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
-nnoremap <C-p> :<C-u>Unite -start-insert file_rec buffer<CR>
+nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
 nnoremap <space>y :<C-u>Unite history/yank<CR>
-let g:unite_source_grep_default_opts = '--exclude ''node_modules'''
+nnoremap <space>s :<C-u>Unite -start-insert buffer<CR>
+nnoremap <space>/ :<C-u>Unite grep:.<cr>
+
+let g:unite_source_grep_command = 'ack'
+let g:unite_source_grep_default_opts = '--noheading --nocolor -H'
+let g:unite_source_grep_recursive_opts = ''
+
 
 " EDITING
 " =======
@@ -71,10 +77,6 @@ set guifont=Inconsolata:h16
 set background=dark
 let g:solarized_termtrans = 1
 colorscheme solarized
-hi! VertSplit ctermfg=Black                             " split border color
-hi! StatusLine ctermfg=LightGray                        " status line color
-hi! StatusLineNC ctermfg=Black                          " inactive status line color
-set fillchars+=vert:\ 
 syntax enable
 set guioptions-=T
 set guioptions-=m                                       " remove menu bar
@@ -88,6 +90,11 @@ set expandtab
 set scrolloff=5                                         " keep buffer of 10 lines above and below cursor
 highlight ExtraWhitespace ctermbg=red guibg=red         " highlight trailing whitespace
 match ExtraWhitespace /\s\+\%#\@<!$/
+
+hi! VertSplit ctermfg=Black                             " split border color
+hi! StatusLine ctermfg=LightGray                        " status line color
+hi! StatusLineNC ctermfg=Black                          " inactive status line color
+set fillchars+=vert:\ 
 
 " MOVEMENT
 " ========

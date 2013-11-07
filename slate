@@ -10,14 +10,12 @@ bind up:alt                     resize +0   -10%
 bind down:alt                   resize +0   +10%
 bind right:ctrl;alt             resize -10% +0 bottom-right
 bind left:ctrl;alt              resize +10% +0 bottom-right
-bind up:ctrl;alt                resize +0   +10% bottom-right
+# bind up:ctrl;alt                resize +0   +10% bottom-right
 bind down:ctrl;alt              resize +0   -10% bottom-right
 
 # Push Bindings
 bind right:ctrl;cmd             push right bar-resize:screenSizeX/2
 bind left:ctrl;cmd              push left  bar-resize:screenSizeX/2
-bind down:ctrl;cmd              push right    bar-resize:screenSizeX*2/3
-bind up:ctrl;cmd                push up  bar-resize:screenSizeX
 
 # Nudge Bindings
 # bind right:shift;alt          nudge +10% +0
@@ -47,8 +45,14 @@ bind esc:cmd                    hint QWERTUIOP
 
 # CUSTOM
 
+# focus
 bind l:ctrl                     focus right
 bind h:ctrl                     focus left
-bind k:ctrl                     focus up
 bind j:ctrl                     focus down
-bind tab:cmd                    switch
+bind k:ctrl                     focus up
+
+# push
+bind down:ctrl;cmd              resize +0 -50% bottom-right
+bind up:ctrl;cmd                resize +0 -50% top-right
+bind up:ctrl;alt                push up bar-resize:screenSizeX
+
