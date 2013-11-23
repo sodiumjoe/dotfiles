@@ -23,18 +23,23 @@ set secure                                              " disable unsafe command
 call pathogen#infect()                                  " Pathogen
 
 filetype plugin on                                      " For instant markdown: https://github.com/suan/vim-instant-markdown
+let g:instant_markdown_autostart = 0
 
 " UNITE
 " =====
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
+call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/')
 nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
 nnoremap <space>y :<C-u>Unite history/yank<CR>
 nnoremap <space>s :<C-u>Unite -start-insert buffer<CR>
 nnoremap <space>/ :<C-u>Unite grep:.<cr>
 
+:map <C-o> <Plug>(unite_redraw)
+
 let g:unite_source_grep_command = 'ack'
+let g:unite_source_rec_async_command = 'ack -f --nofilter'
 let g:unite_source_grep_default_opts = '--noheading --nocolor -H'
 let g:unite_source_grep_recursive_opts = ''
 

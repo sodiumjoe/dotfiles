@@ -12,7 +12,7 @@ plugins=(git)
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:/Users/joe/packer:
 
 # More extensive tab completion
 autoload -U compinit
