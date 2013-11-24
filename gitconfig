@@ -3,14 +3,24 @@
 	email = joe@xoxomoon.com
 [alias]
 	co = checkout
+    st = status
+    df = difftool
 [core]
 	editor = vim
     excludesfile = /opt/boxen/config/git/gitignore
-
-[hub]
-    protocol = https
 
 [credential]
     helper = /opt/boxen/bin/boxen-git-credential
 [push]
 	default = matching
+[diff]
+	tool = vimdiff
+[difftool]
+	prompt = false
+[color]
+    ui = true
+[init]
+    templatedir = ~/.git_template
+
+[hub]
+    protocol = ssh
