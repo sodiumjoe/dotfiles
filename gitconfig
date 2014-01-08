@@ -23,4 +23,5 @@
     templatedir = ~/.git_template
 
 [hub]
-    protocol = ssh
+	protocol = ssh
+

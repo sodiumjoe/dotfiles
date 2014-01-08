@@ -18,11 +18,11 @@ export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local
 autoload -U compinit
 compinit
 
-# tab completion from both ends
-setopt completeinword
-
 # case-insensitive tab completion
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'
+
+# turn off autocorrect
+unsetopt correct_all
 
 # vi mode
 bindkey -v
@@ -57,9 +57,6 @@ export NODE_PATH='/usr/local/lib/node_modules'
 # export JAVA_HOME=$(/usr/libexec/java_home -v 1.7)
 export VAGRANT_DEFAULT_PROVIDER='vmware_fusion'
 
-# source passwords
-# source ~/.pw
-
 # boxen
 [ -f /opt/boxen/env.sh ] && source /opt/boxen/env.sh
 
@@ -69,8 +66,18 @@ alias vim='mvim -v'
 # rbenv
 eval "$(rbenv init -)"
 
-# turn off autocorrect
-unsetopt correct_all
+# hub https://github.com/github/hub
+eval "$(hub alias -s)"
 
-if [ "$TMUX" = "" ]; then tmux; fi
+# ondir https://github.com/alecthomas/ondir
+cd() {
+  builtin cd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
+}
+pushd() {
+  builtin pushd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
+}
+popd() {
+  builtin popd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
+}
+eval "`ondir /`"
 
