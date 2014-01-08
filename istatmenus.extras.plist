@@ -31,7 +31,7 @@
 	<key>BatteryDisplayMode</key>
 	<string>4,0</string>
 	<key>BatteryDisplayModeCharged</key>
-	<string>2,0</string>
+	<string></string>
 	<key>BatteryDisplayModeCharging</key>
 	<string>2,0</string>
 	<key>BatteryDisplayModeDraining</key>
