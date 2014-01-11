@@ -22,8 +22,10 @@ set secure                                              " disable unsafe command
 
 call pathogen#infect()                                  " Pathogen
 
-filetype plugin on                                      " For instant markdown: https://github.com/suan/vim-instant-markdown
-let g:instant_markdown_autostart = 0
+filetype plugin on
+let g:instant_markdown_autostart = 0                    " For instant markdown: https://github.com/suan/vim-instant-markdown
+let g:calendar_google_calendar = 1                      " calendar.vim: https://github.com/itchyny/calendar.vim
+
 
 " UNITE
 " =====
