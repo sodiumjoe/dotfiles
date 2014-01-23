@@ -17,6 +17,8 @@ set splitright
 set exrc                                                " enable per-directory .vimrc files
 set secure                                              " disable unsafe commands in local .vimrc files
 
+set clipboard=unnamed                                   " send to system clipboard: https://coderwall.com/p/g-d8rg
+
 " PLUGINS
 " =======
 
