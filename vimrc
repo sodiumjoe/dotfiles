@@ -17,6 +17,9 @@ set splitright
 set exrc                                                " enable per-directory .vimrc files
 set secure                                              " disable unsafe commands in local .vimrc files
 
+set nojoinspaces                                        " Insert only one space when joining lines that contain sentence-terminating
+                                                        " punctuation like `.`.
+
 set clipboard=unnamed                                   " send to system clipboard: https://coderwall.com/p/g-d8rg
 
 " PLUGINS
@@ -42,9 +45,9 @@ nnoremap <space>/ :<C-u>Unite grep:.<cr>
 
 :map <C-o> <Plug>(unite_redraw)
 
-let g:unite_source_grep_command = 'ack'
-let g:unite_source_rec_async_command = 'ack -f --nofilter'
-let g:unite_source_grep_default_opts = '--noheading --nocolor -H'
+let g:unite_source_grep_command = 'ag'
+let g:unite_source_rec_async_command = 'ag -f --nofilter'
+let g:unite_source_grep_default_opts = '--noheading --nocolor'
 let g:unite_source_grep_recursive_opts = ''
 
 

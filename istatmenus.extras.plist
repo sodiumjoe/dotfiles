@@ -171,6 +171,8 @@
 	</array>
 	<key>MenubarGraphOpacity</key>
 	<real>0.0</real>
+	<key>NetworkPrimaryInterface</key>
+	<string></string>
 	<key>SensorsMenubar</key>
 	<array>
 		<string>TCXC</string>

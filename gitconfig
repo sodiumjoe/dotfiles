@@ -12,7 +12,7 @@
 [credential]
     helper = /opt/boxen/bin/boxen-git-credential
 [push]
-	default = matching
+	default = simple
 [diff]
 	tool = vimdiff
 [difftool]
