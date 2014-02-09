@@ -81,3 +81,7 @@ popd() {
 }
 eval "`ondir /`"
 
+# aliases
+
+alias ll="ls -lah"
+
