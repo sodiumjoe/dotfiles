@@ -42,6 +42,7 @@ nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
 nnoremap <space>y :<C-u>Unite history/yank<CR>
 nnoremap <space>s :<C-u>Unite -start-insert buffer<CR>
 nnoremap <space>/ :<C-u>Unite grep:.<cr>
+noremap <space>* :<C-u>Unite grep:.::<C-R><C-w><CR>
 
 :map <C-o> <Plug>(unite_redraw)
 
