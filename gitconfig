@@ -6,7 +6,7 @@
     st = status
     df = difftool
 [core]
-	editor = vim
+	editor = mvim -v
     excludesfile = /opt/boxen/config/git/gitignore
 
 [credential]
@@ -14,7 +14,7 @@
 [push]
 	default = simple
 [diff]
-	tool = vimdiff
+	tool = mvimdiff
 [difftool]
 	prompt = false
 [color]
@@ -25,3 +25,5 @@
 [hub]
 	protocol = ssh
 
+[difftool "mvimdiff"]
+    cmd = mvim -f -d -v \"$LOCAL\" \"$REMOTE\"
