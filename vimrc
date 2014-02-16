@@ -31,23 +31,22 @@ filetype plugin on
 let g:instant_markdown_autostart = 0                    " For instant markdown: https://github.com/suan/vim-instant-markdown
 let g:calendar_google_calendar = 1                      " calendar.vim: https://github.com/itchyny/calendar.vim
 
-
 " UNITE
 " =====
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
-call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/')
+call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/\|.git/')
 nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
 nnoremap <space>y :<C-u>Unite history/yank<CR>
 nnoremap <space>s :<C-u>Unite -start-insert buffer<CR>
 nnoremap <space>/ :<C-u>Unite grep:.<cr>
-noremap <space>* :<C-u>Unite grep:.::<C-R><C-w><CR>
+" noremap <space>* :<C-u>Unite grep:.::<C-R><C-w><CR>
 
 :map <C-o> <Plug>(unite_redraw)
 
 let g:unite_source_grep_command = 'ag'
-let g:unite_source_rec_async_command = 'ag -f --nofilter'
+let g:unite_source_rec_async_command = 'ag -i --hidden -g ""'
 let g:unite_source_grep_default_opts = '--nogroup --nocolor --column'
 let g:unite_source_grep_recursive_opts = ''
 
@@ -82,6 +81,10 @@ autocmd Filetype ruby       setlocal ts=2 sts=2 sw=2
 autocmd Filetype jade       setlocal ts=2 sts=2 sw=2
 autocmd Filetype coffee     setlocal ts=2 sts=2 sw=2
 autocmd Filetype javascript setlocal ts=2 sts=2 sw=2
+autocmd Filetype puppet     setlocal ts=2 sts=2 sw=2
+set modelines=0
+set nomodeline
+
 
 " DISPLAY
 " =======
@@ -114,4 +117,5 @@ set fillchars+=vert:\
 
 nmap j gj
 nmap k gk
+
 
