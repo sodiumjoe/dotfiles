@@ -3,11 +3,14 @@ enter ~/work
   export GIT_AUTHOR_EMAIL='joe.moon@janrain.com'
   export GIT_COMMITTER_NAME='joe moon'
   export GIT_COMMITTER_EMAIL='joe.moon@janrain.com'
-  echo 'Switched to git user/email settings for "work".'
+  export SSH_CONFIG='~/.ssh/work'
+  echo 'Switched to git user/email settings and ssh config for "work".'
 
 leave ~/work
   unset GIT_AUTHOR_NAME
   unset GIT_AUTHOR_EMAIL
   unset GIT_COMMITTER_NAME
   unset GIT_COMMITTER_EMAIL
-  echo 'Switched back to global git user/email settings.'
+  export SSH_CONFIG='~/.ssh/config'
+  echo 'Switched back to global git user/email and ssh config settings.'
+

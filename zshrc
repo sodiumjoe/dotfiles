@@ -84,4 +84,8 @@ eval "`ondir /`"
 # aliases
 
 alias ll="ls -lah"
+alias ssh="ssh -F $SSH_CONFIG"
 
+
+# added by travis gem
+[ -f /Users/joe/.travis/travis.sh ] && source /Users/joe/.travis/travis.sh
