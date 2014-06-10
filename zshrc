@@ -7,7 +7,6 @@ ZSH_THEME=joebadmo
 # Which plugins would you like to load? (plugins can be found in ~/.oh-my-zsh/plugins/*)
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
-plugins=(git)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -64,10 +63,7 @@ export VAGRANT_DEFAULT_PROVIDER='vmware_fusion'
 alias vim="/opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v"
 
 # rbenv
-eval "$(rbenv init -)"
-
-# hub https://github.com/github/hub
-eval "$(hub alias -s)"
+eval "$(rbenv init - --no-rehash)"
 
 # ondir https://github.com/alecthomas/ondir
 cd() {
@@ -86,6 +82,7 @@ eval "`ondir /`"
 alias ll="ls -lah"
 alias ssh="ssh -F $SSH_CONFIG"
 
+# DISABLE_AUTO_UPDATE=true
 
 # added by travis gem
 [ -f /Users/joe/.travis/travis.sh ] && source /Users/joe/.travis/travis.sh
