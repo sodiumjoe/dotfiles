@@ -50,6 +50,7 @@ bindkey -M vicmd '\ed'  kill-word                         # Alt-d
 
 # reverse search in vi mode
 bindkey "^R" history-incremental-search-backward
+bindkey "^S" history-incremental-search-forward
 
 # environment variables
 export NODE_PATH='/usr/local/lib/node_modules'
@@ -80,7 +81,9 @@ eval "`ondir /`"
 # aliases
 
 alias ll="ls -lah"
-alias ssh="ssh -F $SSH_CONFIG"
+
+SSH_CONFIG='/Users/joe/.ssh/config'
+alias ssh='ssh -F $SSH_CONFIG'
 
 # DISABLE_AUTO_UPDATE=true
 
