@@ -5,6 +5,7 @@
 	co = checkout
     st = status
     df = difftool
+    dfc = difftool --cached
 [core]
 	editor = mvim -v
     excludesfile = /opt/boxen/config/git/gitignore
@@ -12,18 +13,18 @@
 [credential]
     helper = /opt/boxen/bin/boxen-git-credential
 [push]
-	default = simple
+	default = current
 [diff]
 	tool = mvimdiff
 [difftool]
-	prompt = false
+	prompt = true
 [color]
     ui = true
 [init]
     templatedir = ~/.git_template
 
 [hub]
-	protocol = ssh
+	protocol = https
 
 [difftool "mvimdiff"]
     cmd = mvim -f -d -v \"$LOCAL\" \"$REMOTE\"
