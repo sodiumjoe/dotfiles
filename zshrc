@@ -62,6 +62,7 @@ export VAGRANT_DEFAULT_PROVIDER='vmware_fusion'
 
 # use macvim in terminal instead of vim to keep system clipboard functionality
 alias vim="/opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v"
+alias vi="vim"
 
 # rbenv
 eval "$(rbenv init - --no-rehash)"
