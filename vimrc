@@ -4,10 +4,10 @@
 set nocompatible                                                                " vim settings, rather than vi settings
                                                                                 " must be first, because it changes other options as a side effect
 set mouse=a                                                                     " enable mouse
-set nobackup
-set nowritebackup
-set dir=/tmp                                                                    " swap files go here
-set noswapfile
+set backupdir=~/.vim/backups
+set directory=~/.vim/swaps
+set undofile
+set undodir=~/.vim/undo
 set noerrorbells
 set enc=utf-8
 set timeoutlen=1000 ttimeoutlen=10
@@ -21,6 +21,7 @@ set nojoinspaces                                                                
                                                                                 " punctuation like `.`.
 
 set clipboard=unnamed                                                           " send to system clipboard: https://coderwall.com/p/g-d8rg
+set shortmess=aoOtI                                                             " don't show intro message
 
 " PLUGINS
 " =======
@@ -36,7 +37,7 @@ let g:calendar_google_calendar = 1                                              
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
-call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/\|.git/\|.bundle/\|.vagrant/')
+call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/\|.git/\|.bundle/\|\.vagrant/')
 nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
 nnoremap <space>y :<C-u>Unite history/yank<CR>
 nnoremap <space>s :<C-u>Unite -start-insert buffer<CR>
@@ -92,6 +93,11 @@ autocmd Filetype sh         setlocal ts=2 sts=2 sw=2
 set modelines=0
 set nomodeline
 
+" VIM JSON
+" ========
+
+let g:vim_json_syntax_conceal = 0
+
 " DISPLAY
 " =======
 
@@ -126,5 +132,4 @@ let &colorcolumn=join(range(81,999),",")                                        
 
 nmap j gj
 nmap k gk
-
 
