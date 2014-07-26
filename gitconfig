@@ -23,8 +23,5 @@
 [init]
     templatedir = ~/.git_template
 
-[hub]
-	protocol = https
-
 [difftool "mvimdiff"]
     cmd = mvim -f -d -v \"$LOCAL\" \"$REMOTE\"
