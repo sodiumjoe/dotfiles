@@ -64,9 +64,6 @@ export VAGRANT_DEFAULT_PROVIDER='vmware_fusion'
 alias vim="/opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v"
 alias vi="vim"
 
-# rbenv
-eval "$(rbenv init - --no-rehash)"
-
 # ondir https://github.com/alecthomas/ondir
 cd() {
   builtin cd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
@@ -86,7 +83,4 @@ alias ll="ls -lah"
 SSH_CONFIG='/Users/joe/.ssh/config'
 alias ssh='ssh -F $SSH_CONFIG'
 
-# DISABLE_AUTO_UPDATE=true
-
-# added by travis gem
-[ -f /Users/joe/.travis/travis.sh ] && source /Users/joe/.travis/travis.sh
+DISABLE_AUTO_UPDATE=true
