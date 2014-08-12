@@ -79,6 +79,7 @@ eval "`ondir /`"
 # aliases
 
 alias ll="ls -lah"
+alias ag="ag -i"
 
 SSH_CONFIG='/Users/joe/.ssh/config'
 alias ssh='ssh -F $SSH_CONFIG'
