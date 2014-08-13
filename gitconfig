@@ -20,11 +20,6 @@
 	prompt = true
 [color]
     ui = true
-[init]
-    templatedir = ~/.git_template
 
 [difftool "mvimdiff"]
     cmd = mvim -f -d -v \"$LOCAL\" \"$REMOTE\"
-
-[hub]
-protocol = https
