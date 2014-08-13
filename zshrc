@@ -11,7 +11,7 @@ ZSH_THEME=joebadmo
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:/Users/joe/packer:
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:~/packer:
 
 # More extensive tab completion
 autoload -U compinit
@@ -81,7 +81,7 @@ eval "`ondir /`"
 alias ll="ls -lah"
 alias ag="ag -i"
 
-SSH_CONFIG='/Users/joe/.ssh/config'
+SSH_CONFIG="${HOME}/.ssh/config"
 alias ssh='ssh -F $SSH_CONFIG'
 
 DISABLE_AUTO_UPDATE=true
