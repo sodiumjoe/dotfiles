@@ -20,7 +20,7 @@ set secure                                                                      
 set nojoinspaces                                                                " Insert only one space when joining lines that contain sentence-terminating
                                                                                 " punctuation like `.`.
 
-set clipboard=unnamed                                                           " send to system clipboard: https://coderwall.com/p/g-d8rg
+set clipboard+=unnamed                                                           " send to system clipboard: https://coderwall.com/p/g-d8rg
 set shortmess=aoOtI                                                             " don't show intro message
 
 " PLUGINS
@@ -31,6 +31,16 @@ call pathogen#infect()                                                          
 filetype plugin on
 let g:instant_markdown_autostart = 0                                            " For instant markdown: https://github.com/suan/vim-instant-markdown
 let g:calendar_google_calendar = 1                                              " calendar.vim: https://github.com/itchyny/calendar.vim
+
+" NEOCOMPLETE
+" ===========
+
+let g:acp_enableAtStartup = 0                                                   " disable autocomplete
+let g:neocomplete#enable_at_startup = 1                                         " enable neocomplete: https://github.com/Shougo/neocomplete.vim
+let g:neocomplete#enable_smart_case = 1
+" Set minimum syntax keyword length.
+let g:neocomplete#sources#syntax#min_keyword_length = 1
+inoremap <expr><TAB>  pumvisible() ? "\<C-n>" : "\<TAB>"
 
 " UNITE
 " =====
@@ -93,6 +103,8 @@ autocmd Filetype sh         setlocal ts=2 sts=2 sw=2
 set modelines=0
 set nomodeline
 
+autocmd BufRead,BufNewFile ~/work/* setlocal noexpandtab
+
 " VIM JSON
 " ========
 
@@ -125,11 +137,10 @@ hi! StatusLine ctermfg=LightGray                                                
 hi! StatusLineNC ctermfg=Black                                                  " inactive status line color
 set fillchars+=vert:\ 
 
-let &colorcolumn=join(range(81,999),",")                                        " highlight after 80 characters
+" let &colorcolumn=join(range(81,999),",")                                        " highlight after 80 characters
 
 " MOVEMENT
 " ========
 
 nmap j gj
 nmap k gk
-
