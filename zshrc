@@ -11,7 +11,7 @@ ZSH_THEME=joebadmo
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:~/packer:
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:~/.bin/terraform:
 
 # More extensive tab completion
 autoload -U compinit
@@ -51,11 +51,6 @@ bindkey -M vicmd '\ed'  kill-word                         # Alt-d
 # reverse search in vi mode
 bindkey "^R" history-incremental-search-backward
 bindkey "^S" history-incremental-search-forward
-
-# environment variables
-export NODE_PATH='/usr/local/lib/node_modules'
-# export JAVA_HOME=$(/usr/libexec/java_home -v 1.7)
-export VAGRANT_DEFAULT_PROVIDER='vmware_fusion'
 
 # boxen
 [ -f /opt/boxen/env.sh ] && source /opt/boxen/env.sh
