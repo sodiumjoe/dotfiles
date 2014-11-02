@@ -75,6 +75,8 @@ eval "`ondir /`"
 
 alias ll="ls -lah"
 alias ag="ag -i"
+alias irc="ssh irc -t 'tmux attach -t irc'"
+alias lp
 
 SSH_CONFIG="${HOME}/.ssh/config"
 alias ssh='ssh -F $SSH_CONFIG'

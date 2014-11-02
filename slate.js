@@ -50,7 +50,7 @@ var pushedRight = function(win) {
   return false;
 };
 
-slate.bind('left:ctrl;cmd', function(win) {
+slate.bind('left:ctrl,cmd', function(win) {
   if (!win) { return; }
   win.doOperation( pushedLeft(win) ? throwNextLeft : pushLeft );
 });
@@ -59,4 +59,3 @@ slate.bind('right:ctrl,cmd', function(win) {
   if (!win) { return; }
   win.doOperation( pushedRight(win) ? throwNextRight : pushRight );
 });
-

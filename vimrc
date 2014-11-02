@@ -23,6 +23,10 @@ set nojoinspaces                                                                
 set clipboard+=unnamed                                                           " send to system clipboard: https://coderwall.com/p/g-d8rg
 set shortmess=aoOtI                                                             " don't show intro message
 
+map <space> <leader>
+:nmap <leader><Space> :w<Cr>
+:nmap <leader>p :set paste!<Cr>
+
 " PLUGINS
 " =======
 
@@ -38,8 +42,7 @@ let g:calendar_google_calendar = 1                                              
 let g:acp_enableAtStartup = 0                                                   " disable autocomplete
 let g:neocomplete#enable_at_startup = 1                                         " enable neocomplete: https://github.com/Shougo/neocomplete.vim
 let g:neocomplete#enable_smart_case = 1
-" Set minimum syntax keyword length.
-let g:neocomplete#sources#syntax#min_keyword_length = 1
+let g:neocomplete#sources#syntax#min_keyword_length = 1                         " Set minimum syntax keyword length.
 inoremap <expr><TAB>  pumvisible() ? "\<C-n>" : "\<TAB>"
 
 " UNITE
@@ -47,15 +50,25 @@ inoremap <expr><TAB>  pumvisible() ? "\<C-n>" : "\<TAB>"
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
-call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/\|.git/\|.bundle/\|\.vagrant/')
+call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/\|.git/\|.bundle/\|\.vagrant/|.bin/')
 nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
-nnoremap <space>y :<C-u>Unite history/yank<CR>
-nnoremap <space>s :<C-u>Unite -start-insert buffer<CR>
-nnoremap <space>8 :<C-u>UniteWithCursorWord grep:.<CR>
-nnoremap <space>/ :<C-u>Unite grep:.<CR>
-" noremap <space>* :<C-u>Unite grep:.::<C-R><C-w><CR>
+nnoremap <leader>y :<C-u>Unite history/yank<CR>
+nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
+nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
+nnoremap <leader>/ :<C-u>Unite grep:.<CR>
+" noremap <leader>* :<C-u>Unite grep:.::<C-R><C-w><CR>
 
 :map <C-o> <Plug>(unite_redraw)
+
+autocmd FileType unite call s:unite_settings()
+
+function! s:unite_settings()
+  let b:SuperTabDisabled=1
+  imap <silent><buffer><expr> <C-x> unite#do_action('split')
+  imap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
+
+  nmap <buffer> <ESC> <Plug>(unite_exit)
+endfunction
 
 let g:unite_source_grep_command = 'ag'
 let g:unite_source_rec_async_command = 'ag --hidden --nocolor -g ""'
@@ -81,6 +94,8 @@ set showcmd                                                                     
 set incsearch                                                                   " incremental searching
 set ignorecase
 set smartcase
+nnoremap <leader>n :<C-u>noh<CR>
+
 
 " SYNTAX HIGHLIGHTING
 " ===================
@@ -100,6 +115,10 @@ autocmd Filetype javascript setlocal ts=2 sts=2 sw=2
 autocmd Filetype puppet     setlocal ts=2 sts=2 sw=2
 autocmd Filetype yaml       setlocal ts=2 sts=2 sw=2
 autocmd Filetype sh         setlocal ts=2 sts=2 sw=2
+autocmd Filetype lua        setlocal ts=2 sts=2 sw=2
+
+au BufRead,BufNewFile *.pjs setfiletype javascript
+
 set modelines=0
 set nomodeline
 
