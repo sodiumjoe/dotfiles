@@ -30,9 +30,31 @@ map <space> <leader>
 " PLUGINS
 " =======
 
-call pathogen#infect()                                                          " Pathogen
+filetype off
+set rtp+=~/.vim/bundle/Vundle.vim
+call vundle#begin()
+Plugin 'gmarik/Vundle.vim'
+Plugin 'altercation/vim-colors-solarized'
+Plugin 'Shougo/neocomplete.vim'
+Plugin 'scrooloose/nerdtree'
+Plugin 'kien/rainbow_parentheses.vim'
+Plugin 'scrooloose/syntastic'
+Plugin 'mbbill/undotree'
+Plugin 'Shougo/unite.vim'
+Plugin 'guns/vim-clojure-static'
+Plugin 'tpope/vim-commentary'
+Plugin 'tpope/vim-fireplace'
+Plugin 'tpope/vim-fugitive'
+Plugin 'tpope/vim-gitgutter'
+Plugin 'pangloss/vim-javascript'
+Plugin 'mxw/vim-jsx'
+Plugin 'tpope/vim-markdown'
+Plugin 'tpope/vim-repeat'
+Plugin 'tpope/vim-surround'
+Plugin 'Shougo/vimproc.vim'
 
-filetype plugin on
+call vundle#end()
+
 let g:instant_markdown_autostart = 0                                            " For instant markdown: https://github.com/suan/vim-instant-markdown
 let g:calendar_google_calendar = 1                                              " calendar.vim: https://github.com/itchyny/calendar.vim
 
