@@ -45,6 +45,8 @@ let g:neocomplete#enable_smart_case = 1
 let g:neocomplete#sources#syntax#min_keyword_length = 1                         " Set minimum syntax keyword length.
 inoremap <expr><TAB>  pumvisible() ? "\<C-n>" : "\<TAB>"
 
+autocmd FileType clojure NeoCompleteLock                                        " disable neocomplete for clojure
+
 " UNITE
 " =====
 
@@ -66,8 +68,6 @@ function! s:unite_settings()
   let b:SuperTabDisabled=1
   imap <silent><buffer><expr> <C-x> unite#do_action('split')
   imap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
-
-  nmap <buffer> <ESC> <Plug>(unite_exit)
 endfunction
 
 let g:unite_source_grep_command = 'ag'
@@ -79,6 +79,14 @@ let g:unite_source_grep_recursive_opts = ''
 " =========
 
 let g:syntastic_javascript_syntax_checker='jshint'
+
+" CLOJURE
+" ======
+
+au VimEnter * RainbowParenthesesToggle
+au Syntax * RainbowParenthesesLoadRound
+au Syntax * RainbowParenthesesLoadSquare
+au Syntax * RainbowParenthesesLoadBraces
 
 " EDITING
 " =======
