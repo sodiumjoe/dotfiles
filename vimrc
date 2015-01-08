@@ -20,12 +20,12 @@ set secure                                                                      
 set nojoinspaces                                                                " Insert only one space when joining lines that contain sentence-terminating
                                                                                 " punctuation like `.`.
 
-set clipboard+=unnamed                                                           " send to system clipboard: https://coderwall.com/p/g-d8rg
+set clipboard+=unnamed                                                          " send to system clipboard: https://coderwall.com/p/g-d8rg
 set shortmess=aoOtI                                                             " don't show intro message
 
 map <space> <leader>
-:nmap <leader><Space> :w<Cr>
-:nmap <leader>p :set paste!<Cr>
+nmap <leader><Space> :w<Cr>
+nmap <leader>p :set paste!<Cr>
 
 " PLUGINS
 " =======
@@ -55,9 +55,6 @@ Plugin 'Shougo/vimproc.vim'
 
 call vundle#end()
 
-let g:instant_markdown_autostart = 0                                            " For instant markdown: https://github.com/suan/vim-instant-markdown
-let g:calendar_google_calendar = 1                                              " calendar.vim: https://github.com/itchyny/calendar.vim
-
 " NEOCOMPLETE
 " ===========
 
@@ -65,9 +62,8 @@ let g:acp_enableAtStartup = 0                                                   
 let g:neocomplete#enable_at_startup = 1                                         " enable neocomplete: https://github.com/Shougo/neocomplete.vim
 let g:neocomplete#enable_smart_case = 1
 let g:neocomplete#sources#syntax#min_keyword_length = 1                         " Set minimum syntax keyword length.
-inoremap <expr><TAB>  pumvisible() ? "\<C-n>" : "\<TAB>"
-
-autocmd FileType clojure NeoCompleteLock                                        " disable neocomplete for clojure
+let g:neocomplete#force_overwrite_completefunc = 1                              " fixes vim-clojure-static issue https://github.com/guns/vim-clojure-static/issues/54
+inoremap <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"                         " tab completion
 
 " UNITE
 " =====
@@ -80,11 +76,10 @@ nnoremap <leader>y :<C-u>Unite history/yank<CR>
 nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
 nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
 nnoremap <leader>/ :<C-u>Unite grep:.<CR>
-" noremap <leader>* :<C-u>Unite grep:.::<C-R><C-w><CR>
 
-:map <C-o> <Plug>(unite_redraw)
+map <C-o> <Plug>(unite_redraw)
 
-autocmd FileType unite call s:unite_settings()
+au FileType unite call s:unite_settings()
 
 function! s:unite_settings()
   let b:SuperTabDisabled=1
@@ -102,8 +97,8 @@ let g:unite_source_grep_recursive_opts = ''
 
 let g:syntastic_javascript_syntax_checker='jshint'
 
-" CLOJURE
-" ======
+" RAINBOWPARENTHESES
+" ==================
 
 au VimEnter * RainbowParenthesesToggle
 au Syntax * RainbowParenthesesLoadRound
@@ -126,26 +121,12 @@ set ignorecase
 set smartcase
 nnoremap <leader>n :<C-u>noh<CR>
 
-
 " SYNTAX HIGHLIGHTING
 " ===================
 
 syntax on                                                                       " syntax highlighting
 set hlsearch                                                                    " highlight last used search pattern
 filetype plugin indent on                                                       " Enable file type detection.
-autocmd BufReadPost *                                                           " jump to the last known cursor position
-  \ if line("'\"") > 1 && line("'\"") <= line("$") |                            " except when position is invalid or inside an event handler
-  \   exe "normal! g`\"" |                                                      " (happens when dropping a file on gvim).
-  \ endif                                                                       " Also don't do it when the mark is in the first line, that is the default
-autocmd Filetype html       setlocal ts=2 sts=2 sw=2                            " File type indents
-autocmd Filetype ruby       setlocal ts=2 sts=2 sw=2
-autocmd Filetype jade       setlocal ts=2 sts=2 sw=2
-autocmd Filetype coffee     setlocal ts=2 sts=2 sw=2
-autocmd Filetype javascript setlocal ts=2 sts=2 sw=2
-autocmd Filetype puppet     setlocal ts=2 sts=2 sw=2
-autocmd Filetype yaml       setlocal ts=2 sts=2 sw=2
-autocmd Filetype sh         setlocal ts=2 sts=2 sw=2
-autocmd Filetype lua        setlocal ts=2 sts=2 sw=2
 
 au BufRead,BufNewFile *.pjs setfiletype javascript
 
@@ -167,15 +148,14 @@ set background=dark
 let g:solarized_termtrans = 1
 colorscheme solarized
 " colorscheme base16-default
-syntax enable
 set guioptions-=T
 set guioptions-=m                                                               " remove menu bar
 set nu
-set fdc=4                                                                       " folding column
-set showtabline=2
+set fdc=2                                                                       " folding column
+set showtabline=1                                                               " hide when only one tab
 set smartindent
-set tabstop=4
-set shiftwidth=4
+set ts=2
+set sw=2
 set expandtab
 set scrolloff=5                                                                 " keep buffer of 10 lines above and below cursor
 highlight ExtraWhitespace ctermbg=red guibg=red                                 " highlight trailing whitespace
@@ -193,3 +173,8 @@ set fillchars+=vert:\
 
 nmap j gj
 nmap k gk
+
+au BufReadPost *                                                                " jump to the last known cursor position
+  \ if line("'\"") > 1 && line("'\"") <= line("$") |                            " except when position is invalid or inside an event handler
+  \   exe "normal! g`\"" |                                                      " (happens when dropping a file on gvim).
+  \ endif                                                                       " Also don't do it when the mark is in the first line, that is the default
