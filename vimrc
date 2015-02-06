@@ -22,9 +22,10 @@ set nojoinspaces                                                                
 
 set clipboard+=unnamed                                                          " send to system clipboard: https://coderwall.com/p/g-d8rg
 set shortmess=aoOtI                                                             " don't show intro message
+set completeopt-=preview                                                        " disable weird scratch window
+set noshowmode                                                                  " disable extraneous messages
 
 map <space> <leader>
-nmap <leader><Space> :w<Cr>
 nmap <leader>p :set paste!<Cr>
 
 " PLUGINS
@@ -33,27 +34,40 @@ nmap <leader>p :set paste!<Cr>
 filetype off
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
-Plugin 'gmarik/Vundle.vim'
+Plugin 'airblade/vim-gitgutter'
 Plugin 'altercation/vim-colors-solarized'
-Plugin 'Shougo/neocomplete.vim'
-Plugin 'scrooloose/nerdtree'
-Plugin 'kien/rainbow_parentheses.vim'
-Plugin 'scrooloose/syntastic'
-Plugin 'mbbill/undotree'
-Plugin 'Shougo/unite.vim'
+Plugin 'amdt/vim-niji'
+Plugin 'gmarik/Vundle.vim'
 Plugin 'guns/vim-clojure-static'
+Plugin 'Lokaltog/vim-easymotion'
+Plugin 'mbbill/undotree'
+Plugin 'mxw/vim-jsx'
+Plugin 'pangloss/vim-javascript'
+Plugin 'Shougo/neocomplete.vim'
+Plugin 'Shougo/unite.vim'
+Plugin 'Shougo/vimproc.vim'
+Plugin 'scrooloose/nerdtree'
+Plugin 'scrooloose/syntastic'
 Plugin 'tpope/vim-commentary'
 Plugin 'tpope/vim-fireplace'
 Plugin 'tpope/vim-fugitive'
-Plugin 'tpope/vim-gitgutter'
-Plugin 'pangloss/vim-javascript'
-Plugin 'mxw/vim-jsx'
 Plugin 'tpope/vim-markdown'
 Plugin 'tpope/vim-repeat'
 Plugin 'tpope/vim-surround'
-Plugin 'Shougo/vimproc.vim'
 
 call vundle#end()
+
+" EASYMOTION
+" ==========
+
+let g:EasyMotion_do_mapping = 0                                                 " disable default mappings
+let g:EasyMotion_do_shade = 0                                                   " disable shading
+nmap <leader>w <Plug>(easymotion-bd-w)
+hi link EasyMotionTarget ErrorMsg
+" hi link EasyMotionShade  Comment
+
+hi link EasyMotionTarget2First ErrorMsg
+hi link EasyMotionTarget2Second ErrorMsg
 
 " NEOCOMPLETE
 " ===========
@@ -96,14 +110,6 @@ let g:unite_source_grep_recursive_opts = ''
 " =========
 
 let g:syntastic_javascript_syntax_checker='jshint'
-
-" RAINBOWPARENTHESES
-" ==================
-
-au VimEnter * RainbowParenthesesToggle
-au Syntax * RainbowParenthesesLoadRound
-au Syntax * RainbowParenthesesLoadSquare
-au Syntax * RainbowParenthesesLoadBraces
 
 " EDITING
 " =======
@@ -158,13 +164,14 @@ set ts=2
 set sw=2
 set expandtab
 set scrolloff=5                                                                 " keep buffer of 10 lines above and below cursor
-highlight ExtraWhitespace ctermbg=red guibg=red                                 " highlight trailing whitespace
+hi ExtraWhitespace ctermbg=red guibg=red                                        " highlight trailing whitespace
 match ExtraWhitespace /\s\+\%#\@<!$/
 
 hi! VertSplit ctermfg=Black                                                     " split border color
 hi! StatusLine ctermfg=LightGray                                                " status line color
 hi! StatusLineNC ctermfg=Black                                                  " inactive status line color
 set fillchars+=vert:\ 
+set laststatus=2
 
 " let &colorcolumn=join(range(81,999),",")                                        " highlight after 80 characters
 
@@ -178,3 +185,11 @@ au BufReadPost *                                                                
   \ if line("'\"") > 1 && line("'\"") <= line("$") |                            " except when position is invalid or inside an event handler
   \   exe "normal! g`\"" |                                                      " (happens when dropping a file on gvim).
   \ endif                                                                       " Also don't do it when the mark is in the first line, that is the default
+
+" AUTORELOAD VIMRC
+" ===============
+
+augroup reload_vimrc " {
+  autocmd!
+  autocmd BufWritePost $MYVIMRC source $MYVIMRC
+augroup END " }
