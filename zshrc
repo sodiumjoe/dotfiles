@@ -11,7 +11,7 @@ ZSH_THEME=joebadmo
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:~/.bin/terraform:
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:~/.bin/terraform:~/npm/bin:
 
 # More extensive tab completion
 autoload -U compinit
@@ -52,44 +52,48 @@ bindkey -M vicmd '\ed'  kill-word                         # Alt-d
 bindkey "^R" history-incremental-search-backward
 bindkey "^S" history-incremental-search-forward
 
-# boxen
-[ -f /opt/boxen/env.sh ] && source /opt/boxen/env.sh
+# local machine only
+if [ $(uname) = "Darwin" ]; then
 
-# use macvim in terminal instead of vim to keep system clipboard functionality
-alias vim="/opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v"
-alias vi="vim"
+  # boxen
+  [ -f /opt/boxen/env.sh ] && source /opt/boxen/env.sh
 
-# ondir https://github.com/alecthomas/ondir
-cd() {
-  builtin cd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
-}
-pushd() {
-  builtin pushd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
-}
-popd() {
-  builtin popd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
-}
-eval "`ondir /`"
+  # use macvim in terminal instead of vim to keep system clipboard functionality
+  alias vim="/opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v"
+  alias vi="vim"
+
+  # ondir https://github.com/alecthomas/ondir
+  cd() {
+    builtin cd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
+  }
+  pushd() {
+    builtin pushd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
+  }
+  popd() {
+    builtin popd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
+  }
+  eval "`ondir /`"
+
+  SSH_CONFIG="${HOME}/.ssh/config"
+  alias ssh='ssh -F $SSH_CONFIG'
+
+fi
 
 # rationalise dot
 
 rationalise-dot() {
-    if [[ $LBUFFER = *.. ]]; then
-      LBUFFER+=/..
-    else
-      LBUFFER+=.
-    fi
-  }
-  zle -N rationalise-dot
-  bindkey . rationalise-dot
+  if [[ $LBUFFER = *.. ]]; then
+    LBUFFER+=/..
+  else
+    LBUFFER+=.
+  fi
+}
+zle -N rationalise-dot
+bindkey . rationalise-dot
 
 # aliases
 
 alias ll="ls -lah"
 alias ag="ag -i"
-alias irc="ssh irc -t 'tmux attach -t irc'"
-
-SSH_CONFIG="${HOME}/.ssh/config"
-alias ssh='ssh -F $SSH_CONFIG'
 
 DISABLE_AUTO_UPDATE=true

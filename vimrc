@@ -37,6 +37,7 @@ call vundle#begin()
 Plugin 'airblade/vim-gitgutter'
 Plugin 'altercation/vim-colors-solarized'
 Plugin 'amdt/vim-niji'
+Plugin 'editorconfig/editorconfig-vim'
 Plugin 'gmarik/Vundle.vim'
 Plugin 'guns/vim-clojure-static'
 Plugin 'Lokaltog/vim-easymotion'
@@ -64,7 +65,6 @@ let g:EasyMotion_do_mapping = 0                                                 
 let g:EasyMotion_do_shade = 0                                                   " disable shading
 nmap <leader>w <Plug>(easymotion-bd-w)
 hi link EasyMotionTarget ErrorMsg
-" hi link EasyMotionShade  Comment
 
 hi link EasyMotionTarget2First ErrorMsg
 hi link EasyMotionTarget2Second ErrorMsg
@@ -78,6 +78,11 @@ let g:neocomplete#enable_smart_case = 1
 let g:neocomplete#sources#syntax#min_keyword_length = 1                         " Set minimum syntax keyword length.
 let g:neocomplete#force_overwrite_completefunc = 1                              " fixes vim-clojure-static issue https://github.com/guns/vim-clojure-static/issues/54
 inoremap <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"                         " tab completion
+
+" VIM-STATIC-CLOJURE
+" ==================
+
+let g:clojure_fuzzy_indent = 0
 
 " UNITE
 " =====
@@ -109,7 +114,8 @@ let g:unite_source_grep_recursive_opts = ''
 " SYNTASTIC
 " =========
 
-let g:syntastic_javascript_syntax_checker='jshint'
+let g:syntastic_javascript_checkers = ['eslint', 'jshint']
+autocmd FileType javascript let b:syntastic_checkers = findfile('.eslintrc', '.;') != '' ? ['eslint'] : ['jshint']
 
 " EDITING
 " =======
