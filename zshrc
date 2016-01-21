@@ -58,10 +58,8 @@ if [ $(uname) = "Darwin" ]; then
   # boxen
   [ -f /opt/boxen/env.sh ] && source /opt/boxen/env.sh
 
-  # use macvim in terminal instead of vim to keep system clipboard functionality
-  # alias vim="/opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v"
   alias vim="nvim"
-  alias vi="vim"
+  alias vi="nvim"
 
   # ondir https://github.com/alecthomas/ondir
   cd() {
