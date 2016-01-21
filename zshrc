@@ -98,3 +98,6 @@ alias ll="ls -lah"
 alias ag="ag -i"
 
 DISABLE_AUTO_UPDATE=true
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" # This loads nvm
