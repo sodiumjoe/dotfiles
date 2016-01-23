@@ -203,8 +203,8 @@ if has('nvim')
   let g:deoplete#enable_smart_case = 1
   let g:deoplete#auto_completion_start_length = 1                                 " Set minimum syntax keyword length.
 
-  inoremap <silent><expr> <Tab> pumvisible() ? "\<C-n>" : deoplete#mappings#manual_complete()
-  inoremap <silent><expr> <S-Tab> pumvisible() ? "\<C-p>" : deoplete#mappings#manual_complete()
+  inoremap <silent><expr> <Tab> pumvisible() ? "\<C-n>" : "\<Tab>"
+  inoremap <silent><expr> <S-Tab> pumvisible() ? "\<C-p>" : "\<S-Tab>"
 
 else
 
