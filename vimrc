@@ -123,6 +123,8 @@ set guioptions-=m                                                               
 set nu
 set fdc=2                                                                       " folding column
 set showtabline=1                                                               " hide when only one tab
+set smarttab
+set autoindent
 set smartindent
 set ts=2
 set sw=2
