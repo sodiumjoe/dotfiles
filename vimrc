@@ -30,6 +30,7 @@ Plug 'Lokaltog/vim-easymotion'
 Plug 'mbbill/undotree'
 Plug 'mxw/vim-jsx'
 Plug 'othree/yajs.vim'
+Plug 'gavocanov/vim-js-indent'
 if has('nvim')
   Plug 'Shougo/deoplete.nvim'
 else
