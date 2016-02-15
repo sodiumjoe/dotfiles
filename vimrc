@@ -9,9 +9,7 @@ if !has('nvim')
   set history=50                                                                  " keep 50 lines of command line history
   set laststatus=2
   set backspace=indent,eol,start                                                  " allow backspacing over everything in insert mode
-  set ruler                                                                       " show the cursor position all the time
   set incsearch                                                                   " incremental searching
-  set smartcase
   set hlsearch                                                                    " highlight last used search pattern
   set timeoutlen=1000 ttimeoutlen=10
 
@@ -24,6 +22,7 @@ call plug#begin('~/.vim/plugged')
 
 Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
+Plug 'digitaltoad/vim-jade'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'guns/vim-clojure-static'
 Plug 'Lokaltog/vim-easymotion'
@@ -31,11 +30,13 @@ Plug 'mbbill/undotree'
 Plug 'mxw/vim-jsx'
 Plug 'othree/yajs.vim'
 Plug 'gavocanov/vim-js-indent'
+Plug 'rust-lang/rust.vim'
 if has('nvim')
   Plug 'Shougo/deoplete.nvim'
 else
   Plug 'Shougo/neocomplete.vim'
 endif
+Plug 'Shougo/neoyank.vim'
 Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/unite.vim'
 Plug 'scrooloose/nerdtree'
@@ -68,6 +69,8 @@ set clipboard+=unnamed                                                          
 set shortmess=aoOtI                                                             " don't show intro message
 set completeopt-=preview                                                        " disable weird scratch window
 set noshowmode                                                                  " disable extraneous messages
+set ruler                                                                       " show the cursor position all the time
+set smartcase
 
 map <space> <leader>
 nmap <leader>p :set paste!<Cr>
@@ -130,7 +133,7 @@ set ts=2
 set sw=2
 set expandtab
 set scrolloff=5                                                                 " keep buffer of 10 lines above and below cursor
-hi ExtraWhitespace ctermbg=red                                                  " highlight trailing whitespace
+hi ExtraWhitespace ctermbg=darkred                                                  " highlight trailing whitespace
 match ExtraWhitespace /\s\+\%#\@<!$/
 
 hi! VertSplit ctermfg=Black                                                     " split border color
@@ -218,3 +221,6 @@ else
   inoremap <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"                         " tab completion
 
 endif
+
+" RUST
+let g:rustfmt_autosave = 1

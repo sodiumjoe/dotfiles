@@ -1,26 +1,33 @@
 [user]
-	name = Joe Moon
-	email = joe@xoxomoon.com
+  name = Joe Moon
+  email = joe@xoxomoon.com
 [alias]
-	co = checkout
-    st = status
-    df = difftool
-    dfc = difftool --cached
+  co = checkout
+  st = status
+  df = difftool
+  dfc = difftool --cached
 [core]
-	editor = /opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v
-    excludesfile = /opt/boxen/config/git/gitignore
+  editor = /opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v
+  excludesfile = /opt/boxen/config/git/gitignore
 
 [credential]
-    helper = /opt/boxen/bin/boxen-git-credential
+  helper = /opt/boxen/bin/boxen-git-credential
 [push]
-	default = current
+  default = current
   followTags = true
 [diff]
-	tool = mvimdiff
+  tool = mvimdiff
 [difftool]
-	prompt = true
+  prompt = true
 [color]
-    ui = true
+  ui = true
 
 [difftool "mvimdiff"]
-    cmd = /opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v -f -d \"$LOCAL\" \"$REMOTE\"
+  cmd = /opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v -f -d \"$LOCAL\" \"$REMOTE\"
+
+[transfer]
+  fsckobjects = true
+[fetch]
+  fsckobjects = true
+[receive]
+  fsckObjects = true

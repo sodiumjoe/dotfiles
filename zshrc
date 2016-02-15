@@ -11,7 +11,7 @@ ZSH_THEME=joebadmo
 source $ZSH/oh-my-zsh.sh
 
 # Customize to your needs...
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:~/.bin/terraform:~/npm/bin:
+export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:/usr/local/share/npm/bin:~/.bin:~/.bin/terraform:~/npm/bin:~/.cargo/bin:
 
 # More extensive tab completion
 autoload -U compinit
@@ -60,6 +60,7 @@ if [ $(uname) = "Darwin" ]; then
 
   alias vim="nvim"
   alias vi="nvim"
+  alias vim.="nvim -c 'Unite -start-insert file_rec/async'"
 
   # ondir https://github.com/alecthomas/ondir
   cd() {
@@ -99,3 +100,14 @@ DISABLE_AUTO_UPDATE=true
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" # This loads nvm
+
+# FZF
+
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+
+export FZF_DEFAULT_COMMAND='ag --hidden -g ""'
+export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+
+# autojump
+
+[[ -s $(brew --prefix)/etc/profile.d/autojump.sh ]] && . $(brew --prefix)/etc/profile.d/autojump.sh
