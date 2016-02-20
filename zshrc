@@ -62,20 +62,6 @@ if [ $(uname) = "Darwin" ]; then
   alias vi="nvim"
   alias vim.="nvim -c 'Unite -start-insert file_rec/async'"
 
-  # ondir https://github.com/alecthomas/ondir
-  cd() {
-    builtin cd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
-  }
-  pushd() {
-    builtin pushd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
-  }
-  popd() {
-    builtin popd "$@" && eval "`ondir \"$OLDPWD\" \"$PWD\"`"
-  }
-  eval "`ondir /`"
-
-  SSH_CONFIG="${HOME}/.ssh/config"
-  alias ssh='ssh -F $SSH_CONFIG'
 
 fi
 
@@ -111,3 +97,55 @@ export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
 # autojump
 
 [[ -s $(brew --prefix)/etc/profile.d/autojump.sh ]] && . $(brew --prefix)/etc/profile.d/autojump.sh
+
+# per directory git config
+
+zstyle ':chpwd:profiles:/Users/jmoon/work(|/|/*)'       profile work
+# zstyle ':chpwd:profiles:(|/|/*)'       profile play
+
+chpwd_profile_work() {
+  [[ ${profile} == ${CHPWD_PROFILE} ]] && return 1
+  print "Switched to $profile git user/email"
+
+  export GIT_AUTHOR_NAME='Joe Moon'
+  export GIT_AUTHOR_EMAIL='jmoon@appnexus.com'
+  export GIT_COMMITTER_NAME='joe moon'
+  export GIT_COMMITTER_EMAIL='jmoon@appnexus.com'
+}
+
+chpwd_profile_default() {
+  [[ ${profile} == ${CHPWD_PROFILE} ]] && return 1
+  print "Switched back to $profile git user/email"
+
+  unset GIT_AUTHOR_NAME
+  unset GIT_AUTHOR_EMAIL
+  unset GIT_COMMITTER_NAME
+  unset GIT_COMMITTER_EMAIL
+}
+
+function chpwd_profiles() {
+  local profile context
+  local -i reexecute
+
+  context=":chpwd:profiles:$PWD"
+  zstyle -s "$context" profile profile || profile='default'
+  zstyle -T "$context" re-execute && reexecute=1 || reexecute=0
+
+  if (( ${+parameters[CHPWD_PROFILE]} == 0 )); then
+    typeset -g CHPWD_PROFILE
+    local CHPWD_PROFILES_INIT=1
+    (( ${+functions[chpwd_profiles_init]} )) && chpwd_profiles_init
+  elif [[ $profile != $CHPWD_PROFILE ]]; then
+    (( ${+functions[chpwd_leave_profile_$CHPWD_PROFILE]} )) \
+      && chpwd_leave_profile_${CHPWD_PROFILE}
+  fi
+  if (( reexecute )) || [[ $profile != $CHPWD_PROFILE ]]; then
+    (( ${+functions[chpwd_profile_$profile]} )) && chpwd_profile_${profile}
+  fi
+
+  CHPWD_PROFILE="${profile}"
+  return 0
+}
+
+# Add the chpwd_profiles() function to the list called by chpwd()!
+chpwd_functions=( ${chpwd_functions} chpwd_profiles )
