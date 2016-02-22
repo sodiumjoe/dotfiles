@@ -7,8 +7,8 @@
   df = difftool
   dfc = difftool --cached
 [core]
-  editor = /opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v
-  excludesfile = /opt/boxen/config/git/gitignore
+  editor = vim
+  excludesfile = ~/gitignore
 
 [credential]
   helper = /opt/boxen/bin/boxen-git-credential
@@ -23,7 +23,7 @@
   ui = true
 
 [difftool "mvimdiff"]
-  cmd = /opt/boxen/homebrew/bin/reattach-to-user-namespace mvim -v -f -d \"$LOCAL\" \"$REMOTE\"
+  cmd = vim -v -f -d \"$LOCAL\" \"$REMOTE\"
 
 [transfer]
   fsckobjects = true
