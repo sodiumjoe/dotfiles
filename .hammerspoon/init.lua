@@ -1,11 +1,11 @@
 hs.window.animationDuration = 0
 hs.grid.setMargins({ 0, 0 })
 local log = hs.logger.new('foo', 5)
+local space=hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
 
 local LEFT = 'Left'
 local RIGHT = 'Right'
 local UP = 'Up'
-local log = hs.logger.new('foo', 5)
 
 function isPushed(dir, f, max)
   if not f.h == max.h then return false end
@@ -59,21 +59,11 @@ function pushLeft() push(LEFT) end
 function pushRight() push(RIGHT) end
 
 function focusLeft()
-  local win = hs.window.focusedWindow()
-  if not win then
-    hs.window.orderedWindows()[0].focus()
-  else
-    win:focusWindowWest()
-  end
+  space:focusWindowWest(nil, true)
 end
 
 function focusRight()
-  local win = hs.window.focusedWindow()
-  if not win then
-    hs.window.orderedWindows()[0].focus()
-  else
-    win:focusWindowEast()
-  end
+  space:focusWindowEast(nil, true)
 end
 
 hs.hotkey.bind({"alt", "ctrl"}, UP, hs.grid.maximizeWindow)
