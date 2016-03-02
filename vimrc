@@ -191,8 +191,8 @@ let g:unite_source_grep_recursive_opts = ''
 
 " SYNTASTIC
 
-let g:syntastic_javascript_checkers = ['eslint', 'jshint']
-autocmd FileType javascript let b:syntastic_checkers = findfile('.eslintrc', '.;') != '' ? ['eslint'] : ['jshint']
+let g:syntastic_javascript_checkers = ['eslint']
+autocmd FileType javascript let b:syntastic_javascript_eslint_exec = findfile('./node_modules/eslint/bin/eslint.js', '.;') != '' ? './node_modules/eslint/bin/eslint.js' : 'eslint'
 
 " VIM JSON
 
