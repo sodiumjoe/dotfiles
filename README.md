@@ -11,6 +11,8 @@ cd .dotfiles
 ./osx
 ```
 
+* iterm preferences custom path: `~/.dotfiles`
+
 * keyboard modifiers
   * caps -> ctrl
 
