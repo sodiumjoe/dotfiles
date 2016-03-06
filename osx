@@ -91,6 +91,9 @@ defaults write NSGlobalDomain AppleHighlightColor -string "0.780400 0.815700 0.8
 # Menubar                                                                     #
 ###############################################################################
 
+# dark mode
+defaults write NSGlobalDomain AppleInterfaceStyle -string "Dark"
+
 # Disable transparency in the menu bar and elsewhere on Yosemite
 defaults write com.apple.universalaccess reduceTransparency -bool true
 
