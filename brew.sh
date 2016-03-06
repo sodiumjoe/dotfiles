@@ -24,7 +24,7 @@ brew install leiningen
 brew install lua
 brew install luajit
 brew install mackup
-brew install neovim
+brew install neovim/neovim/neovim
 brew install postgresql
 brew install python
 brew install python3
