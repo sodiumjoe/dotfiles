@@ -12,5 +12,5 @@ for file in ${files[@]}; do
   ln -s ~/.dotfiles/${file} ~/.${file}
 done
 
-http://brew.sh/
+# http://brew.sh/
 /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
