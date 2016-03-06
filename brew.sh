@@ -21,6 +21,8 @@ brew tap caskroom/fonts
 brew install autojump
 brew install curl
 brew install fzf
+# set fzf keybindings
+/usr/local/opt/fzf/install
 brew install git
 brew install gnu-tar
 brew install gnupg
