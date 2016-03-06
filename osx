@@ -304,8 +304,8 @@ defaults write com.apple.dashboard mcx-disabled -bool true
 defaults write com.apple.dashboard no-glass -bool true
 
 # dock pinning
-defaults write com.apple.dashboard pinning -string "start"
-defaults write com.apple.dashboard orientation -string "left"
+# defaults write com.apple.dock pinning -string "start"
+defaults write com.apple.dock orientation -string "left"
 
 # Don’t show Dashboard as a Space
 defaults write com.apple.dock dashboard-in-overlay -bool true
