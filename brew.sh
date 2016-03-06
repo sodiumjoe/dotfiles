@@ -55,3 +55,18 @@ brew cask install karabiner
 brew cask install vlc
 brew cask install google-chrome-beta
 brew cask install font-inconsolata-g-for-powerline
+
+# neovim
+mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
+ln -s ~/.vim $XDG_CONFIG_HOME/nvim
+ln -s ~/.vimrc $XDG_CONFIG_HOME/nvim/init.vim
+
+# python 3 for neovim for deoplete
+pip3 install neovim
+
+# update deoplete
+nvim +UpdateRemotePlugins +qall
+
+# vim-plug
+curl -fLo ~/.config/nvim/autoload/plug.vim --create-dirs \
+      https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
