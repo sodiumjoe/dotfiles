@@ -22,6 +22,7 @@ call plug#begin('~/.vim/plugged')
 
 Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
+Plug 'benekastah/neomake'
 Plug 'digitaltoad/vim-jade'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'gavocanov/vim-js-indent'
@@ -40,7 +41,6 @@ Plug 'Shougo/neoyank.vim'
 Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/unite.vim'
 Plug 'scrooloose/nerdtree'
-Plug 'scrooloose/syntastic'
 Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-fireplace'
 Plug 'tpope/vim-fugitive'
@@ -189,10 +189,32 @@ let g:unite_source_rec_async_command = ['ag', '--hidden', '--nocolor', '-g', '']
 let g:unite_source_grep_default_opts = '--nogroup --nocolor --column -i'
 let g:unite_source_grep_recursive_opts = ''
 
-" SYNTASTIC
+" NEOMAKE
 
-let g:syntastic_javascript_checkers = ['eslint']
-autocmd FileType javascript let b:syntastic_javascript_eslint_exec = findfile('./node_modules/eslint/bin/eslint.js', '.;') != '' ? './node_modules/eslint/bin/eslint.js' : 'eslint'
+let g:neomake_javascript_enabled_makers = ['eslint']
+
+function! NeomakeESlintChecker()
+  let l:npm_bin = ''
+  let l:eslint = 'eslint'
+
+  if executable('npm-which')
+    let l:eslint = split(system('npm-which eslint'), '\n')[0]
+    return 0
+  endif
+
+  if executable('npm')
+    let l:npm_bin = split(system('npm bin'), '\n')[0]
+  endif
+
+  if strlen(l:npm_bin) && executable(l:npm_bin . '/eslint')
+    let l:eslint = l:npm_bin . '/eslint'
+  endif
+
+  let b:neomake_javascript_eslint_exe = l:eslint
+endfunction
+
+autocmd FileType javascript :call NeomakeESlintChecker()
+autocmd! BufWritePost,BufReadPost * Neomake
 
 " VIM JSON
 
