@@ -20,6 +20,7 @@ brew tap caskroom/fonts
 
 brew install autojump
 brew install curl
+brew install editorconfig
 brew install fzf
 # set fzf keybindings
 /usr/local/opt/fzf/install
