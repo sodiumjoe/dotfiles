@@ -12,8 +12,6 @@ cd .dotfiles
 ```
 
 * iterm preferences custom path: `~/.dotfiles`
-
-* keyboard modifiers
-  * caps -> ctrl
-
+* filevault
+* caps -> ctrl
 * generate ssh keys
