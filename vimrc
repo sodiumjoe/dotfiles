@@ -197,6 +197,8 @@ function! NeomakeESlintChecker()
   let l:eslint = 'eslint'
 
   if executable('npm-which')
+    " npm i -g npm-which
+    " to make vim startup faster
     let l:eslint = split(system('npm-which eslint'), '\n')[0]
     return 0
   endif
