@@ -26,12 +26,11 @@ Plug 'benekastah/neomake'
 Plug 'digitaltoad/vim-jade'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'gavocanov/vim-js-indent'
-Plug 'guns/vim-clojure-static'
+" Plug 'guns/vim-clojure-static'
 Plug 'Lokaltog/vim-easymotion'
-Plug 'mbbill/undotree'
 Plug 'mxw/vim-jsx'
 Plug 'othree/yajs.vim'
-Plug 'rust-lang/rust.vim'
+" Plug 'rust-lang/rust.vim'
 if has('nvim')
   Plug 'Shougo/deoplete.nvim'
 else
@@ -246,3 +245,8 @@ endif
 
 " RUST
 let g:rustfmt_autosave = 1
+
+" EDITORCONFIG
+
+let g:EditorConfig_core_mode = 'external_command'
+let g:EditorConfig_exclude_patterns = ['fugitive://.*']
