@@ -76,9 +76,9 @@ defaults write NSGlobalDomain NSAutomaticDashSubstitutionEnabled -bool false
 
 # Set a custom wallpaper image. `DefaultDesktop.jpg` is already a symlink, and
 # all wallpapers are in `/Library/Desktop Pictures/`. The default is `Wave.jpg`.
-rm -rf ~/Library/Application Support/Dock/desktoppicture.db
-sudo rm -rf /System/Library/CoreServices/DefaultDesktop.jpg
-sudo ln -s '/Library/Desktop\ Pictures/Solid\ Colors/Solid\ Gray\ Dark.png' /System/Library/CoreServices/DefaultDesktop.jpg
+# rm -rf ~/Library/Application Support/Dock/desktoppicture.db
+# sudo rm -rf /System/Library/CoreServices/DefaultDesktop.jpg
+# sudo ln -s '/Library/Desktop\ Pictures/Solid\ Colors/Solid\ Gray\ Dark.png' /System/Library/CoreServices/DefaultDesktop.jpg
 
 # no desktop icons
 defaults write com.apple.finder CreateDesktop -bool false
@@ -187,6 +187,7 @@ defaults write com.apple.iTunes dontAutomaticallySyncIPods -bool true
 
 # Save screenshots in PNG format (other options: BMP, GIF, JPG, PDF, TIFF)
 defaults write com.apple.screencapture type -string "png"
+defaults write com.apple.screencapture location ~/Pictures/Screenshots/
 
 # Disable shadow in screenshots
 defaults write com.apple.screencapture disable-shadow -bool true

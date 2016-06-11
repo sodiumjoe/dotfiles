@@ -10,8 +10,10 @@
 			<key>type</key>
 			<string>builtin</string>
 		</dict>
+		<key>children</key>
+		<array/>
 		<key>isLeaf</key>
-		<integer>1</integer>
+		<true/>
 		<key>nodeTitle</key>
 		<string>Paste as Plain Text</string>
 	</dict>
@@ -26,8 +28,10 @@
 					<key>type</key>
 					<string>js</string>
 				</dict>
+				<key>children</key>
+				<array/>
 				<key>isLeaf</key>
-				<integer>1</integer>
+				<true/>
 				<key>nodeTitle</key>
 				<string>Capitalize.js</string>
 			</dict>
@@ -39,8 +43,10 @@
 					<key>type</key>
 					<string>js</string>
 				</dict>
+				<key>children</key>
+				<array/>
 				<key>isLeaf</key>
-				<integer>1</integer>
+				<true/>
 				<key>nodeTitle</key>
 				<string>lowercase.js</string>
 			</dict>
@@ -52,8 +58,10 @@
 					<key>type</key>
 					<string>js</string>
 				</dict>
+				<key>children</key>
+				<array/>
 				<key>isLeaf</key>
-				<integer>1</integer>
+				<true/>
 				<key>nodeTitle</key>
 				<string>Title Case.js</string>
 			</dict>
@@ -65,14 +73,16 @@
 					<key>type</key>
 					<string>js</string>
 				</dict>
+				<key>children</key>
+				<array/>
 				<key>isLeaf</key>
-				<integer>1</integer>
+				<true/>
 				<key>nodeTitle</key>
 				<string>UPPERCASE.js</string>
 			</dict>
 		</array>
 		<key>isLeaf</key>
-		<integer>0</integer>
+		<false/>
 		<key>nodeTitle</key>
 		<string>Case</string>
 	</dict>
@@ -87,8 +97,10 @@
 					<key>type</key>
 					<string>js</string>
 				</dict>
+				<key>children</key>
+				<array/>
 				<key>isLeaf</key>
-				<integer>1</integer>
+				<true/>
 				<key>nodeTitle</key>
 				<string>LTrim.js</string>
 			</dict>
@@ -100,8 +112,10 @@
 					<key>type</key>
 					<string>js</string>
 				</dict>
+				<key>children</key>
+				<array/>
 				<key>isLeaf</key>
-				<integer>1</integer>
+				<true/>
 				<key>nodeTitle</key>
 				<string>RTrim.js</string>
 			</dict>
@@ -113,14 +127,16 @@
 					<key>type</key>
 					<string>js</string>
 				</dict>
+				<key>children</key>
+				<array/>
 				<key>isLeaf</key>
-				<integer>1</integer>
+				<true/>
 				<key>nodeTitle</key>
 				<string>Trim.js</string>
 			</dict>
 		</array>
 		<key>isLeaf</key>
-		<integer>0</integer>
+		<false/>
 		<key>nodeTitle</key>
 		<string>Trim</string>
 	</dict>
@@ -132,8 +148,10 @@
 			<key>type</key>
 			<string>builtin</string>
 		</dict>
+		<key>children</key>
+		<array/>
 		<key>isLeaf</key>
-		<integer>1</integer>
+		<true/>
 		<key>nodeTitle</key>
 		<string>Remove</string>
 	</dict>
