@@ -23,6 +23,7 @@ call plug#begin('~/.vim/plugged')
 Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
 Plug 'benekastah/neomake'
+Plug 'benjie/neomake-local-eslint.vim'
 Plug 'digitaltoad/vim-jade'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'gavocanov/vim-js-indent'
@@ -191,31 +192,12 @@ let g:unite_source_grep_recursive_opts = ''
 " NEOMAKE
 
 let g:neomake_javascript_enabled_makers = ['eslint']
-
-function! NeomakeESlintChecker()
-  let l:npm_bin = ''
-  let l:eslint = 'eslint'
-
-  if executable('npm-which')
-    " npm i -g npm-which
-    " to make vim startup faster
-    let l:eslint = split(system('npm-which eslint'), '\n')[0]
-    return 0
-  endif
-
-  if executable('npm')
-    let l:npm_bin = split(system('npm bin'), '\n')[0]
-  endif
-
-  if strlen(l:npm_bin) && executable(l:npm_bin . '/eslint')
-    let l:eslint = l:npm_bin . '/eslint'
-  endif
-
-  let b:neomake_javascript_eslint_exe = l:eslint
-endfunction
-
-autocmd FileType javascript :call NeomakeESlintChecker()
 autocmd! BufWritePost,BufReadPost * Neomake
+nmap <Leader><Space>o :lopen<CR>      " open location window
+nmap <Leader><Space>c :lclose<CR>     " close location window
+nmap <Leader><Space>, :ll<CR>         " go to current error/warning
+nmap <Leader><Space>n :lnext<CR>      " next error/warning
+nmap <Leader><Space>p :lprev<CR>      " previous error/warning
 
 " VIM JSON
 
