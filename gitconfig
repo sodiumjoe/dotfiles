@@ -11,6 +11,7 @@
   excludesfile = ~/gitignore
 
 [credential]
+	helper = osxkeychain
 [push]
   default = current
   followTags = true
