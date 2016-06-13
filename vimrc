@@ -32,6 +32,7 @@ Plug 'Lokaltog/vim-easymotion'
 Plug 'mxw/vim-jsx'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'othree/yajs.vim'
+Plug 'pbrisbin/vim-restore-cursor'
 " Plug 'rust-lang/rust.vim'
 if has('nvim')
   Plug 'Shougo/deoplete.nvim'
