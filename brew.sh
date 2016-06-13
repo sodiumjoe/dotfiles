@@ -18,6 +18,9 @@ brew tap caskroom/versions
 # https://github.com/caskroom/homebrew-fonts
 brew tap caskroom/fonts
 
+# https://github.com/aykamko/tag
+brew tap aykamko/tag-ag
+
 brew install autojump
 brew install curl
 brew install editorconfig
@@ -39,6 +42,7 @@ brew install python
 brew install python3
 brew install rust
 brew install sqlite
+brew install tag-ag
 brew install the_silver_searcher
 brew install tmux
 brew install tree
