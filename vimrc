@@ -30,6 +30,7 @@ Plug 'gavocanov/vim-js-indent'
 " Plug 'guns/vim-clojure-static'
 Plug 'Lokaltog/vim-easymotion'
 Plug 'mxw/vim-jsx'
+Plug 'ntpeters/vim-better-whitespace'
 Plug 'othree/yajs.vim'
 " Plug 'rust-lang/rust.vim'
 if has('nvim')
@@ -133,8 +134,6 @@ set ts=2
 set sw=2
 set expandtab
 set scrolloff=5                                                                 " keep buffer of 10 lines above and below cursor
-hi ExtraWhitespace ctermbg=darkred                                                  " highlight trailing whitespace
-match ExtraWhitespace /\s\+\%#\@<!$/
 
 hi! VertSplit ctermfg=Black                                                     " split border color
 hi! StatusLine ctermfg=LightGray                                                " status line color
@@ -142,6 +141,7 @@ hi! StatusLineNC ctermfg=Black                                                  
 hi! Folded cterm=bold ctermbg=8                                                 " fold line style
 
 set fillchars+=vert:\ 
+highlight ExtraWhitespace ctermbg=darkred
 
 " let &colorcolumn=join(range(81,999),",")                                        " highlight after 80 characters
 
