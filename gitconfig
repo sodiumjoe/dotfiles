@@ -16,14 +16,14 @@
   default = current
   followTags = true
 [diff]
-  tool = mvimdiff
+  tool = vimdiff
 [difftool]
   prompt = true
 [color]
   ui = true
 
-[difftool "mvimdiff"]
-  cmd = vim -v -f -d \"$LOCAL\" \"$REMOTE\"
+[difftool "vimdiff"]
+  cmd = nvim -d \"$LOCAL\" \"$REMOTE\"
 
 [transfer]
   fsckobjects = true
