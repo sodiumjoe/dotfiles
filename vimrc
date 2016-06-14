@@ -84,11 +84,6 @@ nmap <leader>p :set paste!<Cr>
 nmap j gj
 nmap k gk
 
-au BufReadPost *                                                                " jump to the last known cursor position
-  \ if line("'\"") > 1 && line("'\"") <= line("$") |                            " except when position is invalid or inside an event handler
-  \   exe "normal! g`\"" |                                                      " (happens when dropping a file on gvim).
-  \ endif                                                                       " Also don't do it when the mark is in the first line, that is the default
-
 " AUTORELOAD VIMRC
 " ===============
 
