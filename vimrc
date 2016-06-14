@@ -23,11 +23,11 @@ call plug#begin('~/.vim/plugged')
 Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
 Plug 'benekastah/neomake'
-Plug 'benjie/neomake-local-eslint.vim'
 Plug 'digitaltoad/vim-jade'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'gavocanov/vim-js-indent'
 " Plug 'guns/vim-clojure-static'
+Plug 'jaawerth/nrun.vim'
 Plug 'Lokaltog/vim-easymotion'
 Plug 'matze/vim-move'
 Plug 'mxw/vim-jsx'
@@ -188,6 +188,7 @@ let g:unite_source_grep_recursive_opts = ''
 
 " NEOMAKE
 
+let b:neomake_javascript_eslint_exe = nrun#Which('eslint')
 let g:neomake_javascript_enabled_makers = ['eslint']
 autocmd! BufWritePost,BufReadPost * Neomake
 nmap <Leader><Space>o :lopen<CR>      " open location window
