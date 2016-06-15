@@ -44,12 +44,13 @@ function split(dir)
   local max = screen:frame()
 
   if dir == LEFT then
-    f.x = max.x
+    f.x = max.x - 4
+    f.w = max.w / 2 + 4
   else
     f.x = max.x + max.w / 2
+    f.w = max.w / 2
   end
 
-  f.w = max.w / 2
   f.y = max.y
   f.h = max.h
   win:setFrame(f)
@@ -66,7 +67,19 @@ function focusRight()
   space:focusWindowEast(nil, true)
 end
 
-hs.hotkey.bind({"alt", "ctrl"}, UP, hs.grid.maximizeWindow)
+function maximize()
+  local win = hs.window.focusedWindow()
+  local f = win:frame()
+  local screen = win:screen()
+  local max = screen:frame()
+  f.x = max.x - 4
+  f.y = max.y
+  f.w = max.w + 4
+  f.h = max.h
+  win:setFrame(f)
+end
+
+hs.hotkey.bind({"alt", "ctrl"}, UP, maximize)
 hs.hotkey.bind({"cmd", "ctrl"}, LEFT, pushLeft)
 hs.hotkey.bind({"cmd", "ctrl"}, RIGHT, pushRight)
 hs.hotkey.bind({"ctrl"}, 'h', focusLeft)
