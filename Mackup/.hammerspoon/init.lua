@@ -42,13 +42,19 @@ function split(dir)
   local f = win:frame()
   local screen = win:screen()
   local max = screen:frame()
+  local primary = hs.screen.primaryScreen()
+  local isPrimary = primary:id() == screen:id()
 
   if dir == LEFT then
-    f.x = max.x - 4
-    f.w = max.w / 2 + 4
+    if isPrimary then
+      f.x = max.x - 4
+      f.w = max.w / 2 + 4
+    else
+      f.x = max.x
+      f.w = max.w / 2
+    end
   else
     f.x = max.x + max.w / 2
-    f.w = max.w / 2
   end
 
   f.y = max.y
