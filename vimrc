@@ -188,8 +188,8 @@ let g:unite_source_grep_recursive_opts = ''
 
 " NEOMAKE
 
-let b:neomake_javascript_eslint_exe = nrun#Which('eslint')
 let g:neomake_javascript_enabled_makers = ['eslint']
+let g:neomake_javascript_eslint_exe = nrun#Which('eslint')
 autocmd! BufWritePost,BufReadPost * Neomake
 nmap <Leader><Space>o :lopen<CR>      " open location window
 nmap <Leader><Space>c :lclose<CR>     " close location window
