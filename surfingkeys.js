@@ -32,3 +32,12 @@ settings.theme = '\
 .sk_theme .focused { \
     background: #f0f0f0; \
 }';
+
+settings.blacklist = {
+  'https://inbox.google.com': 1,
+  'https://calendar.google.com': 1,
+  'https://mail.google.com': 1,
+  'http://www.theatlantic.com/infocus': 1,
+  'https://www.theatlantic.com/infocus': 1,
+  'https://feedly.com': 1,
+};
