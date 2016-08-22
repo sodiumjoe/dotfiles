@@ -4,7 +4,7 @@ mapkey('u', 'page up', 'Normal.scroll("pageUp")');
 
 map('<Ctrl-[>', '<Esc>');
 
-mapkey('F', '#1Open a link in new tab', 'Hints.create("", Hints.dispatchMouseClick, {tabbed: true})');
+mapkey('F', '#1Open a link in non-active new tab', 'Hints.create("", Hints.dispatchMouseClick, {tabbed: true, active: false})');
 
 mapkey('L', '#4Go forward in history', 'history.go(1)');
 mapkey('H', '#4Go back in history', 'history.go(-1)');
