@@ -40,4 +40,5 @@ settings.blacklist = {
   'http://www.theatlantic.com/infocus': 1,
   'https://www.theatlantic.com/infocus': 1,
   'https://feedly.com': 1,
+  'https://discordapp.com': 1,
 };
