@@ -12,7 +12,7 @@ git clone https://github.com/sodiumjoe/nvm.git ~/.nvm
 
 # symlink dotfiles
 
-files=("mackup.cfg" "agignore" "gitconfig" "tmux.conf" "vimrc")
+files=("mackup.cfg" "ignore" "gitconfig" "tmux.conf" "vimrc")
 
 for file in ${files[@]}; do
   ln -s ~/.dotfiles/${file} ~/.${file}
