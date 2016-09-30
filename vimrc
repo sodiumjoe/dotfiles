@@ -84,14 +84,6 @@ nmap <leader>p :set paste!<Cr>
 nmap j gj
 nmap k gk
 
-" AUTORELOAD VIMRC
-" ===============
-
-augroup reload_vimrc " {
-  autocmd!
-  autocmd BufWritePost $MYVIMRC source $MYVIMRC
-augroup END " }
-
 " SEARCH
 " ======
 
@@ -162,7 +154,6 @@ let g:clojure_fuzzy_indent = 0
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
-call unite#custom#source('file_rec/async', 'ignore_pattern', 'node_modules/\|bower_components/\|.git/\|.bundle/\|\.vagrant/|.bin/')
 nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
 nnoremap <leader>y :<C-u>Unite history/yank<CR>
 nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
@@ -181,10 +172,10 @@ function! s:unite_settings()
   inoremap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
 endfunction
 
-let g:unite_source_grep_command = 'ag'
-let g:unite_source_rec_async_command = ['ag', '--hidden', '--nocolor', '-g', '']
-let g:unite_source_grep_default_opts = '--nogroup --nocolor --column -i'
-let g:unite_source_grep_recursive_opts = ''
+let g:unite_source_grep_command = 'rg'
+let g:unite_source_rec_async_command = ['rg', '--files']
+let g:unite_source_grep_default_opts = '--hidden --no-heading --vimgrep -S'
+let g:unite_source_grep_recursive_opt = ''
 
 " NEOMAKE
 

@@ -19,7 +19,6 @@ brew tap caskroom/versions
 brew tap caskroom/fonts
 
 # https://github.com/aykamko/tag
-brew tap aykamko/tag-ag
 
 brew install autojump
 brew install curl
@@ -40,9 +39,9 @@ brew install neovim/neovim/neovim
 brew install postgresql
 brew install python
 brew install python3
+brew install ripgrep
 brew install rust
 brew install sqlite
-brew install tag-ag
 brew install the_silver_searcher
 brew install tmux
 brew install tree
