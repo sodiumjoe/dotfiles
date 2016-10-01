@@ -25,6 +25,7 @@ Plug 'altercation/vim-colors-solarized'
 Plug 'benekastah/neomake'
 Plug 'digitaltoad/vim-jade'
 Plug 'editorconfig/editorconfig-vim'
+Plug 'elixir-lang/vim-elixir'
 Plug 'gavocanov/vim-js-indent'
 " Plug 'guns/vim-clojure-static'
 Plug 'jaawerth/nrun.vim'
@@ -103,6 +104,7 @@ set modelines=0
 set nomodeline
 
 autocmd BufRead,BufNewFile ~/work/* setlocal noexpandtab
+autocmd BufRead,BufNewFile ~/work/elixir/* setlocal expandtab
 
 " DISPLAY
 " =======
@@ -148,7 +150,7 @@ hi link EasyMotionTarget2Second ErrorMsg
 
 " VIM-STATIC-CLOJURE
 
-let g:clojure_fuzzy_indent = 0
+" let g:clojure_fuzzy_indent = 0
 
 " UNITE
 

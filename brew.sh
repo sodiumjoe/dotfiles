@@ -23,6 +23,8 @@ brew tap caskroom/fonts
 brew install autojump
 brew install curl
 brew install editorconfig
+brew install elixir
+brew install erlang
 brew install fzf
 # set fzf keybindings
 /usr/local/opt/fzf/install
@@ -31,10 +33,11 @@ brew install gnu-tar
 brew install gnupg
 brew install httpie
 brew install jq
-brew install leiningen
+# brew install leiningen
 brew install lua
 brew install luajit
 brew install mackup
+brew install m-cli
 brew install neovim/neovim/neovim
 brew install postgresql
 brew install python
@@ -42,7 +45,6 @@ brew install python3
 brew install ripgrep
 brew install rust
 brew install sqlite
-brew install the_silver_searcher
 brew install tmux
 brew install tree
 brew install zsh
