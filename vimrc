@@ -45,6 +45,7 @@ Plug 'Shougo/neoyank.vim'
 Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/unite.vim'
 Plug 'scrooloose/nerdtree'
+Plug 'sjl/clam.vim'
 Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-fireplace'
 Plug 'tpope/vim-fugitive'
@@ -217,6 +218,11 @@ else
   inoremap <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"                         " tab completion
 
 endif
+
+" CLAM
+
+nnoremap ! :Clam<space>
+vnoremap ! :ClamVisual<space>
 
 " RUST
 let g:rustfmt_autosave = 1
