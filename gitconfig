@@ -7,7 +7,7 @@
   df = difftool
   dfc = difftool --cached
 [core]
-  editor = vim
+  editor = nvim
   excludesfile = ~/gitignore
 
 [credential]
