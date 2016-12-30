@@ -52,6 +52,7 @@ Plug 'tpope/vim-fugitive'
 Plug 'tpope/vim-markdown'
 Plug 'tpope/vim-repeat'
 Plug 'tpope/vim-surround'
+Plug 'vimwiki/vimwiki'
 
 call plug#end()
 
@@ -231,3 +232,17 @@ let g:rustfmt_autosave = 1
 
 let g:EditorConfig_core_mode = 'external_command'
 let g:EditorConfig_exclude_patterns = ['fugitive://.*']
+
+set inccommand=split
+
+" VIMWIKI
+
+let work_wiki = {}
+let work_wiki.path = '~/work/todo.wiki'
+let work_wiki.path_html = '~/work/todo.html'
+
+let play_wiki = {}
+let play_wiki.path = '~/play/todo.wiki'
+let play_wiki.path_html = '~/play/todo.html'
+
+let g:vimwiki_list = [work_wiki, play_wiki]
