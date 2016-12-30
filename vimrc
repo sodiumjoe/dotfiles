@@ -105,8 +105,9 @@ au BufRead,BufNewFile *.pjs setfiletype javascript
 set modelines=0
 set nomodeline
 
-autocmd BufRead,BufNewFile ~/work/* setlocal noexpandtab
-autocmd BufRead,BufNewFile ~/work/elixir/* setlocal expandtab
+au BufRead,BufNewFile ~/work/* setlocal noexpandtab
+au BufRead,BufNewFile ~/work/elixir/* setlocal expandtab
+au BufRead,BufNewFile *.md setlocal textwidth=80
 
 " DISPLAY
 " =======
@@ -163,6 +164,7 @@ nnoremap <leader>y :<C-u>Unite history/yank<CR>
 nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
 nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
 nnoremap <leader>/ :<C-u>Unite grep:.<CR>
+nnoremap <leader>d :<C-u>UniteWithBufferDir -start-insert buffer file_rec/async<CR>
 
 map <C-o> <Plug>(unite_redraw)
 
