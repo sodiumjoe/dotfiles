@@ -37,7 +37,7 @@ Plug 'othree/yajs.vim'
 Plug 'pbrisbin/vim-restore-cursor'
 " Plug 'rust-lang/rust.vim'
 if has('nvim')
-  Plug 'Shougo/deoplete.nvim'
+  Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 else
   Plug 'Shougo/neocomplete.vim'
 endif
