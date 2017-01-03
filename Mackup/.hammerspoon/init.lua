@@ -67,7 +67,7 @@ function split(dir)
   else
     if isPrimary and isMultipleScreens then
       f.x = max.x + max.w / 2 - 4
-      f.w = max.w / 2
+      f.w = max.w / 2 + 4
     else
       f.x = max.x + max.w / 2
       f.w = max.w / 2
