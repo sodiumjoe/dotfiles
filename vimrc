@@ -159,6 +159,7 @@ hi link EasyMotionTarget2Second ErrorMsg
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(['matcher_fuzzy'])
+call unite#filters#sorter_default#use(['sorter_length'])
 nnoremap <C-p> :<C-u>Unite -start-insert buffer file_rec/async<CR>
 nnoremap <leader>y :<C-u>Unite history/yank<CR>
 nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
