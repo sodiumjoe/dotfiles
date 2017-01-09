@@ -24,6 +24,12 @@ function isPushed(dir, f, max)
 end
 
 function throw(dir, win)
+
+  if (dir == LEFT and screen:toEast() == nil) or
+    (dir == RIGHT and screen:toWest() == nil) then
+    return
+  end
+
   if dir == LEFT then
     win:moveOneScreenWest()
     split(RIGHT)
