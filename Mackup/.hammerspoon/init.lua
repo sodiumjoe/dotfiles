@@ -1,4 +1,4 @@
-hs.window.animationDuration = 0
+hs.window.animationDuration = 0.01
 hs.grid.setMargins({ 0, 0 })
 -- local log = hs.logger.new('foo', 5)
 local space=hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
