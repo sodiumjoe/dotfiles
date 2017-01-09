@@ -46,6 +46,7 @@ Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/unite.vim'
 Plug 'scrooloose/nerdtree'
 Plug 'sjl/clam.vim'
+Plug 'thinca/vim-unite-history'
 Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-fireplace'
 Plug 'tpope/vim-fugitive'
@@ -166,6 +167,8 @@ nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
 nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
 nnoremap <leader>/ :<C-u>Unite grep:.<CR>
 nnoremap <leader>d :<C-u>UniteWithBufferDir -start-insert buffer file_rec/async<CR>
+nnoremap <leader>f :<C-u>Unite -start-insert history/command<CR>
+nnoremap <leader><Space>/ :<C-u>Unite -start-insert history/search<CR>
 
 map <C-o> <Plug>(unite_redraw)
 
