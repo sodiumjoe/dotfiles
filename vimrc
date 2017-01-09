@@ -107,7 +107,7 @@ set nomodeline
 
 au BufRead,BufNewFile ~/work/* setlocal noexpandtab
 au BufRead,BufNewFile ~/work/elixir/* setlocal expandtab
-au BufRead,BufNewFile *.md setlocal textwidth=80
+au BufRead,BufNewFile *.md,*.wiki setlocal textwidth=80
 
 " DISPLAY
 " =======
