@@ -382,7 +382,7 @@
 	<key>HideScrollbar</key>
 	<true/>
 	<key>HideTab</key>
-	<false/>
+	<true/>
 	<key>HideTabCloseButton</key>
 	<true/>
 	<key>HideTabNumber</key>
@@ -464,9 +464,9 @@
 	<key>NSWindow Frame SessionsPreferences</key>
 	<string>1549 -90 606 456 1280 -229 2560 1440 </string>
 	<key>NSWindow Frame SharedPreferences</key>
-	<string>82 184 796 473 0 0 1280 778 </string>
+	<string>82 285 770 381 0 0 1280 778 </string>
 	<key>NSWindow Frame iTerm Window 0</key>
-	<string>2560 -214 1277 1425 1280 -229 2560 1440 </string>
+	<string>0 0 1280 778 0 0 1280 778 </string>
 	<key>NSWindow Frame iTerm Window 1</key>
 	<string>0 0 1276 777 0 0 1280 777 </string>
 	<key>NeverWarnAboutShortLivedSessions_64C88AF5-5E88-4F1A-B42F-99C8930A789E</key>
@@ -2089,7 +2089,7 @@
 	<key>SUHasLaunchedBefore</key>
 	<true/>
 	<key>SULastCheckTime</key>
-	<date>2016-12-12T06:34:26Z</date>
+	<date>2017-01-06T22:53:29Z</date>
 	<key>SavePasteHistory</key>
 	<false/>
 	<key>ShowBookmarkName</key>
