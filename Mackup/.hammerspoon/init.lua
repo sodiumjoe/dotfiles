@@ -23,7 +23,7 @@ function isPushed(dir, f, max)
   if dir == RIGHT then return (f.x == (max.x + (max.w / 2)) or f.x == (max.x + (max.w/2 - 4))) and (f.w == (max.w / 2) or f.w == (max.w / 2 + 4)) end
 end
 
-function throw(dir, win)
+function throw(dir, win, screen)
 
   if (dir == LEFT and screen:toEast() == nil) or
     (dir == RIGHT and screen:toWest() == nil) then
@@ -47,7 +47,7 @@ function push(dir)
   local max = screen:frame()
 
   if isPushed(dir, f, max) and not isMaximized(f, screen, max) then
-    throw(dir, win)
+    throw(dir, win, screen)
   else
     split(dir)
   end
