@@ -49,6 +49,7 @@ brew install tmux
 brew install tree
 brew install zsh
 
+brew cask install alfred
 brew cask install bartender
 brew cask install bettertouchtool
 brew cask install clipmenu
