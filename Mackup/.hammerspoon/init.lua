@@ -1,92 +1,118 @@
 hs.window.animationDuration = 0.01
 hs.grid.setMargins({ 0, 0 })
--- local log = hs.logger.new('foo', 5)
+local log = hs.logger.new('foo', 5)
+-- log.log('logging enabled')
 local space=hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
 
 local LEFT = 'Left'
 local RIGHT = 'Right'
 local UP = 'Up'
 
-function isMaximized(f, screen, max)
-  local primary = hs.screen.primaryScreen()
-  local isPrimary = primary:id() == screen:id()
+function isMaximized(f, max, isPrimary)
   if isPrimary then
-    return (f.x == max.x - 4) and f.y == max.y and f.w == max.w + 4 and f.h == max.h
-  else
-    return f.x == max.x and f.y == max.y and f.w == max.w and f.h == max.h
+    return f.x == max.x - 4 and f.y == max.y and f.w == max.w + 4 and f.h == max.h
   end
+  return f.x == max.x and f.y == max.y and f.w == max.w and f.h == max.h
 end
 
-function isPushed(dir, f, max)
-  if not f.h == max.h then return false end
-  if dir == LEFT then return f.x == max.x and f.w == (max.w / 2) end
-  if dir == RIGHT then return (f.x == (max.x + (max.w / 2)) or f.x == (max.x + (max.w/2 - 4))) and (f.w == (max.w / 2) or f.w == (max.w / 2 + 4)) end
+function isPushedLeft(f, max, isPrimary)
+  if isMaximized(f, max, isPrimary) then return false end
+  if f.h ~= max.h then return false end
+  return f.x == max.x and f.w == (max.w / 2)
 end
 
-function throw(dir, win, screen)
-
-  if (dir == LEFT and screen:toEast() == nil) or
-    (dir == RIGHT and screen:toWest() == nil) then
-    return
-  end
-
-  if dir == LEFT then
-    win:moveOneScreenWest()
-    split(RIGHT)
-  else
-    win:moveOneScreenEast()
-    split(LEFT)
-  end
+function isPushedRight(f, max, isPrimary)
+  if isMaximized(f, max, isPrimary) then return false end
+  if f.h ~= max.h then return false end
+  return (f.x == (max.x + (max.w / 2)) or f.x == (max.x + (max.w/2 - 4))) and (f.w == (max.w / 2) or f.w == (max.w / 2 + 4))
 end
 
-function push(dir)
+function pushLeft()
+  log.log('push left')
   local win = hs.window.focusedWindow()
   if not win then return end
   local f = win:frame()
   local screen = win:screen()
   local max = screen:frame()
+  local primary = hs.screen.primaryScreen()
+  local isPrimary = primary:id() == screen:id()
 
-  if isPushed(dir, f, max) and not isMaximized(f, screen, max) then
-    throw(dir, win, screen)
-  else
-    split(dir)
+  if isPushedLeft(f, max, isPrimary) then
+    log.log('is pushed left')
+    if screen:toWest() == nil then return end
+    -- throw left
+    win:moveOneScreenWest()
+    local f = win:frame()
+    local screen = win:screen()
+    local max = screen:frame()
+    local primary = hs.screen.primaryScreen()
+    local isPrimary = primary:id() == screen:id()
+    f = splitRight(f, max, isPrimary)
+    return win:setFrame(f)
   end
+
+  log.log('split left')
+  f = splitLeft(f, max, isPrimary)
+  log.log(f)
+  win:setFrame(f)
+
 end
 
-function split(dir)
+function pushRight()
   local win = hs.window.focusedWindow()
+  if not win then return end
   local f = win:frame()
   local screen = win:screen()
   local max = screen:frame()
   local primary = hs.screen.primaryScreen()
-  local isMultipleScreens = #hs.screen.allScreens() > 1
   local isPrimary = primary:id() == screen:id()
 
-  if dir == LEFT then
-    if isPrimary then
-      f.x = max.x - 4
-      f.w = max.w / 2 + 4
-    else
-      f.x = max.x
-      f.w = max.w / 2
-    end
+  if isPushedRight(f, max, isPrimary) then
+    if screen:toEast() == nil then return end
+    -- throw right
+    win:moveOneScreenEast()
+    local f = win:frame()
+    local screen = win:screen()
+    local max = screen:frame()
+    local primary = hs.screen.primaryScreen()
+    local isPrimary = primary:id() == screen:id()
+    f = splitLeft(f, max, isPrimary)
+    return win:setFrame(f)
+  end
+
+  f = splitRight(f, max, isPrimary)
+  win:setFrame(f)
+end
+
+function splitLeft(f, max, isPrimary)
+  log.log('isPrimary')
+  log.log(isPrimary)
+  if isPrimary then
+    f.x = max.x - 4
+    f.w = max.w / 2 + 4
   else
-    if isPrimary and isMultipleScreens then
-      f.x = max.x + max.w / 2 - 4
-      f.w = max.w / 2 + 4
-    else
-      f.x = max.x + max.w / 2
-      f.w = max.w / 2
-    end
+    f.x = max.x
+    f.w = max.w / 2
   end
 
   f.y = max.y
   f.h = max.h
-  win:setFrame(f)
+  return f
 end
 
-function pushLeft() push(LEFT) end
-function pushRight() push(RIGHT) end
+function splitRight(f, max, isPrimary)
+  if isPrimary and #hs.screen.allScreens() > 1 then
+    f.x = max.x + max.w / 2 - 4
+    f.w = max.w / 2 + 4
+  else
+    f.x = max.x + max.w / 2
+    f.w = max.w / 2
+  end
+
+  f.y = max.y
+  f.h = max.h
+  return f
+end
 
 function focusLeft()
   space:focusWindowWest(nil, true)
@@ -103,21 +129,23 @@ function maximize()
   local max = screen:frame()
   local primary = hs.screen.primaryScreen()
   local isPrimary = primary:id() == screen:id()
+
   if isPrimary then
     f.x = max.x - 4
     f.y = max.y
     f.w = max.w + 4
     f.h = max.h
-  else
-    f.x = max.x
-    f.y = max.y
-    f.w = max.w
-    f.h = max.h
+    return win:setFrame(f)
   end
-  win:setFrame(f)
+
+  f.x = max.x
+  f.y = max.y
+  f.w = max.w
+  f.h = max.h
+  return win:setFrame(f)
 end
 
-hs.hotkey.bind({"alt", "ctrl"}, UP, maximize)
+hs.hotkey.bind({"cmd", "ctrl"}, UP, maximize)
 hs.hotkey.bind({"cmd", "ctrl"}, LEFT, pushLeft)
 hs.hotkey.bind({"cmd", "ctrl"}, RIGHT, pushRight)
 hs.hotkey.bind({"ctrl"}, 'h', focusLeft)
