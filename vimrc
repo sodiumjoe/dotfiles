@@ -29,6 +29,7 @@ Plug 'editorconfig/editorconfig-vim'
 Plug 'elixir-lang/vim-elixir'
 Plug 'gavocanov/vim-js-indent'
 " Plug 'guns/vim-clojure-static'
+Plug 'haya14busa/incsearch.vim'
 Plug 'jaawerth/nrun.vim'
 Plug 'matze/vim-move'
 Plug 'mxw/vim-jsx'
@@ -261,3 +262,16 @@ let play_wiki.path = '~/play/todo.wiki'
 let play_wiki.path_html = '~/play/todo.html'
 
 let g:vimwiki_list = [work_wiki, play_wiki]
+
+" INCSEARCH
+
+map /  <Plug>(incsearch-forward)
+map ?  <Plug>(incsearch-backward)
+map g/ <Plug>(incsearch-stay)
+
+" automatically turn off highlighting after search
+let g:incsearch#auto_nohlsearch = 1
+
+" mappings to enable automatically disable highlighting after search
+map n  <Plug>(incsearch-nohl-n)
+map N  <Plug>(incsearch-nohl-N)
