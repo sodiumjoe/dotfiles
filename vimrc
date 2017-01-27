@@ -130,11 +130,7 @@ au BufRead,BufNewFile *.md,*.wiki setlocal textwidth=80
 
 set guifont=Inconsolata:h16
 set background=dark
-let g:solarized_termtrans = 1
 colorscheme solarized
-set guioptions-=T
-" remove menu bar
-set guioptions-=m
 " folding column width
 set fdc=1
 " hide when only one tab
