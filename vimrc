@@ -130,13 +130,19 @@ set sw=2
 set expandtab
 set scrolloff=5                                                                 " keep buffer of 10 lines above and below cursor
 
-hi! VertSplit ctermfg=Black                                                     " split border color
-hi! StatusLine ctermfg=LightGray                                                " status line color
-hi! StatusLineNC ctermfg=Black                                                  " inactive status line color
-hi! Folded cterm=bold ctermbg=8                                                 " fold line style
+hi! StatusLine cterm=NONE ctermfg=7 ctermbg=black
+hi! StatusLineNC cterm=NONE ctermfg=0 ctermbg=black
+hi! Folded ctermfg=0 ctermbg=black cterm=NONE
+hi! FoldColumn cterm=bold ctermfg=4 ctermbg=NONE
+hi! SignColumn ctermbg=NONE
+hi! LineNr ctermbg=NONE
+hi! ExtraWhitespace ctermbg=5 cterm=bold
+hi! EndOfBuffer ctermfg=black ctermbg=black
 
-set fillchars+=vert:\ 
-highlight ExtraWhitespace ctermbg=darkred
+function! Git_branch()
+  let branch = fugitive#head()
+  return empty(branch)?'':'['.branch.']'
+endfunction
 
 " let &colorcolumn=join(range(81,999),",")                                        " highlight after 80 characters
 
