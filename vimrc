@@ -146,6 +146,8 @@ function! Git_branch()
   return empty(branch)?'':'['.branch.']'
 endfunction
 
+set statusline=\ %{Git_branch()}\ %<%F\ %h%m%r%=%-14.(%l,%c%V%)\ %P\ 
+
 " let &colorcolumn=join(range(81,999),",")                                        " highlight after 80 characters
 
 " PLUGIN CONFIGS
