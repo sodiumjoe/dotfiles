@@ -3,14 +3,19 @@
 
 if !has('nvim')
 
-  set nocompatible                                                                " vim settings, rather than vi settings
-                                                                                  " must be first, because it changes other options as a side effect
+  " vim settings, rather than vi settings
+  " must be first, because it changes other options as a side effect
+  set nocompatible
   set enc=utf-8
-  set history=50                                                                  " keep 50 lines of command line history
+  " keep 50 lines of command line history
+  set history=50
   set laststatus=2
-  set backspace=indent,eol,start                                                  " allow backspacing over everything in insert mode
-  set incsearch                                                                   " incremental searching
-  set hlsearch                                                                    " highlight last used search pattern
+  " allow backspacing over everything in insert mode
+  set backspace=indent,eol,start
+  " incremental searching
+  set incsearch
+  " highlight last used search pattern
+  set hlsearch
   set timeoutlen=1000 ttimeoutlen=10
 
 endif
@@ -69,16 +74,23 @@ set undodir=~/.vim/undo
 set noerrorbells
 set splitbelow
 set splitright
-
-set exrc                                                                        " enable per-directory .vimrc files
-set secure                                                                      " disable unsafe commands in local .vimrc files
-set nojoinspaces                                                                " Insert only one space when joining lines that contain sentence-terminating
-                                                                                " punctuation like `.`.
-set clipboard+=unnamed                                                          " send to system clipboard: https://coderwall.com/p/g-d8rg
-set shortmess=aoOtI                                                             " don't show intro message
-set completeopt-=preview                                                        " disable weird scratch window
-set noshowmode                                                                  " disable extraneous messages
-set ruler                                                                       " show the cursor position all the time
+" enable per-directory .vimrc files
+set exrc
+" disable unsafe commands in local .vimrc files
+set secure
+" Insert only one space when joining lines that contain sentence-terminating
+" punctuation like `.`.
+set nojoinspaces
+" send to system clipboard: https://coderwall.com/p/g-d8rg
+set clipboard+=unnamed
+" don't show intro message
+set shortmess=aoOtI
+" disable weird scratch window
+set completeopt-=preview
+" disable extraneous messages
+set noshowmode
+" show the cursor position all the time
+set ruler
 set smartcase
 
 map <space> <leader>
@@ -93,15 +105,16 @@ nmap k gk
 " SEARCH
 " ======
 
-set showcmd                                                                     " display incomplete commands
+" display incomplete commands
+set showcmd
 set ignorecase
 nnoremap <leader>n :<C-u>noh<CR>
 
 " SYNTAX HIGHLIGHTING
 " ===================
 
-syntax on                                                                       " syntax highlighting
-filetype plugin indent on                                                       " Enable file type detection.
+syntax on
+filetype plugin indent on
 
 au BufRead,BufNewFile *.pjs setfiletype javascript
 
@@ -120,17 +133,20 @@ set background=dark
 let g:solarized_termtrans = 1
 colorscheme solarized
 set guioptions-=T
-set guioptions-=m                                                               " remove menu bar
-set nu
-set fdc=2                                                                       " folding column
-set showtabline=1                                                               " hide when only one tab
+" remove menu bar
+set guioptions-=m
+" folding column width
+set fdc=1
+" hide when only one tab
+set showtabline=1
 set smarttab
 set autoindent
 set smartindent
 set ts=2
 set sw=2
 set expandtab
-set scrolloff=5                                                                 " keep buffer of 10 lines above and below cursor
+" keep buffer of 10 lines above and below cursor
+set scrolloff=5
 
 hi! StatusLine cterm=NONE ctermfg=7 ctermbg=black
 hi! StatusLineNC cterm=NONE ctermfg=0 ctermbg=black
@@ -222,8 +238,10 @@ if has('nvim')
 
   let g:deoplete#enable_at_startup = 1
   let g:deoplete#enable_smart_case = 1
-  let g:deoplete#auto_completion_start_length = 1                                 " Set minimum syntax keyword length.
+  " Set minimum syntax keyword length.
+  let g:deoplete#auto_completion_start_length = 1
 
+  " tab completion
   inoremap <silent><expr> <Tab> pumvisible() ? "\<C-n>" : "\<Tab>"
   inoremap <silent><expr> <S-Tab> pumvisible() ? "\<C-p>" : "\<S-Tab>"
 
@@ -231,12 +249,17 @@ else
 
   " NEOCOMPLETE
 
-  let g:acp_enableAtStartup = 0                                                   " disable autocomplete
-  let g:neocomplete#enable_at_startup = 1                                         " enable neocomplete: https://github.com/Shougo/neocomplete.vim
+  " disable autocomplete
+  let g:acp_enableAtStartup = 0
+  " enable neocomplete: https://github.com/Shougo/neocomplete.vim
+  let g:neocomplete#enable_at_startup = 1
   let g:neocomplete#enable_smart_case = 1
-  let g:neocomplete#sources#syntax#min_keyword_length = 1                         " Set minimum syntax keyword length.
-  let g:neocomplete#force_overwrite_completefunc = 1                              " fixes vim-clojure-static issue https://github.com/guns/vim-clojure-static/issues/54
-  inoremap <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"                         " tab completion
+  " Set minimum syntax keyword length.
+  let g:neocomplete#sources#syntax#min_keyword_length = 1
+  " fixes vim-clojure-static issue https://github.com/guns/vim-clojure-static/issues/54
+  let g:neocomplete#force_overwrite_completefunc = 1
+  " tab completion
+  inoremap <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
 
 endif
 
