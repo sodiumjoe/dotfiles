@@ -35,6 +35,7 @@ Plug 'matze/vim-move'
 Plug 'mxw/vim-jsx'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'othree/yajs.vim'
+Plug 'romainl/vim-qf'
 Plug 'pbrisbin/vim-restore-cursor'
 " Plug 'rust-lang/rust.vim'
 if has('nvim')
@@ -202,11 +203,12 @@ let g:unite_source_grep_recursive_opt = ''
 let g:neomake_javascript_enabled_makers = ['eslint']
 let g:neomake_javascript_eslint_exe = nrun#Which('eslint')
 autocmd! BufWritePost,BufReadPost * Neomake
-nmap <Leader><Space>o :lopen<CR>      " open location window
-nmap <Leader><Space>c :lclose<CR>     " close location window
-nmap <Leader><Space>, :ll<CR>         " go to current error/warning
-nmap <Leader><Space>n :lnext<CR>      " next error/warning
-nmap <Leader><Space>p :lprev<CR>      " previous error/warning
+" open location window
+nmap <Leader><Space>o :lopen<CR>
+" close location window
+nmap <Leader><Space>c :lclose<CR>
+" cycle through location list
+nmap <Leader><Space> <Plug>QfLprevious
 
 " VIM JSON
 
