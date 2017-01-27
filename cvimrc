@@ -7,6 +7,6 @@ let configpath = '~/.cvimrc'
 set smoothscroll
 let scrollduration=250
 let barposition='bottom'
-let blacklists = ["https://inbox.google.com/*","https://calendar.google.com/*"]
+let blacklists = ["https://inbox.google.com/*","https://calendar.google.com/*","https://feedly.com/*"]
 let hintcharacters = 'asdfghjkl;'
 let mapleader = ' '
