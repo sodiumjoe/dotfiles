@@ -24,12 +24,12 @@ Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
 Plug 'benekastah/neomake'
 Plug 'digitaltoad/vim-jade'
+Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'elixir-lang/vim-elixir'
 Plug 'gavocanov/vim-js-indent'
 " Plug 'guns/vim-clojure-static'
 Plug 'jaawerth/nrun.vim'
-Plug 'Lokaltog/vim-easymotion'
 Plug 'matze/vim-move'
 Plug 'mxw/vim-jsx'
 Plug 'ntpeters/vim-better-whitespace'
@@ -145,12 +145,15 @@ highlight ExtraWhitespace ctermbg=darkred
 
 " EASYMOTION
 
-let g:EasyMotion_do_mapping = 0                                                 " disable default mappings
-let g:EasyMotion_do_shade = 0                                                   " disable shading
-nmap <leader>w <Plug>(easymotion-bd-w)
-hi link EasyMotionTarget ErrorMsg
-hi link EasyMotionTarget2First ErrorMsg
-hi link EasyMotionTarget2Second ErrorMsg
+map <Leader>e <Plug>(easymotion-prefix)
+
+" disable shading
+let g:EasyMotion_do_shade = 0
+
+" colors
+hi EasyMotionTarget ctermfg=1 cterm=bold,underline
+hi link EasyMotionTarget2First EasyMotionTarget
+hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
 " VIM-STATIC-CLOJURE
 
