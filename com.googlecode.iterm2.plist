@@ -67956,7 +67956,7 @@
 	<key>NSWindow Frame SessionsPreferences</key>
 	<string>1549 -90 606 456 1280 -229 2560 1440 </string>
 	<key>NSWindow Frame SharedPreferences</key>
-	<string>171 193 796 473 0 0 1280 778 </string>
+	<string>171 164 796 473 0 0 1280 778 </string>
 	<key>NSWindow Frame iTerm Window 0</key>
 	<string>0 0 1280 778 0 0 1280 778 </string>
 	<key>NSWindow Frame iTerm Window 1</key>
@@ -68268,12 +68268,40 @@
 					<key>Text</key>
 					<string>0x1f</string>
 				</dict>
+				<key>0x30-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 30</string>
+				</dict>
+				<key>0x31-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 31</string>
+				</dict>
+				<key>0x32-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 32</string>
+				</dict>
 				<key>0x32-0x40000</key>
 				<dict>
 					<key>Action</key>
 					<integer>11</integer>
 					<key>Text</key>
 					<string>0x00</string>
+				</dict>
+				<key>0x33-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 33</string>
 				</dict>
 				<key>0x33-0x40000</key>
 				<dict>
@@ -68282,12 +68310,26 @@
 					<key>Text</key>
 					<string>0x1b</string>
 				</dict>
+				<key>0x34-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 34</string>
+				</dict>
 				<key>0x34-0x40000</key>
 				<dict>
 					<key>Action</key>
 					<integer>11</integer>
 					<key>Text</key>
 					<string>0x1c</string>
+				</dict>
+				<key>0x35-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 35</string>
 				</dict>
 				<key>0x35-0x40000</key>
 				<dict>
@@ -68296,12 +68338,26 @@
 					<key>Text</key>
 					<string>0x1d</string>
 				</dict>
+				<key>0x36-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 36</string>
+				</dict>
 				<key>0x36-0x40000</key>
 				<dict>
 					<key>Action</key>
 					<integer>11</integer>
 					<key>Text</key>
 					<string>0x1e</string>
+				</dict>
+				<key>0x37-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 37</string>
 				</dict>
 				<key>0x37-0x40000</key>
 				<dict>
@@ -68310,12 +68366,26 @@
 					<key>Text</key>
 					<string>0x1f</string>
 				</dict>
+				<key>0x38-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 38</string>
+				</dict>
 				<key>0x38-0x40000</key>
 				<dict>
 					<key>Action</key>
 					<integer>11</integer>
 					<key>Text</key>
 					<string>0x7f</string>
+				</dict>
+				<key>0x39-0x100000</key>
+				<dict>
+					<key>Action</key>
+					<integer>11</integer>
+					<key>Text</key>
+					<string>0x01 39</string>
 				</dict>
 				<key>0x66-0x140000</key>
 				<dict>
@@ -68887,7 +68957,7 @@
 	<key>SplitPaneDimmingAmount</key>
 	<real>0.10000000149011612</real>
 	<key>SwitchTabModifier</key>
-	<integer>4</integer>
+	<integer>9</integer>
 	<key>SwitchWindowModifier</key>
 	<integer>6</integer>
 	<key>TabStyle</key>
