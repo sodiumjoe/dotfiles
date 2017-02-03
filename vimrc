@@ -144,13 +144,38 @@ hi FoldColumn cterm=bold ctermfg=blue ctermbg=NONE
 hi SignColumn ctermbg=NONE
 hi LineNr ctermbg=NONE
 hi EndOfBuffer ctermfg=8 ctermbg=8
+hi StatusLineError cterm=NONE ctermfg=1 ctermbg=black
+
+" STATUSLINE
 
 function! Git_branch()
   let branch = fugitive#head()
   return empty(branch)?'':'['.branch.']'
 endfunction
 
-set statusline=\ %{Git_branch()}\ %<%F\ %h%m%r%=%-14.(%l,%c%V%)\ %P\ "
+set statusline=\ "
+set statusline+=%{Git_branch()}
+set statusline+=\ "
+" filename
+set statusline+=%<%t
+set statusline+=\ "
+" help/modified/readonly
+set statusline+=%h%m%r
+" alignment group
+set statusline+=%=
+" start error highlight group
+set statusline+=%#StatusLineError#
+" errors from w0rp/ale
+set statusline+=%{ALEGetStatusLine()}
+" reset highlight group
+set statusline+=%#StatusLine#
+set statusline+=\ "
+" line,column,virtual column
+set statusline+=%-14.(%l,%c%V%)
+set statusline+=\ "
+" percentge through file of displayed window
+set statusline+=%P
+set statusline+=\ "
 
 " PLUGIN CONFIGS
 " ==============
