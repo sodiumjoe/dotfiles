@@ -176,8 +176,8 @@ set statusline+=\ "
 " percentge through file of displayed window
 set statusline+=%P
 set statusline+=\ "
-
 " PLUGIN CONFIGS
+
 " ==============
 
 " EASYMOTION
@@ -241,7 +241,7 @@ let g:ale_statusline_format = ['⨉ %d', '⚠ %d', '']
 " let g:ale_lint_on_text_changed = 0
 " let g:ale_lint_on_save = 1
 " cycle through location list
-nmap <Leader><Space> <Plug>QfLprevious
+nnoremap <leader>n <Plug>(ale_next_wrap)
 
 " VIM JSON
 
