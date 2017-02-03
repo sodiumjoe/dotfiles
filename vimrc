@@ -27,7 +27,6 @@ call plug#begin('~/.vim/plugged')
 
 Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
-Plug 'benekastah/neomake'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'elixir-lang/vim-elixir'
@@ -59,6 +58,7 @@ Plug 'tpope/vim-repeat'
 Plug 'tpope/vim-surround'
 Plug 'vimwiki/vimwiki'
 Plug 'whatyouhide/vim-lengthmatters'
+Plug 'w0rp/ale'
 
 call plug#end()
 
@@ -103,8 +103,6 @@ nmap k gk
 " SEARCH
 " ======
 
-" display incomplete commands
-nnoremap <leader>n :<C-u>noh<CR>
 set ignorecase
 
 " SYNTAX HIGHLIGHTING
@@ -125,7 +123,7 @@ set guifont=Inconsolata:h16
 set background=dark
 colorscheme solarized
 " folding column width
-set fdc=1
+set fdc=2
 " disable tabline
 set showtabline=0
 set autoindent
@@ -135,6 +133,7 @@ set sw=2
 set expandtab
 " keep buffer of lines above and below cursor
 set scrolloff=5
+" display incomplete commands
 set showcmd
 set textwidth=80
 
@@ -204,15 +203,13 @@ let g:unite_source_rec_async_command = ['rg', '--files']
 let g:unite_source_grep_default_opts = '--hidden --no-heading --vimgrep -S'
 let g:unite_source_grep_recursive_opt = ''
 
-" NEOMAKE
+" ALE
 
-let g:neomake_javascript_enabled_makers = ['eslint']
-let g:neomake_javascript_eslint_exe = nrun#Which('eslint')
-autocmd! BufWritePost,BufReadPost * Neomake
-" open location window
-nmap <Leader><Space>o :lopen<CR>
-" close location window
-nmap <Leader><Space>c :lclose<CR>
+let g:ale_sign_error = '⨉'
+let g:ale_sign_warning = '⚠'
+let g:ale_statusline_format = ['⨉ %d', '⚠ %d', '']
+" let g:ale_lint_on_text_changed = 0
+" let g:ale_lint_on_save = 1
 " cycle through location list
 nmap <Leader><Space> <Plug>QfLprevious
 
