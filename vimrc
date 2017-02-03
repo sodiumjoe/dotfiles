@@ -1,4 +1,4 @@
-" LEGACY VIM
+" legacy vim
 " ==========
 
 if !has('nvim')
@@ -20,7 +20,7 @@ if !has('nvim')
 
 endif
 
-" PLUGINS
+" plugins
 " =======
 
 call plug#begin('~/.vim/plugged')
@@ -62,7 +62,7 @@ Plug 'w0rp/ale'
 
 call plug#end()
 
-" GENERAL
+" general
 " =======
 
 set backupdir=~/.vim/backups
@@ -94,18 +94,18 @@ set smartcase
 map <space> <leader>
 nnoremap <leader>p :set paste!<Cr>
 
-" MOVEMENT
+" movement
 " ========
 
 nnoremap j gj
 nnoremap k gk
 
-" SEARCH
+" search
 " ======
 
 set ignorecase
 
-" SYNTAX HIGHLIGHTING
+" syntax highlighting
 " ===================
 
 syntax on
@@ -116,7 +116,7 @@ set nomodeline
 au BufRead,BufNewFile ~/work/* setlocal noexpandtab
 au BufRead,BufNewFile ~/work/elixir/* setlocal expandtab
 
-" DISPLAY
+" display
 " =======
 
 set guifont=Inconsolata:h16
@@ -146,7 +146,8 @@ hi LineNr ctermbg=NONE
 hi EndOfBuffer ctermfg=8 ctermbg=8
 hi StatusLineError cterm=NONE ctermfg=1 ctermbg=black
 
-" STATUSLINE
+" statusline
+" ==========
 
 function! Git_branch()
   let branch = fugitive#head()
@@ -177,10 +178,10 @@ set statusline+=\ "
 set statusline+=%P
 set statusline+=\ "
 
-" PLUGIN CONFIGS
+" plugin configs
 " ==============
 
-" EASYMOTION
+" easymotion
 
 map <leader>e <Plug>(easymotion-prefix)
 
@@ -192,11 +193,11 @@ hi EasyMotionTarget ctermfg=1 cterm=bold,underline
 hi link EasyMotionTarget2First EasyMotionTarget
 hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
-" VIM-STATIC-CLOJURE
+" vim-static-clojure
 
 " let g:clojure_fuzzy_indent = 0
 
-" UNITE
+" unite
 
 let g:unite_source_history_yank_enable = 1
 call unite#filters#matcher_default#use(
@@ -233,7 +234,7 @@ let g:unite_source_rec_async_command = ['rg', '--files']
 let g:unite_source_grep_default_opts = '--hidden --no-heading --vimgrep -S'
 let g:unite_source_grep_recursive_opt = ''
 
-" ALE
+" ale
 
 let g:ale_sign_error = '⨉'
 let g:ale_sign_warning = '⚠'
@@ -243,15 +244,11 @@ let g:ale_statusline_format = ['⨉ %d', '⚠ %d', '']
 " cycle through location list
 nnoremap <leader>n <Plug>(ale_next_wrap)
 
-" VIM JSON
-
-let g:vim_json_syntax_conceal = 0
-
 if has('nvim')
 
   set inccommand=split
 
-  " DEOPLETE
+  " deoplete
 
   let g:deoplete#enable_at_startup = 1
   let g:deoplete#enable_smart_case = 1
@@ -264,7 +261,7 @@ if has('nvim')
 
 else
 
-  " NEOCOMPLETE
+  " neocomplete
 
   " disable autocomplete
   let g:acp_enableAtStartup = 0
@@ -286,15 +283,15 @@ endif
 nnoremap ! :Clam<space>
 vnoremap ! :ClamVisual<space>
 
-" RUST
+" rust
 let g:rustfmt_autosave = 1
 
-" EDITORCONFIG
+" editorconfig
 
 let g:EditorConfig_core_mode = 'external_command'
 let g:EditorConfig_exclude_patterns = ['fugitive://.*']
 
-" VIMWIKI
+" vimwiki
 
 let work_wiki = {}
 let work_wiki.path = '~/work/todo.wiki'
@@ -306,16 +303,16 @@ let play_wiki.path_html = '~/play/todo.html'
 
 let g:vimwiki_list = [work_wiki, play_wiki]
 
-" LENGTH MATTERS
-"
+" vim-lengthmatters
+
 call lengthmatters#highlight_link_to('ColorColumn')
 
-" VIM-MOVE
+" vim-move
 let g:move_key_modifier = 'C'
 
-" VIM-BETTER-WHITESPACE
+" vim-better-whitespace
 hi link ExtraWhitespace Search
 
-" VIM-GITGUTTER
+" vim-gitgutter
 
 let g:gitgutter_sign_column_always = 1
