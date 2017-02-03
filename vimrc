@@ -315,3 +315,7 @@ let g:move_key_modifier = 'C'
 
 " VIM-BETTER-WHITESPACE
 hi link ExtraWhitespace Search
+
+" VIM-GITGUTTER
+
+let g:gitgutter_sign_column_always = 1
