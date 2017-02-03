@@ -92,13 +92,13 @@ set ruler
 set smartcase
 
 map <space> <leader>
-nmap <leader>p :set paste!<Cr>
+nnoremap <leader>p :set paste!<Cr>
 
 " MOVEMENT
 " ========
 
-nmap j gj
-nmap k gk
+nnoremap j gj
+nnoremap k gk
 
 " SEARCH
 " ======
@@ -176,13 +176,13 @@ set statusline+=\ "
 " percentge through file of displayed window
 set statusline+=%P
 set statusline+=\ "
-" PLUGIN CONFIGS
 
+" PLUGIN CONFIGS
 " ==============
 
 " EASYMOTION
 
-map <Leader>e <Plug>(easymotion-prefix)
+map <leader>e <Plug>(easymotion-prefix)
 
 " disable shading
 let g:EasyMotion_do_shade = 0
