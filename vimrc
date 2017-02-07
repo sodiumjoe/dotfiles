@@ -235,8 +235,8 @@ let g:unite_source_grep_recursive_opt = ''
 let g:ale_sign_error = '⨉'
 let g:ale_sign_warning = '⚠'
 let g:ale_statusline_format = ['⨉ %d', '⚠ %d', '']
-" let g:ale_lint_on_text_changed = 0
-" let g:ale_lint_on_save = 1
+let g:ale_lint_on_text_changed = 0
+let g:ale_lint_on_save = 1
 " cycle through location list
 nnoremap <leader>n <Plug>(ale_next_wrap)
 
