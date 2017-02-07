@@ -195,22 +195,23 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 " unite
 
 let g:unite_source_history_yank_enable = 1
+let g:unite_prompt = '❯ '
+hi link uniteInputPrompt Function
 call unite#filters#matcher_default#use(
       \['matcher_fuzzy', 'matcher_hide_current_file'])
 call unite#custom#source(
       \'buffer,file,file_rec',
       \'sorters',
       \'sorter_selecta')
-nnoremap <C-p> :<C-u>Unite
-      \ -start-insert -prompt=❯ -auto-resize buffer file_rec/neovim<CR>
-nnoremap <leader>y :<C-u>Unite -prompt=❯ history/yank<CR>
-nnoremap <leader>s :<C-u>Unite -prompt=❯ -start-insert buffer<CR>
-nnoremap <leader>8 :<C-u>UniteWithCursorWord -prompt=❯ grep:.<CR>
-nnoremap <leader>/ :<C-u>Unite -prompt=❯ grep:.<CR>
+nnoremap <C-p> :<C-u>Unite -start-insert -auto-resize buffer file_rec/neovim<CR>
+nnoremap <leader>y :<C-u>Unite history/yank<CR>
+nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
+nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
+nnoremap <leader>/ :<C-u>Unite grep:.<CR>
 nnoremap <leader>d :<C-u>UniteWithBufferDir
-      \ -start-insert -prompt=❯ buffer file_rec/async<CR>
-nnoremap <leader>f :<C-u>Unite -start-insert -prompt=❯ history/command<CR>
-nnoremap <leader><Space>/ :<C-u>Unite -start-insert -prompt=❯ history/search<CR>
+      \ -start-insert -prompt=❯\  buffer file_rec/async<CR>
+nnoremap <leader>f :<C-u>Unite -start-insert history/command<CR>
+nnoremap <leader><Space>/ :<C-u>Unite -start-insert history/search<CR>
 
 map <C-o> <Plug>(unite_redraw)
 
