@@ -45,6 +45,8 @@ endif
 Plug 'Shougo/neoyank.vim'
 Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/unite.vim'
+Plug 'sodiumjoe/unite-git'
+Plug 'sodiumjoe/unite-qf'
 Plug 'sjl/clam.vim'
 Plug 'thinca/vim-unite-history'
 Plug 'tpope/vim-commentary'
@@ -308,6 +310,13 @@ let g:move_key_modifier = 'C'
 
 " vim-better-whitespace
 hi link ExtraWhitespace Search
+
+" unite-git
+
+nnoremap <leader>g :<C-u>Unite git_status<CR>
+
+" unite-qf
+nnoremap <leader>o :<C-u>Unite location_list<CR>
 
 " vim-gitgutter
 
