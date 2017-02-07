@@ -67946,7 +67946,7 @@
 		<integer>1</integer>
 	</dict>
 	<key>NSWindow Frame NSFontPanel</key>
-	<string>259 294 445 77 0 0 1280 777 </string>
+	<string>259 160 445 77 0 0 1280 778 </string>
 	<key>NSWindow Frame Preferences</key>
 	<string>590 321 606 456 0 0 1280 777 </string>
 	<key>NSWindow Frame SUAutomaticUpdateAlert</key>
@@ -67956,9 +67956,9 @@
 	<key>NSWindow Frame SessionsPreferences</key>
 	<string>1549 -90 606 456 1280 -229 2560 1440 </string>
 	<key>NSWindow Frame SharedPreferences</key>
-	<string>171 164 796 473 0 0 1280 778 </string>
+	<string>171 113 918 495 0 0 1280 778 </string>
 	<key>NSWindow Frame iTerm Window 0</key>
-	<string>0 0 1280 778 0 0 1280 778 </string>
+	<string>2560 -229 1280 1440 1280 -229 2560 1440 </string>
 	<key>NSWindow Frame iTerm Window 1</key>
 	<string>2560 -229 1280 1440 1280 -229 2560 1440 </string>
 	<key>NSWindow Frame iTerm Window 2</key>
@@ -68666,7 +68666,7 @@
 			<key>Non-ASCII Anti Aliased</key>
 			<true/>
 			<key>Normal Font</key>
-			<string>InconsolataForPowerline-g 12</string>
+			<string>InconsolataGo-Regular 14</string>
 			<key>Option Key Sends</key>
 			<integer>2</integer>
 			<key>Prompt Before Closing 2</key>
