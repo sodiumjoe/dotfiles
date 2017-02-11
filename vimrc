@@ -155,7 +155,7 @@ set statusline=\ "
 set statusline+=%{Git_branch()}
 set statusline+=\ "
 " filename
-set statusline+=%<%t
+set statusline+=%<%f
 set statusline+=\ "
 " help/modified/readonly
 set statusline+=%h%m%r
@@ -212,8 +212,8 @@ nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
 nnoremap <leader>/ :<C-u>Unite grep:.<CR>
 nnoremap <leader>d :<C-u>UniteWithBufferDir
       \ -start-insert -prompt=❯\  buffer file_rec/async<CR>
-nnoremap <leader>f :<C-u>Unite -start-insert history/command<CR>
-nnoremap <leader><Space>/ :<C-u>Unite -start-insert history/search<CR>
+nnoremap <leader>f :<C-u>Unite history/command<CR>
+nnoremap <leader><Space>/ :<C-u>Unite history/search<CR>
 
 map <C-o> <Plug>(unite_redraw)
 
