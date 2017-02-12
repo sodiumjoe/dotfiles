@@ -6,7 +6,7 @@ if !has('nvim')
   " vim settings, rather than vi settings
   " must be first, because it changes other options as a side effect
   set nocompatible
-  set enc=utf-8
+  set enc=utf8
   " keep 50 lines of command line history
   set history=50
   set laststatus=2
@@ -31,10 +31,12 @@ Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'jaawerth/nrun.vim'
 Plug 'junegunn/vim-slash'
+Plug 'machakann/vim-highlightedyank'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
 " Plug 'romainl/vim-qf'
 Plug 'pbrisbin/vim-restore-cursor'
+Plug 'Raimondi/delimitMate'
 Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
 if has('nvim')
@@ -87,6 +89,8 @@ set noshowmode
 " show the cursor position all the time
 set ruler
 set smartcase
+" enable pipe cursor in insert mode
+let $NVIM_TUI_ENABLE_CURSOR_SHAPE=1
 
 map <space> <leader>
 nnoremap <leader>p :set paste!<Cr>
