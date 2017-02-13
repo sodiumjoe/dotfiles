@@ -91,6 +91,7 @@ set ruler
 set smartcase
 " enable pipe cursor in insert mode
 let $NVIM_TUI_ENABLE_CURSOR_SHAPE=1
+set diffopt=filler,vertical
 
 map <space> <leader>
 nnoremap <leader>p :set paste!<Cr>
@@ -229,6 +230,8 @@ function! s:unite_settings()
   nnoremap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
   inoremap <silent><buffer><expr> <C-x> unite#do_action('split')
   inoremap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
+  nnoremap <silent><buffer><expr> d unite#do_action('diff')
+  nnoremap <silent><buffer><expr> - unite#do_action('stage')
 endfunction
 
 let g:unite_source_grep_command = 'rg'
