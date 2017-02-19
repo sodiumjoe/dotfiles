@@ -45,7 +45,6 @@ else
   Plug 'Shougo/neocomplete.vim'
 endif
 Plug 'Shougo/neoyank.vim'
-Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/unite.vim'
 Plug 'sodiumjoe/unite-git'
 Plug 'sodiumjoe/unite-qf'
@@ -210,15 +209,21 @@ call unite#custom#source(
       \'buffer,file,file_rec',
       \'sorters',
       \'sorter_selecta')
-nnoremap <C-p> :<C-u>Unite -start-insert -auto-resize buffer file_rec/neovim<CR>
+call unite#custom#profile('default', 'context', {
+      \ 'start_insert': 1,
+      \ 'prompt_focus': 1
+      \})
+call unite#custom#profile('grep', 'context', {
+      \ 'no_start_insert': 1
+      \})
+nnoremap <C-p> :<C-u>Unite buffer file_rec/neovim<CR>
 nnoremap <leader>y :<C-u>Unite history/yank<CR>
-nnoremap <leader>s :<C-u>Unite -start-insert buffer<CR>
+nnoremap <leader>s :<C-u>Unite buffer<CR>
 nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
 nnoremap <leader>/ :<C-u>Unite grep:.<CR>
-nnoremap <leader>d :<C-u>UniteWithBufferDir
-      \ -start-insert -prompt=❯\  buffer file_rec/async<CR>
-nnoremap <leader>f :<C-u>Unite history/command<CR>
-nnoremap <leader><Space>/ :<C-u>Unite history/search<CR>
+nnoremap <leader>d :<C-u>UniteWithBufferDir file_rec/neovim<CR>
+nnoremap <leader>f :<C-u>Unite history/command -no-start-insert<CR>
+nnoremap <leader><Space>/ :<C-u>Unite history/search -no-start-insert<CR>
 
 map <C-o> <Plug>(unite_redraw)
 
@@ -226,9 +231,7 @@ au FileType unite call s:unite_settings()
 
 function! s:unite_settings()
   let b:SuperTabDisabled=1
-  nnoremap <silent><buffer><expr> <C-x> unite#do_action('split')
   nnoremap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
-  inoremap <silent><buffer><expr> <C-x> unite#do_action('split')
   inoremap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
   nnoremap <silent><buffer><expr> d unite#do_action('diff')
   nnoremap <silent><buffer><expr> - unite#do_action('stage')
@@ -320,10 +323,10 @@ hi link ExtraWhitespace Search
 
 " unite-git
 
-nnoremap <leader>g :<C-u>Unite git_status<CR>
+nnoremap <leader>g :<C-u>Unite -no-start-insert git_status<CR>
 
 " unite-qf
-nnoremap <leader>o :<C-u>Unite location_list<CR>
+nnoremap <leader>o :<C-u>Unite -no-start-insert location_list<CR>
 
 " vim-gitgutter
 
