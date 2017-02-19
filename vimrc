@@ -31,7 +31,6 @@ Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'jaawerth/nrun.vim'
 Plug 'junegunn/vim-slash'
-Plug 'machakann/vim-highlightedyank'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
 " Plug 'romainl/vim-qf'
@@ -57,6 +56,9 @@ Plug 'tpope/vim-surround'
 Plug 'vimwiki/vimwiki'
 Plug 'whatyouhide/vim-lengthmatters'
 Plug 'w0rp/ale'
+
+" has to load after other plugins
+Plug 'ryanoasis/vim-devicons'
 
 call plug#end()
 
@@ -286,7 +288,7 @@ else
 
 endif
 
-" CLAM
+" clam
 
 nnoremap ! :Clam<space>
 vnoremap ! :ClamVisual<space>
