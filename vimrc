@@ -1,5 +1,3 @@
-scriptencoding utf8
-
 " plugins
 " =======
 
@@ -38,6 +36,7 @@ call plug#end()
 " general
 " =======
 
+scriptencoding utf8
 set backupdir=~/.vim/backups
 set directory=~/.vim/swaps
 set undofile
@@ -69,6 +68,8 @@ set diffopt=filler,vertical
 
 map <space> <leader>
 nnoremap <leader>p :set paste!<Cr>
+" search visual selection
+vnoremap // y/<C-R>"<CR>
 
 " movement
 " ========
