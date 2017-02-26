@@ -29,13 +29,10 @@ Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
-Plug 'jaawerth/nrun.vim'
 Plug 'junegunn/vim-slash'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
-" Plug 'romainl/vim-qf'
 Plug 'pbrisbin/vim-restore-cursor'
-Plug 'Raimondi/delimitMate'
 Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
 if has('nvim')
@@ -115,9 +112,6 @@ syntax on
 filetype plugin indent on
 
 set nomodeline
-
-au BufRead,BufNewFile ~/work/* setlocal noexpandtab
-au BufRead,BufNewFile ~/work/elixir/* setlocal expandtab
 
 " display
 " =======
@@ -264,10 +258,7 @@ if has('nvim')
   let g:deoplete#enable_smart_case = 1
   " Set minimum syntax keyword length.
   let g:deoplete#auto_completion_start_length = 1
-
-  " tab completion
-  inoremap <silent><expr> <Tab> pumvisible() ? "\<C-n>" : "\<Tab>"
-  inoremap <silent><expr> <S-Tab> pumvisible() ? "\<C-p>" : "\<S-Tab>"
+	let g:deoplete#auto_complete_delay = 0
 
 else
 
