@@ -6,7 +6,7 @@ if !has('nvim')
   " vim settings, rather than vi settings
   " must be first, because it changes other options as a side effect
   set nocompatible
-  set enc=utf8
+  set encoding=utf8
   " keep 50 lines of command line history
   set history=50
   set laststatus=2
@@ -126,13 +126,13 @@ set guifont=Inconsolata:h16
 set background=dark
 colorscheme solarized
 " folding column width
-set fdc=2
+set foldcolumn=2
 " disable tabline
 set showtabline=0
 set autoindent
 set smartindent
-set ts=2
-set sw=2
+set tabstop=2
+set shiftwidth=2
 set expandtab
 " keep buffer of lines above and below cursor
 set scrolloff=5
@@ -153,8 +153,8 @@ hi StatusLineError cterm=NONE ctermfg=1 ctermbg=black
 " ==========
 
 function! Git_branch()
-  let branch = fugitive#head()
-  return empty(branch)?'':'['.branch.']'
+  let l:branch = fugitive#head()
+  return empty(l:branch)?'':'['.l:branch.']'
 endfunction
 
 set statusline=\ "
@@ -303,15 +303,15 @@ let g:EditorConfig_exclude_patterns = ['fugitive://.*']
 
 " vimwiki
 
-let work_wiki = {}
-let work_wiki.path = '~/work/todo.wiki'
-let work_wiki.path_html = '~/work/todo.html'
+let g:work_wiki = {}
+let g:work_wiki.path = '~/work/todo.wiki'
+let g:work_wiki.path_html = '~/work/todo.html'
 
-let play_wiki = {}
-let play_wiki.path = '~/play/todo.wiki'
-let play_wiki.path_html = '~/play/todo.html'
+let g:play_wiki = {}
+let g:play_wiki.path = '~/play/todo.wiki'
+let g:play_wiki.path_html = '~/play/todo.html'
 
-let g:vimwiki_list = [work_wiki, play_wiki]
+let g:vimwiki_list = [g:work_wiki, g:play_wiki]
 
 " vim-lengthmatters
 
