@@ -1,24 +1,4 @@
-" legacy vim
-" ==========
-
-if !has('nvim')
-
-  " vim settings, rather than vi settings
-  " must be first, because it changes other options as a side effect
-  set nocompatible
-  set encoding=utf8
-  " keep 50 lines of command line history
-  set history=50
-  set laststatus=2
-  " allow backspacing over everything in insert mode
-  set backspace=indent,eol,start
-  " incremental searching
-  set incsearch
-  " highlight last used search pattern
-  set hlsearch
-  set timeoutlen=1000 ttimeoutlen=10
-
-endif
+scriptencoding utf8
 
 " plugins
 " =======
@@ -37,11 +17,7 @@ Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
 Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
-if has('nvim')
-  Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
-else
-  Plug 'Shougo/neocomplete.vim'
-endif
+Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 Plug 'Shougo/neoyank.vim'
 Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/denite.nvim'
@@ -244,36 +220,15 @@ let g:ale_lint_on_save = 1
 " cycle through location list
 nnoremap <leader>n <Plug>(ale_next_wrap)
 
-if has('nvim')
+set inccommand=split
 
-  set inccommand=split
+" deoplete
 
-  " deoplete
-
-  let g:deoplete#enable_at_startup = 1
-  let g:deoplete#enable_smart_case = 1
-  " Set minimum syntax keyword length.
-  let g:deoplete#auto_completion_start_length = 1
-	let g:deoplete#auto_complete_delay = 0
-
-else
-
-  " neocomplete
-
-  " disable autocomplete
-  let g:acp_enableAtStartup = 0
-  " enable neocomplete: https://github.com/Shougo/neocomplete.vim
-  let g:neocomplete#enable_at_startup = 1
-  let g:neocomplete#enable_smart_case = 1
-  " Set minimum syntax keyword length.
-  let g:neocomplete#sources#syntax#min_keyword_length = 1
-  " fixes vim-clojure-static issue
-  " https://github.com/guns/vim-clojure-static/issues/54
-  " let g:neocomplete#force_overwrite_completefunc = 1
-  " tab completion
-  inoremap <expr><TAB> pumvisible() ? "\<C-n>" : "\<TAB>"
-
-endif
+let g:deoplete#enable_at_startup = 1
+let g:deoplete#enable_smart_case = 1
+" Set minimum syntax keyword length.
+let g:deoplete#auto_completion_start_length = 1
+let g:deoplete#auto_complete_delay = 0
 
 " clam
 
