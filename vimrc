@@ -27,6 +27,8 @@ call plug#begin('~/.vim/plugged')
 
 Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
+Plug 'chemzqm/vim-easygit'
+Plug 'chemzqm/denite-git'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'junegunn/vim-slash'
@@ -41,11 +43,9 @@ else
   Plug 'Shougo/neocomplete.vim'
 endif
 Plug 'Shougo/neoyank.vim'
-Plug 'Shougo/unite.vim'
-Plug 'sodiumjoe/unite-git'
-Plug 'sodiumjoe/unite-qf'
+Plug 'Shougo/vimproc.vim', { 'do': 'make' }
+Plug 'Shougo/denite.nvim'
 Plug 'sjl/clam.vim'
-Plug 'thinca/vim-unite-history'
 Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-fugitive'
 Plug 'tpope/vim-repeat'
@@ -175,6 +175,9 @@ set statusline+=\ "
 set statusline+=%P
 set statusline+=\ "
 
+nnoremap <leader>o :lopen<CR>
+nnoremap <leader>c :lclose<CR>
+
 " plugin configs
 " ==============
 
@@ -194,49 +197,42 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
 " let g:clojure_fuzzy_indent = 0
 
-" unite
+" denite
 
-let g:unite_source_history_yank_enable = 1
-let g:unite_prompt = '❯ '
-hi link uniteInputPrompt Function
-call unite#filters#matcher_default#use(
-      \['matcher_fuzzy', 'matcher_hide_current_file'])
-call unite#custom#source(
-      \'buffer,file,file_rec',
-      \'sorters',
-      \'sorter_selecta')
-call unite#custom#profile('default', 'context', {
-      \ 'start_insert': 1,
-      \ 'prompt_focus': 1
-      \})
-call unite#custom#profile('grep', 'context', {
-      \ 'no_start_insert': 1
-      \})
-nnoremap <C-p> :<C-u>Unite buffer file_rec/neovim<CR>
-nnoremap <leader>y :<C-u>Unite history/yank<CR>
-nnoremap <leader>s :<C-u>Unite buffer<CR>
-nnoremap <leader>8 :<C-u>UniteWithCursorWord grep:.<CR>
-nnoremap <leader>/ :<C-u>Unite grep:.<CR>
-nnoremap <leader>d :<C-u>UniteWithBufferDir file_rec/neovim<CR>
-nnoremap <leader>f :<C-u>Unite history/command -no-start-insert<CR>
-nnoremap <leader><Space>/ :<C-u>Unite history/search -no-start-insert<CR>
+call denite#custom#var('file_rec', 'command',
+      \ ['rg', '--files', '--glob', '!.git', ''])
+call denite#custom#option('default', 'prompt', '❯')
+augroup deniteresize
+  autocmd!
+  au VimResized,VimEnter * call denite#custom#option('default', 'winheight',
+        \ winheight(0) / 2)
+augroup end
+call denite#custom#var('grep', 'command', ['rg'])
+call denite#custom#var('grep', 'default_opts',
+      \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
+call denite#custom#var('grep', 'recursive_opts', [])
+call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
+call denite#custom#var('grep', 'separator', ['--'])
+call denite#custom#var('grep', 'final_opts', [])
+call denite#custom#map('insert', '<Esc>', '<denite:enter_mode:normal>',
+      \'noremap')
+call denite#custom#map('normal', '<Esc>', '<NOP>',
+      \'noremap')
+call denite#custom#map('insert', '<C-v>', '<denite:do_action:vsplit>',
+      \'noremap')
+call denite#custom#map('normal', '<C-v>', '<denite:do_action:vsplit>',
+      \'noremap')
+call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
+      \'noremap')
 
-map <C-o> <Plug>(unite_redraw)
+nnoremap <C-p> :<C-u>Denite file_rec<CR>
+nnoremap <leader>s :<C-u>Denite buffer<CR>
+nnoremap <leader>8 :<C-u>DeniteCursorWord grep:. -mode=normal<CR>
+nnoremap <leader>/ :<C-u>Denite grep:. -mode=normal<CR>
+nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:. -mode=normal<CR>
+nnoremap <leader>d :<C-u>DeniteBufferDir file_rec<CR>
 
-au FileType unite call s:unite_settings()
-
-function! s:unite_settings()
-  let b:SuperTabDisabled=1
-  nnoremap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
-  inoremap <silent><buffer><expr> <C-v> unite#do_action('vsplit')
-  nnoremap <silent><buffer><expr> d unite#do_action('diff')
-  nnoremap <silent><buffer><expr> - unite#do_action('stage')
-endfunction
-
-let g:unite_source_grep_command = 'rg'
-let g:unite_source_rec_async_command = ['rg', '--files']
-let g:unite_source_grep_default_opts = '--hidden --no-heading --vimgrep -S'
-let g:unite_source_grep_recursive_opt = ''
+hi link deniteMatchedChar Special
 
 " ale
 
@@ -314,12 +310,15 @@ let g:move_key_modifier = 'C'
 " vim-better-whitespace
 hi link ExtraWhitespace Search
 
-" unite-git
-
-nnoremap <leader>g :<C-u>Unite -no-start-insert git_status<CR>
-
-" unite-qf
-nnoremap <leader>o :<C-u>Unite -no-start-insert location_list<CR>
+" vim-easygit
+" let g:easygit_enable_command = 1
+nnoremap <leader>g :<C-u>Denite gitstatus -mode=normal<CR>
+call denite#custom#map('normal', 'a', '<denite:do_action:add>',
+      \ 'noremap')
+call denite#custom#map('normal', 'd', '<denite:do_action:delete>',
+      \ 'noremap')
+call denite#custom#map('normal', 'r', '<denite:do_action:reset>',
+      \ 'noremap')
 
 " vim-gitgutter
 
