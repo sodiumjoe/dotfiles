@@ -16,8 +16,6 @@ Plug 'pbrisbin/vim-restore-cursor'
 Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
 Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
-Plug 'Shougo/neoyank.vim'
-Plug 'Shougo/vimproc.vim', { 'do': 'make' }
 Plug 'Shougo/denite.nvim'
 Plug 'sjl/clam.vim'
 Plug 'tpope/vim-commentary'
