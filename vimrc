@@ -6,6 +6,7 @@ call plug#begin('~/.vim/plugged')
 Plug 'airblade/vim-gitgutter'
 Plug 'altercation/vim-colors-solarized'
 Plug 'chemzqm/vim-easygit'
+Plug 'chemzqm/denite-extra'
 Plug 'chemzqm/denite-git'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
@@ -150,9 +151,6 @@ set statusline+=\ "
 set statusline+=%P
 set statusline+=\ "
 
-nnoremap <leader>o :lopen<CR>
-nnoremap <leader>c :lclose<CR>
-
 " plugin configs
 " ==============
 
@@ -208,6 +206,12 @@ nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:. -mode=normal<CR>
 nnoremap <leader>d :<C-u>DeniteBufferDir file_rec<CR>
 
 hi link deniteMatchedChar Special
+
+" denite-extra
+
+nnoremap <leader>o :<C-u>Denite location_list -mode=normal -no-empty -resume<CR>
+nnoremap <leader>hs :<C-u>Denite history:search -mode=normal<CR>
+nnoremap <leader>hc :<C-u>Denite history:cmd -mode=normal<CR>
 
 " ale
 
