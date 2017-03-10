@@ -203,6 +203,7 @@ call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
 
 nnoremap <C-p> :<C-u>Denite file_rec<CR>
 nnoremap <leader>s :<C-u>Denite buffer<CR>
+nnoremap <leader><Space>s :<C-u>DeniteBufferDir buffer<CR>
 nnoremap <leader>8 :<C-u>DeniteCursorWord grep:. -mode=normal<CR>
 nnoremap <leader>/ :<C-u>Denite grep:. -mode=normal<CR>
 nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:. -mode=normal<CR>
@@ -212,7 +213,7 @@ hi link deniteMatchedChar Special
 
 " denite-extra
 
-nnoremap <leader>o :<C-u>Denite location_list -mode=normal -no-empty -resume<CR>
+nnoremap <leader>o :<C-u>Denite location_list -mode=normal -no-empty<CR>
 nnoremap <leader>hs :<C-u>Denite history:search -mode=normal<CR>
 nnoremap <leader>hc :<C-u>Denite history:cmd -mode=normal<CR>
 
@@ -234,7 +235,7 @@ let g:deoplete#enable_at_startup = 1
 let g:deoplete#enable_smart_case = 1
 " Set minimum syntax keyword length.
 let g:deoplete#auto_completion_start_length = 1
-let g:deoplete#auto_complete_delay = 0
+let g:deoplete#auto_complete_delay = 50
 
 "clam
 
