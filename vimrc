@@ -263,7 +263,21 @@ let g:vimwiki_list = [g:work_wiki, g:play_wiki]
 
 " vim-lengthmatters
 
-call lengthmatters#highlight_link_to('ColorColumn')
+call lengthmatters#highlight('ctermbg=0 guibg=#556873')
+let g:lengthmatters_excluded = [
+      \'unite',
+      \'tagbar',
+      \'startify',
+      \'gundo',
+      \'vimshell',
+      \'w3m',
+      \'nerdtree',
+      \'help',
+      \'qf',
+      \'dirvish',
+      \'denite',
+      \'gitcommit'
+      \]
 
 " vim-move
 let g:move_key_modifier = 'C'
