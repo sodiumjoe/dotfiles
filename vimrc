@@ -175,11 +175,14 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 call denite#custom#var('file_rec', 'command',
       \ ['rg', '--files', '--glob', '!.git', ''])
 call denite#custom#option('default', 'prompt', '❯')
+
+" reset 50% winheight on window resize
 augroup deniteresize
   autocmd!
-  au VimResized,VimEnter * call denite#custom#option('default', 'winheight',
-        \ winheight(0) / 2)
+  autocmd VimResized,VimEnter * call denite#custom#option('default',
+        \'winheight', winheight(0) / 2)
 augroup end
+
 call denite#custom#var('grep', 'command', ['rg'])
 call denite#custom#var('grep', 'default_opts',
       \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
@@ -233,7 +236,7 @@ let g:deoplete#enable_smart_case = 1
 let g:deoplete#auto_completion_start_length = 1
 let g:deoplete#auto_complete_delay = 0
 
-" clam
+"clam
 
 nnoremap ! :Clam<space>
 vnoremap ! :ClamVisual<space>
