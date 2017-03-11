@@ -227,6 +227,10 @@ let g:ale_lint_on_save = 1
 " cycle through location list
 nnoremap <leader>n <Plug>(ale_next_wrap)
 
+let g:ale_linters = {
+\   'elixir': [],
+\}
+
 set inccommand=split
 
 " deoplete
