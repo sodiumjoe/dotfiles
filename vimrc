@@ -4,7 +4,6 @@
 call plug#begin('~/.vim/plugged')
 
 Plug 'airblade/vim-gitgutter'
-Plug 'altercation/vim-colors-solarized'
 Plug 'chemzqm/vim-easygit'
 Plug 'chemzqm/denite-extra'
 Plug 'chemzqm/denite-git'
@@ -23,6 +22,7 @@ Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-fugitive'
 Plug 'tpope/vim-repeat'
 Plug 'tpope/vim-surround'
+Plug 'trevordmiller/nova-vim'
 Plug 'vimwiki/vimwiki'
 Plug 'whatyouhide/vim-lengthmatters'
 Plug 'w0rp/ale'
@@ -94,7 +94,7 @@ set nomodeline
 
 set guifont=Inconsolata:h16
 set background=dark
-colorscheme solarized
+colorscheme nova
 " folding column width
 set foldcolumn=2
 " disable tabline
