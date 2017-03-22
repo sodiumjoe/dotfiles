@@ -10,6 +10,11 @@ git clone --recursive https://github.com/sodiumjoe/prezto.git ~/.zprezto
 
 git clone https://github.com/sodiumjoe/nvm.git ~/.nvm
 
+mkdir ~/play
+
+git clone git@github.com:changyuheng/fz.git ~/play/fz
+git clone git@github.com:rupa/z.git ~/play/z
+
 # symlink dotfiles
 
 files=("mackup.cfg" "ignore" "gitconfig" "tmux.conf" "vimrc" "cvimrc")
