@@ -60,7 +60,6 @@ brew cask install clipmenu
 brew cask install controlplane
 brew cask install crashplan
 brew cask install dropbox
-brew cask install flux
 brew cask install hammerspoon
 brew cask install iterm2
 brew cask install karabiner
