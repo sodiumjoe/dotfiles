@@ -171,10 +171,6 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
 " denite
 
-call denite#custom#var('file_rec', 'command',
-      \ ['rg', '--files', '--glob', '!.git', ''])
-call denite#custom#option('default', 'prompt', '❯')
-
 " reset 50% winheight on window resize
 augroup deniteresize
   autocmd!
@@ -182,6 +178,12 @@ augroup deniteresize
         \'winheight', winheight(0) / 2)
 augroup end
 
+call denite#custom#option('default', {
+      \ 'prompt': '❯'
+      \ })
+
+call denite#custom#var('file_rec', 'command',
+      \ ['rg', '--files', '--glob', '!.git', ''])
 call denite#custom#var('grep', 'command', ['rg'])
 call denite#custom#var('grep', 'default_opts',
       \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
