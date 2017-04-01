@@ -127,7 +127,7 @@ function! Git_branch()
   return empty(l:branch)?'':'['.l:branch.']'
 endfunction
 
-set statusline=\ "
+set statusline=""
 set statusline+=%{Git_branch()}
 set statusline+=\ "
 " filename
@@ -149,7 +149,6 @@ set statusline+=%-14.(%l,%c%V%)
 set statusline+=\ "
 " percentge through file of displayed window
 set statusline+=%P
-set statusline+=\ "
 
 " plugin configs
 " ==============
