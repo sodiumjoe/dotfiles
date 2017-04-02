@@ -62,7 +62,6 @@ brew cask install crashplan
 brew cask install dropbox
 brew cask install hammerspoon
 brew cask install iterm2
-brew cask install karabiner
 brew cask install vlc
 brew cask install google-chrome-beta
 brew cask install font-inconsolata-g-for-powerline
