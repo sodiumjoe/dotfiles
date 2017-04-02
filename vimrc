@@ -111,14 +111,11 @@ set scrolloff=5
 set showcmd
 set textwidth=80
 
-hi StatusLine cterm=NONE ctermfg=white ctermbg=black
-hi StatusLineNC cterm=NONE ctermfg=black ctermbg=black
-hi Folded ctermfg=black ctermbg=black cterm=NONE
-hi FoldColumn cterm=bold ctermfg=blue ctermbg=NONE
-hi SignColumn ctermbg=NONE
-hi LineNr ctermbg=NONE
-hi EndOfBuffer ctermfg=8 ctermbg=8
-hi StatusLineError cterm=NONE ctermfg=1 ctermbg=black
+hi StatusLineError guifg=#DF8C8C guibg=#556873
+hi clear IncSearch
+hi link IncSearch Visual
+hi clear Search
+hi link Search Visual
 
 " statusline
 " ==========
