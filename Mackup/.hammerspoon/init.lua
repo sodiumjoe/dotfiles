@@ -28,7 +28,6 @@ function isPushedRight(f, max, isPrimary)
 end
 
 function pushLeft()
-  log.log('push left')
   local win = hs.window.focusedWindow()
   if not win then return end
   local f = win:frame()
@@ -38,7 +37,6 @@ function pushLeft()
   local isPrimary = primary:id() == screen:id()
 
   if isPushedLeft(f, max, isPrimary) then
-    log.log('is pushed left')
     if screen:toWest() == nil then return end
     -- throw left
     win:moveOneScreenWest()
@@ -51,9 +49,7 @@ function pushLeft()
     return win:setFrame(f)
   end
 
-  log.log('split left')
   f = splitLeft(f, max, isPrimary)
-  log.log(f)
   win:setFrame(f)
 
 end
@@ -85,8 +81,6 @@ function pushRight()
 end
 
 function splitLeft(f, max, isPrimary)
-  log.log('isPrimary')
-  log.log(isPrimary)
   if isPrimary then
     f.x = max.x - 4
     f.w = max.w / 2 + 4
