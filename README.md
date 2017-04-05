@@ -7,7 +7,6 @@ git clone https://github.com/sodiumjoe/dotfiles.git .dotfiles
 cd .dotfiles
 ./bootstrap.sh
 ./brew.sh
-./zprezto.zsh
 ./osx
 ```
 
