@@ -29,6 +29,8 @@
   fsckobjects = true
 [receive]
   fsckObjects = true
+[status]
+  showUntrackedFiles = all
 
 [color]
   pager = true
