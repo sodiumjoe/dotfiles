@@ -59,3 +59,6 @@ if which karn > /dev/null; then eval "$(karn init)"; fi
 source ~/play/per-directory-history/per-directory-history.zsh
 source ~/play/z/z.sh
 source ~/play/fz/fz.zsh
+export NVM_LAZY_LOAD=true
+source ~/play/zsh-nvm/zsh-nvm.plugin.zsh
+source ~/play/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh

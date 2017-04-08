@@ -16,6 +16,9 @@ git clone git@github.com:changyuheng/fz.git ~/play/fz
 git clone git@github.com:rupa/z.git ~/play/z
 git clone git@github.com:jimhester/per-directory-history.git \
   ~/play/per-directory-history
+git clone https://github.com/lukechilds/zsh-better-npm-completion.git \
+  ~/play/zsh-better-npm-completion
+git clone https://github.com/lukechilds/zsh-nvm.git ~/play/zsh-nvm
 
 # symlink dotfiles
 
