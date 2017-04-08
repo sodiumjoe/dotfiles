@@ -97,7 +97,7 @@ set guifont=Inconsolata:h16
 set background=dark
 colorscheme nova
 " folding column width
-set foldcolumn=2
+set foldcolumn=0
 " disable tabline
 set showtabline=0
 set autoindent
@@ -246,6 +246,7 @@ nnoremap ! :Clam<space>
 vnoremap ! :ClamVisual<space>
 
 " rust
+
 let g:rustfmt_autosave = 1
 
 " editorconfig
@@ -284,12 +285,15 @@ let g:lengthmatters_excluded = [
       \]
 
 " vim-move
+
 let g:move_key_modifier = 'C'
 
 " vim-better-whitespace
+
 hi link ExtraWhitespace Search
 
 " vim-easygit
+
 " let g:easygit_enable_command = 1
 nnoremap <leader>g :<C-u>Denite gitstatus -mode=normal<CR>
 call denite#custom#map('normal', 'a', '<denite:do_action:add>',
