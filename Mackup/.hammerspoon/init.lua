@@ -139,8 +139,8 @@ function maximize()
   return win:setFrame(f)
 end
 
-hs.hotkey.bind({"cmd", "ctrl"}, UP, maximize)
-hs.hotkey.bind({"cmd", "ctrl"}, LEFT, pushLeft)
-hs.hotkey.bind({"cmd", "ctrl"}, RIGHT, pushRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'k', maximize)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'h', pushLeft)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'l', pushRight)
 hs.hotkey.bind({"ctrl"}, 'h', focusLeft)
 hs.hotkey.bind({"ctrl"}, 'l', focusRight)
