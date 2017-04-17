@@ -13,6 +13,7 @@ Plug 'junegunn/vim-slash'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
+Plug 'sbdchd/neoformat'
 Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
 Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
@@ -306,3 +307,13 @@ call denite#custom#map('normal', 'r', '<denite:do_action:reset>',
 " vim-gitgutter
 
 let g:gitgutter_sign_column_always = 1
+
+" neoformat
+
+autocmd BufWritePre *.js Neoformat
+
+let g:neoformat_enabled_javascript = ['prettier']
+let g:neoformat_javascript_prettier = {
+      \ 'exe': './node_modules/.bin/prettier',
+      \ }
+let g:neoformat_only_msg_on_error = 1
