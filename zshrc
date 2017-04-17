@@ -6,7 +6,7 @@ fi
 ZSH_HIGHLIGHT_STYLES[path]='fg=cyan'
 
 export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:\
-/usr/local/share/npm/bin:~/.bin:~/.bin/terraform:~/npm/bin:~/.cargo/bin:
+/usr/local/share/npm/bin:~/bin:~/.bin:~/.bin/terraform:~/npm/bin:~/.cargo/bin
 
 export EDITOR=nvim
 
@@ -62,3 +62,5 @@ source ~/play/fz/fz.zsh
 export NVM_LAZY_LOAD=true
 source ~/play/zsh-nvm/zsh-nvm.plugin.zsh
 source ~/play/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh
+
+export RUST_SRC_PATH="~/play/rust/src"

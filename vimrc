@@ -13,6 +13,7 @@ Plug 'junegunn/vim-slash'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
+Plug 'racer-rust/vim-racer'
 Plug 'sbdchd/neoformat'
 Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
@@ -231,6 +232,8 @@ let g:ale_linters = {
 \   'elixir': [],
 \}
 
+let g:ale_rust_cargo_use_check = 1
+
 set inccommand=split
 
 " deoplete
@@ -317,3 +320,13 @@ let g:neoformat_javascript_prettier = {
       \ 'exe': './node_modules/.bin/prettier',
       \ }
 let g:neoformat_only_msg_on_error = 1
+
+" vim-racer
+
+set hidden
+let $RUST_SRC_PATH = '/Users/jmoon/play/rust/src'
+let g:racer_cmd = '~/.cargo/bin/racer'
+let g:racer_experimental_completer = 1
+let g:racer_insert_paren = 0
+
+au FileType rust nmap gd <Plug>(rust-def)
