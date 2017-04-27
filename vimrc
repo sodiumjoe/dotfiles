@@ -14,6 +14,7 @@ Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
 Plug 'racer-rust/vim-racer'
+Plug 'rust-lang/rust.vim'
 Plug 'sbdchd/neoformat'
 Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
@@ -249,10 +250,6 @@ let g:deoplete#auto_complete_delay = 50
 nnoremap ! :Clam<space>
 vnoremap ! :ClamVisual<space>
 
-" rust
-
-let g:rustfmt_autosave = 1
-
 " editorconfig
 
 let g:EditorConfig_core_mode = 'external_command'
@@ -314,6 +311,7 @@ let g:gitgutter_sign_column_always = 1
 " neoformat
 
 autocmd BufWritePre *.js Neoformat
+autocmd BufWritePre *.rs Neoformat
 
 let g:neoformat_enabled_javascript = ['prettier']
 let g:neoformat_javascript_prettier = {
