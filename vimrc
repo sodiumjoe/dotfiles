@@ -115,7 +115,10 @@ set scrolloff=5
 set showcmd
 set textwidth=80
 
-hi StatusLineError guifg=#DF8C8C guibg=#556873
+" split dividers
+set fillchars=""
+hi VertSplit guibg=#556873
+
 hi clear IncSearch
 hi link IncSearch Visual
 hi clear Search
@@ -123,6 +126,10 @@ hi link Search Visual
 
 " statusline
 " ==========
+
+hi StatusLine guifg=#7FC1CA guibg=#556873
+hi StatusLineNC guifg=#3C4C55 guibg=#556873
+hi StatusLineError guifg=#DF8C8C guibg=#556873
 
 function! Git_branch()
   let l:branch = fugitive#head()
