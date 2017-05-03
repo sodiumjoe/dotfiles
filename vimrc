@@ -9,7 +9,8 @@ Plug 'chemzqm/denite-extra'
 Plug 'chemzqm/denite-git'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
-Plug 'junegunn/vim-slash'
+Plug 'haya14busa/incsearch.vim'
+Plug 'haya14busa/incsearch-easymotion.vim'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
@@ -328,3 +329,24 @@ let g:racer_experimental_completer = 1
 let g:racer_insert_paren = 0
 
 au FileType rust nmap gd <Plug>(rust-def)
+
+" incsearch
+
+" map /  <Plug>(incsearch-forward)
+" map ?  <Plug>(incsearch-backward)
+" map g/ <Plug>(incsearch-stay)
+
+set hlsearch
+let g:incsearch#auto_nohlsearch = 1
+map n  <Plug>(incsearch-nohl-n)
+map N  <Plug>(incsearch-nohl-N)
+map *  <Plug>(incsearch-nohl-*)
+map #  <Plug>(incsearch-nohl-#)
+map g* <Plug>(incsearch-nohl-g*)
+map g# <Plug>(incsearch-nohl-g#)
+
+" incsearch-easymotion
+
+map / <Plug>(incsearch-easymotion-/)
+map ? <Plug>(incsearch-easymotion-?)
+map g/ <Plug>(incsearch-easymotion-stay)
