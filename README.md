@@ -14,3 +14,4 @@ cd .dotfiles
 * filevault
 * caps -> ctrl
 * generate ssh keys
+* https://www.rustup.rs/
