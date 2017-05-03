@@ -66,8 +66,6 @@ set noshowmode
 " show the cursor position all the time
 set ruler
 set smartcase
-" enable pipe cursor in insert mode
-let $NVIM_TUI_ENABLE_CURSOR_SHAPE=1
 set diffopt=filler,vertical
 
 map <space> <leader>
