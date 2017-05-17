@@ -178,6 +178,9 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
 " denite
 
+" disable devicons for denite because it's slow
+let g:webdevicons_enable_denite = 0
+
 " reset 50% winheight on window resize
 augroup deniteresize
   autocmd!
