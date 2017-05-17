@@ -10,3 +10,4 @@ let barposition='bottom'
 let blacklists = ["https://inbox.google.com/*","https://calendar.google.com/*","https://feedly.com/*"]
 let hintcharacters = 'asdfghjkl;'
 let mapleader = ' '
+set nativelinkorder
