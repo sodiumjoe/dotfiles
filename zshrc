@@ -39,7 +39,8 @@ export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
   --height=100% \
   --no-bold \
   --color=dark,bg+:0,fg+:4 \
-  --prompt='❯❯❯ '"
+  --prompt='❯❯❯ ' \
+  --no-reverse"
 
 # fbr - checkout git branch (including remote branches)
 fbr() {
