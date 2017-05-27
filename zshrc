@@ -45,10 +45,9 @@ export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
 # fbr - checkout git branch (including remote branches)
 fbr() {
   local branches branch
-  branches=$(git branch --all | grep -v HEAD) &&
-  branch=$(echo "$branches" |
-           fzf-tmux -d $(( 2 + $(wc -l <<< "$branches") )) +m) &&
-  git checkout $(echo "$branch" | sed "s/.* //" | sed "s#remotes/[^/]*/##")
+  branches=$(git branch --format="%(refname:short)" --sort=-committerdate) &&
+  branch=$(echo "$branches" | fzf) &&
+  git checkout $branch
 }
 
 if which karn > /dev/null; then eval "$(karn init)"; fi
