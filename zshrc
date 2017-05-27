@@ -50,6 +50,7 @@ fbr() {
   git checkout $branch
 }
 
+# per-directory git config
 if which karn > /dev/null; then eval "$(karn init)"; fi
 
 # added by travis gem
