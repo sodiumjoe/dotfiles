@@ -118,9 +118,9 @@ set fillchars=""
 hi VertSplit guibg=#556873
 
 hi clear IncSearch
-hi link IncSearch Visual
+hi link IncSearch TermCursor
 hi clear Search
-hi link Search Visual
+hi link Search TermCursor
 
 " statusline
 " ==========
