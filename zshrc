@@ -9,6 +9,10 @@ export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:\
 /usr/local/share/npm/bin:~/bin:~/.bin:~/.bin/terraform:~/npm/bin:~/.cargo/bin
 
 export EDITOR=nvim
+# open in editor
+autoload -z edit-command-line
+zle -N edit-command-line
+bindkey -M vicmd v edit-command-line
 
 # (ins mode)
 bindkey -M viins '\e^?' backward-kill-word
