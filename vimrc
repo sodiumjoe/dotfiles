@@ -118,9 +118,9 @@ set fillchars=""
 hi VertSplit guibg=#556873
 
 hi clear IncSearch
-hi link IncSearch TermCursor
+hi link IncSearch StatusLine
 hi clear Search
-hi link Search TermCursor
+hi link Search StatusLine
 
 " statusline
 " ==========
@@ -322,10 +322,10 @@ let g:gitgutter_sign_column_always = 1
 autocmd BufWritePre *.js Neoformat
 autocmd BufWritePre *.rs Neoformat
 
-let g:neoformat_enabled_javascript = ['prettier']
-let g:neoformat_javascript_prettier = {
-      \ 'exe': './node_modules/.bin/prettier',
-      \ }
+" let g:neoformat_enabled_javascript = ['prettier']
+" let g:neoformat_javascript_prettier = {
+"       \ 'exe': './node_modules/.bin/prettier --write --single-quote --use-tabs --trailing-comma es5',
+"       \ }
 let g:neoformat_only_msg_on_error = 1
 
 " vim-racer
