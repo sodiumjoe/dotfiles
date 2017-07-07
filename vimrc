@@ -3,37 +3,32 @@
 
 call plug#begin('~/.vim/plugged')
 
+Plug 'Shougo/denite.nvim'
+Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 Plug 'airblade/vim-gitgutter'
-Plug 'chemzqm/vim-easygit'
+Plug 'benizi/vim-automkdir'
 Plug 'chemzqm/denite-extra'
 Plug 'chemzqm/denite-git'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
-Plug 'haya14busa/incsearch.vim'
 Plug 'haya14busa/incsearch-easymotion.vim'
+Plug 'haya14busa/incsearch.vim'
+Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
+Plug 'mhartington/nvim-typescript'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
 Plug 'racer-rust/vim-racer'
-Plug 'rust-lang/rust.vim'
 Plug 'sbdchd/neoformat'
-Plug 'scrooloose/nerdtree'
 Plug 'sheerun/vim-polyglot'
-Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
-Plug 'Shougo/denite.nvim'
-Plug 'sjl/clam.vim'
 Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-fugitive'
 Plug 'tpope/vim-repeat'
 Plug 'tpope/vim-surround'
 Plug 'trevordmiller/nova-vim'
-Plug 'benizi/vim-automkdir'
 Plug 'vimwiki/vimwiki'
-Plug 'whatyouhide/vim-lengthmatters'
 Plug 'w0rp/ale'
-
-" has to load after other plugins
-Plug 'ryanoasis/vim-devicons'
+Plug 'whatyouhide/vim-lengthmatters'
 
 call plug#end()
 
@@ -66,12 +61,18 @@ set noshowmode
 " show the cursor position all the time
 set ruler
 set smartcase
+set infercase
 set diffopt=filler,vertical
+set breakindent
 
 map <space> <leader>
-nnoremap <leader>p :set paste!<Cr>
 " search visual selection
 vnoremap // y/<C-R>"<CR>
+
+" partial command filter on command history
+cnoremap <C-k> <Up>
+cnoremap <C-j> <Down>
+
 
 " movement
 " ========
@@ -178,9 +179,6 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
 " denite
 
-" disable devicons for denite because it's slow
-let g:webdevicons_enable_denite = 0
-
 " reset 50% winheight on window resize
 augroup deniteresize
   autocmd!
@@ -235,8 +233,9 @@ let g:ale_sign_warning = '⚠'
 let g:ale_statusline_format = ['⨉ %d', '⚠ %d', '']
 let g:ale_lint_on_text_changed = 0
 let g:ale_lint_on_save = 1
+let g:ale_lint_on_enter = 1
 " cycle through location list
-nnoremap <leader>n <Plug>(ale_next_wrap)
+nmap <silent> <leader>n <Plug>(ale_next_wrap)
 
 let g:ale_linters = {
 \   'elixir': [],
