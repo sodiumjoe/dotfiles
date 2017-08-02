@@ -358,3 +358,10 @@ map g# <Plug>(incsearch-nohl-g#)
 map / <Plug>(incsearch-easymotion-/)
 map ? <Plug>(incsearch-easymotion-?)
 map g/ <Plug>(incsearch-easymotion-stay)
+
+" dirvish
+
+augroup dirvish_fugitive
+  autocmd!
+  autocmd FileType dirvish call fugitive#detect(@%)
+augroup end
