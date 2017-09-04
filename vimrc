@@ -8,7 +8,6 @@ Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 Plug 'airblade/vim-gitgutter'
 Plug 'benizi/vim-automkdir'
 Plug 'chemzqm/denite-extra'
-Plug 'chemzqm/denite-git'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'haya14busa/incsearch-easymotion.vim'
@@ -16,6 +15,7 @@ Plug 'haya14busa/incsearch.vim'
 Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
 Plug 'mhartington/nvim-typescript'
+Plug 'neoclide/denite-git'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
 Plug 'racer-rust/vim-racer'
@@ -315,7 +315,7 @@ call denite#custom#map('normal', 'r', '<denite:do_action:reset>',
 
 " vim-gitgutter
 
-let g:gitgutter_sign_column_always = 1
+set signcolumn=yes
 
 " neoformat
 
