@@ -43,7 +43,6 @@ brew install postgresql
 brew install python
 brew install python3
 brew install ranger
-brew install reattach-to-user-namespace
 brew install ripgrep
 brew install sqlite
 brew install tmux
