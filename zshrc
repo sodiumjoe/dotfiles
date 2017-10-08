@@ -70,3 +70,5 @@ source ~/play/zsh-nvm/zsh-nvm.plugin.zsh
 source ~/play/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh
 
 export RUST_SRC_PATH="~/play/rust/src"
+
+ulimit -n 65536 65536
