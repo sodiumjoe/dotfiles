@@ -32,6 +32,7 @@ files=(\
   "zlogin"\
   "zshrc"\
   "zimrc"\
+  "alacritty.yml"\
   )
 
 for file in ${files[@]}; do
