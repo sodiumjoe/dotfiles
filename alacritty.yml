@@ -55,11 +55,13 @@ font:
   # Point size of the font
   size: 14.0
 
+  fallback_size: 12.0
+
   # Offset is the extra space around each character. offset.y can be thought of
   # as modifying the linespacing, and offset.x as modifying the letter spacing.
   offset:
     x: 0.0
-    y: 5.0
+    y: 4.0
 
   # Glyph offset determines the locations of the glyphs within their cells with
   # the default being at the bottom. Increase the x offset to move the glyph to
@@ -206,6 +208,9 @@ visual_bell:
   animation: EaseOutExpo
   duration: 0
 
+# Background opacity
+background_opacity: 1.0
+
 # Key bindings
 #
 # Each binding is defined as an object with some properties. Most of the
@@ -239,6 +244,7 @@ visual_bell:
 #     strings. For example:
 #     - { ... , command: { program: "alacritty", args: ["-e", "vttest"] } }
 key_bindings:
+  - { key: N,        mods: Command, command: { program: "open", args: ["-n", "/Applications/Alacritty.app"] } }
   - { key: V,        mods: Command, action: Paste                        }
   - { key: C,        mods: Command, action: Copy                         }
   - { key: Q,        mods: Command, action: Quit                         }
@@ -247,6 +253,9 @@ key_bindings:
   - { key: Home,                    chars: "\x1b[H",   mode: ~AppCursor  }
   - { key: End,                     chars: "\x1bOF",   mode: AppCursor   }
   - { key: End,                     chars: "\x1b[F",   mode: ~AppCursor  }
+  - { key: Key0,     mods: Command, action: ResetFontSize                }
+  - { key: Equals,   mods: Command, action: IncreaseFontSize             }
+  - { key: Subtract, mods: Command, action: DecreaseFontSize             }
   - { key: PageUp,   mods: Shift,   chars: "\x1b[5;2~"                   }
   - { key: PageUp,   mods: Control, chars: "\x1b[5;5~"                   }
   - { key: PageUp,                  chars: "\x1b[5~"                     }
@@ -294,6 +303,7 @@ key_bindings:
   - { key: Tab,mods: Shift|Control, chars: "\x01p",                      } # <C-a>p
   - { key: N,mods: Command|Control, chars: "\x01\x0E",                   } # <C-a><C-n>
   - { key: P,mods: Command|Control, chars: "\x01\x10",                   } # <C-a><C-p>
+  - { key: Space,    mods: Control, chars: "\x00",                       }
 
 # Mouse bindings
 #
@@ -320,7 +330,7 @@ key_bindings:
 selection:
   semantic_escape_chars: ",│`|:\"' ()[]{}<>"
 
-hide_cursor_when_typing: false
+hide_cursor_when_typing: true
 
 # Live config reload (changes require restart)
 live_config_reload: true
