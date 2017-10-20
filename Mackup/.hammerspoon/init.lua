@@ -8,21 +8,27 @@ local LEFT = 'Left'
 local RIGHT = 'Right'
 local UP = 'Up'
 
-function isMaximized(f, max, isPrimary)
-  if isPrimary then
+function getHasSidebar(screen)
+  if #hs.screen.allScreens() == 1 then return true end
+  local primary = hs.screen.primaryScreen()
+  return primary:id() ~= screen:id()
+end
+
+function isMaximized(f, max, hasSidebar)
+  if hasSidebar then
     return f.x == max.x - 4 and f.y == max.y and f.w == max.w + 4 and f.h == max.h
   end
   return f.x == max.x and f.y == max.y and f.w == max.w and f.h == max.h
 end
 
-function isPushedLeft(f, max, isPrimary)
-  if isMaximized(f, max, isPrimary) then return false end
+function isPushedLeft(f, max, hasSidebar)
+  if isMaximized(f, max, hasSidebar) then return false end
   if f.h ~= max.h then return false end
   return f.x == max.x and f.w == (max.w / 2)
 end
 
-function isPushedRight(f, max, isPrimary)
-  if isMaximized(f, max, isPrimary) then return false end
+function isPushedRight(f, max, hasSidebar)
+  if isMaximized(f, max, hasSidebar) then return false end
   if f.h ~= max.h then return false end
   return (f.x == (max.x + (max.w / 2)) or f.x == (max.x + (max.w/2 - 4))) and (f.w == (max.w / 2) or f.w == (max.w / 2 + 4))
 end
@@ -33,25 +39,22 @@ function pushLeft()
   local f = win:frame()
   local screen = win:screen()
   local max = screen:frame()
-  local primary = hs.screen.primaryScreen()
-  local isPrimary = primary:id() == screen:id()
+  local hasSidebar = getHasSidebar(screen)
 
-  if isPushedLeft(f, max, isPrimary) then
+  if isPushedLeft(f, max, hasSidebar) then
     if screen:toWest() == nil then return end
     -- throw left
     win:moveOneScreenWest()
     local f = win:frame()
     local screen = win:screen()
     local max = screen:frame()
-    local primary = hs.screen.primaryScreen()
-    local isPrimary = primary:id() == screen:id()
-    f = splitRight(f, max, isPrimary)
+    local hasSidebar = getHasSidebar(screen)
+    f = splitRight(f, max, hasSidebar)
     return win:setFrame(f)
   end
 
-  f = splitLeft(f, max, isPrimary)
+  f = splitLeft(f, max, hasSidebar)
   win:setFrame(f)
-
 end
 
 function pushRight()
@@ -60,28 +63,26 @@ function pushRight()
   local f = win:frame()
   local screen = win:screen()
   local max = screen:frame()
-  local primary = hs.screen.primaryScreen()
-  local isPrimary = primary:id() == screen:id()
+  local hasSidebar = getHasSidebar(screen)
 
-  if isPushedRight(f, max, isPrimary) then
+  if isPushedRight(f, max, hasSidebar) then
     if screen:toEast() == nil then return end
     -- throw right
     win:moveOneScreenEast()
     local f = win:frame()
     local screen = win:screen()
     local max = screen:frame()
-    local primary = hs.screen.primaryScreen()
-    local isPrimary = primary:id() == screen:id()
-    f = splitLeft(f, max, isPrimary)
+    local hasSidebar = getHasSidebar(screen)
+    f = splitLeft(f, max, hasSidebar)
     return win:setFrame(f)
   end
 
-  f = splitRight(f, max, isPrimary)
+  f = splitRight(f, max, hasSidebar)
   win:setFrame(f)
 end
 
-function splitLeft(f, max, isPrimary)
-  if isPrimary then
+function splitLeft(f, max, hasSidebar)
+  if hasSidebar then
     f.x = max.x - 4
     f.w = max.w / 2 + 4
   else
@@ -94,10 +95,10 @@ function splitLeft(f, max, isPrimary)
   return f
 end
 
-function splitRight(f, max, isPrimary)
-  if isPrimary and #hs.screen.allScreens() > 1 then
-    f.x = max.x + max.w / 2 - 4
-    f.w = max.w / 2 + 4
+function splitRight(f, max, hasSidebar)
+  if hasSidebar then
+    f.x = max.x + max.w / 2
+    f.w = max.w / 2
   else
     f.x = max.x + max.w / 2
     f.w = max.w / 2
@@ -121,10 +122,9 @@ function maximize()
   local f = win:frame()
   local screen = win:screen()
   local max = screen:frame()
-  local primary = hs.screen.primaryScreen()
-  local isPrimary = primary:id() == screen:id()
+  local hasSidebar = getHasSidebar(screen)
 
-  if isPrimary then
+  if hasSidebar then
     f.x = max.x - 4
     f.y = max.y
     f.w = max.w + 4
