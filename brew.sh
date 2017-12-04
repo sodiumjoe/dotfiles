@@ -31,8 +31,6 @@ brew install fzf
 brew install git
 brew install gnu-tar
 brew install gnupg
-brew install httpie
-brew install jq
 brew install karn
 # brew install leiningen
 brew install lua
@@ -44,6 +42,7 @@ brew install python
 brew install python3
 brew install ranger
 brew install ripgrep
+brew install rq
 brew install sqlite
 brew install tmux
 brew install tree
