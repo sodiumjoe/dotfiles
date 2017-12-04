@@ -21,6 +21,8 @@ autoload -z edit-command-line
 zle -N edit-command-line
 bindkey -M vicmd v edit-command-line
 
+export LANG='en_US.UTF-8'
+
 # (ins mode)
 bindkey -M viins '\e^?' backward-kill-word
 
