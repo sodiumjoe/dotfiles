@@ -1,8 +1,42 @@
+-- https://github.com/asmagill/hs._asm.undocumented.spaces
+local spaces = require("hs._asm.undocumented.spaces")
 hs.window.animationDuration = 0.01
 hs.grid.setMargins({ 0, 0 })
-local log = hs.logger.new('foo', 5)
+-- local log = hs.logger.new('foo', 5)
 -- log.log('logging enabled')
 local space=hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
+
+function indexOf(table, value)
+  for k, v in pairs(table) do
+    if v == value then return k end
+  end
+  return nil
+end
+
+function pushSpaceLeft(win)
+  local currentSpace = spaces.query(spaces.masks.currentSpaces)[1]
+  local currentSpaces = spaces.layout()[spaces.mainScreenUUID()]
+  local currentSpaceIndex = indexOf(currentSpaces, currentSpace)
+  if currentSpaceIndex == nil then return end
+  local spaceId = currentSpaces[currentSpaceIndex - 1]
+  log.log(spaceId)
+  if spaceId == nil then return end
+  spaces.moveWindowToSpace(win:id(), spaceId)
+  pushRight(win)
+  spaces.changeToSpace(spaceId)
+end
+
+function pushSpaceRight(win)
+  local currentSpace = spaces.query(spaces.masks.currentSpaces)[1]
+  local currentSpaces = spaces.layout()[spaces.mainScreenUUID()]
+  local currentSpaceIndex = indexOf(currentSpaces, currentSpace)
+  if currentSpaceIndex == nil then return end
+  local spaceId = currentSpaces[currentSpaceIndex + 1]
+  if spaceId == nil then return end
+  spaces.moveWindowToSpace(win:id(), spaceId)
+  pushLeft(win)
+  spaces.changeToSpace(spaceId)
+end
 
 local LEFT = 'Left'
 local RIGHT = 'Right'
@@ -24,6 +58,9 @@ end
 function isPushedLeft(f, max, hasSidebar)
   if isMaximized(f, max, hasSidebar) then return false end
   if f.h ~= max.h then return false end
+  if hasSidebar then
+    return f.x == max.x - 4 and f.w == max.w / 2 + 4
+  end
   return f.x == max.x and f.w == (max.w / 2)
 end
 
@@ -33,8 +70,8 @@ function isPushedRight(f, max, hasSidebar)
   return (f.x == (max.x + (max.w / 2)) or f.x == (max.x + (max.w/2 - 4))) and (f.w == (max.w / 2) or f.w == (max.w / 2 + 4))
 end
 
-function pushLeft()
-  local win = hs.window.focusedWindow()
+function pushLeft(win)
+  win = win or hs.window.focusedWindow()
   if not win then return end
   local f = win:frame()
   local screen = win:screen()
@@ -42,7 +79,9 @@ function pushLeft()
   local hasSidebar = getHasSidebar(screen)
 
   if isPushedLeft(f, max, hasSidebar) then
-    if screen:toWest() == nil then return end
+    if screen:toWest() == nil then
+      return pushSpaceLeft(win)
+    end
     -- throw left
     win:moveOneScreenWest()
     local f = win:frame()
@@ -57,8 +96,8 @@ function pushLeft()
   win:setFrame(f)
 end
 
-function pushRight()
-  local win = hs.window.focusedWindow()
+function pushRight(win)
+  win = win or hs.window.focusedWindow()
   if not win then return end
   local f = win:frame()
   local screen = win:screen()
@@ -66,7 +105,9 @@ function pushRight()
   local hasSidebar = getHasSidebar(screen)
 
   if isPushedRight(f, max, hasSidebar) then
-    if screen:toEast() == nil then return end
+    if screen:toEast() == nil then
+      return pushSpaceRight(win)
+    end
     -- throw right
     win:moveOneScreenEast()
     local f = win:frame()
