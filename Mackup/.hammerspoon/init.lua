@@ -19,7 +19,6 @@ function pushSpaceLeft(win)
   local currentSpaceIndex = indexOf(currentSpaces, currentSpace)
   if currentSpaceIndex == nil then return end
   local spaceId = currentSpaces[currentSpaceIndex - 1]
-  log.log(spaceId)
   if spaceId == nil then return end
   spaces.moveWindowToSpace(win:id(), spaceId)
   pushRight(win)
