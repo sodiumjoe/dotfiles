@@ -328,6 +328,14 @@ autocmd BufWritePre *.rs Neoformat
 "       \ }
 let g:neoformat_only_msg_on_error = 1
 
+let g:neoformat_rust_rustfmt = {
+      \ 'exe': 'rustup',
+      \ 'args': ['run', 'nightly', 'rustfmt'],
+      \ 'stdin': 1,
+      \ }
+
+let g:neoformat_enabled_rust = ['rustfmt']
+
 " vim-racer
 
 set hidden
