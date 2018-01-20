@@ -369,6 +369,11 @@ map g/ <Plug>(incsearch-easymotion-stay)
 
 " dirvish
 
+augroup dirvish_config
+  autocmd!
+  autocmd FileType dirvish silent! unmap <buffer> <C-p>
+augroup END
+
 augroup dirvish_fugitive
   autocmd!
   autocmd FileType dirvish call fugitive#detect(@%)
