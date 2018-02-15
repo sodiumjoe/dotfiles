@@ -64,11 +64,6 @@ fbr() {
 # per-directory git config
 if which karn > /dev/null; then eval "$(karn init)"; fi
 
-# added by travis gem
-# [ -f /Users/jmoon/.travis/travis.sh ] && source /Users/jmoon/.travis/travis.sh
-
-# eval $(docker-machine env an-vm)
-
 source ~/play/per-directory-history/per-directory-history.zsh
 source ~/play/z/z.sh
 source ~/play/fz/fz.plugin.zsh
