@@ -58,15 +58,15 @@ function isPushedLeft(f, max, hasSidebar)
   if isMaximized(f, max, hasSidebar) then return false end
   if f.h ~= max.h then return false end
   if hasSidebar then
-    return f.x == max.x - 4 and f.w == max.w / 2 + 4
+    return f.x == max.x - 4
   end
-  return f.x == max.x and f.w == (max.w / 2)
+  return f.x == max.x
 end
 
 function isPushedRight(f, max, hasSidebar)
   if isMaximized(f, max, hasSidebar) then return false end
   if f.h ~= max.h then return false end
-  return (f.x == (max.x + (max.w / 2)) or f.x == (max.x + (max.w/2 - 4))) and (f.w == (max.w / 2) or f.w == (max.w / 2 + 4))
+  return f.x == (max.x + (max.w / 2)) or f.x == (max.x + (max.w/2 - 4))
 end
 
 function pushLeft(win)
@@ -87,7 +87,7 @@ function pushLeft(win)
     local screen = win:screen()
     local max = screen:frame()
     local hasSidebar = getHasSidebar(screen)
-    f = splitRight(f, max, hasSidebar)
+    f = splitRight(f, max)
     return win:setFrame(f)
   end
 
@@ -117,7 +117,7 @@ function pushRight(win)
     return win:setFrame(f)
   end
 
-  f = splitRight(f, max, hasSidebar)
+  f = splitRight(f, max)
   win:setFrame(f)
 end
 
@@ -135,15 +135,9 @@ function splitLeft(f, max, hasSidebar)
   return f
 end
 
-function splitRight(f, max, hasSidebar)
-  if hasSidebar then
-    f.x = max.x + max.w / 2
-    f.w = max.w / 2
-  else
-    f.x = max.x + max.w / 2
-    f.w = max.w / 2
-  end
-
+function splitRight(f, max)
+  f.x = max.x + max.w / 2
+  f.w = max.w / 2
   f.y = max.y
   f.h = max.h
   return f
