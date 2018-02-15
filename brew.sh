@@ -23,8 +23,6 @@ brew tap caskroom/fonts
 brew install autojump
 brew install curl
 brew install editorconfig
-brew install elixir
-brew install erlang
 brew install fzf
 # set fzf keybindings
 /usr/local/opt/fzf/install
@@ -60,7 +58,7 @@ brew cask install dropbox
 brew cask install hammerspoon
 brew cask install vlc
 brew cask install google-chrome-beta
-brew cask install font-inconsolata-g-for-powerline
+brew cask install font-inconsolata-nerd-font
 
 # neovim
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
