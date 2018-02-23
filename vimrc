@@ -320,13 +320,15 @@ set signcolumn=yes
 " neoformat
 
 autocmd BufWritePre *.js Neoformat
+autocmd BufWritePre *.jsx Neoformat
 autocmd BufWritePre *.rs Neoformat
 
-" let g:neoformat_enabled_javascript = ['prettier']
-" let g:neoformat_javascript_prettier = {
-"       \ 'exe': './node_modules/.bin/prettier --write --single-quote --use-tabs --trailing-comma es5',
-"       \ }
-let g:neoformat_only_msg_on_error = 1
+let g:neoformat_enabled_javascript = ['prettier']
+let g:neoformat_javascript_prettier = {
+      \ 'exe': './node_modules/.bin/prettier',
+      \ 'args': ['--write', '--config .prettierrc'],
+      \ 'replace': 1
+      \ }
 
 let g:neoformat_rust_rustfmt = {
       \ 'exe': 'rustup',
