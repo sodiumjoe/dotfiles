@@ -420,3 +420,4 @@ key_bindings:
   - { key: N,mods: Command|Control, chars: "\x01\x0E",                   } # <C-a><C-n>
   - { key: P,mods: Command|Control, chars: "\x01\x10",                   } # <C-a><C-p>
   - { key: Space,    mods: Control, chars: "\x00",                       }
+#   - { key: N,        mods: Command, command: { program: "open", args: ["-n", "/Applications/Alacritty.app"] } }
