@@ -3,8 +3,10 @@
 
 call plug#begin('~/.vim/plugged')
 
-Plug 'Shougo/denite.nvim'
-Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
+if has('nvim')
+  Plug 'Shougo/denite.nvim'
+  Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
+endif
 Plug 'airblade/vim-gitgutter'
 Plug 'benizi/vim-automkdir'
 Plug 'easymotion/vim-easymotion'
@@ -73,6 +75,10 @@ vnoremap // y/<C-R>"<CR>
 cnoremap <C-k> <Up>
 cnoremap <C-j> <Down>
 
+if executable('rg')
+  set grepprg=rg\ --vimgrep\ --no-heading\ -S
+  set grepformat=%f:%l:%c:%m,%f:%l:%m
+endif
 
 " movement
 " ========
@@ -179,36 +185,38 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
 " denite
 
-" reset 50% winheight on window resize
-augroup deniteresize
-  autocmd!
-  autocmd VimResized,VimEnter * call denite#custom#option('default',
-        \'winheight', winheight(0) / 2)
-augroup end
+if has('nvim')
+  " reset 50% winheight on window resize
+  augroup deniteresize
+    autocmd!
+    autocmd VimResized,VimEnter * call denite#custom#option('default',
+          \'winheight', winheight(0) / 2)
+  augroup end
 
-call denite#custom#option('default', {
-      \ 'prompt': '❯'
-      \ })
+  call denite#custom#option('default', {
+        \ 'prompt': '❯'
+        \ })
 
-call denite#custom#var('file_rec', 'command',
-      \ ['rg', '--files', '--glob', '!.git', ''])
-call denite#custom#var('grep', 'command', ['rg'])
-call denite#custom#var('grep', 'default_opts',
-      \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
-call denite#custom#var('grep', 'recursive_opts', [])
-call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
-call denite#custom#var('grep', 'separator', ['--'])
-call denite#custom#var('grep', 'final_opts', [])
-call denite#custom#map('insert', '<Esc>', '<denite:enter_mode:normal>',
-      \'noremap')
-call denite#custom#map('normal', '<Esc>', '<NOP>',
-      \'noremap')
-call denite#custom#map('insert', '<C-v>', '<denite:do_action:vsplit>',
-      \'noremap')
-call denite#custom#map('normal', '<C-v>', '<denite:do_action:vsplit>',
-      \'noremap')
-call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
-      \'noremap')
+  call denite#custom#var('file_rec', 'command',
+        \ ['rg', '--files', '--glob', '!.git', ''])
+  call denite#custom#var('grep', 'command', ['rg'])
+  call denite#custom#var('grep', 'default_opts',
+        \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
+  call denite#custom#var('grep', 'recursive_opts', [])
+  call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
+  call denite#custom#var('grep', 'separator', ['--'])
+  call denite#custom#var('grep', 'final_opts', [])
+  call denite#custom#map('insert', '<Esc>', '<denite:enter_mode:normal>',
+        \'noremap')
+  call denite#custom#map('normal', '<Esc>', '<NOP>',
+        \'noremap')
+  call denite#custom#map('insert', '<C-v>', '<denite:do_action:vsplit>',
+        \'noremap')
+  call denite#custom#map('normal', '<C-v>', '<denite:do_action:vsplit>',
+        \'noremap')
+  call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
+        \'noremap')
+endif
 
 nnoremap <C-p> :<C-u>Denite file_rec<CR>
 nnoremap <leader>s :<C-u>Denite buffer<CR>
@@ -243,7 +251,9 @@ let g:ale_linters = {
 
 let g:ale_rust_cargo_use_check = 1
 
-set inccommand=split
+if has('nvim')
+  set inccommand=split
+endif
 
 " deoplete
 
@@ -296,13 +306,15 @@ let g:move_key_modifier = 'C'
 
 hi link ExtraWhitespace Search
 
-nnoremap <leader>g :<C-u>Denite gitstatus -mode=normal<CR>
-call denite#custom#map('normal', 'a', '<denite:do_action:add>',
-      \ 'noremap')
-call denite#custom#map('normal', 'd', '<denite:do_action:delete>',
-      \ 'noremap')
-call denite#custom#map('normal', 'r', '<denite:do_action:reset>',
-      \ 'noremap')
+if has('nvim')
+  nnoremap <leader>g :<C-u>Denite gitstatus -mode=normal<CR>
+  call denite#custom#map('normal', 'a', '<denite:do_action:add>',
+        \ 'noremap')
+  call denite#custom#map('normal', 'd', '<denite:do_action:delete>',
+        \ 'noremap')
+  call denite#custom#map('normal', 'r', '<denite:do_action:reset>',
+        \ 'noremap')
+endif
 
 " vim-gitgutter
 
