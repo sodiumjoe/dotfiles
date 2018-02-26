@@ -67,7 +67,7 @@ set infercase
 set diffopt=filler,vertical
 set breakindent
 
-map <space> <leader>
+let g:mapleader="\<SPACE>"
 " search visual selection
 vnoremap // y/<C-R>"<CR>
 
