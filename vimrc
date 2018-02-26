@@ -7,7 +7,6 @@ Plug 'Shougo/denite.nvim'
 Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 Plug 'airblade/vim-gitgutter'
 Plug 'benizi/vim-automkdir'
-Plug 'chemzqm/denite-extra'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'haya14busa/incsearch-easymotion.vim'
@@ -254,11 +253,6 @@ let g:deoplete#enable_smart_case = 1
 let g:deoplete#auto_completion_start_length = 1
 let g:deoplete#auto_complete_delay = 50
 
-"clam
-
-nnoremap ! :Clam<space>
-vnoremap ! :ClamVisual<space>
-
 " editorconfig
 
 let g:EditorConfig_core_mode = 'external_command'
@@ -302,9 +296,6 @@ let g:move_key_modifier = 'C'
 
 hi link ExtraWhitespace Search
 
-" vim-easygit
-
-" let g:easygit_enable_command = 1
 nnoremap <leader>g :<C-u>Denite gitstatus -mode=normal<CR>
 call denite#custom#map('normal', 'a', '<denite:do_action:add>',
       \ 'noremap')
