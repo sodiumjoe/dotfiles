@@ -5,6 +5,7 @@ xcode-select --install
 cd ~
 git clone https://github.com/sodiumjoe/dotfiles.git .dotfiles
 cd .dotfiles
+git submodule update --init
 ./bootstrap.sh
 ./brew.sh
 ./macos
