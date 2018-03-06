@@ -12,7 +12,7 @@ export ZIM_HOME=${ZDOTDIR:-${HOME}}/.zim
 
 ZSH_HIGHLIGHT_STYLES[path]='fg=cyan'
 
-export PATH=/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:\
+export PATH=/usr/local/opt/python@2/libexec/bin:/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:\
 /usr/local/share/npm/bin:~/bin:~/.bin:~/.bin/terraform:~/npm/bin:~/.cargo/bin
 
 export EDITOR=nvim
