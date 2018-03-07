@@ -141,6 +141,19 @@ function! Git_branch()
   return empty(l:branch)?'':'['.l:branch.']'
 endfunction
 
+function! LinterStatus() abort
+  let l:counts = ale#statusline#Count(bufnr(''))
+
+  let l:all_errors = l:counts.error + l:counts.style_error
+  let l:all_non_errors = l:counts.total - l:all_errors
+
+  return l:counts.total == 0 ? '' : printf(
+        \   '%d⚠ %d⨉',
+        \   all_non_errors,
+        \   all_errors
+        \)
+endfunction
+
 set statusline=""
 set statusline+=%{Git_branch()}
 set statusline+=\ "
@@ -154,7 +167,7 @@ set statusline+=%=
 " start error highlight group
 set statusline+=%#StatusLineError#
 " errors from w0rp/ale
-set statusline+=%{ALEGetStatusLine()}
+set statusline+=%{LinterStatus()}
 " reset highlight group
 set statusline+=%#StatusLine#
 set statusline+=\ "
