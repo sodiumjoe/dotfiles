@@ -128,6 +128,9 @@ hi clear IncSearch
 hi link IncSearch StatusLine
 hi clear Search
 hi link Search StatusLine
+" get rid of tildes
+hi EndOfBuffer guifg=#3C4C55
+
 
 " statusline
 " ==========
