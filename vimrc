@@ -121,8 +121,8 @@ set showcmd
 set textwidth=80
 
 " split dividers
-set fillchars=""
-hi VertSplit guibg=#556873
+set fillchars=vert:\│
+hi VertSplit guifg=#556873
 
 hi clear IncSearch
 hi link IncSearch StatusLine
