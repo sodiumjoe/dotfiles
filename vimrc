@@ -131,7 +131,6 @@ hi link Search StatusLine
 " get rid of tildes
 hi EndOfBuffer guifg=#3C4C55
 
-
 " statusline
 " ==========
 
@@ -174,11 +173,11 @@ set statusline+=%{LinterStatus()}
 " reset highlight group
 set statusline+=%#StatusLine#
 set statusline+=\ "
-" line,column,virtual column
-set statusline+=%-14.(%l,%c%V%)
+" line/total lines
+set statusline+=L%l/%L
 set statusline+=\ "
-" percentge through file of displayed window
-set statusline+=%P
+" virtual column
+set statusline+=C%02v
 
 " plugin configs
 " ==============
