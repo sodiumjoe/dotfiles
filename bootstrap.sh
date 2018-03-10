@@ -23,6 +23,7 @@ files=(\
   "zshrc"\
   "zimrc"\
   "alacritty.yml"\
+  "hammerspoon"\
   )
 
 for file in ${files[@]}; do
