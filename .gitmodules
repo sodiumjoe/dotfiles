@@ -13,3 +13,6 @@
 [submodule "zsh-better-npm-completion"]
 	path = zsh-better-npm-completion
 	url = https://github.com/lukechilds/zsh-better-npm-completion.git
+[submodule "battery"]
+	path = battery
+	url = git@github.com:richo/battery.git
