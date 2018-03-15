@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# Initialize our own variables:
+let token
+let url
+let last
+let interval=3600
+let now=$(date +%s)
+let expiration=last+interval
+
+token=$(cat ~/.pinboard_token)
+url="https://api.pinboard.in/v1/posts/all"
+
+if [ -e ~/.gifcachetimestamp ]
+then
+  last=$(cat ~/.gifcachetimestamp)
+else
+  last=0
+fi
+
+[ "$1" = "--" ] && shift
+
+[ "$now" -ge "$expiration" ] && \
+  echo $now > ~/.gifcachetimestamp && \
+  curl -s $url\?tag\=gifs\&auth_token\=$token\&format\=json > ~/gifs.json
+
+description=$(cat ~/gifs.json | jq -r '.[] | .description' | fzf --query="$@")
+
+[ -z "$description" ] && exit 0
+
+href=$(cat ~/gifs.json | jq -r ".[] | select(.description == \"${description}\") | .href")
+
+open $href

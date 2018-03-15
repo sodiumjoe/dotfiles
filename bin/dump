@@ -1,0 +1,15 @@
+#!/bin/bash
+
+while [ 1 ]
+do
+  rsync -rcvz --remove-source-files --progress ./ imac:/Volumes/backup/Pictures
+  if [ "$?" = "0" ] ; then
+    echo "rsync completed normally"
+    find . -depth -type d -empty -delete
+    echo "deleted empty directories"
+    exit
+  else
+    echo "Rsync failure. Backing off and retrying..."
+    sleep 180
+  fi
+done

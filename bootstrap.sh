@@ -24,6 +24,7 @@ files=(\
   "zimrc"\
   "alacritty.yml"\
   "hammerspoon"\
+  "bin"\
   )
 
 for file in ${files[@]}; do
