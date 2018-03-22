@@ -7,6 +7,7 @@ if has('nvim')
   Plug 'Shougo/denite.nvim'
   Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 endif
+Plug 'KeyboardFire/vim-minisnip'
 Plug 'airblade/vim-gitgutter'
 Plug 'benizi/vim-automkdir'
 Plug 'easymotion/vim-easymotion'
