@@ -6,6 +6,10 @@ call plug#begin('~/.vim/plugged')
 if has('nvim')
   Plug 'Shougo/denite.nvim'
   Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
+  Plug 'autozimu/LanguageClient-neovim', {
+        \ 'branch': 'next',
+        \ 'do': 'bash install.sh',
+        \ }
 endif
 Plug 'KeyboardFire/vim-minisnip'
 Plug 'airblade/vim-gitgutter'
@@ -20,7 +24,6 @@ Plug 'mhartington/nvim-typescript'
 Plug 'neoclide/denite-git'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
-Plug 'racer-rust/vim-racer'
 Plug 'sbdchd/neoformat'
 Plug 'sheerun/vim-polyglot'
 Plug 'tpope/vim-commentary'
@@ -357,15 +360,6 @@ let g:neoformat_rust_rustfmt = {
 
 let g:neoformat_enabled_rust = ['rustfmt']
 
-" vim-racer
-
-set hidden
-let $RUST_SRC_PATH = '/Users/jmoon/play/rust/src'
-let g:racer_cmd = '~/.cargo/bin/racer'
-let g:racer_experimental_completer = 1
-let g:racer_insert_paren = 0
-
-au FileType rust nmap gd <Plug>(rust-def)
 
 " incsearch
 
@@ -399,3 +393,16 @@ augroup dirvish_fugitive
   autocmd!
   autocmd FileType dirvish call fugitive#detect(@%)
 augroup end
+
+" LanguageClient-neovim
+
+let g:LanguageClient_autoStart = 1
+
+let g:LanguageClient_serverCommands = {
+      \ 'rust': ['rls'],
+      \}
+
+      " \ 'javascript': ['javascript-typescript-stdio'],
+      " \ 'javascript.jsx': ['javascript-typescript-stdio'],
+      " \ 'typescript': ['javascript-typescript-stdio'],
+      " \ }

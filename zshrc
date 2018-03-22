@@ -71,6 +71,4 @@ export NVM_LAZY_LOAD=true
 source ~/.dotfiles/zsh-nvm/zsh-nvm.plugin.zsh
 source ~/.dotfiles/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh
 
-export RUST_SRC_PATH="~/play/rust/src"
-
 ulimit -n 65536 65536
