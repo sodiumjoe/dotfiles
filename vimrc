@@ -315,6 +315,8 @@ let g:play_wiki.path = '~/play/todo.wiki'
 let g:play_wiki.path_html = '~/play/todo.html'
 
 let g:vimwiki_list = [g:work_wiki, g:play_wiki]
+map <leader>wp <Plug>VimwikiDiaryPrevDay
+map <leader>wn <Plug>VimwikiDiaryNextDay
 
 " vim-lengthmatters
 
