@@ -25,6 +25,10 @@ files=(\
   "alacritty.yml"\
   "hammerspoon"\
   "bin"\
+  "vim/minisnip"\
+  "curlrc"\
+  "inputrc"\
+  "karn.yml"\
   )
 
 for file in ${files[@]}; do
