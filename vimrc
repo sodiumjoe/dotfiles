@@ -295,8 +295,7 @@ endif
 
 let g:deoplete#enable_at_startup = 1
 let g:deoplete#enable_smart_case = 1
-" Set minimum syntax keyword length.
-let g:deoplete#auto_completion_start_length = 1
+let g:deoplete#auto_complete_start_length = 1
 let g:deoplete#auto_complete_delay = 50
 
 " editorconfig
