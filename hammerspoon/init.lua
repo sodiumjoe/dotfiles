@@ -44,7 +44,7 @@ local RIGHT = 'Right'
 local UP = 'Up'
 
 function getHasSidebar(screen)
-  if #hs.screen.allScreens() == 1 then return true end
+  if hs.screen.allScreens() == 1 then return true end
   local primary = hs.screen.primaryScreen()
   return primary:id() ~= screen:id()
 end
