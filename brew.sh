@@ -18,9 +18,11 @@ brew tap caskroom/versions
 # https://github.com/caskroom/homebrew-fonts
 brew tap caskroom/fonts
 
-# https://github.com/aykamko/tag
+# https://github.com/Goles/Battery
+brew tap Goles/battery
 
 brew install autojump
+brew install --HEAD battery
 brew install curl
 brew install editorconfig
 brew install fzf
@@ -41,6 +43,7 @@ brew install python3
 brew install ranger
 brew install ripgrep
 brew install rq
+brew install spark
 brew install sqlite
 brew install tmux
 brew install tree
