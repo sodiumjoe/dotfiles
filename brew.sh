@@ -55,7 +55,6 @@ brew cask install alfred
 brew cask install bartender
 brew cask install bettertouchtool
 brew cask install clipy
-brew cask install controlplane
 brew cask install crashplan
 brew cask install dropbox
 brew cask install hammerspoon
