@@ -376,7 +376,7 @@ autocmd BufWritePre *.js Neoformat
 autocmd BufWritePre *.jsx Neoformat
 autocmd BufWritePre *.rs Neoformat
 
-let g:neoformat_enabled_javascript = ['prettier']
+let g:neoformat_enabled_javascript = ['prettier', 'prettier2']
 let g:neoformat_javascript_prettier = {
       \ 'exe': './node_modules/.bin/prettier',
       \ 'args': ['--write', '--config .prettierrc'],
