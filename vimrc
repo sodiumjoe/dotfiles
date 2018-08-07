@@ -285,12 +285,6 @@ nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 
 hi link deniteMatchedChar Special
 
-" denite-extra
-
-nnoremap <leader>o :<C-u>Denite location_list -mode=normal -no-empty<CR>
-nnoremap <leader>hs :<C-u>Denite history:search -mode=normal<CR>
-nnoremap <leader>hc :<C-u>Denite history:cmd -mode=normal<CR>
-
 " ale
 
 let g:ale_sign_error = '⨉'
@@ -361,6 +355,7 @@ let g:move_key_modifier = 'C'
 
 hi link ExtraWhitespace Search
 
+" denite-git
 if has('nvim')
   nnoremap <leader>g :<C-u>Denite gitstatus -mode=normal<CR>
   call denite#custom#map('normal', 'a', '<denite:do_action:add>',
