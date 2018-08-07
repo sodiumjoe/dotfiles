@@ -143,7 +143,27 @@ hi StatusLineError guifg=#DF8C8C guibg=#556873
 
 function! Git_branch()
   let l:branch = fugitive#head()
-  return empty(l:branch)?'':'['.l:branch.']'
+  if l:branch == ""
+    return ""
+  elseif l:branch == "master"
+    return "Ⓜ "
+  endif
+  let l:branch = substitute(l:branch, "moon/", "", "")
+  let l:branch = strpart(l:branch, 0, 9)
+  return '[' . l:branch . ']'
+endfunction
+
+function! Current_project()
+  let l:cwd = getcwd()
+  let l:len = strlen(l:cwd)
+  let l:sail = "frontend/sail"
+  let l:manage = "manage/frontend"
+  if strpart(l:cwd, l:len - strlen(l:sail)) == l:sail
+    return "[sail]"
+  elseif strpart(l:cwd, l:len - strlen(l:manage)) == l:manage
+    return "[manage]"
+  endif
+  return ""
 endfunction
 
 function! LinterStatus() abort
@@ -160,8 +180,9 @@ function! LinterStatus() abort
 endfunction
 
 set statusline=""
-set statusline+=%{Git_branch()}
-set statusline+=\ "
+set statusline+=%(%{Git_branch()}\ %)
+set statusline+=%(%{Current_project()}\ %)
+" set statusline+=\ "
 " filename
 set statusline+=%<%f
 set statusline+=\ "
