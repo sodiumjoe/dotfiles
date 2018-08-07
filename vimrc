@@ -327,14 +327,11 @@ let g:EditorConfig_exclude_patterns = ['fugitive://.*']
 " vimwiki
 
 let g:work_wiki = {}
-let g:work_wiki.path = '~/work/todo.wiki'
-let g:work_wiki.path_html = '~/work/todo.html'
+let g:work_wiki.path = '~/stripe/todo.wiki'
+let g:work_wiki.path_html = '~/stripe/todo.html'
+let g:work_wiki.syntax = 'markdown'
 
-let g:play_wiki = {}
-let g:play_wiki.path = '~/play/todo.wiki'
-let g:play_wiki.path_html = '~/play/todo.html'
-
-let g:vimwiki_list = [g:work_wiki, g:play_wiki]
+let g:vimwiki_list = [g:work_wiki]
 map <leader>wp <Plug>VimwikiDiaryPrevDay
 map <leader>wn <Plug>VimwikiDiaryNextDay
 
