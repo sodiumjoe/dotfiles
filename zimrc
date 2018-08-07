@@ -8,13 +8,9 @@
 # Zim settings
 #
 
-# for some reason this has to go before all the bindkey stuff in `input` for
-# zdouble_dot_expand to work
-bindkey -v
-
 # Select what modules you would like enabled.
-# The second line of modules may depend on options set by modules in the first line.
-# These dependencies are noted on the respective module's README.md.
+# The second line of modules may depend on options set by modules in the first
+# line. These dependencies are noted on the respective module's README.md.
 zmodules=(directory environment git git-info history input utility custom \
           syntax-highlighting history-substring-search prompt completion)
 
@@ -34,17 +30,20 @@ zprompt_theme='sodiumjoe'
 # Completion
 #
 
-# set an optional host-specific filename for the completion cache file
-# if none is provided, the default '.zcompdump' is used.
+# Set an optional host-specific filename for the completion cache file. If none
+# is provided, the default '.zcompdump' is used.
 #zcompdump_file=".zcompdump-${HOST}-${ZSH_VERSION}"
 
 #
 # Utility
 #
 
-# Uncomment to enable command correction prompts
-# See: http://zsh.sourceforge.net/Doc/Release/Options.html#Input_002fOutput
+# Uncomment to enable spelling correction prompt for commands. See:
+# http://zsh.sourceforge.net/Doc/Release/Options.html#Input_002fOutput
 #setopt CORRECT
+
+# Set custom spelling correction prompt
+#SPROMPT='zsh: correct %F{red}%R%f to %F{green}%r%f [nyae]? '
 
 #
 # Environment
@@ -63,8 +62,11 @@ HIST_IGNORE_ALL_DUPS=1
 # Input
 #
 
-# Uncomment to enable double-dot expansion.
-# This appends '../' to your input for each '.' you type after an initial '..'
+# Set to vi or emacs
+zinput_mode='vi'
+
+# Uncomment to enable double-dot expansion. This appends '../' to your input for
+# each '.' you type after an initial '..'
 zdouble_dot_expand='true'
 
 #
@@ -83,7 +85,7 @@ zhighlighters=(main brackets)
 #
 
 # Load these ssh identities with the ssh module
-zssh_ids=(id_rsa,anxs)
+zssh_ids=(id_rsa,id_rsa_moon@stripe.com)
 
 
 #

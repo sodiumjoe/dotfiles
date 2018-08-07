@@ -12,8 +12,22 @@ export ZIM_HOME=${ZDOTDIR:-${HOME}}/.zim
 
 ZSH_HIGHLIGHT_STYLES[path]='fg=cyan'
 
-export PATH=/usr/local/opt/python@2/libexec/bin:/usr/local/bin:/bin:/usr/sbin:/sbin:/usr/bin:/usr/X11/bin:\
-/usr/local/share/npm/bin:~/bin:~/.bin:~/.bin/terraform:~/npm/bin:~/.cargo/bin
+export PATH=~/stripe/henson/bin:node_modules/.bin
+export PATH=${PATH}:~/stripe/password-vault/bin
+export PATH=${PATH}:~/stripe/space-commander/bin
+export PATH=${PATH}:/usr/local/opt/python/libexec/bin
+export PATH=${PATH}:/usr/local/bin
+export PATH=${PATH}:/bin
+export PATH=${PATH}:/usr/sbin
+export PATH=${PATH}:/sbin
+export PATH=${PATH}:/usr/bin
+export PATH=${PATH}:/usr/X11/bin
+export PATH=${PATH}:/usr/local/share/npm/bin
+export PATH=${PATH}:~/bin
+export PATH=${PATH}:~/.bin
+export PATH=${PATH}:~/.bin/terraform
+export PATH=${PATH}:~/npm/bin
+export PATH=${PATH}:~/.cargo/bin
 
 export EDITOR=nvim
 # open in editor
@@ -34,8 +48,6 @@ alias vi='nvim'
 
 alias lbr='lbr -i -p'
 alias rg='rg --hidden -S'
-alias work-chrome='open -n -a "Google Chrome" --args\
-  --profile-directory="Profile 1"'
 alias vimdiff='nvim -d'
 alias iex='rlwrap -a foo iex'
 alias del='rmtrash'
@@ -67,8 +79,12 @@ if which karn > /dev/null; then eval "$(karn init)"; fi
 source ~/.dotfiles/per-directory-history/per-directory-history.zsh
 source ~/.dotfiles/z/z.sh
 source ~/.dotfiles/fz/fz.plugin.zsh
-export NVM_LAZY_LOAD=true
-source ~/.dotfiles/zsh-nvm/zsh-nvm.plugin.zsh
-source ~/.dotfiles/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh
+# export NVM_LAZY_LOAD=true
+# source ~/.dotfiles/zsh-nvm/zsh-nvm.plugin.zsh
+# source ~/.dotfiles/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh
 
-ulimit -n 65536 65536
+## stripe
+
+. /Users/moon/.rbenvrc
+. ~/.stripe-repos.sh
+eval "$(nodenv init -)"
