@@ -20,7 +20,6 @@ Plug 'haya14busa/incsearch-easymotion.vim'
 Plug 'haya14busa/incsearch.vim'
 Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
-Plug 'mhartington/nvim-typescript'
 Plug 'neoclide/denite-git'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
@@ -369,6 +368,11 @@ let g:neoformat_javascript_prettier = {
       \ 'args': ['--write', '--config .prettierrc'],
       \ 'replace': 1
       \ }
+let g:neoformat_javascript_prettier2 = {
+      \ 'exe': './node_modules/.bin/prettier',
+      \ 'args': ['--write', '--config prettier.config.js'],
+      \ 'replace': 1
+      \ }
 
 let g:neoformat_rust_rustfmt = {
       \ 'exe': 'rustup',
@@ -414,13 +418,21 @@ augroup end
 
 " LanguageClient-neovim
 
-let g:LanguageClient_autoStart = 1
-
 let g:LanguageClient_serverCommands = {
       \ 'rust': ['rls'],
+      \ 'javascript': ['flow', 'lsp', '--from', './node_modules/.bin'],
+      \ 'javascript.jsx': ['flow', 'lsp', '--from', './node_modules/.bin'],
       \}
 
-      " \ 'javascript': ['javascript-typescript-stdio'],
-      " \ 'javascript.jsx': ['javascript-typescript-stdio'],
-      " \ 'typescript': ['javascript-typescript-stdio'],
-      " \ }
+let g:LanguageClient_autoStart = 1
+
+nnoremap <silent> K :call LanguageClient#textDocument_hover()<CR>
+nnoremap <silent> gd :call LanguageClient#textDocument_definition()<CR>
+
+let g:LanguageClient_loggingFile = '/tmp/LanguageClient.log'
+let g:LanguageClient_loggingLevel = 'INFO'
+let g:LanguageClient_serverStderr = '/tmp/LanguageServer.log'
+let g:LanguageClient_rootMarkers = ['.flowconfig']
+
+set diffopt+=iwhite
+set diffexpr=""
