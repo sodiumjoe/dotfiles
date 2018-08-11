@@ -145,7 +145,7 @@ function! Git_branch()
   if l:branch == ""
     return ""
   elseif l:branch == "master"
-    return "Ⓜ "
+    return "⌂"
   endif
   let l:branch = substitute(l:branch, "moon/", "", "")
   let l:branch = strpart(l:branch, 0, 9)
