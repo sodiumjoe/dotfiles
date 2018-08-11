@@ -44,9 +44,15 @@ local RIGHT = 'Right'
 local UP = 'Up'
 
 function getHasSidebar(screen)
-  if hs.screen.allScreens() == 1 then return true end
-  local primary = hs.screen.primaryScreen()
-  return primary:id() ~= screen:id()
+  return false
+  -- if isSingleScreen() then return false end
+  -- local primary = hs.screen.primaryScreen()
+  -- return primary:id() ~= screen:id()
+end
+
+function isSingleScreen()
+  if #hs.screen.allScreens() == 1 then return true end
+  return false
 end
 
 function isMaximized(f, max, hasSidebar)
@@ -163,8 +169,8 @@ function focusRight()
   space:focusWindowEast(nil, true)
 end
 
-function maximize()
-  local win = hs.window.focusedWindow()
+function maximize(win)
+  local win = win or hs.window.focusedWindow()
   local f = win:frame()
   local screen = win:screen()
   local max = screen:frame()
@@ -185,8 +191,78 @@ function maximize()
   return win:setFrame(f)
 end
 
+function isLeftSpaceWindow(win)
+  return win:application():name() == 'Slack'
+end
+
+function isLeftWindow(win)
+  local name = win:application():name()
+  local title = win:title()
+  return name == 'Google Chrome' and not string.match(title, 'Hangouts')
+end
+
+function isRightWindow(win)
+  local name = win:application():name()
+  local title = win:title()
+  return string.match(title, 'Hangouts') or name == 'Alacritty'
+end
+
+function layout()
+  if isSingleScreen() then
+    local filter = hs.window.filter.new()
+    local windows = filter:getWindows()
+    for k, win in pairs(windows) do
+      maximize(win)
+    end
+    return nil
+  end
+
+  for k, win in pairs(hs.window.filter.new(isLeftSpaceWindow):getWindows()) do
+    if win:isStandard() then
+      win:moveOneScreenWest()
+      maximize(win)
+    end
+  end
+
+  for k, win in pairs(hs.window.filter.new(isLeftWindow):getWindows()) do
+    if win:isStandard() then
+      win:moveOneScreenEast()
+      local f = win:frame()
+      local screen = win:screen()
+      local hasSidebar = getHasSidebar(screen)
+      local max = screen:frame()
+      f = splitLeft(f, max)
+      win:setFrame(f)
+    end
+  end
+
+  for k, win in pairs(hs.window.filter.new(isRightWindow):getWindows()) do
+    win:moveOneScreenEast()
+    if win:isStandard() then
+      local f = win:frame()
+      local screen = win:screen()
+      local max = screen:frame()
+      f = splitRight(f, max)
+      win:setFrame(f)
+    end
+  end
+end
+
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'k', maximize)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'h', pushLeft)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'l', pushRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'j', layout)
 hs.hotkey.bind({"ctrl"}, 'h', focusLeft)
 hs.hotkey.bind({"ctrl"}, 'l', focusRight)
+
+-- > hs.window.filter.new():setCurrentSpace(true):getWindows()
+-- table: 0x600002870880
+
+-- > hs.window.filter.new():setCurrentSpace(true):getWindows()[4]
+-- hs.window: Google Hangouts - joebadmo@gmail.com (0x600000a53a38)
+
+-- > hs.window.filter.new():setCurrentSpace(true):getWindows()[4]:title()
+-- Google Hangouts - joebadmo@gmail.com
+
+-- > hs.window.filter.new():setCurrentSpace(true):getWindows()[4]:application()
+-- hs.application: Google Chrome (0x600001250ac8)
