@@ -124,7 +124,7 @@ set showcmd
 set textwidth=80
 
 " split dividers
-set fillchars=vert:\│
+set fillchars=vert:\│,eob:⌁
 hi VertSplit guifg=#556873
 
 hi clear IncSearch
@@ -132,7 +132,6 @@ hi link IncSearch StatusLine
 hi clear Search
 hi link Search StatusLine
 " get rid of tildes
-hi EndOfBuffer guifg=#3C4C55
 
 " statusline
 " ==========
