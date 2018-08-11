@@ -6,7 +6,10 @@
   st = status
   df = difftool
   dfc = difftool --cached
+
+# http://stackoverflow.com/questions/18257622/why-is-git-core-preloadindex-default-value-false
 [core]
+  preloadindex = true
   editor = nvim
   excludesfile = ~/gitignore
 
@@ -14,21 +17,18 @@
 	helper = osxkeychain
 [push]
   default = current
-  followTags = true
+
 [diff]
   tool = vimdiff
-[difftool]
-  prompt = true
-
 [difftool "vimdiff"]
   cmd = nvim -d \"$LOCAL\" \"$REMOTE\"
 
 [transfer]
-  fsckobjects = true
+  fsckobjects = false
 [fetch]
-  fsckobjects = true
+  fsckobjects = false
 [receive]
-  fsckObjects = true
+  fsckObjects = false
 [status]
   showUntrackedFiles = all
 
