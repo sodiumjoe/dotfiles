@@ -3,16 +3,13 @@
 
 call plug#begin('~/.vim/plugged')
 
-if has('nvim')
-  Plug 'Shougo/denite.nvim'
-  Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
-  Plug 'autozimu/LanguageClient-neovim', {
-        \ 'branch': 'next',
-        \ 'do': 'bash install.sh',
-        \ }
-endif
-Plug 'KeyboardFire/vim-minisnip'
+Plug 'Shougo/denite.nvim'
+Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 Plug 'airblade/vim-gitgutter'
+Plug 'autozimu/LanguageClient-neovim', {
+      \ 'branch': 'next',
+      \ 'do': 'bash install.sh',
+      \ }
 Plug 'benizi/vim-automkdir'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
@@ -20,9 +17,9 @@ Plug 'haya14busa/incsearch-easymotion.vim'
 Plug 'haya14busa/incsearch.vim'
 Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
-Plug 'neoclide/denite-git'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'pbrisbin/vim-restore-cursor'
+Plug 'rhysd/conflict-marker.vim'
 Plug 'sbdchd/neoformat'
 Plug 'sheerun/vim-polyglot'
 Plug 'tpope/vim-commentary'
@@ -83,6 +80,8 @@ if executable('rg')
   set grepformat=%f:%l:%c:%m,%f:%l:%m
 endif
 
+set inccommand=split
+
 " movement
 " ========
 
@@ -123,7 +122,7 @@ set scrolloff=5
 set showcmd
 set textwidth=80
 
-" split dividers
+" split dividers and end of buffer character
 set fillchars=vert:\│,eob:⌁
 hi VertSplit guifg=#556873
 
@@ -131,7 +130,6 @@ hi clear IncSearch
 hi link IncSearch StatusLine
 hi clear Search
 hi link Search StatusLine
-" get rid of tildes
 
 " statusline
 " ==========
@@ -240,38 +238,36 @@ hi EasyMotionTarget2Second ctermfg=1 cterm=underline
 
 " denite
 
-if has('nvim')
-  " reset 50% winheight on window resize
-  augroup deniteresize
-    autocmd!
-    autocmd VimResized,VimEnter * call denite#custom#option('default',
-          \'winheight', winheight(0) / 2)
-  augroup end
+" reset 50% winheight on window resize
+augroup deniteresize
+  autocmd!
+  autocmd VimResized,VimEnter * call denite#custom#option('default',
+        \'winheight', winheight(0) / 2)
+augroup end
 
-  call denite#custom#option('default', {
-        \ 'prompt': '❯'
-        \ })
+call denite#custom#option('default', {
+      \ 'prompt': '❯'
+      \ })
 
-  call denite#custom#var('file_rec', 'command',
-        \ ['rg', '--files', '--glob', '!.git', ''])
-  call denite#custom#var('grep', 'command', ['rg'])
-  call denite#custom#var('grep', 'default_opts',
-        \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
-  call denite#custom#var('grep', 'recursive_opts', [])
-  call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
-  call denite#custom#var('grep', 'separator', ['--'])
-  call denite#custom#var('grep', 'final_opts', [])
-  call denite#custom#map('insert', '<Esc>', '<denite:enter_mode:normal>',
-        \'noremap')
-  call denite#custom#map('normal', '<Esc>', '<NOP>',
-        \'noremap')
-  call denite#custom#map('insert', '<C-v>', '<denite:do_action:vsplit>',
-        \'noremap')
-  call denite#custom#map('normal', '<C-v>', '<denite:do_action:vsplit>',
-        \'noremap')
-  call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
-        \'noremap')
-endif
+call denite#custom#var('file_rec', 'command',
+      \ ['rg', '--files', '--glob', '!.git', ''])
+call denite#custom#var('grep', 'command', ['rg'])
+call denite#custom#var('grep', 'default_opts',
+      \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
+call denite#custom#var('grep', 'recursive_opts', [])
+call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
+call denite#custom#var('grep', 'separator', ['--'])
+call denite#custom#var('grep', 'final_opts', [])
+call denite#custom#map('insert', '<Esc>', '<denite:enter_mode:normal>',
+      \'noremap')
+call denite#custom#map('normal', '<Esc>', '<NOP>',
+      \'noremap')
+call denite#custom#map('insert', '<C-v>', '<denite:do_action:vsplit>',
+      \'noremap')
+call denite#custom#map('normal', '<C-v>', '<denite:do_action:vsplit>',
+      \'noremap')
+call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
+      \'noremap')
 
 nnoremap <C-p> :<C-u>Denite file_rec<CR>
 nnoremap <leader>s :<C-u>Denite buffer<CR>
@@ -294,16 +290,13 @@ let g:ale_lint_on_save = 1
 let g:ale_lint_on_enter = 1
 " cycle through location list
 nmap <silent> <leader>n <Plug>(ale_next_wrap)
+nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 
 let g:ale_linters = {
 \   'elixir': [],
 \}
 
 let g:ale_rust_cargo_use_check = 1
-
-if has('nvim')
-  set inccommand=split
-endif
 
 " deoplete
 
@@ -356,17 +349,6 @@ let g:move_key_modifier = 'C'
 " vim-better-whitespace
 
 hi link ExtraWhitespace Search
-
-" denite-git
-if has('nvim')
-  nnoremap <leader>g :<C-u>Denite gitstatus -mode=normal<CR>
-  call denite#custom#map('normal', 'a', '<denite:do_action:add>',
-        \ 'noremap')
-  call denite#custom#map('normal', 'd', '<denite:do_action:delete>',
-        \ 'noremap')
-  call denite#custom#map('normal', 'r', '<denite:do_action:reset>',
-        \ 'noremap')
-endif
 
 " vim-gitgutter
 
@@ -428,6 +410,10 @@ augroup dirvish_fugitive
   autocmd FileType dirvish call fugitive#detect(@%)
 augroup end
 
+" fugitive
+
+nnoremap <leader>g :<C-u>Gstatus<CR>
+
 " LanguageClient-neovim
 
 let g:LanguageClient_serverCommands = {
@@ -445,6 +431,3 @@ let g:LanguageClient_loggingFile = '/tmp/LanguageClient.log'
 let g:LanguageClient_loggingLevel = 'INFO'
 let g:LanguageClient_serverStderr = '/tmp/LanguageServer.log'
 let g:LanguageClient_rootMarkers = ['.flowconfig']
-
-set diffopt+=iwhite
-set diffexpr=""
