@@ -18,7 +18,6 @@ Plug 'haya14busa/incsearch.vim'
 Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
-Plug 'pbrisbin/vim-restore-cursor'
 Plug 'rhysd/conflict-marker.vim'
 Plug 'sbdchd/neoformat'
 Plug 'sheerun/vim-polyglot'
@@ -81,6 +80,10 @@ if executable('rg')
 endif
 
 set inccommand=split
+
+" save cursor pos, splits, etc.
+au BufWinLeave * mkview
+au BufWinEnter * silent! loadview
 
 " movement
 " ========
