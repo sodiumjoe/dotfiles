@@ -82,8 +82,8 @@ endif
 set inccommand=split
 
 " save cursor pos, splits, etc.
-au BufWinLeave * mkview
-au BufWinEnter * silent! loadview
+autocmd BufWinLeave *.* silent! mkview
+autocmd BufWinEnter *.* silent! loadview
 
 " movement
 " ========
