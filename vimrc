@@ -159,7 +159,7 @@ function! Current_project()
   let l:sail = "frontend/sail"
   let l:manage = "manage/frontend"
   if strpart(l:cwd, l:len - strlen(l:sail)) == l:sail
-    return "[sail]"
+    return "[⛵]"
   elseif strpart(l:cwd, l:len - strlen(l:manage)) == l:manage
     return "[manage]"
   endif
