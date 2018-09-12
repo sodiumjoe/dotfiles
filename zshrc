@@ -12,7 +12,8 @@ export ZIM_HOME=${ZDOTDIR:-${HOME}}/.zim
 
 ZSH_HIGHLIGHT_STYLES[path]='fg=cyan'
 
-export PATH=~/stripe/henson/bin:node_modules/.bin
+export PATH=~/stripe/henson/bin
+export PATH=${PATH}:node_modules/.bin
 export PATH=${PATH}:~/stripe/password-vault/bin
 export PATH=${PATH}:~/stripe/space-commander/bin
 export PATH=${PATH}:/usr/local/opt/python/libexec/bin
