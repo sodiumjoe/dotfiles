@@ -190,6 +190,8 @@ set statusline+=\ "
 set statusline+=%h%m%r
 " alignment group
 set statusline+=%=
+" lsp status
+set statusline+=%{LanguageClient_statusLine()}
 " start error highlight group
 set statusline+=%#StatusLineError#
 " errors from w0rp/ale
@@ -423,6 +425,7 @@ let g:LanguageClient_autoStart = 1
 
 nnoremap <silent> K :call LanguageClient#textDocument_hover()<CR>
 nnoremap <silent> gd :call LanguageClient#textDocument_definition()<CR>
+nnoremap <silent> <leader><leader> :call LanguageClient#explainErrorAtPoint()<CR>
 
 let g:LanguageClient_loggingFile = '/tmp/LanguageClient.log'
 let g:LanguageClient_loggingLevel = 'INFO'
