@@ -359,9 +359,9 @@ set signcolumn=yes
 
 " neoformat
 
-autocmd BufWritePre *.js Neoformat
-autocmd BufWritePre *.jsx Neoformat
-autocmd BufWritePre *.rs Neoformat
+autocmd BufWritePre *.js silent! Neoformat
+autocmd BufWritePre *.jsx silent! Neoformat
+autocmd BufWritePre *.rs silent! Neoformat
 
 let g:neoformat_enabled_javascript = ['prettier', 'prettier2']
 let g:neoformat_javascript_prettier = {
