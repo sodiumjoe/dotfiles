@@ -375,12 +375,6 @@ let g:neoformat_javascript_prettier2 = {
       \ 'replace': 1
       \ }
 
-let g:neoformat_rust_rustfmt = {
-      \ 'exe': 'rustup',
-      \ 'args': ['run', 'nightly', 'rustfmt'],
-      \ 'stdin': 1,
-      \ }
-
 let g:neoformat_enabled_rust = ['rustfmt']
 
 
