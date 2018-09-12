@@ -47,7 +47,6 @@ KEYTIMEOUT=1
 alias vim='nvim'
 alias vi='nvim'
 
-alias lbr='lbr -i -p'
 alias rg='rg --hidden -S'
 alias vimdiff='nvim -d'
 alias iex='rlwrap -a foo iex'
