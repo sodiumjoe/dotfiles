@@ -253,7 +253,7 @@ call denite#custom#option('default', {
       \ })
 
 call denite#custom#var('file_rec', 'command',
-      \ ['rg', '--files', '--glob', '!.git', ''])
+      \ ['rg', '--files', '--glob', '!.git'])
 call denite#custom#var('grep', 'command', ['rg'])
 call denite#custom#var('grep', 'default_opts',
       \ ['--hidden', '--vimgrep', '--no-heading', '-S'])
