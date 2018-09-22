@@ -1,0 +1,3 @@
+#!/bin/bash
+
+open "https://git.corp.stripe.com/stripe-internal/pay-server/compare/$(git rev-parse --abbrev-ref HEAD)?expand=1"
