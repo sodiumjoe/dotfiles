@@ -17,6 +17,7 @@ export PATH=${PATH}:node_modules/.bin
 export PATH=${PATH}:~/stripe/password-vault/bin
 export PATH=${PATH}:~/stripe/space-commander/bin
 export PATH=${PATH}:/usr/local/opt/python/libexec/bin
+export PATH=${PATH}:/usr/local/opt/curl/bin
 export PATH=${PATH}:/usr/local/bin
 export PATH=${PATH}:/bin
 export PATH=${PATH}:/usr/sbin
