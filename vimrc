@@ -146,10 +146,12 @@ function! Git_branch()
   if l:branch == ""
     return ""
   elseif l:branch == "master"
-    return "⌂"
+    return "[⌂]"
+  elseif strpart(l:branch, 0, 5) == "moon/"
+    let l:branch = substitute(l:branch, "moon/", "", "")
+    let l:branch = strpart(l:branch, 0, 9)
+    return '[' . l:branch . ']'
   endif
-  let l:branch = substitute(l:branch, "moon/", "", "")
-  let l:branch = strpart(l:branch, 0, 9)
   return '[' . l:branch . ']'
 endfunction
 
