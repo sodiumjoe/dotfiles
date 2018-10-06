@@ -1,3 +1,23 @@
 #!/bin/bash
 
-open "https://git.corp.stripe.com/stripe-internal/pay-server/compare/$(git rev-parse --abbrev-ref HEAD)?expand=1"
+let origin
+let owner
+let branch
+let url
+
+origin=$(git remote -v | grep origin | grep push | cut -d ':' -f 2 | cut -d '.' -f 1 | cut -d ' ' -f 1)
+# echo $origin
+
+owner=$(echo "$origin" | cut -d '/' -f 1)
+# echo $owner
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+# echo $branch
+
+if [[ "$owner" == "stripe-internal" ]]; then
+  url="https://git.corp.stripe.com/$origin/compare/$branch?expand=1"
+else
+  url="https://github.com/$origin/pull/new/$branch"
+fi
+
+open $url
