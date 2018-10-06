@@ -128,75 +128,38 @@ render_timer: false
 # Use custom cursor colors. If `true`, the `colors.cursor.foreground` and
 # `colors.cursor.background` colors will be used to display the cursor.
 # Otherwise the cell colors are inverted for the cursor.
-custom_cursor_colors: false
+custom_cursor_colors: true
 
 # If `true`, bold text is drawn using the bright color variants.
 draw_bold_text_with_bright_colors: true
 
 # Colors (Nova)
 
-color_values:
-  cyan:       &cyan       '0x7FC1CA'
-  blue:       &blue       '0x83AFE5'
-  purple:     &purple     '0x9A93E1'
-  pink:       &pink       '0xD18EC2'
-  red:        &red        '0xDF8C8C'
-  orange:     &orange     '0xF2C38F'
-  yellow:     &yellow     '0xDADA93'
-  green:      &green      '0xA8CE93'
-  gray0:      &gray0      '0x1E272C'
-  gray1:      &gray1      '0x3C4C55'
-  gray2:      &gray2      '0x556873'
-  gray3:      &gray3      '0x6A7D89'
-  gray4:      &gray4      '0x899BA6'
-  gray5:      &gray5      '0xC5D4DD'
-  gray6:      &gray6      '0xE6EEF3'
-  background: &background '0x3C4C55' # gray1
-  foreground: &foreground '0xC5D4DD' # gray5
-
 colors:
-  # Default colors
-  primary:
-    background: *gray1
-    foreground: *gray5
-
-    # Bright and dim foreground colors
-    #
-    # The dimmed foreground color is calculated automatically if it is not present.
-    # If the bright foreground color is not set, or `draw_bold_text_with_bright_colors`
-    # is `false`, the normal foreground color will be used.
-    #
-    #dim_foreground: '0x9a9a9a'
-    #bright_foreground: '0xffffff'
-
-  # Cursor colors
-  #
-  # These will only be used when the `custom_cursor_colors` field is set to `true`.
-  cursor:
-    text:   *gray1
-    cursor: *cyan
-
-  # Normal colors
   normal:
-    black:   *gray1
-    red:     *red
-    green:   *green
-    yellow:  *yellow
-    blue:    *blue
-    magenta: *purple
-    cyan:    *cyan
-    white:   *gray5
-
-  # Bright colors
+    black: "#3C4C55"
+    red: "#DF8C8C"
+    green: "#A8CE93"
+    yellow: "#DADA93"
+    blue: "#83AFE5"
+    magenta: "#9A93E1"
+    cyan: "#7FC1CA"
+    white: "#C5D4DD"
   bright:
-    black:   '0x899BA6'
-    red:     '0xF2C38F'
-    green:   '0x9ec400'
-    yellow:  '0xe7c547'
-    blue:    '0x7aa6da'
-    magenta: '0xb77ee0'
-    cyan:    '0x54ced6'
-    white:   '0xffffff'
+    black: "#899BA6"
+    red: "#F2C38F"
+    green: "#A8CE93"
+    yellow: "#DADA93"
+    blue: "#83AFE5"
+    magenta: "#D18EC2"
+    cyan: "#7FC1CA"
+    white: "#E6EEF3"
+  primary:
+    background: "#3C4C55"
+    foreground: "#C5D4DD"
+  cursor:
+    text: "#3C4C55"
+    cursor: "#7FC1CA"
 
   # Dim colors
   #
