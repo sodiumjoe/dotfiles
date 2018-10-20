@@ -1,0 +1,8 @@
+--type-add
+coffee:*.coffee
+
+--type-add
+jsx:*.jsx
+
+--hidden
+--smart-case

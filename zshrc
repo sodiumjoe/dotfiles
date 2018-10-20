@@ -48,7 +48,6 @@ KEYTIMEOUT=1
 alias vim='nvim'
 alias vi='nvim'
 
-alias rg='rg --hidden -S'
 alias vimdiff='nvim -d'
 alias iex='rlwrap -a foo iex'
 alias del='rmtrash'
@@ -83,6 +82,8 @@ source ~/.dotfiles/fz/fz.plugin.zsh
 # export NVM_LAZY_LOAD=true
 # source ~/.dotfiles/zsh-nvm/zsh-nvm.plugin.zsh
 # source ~/.dotfiles/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh
+
+export RIPGREP_CONFIG_PATH=~/.ripgreprc
 
 ## stripe
 
