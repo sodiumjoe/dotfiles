@@ -296,15 +296,14 @@ hi link deniteMatchedChar Special
 let g:ale_sign_error = '⨉'
 let g:ale_sign_warning = '⚠'
 let g:ale_statusline_format = ['⨉ %d', '⚠ %d', '']
-let g:ale_lint_on_text_changed = 0
-let g:ale_lint_on_save = 1
-let g:ale_lint_on_enter = 1
 " cycle through location list
 nmap <silent> <leader>n <Plug>(ale_next_wrap)
 nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 
 let g:ale_linters = {
 \   'elixir': [],
+\   'javascript': ['eslint', 'flow'],
+\   'coffeescript': ['jshint'],
 \}
 
 let g:ale_rust_cargo_use_check = 1
@@ -386,7 +385,7 @@ let g:neoformat_javascript_prettier = {
       \ }
 let g:neoformat_javascript_prettier2 = {
       \ 'exe': './node_modules/.bin/prettier',
-      \ 'args': ['--write', '--config prettier.config.js'],
+      \ 'args': ['--write', '--config ../../prettier.config.js'],
       \ 'replace': 1
       \ }
 
@@ -429,8 +428,9 @@ nnoremap <leader>g :<C-u>Gstatus<CR>
 
 let g:LanguageClient_serverCommands = {
       \ 'rust': ['rls'],
-      \ 'javascript': ['flow', 'lsp', '--from', './node_modules/.bin'],
-      \ 'javascript.jsx': ['flow', 'lsp', '--from', './node_modules/.bin'],
+      \ 'javascript': ['flow', 'lsp'],
+      \ 'javascript.jsx': ['flow', 'lsp'],
+      \ 'ruby': ['/Users/moon/stripe/pay-server/scripts/bin/typecheck', '--lsp'],
       \}
 
 let g:LanguageClient_autoStart = 1
