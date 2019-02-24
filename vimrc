@@ -60,7 +60,7 @@ set shortmess=aoOtI
 set completeopt-=preview
 " disable extraneous messages
 set noshowmode
-" show the cursor position all the time
+" always show the cursor position
 set ruler
 set smartcase
 set infercase
