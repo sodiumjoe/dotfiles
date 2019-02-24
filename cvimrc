@@ -1,13 +1,15 @@
 " https://github.com/1995eaton/chromium-vim
 " on fresh install execute the following three lines
 set localconfig
-let homedirectory = '/Users/jmoon'
+let homedirectory = '/Users/moon'
 let configpath = '~/.cvimrc'
 
 set smoothscroll
 let scrollduration=250
 let barposition='bottom'
-let blacklists = ["https://inbox.google.com/*","https://mail.google.com/mail/*","https://calendar.google.com/*","https://feedly.com/*"]
+let blacklists = ["https://inbox.google.com/*","https://mail.google.com/mail/*","https://calendar.google.com/*"]
 let hintcharacters = 'asdfghjkl;'
 let mapleader = ' '
 set nativelinkorder
+set sortlinkhints
+set nodimhintcharacters
