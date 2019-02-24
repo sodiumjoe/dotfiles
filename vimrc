@@ -260,7 +260,7 @@ call denite#custom#option('default', {
       \ })
 
 call denite#custom#var('file_rec', 'command',
-      \ ['rg', '--files', '--glob', '!.git'])
+      \ ['fd', '--full-path'])
 call denite#custom#var('grep', 'command', ['rg'])
 call denite#custom#var('grep', 'default_opts',
       \ ['--hidden', '--vimgrep', '--smart-case'])
