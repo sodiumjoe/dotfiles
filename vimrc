@@ -82,9 +82,11 @@ endif
 
 set inccommand=split
 
-" save cursor pos, splits, etc.
-autocmd FileWritePre *.* silent! mkview
-autocmd FileReadPre *.* silent! loadview
+" restore cursor pos
+autocmd BufReadPost *
+      \ if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit'
+      \ |   exe "normal! g`\""
+      \ | endif
 
 " movement
 " ========
@@ -365,9 +367,15 @@ set signcolumn=yes
 
 " neoformat
 
-autocmd BufWritePre *.js silent! Neoformat
-autocmd BufWritePre *.jsx silent! Neoformat
-autocmd BufWritePre *.rs silent! Neoformat
+augroup fmt
+  autocmd!
+  autocmd BufWritePre *.{js,jsx,rs} silent! Neoformat
+augroup END
+
+augroup Alacritty
+  autocmd!
+  autocmd BufNewFile,BufRead ~/home/alacritty/**/* autocmd! fmt
+augroup END
 
 let g:neoformat_enabled_javascript = ['prettier', 'prettier2']
 let g:neoformat_javascript_prettier = {
@@ -382,7 +390,6 @@ let g:neoformat_javascript_prettier2 = {
       \ }
 
 let g:neoformat_enabled_rust = ['rustfmt']
-
 
 " incsearch
 
