@@ -11,6 +11,7 @@ Plug 'autozimu/LanguageClient-neovim', {
       \ 'do': 'bash install.sh',
       \ }
 Plug 'benizi/vim-automkdir'
+Plug 'chemzqm/vim-jsx-improve'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'haya14busa/incsearch-easymotion.vim'
@@ -435,3 +436,8 @@ let g:LanguageClient_loggingFile = '/tmp/LanguageClient.log'
 let g:LanguageClient_loggingLevel = 'INFO'
 let g:LanguageClient_serverStderr = '/tmp/LanguageServer.log'
 let g:LanguageClient_rootMarkers = ['.flowconfig']
+" let g:LanguageClient_changeThrottle = 1
+let g:LanguageClient_diagnosticsEnable = 0
+
+" vim-polyglot
+let g:polyglot_disabled=['javascript.jsx', 'javascript']
