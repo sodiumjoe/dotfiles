@@ -83,3 +83,5 @@
   selected = normal
   separator = red bold
   linenumber = normal
+[hub]
+	host = git.corp.stripe.com
