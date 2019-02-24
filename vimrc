@@ -350,7 +350,8 @@ let g:lengthmatters_excluded = [
       \'qf',
       \'dirvish',
       \'denite',
-      \'gitcommit'
+      \'gitcommit',
+      \'json'
       \]
 
 " vim-move
