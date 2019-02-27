@@ -86,6 +86,8 @@ export RIPGREP_CONFIG_PATH=~/.ripgreprc
 
 ## stripe
 
+source ~/stripe/space-commander/bin/sc-aliases
+
 . /Users/moon/.rbenvrc
 . ~/.stripe-repos.sh
 eval "$(nodenv init -)"
