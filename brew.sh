@@ -22,9 +22,9 @@ brew tap caskroom/fonts
 brew tap Goles/battery
 
 brew install autojump
-brew install --HEAD battery
 brew install curl
 brew install editorconfig
+brew install fd
 brew install fzf
 # set fzf keybindings
 /usr/local/opt/fzf/install
