@@ -30,6 +30,8 @@ export PATH=${PATH}:~/.bin
 export PATH=${PATH}:~/.bin/terraform
 export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
+export PATH="/usr/local/go/bin:$PATH"
+export PATH=${PATH}:~/stripe/go/bin
 
 export EDITOR=nvim
 # open in editor
@@ -91,3 +93,5 @@ source ~/stripe/space-commander/bin/sc-aliases
 . /Users/moon/.rbenvrc
 . ~/.stripe-repos.sh
 eval "$(nodenv init -)"
+
+export GOPATH=${HOME}/stripe/go
