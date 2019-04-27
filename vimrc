@@ -259,8 +259,8 @@ call denite#custom#option('default', {
       \ 'prompt': '❯'
       \ })
 
-call denite#custom#var('file_rec', 'command',
-      \ ['fd', '--full-path'])
+call denite#custom#var('file/rec', 'command',
+      \ ['fd', '-H', '--full-path'])
 call denite#custom#var('grep', 'command', ['rg'])
 call denite#custom#var('grep', 'default_opts',
       \ ['--hidden', '--vimgrep', '--smart-case'])
@@ -279,7 +279,7 @@ call denite#custom#map('normal', '<C-v>', '<denite:do_action:vsplit>',
 call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
       \'noremap')
 
-nnoremap <C-p> :<C-u>Denite file_rec<CR>
+nnoremap <C-p> :<C-u>Denite file/rec<CR>
 nnoremap <leader>s :<C-u>Denite buffer<CR>
 nnoremap <leader><Space>s :<C-u>DeniteBufferDir buffer<CR>
 nnoremap <leader>8 :<C-u>DeniteCursorWord grep:. -mode=normal<CR>
@@ -313,9 +313,11 @@ let g:ale_rust_cargo_use_check = 1
 " deoplete
 
 let g:deoplete#enable_at_startup = 1
-let g:deoplete#enable_smart_case = 1
-let g:deoplete#auto_complete_start_length = 1
-let g:deoplete#auto_complete_delay = 50
+
+call deoplete#custom#option({
+      \   'min_pattern_length': 1,
+      \   'auto_complete_delay': 50,
+      \})
 
 " editorconfig
 
