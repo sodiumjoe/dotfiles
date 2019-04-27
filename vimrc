@@ -372,7 +372,7 @@ set signcolumn=yes
 
 augroup fmt
   autocmd!
-  autocmd BufWritePre *.{js,jsx,rs} silent! Neoformat
+  autocmd BufWritePre *.{js,jsx,rs,go} silent! Neoformat
 augroup END
 
 augroup Alacritty
@@ -393,6 +393,7 @@ let g:neoformat_javascript_prettier2 = {
       \ }
 
 let g:neoformat_enabled_rust = ['rustfmt']
+let g:neoformat_enabled_go = ['goimports', 'gofmt']
 
 " incsearch
 
@@ -434,6 +435,7 @@ let g:LanguageClient_serverCommands = {
       \ 'javascript': ['flow', 'lsp'],
       \ 'javascript.jsx': ['flow', 'lsp'],
       \ 'ruby': ['/Users/moon/stripe/pay-server/scripts/bin/typecheck', '--lsp'],
+      \ 'go': ['gopls'],
       \}
 
 let g:LanguageClient_autoStart = 1
