@@ -15,6 +15,7 @@ Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
 Plug 'haya14busa/incsearch-easymotion.vim'
 Plug 'haya14busa/incsearch.vim'
+Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
 Plug 'ntpeters/vim-better-whitespace'
@@ -451,3 +452,25 @@ let g:LanguageClient_serverStderr = '/tmp/LanguageServer.log'
 let g:LanguageClient_rootMarkers = ['.flowconfig']
 " let g:LanguageClient_changeThrottle = 1
 let g:LanguageClient_diagnosticsEnable = 0
+
+" vim-markdown
+let g:vim_markdown_strikethrough = 1
+let g:vim_markdown_new_list_item_indent = 2
+
+" goyo
+
+function! s:goyo_enter()
+  LengthmattersDisable
+  set linebreak
+endfunction
+
+function! s:goyo_leave()
+  LengthmattersEnable
+  hi StatusLine guifg=#7FC1CA guibg=#556873
+  hi StatusLineNC guifg=#3C4C55 guibg=#556873
+  hi StatusLineError guifg=#DF8C8C guibg=#556873
+  set nolinebreak
+endfunction
+
+autocmd! User GoyoEnter nested call <SID>goyo_enter()
+autocmd! User GoyoLeave nested call <SID>goyo_leave()
