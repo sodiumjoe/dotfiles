@@ -303,10 +303,11 @@ nmap <silent> <leader>n <Plug>(ale_next_wrap)
 nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 
 let g:ale_linters = {
-\   'elixir': [],
-\   'javascript': ['eslint', 'flow'],
-\   'coffeescript': ['jshint'],
-\}
+      \   'elixir': [],
+      \   'javascript': ['eslint', 'flow'],
+      \   'javascript.jsx': ['eslint', 'flow'],
+      \   'coffeescript': ['jshint'],
+      \}
 
 let g:ale_rust_cargo_use_check = 1
 
