@@ -31,6 +31,7 @@ brew install fzf
 brew install git
 brew install gnu-tar
 brew install gnupg
+brew install htop
 brew install karn
 # brew install leiningen
 brew install lua
