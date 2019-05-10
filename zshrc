@@ -53,7 +53,6 @@ alias vi='nvim'
 alias vimdiff='nvim -d'
 alias iex='rlwrap -a foo iex'
 alias del='rmtrash'
-alias rm="echo Use 'del', or the full path i.e. '/bin/rm'"
 alias ll='ls -lah'
 
 # FZF
