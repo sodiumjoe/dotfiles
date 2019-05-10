@@ -7,9 +7,6 @@
 [submodule "fz"]
 	path = fz
 	url = git@github.com:changyuheng/fz.git
-[submodule "zsh-nvm"]
-	path = zsh-nvm
-	url = https://github.com/lukechilds/zsh-nvm.git
 [submodule "zsh-better-npm-completion"]
 	path = zsh-better-npm-completion
 	url = https://github.com/lukechilds/zsh-better-npm-completion.git
