@@ -80,9 +80,6 @@ if which karn > /dev/null; then eval "$(karn init)"; fi
 source ~/.dotfiles/per-directory-history/per-directory-history.zsh
 source ~/.dotfiles/z/z.sh
 source ~/.dotfiles/fz/fz.plugin.zsh
-# export NVM_LAZY_LOAD=true
-# source ~/.dotfiles/zsh-nvm/zsh-nvm.plugin.zsh
-# source ~/.dotfiles/zsh-better-npm-completion/zsh-better-npm-completion.plugin.zsh
 
 export RIPGREP_CONFIG_PATH=~/.ripgreprc
 
