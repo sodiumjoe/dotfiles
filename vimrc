@@ -140,7 +140,7 @@ hi link Search StatusLine
 " statusline
 " ==========
 
-hi StatusLine guifg=#7FC1CA guibg=#556873
+hi StatusLine guifg=#C5D4DD guibg=#556873
 hi StatusLineNC guifg=#3C4C55 guibg=#556873
 hi StatusLineError guifg=#DF8C8C guibg=#556873
 
