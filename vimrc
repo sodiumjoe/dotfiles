@@ -144,33 +144,6 @@ hi StatusLine guifg=#C5D4DD guibg=#556873
 hi StatusLineNC guifg=#3C4C55 guibg=#556873
 hi StatusLineError guifg=#DF8C8C guibg=#556873
 
-function! Git_branch()
-  let l:branch = fugitive#head()
-  if l:branch == ""
-    return ""
-  elseif l:branch == "master"
-    return "[⌂]"
-  elseif strpart(l:branch, 0, 5) == "moon/"
-    let l:branch = substitute(l:branch, "moon/", "", "")
-    let l:branch = strpart(l:branch, 0, 9)
-    return '[' . l:branch . ']'
-  endif
-  return '[' . l:branch . ']'
-endfunction
-
-function! Current_project()
-  let l:cwd = getcwd()
-  let l:len = strlen(l:cwd)
-  let l:sail = "frontend/sail"
-  let l:manage = "manage/frontend"
-  if strpart(l:cwd, l:len - strlen(l:sail)) == l:sail
-    return "[⛵]"
-  elseif strpart(l:cwd, l:len - strlen(l:manage)) == l:manage
-    return "[manage]"
-  endif
-  return ""
-endfunction
-
 function! LinterStatus() abort
   let l:counts = ale#statusline#Count(bufnr(''))
 
@@ -184,15 +157,14 @@ function! LinterStatus() abort
         \)
 endfunction
 
-set statusline=""
-set statusline+=%(%{Git_branch()}\ %)
-set statusline+=%(%{Current_project()}\ %)
-" set statusline+=\ "
+" autocmd BufReadPost,FileReadPost,BufNewFile * call system("tmux rename-window '" . Current_project() . "'")
+
+set statusline=
 " filename
-set statusline+=%<%f
+set statusline+=\ %<%{expand('%:~:.')}
 set statusline+=\ "
 " help/modified/readonly
-set statusline+=%h%m%r
+set statusline+=%(%h%m%r%)
 " alignment group
 set statusline+=%=
 " lsp status
@@ -201,14 +173,7 @@ set statusline+=%{LanguageClient_statusLine()}
 set statusline+=%#StatusLineError#
 " errors from w0rp/ale
 set statusline+=%{LinterStatus()}
-" reset highlight group
-set statusline+=%#StatusLine#
 set statusline+=\ "
-" line/total lines
-set statusline+=L%l/%L
-set statusline+=\ "
-" virtual column
-set statusline+=C%02v
 
 " javascript source resolution
 set path=.
