@@ -53,7 +53,7 @@ alias vi='nvim'
 alias vimdiff='nvim -d'
 alias iex='rlwrap -a foo iex'
 alias del='rmtrash'
-alias ll='ls -lah'
+alias ll='exa -l'
 
 # FZF
 

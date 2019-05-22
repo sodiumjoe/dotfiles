@@ -24,6 +24,7 @@ brew tap Goles/battery
 brew install autojump
 brew install curl
 brew install editorconfig
+brew install exa
 brew install fd
 brew install fzf
 # set fzf keybindings
