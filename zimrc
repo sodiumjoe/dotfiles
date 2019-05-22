@@ -24,7 +24,7 @@ zmodules=(directory environment git git-info history input utility custom \
 #
 
 # Set your desired prompt here
-zprompt_theme='pure'
+zprompt_theme='sodiumjoe'
 
 #
 # Completion
