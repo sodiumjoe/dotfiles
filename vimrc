@@ -231,28 +231,31 @@ call denite#custom#var('grep', 'recursive_opts', [])
 call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
 call denite#custom#var('grep', 'separator', ['--'])
 call denite#custom#var('grep', 'final_opts', [])
-call denite#custom#map('insert', '<Esc>', '<denite:enter_mode:normal>',
-      \'noremap')
-call denite#custom#map('normal', '<Esc>', '<NOP>',
-      \'noremap')
-call denite#custom#map('insert', '<C-v>', '<denite:do_action:vsplit>',
-      \'noremap')
-call denite#custom#map('normal', '<C-v>', '<denite:do_action:vsplit>',
-      \'noremap')
-call denite#custom#map('normal', 'dw', '<denite:delete_word_after_caret>',
-      \'noremap')
 
-nnoremap <C-p> :<C-u>Denite file/rec<CR>
+autocmd FileType denite call s:denite_my_settings()
+function! s:denite_my_settings() abort
+  nnoremap <silent><buffer><expr> <CR>
+  \ denite#do_map('do_action')
+  nnoremap <silent><buffer><expr> d
+  \ denite#do_map('do_action', 'delete')
+  nnoremap <silent><buffer><expr> p
+  \ denite#do_map('do_action', 'preview')
+  nnoremap <silent><buffer><expr> q
+  \ denite#do_map('quit')
+  nnoremap <silent><buffer><expr> i
+  \ denite#do_map('open_filter_buffer')
+endfunction
+
+nnoremap <C-p> :<C-u>Denite file/rec -start-filter<CR>
 nnoremap <leader>s :<C-u>Denite buffer<CR>
-nnoremap <leader><Space>s :<C-u>DeniteBufferDir buffer<CR>
-nnoremap <leader>8 :<C-u>DeniteCursorWord grep:. -mode=normal<CR>
-nnoremap <leader>/ :<C-u>Denite grep:. -mode=normal<CR>
-nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:. -mode=normal<CR>
-nnoremap <leader>d :<C-u>DeniteBufferDir file/rec<CR>
+nnoremap <leader>8 :<C-u>DeniteCursorWord grep:.<CR>
+nnoremap <leader>/ :<C-u>Denite grep:.<CR>
+nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:.<CR>
+nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
-nnoremap <leader><C-r> :<C-u>Denite register:. -mode=normal<CR>
+nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
 " references source from LanguageClient
-nnoremap <leader>lr :<C-u>Denite references -mode=normal<CR>
+nnoremap <leader>lr :<C-u>Denite references<CR>
 
 hi link deniteMatchedChar Special
 
