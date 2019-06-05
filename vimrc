@@ -167,8 +167,6 @@ set statusline+=\ "
 set statusline+=%(%h%m%r%)
 " alignment group
 set statusline+=%=
-" lsp status
-set statusline+=%{LanguageClient_statusLine()}
 " start error highlight group
 set statusline+=%#StatusLineError#
 " errors from w0rp/ale
