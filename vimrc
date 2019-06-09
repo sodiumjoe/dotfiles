@@ -6,10 +6,6 @@ call plug#begin('~/.vim/plugged')
 Plug 'Shougo/denite.nvim'
 Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 Plug 'airblade/vim-gitgutter'
-Plug 'autozimu/LanguageClient-neovim', {
-      \ 'branch': 'next',
-      \ 'do': 'bash install.sh',
-      \ }
 Plug 'benizi/vim-automkdir'
 Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
@@ -270,12 +266,24 @@ nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 
 let g:ale_linters = {
       \   'elixir': [],
-      \   'javascript': ['eslint', 'flow'],
-      \   'javascript.jsx': ['eslint', 'flow'],
+      \   'javascript': ['eslint', 'flow', 'flow-language-server'],
+      \   'javascript.jsx': ['eslint', 'flow', 'flow-language-server'],
       \   'coffeescript': ['jshint'],
       \}
 
+" https://github.com/w0rp/ale/issues/2560#issuecomment-500166527
+let g:ale_linters_ignore = {
+      \   'javascript': ['flow-language-server'],
+      \   'javascript.jsx': ['flow-language-server'],
+      \}
+
 let g:ale_rust_cargo_use_check = 1
+let g:ale_ruby_rubocop_executable = 'bundle'
+
+nnoremap <silent> K :ALEHover<CR>
+nnoremap <silent> gd :ALEGoToDefinition<CR>
+nnoremap <silent> gvd :ALEGoToDefinitionInVSplit<CR>
+nnoremap <silent> gr :ALEFindReferences<CR>
 
 " deoplete
 
@@ -394,30 +402,6 @@ augroup end
 " fugitive
 
 nnoremap <leader>g :<C-u>Gstatus<CR>
-
-" LanguageClient-neovim
-
-let g:LanguageClient_serverCommands = {
-      \ 'rust': ['rls'],
-      \ 'javascript': ['flow', 'lsp'],
-      \ 'javascript.jsx': ['flow', 'lsp'],
-      \ 'ruby': ['/Users/moon/stripe/pay-server/scripts/bin/typecheck', '--lsp'],
-      \ 'go': ['gopls'],
-      \}
-
-let g:LanguageClient_autoStart = 1
-
-nnoremap <silent> K :call LanguageClient#textDocument_hover()<CR>
-nnoremap <silent> gd :call LanguageClient#textDocument_definition()<CR>
-nnoremap <silent> gr :call LanguageClient#textDocument_references()<CR>
-nnoremap <silent> <leader><leader> :call LanguageClient#explainErrorAtPoint()<CR>
-
-let g:LanguageClient_loggingFile = '/tmp/LanguageClient.log'
-let g:LanguageClient_loggingLevel = 'INFO'
-let g:LanguageClient_serverStderr = '/tmp/LanguageServer.log'
-let g:LanguageClient_rootMarkers = ['.flowconfig']
-" let g:LanguageClient_changeThrottle = 1
-let g:LanguageClient_diagnosticsEnable = 0
 
 " vim-markdown
 let g:vim_markdown_strikethrough = 1
