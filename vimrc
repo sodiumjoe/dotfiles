@@ -249,8 +249,6 @@ nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:.<CR>
 nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
-" references source from LanguageClient
-nnoremap <leader>lr :<C-u>Denite references<CR>
 
 hi link deniteMatchedChar Special
 
@@ -292,6 +290,10 @@ call deoplete#custom#option({
       \   'min_pattern_length': 1,
       \   'auto_complete_delay': 50,
       \})
+
+" disable deoplete for denite buffer
+autocmd FileType denite-filter
+      \   call deoplete#custom#buffer_option('auto_complete', v:false)
 
 " editorconfig
 
