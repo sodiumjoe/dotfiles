@@ -122,7 +122,6 @@ set expandtab
 set scrolloff=5
 " display incomplete commands
 set showcmd
-set textwidth=80
 
 " split dividers and end of buffer character
 set fillchars=vert:\│,eob:⌁
