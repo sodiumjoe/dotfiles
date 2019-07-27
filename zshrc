@@ -54,6 +54,7 @@ alias vimdiff='nvim -d'
 alias iex='rlwrap -a foo iex'
 alias del='rmtrash'
 alias ll='exa -la'
+alias zd='cd ~/stripe/pay-server/manage/frontend'
 
 # FZF
 
