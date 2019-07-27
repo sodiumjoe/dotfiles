@@ -14,6 +14,7 @@ Plug 'haya14busa/incsearch.vim'
 Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
+Plug 'neoclide/denite-git'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'rhysd/conflict-marker.vim'
 Plug 'sbdchd/neoformat'
@@ -253,6 +254,7 @@ nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:.<CR>
 nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
+nnoremap <leader>g :<C-u>Denite gitstatus<CR>
 
 hi link deniteMatchedChar Special
 
@@ -403,10 +405,6 @@ augroup dirvish_fugitive
   autocmd!
   autocmd FileType dirvish call fugitive#detect(@%)
 augroup end
-
-" fugitive
-
-nnoremap <leader>g :<C-u>Gstatus<CR>
 
 " vim-markdown
 let g:vim_markdown_strikethrough = 1
