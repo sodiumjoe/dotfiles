@@ -33,7 +33,7 @@ export PATH=${PATH}:~/.cargo/bin
 export PATH="/usr/local/go/bin:$PATH"
 export PATH=${PATH}:~/stripe/go/bin
 
-export EDITOR=nvim
+export EDITOR='nvim -U none'
 # open in editor
 autoload -z edit-command-line
 zle -N edit-command-line
