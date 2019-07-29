@@ -1,12 +1,6 @@
 [submodule "per-directory-history"]
 	path = per-directory-history
 	url = git@github.com:jimhester/per-directory-history.git
-[submodule "z"]
-	path = z
-	url = git@github.com:rupa/z.git
-[submodule "fz"]
-	path = fz
-	url = git@github.com:changyuheng/fz.git
 [submodule "zsh-better-npm-completion"]
 	path = zsh-better-npm-completion
 	url = https://github.com/lukechilds/zsh-better-npm-completion.git
