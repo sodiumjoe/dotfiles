@@ -10,7 +10,7 @@ export ZIM_HOME=${ZDOTDIR:-${HOME}}/.zim
 # Start zim
 [[ -s ${ZIM_HOME}/init.zsh ]] && source ${ZIM_HOME}/init.zsh # Source zim
 
-ZSH_HIGHLIGHT_STYLES[path]='fg=cyan'
+# ZSH_HIGHLIGHT_STYLES[path]='fg=cyan'
 
 export PATH=~/stripe/henson/bin
 export PATH=${PATH}:node_modules/.bin
@@ -74,12 +74,22 @@ fbr() {
   git checkout $branch
 }
 
+chpwd() {
+  if [[ $(pwd) == "/Users/moon/stripe/dashboard" ]]; then
+    cd ~/stripe/pay-server/manage/frontend
+  fi
+}
+
 # per-directory git config
 if which karn > /dev/null; then eval "$(karn init)"; fi
 
 source ~/.dotfiles/per-directory-history/per-directory-history.zsh
-source ~/.dotfiles/z/z.sh
-source ~/.dotfiles/fz/fz.plugin.zsh
+# source ~/.dotfiles/z/z.sh
+# source ~/z.lua/z.lua.plugin.zsh
+eval "$(lua ~/z.lua/z.lua --init zsh enhanced once fzf)"
+source ~/.dotfiles/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
+
+# source ~/.dotfiles/fz/fz.plugin.zsh
 
 export RIPGREP_CONFIG_PATH=~/.ripgreprc
 
