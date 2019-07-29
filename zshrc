@@ -88,6 +88,10 @@ source ~/.dotfiles/per-directory-history/per-directory-history.zsh
 # source ~/z.lua/z.lua.plugin.zsh
 eval "$(lua ~/z.lua/z.lua --init zsh enhanced once fzf)"
 source ~/.dotfiles/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
+source ~/.dotfiles/zsh-autosuggestions/zsh-autosuggestions.zsh
+
+# zsh-autosuggestions
+bindkey '^n' autosuggest-accept
 
 # source ~/.dotfiles/fz/fz.plugin.zsh
 

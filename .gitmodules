@@ -13,3 +13,6 @@
 [submodule "fast-syntax-highlighting"]
 	path = fast-syntax-highlighting
 	url = git@github.com:zdharma/fast-syntax-highlighting.git
+[submodule "zsh-autosuggestions"]
+	path = zsh-autosuggestions
+	url = git@github.com:zsh-users/zsh-autosuggestions.git
