@@ -84,7 +84,7 @@ chpwd() {
 if which karn > /dev/null; then eval "$(karn init)"; fi
 
 source ~/.dotfiles/per-directory-history/per-directory-history.zsh
-eval "$(lua ~/z.lua/z.lua --init zsh enhanced once fzf)"
+eval "$(lua ~/.dotfiles/z.lua/z.lua --init zsh enhanced once fzf)"
 source ~/.dotfiles/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
 source ~/.dotfiles/zsh-autosuggestions/zsh-autosuggestions.zsh
 

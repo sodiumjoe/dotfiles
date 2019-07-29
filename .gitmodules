@@ -10,3 +10,6 @@
 [submodule "zsh-autosuggestions"]
 	path = zsh-autosuggestions
 	url = git@github.com:zsh-users/zsh-autosuggestions.git
+[submodule "z.lua"]
+	path = z.lua
+	url = git@github.com:skywind3000/z.lua.git
