@@ -87,6 +87,7 @@ source ~/.dotfiles/per-directory-history/per-directory-history.zsh
 eval "$(lua ~/.dotfiles/z.lua/z.lua --init zsh enhanced once fzf)"
 source ~/.dotfiles/fast-syntax-highlighting/fast-syntax-highlighting.plugin.zsh
 source ~/.dotfiles/zsh-autosuggestions/zsh-autosuggestions.zsh
+source ~/.dotfiles/forgit/forgit.plugin.zsh
 
 # zsh-autosuggestions
 bindkey '^n' autosuggest-accept
