@@ -68,9 +68,14 @@ let g:mapleader="\<SPACE>"
 " search visual selection
 vnoremap // y/<C-R>"<CR>
 
-" partial command filter on command history
+" move line up
 cnoremap <C-k> <Up>
+" move line down
 cnoremap <C-j> <Down>
+" copy relative path to clipboard
+nmap <silent> <leader>cr :let @+ = expand("%")<cr>
+" copy full path to clipboard
+nmap <silent> <leader>cf :let @+ = expand("%:p")<cr>
 
 if executable('rg')
   set grepprg=rg\ --vimgrep\ --no-heading\ -S
