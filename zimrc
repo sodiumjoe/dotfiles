@@ -1,5 +1,3 @@
-
-
 #################
 # CORE SETTINGS #
 #################
@@ -93,7 +91,6 @@ zdouble_dot_expand='true'
 
 # Load these ssh identities with the ssh module
 zssh_ids=(id_rsa,id_rsa_moon@stripe.com)
-
 
 #
 # Pacman
