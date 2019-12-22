@@ -258,8 +258,8 @@ endfunction
 nnoremap <C-p> :<C-u>Denite file/rec -start-filter<CR>
 nnoremap <leader>s :<C-u>Denite buffer<CR>
 nnoremap <leader>8 :<C-u>DeniteCursorWord grep:.<CR>
-nnoremap <leader>/ :<C-u>Denite grep:.<CR>
-nnoremap <leader><Space>/ :<C-u>DeniteBufferDir grep:.<CR>
+nnoremap <leader>/ :<C-u>Denite -start-filter grep:::!<CR>
+nnoremap <leader><Space>/ :<C-u>DeniteBufferDir -start-filter grep:::!<CR>
 nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
