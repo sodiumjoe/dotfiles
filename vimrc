@@ -15,6 +15,7 @@ Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
 Plug 'matze/vim-move'
 Plug 'neoclide/denite-git'
+Plug 'norcalli/nvim-colorizer.lua'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'rhysd/conflict-marker.vim'
 Plug 'sbdchd/neoformat'
@@ -343,7 +344,8 @@ let g:lengthmatters_excluded = [
       \'dirvish',
       \'denite',
       \'gitcommit',
-      \'json'
+      \'json',
+      \'vimwiki'
       \]
 
 " vim-move
@@ -379,6 +381,11 @@ let g:neoformat_javascript_prettier = {
 let g:neoformat_javascript_prettier2 = {
       \ 'exe': './node_modules/.bin/prettier',
       \ 'args': ['--write', '--config ../../prettier.config.js'],
+      \ 'replace': 1
+      \ }
+let g:neoformat_javascript_prettier3 = {
+      \ 'exe': 'prettier',
+      \ 'args': ['--write', '--config ../prettier.config.js'],
       \ 'replace': 1
       \ }
 
