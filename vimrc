@@ -171,6 +171,11 @@ set statusline+=%#StatusLineError#
 " errors from w0rp/ale
 set statusline+=%{LinterStatus()}
 set statusline+=\ "
+" line/total lines
+set statusline+=L%l/%L
+" virtual column
+set statusline+=C%02v
+set statusline+=\ "
 
 " javascript source resolution
 set path=.
