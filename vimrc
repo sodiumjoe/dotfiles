@@ -158,8 +158,6 @@ function! LinterStatus() abort
         \)
 endfunction
 
-" autocmd BufReadPost,FileReadPost,BufNewFile * call system("tmux rename-window '" . Current_project() . "'")
-
 set statusline=
 " filename
 set statusline+=\ %<%{expand('%:~:.')}
