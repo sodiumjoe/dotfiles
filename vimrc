@@ -229,6 +229,9 @@ call denite#custom#var('grep', 'recursive_opts', [])
 call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
 call denite#custom#var('grep', 'separator', ['--'])
 call denite#custom#var('grep', 'final_opts', [])
+call denite#custom#option('_', 'max_dynamic_update_candidates', 100000)
+call denite#custom#option('_', 'split', 'floating')
+
 
 autocmd FileType denite call s:denite_settings()
 
