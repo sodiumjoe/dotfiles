@@ -217,8 +217,15 @@ call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
 call denite#custom#var('grep', 'separator', ['--'])
 call denite#custom#var('grep', 'final_opts', [])
 call denite#custom#option('_', 'max_dynamic_update_candidates', 100000)
-call denite#custom#option('_', 'split', 'floating')
-
+call denite#custom#option('_', {
+      \ 'split': 'floating',
+      \ 'highlight_matched_char': 'Underlined',
+      \ 'highlight_matched_range': 'NormalFloat',
+      \ 'wincol': &columns / 6,
+      \ 'winwidth': &columns * 2 / 3,
+      \ 'winrow': &lines / 6,
+      \ 'winheight': &lines * 2 / 3
+      \ })
 
 autocmd FileType denite call s:denite_settings()
 
