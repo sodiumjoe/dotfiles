@@ -285,6 +285,10 @@ nnoremap <silent> gd :ALEGoToDefinition<CR>
 nnoremap <silent> gvd :ALEGoToDefinitionInVSplit<CR>
 nnoremap <silent> gr :ALEFindReferences<CR>
 
+" colorizer-lua
+
+lua require'colorizer'.setup()
+
 " deoplete
 
 let g:deoplete#enable_at_startup = 1
