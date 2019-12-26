@@ -13,6 +13,7 @@ Plug 'haya14busa/incsearch-easymotion.vim'
 Plug 'haya14busa/incsearch.vim'
 Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
+Plug 'lifepillar/vim-colortemplate'
 Plug 'matze/vim-move'
 Plug 'neoclide/denite-git'
 Plug 'norcalli/nvim-colorizer.lua'
@@ -25,7 +26,6 @@ Plug 'tpope/vim-eunuch'
 Plug 'tpope/vim-fugitive'
 Plug 'tpope/vim-repeat'
 Plug 'tpope/vim-surround'
-Plug 'trevordmiller/nova-vim'
 Plug 'vimwiki/vimwiki'
 Plug 'w0rp/ale'
 Plug 'whatyouhide/vim-lengthmatters'
@@ -64,6 +64,7 @@ set smartcase
 set infercase
 set diffopt=filler,vertical
 set breakindent
+set guicursor=n-v-sm:block,i-c-ci-ve:ver25,r-cr-o:hor20
 
 let g:mapleader="\<SPACE>"
 " search visual selection
@@ -115,7 +116,8 @@ set nomodeline
 
 set guifont=Inconsolata:h16
 set background=dark
-colorscheme nova
+set termguicolors
+colorscheme sodium
 " folding column width
 set foldcolumn=0
 " disable tabline
@@ -132,19 +134,9 @@ set showcmd
 
 " split dividers and end of buffer character
 set fillchars=vert:\│,eob:⌁
-hi VertSplit guifg=#556873
-
-hi clear IncSearch
-hi link IncSearch StatusLine
-hi clear Search
-hi link Search StatusLine
 
 " statusline
 " ==========
-
-hi StatusLine guifg=#C5D4DD guibg=#556873
-hi StatusLineNC guifg=#3C4C55 guibg=#556873
-hi StatusLineError guifg=#DF8C8C guibg=#556873
 
 function! LinterStatus() abort
   let l:counts = ale#statusline#Count(bufnr(''))
@@ -205,11 +197,6 @@ map <leader>e <Plug>(easymotion-prefix)
 " disable shading
 let g:EasyMotion_do_shade = 0
 
-" colors
-hi EasyMotionTarget ctermfg=1 cterm=bold,underline
-hi link EasyMotionTarget2First EasyMotionTarget
-hi EasyMotionTarget2Second ctermfg=1 cterm=underline
-
 " vim-static-clojure
 
 " let g:clojure_fuzzy_indent = 0
@@ -267,8 +254,6 @@ nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
 nnoremap <leader>g :<C-u>Denite gitstatus<CR>
-
-hi link deniteMatchedChar Special
 
 " ale
 
@@ -355,10 +340,6 @@ let g:lengthmatters_excluded = [
 
 let g:move_key_modifier = 'C'
 
-" vim-better-whitespace
-
-hi link ExtraWhitespace Search
-
 " vim-gitgutter
 
 set signcolumn=yes
@@ -437,9 +418,6 @@ endfunction
 
 function! s:goyo_leave()
   LengthmattersEnable
-  hi StatusLine guifg=#7FC1CA guibg=#556873
-  hi StatusLineNC guifg=#3C4C55 guibg=#556873
-  hi StatusLineError guifg=#DF8C8C guibg=#556873
   set nolinebreak
 endfunction
 
