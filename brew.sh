@@ -18,10 +18,6 @@ brew tap caskroom/versions
 # https://github.com/caskroom/homebrew-fonts
 brew tap caskroom/fonts
 
-# https://github.com/Goles/Battery
-brew tap Goles/battery
-
-brew install autojump
 brew install curl
 brew install editorconfig
 brew install exa
@@ -56,7 +52,6 @@ brew install zsh
 brew cask install alfred
 brew cask install bartender
 brew cask install bettertouchtool
-brew cask install clipy
 brew cask install crashplan
 brew cask install dropbox
 brew cask install hammerspoon
@@ -65,9 +60,8 @@ brew cask install google-chrome-beta
 brew cask install font-inconsolata-nerd-font
 
 # neovim
-mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
-ln -s ~/.vim $XDG_CONFIG_HOME/nvim
-ln -s ~/.vimrc $XDG_CONFIG_HOME/nvim/init.vim
+ln -s ~/.dotfiles/init.vim $XDG_CONFIG_HOME/nvim/init.vim
+
 
 # python 3 for neovim for deoplete
 pip3 install neovim

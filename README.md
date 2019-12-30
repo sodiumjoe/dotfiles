@@ -3,7 +3,7 @@ This is my dotfiles repo. There are many like it but this one is mine.
 ```bash
 xcode-select --install
 cd ~
-git clone https://github.com/sodiumjoe/dotfiles.git .dotfiles
+git clone --recursive https://github.com/sodiumjoe/dotfiles.git .dotfiles
 cd .dotfiles
 git submodule update --init
 ./bootstrap.sh

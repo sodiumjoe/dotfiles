@@ -1,2 +1,5 @@
 # netrw
 .netrwhist
+zsh/.zcompdump*
+zsh/*.zwc*
+zsh/.zhistory

@@ -13,6 +13,6 @@
 [submodule "z.lua"]
 	path = z.lua
 	url = git@github.com:skywind3000/z.lua.git
-[submodule "forgit"]
-	path = forgit
-	url = git@github.com:wfxr/forgit.git
+[submodule "zim"]
+	path = zim
+	url = git@github.com:sodiumjoe/zim.git

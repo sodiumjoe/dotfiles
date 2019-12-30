@@ -1,7 +1,7 @@
 " plugins
 " =======
 
-call plug#begin('~/.vim/plugged')
+call plug#begin('~/.config/nvim/plugged')
 
 Plug 'Shougo/denite.nvim'
 Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
@@ -36,10 +36,7 @@ call plug#end()
 " =======
 
 scriptencoding utf8
-set backupdir=~/.vim/backups
-set directory=~/.vim/swaps
 set undofile
-set undodir=~/.vim/undo
 set noerrorbells
 set splitbelow
 set splitright

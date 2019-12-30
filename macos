@@ -969,6 +969,12 @@ defaults write com.google.Chrome.canary PMPrintingExpandedStateForPrint2 -bool t
 mackup restore
 
 ###############################################################################
+# Hammerspoon                                                                 #
+###############################################################################
+
+defaults write org.hammerspoon.Hammerspoon MJConfigFile "~/.config/hammerspoon/init.lua"
+
+###############################################################################
 # Kill affected applications                                                  #
 ###############################################################################
 
