@@ -276,9 +276,7 @@ let g:ale_linters = {
       \   'javascript': ['eslint', 'flow', 'flow-language-server'],
       \   'javascript.jsx': ['eslint', 'flow', 'flow-language-server'],
       \   'coffeescript': ['jshint'],
-      \   'ruby': ['rubocop'],
       \}
-let g:ale_ruby_rubocop_executable = 'script/bin/rubocop'
 
 " https://github.com/w0rp/ale/issues/2560#issuecomment-500166527
 let g:ale_linters_ignore = {
@@ -292,7 +290,7 @@ let g:ale_ruby_rubocop_executable = 'bundle'
 nnoremap <silent> K :ALEHover<CR>
 nnoremap <silent> gd :ALEGoToDefinition<CR>
 nnoremap <silent> gvd :ALEGoToDefinitionInVSplit<CR>
-nnoremap <silent> gr :ALEFindReferences -relative<CR>
+nnoremap <silent> gr :ALEFindReferences<CR>
 
 " colorizer-lua
 
@@ -369,7 +367,7 @@ augroup Alacritty
   autocmd BufNewFile,BufRead ~/home/alacritty/**/* autocmd! fmt
 augroup END
 
-let g:neoformat_enabled_javascript = ['prettier', 'prettier2', 'prettier3']
+let g:neoformat_enabled_javascript = ['prettier', 'prettier2']
 let g:neoformat_javascript_prettier = {
       \ 'exe': './node_modules/.bin/prettier',
       \ 'args': ['--write', '--config .prettierrc'],
