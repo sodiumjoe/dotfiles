@@ -85,3 +85,5 @@
   linenumber = normal
 [hub]
 	host = git.corp.stripe.com
+[rerere]
+	enabled = true

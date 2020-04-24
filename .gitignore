@@ -3,3 +3,5 @@
 zsh/.zcompdump*
 zsh/*.zwc*
 zsh/.zhistory
+zsh/.zsh_history
+zsh/.zim
