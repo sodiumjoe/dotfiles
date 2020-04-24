@@ -283,9 +283,10 @@ let g:ale_rust_cargo_use_check = 1
 let g:ale_ruby_rubocop_executable = 'bundle'
 
 nnoremap <silent> K :ALEHover<CR>
+nnoremap <silent> <leader>k :ALEDetail<CR>
 nnoremap <silent> gd :ALEGoToDefinition<CR>
 nnoremap <silent> gvd :ALEGoToDefinitionInVSplit<CR>
-nnoremap <silent> gr :ALEFindReferences<CR>
+nnoremap <silent> gr :ALEFindReferences -relative<CR>
 
 " colorizer-lua
 
