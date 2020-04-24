@@ -357,11 +357,6 @@ augroup fmt
   autocmd BufWritePre *.{js,jsx,rs,go} silent! Neoformat
 augroup END
 
-augroup Alacritty
-  autocmd!
-  autocmd BufNewFile,BufRead ~/home/alacritty/**/* autocmd! fmt
-augroup END
-
 let g:neoformat_enabled_javascript = ['prettier', 'prettier2']
 let g:neoformat_javascript_prettier = {
       \ 'exe': './node_modules/.bin/prettier',
