@@ -52,7 +52,7 @@ set clipboard+=unnamed
 " don't show intro message
 set shortmess=aoOtI
 " disable weird scratch window
-set completeopt-=preview
+set completeopt=preview,menu,noselect
 " disable extraneous messages
 set noshowmode
 " always show the cursor position
@@ -200,8 +200,16 @@ let g:EasyMotion_do_shade = 0
 
 " denite
 
-call denite#custom#option('default', {
-      \ 'prompt': '❯'
+call denite#custom#option('_', {
+      \ 'prompt': '❯',
+      \ 'split': 'floating',
+      \ 'highlight_matched_char': 'Underlined',
+      \ 'highlight_matched_range': 'NormalFloat',
+      \ 'wincol': &columns / 6,
+      \ 'winwidth': &columns * 2 / 3,
+      \ 'winrow': &lines / 6,
+      \ 'winheight': &lines * 2 / 3,
+      \ 'max_dynamic_update_candidates': 100000
       \ })
 
 call denite#custom#var('file/rec', 'command',
@@ -213,16 +221,6 @@ call denite#custom#var('grep', 'recursive_opts', [])
 call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
 call denite#custom#var('grep', 'separator', ['--'])
 call denite#custom#var('grep', 'final_opts', [])
-call denite#custom#option('_', 'max_dynamic_update_candidates', 100000)
-call denite#custom#option('_', {
-      \ 'split': 'floating',
-      \ 'highlight_matched_char': 'Underlined',
-      \ 'highlight_matched_range': 'NormalFloat',
-      \ 'wincol': &columns / 6,
-      \ 'winwidth': &columns * 2 / 3,
-      \ 'winrow': &lines / 6,
-      \ 'winheight': &lines * 2 / 3
-      \ })
 
 autocmd FileType denite call s:denite_settings()
 
