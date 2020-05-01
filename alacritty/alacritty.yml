@@ -9,7 +9,7 @@ env:
   # This value is used to set the `$TERM` environment variable for
   # each instance of Alacritty. If it is not present, alacritty will
   # check the local terminfo database and use `alacritty` if it is
-  # available, otherwise `xterm-256color` is used.
+  # available, otherwise `xterm-256solor` is used.
   TERM: xterm-256color
 
 window:
@@ -143,7 +143,7 @@ colors:
     foreground: "#C5D4DD"
   cursor:
     text: "#3C4C55"
-    cursor: "#7FC1CA"
+    cursor: "#C5D4DD"
 
   # Normal colors
   normal:
