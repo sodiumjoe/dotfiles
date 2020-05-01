@@ -165,6 +165,14 @@ zstyle :prompt:pure:git:branch color white
 zstyle :prompt:pure:git:branch:cached color yellow
 zstyle :prompt:pure:git:dirty color red
 
+# dir aliases
+setopt AUTO_NAME_DIRS
+setopt CDABLE_VARS
+dashboard=~/stripe/pay-server/manage/frontend
+pay=~/stripe/pay-server
+manage=~/stripe/pay-server/manage
+config=~/.config
+
 # aliases
 
 alias vim='nvim'
