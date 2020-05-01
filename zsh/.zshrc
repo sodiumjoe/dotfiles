@@ -155,6 +155,16 @@ bindkey -M viins '\e^?' backward-kill-word
 # Enter normal mode immediately
 KEYTIMEOUT=1
 
+# pure prompt config
+PURE_PROMPT_SYMBOL=➤
+PURE_PROMPT_VICMD_SYMBOL=➤
+PURE_GIT_UNTRACKED_DIRTY=0
+
+zstyle :prompt:pure:prompt:success color blue
+zstyle :prompt:pure:git:branch color white
+zstyle :prompt:pure:git:branch:cached color yellow
+zstyle :prompt:pure:git:dirty color red
+
 # aliases
 
 alias vim='nvim'
