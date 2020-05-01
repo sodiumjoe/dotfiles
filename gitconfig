@@ -1,6 +1,10 @@
 [user]
   name = Joe Moon
   email = joe@xoxomoon.com
+
+[includeIf "gitdir:~/stripe"]
+  path = ~/stripe/.gitconfig
+
 [alias]
   co = checkout
   st = status

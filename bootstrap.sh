@@ -19,7 +19,6 @@ files=(\
   "bin"\
   "curlrc"\
   "inputrc"\
-  "karn.yml"\
   "zshenv"\
   )
 

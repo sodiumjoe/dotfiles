@@ -190,9 +190,6 @@ chpwd() {
   fi
 }
 
-# per-directory git config
-if which karn > /dev/null; then eval "$(karn init)"; fi
-
 eval "$(lua ${ZIM_HOME}/modules/z.lua/z.lua --init zsh enhanced once fzf)"
 
 # zsh-autosuggestions
