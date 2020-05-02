@@ -31,6 +31,7 @@ xdg_files=(\
   "hammerspoon"\
   "rg"\
   "zsh"\
+  "tmux"\
   )
 
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
