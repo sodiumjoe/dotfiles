@@ -390,11 +390,6 @@ augroup dirvish_config
   autocmd FileType dirvish silent! unmap <buffer> <C-p>
 augroup END
 
-augroup dirvish_fugitive
-  autocmd!
-  autocmd FileType dirvish call fugitive#detect(@%)
-augroup end
-
 " vim-markdown
 let g:vim_markdown_strikethrough = 1
 let g:vim_markdown_new_list_item_indent = 2
