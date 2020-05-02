@@ -353,24 +353,14 @@ set signcolumn=yes
 
 augroup fmt
   autocmd!
-  autocmd BufWritePre *.{js,jsx,rs,go} silent! Neoformat
+  autocmd BufWritePre *.{js,rs,go} silent! Neoformat
 augroup END
 
-let g:neoformat_enabled_javascript = ['prettier', 'prettier2']
+let g:neoformat_enabled_javascript = ['prettier']
 let g:neoformat_javascript_prettier = {
       \ 'exe': './node_modules/.bin/prettier',
-      \ 'args': ['--write', '--config .prettierrc'],
-      \ 'replace': 1
-      \ }
-let g:neoformat_javascript_prettier2 = {
-      \ 'exe': './node_modules/.bin/prettier',
-      \ 'args': ['--write', '--config ../../prettier.config.js'],
-      \ 'replace': 1
-      \ }
-let g:neoformat_javascript_prettier3 = {
-      \ 'exe': 'prettier',
-      \ 'args': ['--write', '--config ../prettier.config.js'],
-      \ 'replace': 1
+      \ 'args': ['--stdin', '--stdin-filepath', '"%:p"'],
+      \ 'stdin': 1,
       \ }
 
 let g:neoformat_enabled_rust = ['rustfmt']
