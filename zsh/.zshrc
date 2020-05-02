@@ -123,7 +123,6 @@ bindkey -M vicmd 'j' history-substring-search-down
 # }}} End configuration added by Zim install
 
 export PATH=~/stripe/henson/bin
-export PATH=${PATH}:node_modules/.bin
 export PATH=${PATH}:~/stripe/password-vault/bin
 export PATH=${PATH}:~/stripe/space-commander/bin
 export PATH=${PATH}:/usr/local/opt/python/libexec/bin
