@@ -141,11 +141,10 @@ function! LinterStatus() abort
   let l:all_errors = l:counts.error + l:counts.style_error
   let l:all_non_errors = l:counts.total - l:all_errors
 
-  return l:counts.total == 0 ? '' : printf(
-        \   '%d⚠ %d⨉',
-        \   all_non_errors,
-        \   all_errors
-        \)
+  let l:warnings = l:all_non_errors == 0 ? '' : printf('%d⚠', l:all_non_errors)
+  let l:errors = l:all_errors == 0 ? '' : printf('%d☒', l:all_errors)
+
+  return join([l:warnings, l:errors], ' ')
 endfunction
 
 set statusline=
@@ -161,6 +160,8 @@ set statusline+=%#StatusLineError#
 " errors from w0rp/ale
 set statusline+=%{LinterStatus()}
 set statusline+=\ "
+" end error highlight group
+set statusline+=%#StatusLine#
 " line/total lines
 set statusline+=L%l/%L
 " virtual column
@@ -169,7 +170,7 @@ set statusline+=\ "
 
 " javascript source resolution
 set path=.
-set suffixesadd=.js,.jsx
+set suffixesadd=.js
 
 function! LoadMainNodeModule(fname)
     let nodeModules = "./node_modules/"
@@ -259,9 +260,6 @@ nnoremap <leader>g :<C-u>Denite gitstatus<CR>
 
 " ale
 
-let g:ale_sign_error = '⨉'
-let g:ale_sign_warning = '⚠'
-let g:ale_statusline_format = ['⨉ %d', '⚠ %d', '']
 " cycle through location list
 nmap <silent> <leader>n <Plug>(ale_next_wrap)
 nmap <silent> <leader>p <Plug>(ale_previous_wrap)
