@@ -36,6 +36,10 @@ call plug#end()
 " general
 " =======
 
+" faster startup time
+" :h g:python3_host_prog
+let g:python3_host_prog = '/usr/local/bin/python3'
+
 scriptencoding utf8
 set undofile
 set noerrorbells
