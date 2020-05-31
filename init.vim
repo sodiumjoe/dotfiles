@@ -17,6 +17,7 @@ Plug 'justinmk/vim-dirvish'
 Plug 'lifepillar/vim-colortemplate'
 Plug 'matze/vim-move'
 Plug 'neoclide/denite-git'
+Plug 'nixprime/cpsm', { 'do': './install.sh' }
 Plug 'norcalli/nvim-colorizer.lua'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'rhysd/conflict-marker.vim'
@@ -220,6 +221,8 @@ call denite#custom#option('_', {
 
 call denite#custom#var('file/rec', 'command',
       \ ['fd', '-H', '--full-path'])
+call denite#custom#source(
+    	\ 'file/rec', 'matchers', ['matcher/cpsm'])
 call denite#custom#var('grep', 'command', ['rg'])
 call denite#custom#var('grep', 'default_opts',
       \ ['--hidden', '--vimgrep', '--smart-case'])
