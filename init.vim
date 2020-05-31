@@ -276,6 +276,7 @@ nnoremap <leader>y :<C-u>Denite neoyank<CR>
 nmap <silent> <leader>n <Plug>(ale_next_wrap)
 nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 
+let g:ale_set_balloons = 1
 let g:ale_linters = {
       \   'elixir': [],
       \   'javascript': ['eslint', 'flow', 'flow-language-server'],
