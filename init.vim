@@ -277,12 +277,34 @@ nmap <silent> <leader>n <Plug>(ale_next_wrap)
 nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 
 let g:ale_set_balloons = 1
+let g:ale_pattern_options_enabled = 1
+
+call ale#linter#Define('ruby', {
+\   'name': 'sorbet-payserver',
+\   'lsp': 'stdio',
+\   'executable': 'true',
+\   'command': 'pay exec scripts/bin/typecheck --lsp',
+\   'language': 'ruby',
+\   'project_root': $HOME . '/stripe/pay-server',
+\})
+
 let g:ale_linters = {
       \   'elixir': [],
       \   'javascript': ['eslint', 'flow', 'flow-language-server'],
       \   'javascript.jsx': ['eslint', 'flow', 'flow-language-server'],
       \   'coffeescript': ['jshint'],
+      \   'ruby': ['rubocop', 'sorbet-payserver'],
+      \   'rust': ['cargo', 'rls'],
       \}
+
+let s:rubocop_config = {
+\ 'ale_ruby_rubocop_executable': 'bundle',
+\}
+
+let g:ale_pattern_options = {
+\ 'pay-server/.*\.rb$': s:rubocop_config,
+\ 'pay-server/.*Gemfile$': s:rubocop_config,
+\}
 
 " https://github.com/w0rp/ale/issues/2560#issuecomment-500166527
 let g:ale_linters_ignore = {
@@ -291,7 +313,6 @@ let g:ale_linters_ignore = {
       \}
 
 let g:ale_rust_cargo_use_check = 1
-let g:ale_ruby_rubocop_executable = 'bundle'
 
 nnoremap <silent> K :ALEHover<CR>
 nnoremap <silent> <leader>k :ALEDetail<CR>
