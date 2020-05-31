@@ -5,6 +5,7 @@ call plug#begin('~/.config/nvim/plugged')
 
 Plug 'Shougo/denite.nvim'
 Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
+Plug 'Shougo/neoyank.vim'
 Plug 'airblade/vim-gitgutter'
 Plug 'benizi/vim-automkdir'
 Plug 'easymotion/vim-easymotion'
@@ -257,6 +258,10 @@ nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
 nnoremap <leader>g :<C-u>Denite gitstatus<CR>
+
+" neoyank
+
+nnoremap <leader>y :<C-u>Denite neoyank<CR>
 
 " ale
 
