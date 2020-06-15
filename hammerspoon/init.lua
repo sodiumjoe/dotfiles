@@ -1,164 +1,42 @@
 -- https://github.com/asmagill/hs._asm.undocumented.spaces
 local spaces = require("hs._asm.undocumented.spaces")
 hs.window.animationDuration = 0.01
-hs.grid.setMargins({ 0, 0 })
 -- local log = hs.logger.new('foo', 5)
 -- log.log('logging enabled')
-local space=hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
+local space = hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
+local chromeFilter = hs.window.filter.new(false):setAppFilter('Google Chrome', {rejectTitles='Hangouts', visible=true})
+local hangoutsFilter = hs.window.filter.new(false):setAppFilter('Google Chrome', {allowTitles='Hangouts', visible=true})
+local alacrittyFilter = hs.window.filter.new(false):setAppFilter('Alacritty')
+local zoomFilter = hs.window.filter.new(false):setAppFilter('zoom.us', {visible=true})
+local zoomNonMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter{rejectTitles='Zoom Meeting'}
+local zoomMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter{allowTitles='Zoom Meeting'}
+
+hs.window.highlight.ui.frameWidth = 10
+hs.window.highlight.ui.frameColor = {0,0.6,1,0.5}
+hs.window.highlight.start()
 
 local gap = 22
+
+local positions = {
+  left  =       {x=0, y=0, w=3, h=6},
+  right =       {x=3, y=0, w=3, h=6},
+  topLeft  =    {x=0, y=0, w=3, h=3},
+  topRight =    {x=3, y=0, w=3, h=3},
+  bottomLeft  = {x=0, y=3, w=3, h=3},
+  bottomRight = {x=3, y=3, w=3, h=3},
+  maximized =   {x=0, y=0, w=6, h=6},
+}
+
+hs.grid.setMargins({ gap, gap })
+for k, screen in pairs(hs.screen.allScreens()) do
+  hs.grid.setGrid('6x6', screen)
+end
 
 function indexOf(table, value)
   for k, v in pairs(table) do
     if v == value then return k end
   end
   return nil
-end
-
-function pushSpaceLeft(win)
-  local currentSpace = spaces.query(spaces.masks.currentSpaces)[1]
-  local currentSpaces = spaces.layout()[spaces.mainScreenUUID()]
-  local currentSpaceIndex = indexOf(currentSpaces, currentSpace)
-  if currentSpaceIndex == nil then return end
-  local spaceId = currentSpaces[currentSpaceIndex - 1]
-  if spaceId == nil then return end
-  spaces.moveWindowToSpace(win:id(), spaceId)
-  pushRight(win)
-  spaces.changeToSpace(spaceId)
-end
-
-function pushSpaceRight(win)
-  local currentSpace = spaces.query(spaces.masks.currentSpaces)[1]
-  local currentSpaces = spaces.layout()[spaces.mainScreenUUID()]
-  local currentSpaceIndex = indexOf(currentSpaces, currentSpace)
-  if currentSpaceIndex == nil then return end
-  local spaceId = currentSpaces[currentSpaceIndex + 1]
-  if spaceId == nil then return end
-  spaces.moveWindowToSpace(win:id(), spaceId)
-  pushLeft(win)
-  spaces.changeToSpace(spaceId)
-end
-
-local LEFT = 'Left'
-local RIGHT = 'Right'
-local UP = 'Up'
-
-function getHasSidebar(screen)
-  return false
-  -- if isSingleScreen() then return false end
-  -- local primary = hs.screen.primaryScreen()
-  -- return primary:id() ~= screen:id()
-end
-
-function isSingleScreen()
-  if #hs.screen.allScreens() == 1 then return true end
-  return false
-end
-
-function isMaximized(f, max, hasSidebar)
-  if hasSidebar then
-    return f.x == max.x - 4 and f.y == max.y and f.w == max.w + 4 and f.h == max.h
-  end
-  return f.x == max.x and f.y == max.y and f.w == max.w and f.h == max.h
-end
-
-function getLeftGap(max, hasSidebar)
-  if hasSidebar then
-    return max.x + gap - 4
-  end
-  return max.x + gap
-end
-
-function getSplitWidth(max)
-  return max.w / 2 - gap * 1.5
-end
-
-function getSplitHeight(max)
-  return max.h - gap * 2
-end
-
-function getBottomGap(max)
-  return max.y + gap
-end
-
-function isPushedLeft(f, max, hasSidebar)
-  if isMaximized(f, max, hasSidebar) then return false end
-  if f.h ~= getSplitHeight(max) then return false end
-  return f.x == getLeftGap(max, hasSidebar)
-end
-
-function isPushedRight(f, max, hasSidebar)
-  if isMaximized(f, max, hasSidebar) then return false end
-  if f.h ~= getSplitHeight(max) then return false end
-  return f.x == getLeftGap(max, false) + getSplitWidth(max) + gap
-end
-
-function pushLeft(win)
-  win = win or hs.window.focusedWindow()
-  if not win then return end
-  local f = win:frame()
-  local screen = win:screen()
-  local max = screen:frame()
-  local hasSidebar = getHasSidebar(screen)
-
-  if isPushedLeft(f, max, hasSidebar) then
-    if screen:toWest() == nil then
-      return pushSpaceLeft(win)
-    end
-    -- throw left
-    win:moveOneScreenWest()
-    local f = win:frame()
-    local screen = win:screen()
-    local max = screen:frame()
-    local hasSidebar = getHasSidebar(screen)
-    f = splitRight(f, max)
-    return win:setFrame(f)
-  end
-
-  f = splitLeft(f, max, hasSidebar)
-  win:setFrame(f)
-end
-
-function pushRight(win)
-  win = win or hs.window.focusedWindow()
-  if not win then return end
-  local f = win:frame()
-  local screen = win:screen()
-  local max = screen:frame()
-  local hasSidebar = getHasSidebar(screen)
-
-  if isPushedRight(f, max, hasSidebar) then
-    if screen:toEast() == nil then
-      return pushSpaceRight(win)
-    end
-    -- throw right
-    win:moveOneScreenEast()
-    local f = win:frame()
-    local screen = win:screen()
-    local max = screen:frame()
-    local hasSidebar = getHasSidebar(screen)
-    f = splitLeft(f, max, hasSidebar)
-    return win:setFrame(f)
-  end
-
-  f = splitRight(f, max)
-  win:setFrame(f)
-end
-
-function splitLeft(f, max, hasSidebar)
-  f.x = getLeftGap(max, hasSidebar)
-  f.w = getSplitWidth(max)
-  f.y = getBottomGap(max)
-  f.h = getSplitHeight(max)
-  return f
-end
-
-function splitRight(f, max)
-  f.x = getLeftGap(max, hasSidebar) + getSplitWidth(max) + gap
-  f.w = getSplitWidth(max)
-  f.y = getBottomGap(max)
-  f.h = getSplitHeight(max)
-  return f
 end
 
 function focusLeft()
@@ -169,46 +47,114 @@ function focusRight()
   space:focusWindowEast(nil, true)
 end
 
-function maximize(win)
-  local win = win or hs.window.focusedWindow()
-  local f = win:frame()
-  local screen = win:screen()
-  local max = screen:frame()
-  local hasSidebar = getHasSidebar(screen)
+function focusUp()
+  space:focusWindowNorth(nil, true)
+end
 
-  if hasSidebar then
-    f.x = max.x - 4
-    f.y = max.y
-    f.w = max.w + 4
-    f.h = max.h
-    return win:setFrame(f)
+function focusDown()
+  space:focusWindowSouth(nil, true)
+end
+
+function pushLeft()
+  local win = hs.window.focusedWindow()
+  local screen = win:screen()
+  local screenToWest = screen:toWest()
+
+  if (hs.grid.get(win) ~= positions.left) then
+    return hs.grid.set(win, positions.left)
   end
 
-  f.x = max.x
-  f.y = max.y
-  f.w = max.w
-  f.h = max.h
-  return win:setFrame(f)
+  if (screenToWest) then
+    hs.grid.set(win, positions.right, screenToWest)
+  end
+
+  local activeSpace = spaces.activeSpace()
+  local allSpaces = spaces.layout()[spaces.mainScreenUUID()]
+  local activeSpaceIndex = indexOf(allSpaces, activeSpace)
+  local spaceToWest = allSpaces[activeSpaceIndex - 1]
+
+  if (spaceToWest) then
+    win:spacesMoveTo(spaceToWest)
+    local screens = hs.screen.allScreens()
+    local lastScreen = screens[#screens]
+    hs.grid.set(win, positions.right, lastScreen)
+    spaces.changeToSpace(spaceToWest)
+  end
 end
 
-function isLeftSpaceWindow(win)
-  return win:application():name() == 'Slack'
+function pushRight()
+  local win = hs.window.focusedWindow()
+  local screen = win:screen()
+
+  if (hs.grid.get(win) ~= positions.right) then
+    return hs.grid.set(win, positions.right)
+  end
+
+  local screenToEast = screen:toEast()
+
+  if (screenToEast) then
+    return hs.grid.set(win, positions.left, screenToEast)
+  end
+
+  local activeSpace = spaces.activeSpace()
+  local allSpaces = spaces.layout()[spaces.mainScreenUUID()]
+  local activeSpaceIndex = indexOf(allSpaces, activeSpace)
+  local spaceToEast = allSpaces[activeSpaceIndex + 1]
+
+  if (spaceToEast) then
+    win:spacesMoveTo(spaceToEast)
+    local screens = hs.screen.allScreens()
+    local firstScreen = screens[1]
+    hs.grid.set(win, positions.left, firstScreen)
+    spaces.changeToSpace(spaceToEast)
+  end
 end
 
-function isLeftWindow(win)
-  local name = win:application():name()
-  local title = win:title()
-  return name == 'Google Chrome' and not string.match(title, 'Hangouts')
+function pushTopLeft()
+  local win = hs.window.focusedWindow()
+  hs.grid.set(win, positions.topLeft)
 end
 
-function isRightWindow(win)
-  local name = win:application():name()
-  local title = win:title()
-  return string.match(title, 'Hangouts') or name == 'Alacritty'
+function pushTopRight()
+  local win = hs.window.focusedWindow()
+  hs.grid.set(win, positions.topRight)
+end
+
+function pushBottomLeft()
+  local win = hs.window.focusedWindow()
+  hs.grid.set(win, positions.bottomLeft)
+end
+
+function pushBottomRight()
+  local win = hs.window.focusedWindow()
+  hs.grid.set(win, positions.bottomRight)
+end
+
+function maximize()
+  local win = hs.window.focusedWindow()
+  if (hs.screen.mainScreen() == hs.screen.primaryScreen()) then
+    win:maximize()
+  else
+    hs.grid.set(win, positions.maximized)
+  end
+end
+
+function layoutApp(filter, position, screen, space)
+  for k, win in pairs(filter:getWindows()) do
+    if space then
+      win:spacesMoveTo(space)
+    end
+    hs.grid.set(win, position, screen)
+  end
 end
 
 function layout()
-  if isSingleScreen() then
+  local allSpaces = spaces.layout()[spaces.mainScreenUUID()]
+  local screens = hs.screen.allScreens()
+
+  layoutApp(hangoutsFilter, positions.right, screens[2], allSpaces[2])
+
+  if #hs.screen.allScreens() == 1 then
     local filter = hs.window.filter.new()
     local windows = filter:getWindows()
     for k, win in pairs(windows) do
@@ -217,33 +163,26 @@ function layout()
     return nil
   end
 
-  for k, win in pairs(hs.window.filter.new(isLeftSpaceWindow):getWindows()) do
-    if win:isStandard() then
-      win:moveOneScreenWest()
-      maximize(win)
-    end
+  layoutApp(chromeFilter, positions.left, screens[2])
+  layoutApp(alacrittyFilter, positions.right, screens[2])
+
+  local slack = hs.window.find('Slack')
+  if slack then
+    slack:moveToScreen(screens[1])
+    slack:maximize()
   end
 
-  for k, win in pairs(hs.window.filter.new(isLeftWindow):getWindows()) do
-    if win:isStandard() then
-      win:moveOneScreenEast()
-      local f = win:frame()
-      local screen = win:screen()
-      local hasSidebar = getHasSidebar(screen)
-      local max = screen:frame()
-      f = splitLeft(f, max)
-      win:setFrame(f)
+  local zoomMeetings = zoomMeetingFilter:getWindows()
+  if zoomMeetings[1] then
+    if hs.grid.get(zoomMeetings[1]) == positions.topLeft then
+      layoutApp(zoomMeetingFilter, positions.bottomLeft, screens[2])
+      layoutApp(zoomNonMeetingFilter, positions.topLeft, screens[2])
+    else
+      layoutApp(zoomMeetingFilter, positions.topLeft, screens[2])
+      layoutApp(zoomNonMeetingFilter, positions.bottomLeft, screens[2])
     end
-  end
-
-  for k, win in pairs(hs.window.filter.new(isRightWindow):getWindows()) do
-    win:moveOneScreenEast()
-    if win:isStandard() then
-      local f = win:frame()
-      local screen = win:screen()
-      local max = screen:frame()
-      f = splitRight(f, max)
-      win:setFrame(f)
+    for k, win in pairs(zoomFilter:getWindows()) do
+      win:focus()
     end
   end
 end
@@ -251,18 +190,10 @@ end
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'k', maximize)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'h', pushLeft)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'l', pushRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'u', pushTopLeft)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'o', pushTopRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'm', pushBottomLeft)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, '.', pushBottomRight)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'j', layout)
 hs.hotkey.bind({"ctrl"}, 'h', focusLeft)
 hs.hotkey.bind({"ctrl"}, 'l', focusRight)
-
--- > hs.window.filter.new():setCurrentSpace(true):getWindows()
--- table: 0x600002870880
-
--- > hs.window.filter.new():setCurrentSpace(true):getWindows()[4]
--- hs.window: Google Hangouts - joebadmo@gmail.com (0x600000a53a38)
-
--- > hs.window.filter.new():setCurrentSpace(true):getWindows()[4]:title()
--- Google Hangouts - joebadmo@gmail.com
-
--- > hs.window.filter.new():setCurrentSpace(true):getWindows()[4]:application()
--- hs.application: Google Chrome (0x600001250ac8)
