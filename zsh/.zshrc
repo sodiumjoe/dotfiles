@@ -155,6 +155,10 @@ bindkey -M viins '\e^?' backward-kill-word
 # Enter normal mode immediately
 KEYTIMEOUT=1
 
+ZSH_AUTOSUGGEST_USE_ASYNC=1
+ZSH_AUTOSUGGEST_MANUAL_REBIND=1
+ZSH_AUTOSUGGEST_HISTORY_IGNORE="man *"
+
 # pure prompt config
 PURE_PROMPT_SYMBOL=➤
 PURE_PROMPT_VICMD_SYMBOL=➤
