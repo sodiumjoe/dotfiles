@@ -141,6 +141,7 @@ export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
 export PATH="/usr/local/go/bin:$PATH"
 export PATH=${PATH}:~/stripe/go/bin
+export PATH="${PATH}:/usr/local/opt/coreutils/libexec/gnubin"
 
 export EDITOR='nvim -U none'
 # open in editor
