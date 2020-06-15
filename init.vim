@@ -39,6 +39,8 @@ call plug#end()
 " =======
 
 " faster startup time
+" :h g:python_host_prog
+let g:python_host_prog = '/usr/local/bin/python'
 " :h g:python3_host_prog
 let g:python3_host_prog = '/usr/local/bin/python3'
 
