@@ -9,9 +9,7 @@ Plug 'Shougo/neoyank.vim'
 Plug 'airblade/vim-gitgutter'
 Plug 'benizi/vim-automkdir'
 Plug 'christoomey/vim-tmux-navigator'
-Plug 'easymotion/vim-easymotion'
 Plug 'editorconfig/editorconfig-vim'
-Plug 'haya14busa/incsearch-easymotion.vim'
 Plug 'haya14busa/incsearch.vim'
 Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
@@ -196,17 +194,6 @@ set includeexpr=LoadMainNodeModule(v:fname)
 
 " plugin configs
 " ==============
-
-" easymotion
-
-map <leader>e <Plug>(easymotion-prefix)
-
-" disable shading
-let g:EasyMotion_do_shade = 0
-
-" vim-static-clojure
-
-" let g:clojure_fuzzy_indent = 0
 
 " denite
 
@@ -413,12 +400,6 @@ map *  <Plug>(incsearch-nohl-*)
 map #  <Plug>(incsearch-nohl-#)
 map g* <Plug>(incsearch-nohl-g*)
 map g# <Plug>(incsearch-nohl-g#)
-
-" incsearch-easymotion
-
-map / <Plug>(incsearch-easymotion-/)
-map ? <Plug>(incsearch-easymotion-?)
-map g/ <Plug>(incsearch-easymotion-stay)
 
 " dirvish
 
