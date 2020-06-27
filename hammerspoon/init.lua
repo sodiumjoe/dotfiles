@@ -152,9 +152,9 @@ function layout()
   local allSpaces = spaces.layout()[spaces.mainScreenUUID()]
   local screens = hs.screen.allScreens()
 
-  layoutApp(hangoutsFilter, positions.right, screens[2], allSpaces[2])
-
   if #hs.screen.allScreens() == 1 then
+    layoutApp(hangoutsFilter, positions.maximized, screens[2], allSpaces[2])
+
     local filter = hs.window.filter.new()
     local windows = filter:getWindows()
     for k, win in pairs(windows) do
@@ -163,6 +163,7 @@ function layout()
     return nil
   end
 
+  layoutApp(hangoutsFilter, positions.right, screens[2], allSpaces[2])
   layoutApp(chromeFilter, positions.left, screens[2])
   layoutApp(alacrittyFilter, positions.right, screens[2])
 
