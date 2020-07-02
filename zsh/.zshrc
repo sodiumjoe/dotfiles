@@ -1,3 +1,14 @@
+# Use beam shape cursor on startup.
+# must go before instant prompt initialization
+>$TTY echo -ne '\e[6 q'
+
+# Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.config/zsh/.zshrc.
+# Initialization code that may require console input (password prompts, [y/n]
+# confirmations, etc.) must go above this block; everything else may go below.
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
 # Start configuration added by Zim install {{{
 #
 # User configuration sourced by interactive shells
@@ -123,6 +134,7 @@ source ${ZIM_HOME}/init.zsh
 # }}} End configuration added by Zim install
 
 export PATH=~/stripe/henson/bin
+export PATH="/usr/local/go/bin:${PATH}"
 export PATH=${PATH}:~/stripe/password-vault/bin
 export PATH=${PATH}:~/stripe/space-commander/bin
 export PATH=${PATH}:/usr/local/opt/python/libexec/bin
@@ -139,7 +151,6 @@ export PATH=${PATH}:~/.bin
 export PATH=${PATH}:~/.bin/terraform
 export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
-export PATH="/usr/local/go/bin:$PATH"
 export PATH=${PATH}:~/stripe/go/bin
 export PATH="${PATH}:/usr/local/opt/coreutils/libexec/gnubin"
 
@@ -152,6 +163,29 @@ bindkey -M vicmd v edit-command-line
 # (ins mode)
 bindkey -M viins '\e^?' backward-kill-word
 
+# cursor shape
+function zle-keymap-select {
+    if [[ ${KEYMAP} == vicmd ]] || [[ $1 = 'block' ]]; then
+        >$TTY echo -ne '\e[2 q'
+    elif [[ ${KEYMAP} == main ]] || [[ ${KEYMAP} == viins ]] || [[ ${KEYMAP} = '' ]] || [[ $1 = 'beam' ]]; then
+        >$TTY echo -ne '\e[6 q'
+    fi
+}
+zle -N zle-keymap-select
+
+# Use beam shape cursor for each new prompt.
+preexec() {
+	>$TTY echo -ne '\e[6 q'
+}
+
+_fix_cursor() {
+	>$TTY echo -ne '\e[6 q'
+}
+precmd_functions+=(_fix_cursor)
+
+zle -N zle-line-init
+zle -N zle-keymap-select
+
 # Enter normal mode immediately
 KEYTIMEOUT=1
 
@@ -159,23 +193,11 @@ ZSH_AUTOSUGGEST_USE_ASYNC=1
 ZSH_AUTOSUGGEST_MANUAL_REBIND=1
 ZSH_AUTOSUGGEST_HISTORY_IGNORE="man *"
 
-# pure prompt config
-PURE_PROMPT_SYMBOL=➤
-PURE_PROMPT_VICMD_SYMBOL=➤
-PURE_GIT_UNTRACKED_DIRTY=0
-
-zstyle :prompt:pure:prompt:success color blue
-zstyle :prompt:pure:git:branch color white
-zstyle :prompt:pure:git:branch:cached color yellow
-zstyle :prompt:pure:git:dirty color red
-
 # dir aliases
-setopt AUTO_NAME_DIRS
-setopt CDABLE_VARS
-dashboard=~/stripe/pay-server/manage/frontend
-pay=~/stripe/pay-server
-manage=~/stripe/pay-server/manage
-config=~/.config
+hash -d dashboard=~/stripe/pay-server/manage/frontend
+hash -d pay=~/stripe/pay-server
+hash -d manage=~/stripe/pay-server/manage
+hash -d config=~/.config
 
 # aliases
 
@@ -213,6 +235,8 @@ chpwd() {
 }
 
 eval "$(lua ${ZIM_HOME}/modules/z.lua/z.lua --init zsh enhanced once fzf)"
+alias zz='z -c'      # restrict matches to subdirs of $PWD
+alias zf='z -I'      # use fzf to select in multiple matches
 
 # zsh-autosuggestions
 bindkey '^n' autosuggest-accept
@@ -229,4 +253,5 @@ eval "$(nodenv init -)"
 
 export GOPATH=${HOME}/stripe/go
 
-# source /Users/moon/Library/Preferences/org.dystroy.broot/launcher/bash/br
+# To customize prompt, run `p10k configure` or edit ~/.config/zsh/.p10k.zsh.
+[[ ! -f ~/.config/zsh/.p10k.zsh ]] || source ~/.config/zsh/.p10k.zsh

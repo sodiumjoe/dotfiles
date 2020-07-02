@@ -21,7 +21,7 @@ zmodule utility
 zmodule git-info
 # A customizable version of steeef's prompt theme.
 # zmodule steeef
-zmodule sodiumjoe/pure --source async.zsh --source pure.zsh
+zmodule romkatv/powerlevel10k
 
 # Additional completion definitions for Zsh.
 zmodule zsh-users/zsh-completions
