@@ -13,8 +13,9 @@ Plug 'editorconfig/editorconfig-vim'
 Plug 'haya14busa/incsearch.vim'
 Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
-Plug 'lifepillar/vim-colortemplate'
+" Plug 'lifepillar/vim-colortemplate'
 Plug 'matze/vim-move'
+Plug 'ncm2/float-preview.nvim'
 Plug 'neoclide/denite-git'
 Plug 'nixprime/cpsm', { 'do': './install.sh' }
 Plug 'norcalli/nvim-colorizer.lua'
@@ -249,8 +250,8 @@ endfunction
 nnoremap <C-p> :<C-u>Denite file/rec -start-filter<CR>
 nnoremap <leader>s :<C-u>Denite buffer<CR>
 nnoremap <leader>8 :<C-u>DeniteCursorWord grep:.<CR>
-nnoremap <leader>/ :<C-u>Denite -start-filter grep:::!<CR>
-nnoremap <leader><Space>/ :<C-u>DeniteBufferDir -start-filter grep:::!<CR>
+nnoremap <leader>/ :<C-u>Denite -start-filter -filter-updatetime=0 grep:::!<CR>
+nnoremap <leader><Space>/ :<C-u>DeniteBufferDir -start-filter -filter-updatetime=0 grep:::!<CR>
 nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
@@ -409,6 +410,7 @@ augroup dirvish_config
 augroup END
 
 " vim-markdown
+
 let g:vim_markdown_strikethrough = 1
 let g:vim_markdown_new_list_item_indent = 2
 
@@ -428,6 +430,7 @@ autocmd! User GoyoEnter nested call <SID>goyo_enter()
 autocmd! User GoyoLeave nested call <SID>goyo_leave()
 
 " vim-tmux-navigator
+"
 let g:tmux_navigator_no_mappings = 1
 
 nnoremap <silent> <C-w>h :TmuxNavigateLeft<cr>
@@ -435,3 +438,7 @@ nnoremap <silent> <C-w>j :TmuxNavigateDown<cr>
 nnoremap <silent> <C-w>k :TmuxNavigateUp<cr>
 nnoremap <silent> <C-w>l :TmuxNavigateRight<cr>
 nnoremap <silent> <C-w>w :TmuxNavigatePrevious<cr>
+
+" float-preview
+
+let g:float_preview#docked = 1
