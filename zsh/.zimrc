@@ -40,4 +40,4 @@ zmodule zsh-users/zsh-syntax-highlighting
 
 zmodule jimhester/per-directory-history
 zmodule zdharma/fast-syntax-highlighting
-zmodule skywind3000/z.lua
+zmodule skywind3000/z.lua -c 'eval "$(lua {}/z.lua --init zsh enhanced once fzf)"'
