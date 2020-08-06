@@ -1,0 +1,7 @@
+[user]
+  name = Joe Moon
+  email = moon@stripe.com
+
+[feature]
+  manyFiles = true
+
