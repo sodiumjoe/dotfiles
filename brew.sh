@@ -21,6 +21,7 @@ brew tap caskroom/fonts
 brew install curl
 brew install editorconfig
 brew install exa
+brew install exiftool
 brew install fd
 brew install fzf
 # set fzf keybindings
@@ -42,6 +43,7 @@ brew install ripgrep
 brew install rq
 brew install spark
 brew install sqlite
+brew install tarsnap
 brew install tmux
 brew install tree
 brew install watchman
@@ -59,7 +61,7 @@ brew cask install google-chrome-beta
 brew cask install font-inconsolata-nerd-font
 
 # neovim
-ln -s ~/.dotfiles/init.vim $XDG_CONFIG_HOME/nvim/init.vim
+ln -s ~/.dotfiles/init.vim ${XDG_CONFIG_HOME}/nvim/init.vim
 
 
 # python 3 for neovim for deoplete

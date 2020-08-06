@@ -234,7 +234,6 @@ chpwd() {
   fi
 }
 
-eval "$(lua ${ZIM_HOME}/modules/z.lua/z.lua --init zsh enhanced once fzf)"
 alias zz='z -c'      # restrict matches to subdirs of $PWD
 alias zf='z -I'      # use fzf to select in multiple matches
 

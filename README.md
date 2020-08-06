@@ -11,7 +11,6 @@ git submodule update --init
 ./macos
 ```
 
-* iterm preferences custom path: `~/.dotfiles`
 * filevault
 * caps -> ctrl
 * generate ssh keys
