@@ -5,3 +5,6 @@ zsh/*.zwc*
 zsh/.zhistory
 zsh/.zsh_history
 zsh/.zim
+karabiner/assets/*
+karabiner/automatic_backups/*
+karabiner/Icon*
