@@ -381,6 +381,7 @@ function prompt_my_dir() {
     # (( $#where > 32 )) && where[13,-13]="…"
     res+="${clean}${where//\%/%%}"  # escape %
     res="${res/moon\/DASH-/}"
+    res="${res/moon\/RUN_DASHPLAT-/[RUN]}"
 
     # Display the current Git commit if there is no branch or tag.
     # Tip: To always display the current Git commit, remove `[[ -z $where ]] &&` from the next line.

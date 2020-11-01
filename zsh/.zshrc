@@ -2,6 +2,9 @@
 # must go before instant prompt initialization
 >$TTY echo -ne '\e[6 q'
 
+# disable alacritty dock bouncing https://github.com/alacritty/alacritty/issues/2950
+printf "\e[?1042l"
+
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.config/zsh/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.
