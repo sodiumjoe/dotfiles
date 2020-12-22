@@ -14,12 +14,12 @@ Plug 'haya14busa/incsearch.vim'
 Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
 " Plug 'lifepillar/vim-colortemplate'
+Plug 'liuchengxu/vim-clap', { 'do': ':Clap install-binary' }
 Plug 'matze/vim-move'
 Plug 'ncm2/float-preview.nvim'
 Plug 'neoclide/denite-git'
 Plug 'norcalli/nvim-colorizer.lua'
 Plug 'ntpeters/vim-better-whitespace'
-Plug 'raghur/fruzzy', {'do': { -> fruzzy#install()}}
 Plug 'rhysd/conflict-marker.vim'
 Plug 'sbdchd/neoformat'
 Plug 'sheerun/vim-polyglot'
@@ -213,7 +213,9 @@ call denite#custom#option('_', {
 call denite#custom#var('file/rec', 'command',
       \ ['fd', '-H', '--full-path'])
 call denite#custom#source(
-    	\ 'file/rec', 'matchers', ['matcher/fruzzy'])
+    	\ 'file/rec', 'matchers', ['matcher/clap'])
+call denite#custom#filter('matcher/clap',
+      \ 'clap_path', expand('~/.config/nvim/plugged/vim-clap'))
 call denite#custom#var('grep', 'command', ['rg'])
 call denite#custom#var('grep', 'default_opts',
       \ ['--vimgrep', '--smart-case', '--no-heading'])
@@ -443,7 +445,3 @@ nnoremap <silent> <C-w>w :TmuxNavigatePrevious<cr>
 " float-preview
 
 let g:float_preview#docked = 1
-
-" fruzzy
-
-let g:fruzzy#usenative = 1
