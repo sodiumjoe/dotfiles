@@ -33,10 +33,14 @@ local positions = {
   maximized =   {x=0, y=0, w=6, h=6},
 }
 
-hs.grid.setMargins({ gap, gap })
-for k, screen in pairs(hs.screen.allScreens()) do
-  hs.grid.setGrid('6x6', screen)
+function resetGrid()
+  hs.grid.setMargins({ gap, gap })
+  for k, screen in pairs(hs.screen.allScreens()) do
+    hs.grid.setGrid('6x6', screen)
+  end
 end
+
+resetGrid()
 
 function indexOf(table, value)
   for k, v in pairs(table) do
@@ -175,6 +179,7 @@ function maximize()
 end
 
 function layoutApp(filter, slot, space)
+  resetGrid()
   for k, win in pairs(filter:getWindows()) do
     if space then
       win:spacesMoveTo(space)
@@ -246,18 +251,18 @@ local screenWatcher = hs.screen.watcher.new(reload)
 
 screenWatcher:start()
 
-hs.hotkey.bind({"option", "ctrl", "shift"}, 'k', maximize)
-hs.hotkey.bind({"option", "ctrl", "shift"}, 'h', pushLeft)
-hs.hotkey.bind({"option", "ctrl", "shift"}, 'l', pushRight)
-hs.hotkey.bind({"option", "ctrl", "shift"}, 'u', pushTopLeft)
-hs.hotkey.bind({"option", "ctrl", "shift"}, 'o', pushTopRight)
-hs.hotkey.bind({"option", "ctrl", "shift"}, 'm', pushBottomLeft)
-hs.hotkey.bind({"option", "ctrl", "shift"}, '.', pushBottomRight)
-hs.hotkey.bind({"option", "ctrl", "shift"}, 'j', layout)
-hs.hotkey.bind({"option", "ctrl", "shift"}, '1', function() moveToSlot(1) end)
-hs.hotkey.bind({"option", "ctrl", "shift"}, '2', function() moveToSlot(2) end)
-hs.hotkey.bind({"option", "ctrl", "shift"}, '3', function() moveToSlot(3) end)
-hs.hotkey.bind({"option", "ctrl", "shift"}, '4', function() moveToSlot(4) end)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'k', maximize)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'h', pushLeft)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'l', pushRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'u', pushTopLeft)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'o', pushTopRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'm', pushBottomLeft)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, '.', pushBottomRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'j', layout)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, '1', function() moveToSlot(1) end)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, '2', function() moveToSlot(2) end)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, '3', function() moveToSlot(3) end)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, '4', function() moveToSlot(4) end)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'r', reload)
 hs.hotkey.bind({"ctrl"}, 'h', focusLeft)
 hs.hotkey.bind({"ctrl"}, 'l', focusRight)
