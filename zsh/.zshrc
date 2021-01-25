@@ -157,6 +157,8 @@ export PATH=${PATH}:~/.cargo/bin
 export PATH=${PATH}:~/stripe/go/bin
 export PATH="${PATH}:/usr/local/opt/coreutils/libexec/gnubin"
 
+export RUSTUP_HOME=~/bin/rustup
+
 export EDITOR='nvim -U none'
 # open in editor
 autoload -z edit-command-line
