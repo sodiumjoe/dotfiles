@@ -5,9 +5,7 @@ hs.window.animationDuration = 0.01
 -- log.log('logging enabled')
 local space = hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
 local chromeFilter = hs.window.filter.new(false):setAppFilter('Google Chrome', {visible=true})
-local mainChromeWindowTitle = "Stripe %- Calendar.*"
-local mainChromeFilter = hs.window.filter.copy(chromeFilter):setOverrideFilter{allowTitles=mainChromeWindowTitle}
-local projectChromeFilter = hs.window.filter.copy(chromeFilter):setOverrideFilter{rejectTitles=mainChromeWindowTitle}
+local calendarFilter = hs.window.filter.new(false):setAppFilter('Google Calendar', {visible=true})
 local chatFilter = hs.window.filter.new(false):setAppFilter('Google Chat', {visible=true})
 local alacrittyFilter = hs.window.filter.new(false):setAppFilter('Alacritty')
 local zoomFilter = hs.window.filter.new(false):setAppFilter('zoom.us', {visible=true}):setSortOrder(hs.window.filter.sortByCreated)
@@ -191,7 +189,6 @@ end
 function layout()
   local spaces = getSpaces()
   local screens = hs.screen.allScreens()
-  hs.window.find("Chrome"):application():selectMenuItem(mainChromeWindowTitle, true)
 
   if #screens == 1 then
     for k, win in pairs(chatFilter:getWindows()) do
@@ -210,6 +207,7 @@ function layout()
   layoutApp(chatFilter, 3, spaces[2])
   layoutApp(alacrittyFilter, 3)
   layoutApp(slackFilter, 1)
+  layoutApp(calendarFilter, 4)
 
   local zoomMeetings = zoomMeetingFilter:getWindows()
   local zoomNonMeetingWindows = zoomNonMeetingFilter:getWindows()
@@ -225,7 +223,7 @@ function layout()
   -- active zoom meeting
   if zoomMeeting then
     -- move chrome windows to the right
-    layoutApp(projectChromeFilter, 3)
+    layoutApp(chromeFilter, 3)
     layoutApp(alacrittyFilter, 4)
 
     if hs.grid.get(zoomMeeting) == positions.topRight then
@@ -237,9 +235,9 @@ function layout()
     end
     zoom:focus()
   else
-    layoutApp(projectChromeFilter, 2)
-    layoutApp(mainChromeFilter, 4)
+    layoutApp(chromeFilter, 2)
     layoutApp(alacrittyFilter, 3)
+    layoutApp(calendarFilter, 4)
   end
 end
 
