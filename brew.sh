@@ -7,16 +7,16 @@ sudo -v
 while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
 
 brew update
-brew upgrade --all
+brew upgrade
 
 # https://caskroom.github.io/
-brew tap caskroom/cask
+brew tap homebrew/cask
 
-# https://github.com/caskroom/homebrew-versions
-brew tap caskroom/versions
+# https://github.com/Homebrew/homebrew-cask-versions
+brew tap homebrew/cask-versions
 
-# https://github.com/caskroom/homebrew-fonts
-brew tap caskroom/fonts
+# https://github.com/Homebrew/homebrew-cask-fonts
+brew tap homebrew/cask-fonts
 
 brew install curl
 brew install editorconfig
@@ -25,7 +25,7 @@ brew install exiftool
 brew install fd
 brew install fzf
 # set fzf keybindings
-/usr/local/opt/fzf/install
+/opt/homebrew/opt/fzf/install
 brew install git
 brew install gnu-tar
 brew install gnupg
@@ -50,19 +50,15 @@ brew install watchman
 brew install yarn
 brew install zsh
 
-brew cask install alfred
-brew cask install bartender
-brew cask install bettertouchtool
-brew cask install crashplan
-brew cask install dropbox
-brew cask install hammerspoon
-brew cask install vlc
-brew cask install google-chrome-beta
-brew cask install font-inconsolata-nerd-font
+brew install --cask alfred
+brew install --cask bartender
+brew install --cask dropbox
+brew install --cask hammerspoon
+brew install --cask vlc
+brew install --cask font-inconsolata-go-nerd-font
 
 # neovim
 ln -s ~/.dotfiles/init.vim ${XDG_CONFIG_HOME}/nvim/init.vim
-
 
 # python 3 for neovim for deoplete
 pip3 install neovim
