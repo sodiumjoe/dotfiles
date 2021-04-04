@@ -136,10 +136,10 @@ source ${ZIM_HOME}/init.zsh
 # bindkey -M vicmd 'j' history-substring-search-down
 # }}} End configuration added by Zim install
 
-export PATH=~/stripe/henson/bin
-export PATH="/usr/local/go/bin:${PATH}"
+export PATH=${PATH}:~/stripe/henson/bin
 export PATH=${PATH}:~/stripe/password-vault/bin
 export PATH=${PATH}:~/stripe/space-commander/bin
+export PATH=${PATH}:~/stripe/go/bin
 export PATH=${PATH}:/usr/local/opt/python/libexec/bin
 export PATH=${PATH}:/usr/local/opt/curl/bin
 export PATH=${PATH}:/usr/local/bin
@@ -154,8 +154,6 @@ export PATH=${PATH}:~/.bin
 export PATH=${PATH}:~/.bin/terraform
 export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
-export PATH=${PATH}:~/stripe/go/bin
-export PATH="${PATH}:/usr/local/opt/coreutils/libexec/gnubin"
 
 export RUSTUP_HOME=~/bin/rustup
 
@@ -176,7 +174,6 @@ function zle-keymap-select {
         >$TTY echo -ne '\e[6 q'
     fi
 }
-zle -N zle-keymap-select
 
 # Use beam shape cursor for each new prompt.
 preexec() {
@@ -188,7 +185,6 @@ _fix_cursor() {
 }
 precmd_functions+=(_fix_cursor)
 
-zle -N zle-line-init
 zle -N zle-keymap-select
 
 # Enter normal mode immediately
@@ -210,8 +206,6 @@ alias vim='nvim'
 alias vi='nvim'
 
 alias vimdiff='nvim -d'
-alias iex='rlwrap -a foo iex'
-alias del='rmtrash'
 alias ll='exa -la'
 alias zd='cd ~/stripe/pay-server/manage/frontend'
 
@@ -233,12 +227,6 @@ fbr() {
   git checkout $branch
 }
 
-chpwd() {
-  if [[ $(pwd) == "/Users/moon/stripe/dashboard" ]]; then
-    cd ~/stripe/pay-server/manage/frontend
-  fi
-}
-
 alias zz='z -c'      # restrict matches to subdirs of $PWD
 alias zf='z -I'      # use fzf to select in multiple matches
 
@@ -249,13 +237,22 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
 
-source ~/stripe/space-commander/bin/sc-aliases
+chpwd() {
+  if [[ $(pwd) == "/Users/moon/stripe/dashboard" ]]; then
+    cd ~/stripe/pay-server/manage/frontend
+  fi
+}
 
-. /Users/moon/.rbenvrc
-. ~/.stripe-repos.sh
-eval "$(nodenv init -)"
+if [ -d "~/stripe" ]
+then
+  source ~/stripe/space-commander/bin/sc-aliases
 
-export GOPATH=${HOME}/stripe/go
+  . /Users/moon/.rbenvrc
+  . ~/.stripe-repos.sh
+  eval "$(nodenv init -)"
+
+  export GOPATH=${HOME}/stripe/go
+fi
 
 # To customize prompt, run `p10k configure` or edit ~/.config/zsh/.p10k.zsh.
 [[ ! -f ~/.config/zsh/.p10k.zsh ]] || source ~/.config/zsh/.p10k.zsh
