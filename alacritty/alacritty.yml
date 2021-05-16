@@ -115,7 +115,7 @@ font:
   # increasing `y` moves the glyph upwards.
   glyph_offset:
     x: 0
-    y: 3
+    y: 0
 
   # Thin stroke font rendering (macOS only)
   #
