@@ -70,6 +70,8 @@ set infercase
 set diffopt=filler,vertical
 set breakindent
 set guicursor=n-v-sm:block,i-c-ci-ve:ver25,r-cr-o:hor20
+" don't wrap search result traversal
+set nowrapscan
 
 let g:mapleader="\<SPACE>"
 " search visual selection
@@ -83,6 +85,11 @@ cnoremap <C-j> <Down>
 nmap <silent> <leader>cr :let @+ = expand("%")<cr>
 " copy full path to clipboard
 nmap <silent> <leader>cf :let @+ = expand("%:p")<cr>
+
+" leader d and leader p for deleting instead of cutting and pasting
+nnoremap <leader>d "_d
+xnoremap <leader>d "_d
+xnoremap <leader>p "_dP
 
 if executable('rg')
   set grepprg=rg\ --vimgrep\ --no-heading\ -S
@@ -207,7 +214,7 @@ call denite#custom#option('_', {
       \ 'winwidth': &columns * 2 / 3,
       \ 'winrow': &lines / 6,
       \ 'winheight': &lines * 2 / 3,
-      \ 'max_dynamic_update_candidates': 100000
+      \ 'max_dynamic_update_candidates': 20000
       \ })
 
 call denite#custom#var('file/rec', 'command',
@@ -258,6 +265,8 @@ nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
 nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
 nnoremap <leader>g :<C-u>Denite gitstatus<CR>
+nnoremap <leader>j :<C-u>Denite jump<CR>
+nnoremap <leader>m :<C-u>Denite mark<CR>
 
 " neoyank
 
@@ -291,7 +300,7 @@ let g:ale_linters = {
       \}
 
 let s:rubocop_config = {
-\ 'ale_ruby_rubocop_executable': 'bundle',
+\ 'ale_ruby_rubocop_executable': 'scripts/bin/rubocop.rb',
 \}
 
 let g:ale_pattern_options = {

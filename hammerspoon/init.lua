@@ -1,8 +1,8 @@
 -- https://github.com/asmagill/hs._asm.undocumented.spaces
 local hsSpaces = require("hs._asm.undocumented.spaces")
 hs.window.animationDuration = 0.01
--- local log = hs.logger.new('foo', 5)
--- log.log('logging enabled')
+local log = hs.logger.new('foo', 5)
+log.log('logging enabled')
 local space = hs.window.filter.new(nil,'space'):setCurrentSpace(true):setDefaultFilter{}
 local chromeFilter = hs.window.filter.new(false):setAppFilter('Google Chrome', {visible=true})
 local calendarFilter = hs.window.filter.new(false):setAppFilter('Google Calendar', {visible=true})
@@ -21,38 +21,57 @@ hs.window.highlight.start()
 
 local gap = 22
 
+
+function resetScreenRotations()
+  local middle = hs.screen.find("26C240C4-6A97-7FFA-A1A5-2E7F8C43E052")
+  local rotated = false
+  if middle:rotate() ~= 90 then
+    middle:rotate(90)
+    rotated = true
+  end
+  local right = hs.screen.find("17F8FEE2-6FDF-4E9C-613D-727E3BCC6565")
+  if right:rotate() ~= 270 then
+    right:rotate(270)
+    rotated = true
+  end
+  if rotated then
+    hs.timer.usleep(100)
+  end
+end
+
 local positions = {
-  left  =       {x=0, y=0, w=3, h=6},
-  right =       {x=3, y=0, w=3, h=6},
-  topLeft  =    {x=0, y=0, w=3, h=3},
-  topRight =    {x=3, y=0, w=3, h=3},
-  bottomLeft  = {x=0, y=3, w=3, h=3},
-  bottomRight = {x=3, y=3, w=3, h=3},
-  maximized =   {x=0, y=0, w=6, h=6},
+  left  =       {x=0,  y=0,  w=12, h=24},
+  right =       {x=12, y=0,  w=12, h=24},
+  top =         {x=0,  y=0,  w=24, h=8},
+  topLeft  =    {x=0,  y=0,  w=12, h=8},
+  topRight =    {x=12, y=0,  w=12, h=8},
+  bottom =      {x=0,  y=8,  w=24, h=16},
+  bottomLeft  = {x=0,  y=12, w=12, h=12},
+  bottomRight = {x=12, y=12, w=12, h=12},
+  maximized =   {x=0,  y=0,  w=24, h=24},
+  topZoom =     {x=1,  y=8,  w=22, h=8},
+  bottomZoom =  {x=1,  y=16, w=22, h=8},
 }
 
 function resetGrid()
   hs.grid.setMargins({ gap, gap })
   for k, screen in pairs(hs.screen.allScreens()) do
-    hs.grid.setGrid('6x6', screen)
+    hs.grid.setGrid('24x24', screen)
   end
 end
 
 resetGrid()
 
-function indexOf(table, value)
-  for k, v in pairs(table) do
-    if v == value then return k end
-  end
-  return nil
-end
-
 function getSpaces()
   return hsSpaces.layout()[hsSpaces.mainScreenUUID()]
 end
 
-function isLaptopScreen()
-  return hs.screen.mainScreen():frame().w == 1792
+function isLaptopScreen(win)
+  return win:screen() == hs.screen.primaryScreen()
+end
+
+function isWorkstation()
+  return #hs.screen.allScreens() > 1
 end
 
 function moveToSlot(slot, win)
@@ -95,27 +114,34 @@ function pushLeft()
   local win = hs.window.frontmostWindow()
   local screen = win:screen()
 
-  if (hs.grid.get(win) ~= positions.left) then
+  if (hs.grid.get(win) ~= positions.left and not isWorkstation()) then
     return hs.grid.set(win, positions.left)
   end
 
   local screenToWest = screen:toWest()
 
-  if (screenToWest) then
-    return hs.grid.set(win, positions.right, screenToWest)
+  local position = (isWorkstation() and positions.bottom) or positions.right
+  if screenToWest then
+    hs.grid.set(win, position, screenToWest)
+    if isWorkstation() and isLaptopScreen(win) then
+      win:maximize()
+    end
+    return
   end
 
   local activeSpace = hsSpaces.activeSpace()
   local spaces = getSpaces()
-  local activeSpaceIndex = indexOf(spaces, activeSpace)
+  local activeSpaceIndex = hs.fnutils.indexOf(spaces, activeSpace)
   local spaceToWest = spaces[activeSpaceIndex - 1]
 
-  if (spaceToWest) then
+  if spaceToWest then
     win:spacesMoveTo(spaceToWest)
-    local screens = hs.screen.allScreens()
-    local lastScreen = screens[#screens]
-    hs.grid.set(win, positions.right, lastScreen)
-    hsSpaces.changeToSpace(spaceToWest)
+    for screen, screenPos in pairs(hs.screen.screenPositions()) do
+      if screenPos.x == 2 then
+        hs.grid.set(win, position, screen)
+        return hsSpaces.changeToSpace(spaceToWest)
+      end
+    end
   end
 end
 
@@ -123,28 +149,43 @@ function pushRight()
   local win = hs.window.frontmostWindow()
   local screen = win:screen()
 
-  if (hs.grid.get(win) ~= positions.right) then
+  if (hs.grid.get(win) ~= positions.right and not isWorkstation()) then
     return hs.grid.set(win, positions.right)
   end
 
   local screenToEast = screen:toEast()
 
-  if (screenToEast) then
-    return hs.grid.set(win, positions.left, screenToEast)
+  local position = isWorkstation() and positions.bottom or positions.left
+
+  if screenToEast then
+    return hs.grid.set(win, position, screenToEast)
   end
 
   local activeSpace = hsSpaces.activeSpace()
   local spaces = getSpaces()
-  local activeSpaceIndex = indexOf(spaces, activeSpace)
+  local activeSpaceIndex = hs.fnutils.indexOf(spaces, activeSpace)
   local spaceToEast = spaces[activeSpaceIndex + 1]
 
-  if (spaceToEast) then
+  if spaceToEast then
     win:spacesMoveTo(spaceToEast)
-    local screens = hs.screen.allScreens()
-    local firstScreen = screens[1]
-    hs.grid.set(win, positions.left, firstScreen)
-    hsSpaces.changeToSpace(spaceToEast)
+    for screen, screenPos in pairs(hs.screen.screenPositions()) do
+      if screenPos.x == 0 then
+        hs.grid.set(win, position, screen)
+        if isLaptopScreen(win) then win:maximize() end
+        return hsSpaces.changeToSpace(spaceToEast)
+      end
+    end
   end
+end
+
+function pushTop()
+  local win = hs.window.frontmostWindow()
+  hs.grid.set(win, positions.top)
+end
+
+function pushBottom()
+  local win = hs.window.frontmostWindow()
+  hs.grid.set(win, positions.bottom)
 end
 
 function pushTopLeft()
@@ -169,24 +210,30 @@ end
 
 function maximize()
   local win = hs.window.frontmostWindow()
-  if (isLaptopScreen()) then
+  if (isLaptopScreen(win)) then
     win:maximize()
   else
     hs.grid.set(win, positions.maximized)
   end
 end
 
-function layoutApp(filter, slot, space)
-  resetGrid()
-  for k, win in pairs(filter:getWindows()) do
-    if space then
-      win:spacesMoveTo(space)
+function layoutWin(win, screenIndex, position, space)
+  if space then win:spacesMoveTo(space) end
+  for screen, screenPos in pairs(hs.screen.screenPositions()) do
+    if screenPos.x == screenIndex then
+      hs.grid.set(win, position, screen)
     end
-    moveToSlot(slot, win)
+  end
+end
+
+function layoutApp(filter, screenIndex, position, space)
+  for k, win in pairs(filter:getWindows()) do
+    layoutWin(win, screenIndex, position, space)
   end
 end
 
 function layout()
+
   local spaces = getSpaces()
   local screens = hs.screen.allScreens()
 
@@ -204,10 +251,18 @@ function layout()
     return nil
   end
 
-  layoutApp(chatFilter, 3, spaces[2])
-  layoutApp(alacrittyFilter, 3)
-  layoutApp(slackFilter, 1)
-  layoutApp(calendarFilter, 4)
+  resetScreenRotations()
+  resetGrid()
+
+  layoutApp(chatFilter, 2, positions.bottom, spaces[2])
+  layoutApp(alacrittyFilter, 2, positions.bottom)
+  layoutApp(calendarFilter, 2, positions.top)
+
+  local slack = slackFilter:getWindows()[1]
+  if slack then
+    layoutWin(slack, 0, positions.maximized)
+    slack:maximize()
+  end
 
   local zoomMeetings = zoomMeetingFilter:getWindows()
   local zoomNonMeetingWindows = zoomNonMeetingFilter:getWindows()
@@ -216,28 +271,27 @@ function layout()
   local zoomMeeting = zoomMeetings[1]
 
   if mainZoomWindow then
-    moveToSlot(1, mainZoomWindow)
+    hs.grid.set(mainZoomWindow, positions.maximized, hs.screen.primaryScreen())
+    mainZoomWindow:maximize()
     mainZoomWindow:sendToBack()
   end
 
   -- active zoom meeting
   if zoomMeeting then
     -- move chrome windows to the right
-    layoutApp(chromeFilter, 3)
-    layoutApp(alacrittyFilter, 4)
+    layoutApp(chromeFilter, 2, positions.bottom)
+    layoutApp(alacrittyFilter, 2, positions.bottom)
 
-    if hs.grid.get(zoomMeeting) == positions.topRight then
-      hs.grid.set(zoomMeeting, positions.bottomRight, screens[1])
-      hs.grid.set(zoom, positions.topRight, screens[1])
+    if hs.grid.get(zoomMeeting) == positions.topZoom then
+      layoutWin(zoomMeeting, 1, positions.bottomZoom)
+      layoutWin(zoom, 1, positions.topZoom)
     else
-      hs.grid.set(zoomMeeting, positions.topRight, screens[1])
-      hs.grid.set(zoom, positions.bottomRight, screens[1])
+      layoutWin(zoomMeeting, 1, positions.topZoom)
+      layoutWin(zoom, 1, positions.bottomZoom)
     end
     zoom:focus()
   else
-    layoutApp(chromeFilter, 2)
-    layoutApp(alacrittyFilter, 3)
-    layoutApp(calendarFilter, 4)
+    layoutApp(chromeFilter, 1, positions.bottom)
   end
 end
 
@@ -245,17 +299,13 @@ function reload()
   hs.reload()
 end
 
-local screenWatcher = hs.screen.watcher.new(reload)
-
-screenWatcher:start()
-
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'k', maximize)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'h', pushLeft)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'l', pushRight)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'u', pushTopLeft)
-hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'o', pushTopRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'o', pushTop)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'm', pushBottomLeft)
-hs.hotkey.bind({"cmd", "ctrl", "shift"}, '.', pushBottomRight)
+hs.hotkey.bind({"cmd", "ctrl", "shift"}, '.', pushBottom)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'j', layout)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, '1', function() moveToSlot(1) end)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, '2', function() moveToSlot(2) end)
@@ -264,3 +314,5 @@ hs.hotkey.bind({"cmd", "ctrl", "shift"}, '4', function() moveToSlot(4) end)
 hs.hotkey.bind({"cmd", "ctrl", "shift"}, 'r', reload)
 hs.hotkey.bind({"ctrl"}, 'h', focusLeft)
 hs.hotkey.bind({"ctrl"}, 'l', focusRight)
+-- hs.hotkey.bind({"ctrl"}, 'o', focusUp)
+-- hs.hotkey.bind({"ctrl"}, '.', focusDown)
