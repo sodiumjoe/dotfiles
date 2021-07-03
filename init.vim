@@ -346,8 +346,11 @@ let g:work_wiki.syntax = 'markdown'
 let g:vimwiki_auto_header = 1
 
 let g:vimwiki_list = [g:work_wiki, g:wiki]
-map <leader>wp <Plug>VimwikiDiaryPrevDay
-map <leader>wn <Plug>VimwikiDiaryNextDay
+
+map <Space>wp <Plug>VimwikiDiaryPrevDay
+autocmd FileType vimwiki map <buffer> <leader>wn <Plug>VimwikiDiaryNextDay
+map <leader>= <Plug>VimwikiAddHeaderLevel
+map <leader>- <Plug>VimwikiRemoveHeaderLevel
 
 " vim-lengthmatters
 
