@@ -1,5 +1,7 @@
 This is my dotfiles repo. There are many like it but this one is mine.
 
+# Install
+
 ```bash
 xcode-select --install
 cd ~
@@ -15,3 +17,9 @@ git submodule update --init
 * caps -> ctrl
 * generate ssh keys
 * https://www.rustup.rs/
+
+# Update
+* `zimfw update`
+* `zimfw upgrade`
+* `brew update`
+* `brew upgrade`
