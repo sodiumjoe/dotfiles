@@ -234,55 +234,6 @@ set includeexpr=LoadMainNodeModule(v:fname)
 " plugin configs
 " ==============
 
-" denite
-
-call denite#custom#option('_', {
-      \ 'prompt': '❯',
-      \ 'split': 'floating',
-      \ 'highlight_matched_char': 'Underlined',
-      \ 'highlight_matched_range': 'NormalFloat',
-      \ 'wincol': &columns / 6,
-      \ 'winwidth': &columns * 2 / 3,
-      \ 'winrow': &lines / 6,
-      \ 'winheight': &lines * 2 / 3,
-      \ 'max_dynamic_update_candidates': 20000
-      \ })
-
-call denite#custom#var('file/rec', 'command',
-      \ ['fd', '-H', '--full-path'])
-call denite#custom#source(
-    	\ 'file/rec', 'matchers', ['matcher/clap'])
-call denite#custom#filter('matcher/clap',
-      \ 'clap_path', expand('~/.config/nvim/plugged/vim-clap'))
-call denite#custom#var('grep', 'command', ['rg'])
-call denite#custom#var('grep', 'default_opts',
-      \ ['--vimgrep', '--smart-case', '--no-heading'])
-call denite#custom#var('grep', 'recursive_opts', [])
-call denite#custom#var('grep', 'pattern_opt', ['--regexp'])
-call denite#custom#var('grep', 'separator', ['--'])
-call denite#custom#var('grep', 'final_opts', [])
-
-autocmd FileType denite call s:denite_settings()
-
-function! s:denite_settings() abort
-  nnoremap <silent><buffer><expr> <CR>
-        \ denite#do_map('do_action')
-  nnoremap <silent><buffer><expr> <C-v>
-        \ denite#do_map('do_action', 'vsplit')
-  nnoremap <silent><buffer><expr> d
-        \ denite#do_map('do_action', 'delete')
-  nnoremap <silent><buffer><expr> p
-        \ denite#do_map('do_action', 'preview')
-  nnoremap <silent><buffer><expr> <Esc>
-        \ denite#do_map('quit')
-  nnoremap <silent><buffer><expr> q
-        \ denite#do_map('quit')
-  nnoremap <silent><buffer><expr> i
-        \ denite#do_map('open_filter_buffer')
-endfunction
-
-autocmd FileType denite-filter call s:denite_filter_settings()
-
 " nvim-treesitter
 
 lua << EOF
@@ -313,14 +264,15 @@ require('telescope').load_extension('fzy_native')
 EOF
 
 nnoremap <C-p> <cmd>Telescope find_files hidden=true<cr>
-nnoremap <leader>s <cmd>Telescope buffers show_all_buffers=true sort_lastused=true initial_mode=normal<cr>
+" https://github.com/nvim-telescope/telescope.nvim/issues/750
+" nnoremap <leader>s <cmd>Telescope buffers show_all_buffers=true sort_lastused=true initial_mode=normal<cr>
+nnoremap <leader>s :lua require'telescope.builtin'.buffers{ on_complete = { function() vim.cmd"stopinsert" end } }<cr>
 nnoremap <leader>q <cmd>Telescope quickfix<cr><esc>
 nnoremap <leader>8 <cmd>Telescope grep_string<cr><esc>
 " nnoremap <leader>/ <cmd>Telescope live_grep<cr>
 nnoremap <leader>/ :lua require('telescope.builtin').grep_string{ search = vim.fn.input('❯ ' ) }<cr>
 nnoremap <leader><Space>/ <cmd>Telescope live_grep cwd=%:h<cr>
 nnoremap <leader>d :lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>
-" nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
 nnoremap <leader><C-r> <cmd>Telescope registers<CR>
 nnoremap <leader>g <cmd>Telescope git_status<cr><esc>
 
