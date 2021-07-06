@@ -81,10 +81,6 @@ let g:mapleader="\<SPACE>"
 " search visual selection
 vnoremap // y/<C-R>"<CR>
 
-" move line up
-cnoremap <C-k> <Up>
-" move line down
-cnoremap <C-j> <Down>
 " copy relative path to clipboard
 nmap <silent> <leader>cr :let @+ = expand("%")<cr>
 " copy full path to clipboard
@@ -245,10 +241,10 @@ require'nvim-treesitter.configs'.setup {
 }
 EOF
 
-" Telescope
+" nvim-telescope
 
 lua << EOF
-require('telescope').setup{
+require('telescope').setup {
   defaults = {
     prompt_prefix = "❯ ",
     selection_caret = "➤ ",
@@ -311,8 +307,6 @@ require'colorizer'.setup()
 EOF
 
 " nvim-lspconfig
-
-
 
 lua << EOF
 local nvim_lsp = require('lspconfig')
@@ -429,10 +423,6 @@ let g:lengthmatters_excluded = [
 
 let g:move_key_modifier = 'C'
 
-" vim-gitgutter
-
-set signcolumn=yes
-
 " gitsigns
 
 lua << EOF
@@ -514,10 +504,6 @@ nnoremap <silent> <C-w>j :TmuxNavigateDown<cr>
 nnoremap <silent> <C-w>k :TmuxNavigateUp<cr>
 nnoremap <silent> <C-w>l :TmuxNavigateRight<cr>
 nnoremap <silent> <C-w>w :TmuxNavigatePrevious<cr>
-
-" float-preview
-
-" let g:float_preview#docked = 1
 
 " hop
 
