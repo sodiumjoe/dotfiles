@@ -3,26 +3,29 @@
 
 call plug#begin('~/.config/nvim/plugged')
 
-Plug 'Shougo/denite.nvim'
-Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
-Plug 'Shougo/neoyank.vim'
-Plug 'airblade/vim-gitgutter'
+Plug 'nvim-lua/plenary.nvim'
 Plug 'benizi/vim-automkdir'
 Plug 'christoomey/vim-tmux-navigator'
 Plug 'editorconfig/editorconfig-vim'
-Plug 'haya14busa/incsearch.vim'
+Plug 'haya14busa/is.vim'
+Plug 'hrsh7th/nvim-compe'
 Plug 'junegunn/goyo.vim'
 Plug 'justinmk/vim-dirvish'
-" Plug 'lifepillar/vim-colortemplate'
-Plug 'liuchengxu/vim-clap', { 'do': ':Clap install-binary' }
+Plug 'kevinhwang91/nvim-hlslens'
+Plug 'kyazdani42/nvim-web-devicons'
+Plug 'lewis6991/gitsigns.nvim'
+Plug 'lifepillar/vim-colortemplate'
 Plug 'matze/vim-move'
-Plug 'ncm2/float-preview.nvim'
-Plug 'neoclide/denite-git'
+Plug 'neovim/nvim-lspconfig'
+Plug 'nvim-lua/popup.nvim'
+Plug 'nvim-telescope/telescope.nvim'
+Plug 'nvim-telescope/telescope-fzy-native.nvim'
+Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
 Plug 'norcalli/nvim-colorizer.lua'
 Plug 'ntpeters/vim-better-whitespace'
+Plug 'phaazon/hop.nvim'
 Plug 'rhysd/conflict-marker.vim'
 Plug 'sbdchd/neoformat'
-Plug 'sheerun/vim-polyglot'
 Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-eunuch'
 Plug 'tpope/vim-fugitive'
@@ -60,7 +63,8 @@ set clipboard+=unnamed
 " don't show intro message
 set shortmess=aoOtI
 " disable weird scratch window
-set completeopt=preview,menu,noselect
+" set completeopt=preview,menu,noselect
+set completeopt=menuone,noselect
 " disable extraneous messages
 set noshowmode
 " always show the cursor position
@@ -150,6 +154,9 @@ set fillchars=vert:\│,eob:⌁
 " statusline
 " ==========
 
+" separator hilight group
+hi User1 guifg=#3c4c55 guibg=#556873
+
 function! LinterStatus() abort
   let l:counts = ale#statusline#Count(bufnr(''))
 
@@ -162,26 +169,50 @@ function! LinterStatus() abort
   return join([l:warnings, l:errors], ' ')
 endfunction
 
-set statusline=
-" filename
-set statusline+=\ %<%{expand('%:~:.')}
-set statusline+=\ "
-" help/modified/readonly
-set statusline+=%(%h%m%r%)
-" alignment group
-set statusline+=%=
-" start error highlight group
-set statusline+=%#StatusLineError#
-" errors from w0rp/ale
-set statusline+=%{LinterStatus()}
-set statusline+=\ "
-" end error highlight group
-set statusline+=%#StatusLine#
-" line/total lines
-set statusline+=L%l/%L
-" virtual column
-set statusline+=C%02v
-set statusline+=\ "
+function! StatusLine() abort
+
+  let l:padding = ' '
+  let l:separator=' %1*│%* '
+
+  let l:statusline=''
+
+  " active window
+  if g:statusline_winid == win_getid()
+    let l:statusline.='%#CursorLine#'
+  endif
+
+  " filename
+  let l:statusline.=l:padding
+  let l:statusline.='%<%{expand("%:~:.")}'
+  let l:statusline.=l:padding
+  let l:statusline.='%#StatusLine#'
+  let l:statusline.=l:padding
+
+  " help/modified/readonly
+  let l:statusline.='%(%h%m%r%)'
+
+  " alignment group
+  let l:statusline.='%='
+
+  " start error highlight group
+  let l:statusline.='%#StatusLineError#'
+
+  " errors from w0rp/ale
+  let l:statusline.='%{LinterStatus()}'
+
+  " end error highlight group
+  let l:statusline.='%#StatusLine#'
+  let l:statusline.=l:separator
+  " line/total lines
+  let l:statusline.='L%l/%L'
+  let l:statusline.=l:separator
+  " virtual column
+  let l:statusline.='C%02v'
+  let l:statusline.=l:padding
+  return l:statusline
+endfunction
+
+set statusline=%!StatusLine()
 
 " javascript source resolution
 set path=.
@@ -252,25 +283,48 @@ endfunction
 
 autocmd FileType denite-filter call s:denite_filter_settings()
 
-function! s:denite_filter_settings() abort
-  nmap <silent><buffer> <Esc> <Plug>(denite_filter_quit)
-endfunction
+" nvim-treesitter
 
-nnoremap <C-p> :<C-u>Denite file/rec -start-filter<CR>
-nnoremap <leader>s :<C-u>Denite buffer<CR>
-nnoremap <leader>8 :<C-u>DeniteCursorWord grep:.<CR>
-nnoremap <leader>/ :<C-u>Denite -start-filter -filter-updatetime=0 grep:::!<CR>
-nnoremap <leader><Space>/ :<C-u>DeniteBufferDir -start-filter -filter-updatetime=0 grep:::!<CR>
-nnoremap <leader>d :<C-u>DeniteBufferDir file/rec -start-filter<CR>
-nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
-nnoremap <leader><C-r> :<C-u>Denite register:.<CR>
-nnoremap <leader>g :<C-u>Denite gitstatus<CR>
-nnoremap <leader>j :<C-u>Denite jump<CR>
-nnoremap <leader>m :<C-u>Denite mark<CR>
+lua << EOF
+require'nvim-treesitter.configs'.setup {
+  ensure_installed = "maintained",
+  highlight = {
+    enable = true,
+  },
+}
+EOF
 
-" neoyank
+" Telescope
 
-nnoremap <leader>y :<C-u>Denite neoyank<CR>
+lua << EOF
+require('telescope').setup{
+  defaults = {
+    prompt_prefix = "❯ ",
+    selection_caret = "➤ ",
+    vimgrep_arguments = {
+      'rg',
+      '--vimgrep',
+      '--no-heading',
+      '--smart-case'
+    },
+  }
+}
+require('telescope').load_extension('fzy_native')
+EOF
+
+nnoremap <C-p> <cmd>Telescope find_files hidden=true<cr>
+nnoremap <leader>s <cmd>Telescope buffers show_all_buffers=true sort_lastused=true initial_mode=normal<cr>
+nnoremap <leader>q <cmd>Telescope quickfix<cr><esc>
+nnoremap <leader>8 <cmd>Telescope grep_string<cr><esc>
+" nnoremap <leader>/ <cmd>Telescope live_grep<cr>
+nnoremap <leader>/ :lua require('telescope.builtin').grep_string{ search = vim.fn.input('❯ ' ) }<cr>
+nnoremap <leader><Space>/ <cmd>Telescope live_grep cwd=%:h<cr>
+nnoremap <leader>d :lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>
+" nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
+nnoremap <leader><C-r> <cmd>Telescope registers<CR>
+nnoremap <leader>g <cmd>Telescope git_status<cr><esc>
+
+hi link TelescopeSelection TelescopeNormal
 
 " ale
 
@@ -281,22 +335,12 @@ nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 let g:ale_set_balloons = 1
 let g:ale_pattern_options_enabled = 1
 
-call ale#linter#Define('ruby', {
-\   'name': 'sorbet-payserver',
-\   'lsp': 'stdio',
-\   'executable': 'true',
-\   'command': 'pay exec scripts/bin/typecheck --lsp',
-\   'language': 'ruby',
-\   'project_root': $HOME . '/stripe/pay-server',
-\})
-
 let g:ale_linters = {
       \   'elixir': [],
-      \   'javascript': ['eslint', 'flow', 'flow-language-server'],
-      \   'javascript.jsx': ['eslint', 'flow', 'flow-language-server'],
+      \   'javascript': ['eslint'],
+      \   'javascript.jsx': ['eslint'],
       \   'coffeescript': ['jshint'],
-      \   'ruby': ['rubocop', 'sorbet-payserver'],
-      \   'rust': ['cargo', 'rls'],
+      \   'ruby': ['rubocop'],
       \}
 
 let s:rubocop_config = {
@@ -308,36 +352,84 @@ let g:ale_pattern_options = {
 \ 'pay-server/.*Gemfile$': s:rubocop_config,
 \}
 
-" https://github.com/w0rp/ale/issues/2560#issuecomment-500166527
-let g:ale_linters_ignore = {
-      \   'javascript': ['flow-language-server'],
-      \   'javascript.jsx': ['flow-language-server'],
-      \}
-
-let g:ale_rust_cargo_use_check = 1
-
-nnoremap <silent> K :ALEHover<CR>
-nnoremap <silent> <leader>k :ALEDetail<CR>
-nnoremap <silent> gd :ALEGoToDefinition<CR>
-nnoremap <silent> gvd :ALEGoToDefinitionInVSplit<CR>
-nnoremap <silent> gr :ALEFindReferences -relative<CR>
-
 " colorizer-lua
 
-lua require'colorizer'.setup()
+lua << EOF
+require'colorizer'.setup()
+EOF
 
-" deoplete
+" nvim-lspconfig
 
-let g:deoplete#enable_at_startup = 1
 
-call deoplete#custom#option({
-      \   'min_pattern_length': 1,
-      \   'auto_complete_delay': 50,
-      \})
 
-" disable deoplete for denite buffer
-autocmd FileType denite-filter
-      \   call deoplete#custom#buffer_option('auto_complete', v:false)
+lua << EOF
+local nvim_lsp = require('lspconfig')
+
+-- Use an on_attach function to only map the following keys
+-- after the language server attaches to the current buffer
+local on_attach = function(client, bufnr)
+  local function buf_set_keymap(...) vim.api.nvim_buf_set_keymap(bufnr, ...) end
+  local function buf_set_option(...) vim.api.nvim_buf_set_option(bufnr, ...) end
+
+  -- Mappings.
+  local opts = { noremap=true, silent=true }
+
+  -- See `:help vim.lsp.*` for documentation on any of the below functions
+  buf_set_keymap('n', 'gD', '<Cmd>lua vim.lsp.buf.declaration()<CR>', opts)
+  buf_set_keymap('n', 'gd', '<Cmd>lua vim.lsp.buf.definition()<CR>', opts)
+  buf_set_keymap('n', 'K', '<Cmd>lua vim.lsp.buf.hover()<CR>', opts)
+  buf_set_keymap('n', 'gi', '<cmd>lua vim.lsp.buf.implementation()<CR>', opts)
+  buf_set_keymap('n', '<C-k>', '<cmd>lua vim.lsp.buf.signature_help()<CR>', opts)
+--  buf_set_keymap('n', '<space>wa', '<cmd>lua vim.lsp.buf.add_workspace_folder()<CR>', opts)
+--  buf_set_keymap('n', '<space>wr', '<cmd>lua vim.lsp.buf.remove_workspace_folder()<CR>', opts)
+--  buf_set_keymap('n', '<space>wl', '<cmd>lua print(vim.inspect(vim.lsp.buf.list_workspace_folders()))<CR>', opts)
+  buf_set_keymap('n', '<space>D', '<cmd>lua vim.lsp.buf.type_definition()<CR>', opts)
+  buf_set_keymap('n', '<space>rn', '<cmd>lua vim.lsp.buf.rename()<CR>', opts)
+  buf_set_keymap('n', '<space>ca', '<cmd>lua vim.lsp.buf.code_action()<CR>', opts)
+  buf_set_keymap('n', 'gr', '<cmd>lua vim.lsp.buf.references()<CR>', opts)
+  buf_set_keymap('n', '<space>e', '<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>', opts)
+  buf_set_keymap('n', '[d', '<cmd>lua vim.lsp.diagnostic.goto_prev()<CR>', opts)
+  buf_set_keymap('n', ']d', '<cmd>lua vim.lsp.diagnostic.goto_next()<CR>', opts)
+  buf_set_keymap('n', '<space>q', '<cmd>lua vim.lsp.diagnostic.set_loclist()<CR>', opts)
+  buf_set_keymap("n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<CR>", opts)
+
+end
+
+-- Use a loop to conveniently call 'setup' on multiple servers and
+-- map buffer local keybindings when the language server attaches
+local servers = { "flow" }
+for _, lsp in ipairs(servers) do
+  nvim_lsp[lsp].setup {
+    on_attach = on_attach,
+    flags = {
+      debounce_text_changes = 150,
+    }
+  }
+end
+EOF
+
+" nvim-compe
+
+let g:compe = {}
+let g:compe.enabled = v:true
+let g:compe.autocomplete = v:true
+let g:compe.debug = v:false
+let g:compe.min_length = 1
+let g:compe.preselect = 'enable'
+let g:compe.throttle_time = 80
+let g:compe.source_timeout = 200
+let g:compe.incomplete_delay = 400
+let g:compe.max_abbr_width = 100
+let g:compe.max_kind_width = 100
+let g:compe.max_menu_width = 100
+let g:compe.documentation = v:true
+let g:compe.source = {}
+let g:compe.source.path = v:true
+let g:compe.source.buffer = v:true
+let g:compe.source.calc = v:true
+let g:compe.source.nvim_lsp = v:true
+" let g:compe.source.nvim_lua = v:true
+" let g:compe.source.vsnip = v:true
 
 " editorconfig
 
@@ -389,6 +481,12 @@ let g:move_key_modifier = 'C'
 
 set signcolumn=yes
 
+" gitsigns
+
+lua << EOF
+require('gitsigns').setup()
+EOF
+
 " neoformat
 
 augroup fmt
@@ -406,16 +504,27 @@ let g:neoformat_javascript_prettier = {
 let g:neoformat_enabled_rust = ['rustfmt']
 let g:neoformat_enabled_go = ['goimports', 'gofmt']
 
-" incsearch
+" is.vim/nvim-hlslens
+
+lua << EOF
+require('hlslens').setup({
+    calm_down = true,
+    nearest_only = false,
+})
+EOF
+
+hi default link HlSearchNear Search
+hi default link HlSearchLens Search
+hi default link HlSearchLensNear IncSearch
 
 set hlsearch
-let g:incsearch#auto_nohlsearch = 1
-map n  <Plug>(incsearch-nohl-n)
-map N  <Plug>(incsearch-nohl-N)
-map *  <Plug>(incsearch-nohl-*)
-map #  <Plug>(incsearch-nohl-#)
-map g* <Plug>(incsearch-nohl-g*)
-map g# <Plug>(incsearch-nohl-g#)
+" let g:incsearch#auto_nohlsearch = 1
+map n  <Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>
+map N  <Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>
+map *  <Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>
+map #  <Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>
+map g* <Plug>(is-g*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>
+map g# <Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>
 
 " dirvish
 
@@ -456,4 +565,9 @@ nnoremap <silent> <C-w>w :TmuxNavigatePrevious<cr>
 
 " float-preview
 
-let g:float_preview#docked = 1
+" let g:float_preview#docked = 1
+
+" hop
+
+nnoremap <silent> <leader>ew :HopWord<cr>
+nnoremap <silent> <leader>e/ :HopPattern<cr>
