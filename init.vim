@@ -267,7 +267,8 @@ nnoremap <C-p> <cmd>Telescope find_files hidden=true<cr>
 nnoremap <leader>s <cmd>Telescope buffers show_all_buffers=true sort_lastused=true initial_mode=normal<cr>
 nnoremap <leader>q <cmd>Telescope quickfix<cr><esc>
 nnoremap <leader>8 <cmd>Telescope grep_string<cr><esc>
-nnoremap <leader>/ <cmd>Telescope live_grep<cr>
+" nnoremap <leader>/ <cmd>Telescope live_grep<cr>
+nnoremap <leader>/ :lua require('telescope.builtin').grep_string{ search = vim.fn.input('❯ ' ) }<cr>
 nnoremap <leader><Space>/ <cmd>Telescope live_grep cwd=%:h<cr>
 nnoremap <leader>d :lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>
 " nnoremap <leader>r :<C-u>Denite -resume -cursor-pos=+1<CR>
