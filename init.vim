@@ -5,7 +5,6 @@ call plug#begin('~/.config/nvim/plugged')
 
 Plug 'nvim-lua/plenary.nvim'
 " Plug 'Shougo/denite.nvim'
-" Plug 'Shougo/deoplete.nvim', { 'do': ':UpdateRemotePlugins' }
 " Plug 'Shougo/neoyank.vim'
 " Plug 'airblade/vim-gitgutter'
 Plug 'benizi/vim-automkdir'
@@ -398,19 +397,6 @@ nnoremap <silent> gr :ALEFindReferences -relative<CR>
 lua << EOF
 require'colorizer'.setup()
 EOF
-
-" deoplete
-
-" let g:deoplete#enable_at_startup = 1
-
-" call deoplete#custom#option({
-"       \   'min_pattern_length': 1,
-"       \   'auto_complete_delay': 50,
-"       \})
-
-" " disable deoplete for denite buffer
-" autocmd FileType denite-filter
-"       \   call deoplete#custom#buffer_option('auto_complete', v:false)
 
 " nvim-compe
 
