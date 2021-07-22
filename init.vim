@@ -14,7 +14,6 @@ Plug 'justinmk/vim-dirvish'
 Plug 'kevinhwang91/nvim-hlslens'
 Plug 'kyazdani42/nvim-web-devicons'
 Plug 'lewis6991/gitsigns.nvim'
-Plug 'lifepillar/vim-colortemplate'
 Plug 'matze/vim-move'
 Plug 'neovim/nvim-lspconfig'
 Plug 'nvim-lua/popup.nvim'
@@ -26,6 +25,7 @@ Plug 'ntpeters/vim-better-whitespace'
 Plug 'phaazon/hop.nvim'
 Plug 'rhysd/conflict-marker.vim'
 Plug 'sbdchd/neoformat'
+Plug 'sodiumjoe/nvim-highlite'
 Plug 'tpope/vim-commentary'
 Plug 'tpope/vim-eunuch'
 Plug 'tpope/vim-fugitive'
@@ -165,6 +165,16 @@ function! LinterStatus() abort
   return join([l:warnings, l:errors], ' ')
 endfunction
 
+lua << EOF
+function _G.lspStatus()
+  local client_names = {}
+  for _, client in ipairs(vim.lsp.buf_get_clients()) do
+    table.insert(client_names, client.name)
+  end
+  return table.concat(client_names, ' ')
+end
+EOF
+
 function! StatusLine() abort
 
   let l:padding = ' '
@@ -195,9 +205,14 @@ function! StatusLine() abort
 
   " errors from w0rp/ale
   let l:statusline.='%{LinterStatus()}'
-
   " end error highlight group
   let l:statusline.='%#StatusLine#'
+
+  let l:statusline.=l:separator
+
+  " lsp servers
+  let l:statusline.='%{v:lua.lspStatus()}'
+
   let l:statusline.=l:separator
   " line/total lines
   let l:statusline.='L%l/%L'
@@ -343,7 +358,7 @@ end
 
 -- Use a loop to conveniently call 'setup' on multiple servers and
 -- map buffer local keybindings when the language server attaches
-local servers = { "flow" }
+local servers = { "flow", "rust_analyzer" }
 for _, lsp in ipairs(servers) do
   nvim_lsp[lsp].setup {
     on_attach = on_attach,
