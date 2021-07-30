@@ -2,7 +2,6 @@
 " =======
 
 call plug#begin('~/.config/nvim/plugged')
-
 Plug 'nvim-lua/plenary.nvim'
 Plug 'benizi/vim-automkdir'
 Plug 'christoomey/vim-tmux-navigator'
@@ -15,11 +14,13 @@ Plug 'kevinhwang91/nvim-hlslens'
 Plug 'kyazdani42/nvim-web-devicons'
 Plug 'lewis6991/gitsigns.nvim'
 Plug 'matze/vim-move'
+Plug 'mfussenegger/nvim-lint'
 Plug 'neovim/nvim-lspconfig'
+Plug 'nvim-lua/lsp-status.nvim'
 Plug 'nvim-lua/popup.nvim'
 Plug 'nvim-telescope/telescope.nvim'
 Plug 'nvim-telescope/telescope-fzy-native.nvim'
-Plug 'nvim-treesitter/nvim-treesitter', {'do': ':TSUpdate'}
+Plug 'nvim-treesitter/nvim-treesitter', { 'branch': '0.5-compat', 'do': ':TSUpdate' }
 Plug 'norcalli/nvim-colorizer.lua'
 Plug 'ntpeters/vim-better-whitespace'
 Plug 'phaazon/hop.nvim'
@@ -32,7 +33,7 @@ Plug 'tpope/vim-fugitive'
 Plug 'tpope/vim-repeat'
 Plug 'tpope/vim-surround'
 Plug 'vimwiki/vimwiki'
-Plug 'w0rp/ale'
+" Plug 'w0rp/ale'
 Plug 'whatyouhide/vim-lengthmatters'
 
 call plug#end()
@@ -48,7 +49,6 @@ let g:python3_host_prog = "$HOMEBREW_PREFIX/bin/python3"
 
 scriptencoding utf8
 set undofile
-set noerrorbells
 set splitbelow
 set splitright
 " enable per-directory .vimrc files
@@ -62,13 +62,10 @@ set nojoinspaces
 set clipboard+=unnamed
 " don't show intro message
 set shortmess=aoOtI
-" disable weird scratch window
-" set completeopt=preview,menu,noselect
 set completeopt=menuone,noselect
 " disable extraneous messages
 set noshowmode
 " always show the cursor position
-set ruler
 set smartcase
 set infercase
 set diffopt=filler,vertical
@@ -76,10 +73,10 @@ set breakindent
 set guicursor=n-v-sm:block,i-c-ci-ve:ver25,r-cr-o:hor20
 " don't wrap search result traversal
 set nowrapscan
+" show gutter even when empty
+set signcolumn=yes
 
 let g:mapleader="\<SPACE>"
-" search visual selection
-vnoremap // y/<C-R>"<CR>
 
 " copy relative path to clipboard
 nmap <silent> <leader>cr :let @+ = expand("%")<cr>
@@ -95,8 +92,6 @@ if executable('rg')
   set grepprg=rg\ --vimgrep\ --no-heading\ -S
   set grepformat=%f:%l:%c:%m,%f:%l:%m
 endif
-
-set inccommand=split
 
 " restore cursor pos
 autocmd BufReadPost *
@@ -114,11 +109,14 @@ nnoremap k gk
 " ======
 
 set ignorecase
+" search visual selection
+vnoremap // y/<C-R>"<CR>
+set inccommand=split
 
 " syntax highlighting
 " ===================
 
-syntax on
+syntax enable
 filetype plugin indent on
 
 set nomodeline
@@ -148,82 +146,13 @@ set showcmd
 set fillchars=vert:\│,eob:⌁
 
 " statusline
-" ==========
+luafile ~/.config/nvim/statusline.lua
 
-" separator hilight group
-hi User1 guifg=#3c4c55 guibg=#556873
-
-function! LinterStatus() abort
-  let l:counts = ale#statusline#Count(bufnr(''))
-
-  let l:all_errors = l:counts.error + l:counts.style_error
-  let l:all_non_errors = l:counts.total - l:all_errors
-
-  let l:warnings = l:all_non_errors == 0 ? '' : printf('%d⚠', l:all_non_errors)
-  let l:errors = l:all_errors == 0 ? '' : printf('%d☒', l:all_errors)
-
-  return join([l:warnings, l:errors], ' ')
-endfunction
-
-lua << EOF
-function _G.lspStatus()
-  local client_names = {}
-  for _, client in ipairs(vim.lsp.buf_get_clients()) do
-    table.insert(client_names, client.name)
-  end
-  return table.concat(client_names, ' ')
-end
-EOF
-
-function! StatusLine() abort
-
-  let l:padding = ' '
-  let l:separator=' %1*│%* '
-
-  let l:statusline=''
-
-  " active window
-  if g:statusline_winid == win_getid()
-    let l:statusline.='%#CursorLine#'
-  endif
-
-  " filename
-  let l:statusline.=l:padding
-  let l:statusline.='%<%{expand("%:~:.")}'
-  let l:statusline.=l:padding
-  let l:statusline.='%#StatusLine#'
-  let l:statusline.=l:padding
-
-  " help/modified/readonly
-  let l:statusline.='%(%h%m%r%)'
-
-  " alignment group
-  let l:statusline.='%='
-
-  " start error highlight group
-  let l:statusline.='%#StatusLineError#'
-
-  " errors from w0rp/ale
-  let l:statusline.='%{LinterStatus()}'
-  " end error highlight group
-  let l:statusline.='%#StatusLine#'
-
-  let l:statusline.=l:separator
-
-  " lsp servers
-  let l:statusline.='%{v:lua.lspStatus()}'
-
-  let l:statusline.=l:separator
-  " line/total lines
-  let l:statusline.='L%l/%L'
-  let l:statusline.=l:separator
-  " virtual column
-  let l:statusline.='C%02v'
-  let l:statusline.=l:padding
-  return l:statusline
-endfunction
-
-set statusline=%!StatusLine()
+augroup Statusline
+  autocmd!
+  autocmd WinEnter,BufEnter * setlocal statusline=%{%v:lua.activeLine()%}
+  autocmd WinLeave,BufLeave * setlocal statusline=%{%v:lua.inactiveLine()%}
+augroup END
 
 " javascript source resolution
 set path=.
@@ -287,33 +216,64 @@ nnoremap <leader>d :lua require('telescope.builtin').find_files({search_dirs={'%
 nnoremap <leader><C-r> <cmd>Telescope registers<CR>
 nnoremap <leader>g <cmd>Telescope git_status<cr><esc>
 
-hi link TelescopeSelection TelescopeNormal
-
 " ale
 
 " cycle through location list
-nmap <silent> <leader>n <Plug>(ale_next_wrap)
-nmap <silent> <leader>p <Plug>(ale_previous_wrap)
+" nmap <silent> <leader>n <Plug>(ale_next_wrap)
+" nmap <silent> <leader>p <Plug>(ale_previous_wrap)
 
-let g:ale_set_balloons = 1
-let g:ale_pattern_options_enabled = 1
+" let g:ale_set_balloons = 1
+" let g:ale_pattern_options_enabled = 1
+" let g:ale_disable_lsp =1
 
-let g:ale_linters = {
-      \   'elixir': [],
-      \   'javascript': ['eslint'],
-      \   'javascript.jsx': ['eslint'],
-      \   'coffeescript': ['jshint'],
-      \   'ruby': ['rubocop'],
-      \}
+" let g:ale_linters = {
+"       \   'elixir': [],
+"       \   'coffeescript': ['jshint'],
+"       \   'ruby': ['rubocop'],
+"       \   'rust': ['analyzer'],
+"       \}
 
-let s:rubocop_config = {
-\ 'ale_ruby_rubocop_executable': 'scripts/bin/rubocop.rb',
-\}
+" let s:rubocop_config = {
+" \ 'ale_ruby_rubocop_executable': 'scripts/bin/rubocop.rb',
+" \}
 
-let g:ale_pattern_options = {
-\ 'pay-server/.*\.rb$': s:rubocop_config,
-\ 'pay-server/.*Gemfile$': s:rubocop_config,
-\}
+" let g:ale_pattern_options = {
+" \ 'pay-server/.*\.rb$': s:rubocop_config,
+" \ 'pay-server/.*Gemfile$': s:rubocop_config,
+" \}
+
+"lint
+
+lua << EOF
+local lint = require('lint')
+lint.linters_by_ft = {
+  javascript = {'eslint'},
+  ['javascript.jsx'] = {'eslint'},
+  typescript = {'eslint'},
+  typescriptreact = {'eslint'},
+}
+
+local pattern = [[%s*(%d+):(%d+)%s+(%w+)%s+([%w%s]+)%s+(.*)]]
+local groups = { 'line', 'start_col', 'severity', 'message', 'code' }
+local severity_map = {
+  ['error'] = vim.lsp.protocol.DiagnosticSeverity.Error,
+  ['warn'] = vim.lsp.protocol.DiagnosticSeverity.Warning,
+}
+
+lint.linters.eslint = {
+  cmd = 'npx',
+  args = {'eslint'},
+  stdin = false,
+  stream = 'stdout',
+  parser = require('lint.parser').from_pattern(pattern, groups, severity_map, { ['source'] = 'eslint' }),
+  ignore_exitcode = true,
+}
+EOF
+
+augroup lint
+  autocmd!
+  autocmd TextChanged,InsertLeave,BufEnter <buffer> lua require('lint').try_lint()
+augroup END
 
 " colorizer-lua
 
@@ -349,8 +309,9 @@ local on_attach = function(client, bufnr)
   buf_set_keymap('n', '<space>ca', '<cmd>lua vim.lsp.buf.code_action()<CR>', opts)
   buf_set_keymap('n', 'gr', '<cmd>lua vim.lsp.buf.references()<CR>', opts)
   buf_set_keymap('n', '<space>e', '<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>', opts)
-  buf_set_keymap('n', '[d', '<cmd>lua vim.lsp.diagnostic.goto_prev()<CR>', opts)
-  buf_set_keymap('n', ']d', '<cmd>lua vim.lsp.diagnostic.goto_next()<CR>', opts)
+  -- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
+  buf_set_keymap('n', '<leader>p', '<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false},severity_limit=4})<CR>', opts)
+  buf_set_keymap('n', '<leader>n', '<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false},severity_limit=4})<CR>', opts)
   buf_set_keymap('n', '<space>q', '<cmd>lua vim.lsp.diagnostic.set_loclist()<CR>', opts)
   buf_set_keymap("n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<CR>", opts)
 
@@ -358,15 +319,23 @@ end
 
 -- Use a loop to conveniently call 'setup' on multiple servers and
 -- map buffer local keybindings when the language server attaches
-local servers = { "flow", "rust_analyzer" }
+local servers = { "flow", "rust_analyzer", "tsserver" }
 for _, lsp in ipairs(servers) do
   nvim_lsp[lsp].setup {
     on_attach = on_attach,
     flags = {
       debounce_text_changes = 150,
-    }
+    },
   }
 end
+
+vim.lsp.handlers["textDocument/publishDiagnostics"] = vim.lsp.with(
+  vim.lsp.diagnostic.on_publish_diagnostics, {
+    virtual_text = {
+      prefix='💩'
+    }
+  }
+)
 EOF
 
 " nvim-compe
@@ -469,10 +438,6 @@ require('hlslens').setup({
     nearest_only = false,
 })
 EOF
-
-hi default link HlSearchNear Search
-hi default link HlSearchLens Search
-hi default link HlSearchLensNear IncSearch
 
 set hlsearch
 " let g:incsearch#auto_nohlsearch = 1
