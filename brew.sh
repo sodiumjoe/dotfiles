@@ -58,7 +58,7 @@ brew install --cask vlc
 brew install --cask font-inconsolata-go-nerd-font
 
 # neovim
-ln -s ~/.dotfiles/init.vim ${XDG_CONFIG_HOME}/nvim/init.vim
+ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
 
 # python 3 for neovim for deoplete
 pip3 install neovim

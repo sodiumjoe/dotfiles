@@ -249,10 +249,11 @@ then
 
   . /Users/moon/.rbenvrc
   . ~/.stripe-repos.sh
-  eval "$(nodenv init -)"
 
   export GOPATH=${HOME}/stripe/go
 fi
+
+eval "$(nodenv init -)"
 
 # To customize prompt, run `p10k configure` or edit ~/.config/zsh/.p10k.zsh.
 [[ ! -f ~/.config/zsh/.p10k.zsh ]] || source ~/.config/zsh/.p10k.zsh
