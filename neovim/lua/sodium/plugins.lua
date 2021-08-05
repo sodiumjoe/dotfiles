@@ -134,21 +134,21 @@ lint.linters_by_ft = {
 	typescriptreact = { "eslint" },
 }
 
--- /Users/joe/home/my-app/src/App.tsx:5:1: Expected an assignment or function call and instead saw an expression. [Error/@typescript-eslint/no-unused-expressions]
-local pattern = ".-:(%d+):(%d+):%s+([%s%w%p]-)%s+%[(.-)/(.*)%]"
-local groups = { "line", "start_col", "message", "severity", "code" }
+-- /Users/moon/stripe/pay-server/manage/frontend/src/platform/components/GraphQLListView/index.js:91:23: Do not nest ternary expressions. [Error/no-nested-ternary]
+local pattern = '.-:(%d+):(%d+):%s+(.*)(%[.*%])'
+local groups = { 'line', 'start_col', 'severity', 'message' }
 local severity_map = {
-	error = vim.lsp.protocol.DiagnosticSeverity.Error,
-	warn = vim.lsp.protocol.DiagnosticSeverity.Warning,
+  error = vim.lsp.protocol.DiagnosticSeverity.Error,
+  warn = vim.lsp.protocol.DiagnosticSeverity.Warning,
 }
 
 lint.linters.eslint = {
-	cmd = "npx",
-	args = { "eslint", "--format", "unix" },
-	stdin = false,
-	stream = "stdout",
-	parser = require("lint.parser").from_pattern(pattern, groups, severity_map, { ["source"] = "eslint" }),
-	ignore_exitcode = true,
+  cmd = 'npx',
+  args = {'eslint', '--no-color', '--format', 'unix', '--stdin'},
+  stdin = true,
+  stream = 'stdout',
+  parser = require('lint.parser').from_pattern(pattern, groups, nil, { source = 'eslint' }),
+  ignore_exitcode = true,
 }
 
 utils.augroup("TryLint", { "BufWrite,InsertLeave,BufEnter <buffer> lua require('lint').try_lint()" })
@@ -216,7 +216,8 @@ end
 
 -- Use a loop to conveniently call 'setup' on multiple servers and
 -- map buffer local keybindings when the language server attaches
-local servers = { "flow", "rust_analyzer", "tsserver" }
+-- local servers = { "flow", "rust_analyzer", "tsserver" }
+local servers = { "flow", "rust_analyzer" }
 for _, lsp in ipairs(servers) do
 	nvim_lsp[lsp].setup({
 		on_attach = on_attach,
@@ -225,6 +226,12 @@ for _, lsp in ipairs(servers) do
 		},
 	})
 end
+
+nvim_lsp.sorbet.setup {
+  cmd = {"pay", "exec", "scripts/bin/typecheck", "--lsp"};
+  filetypes = {"ruby"};
+}
+
 
 vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, _, params, client_id, _)
 	local config = {
@@ -272,8 +279,8 @@ utils.augroup("Autoformat", {
 g.neoformat_enabled_javascript = { "prettier" }
 g.neoformat_enabled_typescript = { "prettier" }
 g.neoformat_javascript_prettier = {
-	exe = "./node_modules/.bin/prettier",
-	args = { "--stdin", "--stdin-filepath", '"%:p"' },
+	exe = "npx",
+	args = {"prettier"},
 	stdin = 1,
 }
 
@@ -309,12 +316,12 @@ utils.map({
 		[[:lua require'telescope.builtin'.buffers{ on_complete = { function() vim.cmd"stopinsert" end } }<cr>]],
 	},
 	{ "n", [[<leader>8]], [[<cmd>Telescope grep_string<cr><esc>]] },
-	{ "n", [[<leader>/]], [[<cmd>Telescope live_grep<cr>]] },
+	-- { "n", [[<leader>/]], [[<cmd>Telescope live_grep<cr>]] },
 	{ "n", [[<leader>/]], [[:lua require('telescope.builtin').grep_string{ search = vim.fn.input('❯ ' ) }<cr>]] },
 	-- { "n", [[<leader><Space>/]], [[<cmd>Telescope live_grep cwd=%:h<cr>]] },
 	{ "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
 	{ "n", [[<leader><C-r>]], [[<cmd>Telescope registers<CR>]] },
-	{ "n", [[<leader>g]], [[<cmd>Telescope git_status<cr><esc>]] },
+	{ "n", [[<leader>g]], [[<cmd>Telescope git_status use_git_root=false<cr><esc>]] },
 })
 
 -- vim-tmux-navigator
