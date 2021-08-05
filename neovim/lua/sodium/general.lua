@@ -1,5 +1,8 @@
-local g = vim.g
 local utils = require("sodium.utils")
+local g = vim.g
+local o = vim.o
+local b = vim.bo
+local w = vim.wo
 
 -- faster startup time
 -- :h g:python_host_prog
@@ -8,10 +11,6 @@ g.python_host_prog = "/usr/bin/python"
 g.python3_host_prog = "$HOMEBREW_PREFIX/bin/python3"
 
 g.mapleader = [[ ]]
-
-local o = vim.o
-local b = vim.bo
-local w = vim.wo
 
 o.undofile = true
 o.splitbelow = true
@@ -39,7 +38,6 @@ end
 -- =======
 o.guifont = [[Inconsolata:h16]]
 o.background = [[dark]]
-o.termguicolors = true
 vim.cmd([[colorscheme sodium]])
 -- folding column width
 w.foldcolumn = [[0]]
@@ -59,8 +57,11 @@ g.fillchars = [[vert:\│,eob:⌁]]
 
 -- misc
 -- ====
-
 utils.augroup("AutoCloseQFLL", { "FileType qf nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>" })
+
+utils.augroup("RestoreCursorPos", {
+	[[BufReadPost * if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit' |   exe "normal! g`\"" | endif]],
+})
 
 -- javascript source resolution
 g.path = "."
@@ -83,3 +84,21 @@ vim.api.nvim_exec(
 ]],
 	false
 )
+
+utils.map({
+	-- copy relative path to clipboard
+	{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]], { silent = true } },
+	-- copy full path to clipboard
+	{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]], { silent = true } },
+	-- leader d and leader p for deleting instead of cutting and pasting
+	{ "n", [[<leader>d]], [["_d]], { noremap = true } },
+	{ "x", [[<leader>d]], [["_d]], { noremap = true } },
+	{ "x", [[<leader>p]], [["_dP]], { noremap = true } },
+
+	-- movement
+	{ "n", "j", "gj", { noremap = true } },
+	{ "n", "k", "gk", { noremap = true } },
+
+	-- search visual selection (busted)
+	-- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
+})

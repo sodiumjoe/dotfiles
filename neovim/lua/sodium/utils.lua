@@ -15,4 +15,11 @@ function M.augroup(name, cmds)
 	vim.cmd("augroup END")
 end
 
+M.icons = {
+	Error = " ",
+	Warning = " ",
+	Hint = " ",
+	Information = " ",
+}
+
 return M

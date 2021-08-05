@@ -1,5 +1,5 @@
 -- https://github.com/asmagill/hs._asm.undocumented.spaces
-local hsSpaces = require("hs._asm.undocumented.spaces")
+-- local hsSpaces = require("hs._asm.undocumented.spaces")
 hs.window.animationDuration = 0.01
 local log = hs.logger.new('foo', 5)
 log.log('logging enabled')
@@ -239,7 +239,7 @@ function layout()
 
   if #screens == 1 then
     for k, win in pairs(chatFilter:getWindows()) do
-      win:spacesMoveTo(spaces[2])
+      -- win:spacesMoveTo(spaces[2])
       win:maximize()
     end
 

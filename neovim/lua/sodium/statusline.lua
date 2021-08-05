@@ -9,13 +9,11 @@ local highlights = {
 	separator = "%#StatusLineSeparator#",
 }
 
-local signs = { Error = " ", Warning = " ", Hint = " ", Information = " " }
-
 local icons = {
-	error = "",
-	warning = "",
-	info = "",
-	hint = "",
+	error = utils.icons.Error,
+	warning = utils.icons.Warning,
+	info = utils.icons.Information,
+	hint = utils.icons.Hint,
 	ok = "☑",
 }
 
