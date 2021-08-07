@@ -40,7 +40,7 @@ end
 
 local function get_filename()
 	local filetype = vim.bo.filetype
-	if filetype == "" then
+	if vim.api.nvim_buf_get_name(0) == "" then
 		return nil
 	end
 
