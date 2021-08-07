@@ -24,6 +24,7 @@ vim.fn["plug#"]("nvim-lua/popup.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope-fzy-native.nvim")
 vim.fn["plug#"]("nvim-treesitter/nvim-treesitter", { branch = "0.5-compat", ["do"] = ":TSUpdate" })
+vim.fn["plug#"]("ikatyang/tree-sitter-markdown")
 vim.fn["plug#"]("norcalli/nvim-colorizer.lua")
 vim.fn["plug#"]("ntpeters/vim-better-whitespace")
 vim.fn["plug#"]("phaazon/hop.nvim")
@@ -132,33 +133,33 @@ lint.linters_by_ft = {
 	["javascript.jsx"] = { "eslint" },
 	typescript = { "eslint" },
 	typescriptreact = { "eslint" },
+	lua = { "luacheck" },
 }
 
--- /Users/moon/stripe/pay-server/manage/frontend/src/platform/components/GraphQLListView/index.js:91:23: Do not nest ternary expressions. [Error/no-nested-ternary]
-local pattern = '.-:(%d+):(%d+):%s+(.*)(%[.*%])'
-local groups = { 'line', 'start_col', 'severity', 'message' }
+local pattern = ".-:(%d+):(%d+):%s+(.*)(%[.*%])"
+local groups = { "line", "start_col", "severity", "message" }
 local severity_map = {
-  error = vim.lsp.protocol.DiagnosticSeverity.Error,
-  warn = vim.lsp.protocol.DiagnosticSeverity.Warning,
+	error = vim.lsp.protocol.DiagnosticSeverity.Error,
+	warn = vim.lsp.protocol.DiagnosticSeverity.Warning,
 }
 
 lint.linters.eslint = {
-  cmd = 'npx',
-  args = {'eslint', '--no-color', '--format', 'unix', '--stdin'},
-  stdin = true,
-  stream = 'stdout',
-  parser = require('lint.parser').from_pattern(pattern, groups, nil, { source = 'eslint' }),
-  ignore_exitcode = true,
+	cmd = "npx",
+	args = { "eslint", "--no-color", "--format", "unix", "--stdin" },
+	stdin = true,
+	stream = "stdout",
+	parser = require("lint.parser").from_pattern(pattern, groups, severity_map, { source = "eslint" }),
+	ignore_exitcode = true,
 }
 
-utils.augroup("TryLint", { "BufWrite,InsertLeave,BufEnter <buffer> lua require('lint').try_lint()" })
+utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua require('lint').try_lint()" })
 
 -- lspconfig
 -- =========
 local nvim_lsp = require("lspconfig")
 local lsp_status = require("lsp-status")
 
-local function toggle_quickfix()
+local function toggle_quickfix() --luacheck: ignore
 	for _, win in pairs(vim.fn.getwininfo()) do
 		if win.quickfix == 1 then
 			vim.cmd("lclose")
@@ -168,70 +169,23 @@ local function toggle_quickfix()
 	vim.lsp.diagnostic.set_loclist()
 end
 
--- Use an on_attach function to only map the following keys
--- after the language server attaches to the current buffer
-local on_attach = function(client, bufnr)
-	-- setup lsp-status
-	lsp_status.on_attach(client, buffer)
-	local function buf_set_keymap(...)
-		vim.api.nvim_buf_set_keymap(bufnr, ...)
-	end
-	local function buf_set_option(...)
-		vim.api.nvim_buf_set_option(bufnr, ...)
-	end
-
-	-- Mappings.
-	local opts = { noremap = true, silent = true }
-
-	-- See `:help vim.lsp.*` for documentation on any of the below functions
-	buf_set_keymap("n", "gD", "<Cmd>lua vim.lsp.buf.declaration()<CR>", opts)
-	buf_set_keymap("n", "gd", "<Cmd>lua vim.lsp.buf.definition()<CR>", opts)
-	buf_set_keymap("n", "K", "<Cmd>lua vim.lsp.buf.hover()<CR>", opts)
-	buf_set_keymap("n", "gi", "<cmd>lua vim.lsp.buf.implementation()<CR>", opts)
-	-- buf_set_keymap("n", "<C-k>", "<cmd>lua vim.lsp.buf.signature_help()<CR>", opts)
-	--  buf_set_keymap('n', '<space>wa', '<cmd>lua vim.lsp.buf.add_workspace_folder()<CR>', opts)
-	--  buf_set_keymap('n', '<space>wr', '<cmd>lua vim.lsp.buf.remove_workspace_folder()<CR>', opts)
-	--  buf_set_keymap('n', '<space>wl', '<cmd>lua print(vim.inspect(vim.lsp.buf.list_workspace_folders()))<CR>', opts)
-	buf_set_keymap("n", "<space>D", "<cmd>lua vim.lsp.buf.type_definition()<CR>", opts)
-	buf_set_keymap("n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<CR>", opts)
-	buf_set_keymap("n", "<space>ca", "<cmd>lua vim.lsp.buf.code_action()<CR>", opts)
-	buf_set_keymap("n", "gr", "<cmd>lua vim.lsp.buf.references()<CR>", opts)
-	buf_set_keymap("n", "<space>e", "<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>", opts)
-	-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
-	buf_set_keymap(
-		"n",
-		"<leader>p",
-		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false},severity_limit=4})<CR>",
-		opts
-	)
-	buf_set_keymap(
-		"n",
-		"<leader>n",
-		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false},severity_limit=4})<CR>",
-		opts
-	)
-	buf_set_keymap("n", "<space>q", "<cmd>lua toggle_quickfix()<CR>", opts)
-	buf_set_keymap("n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<CR>", opts)
-end
-
 -- Use a loop to conveniently call 'setup' on multiple servers and
 -- map buffer local keybindings when the language server attaches
 -- local servers = { "flow", "rust_analyzer", "tsserver" }
-local servers = { "flow", "rust_analyzer" }
+local servers = { "flow", "rust_analyzer", "tsserver" }
 for _, lsp in ipairs(servers) do
 	nvim_lsp[lsp].setup({
-		on_attach = on_attach,
+		on_attach = lsp_status.on_attach,
 		flags = {
 			debounce_text_changes = 150,
 		},
 	})
 end
 
-nvim_lsp.sorbet.setup {
-  cmd = {"pay", "exec", "scripts/bin/typecheck", "--lsp"};
-  filetypes = {"ruby"};
-}
-
+nvim_lsp.sorbet.setup({
+	cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
+	filetypes = { "ruby" },
+})
 
 vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, _, params, client_id, _)
 	local config = {
@@ -270,18 +224,51 @@ for type, icon in pairs(utils.icons) do
 	vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
 end
 
+-- See `:help vim.lsp.*` for documentation on any of the below functions
+utils.map({
+	{ "n", "gD", "<Cmd>lua vim.lsp.buf.declaration()<CR>", opts },
+	{ "n", "gd", "<Cmd>lua vim.lsp.buf.definition()<CR>", opts },
+	{ "n", "K", "<Cmd>lua vim.lsp.buf.hover()<CR>", opts },
+	{ "n", "gi", "<cmd>lua vim.lsp.buf.implementation()<CR>", opts },
+	{ "n", "<space>D", "<cmd>lua vim.lsp.buf.type_definition()<CR>", opts },
+	{ "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<CR>", opts },
+	{ "n", "<space>ca", "<cmd>lua vim.lsp.buf.code_action()<CR>", opts },
+	{ "n", "gr", "<cmd>lua vim.lsp.buf.references()<CR>", opts },
+	{ "n", "<space>e", "<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>", opts },
+	-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
+	{
+		"n",
+		"<leader>p",
+		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false},severity_limit=4})<CR>",
+		opts,
+	},
+	{
+		"n",
+		"<leader>n",
+		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false},severity_limit=4})<CR>",
+		opts,
+	},
+	{ "n", "<space>q", "<cmd>lua toggle_quickfix()<CR>", opts },
+	{ "n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<CR>", opts },
+})
+
 -- neoformat
 -- =========
 utils.augroup("Autoformat", {
-	"BufWritePre *.{js,rs,go,lua} silent! Neoformat",
+	"BufWritePre *.{js,ts,tsx,rs,go,lua} silent! Neoformat",
 })
 
 g.neoformat_enabled_javascript = { "prettier" }
 g.neoformat_enabled_typescript = { "prettier" }
+g.neoformat_enabled_typescriptreact = { "prettier" }
 g.neoformat_javascript_prettier = {
 	exe = "npx",
-	args = {"prettier"},
-	stdin = 1,
+	args = { "prettier" },
+}
+
+g.neoformat_typescriptreact_prettier = {
+	exe = "npx",
+	args = { "prettier", "--stdin-filepath", '"%:p"', "--parser", "typescript" },
 }
 
 g.neoformat_enabled_rust = { "rustfmt" }
@@ -342,6 +329,7 @@ require("nvim-treesitter.configs").setup({
 	ensure_installed = "maintained",
 	highlight = {
 		enable = true,
+		disable = {},
 	},
 })
 
@@ -379,3 +367,16 @@ utils.map({
 utils.augroup("Vimwiki", {
 	"FileType vimwiki nmap <buffer> <leader>wn <Plug>VimwikiDiaryNextDay",
 })
+
+-- tree-sitter-markdown
+-- ====================
+local parser_config = require("nvim-treesitter.parsers").get_parser_configs()
+parser_config.markdown = {
+	install_info = {
+		url = "https://github.com/ikatyang/tree-sitter-markdown",
+		files = { "src/parser.c", "src/scanner.cc" },
+	},
+	filetype = "markdown",
+	used_by = "vimwiki",
+}
+parser_config.markdown.used_by = "vimwiki"

@@ -22,7 +22,6 @@ local separator = highlights.separator .. "│" .. highlights.reset
 local alignment_group = "%="
 
 local help_modified_read_only = "%(%h%m%r%)"
-local lines = "L%l/%L"
 local virtual_column = "C%02v"
 
 local function highlight_item(item, h)
@@ -99,7 +98,7 @@ local function lsp_status()
 	return table.concat(status_parts, " ")
 end
 
-function insert_item(t, value)
+local function insert_item(t, value)
 	if value then
 		table.insert(t, value)
 	end

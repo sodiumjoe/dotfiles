@@ -1,7 +1,6 @@
 local utils = require("sodium.utils")
 local g = vim.g
 local o = vim.o
-local b = vim.bo
 local w = vim.wo
 
 o.undofile = true
@@ -16,7 +15,7 @@ o.shortmess = [[aoOtI]]
 o.completeopt = [[menuone,noselect]]
 o.modeline = false
 
-b.infercase = true
+o.infercase = true
 o.smartcase = true
 o.ignorecase = true
 o.inccommand = [[split]]
@@ -34,12 +33,12 @@ vim.cmd([[colorscheme sodium]])
 -- folding column width
 w.foldcolumn = [[0]]
 o.showtabline = 0
-b.autoindent = true
-b.smartindent = true
-b.tabstop = 2
-b.shiftwidth = 2
-b.expandtab = true
-g.scrolloff = 5
+o.autoindent = true
+o.smartindent = true
+o.tabstop = 2
+o.shiftwidth = 2
+o.expandtab = true
+o.scrolloff = 5
 g.showmode = false
 g.diffopt = [[filler,vertical]]
 g.guicursor = [[n-v-sm:block,i-c-ci-ve:ver25,r-cr-o:hor20]]
@@ -57,7 +56,7 @@ utils.augroup("RestoreCursorPos", {
 
 -- javascript source resolution
 g.path = "."
-b.suffixesadd = ".js"
+o.suffixesadd = ".js"
 
 vim.api.nvim_exec(
 	[[
