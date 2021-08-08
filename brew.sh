@@ -18,6 +18,7 @@ brew tap homebrew/cask-versions
 # https://github.com/Homebrew/homebrew-cask-fonts
 brew tap homebrew/cask-fonts
 
+brew install bat
 brew install curl
 brew install editorconfig
 brew install exa
@@ -46,6 +47,7 @@ brew install sqlite
 brew install tarsnap
 brew install tmux
 brew install tree
+brew install vivid
 brew install watchman
 brew install yarn
 brew install zsh

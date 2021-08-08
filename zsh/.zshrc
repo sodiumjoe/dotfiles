@@ -257,3 +257,7 @@ eval "$(nodenv init -)"
 
 # To customize prompt, run `p10k configure` or edit ~/.config/zsh/.p10k.zsh.
 [[ ! -f ~/.config/zsh/.p10k.zsh ]] || source ~/.config/zsh/.p10k.zsh
+
+alias luamake=/Users/joe/home/lua-language-server/3rd/luamake/luamake
+
+export LS_COLORS="$(vivid generate sodium)"

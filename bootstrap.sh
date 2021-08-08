@@ -33,6 +33,7 @@ xdg_files=(\
   "zsh"\
   "tmux"\
   "karabiner"\
+  "vivid"\
   )
 
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
