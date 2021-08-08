@@ -11,7 +11,6 @@ vim.fn["plug#"]("benizi/vim-automkdir")
 vim.fn["plug#"]("christoomey/vim-tmux-navigator")
 vim.fn["plug#"]("editorconfig/editorconfig-vim")
 vim.fn["plug#"]("haya14busa/is.vim")
-vim.fn["plug#"]("hrsh7th/nvim-compe")
 vim.fn["plug#"]("justinmk/vim-dirvish")
 vim.fn["plug#"]("kevinhwang91/nvim-hlslens")
 vim.fn["plug#"]("kyazdani42/nvim-web-devicons")
@@ -19,11 +18,13 @@ vim.fn["plug#"]("lewis6991/gitsigns.nvim")
 vim.fn["plug#"]("matze/vim-move")
 vim.fn["plug#"]("mfussenegger/nvim-lint")
 vim.fn["plug#"]("neovim/nvim-lspconfig")
+vim.fn["plug#"]("nvim-lua/completion-nvim")
 vim.fn["plug#"]("nvim-lua/lsp-status.nvim")
 vim.fn["plug#"]("nvim-lua/popup.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope-fzy-native.nvim")
 vim.fn["plug#"]("nvim-treesitter/nvim-treesitter", { branch = "0.5-compat", ["do"] = ":TSUpdate" })
+vim.fn["plug#"]("nvim-treesitter/completion-treesitter")
 vim.fn["plug#"]("ikatyang/tree-sitter-markdown")
 vim.fn["plug#"]("norcalli/nvim-colorizer.lua")
 vim.fn["plug#"]("ntpeters/vim-better-whitespace")
@@ -31,6 +32,7 @@ vim.fn["plug#"]("phaazon/hop.nvim")
 vim.fn["plug#"]("rhysd/conflict-marker.vim")
 vim.fn["plug#"]("sbdchd/neoformat")
 vim.fn["plug#"]("sodiumjoe/nvim-highlite")
+vim.fn["plug#"]("steelsojka/completion-buffers")
 vim.fn["plug#"]("tpope/vim-commentary")
 vim.fn["plug#"]("tpope/vim-eunuch")
 vim.fn["plug#"]("tpope/vim-fugitive")
@@ -49,22 +51,18 @@ require("colorizer").setup()
 -- ========
 require("gitsigns").setup()
 
--- compe
--- =====
-require("compe").setup({
-	enable = true,
-	autocomplete = true,
-	debug = false,
-	min_length = 1,
-	source = {
-		path = true,
-		buffer = true,
-		calc = true,
-		nvim_lsp = true,
-		nvim_lua = true,
-		treesitter = true,
+-- completion-nvim
+-- ===============
+
+local completion = require("completion")
+
+vim.g.completion_chain_complete_list = {
+	default = {
+		{ complete_items = { "lsp", "buffers", "ts" } },
+		{ mode = { "<c-p>" } },
+		{ mode = { "<c-n>" } },
 	},
-})
+}
 
 -- nvim-web-devicons
 -- =================
@@ -169,13 +167,19 @@ local function toggle_quickfix() --luacheck: ignore
 	vim.lsp.diagnostic.set_loclist()
 end
 
+local on_attach = function(client, bufnr)
+	-- setup lsp-status
+	lsp_status.on_attach(client, bufnr)
+	completion.on_attach(client, bufnr)
+end
+
 -- Use a loop to conveniently call 'setup' on multiple servers and
 -- map buffer local keybindings when the language server attaches
 -- local servers = { "flow", "rust_analyzer", "tsserver" }
 local servers = { "flow", "rust_analyzer", "tsserver" }
 for _, lsp in ipairs(servers) do
 	nvim_lsp[lsp].setup({
-		on_attach = lsp_status.on_attach,
+		on_attach = on_attach,
 		flags = {
 			debounce_text_changes = 150,
 		},
