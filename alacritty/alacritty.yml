@@ -388,9 +388,11 @@ colors:
 #   - (Linux/BSD) user login shell
 #   - (Windows) powershell
 shell:
-  program: /opt/homebrew/bin/tmux
+  program: /bin/bash
   args:
-    - attach
+    - -l
+    - -c
+    - "tmux attach || tmux"
 
 # Startup directory
 #
@@ -805,6 +807,11 @@ key_bindings:
   #- { key: B,              mods: Command, mode: ~Search,     action: SearchBackward        }
   - { key: K,mods: Command|Control, chars: "\x01p",                          } # <C-a>p
   - { key: Space,    mods: Control, chars: "\x00",                           }
+  - { key: Tab,      mods: Control, chars: "\x01n",                          } # <C-a>n
+  - { key: Tab,mods: Shift|Control, chars: "\x01p",                          } # <C-a>p
+  - { key: N,mods: Command|Control, chars: "\x01\x0E",                       } # <C-a><C-n>
+  - { key: P,mods: Command|Control, chars: "\x01\x10",                       } # <C-a><C-p>
+  - { key: J,mods: Command|Control, chars: "\x01n",                          } # <C-a>n
 
 #debug:
   # Display the time it takes to redraw each frame.
