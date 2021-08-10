@@ -152,7 +152,13 @@ lint.linters.eslint = {
 	ignore_exitcode = true,
 }
 
-utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua require('lint').try_lint()" })
+function _G.try_lint()
+	if lint.linters_by_ft[vim.bo.filetype] then
+		lint.try_lint()
+	end
+end
+
+utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua try_lint()" })
 
 -- lspconfig
 -- =========
