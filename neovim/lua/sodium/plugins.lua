@@ -136,9 +136,11 @@ lint.linters_by_ft = {
 
 local pattern = ".-:(%d+):(%d+):%s+(.*)(%[.*%])"
 local groups = { "line", "start_col", "severity", "message" }
+local pattern = '.-:(%d+):(%d+):%s*(.*)%s*%[(.+)/(.+)%]'
+local groups = { 'line', 'start_col', 'message', 'severity', 'code' }
 local severity_map = {
-	error = vim.lsp.protocol.DiagnosticSeverity.Error,
-	warn = vim.lsp.protocol.DiagnosticSeverity.Warning,
+  Error = vim.lsp.protocol.DiagnosticSeverity.Error,
+  Warning = vim.lsp.protocol.DiagnosticSeverity.Warning,
 }
 
 lint.linters.eslint = {
