@@ -213,7 +213,7 @@ vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, _, params, cli
 	local diagnostics = params.diagnostics
 
 	for i, v in ipairs(diagnostics) do
-		diagnostics[i].message = string.format("%s: %s", v.source, v.message)
+		diagnostics[i].message = string.format("%s: %s [%s]", v.source, v.message, v.code)
 	end
 
 	vim.lsp.diagnostic.save(diagnostics, bufnr, client_id)
