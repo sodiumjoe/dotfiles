@@ -281,7 +281,8 @@ g.neoformat_javascript_prettier = {
 
 g.neoformat_typescriptreact_prettier = {
 	exe = "npx",
-	args = { "prettier", "--stdin-filepath", '"%:p"', "--parser", "typescript" },
+	args = { "prettier", "--stdin", "--parser", "typescript" },
+	stdin = 1,
 }
 
 g.neoformat_enabled_rust = { "rustfmt" }
