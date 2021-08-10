@@ -7,10 +7,10 @@ function M.map(mappings)
 end
 
 function M.augroup(name, cmds)
-	vim.cmd("augroup " .. name)
+	vim.cmd("augroup" .. " " .. name)
 	vim.cmd("autocmd!")
 	for _, cmd in ipairs(cmds) do
-		vim.cmd("autocmd " .. cmd)
+		vim.cmd("autocmd" .. " " .. cmd)
 	end
 	vim.cmd("augroup END")
 end
