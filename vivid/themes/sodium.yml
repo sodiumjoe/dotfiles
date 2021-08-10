@@ -22,7 +22,6 @@ core:
 
   executable_file:
     foreground: pink
-    font-style: bold
 
   symlink:
     foreground: pink
@@ -104,7 +103,6 @@ archives:
 
 executable:
   foreground: pink
-  font-style: bold
 
 unimportant:
   foreground: background_shade
