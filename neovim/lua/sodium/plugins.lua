@@ -134,13 +134,11 @@ lint.linters_by_ft = {
 	lua = { "luacheck" },
 }
 
-local pattern = ".-:(%d+):(%d+):%s+(.*)(%[.*%])"
-local groups = { "line", "start_col", "severity", "message" }
-local pattern = '.-:(%d+):(%d+):%s*(.*)%s*%[(.+)/(.+)%]'
-local groups = { 'line', 'start_col', 'message', 'severity', 'code' }
+local pattern = ".-:(%d+):(%d+):%s*(.*)%s*%[(.+)/(.+)%]"
+local groups = { "line", "start_col", "message", "severity", "code" }
 local severity_map = {
-  Error = vim.lsp.protocol.DiagnosticSeverity.Error,
-  Warning = vim.lsp.protocol.DiagnosticSeverity.Warning,
+	Error = vim.lsp.protocol.DiagnosticSeverity.Error,
+	Warning = vim.lsp.protocol.DiagnosticSeverity.Warning,
 }
 
 lint.linters.eslint = {
@@ -165,7 +163,7 @@ utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua try_lint()" 
 local nvim_lsp = require("lspconfig")
 local lsp_status = require("lsp-status")
 
-local function toggle_quickfix() --luacheck: ignore
+function _G.toggle_quickfix()
 	for _, win in pairs(vim.fn.getwininfo()) do
 		if win.quickfix == 1 then
 			vim.cmd("lclose")
@@ -184,14 +182,14 @@ end
 local servers = { "flow", "rust_analyzer", "tsserver" }
 
 for _, lsp in ipairs(servers) do
-  if nvim_lsp[lsp] then
-    nvim_lsp[lsp].setup({
-      on_attach = on_attach,
-      flags = {
-        debounce_text_changes = 150,
-      },
-    })
-  end
+	if nvim_lsp[lsp] then
+		nvim_lsp[lsp].setup({
+			on_attach = on_attach,
+			flags = {
+				debounce_text_changes = 150,
+			},
+		})
+	end
 end
 
 nvim_lsp.sorbet.setup({
@@ -276,7 +274,7 @@ g.neoformat_enabled_typescriptreact = { "prettier" }
 g.neoformat_javascript_prettier = {
 	exe = "npx",
 	args = { "prettier", "--stdin-filepath", "%:p" },
-  stdin = 1,
+	stdin = 1,
 }
 
 g.neoformat_typescriptreact_prettier = {
