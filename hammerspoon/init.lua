@@ -1,9 +1,6 @@
--- https://github.com/asmagill/hs._asm.undocumented.spaces
-local hsSpaces = require("hs._asm.undocumented.spaces")
 hs.window.animationDuration = 0.01
-local log = hs.logger.new("foo", 5)
-log.log("logging enabled")
-local space = hs.window.filter.new(nil, "space"):setCurrentSpace(true):setDefaultFilter({})
+-- local log = hs.logger.new("foo", 5)
+-- log.log("logging enabled")
 local chromeFilter = hs.window.filter.new(false):setAppFilter("Google Chrome", { visible = true })
 local calendarFilter = hs.window.filter.new(false):setAppFilter("Google Calendar", { visible = true })
 local chatFilter = hs.window.filter.new(false):setAppFilter("Google Chat", { visible = true })
@@ -64,10 +61,6 @@ local function resetGrid()
 end
 
 resetGrid()
-
-local function getSpaces()
-	return hsSpaces.layout()[hsSpaces.mainScreenUUID()]
-end
 
 local function isLaptopScreen(win)
 	return win:screen() == hs.screen.primaryScreen()
@@ -131,21 +124,6 @@ local function pushLeft()
 		end
 		return
 	end
-
-	local activeSpace = hsSpaces.activeSpace()
-	local spaces = getSpaces()
-	local activeSpaceIndex = hs.fnutils.indexOf(spaces, activeSpace)
-	local spaceToWest = spaces[activeSpaceIndex - 1]
-
-	if spaceToWest then
-		win:spacesMoveTo(spaceToWest)
-		for scr, screenPos in pairs(hs.screen.screenPositions()) do
-			if screenPos.x == 2 then
-				hs.grid.set(win, position, scr)
-				return hsSpaces.changeToSpace(spaceToWest)
-			end
-		end
-	end
 end
 
 local function pushRight()
@@ -162,24 +140,6 @@ local function pushRight()
 
 	if screenToEast then
 		return hs.grid.set(win, position, screenToEast)
-	end
-
-	local activeSpace = hsSpaces.activeSpace()
-	local spaces = getSpaces()
-	local activeSpaceIndex = hs.fnutils.indexOf(spaces, activeSpace)
-	local spaceToEast = spaces[activeSpaceIndex + 1]
-
-	if spaceToEast then
-		win:spacesMoveTo(spaceToEast)
-		for scr, screenPos in pairs(hs.screen.screenPositions()) do
-			if screenPos.x == 0 then
-				hs.grid.set(win, position, scr)
-				if isLaptopScreen(win) then
-					win:maximize()
-				end
-				return hsSpaces.changeToSpace(spaceToEast)
-			end
-		end
 	end
 end
 
@@ -222,10 +182,7 @@ local function maximize()
 	end
 end
 
-local function layoutWin(win, screenIndex, position, sp)
-	if space then
-		win:spacesMoveTo(sp)
-	end
+local function layoutWin(win, screenIndex, position)
 	for screen, screenPos in pairs(hs.screen.screenPositions()) do
 		if screenPos.x == screenIndex then
 			hs.grid.set(win, position, screen)
@@ -233,14 +190,13 @@ local function layoutWin(win, screenIndex, position, sp)
 	end
 end
 
-local function layoutApp(filter, screenIndex, position, sp)
+local function layoutApp(filter, screenIndex, position)
 	for _, win in pairs(filter:getWindows()) do
-		layoutWin(win, screenIndex, position, sp)
+		layoutWin(win, screenIndex, position)
 	end
 end
 
 local function layout()
-	local spaces = getSpaces()
 	local screens = hs.screen.allScreens()
 
   local speakers = hs.audiodevice.findOutputByName('CalDigit Thunderbolt 3 Audio') or hs.audiodevice.findOutputByName('MacBook Pro Speakers')
@@ -255,7 +211,6 @@ local function layout()
 
 	if #screens == 1 then
 		for _, win in pairs(chatFilter:getWindows()) do
-			-- win:spacesMoveTo(spaces[2])
 			win:maximize()
 		end
 
@@ -270,7 +225,7 @@ local function layout()
 	resetScreenRotations()
 	resetGrid()
 
-	layoutApp(chatFilter, 2, positions.bottom, spaces[2])
+	layoutApp(chatFilter, 2, positions.bottom)
 	layoutApp(alacrittyFilter, 2, positions.bottom)
 	layoutApp(calendarFilter, 2, positions.top)
 
