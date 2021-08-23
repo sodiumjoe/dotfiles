@@ -82,9 +82,9 @@ utils.map({
 	-- copy full path to clipboard
 	{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]], { silent = true } },
 	-- leader d and leader p for deleting instead of cutting and pasting
-	{ "n", [[<leader>d]], [["_d]], { noremap = true } },
-	{ "x", [[<leader>d]], [["_d]], { noremap = true } },
-	{ "x", [[<leader>p]], [["_dP]], { noremap = true } },
+	-- { "n", [[<leader>d]], [["_d]], { noremap = true } },
+	-- { "x", [[<leader>d]], [["_d]], { noremap = true } },
+	-- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
 
 	-- movement
 	{ "n", "j", "gj", { noremap = true } },
