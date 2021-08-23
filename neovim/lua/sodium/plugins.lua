@@ -27,6 +27,7 @@ vim.fn["plug#"]("nvim-treesitter/nvim-treesitter", { branch = "0.5-compat", ["do
 vim.fn["plug#"]("nvim-treesitter/completion-treesitter")
 vim.fn["plug#"]("ikatyang/tree-sitter-markdown")
 vim.fn["plug#"]("norcalli/nvim-colorizer.lua")
+vim.fn["plug#"]("onsails/lspkind-nvim")
 vim.fn["plug#"]("ntpeters/vim-better-whitespace")
 vim.fn["plug#"]("phaazon/hop.nvim")
 vim.fn["plug#"]("rhysd/conflict-marker.vim")
@@ -177,6 +178,7 @@ local on_attach = function(client, bufnr)
 	-- setup lsp-status
 	lsp_status.on_attach(client, bufnr)
 	completion.on_attach(client, bufnr)
+	require("lspkind").init({})
 end
 
 local servers = { "flow", "rust_analyzer", "tsserver" }
