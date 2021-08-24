@@ -66,6 +66,10 @@ vim.g.completion_chain_complete_list = {
   TelescopePrompt = {},
 }
 
+utils.augroup("NvimCompletion", {
+  "BufEnter * lua require'completion'.on_attach()",
+})
+
 -- nvim-web-devicons
 -- =================
 require("nvim-web-devicons").setup({
