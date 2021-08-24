@@ -132,6 +132,7 @@ g.lengthmatters_excluded = {
 -- lint
 -- ====
 local lint = require("lint")
+local lint_parser = require("lint.parser");
 lint.linters_by_ft = {
 	javascript = { "eslint" },
 	["javascript.jsx"] = { "eslint" },
@@ -146,13 +147,18 @@ local severity_map = {
 	Error = vim.lsp.protocol.DiagnosticSeverity.Error,
 	Warning = vim.lsp.protocol.DiagnosticSeverity.Warning,
 }
+local parser_from_pattern = lint_parser.from_pattern(pattern, groups, severity_map, { source = "eslint" })
+local function parser(output, bufnr)
+  local diagnostics = parser_from_pattern(output, bufnr)
+  vim.cmd([[checktime]])
+  return diagnostics
+end
 
 lint.linters.eslint = {
 	cmd = "npx",
-	args = { "eslint", "--no-color", "--format", "unix", "--stdin" },
-	stdin = true,
+	args = { "eslint", "--no-color", "--fix", "--format", "unix" },
 	stream = "stdout",
-	parser = require("lint.parser").from_pattern(pattern, groups, severity_map, { source = "eslint" }),
+	parser = parser,
 	ignore_exitcode = true,
 }
 
