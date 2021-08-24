@@ -63,11 +63,11 @@ vim.g.completion_chain_complete_list = {
 		{ mode = { "<c-p>" } },
 		{ mode = { "<c-n>" } },
 	},
-  TelescopePrompt = {},
+	TelescopePrompt = {},
 }
 
 utils.augroup("NvimCompletion", {
-  "BufEnter * lua require'completion'.on_attach()",
+	"BufEnter * lua require'completion'.on_attach()",
 })
 
 -- nvim-web-devicons
@@ -80,7 +80,7 @@ require("nvim-web-devicons").setup({
 -- =======
 utils.augroup("DirvishConfig", {
 	"FileType dirvish silent! unmap <buffer> <C-p>",
-	"FileType dirvish silent! unmap <buffer> <C-n>"
+	"FileType dirvish silent! unmap <buffer> <C-n>",
 })
 
 -- editorconfig
@@ -133,7 +133,7 @@ g.lengthmatters_excluded = {
 -- lint
 -- ====
 local lint = require("lint")
-local lint_parser = require("lint.parser");
+local lint_parser = require("lint.parser")
 lint.linters_by_ft = {
 	javascript = { "eslint" },
 	["javascript.jsx"] = { "eslint" },
@@ -150,9 +150,9 @@ local severity_map = {
 }
 local parser_from_pattern = lint_parser.from_pattern(pattern, groups, severity_map, { source = "eslint" })
 local function parser(output, bufnr)
-  local diagnostics = parser_from_pattern(output, bufnr)
-  vim.cmd([[checktime]])
-  return diagnostics
+	local diagnostics = parser_from_pattern(output, bufnr)
+	vim.cmd([[checktime]])
+	return diagnostics
 end
 
 lint.linters.eslint = {

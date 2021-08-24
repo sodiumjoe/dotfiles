@@ -199,15 +199,16 @@ end
 local function layout()
 	local screens = hs.screen.allScreens()
 
-  local speakers = hs.audiodevice.findOutputByName('CalDigit Thunderbolt 3 Audio') or hs.audiodevice.findOutputByName('MacBook Pro Speakers')
-  if speakers then
-    speakers:setDefaultOutputDevice()
-  end
+	local speakers = hs.audiodevice.findOutputByName("CalDigit Thunderbolt 3 Audio")
+		or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
+	if speakers then
+		speakers:setDefaultOutputDevice()
+	end
 
-  local mic = hs.audiodevice.findInputByName("Yeti Nano") or hs.audiodevice.findInputByName("MacBook Pro Microphone")
-  if mic then
-    mic:setDefaultInputDevice()
-  end
+	local mic = hs.audiodevice.findInputByName("Yeti Nano") or hs.audiodevice.findInputByName("MacBook Pro Microphone")
+	if mic then
+		mic:setDefaultInputDevice()
+	end
 
 	if #screens == 1 then
 		for _, win in pairs(chatFilter:getWindows()) do
