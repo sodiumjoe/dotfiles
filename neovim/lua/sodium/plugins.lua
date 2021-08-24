@@ -80,6 +80,7 @@ require("nvim-web-devicons").setup({
 -- =======
 utils.augroup("DirvishConfig", {
 	"FileType dirvish silent! unmap <buffer> <C-p>",
+	"FileType dirvish silent! unmap <buffer> <C-n>"
 })
 
 -- editorconfig
