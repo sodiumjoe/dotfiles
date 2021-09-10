@@ -57,14 +57,23 @@ require("gitsigns").setup()
 
 local completion = require("completion")
 
-vim.g.completion_chain_complete_list = {
+g.completion_chain_complete_list = {
 	default = {
-		{ complete_items = { "lsp", "buffers", "ts" } },
+		{ complete_items = { "lsp" } },
+		{ complete_items = { "buffers", "ts" } },
+		{ complete_items = { "ts" } },
 		{ mode = { "<c-p>" } },
 		{ mode = { "<c-n>" } },
 	},
 	TelescopePrompt = {},
 }
+
+g.completion_popup_border = "rounded"
+
+utils.map({
+	{ "i", "<C-j>", "<Plug>(completion_next_source)" },
+	{ "i", "<C-k>", "<Plug>(completion_prev_source)" },
+})
 
 utils.augroup("NvimCompletion", {
 	"BufEnter * lua require'completion'.on_attach()",
@@ -97,12 +106,12 @@ require("hlslens").setup({
 vim.o.hlsearch = true
 
 utils.map({
-	{ "n", "n", "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>" },
-	{ "n", "N", "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>" },
-	{ "n", "*", "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>" },
-	{ "n", "#", "<Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>" },
-	{ "n", "g*", "<Plug>(is-g*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>" },
-	{ "n", "g#", "<Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<CR>" },
+	{ "n", "n", "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+	{ "n", "N", "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+	{ "n", "*", "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+	{ "n", "#", "<Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+	{ "n", "g*", "<Plug>(is-g*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+	{ "n", "g#", "<Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
 })
 
 -- hop
@@ -250,30 +259,30 @@ end
 
 -- See `:help vim.lsp.*` for documentation on any of the below functions
 utils.map({
-	{ "n", "gD", "<Cmd>lua vim.lsp.buf.declaration()<CR>", opts },
-	{ "n", "gd", "<Cmd>lua vim.lsp.buf.definition()<CR>", opts },
-	{ "n", "K", "<Cmd>lua vim.lsp.buf.hover()<CR>", opts },
-	{ "n", "gi", "<cmd>lua vim.lsp.buf.implementation()<CR>", opts },
-	{ "n", "<space>D", "<cmd>lua vim.lsp.buf.type_definition()<CR>", opts },
-	{ "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<CR>", opts },
-	{ "n", "<space>ca", "<cmd>lua vim.lsp.buf.code_action()<CR>", opts },
-	{ "n", "gr", "<cmd>lua vim.lsp.buf.references()<CR>", opts },
-	{ "n", "<space>e", "<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<CR>", opts },
+	{ "n", "gD", "<Cmd>lua vim.lsp.buf.declaration()<cr>", opts },
+	{ "n", "gd", "<Cmd>lua vim.lsp.buf.definition()<cr>", opts },
+	{ "n", "K", "<Cmd>lua vim.lsp.buf.hover()<cr>", opts },
+	{ "n", "gi", "<cmd>lua vim.lsp.buf.implementation()<cr>", opts },
+	{ "n", "<space>D", "<cmd>lua vim.lsp.buf.type_definition()<cr>", opts },
+	-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
+	{ "n", "<space>ca", "<cmd>lua vim.lsp.buf.code_action()<cr>", opts },
+	{ "n", "gr", "<cmd>lua vim.lsp.buf.references()<cr>", opts },
+	{ "n", "<space>e", "<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<cr>", opts },
 	-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
 	{
 		"n",
 		"<leader>p",
-		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false},severity_limit=4})<CR>",
+		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false},severity_limit=4})<cr>",
 		opts,
 	},
 	{
 		"n",
 		"<leader>n",
-		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false},severity_limit=4})<CR>",
+		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false},severity_limit=4})<cr>",
 		opts,
 	},
-	{ "n", "<space>q", "<cmd>lua toggle_quickfix()<CR>", opts },
-	{ "n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<CR>", opts },
+	{ "n", "<space>q", "<cmd>lua toggle_quickfix()<cr>", opts },
+	{ "n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<cr>", opts },
 })
 
 -- neoformat
@@ -320,6 +329,7 @@ telescope.setup({
 telescope.load_extension("fzy_native")
 
 utils.map({
+	{ "n", [[<leader>r]], [[<cmd>Telescope resume<cr>]] },
 	{ "n", [[<C-p>]], [[<cmd>Telescope find_files hidden=true<cr>]] },
 	{
 		"n",
@@ -331,7 +341,7 @@ utils.map({
 	{ "n", [[<leader><Space>/]], [[<cmd>Telescope live_grep cwd=%:h<cr>]] },
 	-- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
 	{ "n", [[<leader>d]], [[<cmd>Telescope find_files search_dirs=%:h<cr>]] },
-	{ "n", [[<leader><C-r>]], [[<cmd>Telescope registers<CR>]] },
+	{ "n", [[<leader><C-r>]], [[<cmd>Telescope registers<cr>]] },
 	{ "n", [[<leader>g]], [[<cmd>Telescope git_status use_git_root=false<cr><esc>]] },
 })
 

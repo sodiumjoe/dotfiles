@@ -388,9 +388,7 @@ colors:
 #   - (Linux/BSD) user login shell
 #   - (Windows) powershell
 shell:
-  program: /bin/bash
-  # args:
-  #   - attach
+  program: /bin/zsh
   args:
     - -l
     - -c
