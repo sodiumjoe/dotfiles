@@ -11,6 +11,10 @@ vim.fn["plug#"]("benizi/vim-automkdir")
 vim.fn["plug#"]("christoomey/vim-tmux-navigator")
 vim.fn["plug#"]("editorconfig/editorconfig-vim")
 vim.fn["plug#"]("haya14busa/is.vim")
+vim.fn["plug#"]("hrsh7th/cmp-nvim-lsp")
+vim.fn["plug#"]("hrsh7th/cmp-buffer")
+vim.fn["plug#"]("hrsh7th/nvim-cmp")
+vim.fn["plug#"]("hrsh7th/vim-vsnip")
 vim.fn["plug#"]("justinmk/vim-dirvish")
 vim.fn["plug#"]("kevinhwang91/nvim-hlslens")
 vim.fn["plug#"]("kyazdani42/nvim-web-devicons")
@@ -18,13 +22,11 @@ vim.fn["plug#"]("lewis6991/gitsigns.nvim")
 vim.fn["plug#"]("matze/vim-move")
 vim.fn["plug#"]("mfussenegger/nvim-lint")
 vim.fn["plug#"]("neovim/nvim-lspconfig")
-vim.fn["plug#"]("nvim-lua/completion-nvim")
 vim.fn["plug#"]("nvim-lua/lsp-status.nvim")
 vim.fn["plug#"]("nvim-lua/popup.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope-fzy-native.nvim")
 vim.fn["plug#"]("nvim-treesitter/nvim-treesitter", { branch = "0.5-compat", ["do"] = ":TSUpdate" })
-vim.fn["plug#"]("nvim-treesitter/completion-treesitter")
 vim.fn["plug#"]("ikatyang/tree-sitter-markdown")
 vim.fn["plug#"]("norcalli/nvim-colorizer.lua")
 vim.fn["plug#"]("onsails/lspkind-nvim")
@@ -33,7 +35,6 @@ vim.fn["plug#"]("phaazon/hop.nvim")
 vim.fn["plug#"]("rhysd/conflict-marker.vim")
 vim.fn["plug#"]("sbdchd/neoformat")
 vim.fn["plug#"]("sodiumjoe/nvim-highlite")
-vim.fn["plug#"]("steelsojka/completion-buffers")
 vim.fn["plug#"]("tpope/vim-commentary")
 vim.fn["plug#"]("tpope/vim-eunuch")
 vim.fn["plug#"]("tpope/vim-fugitive")
@@ -52,31 +53,41 @@ require("colorizer").setup()
 -- ========
 require("gitsigns").setup()
 
--- completion-nvim
--- ===============
-
-local completion = require("completion")
-
-g.completion_chain_complete_list = {
-	default = {
-		{ complete_items = { "lsp" } },
-		{ complete_items = { "buffers", "ts" } },
-		{ complete_items = { "ts" } },
-		{ mode = { "<c-p>" } },
-		{ mode = { "<c-n>" } },
+-- cmp
+-- ===
+local cmp = require("cmp")
+cmp.setup({
+	completion = {
+		autocomplete = true,
 	},
-	TelescopePrompt = {},
-}
+	documentation = {
+		border = "rounded",
+	},
+	mapping = {
+		["<cr>"] = cmp.mapping.confirm({ select = true }),
+	},
+	sources = {
+		{ name = "nvim_lsp" },
+		{ name = "buffer" },
+	},
+	snippet = {
+		expand = function(args)
+			vim.fn["vsnip#anonymous"](args.body)
+		end,
+	},
+	formatting = {
+		format = function(entry, vim_item)
+			-- fancy icons and a name of kind
+			vim_item.kind = require("lspkind").presets.default[vim_item.kind] .. " " .. vim_item.kind
 
-g.completion_popup_border = "rounded"
-
-utils.map({
-	{ "i", "<C-j>", "<Plug>(completion_next_source)" },
-	{ "i", "<C-k>", "<Plug>(completion_prev_source)" },
-})
-
-utils.augroup("NvimCompletion", {
-	"BufEnter * lua require'completion'.on_attach()",
+			-- set a name for each source
+			vim_item.menu = ({
+				buffer = "[Buffer]",
+				nvim_lsp = "[LSP]",
+			})[entry.source.name]
+			return vim_item
+		end,
+	},
 })
 
 -- nvim-web-devicons
@@ -198,7 +209,6 @@ end
 local on_attach = function(client, bufnr)
 	-- setup lsp-status
 	lsp_status.on_attach(client, bufnr)
-	completion.on_attach(client, bufnr)
 	require("lspkind").init({})
 end
 
