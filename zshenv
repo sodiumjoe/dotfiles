@@ -1,7 +1,7 @@
 # since zshenv sets $ZDOTDIR, it needs to be symlinked directly from
 # $HOME/.zshenv
 export XDG_CONFIG_HOME=${HOME}/.config
-export ZDOTDIR=${XDG_CONFIG_HOME}/zsh
+ZDOTDIR=${XDG_CONFIG_HOME}/zsh
 
 # Start configuration added by Zim install {{{
 #
