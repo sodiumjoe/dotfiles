@@ -413,6 +413,7 @@ utils.map({
 
 utils.augroup("Vimwiki", {
 	"FileType vimwiki nmap <buffer> <leader>wn <Plug>VimwikiDiaryNextDay",
+	"FileType vimwiki lua require('cmp').setup.buffer { enabled = false }",
 })
 
 -- tree-sitter-markdown
