@@ -25,7 +25,7 @@ vim.fn["plug#"]("neovim/nvim-lspconfig")
 vim.fn["plug#"]("nvim-lua/lsp-status.nvim")
 vim.fn["plug#"]("nvim-lua/popup.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope.nvim")
-vim.fn["plug#"]("nvim-telescope/telescope-fzy-native.nvim")
+vim.fn["plug#"]("nvim-telescope/telescope-fzf-native.nvim", { ["do"] = 'make' })
 vim.fn["plug#"]("nvim-treesitter/nvim-treesitter", { branch = "0.5-compat", ["do"] = ":TSUpdate" })
 vim.fn["plug#"]("ikatyang/tree-sitter-markdown")
 vim.fn["plug#"]("norcalli/nvim-colorizer.lua")
@@ -336,7 +336,7 @@ telescope.setup({
 	},
 })
 
-telescope.load_extension("fzy_native")
+telescope.load_extension("fzf")
 
 utils.map({
 	{ "n", [[<leader>r]], [[<cmd>Telescope resume<cr>]] },
