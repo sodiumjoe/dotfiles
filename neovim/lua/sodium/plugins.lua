@@ -391,9 +391,7 @@ require("nvim-treesitter.configs").setup({
 
 -- vim-better-whitespace
 -- =====================
-require("sodium").highlight("ExtraWhitespace", "Error")
-
-utils.augroup("DisableBetterWhitespace", { "Filetype diff,gitcommit,qf,help,markdown DisableWhitespace" })
+utils.augroup("DisableBetterWhitespace", { "Filetype diff,gitcommit,qf,help,markdown,javascript DisableWhitespace" })
 
 -- vim-move
 -- ========
