@@ -284,18 +284,23 @@ utils.map({
 	-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
 	{ "n", "<space>ca", "<cmd>lua vim.lsp.buf.code_action()<cr>", opts },
 	{ "n", "gr", "<cmd>lua vim.lsp.buf.references()<cr>", opts },
-	{ "n", "<space>e", "<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<cr>", opts },
-	-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
+	{
+    "n",
+    "<space>ee",
+    "<cmd>lua vim.lsp.diagnostic.show_line_diagnostics({focusable=false, border='rounded'})<cr>",
+    opts,
+  },
 	{
 		"n",
 		"<leader>p",
-		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false},severity_limit=4})<cr>",
+	-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
+		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false, border='rounded'},severity_limit=4})<cr>",
 		opts,
 	},
 	{
 		"n",
 		"<leader>n",
-		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false},severity_limit=4})<cr>",
+		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false, border='rounded'},severity_limit=4})<cr>",
 		opts,
 	},
 	{ "n", "<space>q", "<cmd>lua toggle_quickfix()<cr>", opts },
