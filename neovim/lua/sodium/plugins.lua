@@ -149,6 +149,9 @@ g.lengthmatters_excluded = {
 	"gitcommit",
 	"json",
 	"vimwiki",
+  "javascript",
+  "javascript.jsx",
+  "lua",
 }
 
 -- lint
