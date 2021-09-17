@@ -55,13 +55,14 @@ require("gitsigns").setup()
 
 -- cmp
 -- ===
+local border = 'rounded'
 local cmp = require("cmp")
 cmp.setup({
 	completion = {
 		autocomplete = true,
 	},
 	documentation = {
-		border = "rounded",
+		border = border,
 	},
 	mapping = {
 		["<cr>"] = cmp.mapping.confirm({ select = true }),
@@ -195,6 +196,9 @@ utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua try_lint()" 
 -- =========
 local nvim_lsp = require("lspconfig")
 local lsp_status = require("lsp-status")
+
+vim.lsp.handlers["textDocument/hover"] =  vim.lsp.with(vim.lsp.handlers.hover, {border = border})
+vim.lsp.handlers["textDocument/signatureHelp"] =  vim.lsp.with(vim.lsp.handlers.signature_help, {border = border})
 
 function _G.toggle_quickfix()
 	for _, win in pairs(vim.fn.getwininfo()) do
