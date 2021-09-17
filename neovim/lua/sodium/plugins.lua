@@ -305,14 +305,11 @@ utils.augroup("Autoformat", {
 	"BufWritePre *.{js,ts,tsx,rs,go,lua} silent! Neoformat",
 })
 
+g.neoformat_try_node_exe = true
+
 g.neoformat_enabled_javascript = { "prettier" }
 g.neoformat_enabled_typescript = { "prettier" }
 g.neoformat_enabled_typescriptreact = { "prettier" }
-g.neoformat_javascript_prettier = {
-	exe = "npx",
-	args = { "prettier", "--stdin-filepath", "%:p" },
-	stdin = 1,
-}
 
 g.neoformat_typescriptreact_prettier = {
 	exe = "npx",
