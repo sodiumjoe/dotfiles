@@ -340,7 +340,7 @@ telescope.setup({
 telescope.load_extension("fzf")
 
 utils.map({
-	{ "n", [[<leader>r]], [[<cmd>Telescope resume<cr>]] },
+	{ "n", [[<leader>r]], [[<cmd>Telescope resume initial_mode=normal<cr>]] },
 	{ "n", [[<C-p>]], [[<cmd>Telescope find_files hidden=true<cr>]] },
 	{
 		"n",
