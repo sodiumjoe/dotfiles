@@ -25,7 +25,7 @@ vim.fn["plug#"]("neovim/nvim-lspconfig")
 vim.fn["plug#"]("nvim-lua/lsp-status.nvim")
 vim.fn["plug#"]("nvim-lua/popup.nvim")
 vim.fn["plug#"]("nvim-telescope/telescope.nvim")
-vim.fn["plug#"]("nvim-telescope/telescope-fzf-native.nvim", { ["do"] = 'make' })
+vim.fn["plug#"]("nvim-telescope/telescope-fzf-native.nvim", { ["do"] = "make" })
 vim.fn["plug#"]("nvim-treesitter/nvim-treesitter", { branch = "0.5-compat", ["do"] = ":TSUpdate" })
 vim.fn["plug#"]("ikatyang/tree-sitter-markdown")
 vim.fn["plug#"]("norcalli/nvim-colorizer.lua")
@@ -55,7 +55,7 @@ require("gitsigns").setup()
 
 -- cmp
 -- ===
-local border = 'rounded'
+local border = "rounded"
 local cmp = require("cmp")
 cmp.setup({
 	completion = {
@@ -197,8 +197,8 @@ utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua try_lint()" 
 local nvim_lsp = require("lspconfig")
 local lsp_status = require("lsp-status")
 
-vim.lsp.handlers["textDocument/hover"] =  vim.lsp.with(vim.lsp.handlers.hover, {border = border})
-vim.lsp.handlers["textDocument/signatureHelp"] =  vim.lsp.with(vim.lsp.handlers.signature_help, {border = border})
+vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, { border = border })
+vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.signature_help, { border = border })
 
 function _G.toggle_quickfix()
 	for _, win in pairs(vim.fn.getwininfo()) do
