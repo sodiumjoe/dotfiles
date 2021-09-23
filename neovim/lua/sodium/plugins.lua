@@ -45,6 +45,8 @@ vim.fn["plug#"]("whatyouhide/vim-lengthmatters")
 
 vim.fn["plug#end"]()
 
+g.popup_opts = { focusable = false, border = "rounded" }
+
 -- colorizer
 -- =========
 require("colorizer").setup()
@@ -55,15 +57,12 @@ require("gitsigns").setup()
 
 -- cmp
 -- ===
-local border = "rounded"
 local cmp = require("cmp")
 cmp.setup({
 	completion = {
 		autocomplete = true,
 	},
-	documentation = {
-		border = border,
-	},
+	documentation = g.popup_opts,
 	mapping = {
 		["<cr>"] = cmp.mapping.confirm({ select = true }),
 	},
@@ -149,9 +148,9 @@ g.lengthmatters_excluded = {
 	"gitcommit",
 	"json",
 	"vimwiki",
-  "javascript",
-  "javascript.jsx",
-  "lua",
+	"javascript",
+	"javascript.jsx",
+	"lua",
 }
 
 -- lint
@@ -200,8 +199,8 @@ utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua try_lint()" 
 local nvim_lsp = require("lspconfig")
 local lsp_status = require("lsp-status")
 
-vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, { border = border })
-vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.signature_help, { border = border })
+vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, g.popup_opts)
+vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.signature_help, g.popup_opts)
 
 function _G.toggle_quickfix()
 	for _, win in pairs(vim.fn.getwininfo()) do
@@ -285,22 +284,22 @@ utils.map({
 	{ "n", "<space>ca", "<cmd>lua vim.lsp.buf.code_action()<cr>", opts },
 	{ "n", "gr", "<cmd>lua vim.lsp.buf.references()<cr>", opts },
 	{
-    "n",
-    "<space>ee",
-    "<cmd>lua vim.lsp.diagnostic.show_line_diagnostics({focusable=false, border='rounded'})<cr>",
-    opts,
-  },
+		"n",
+		"<space>ee",
+		"<cmd>lua vim.lsp.diagnostic.show_line_diagnostics(vim.g.popup_opts)<cr>",
+		opts,
+	},
 	{
 		"n",
 		"<leader>p",
-	-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
-		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts={focusable=false, border='rounded'},severity_limit=4})<cr>",
+		-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
+		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts=vim.g.popup_opts,severity_limit=4})<cr>",
 		opts,
 	},
 	{
 		"n",
 		"<leader>n",
-		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts={focusable=false, border='rounded'},severity_limit=4})<cr>",
+		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts=vim.g.popup_opts,severity_limit=4})<cr>",
 		opts,
 	},
 	{ "n", "<space>q", "<cmd>lua toggle_quickfix()<cr>", opts },
