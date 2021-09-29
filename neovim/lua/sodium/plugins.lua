@@ -163,17 +163,24 @@ lint.linters_by_ft = {
 	typescript = { "eslint" },
 	typescriptreact = { "eslint" },
 	lua = { "luacheck" },
+  ruby = { "rubocop" },
 }
 
-local pattern = ".-:(%d+):(%d+):%s*(.*)%s*%[(.+)/(.+)%]"
-local groups = { "line", "start_col", "message", "severity", "code" }
-local severity_map = {
+local eslint_pattern = ".-:(%d+):(%d+):%s*(.*)%s*%[(.+)/(.+)%]"
+local eslint_groups = { "line", "start_col", "message", "severity", "code" }
+local eslint_severity_map = {
 	Error = vim.lsp.protocol.DiagnosticSeverity.Error,
 	Warning = vim.lsp.protocol.DiagnosticSeverity.Warning,
 }
-local parser_from_pattern = lint_parser.from_pattern(pattern, groups, severity_map, { source = "eslint" })
-local function parser(output, bufnr)
-	local diagnostics = parser_from_pattern(output, bufnr)
+local eslint_parser_from_pattern = lint_parser.from_pattern(
+  eslint_pattern,
+  eslint_groups,
+  eslint_severity_map,
+  { source = "eslint" }
+)
+
+local function eslint_parser(output, bufnr)
+	local diagnostics = eslint_parser_from_pattern(output, bufnr)
 	vim.cmd([[checktime]])
 	return diagnostics
 end
@@ -182,7 +189,34 @@ lint.linters.eslint = {
 	cmd = "npx",
 	args = { "eslint", "--no-color", "--fix", "--format", "unix" },
 	stream = "stdout",
-	parser = parser,
+	parser = eslint_parser,
+	ignore_exitcode = true,
+}
+
+-- W:437:  5: Lint/UselessAssignment: Useless assignment to variable - foo.
+local rubocop_pattern = "(.):(%d+):%s+(%d+):%s+(.*):%s+(.+)"
+local rubocop_groups = {"severity", "line", "start_col", "code", "message"}
+local rubocop_severity_map = {
+  I = vim.lsp.protocol.DiagnosticSeverity.Info,
+  R = vim.lsp.protocol.DiagnosticSeverity.Info,
+  C = vim.lsp.protocol.DiagnosticSeverity.Warning,
+  W = vim.lsp.protocol.DiagnosticSeverity.Warning,
+  E = vim.lsp.protocol.DiagnosticSeverity.Error,
+  F = vim.lsp.protocol.DiagnosticSeverity.Error,
+}
+
+local rubocop_parser = lint_parser.from_pattern(
+  rubocop_pattern,
+  rubocop_groups,
+  rubocop_severity_map,
+  { source = "rubocop" }
+)
+
+lint.linters.rubocop = {
+  cmd = "scripts/bin/rubocop-daemon/rubocop",
+  args = {"-f", "s", "--no-color"},
+  stream = "stdout",
+  parser = rubocop_parser,
 	ignore_exitcode = true,
 }
 
@@ -234,6 +268,7 @@ end
 nvim_lsp.sorbet.setup({
 	cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
 	filetypes = { "ruby" },
+  root_dir = nvim_lsp.util.root_pattern('.git'),
 })
 
 vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, _, params, client_id, _)
