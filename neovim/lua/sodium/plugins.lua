@@ -271,7 +271,7 @@ nvim_lsp.sorbet.setup({
 	root_dir = nvim_lsp.util.root_pattern(".git"),
 })
 
-vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, _, params, client_id, _)
+vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, result, context, _)
 	local config = {
 		underline = true,
 		virtual_text = {
@@ -281,26 +281,26 @@ vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, _, params, cli
 		signs = true,
 		update_in_insert = false,
 	}
-	local uri = params.uri
+	local uri = result.uri
 	local bufnr = vim.uri_to_bufnr(uri)
 
 	if not bufnr then
 		return
 	end
 
-	local diagnostics = params.diagnostics
+	local diagnostics = result.diagnostics
 
 	for i, v in ipairs(diagnostics) do
 		diagnostics[i].message = string.format("%s: %s [%s] ", v.source, v.message, v.code)
 	end
 
-	vim.lsp.diagnostic.save(diagnostics, bufnr, client_id)
+	vim.lsp.diagnostic.save(diagnostics, bufnr, context.client_id)
 
 	if not vim.api.nvim_buf_is_loaded(bufnr) then
 		return
 	end
 
-	vim.lsp.diagnostic.display(diagnostics, bufnr, client_id, config)
+	vim.lsp.diagnostic.display(diagnostics, bufnr, context.client_id, config)
 end
 
 for type, icon in pairs(utils.icons) do
