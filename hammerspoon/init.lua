@@ -262,8 +262,14 @@ local function layout()
 			layoutWin(zoom, 1, positions.bottomZoom)
 		end
 		zoom:focus()
+		if speakers then
+			speakers:setInputVolume(90)
+		end
 	else
 		layoutApp(chromeFilter, 1, positions.bottom)
+		if speakers then
+			speakers:setInputVolume(25)
+		end
 	end
 end
 
