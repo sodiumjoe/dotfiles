@@ -343,8 +343,14 @@ utils.map({
 
 -- neoformat
 -- =========
+function _G.neoformat()
+	if vim.fn.expand("%"):find("^fugitive:") == nil then
+		vim.api.nvim_command("Neoformat")
+	end
+end
+
 utils.augroup("Autoformat", {
-	"BufWritePre *.{js,ts,tsx,rs,go,lua} silent! Neoformat",
+	"BufWritePre *.{js,ts,tsx,rs,go,lua} silent! undojoin | lua neoformat()",
 })
 
 g.neoformat_try_node_exe = true
