@@ -15,12 +15,13 @@ vim.fn["plug#"]("hrsh7th/cmp-nvim-lsp")
 vim.fn["plug#"]("hrsh7th/cmp-buffer")
 vim.fn["plug#"]("hrsh7th/nvim-cmp")
 vim.fn["plug#"]("hrsh7th/vim-vsnip")
+vim.fn["plug#"]("jose-elias-alvarez/null-ls.nvim")
+vim.fn["plug#"]("jose-elias-alvarez/nvim-lsp-ts-utils")
 vim.fn["plug#"]("justinmk/vim-dirvish")
 vim.fn["plug#"]("kevinhwang91/nvim-hlslens")
 vim.fn["plug#"]("kyazdani42/nvim-web-devicons")
 vim.fn["plug#"]("lewis6991/gitsigns.nvim")
 vim.fn["plug#"]("matze/vim-move")
-vim.fn["plug#"]("mfussenegger/nvim-lint")
 vim.fn["plug#"]("neovim/nvim-lspconfig")
 vim.fn["plug#"]("nvim-lua/lsp-status.nvim")
 vim.fn["plug#"]("nvim-lua/popup.nvim")
@@ -33,7 +34,6 @@ vim.fn["plug#"]("onsails/lspkind-nvim")
 vim.fn["plug#"]("ntpeters/vim-better-whitespace")
 vim.fn["plug#"]("phaazon/hop.nvim")
 vim.fn["plug#"]("rhysd/conflict-marker.vim")
-vim.fn["plug#"]("sbdchd/neoformat")
 vim.fn["plug#"]("sodiumjoe/nvim-highlite")
 vim.fn["plug#"]("tpope/vim-commentary")
 vim.fn["plug#"]("tpope/vim-eunuch")
@@ -153,80 +153,37 @@ g.lengthmatters_excluded = {
 	"lua",
 }
 
--- lint
--- ====
-local lint = require("lint")
-local lint_parser = require("lint.parser")
-lint.linters_by_ft = {
-	javascript = { "eslint" },
-	["javascript.jsx"] = { "eslint" },
-	typescript = { "eslint" },
-	typescriptreact = { "eslint" },
-	lua = { "luacheck" },
-	ruby = { "rubocop" },
+-- null-ls
+-- =======
+local null_ls = require("null-ls")
+local null_ls_helpers = require("null-ls.helpers")
+
+local sources = {
+	null_ls.builtins.code_actions.gitsigns,
+	null_ls_helpers.conditional(function()
+		return vim.fn.executable("eslint_d") and null_ls.builtins.diagnostics.eslint_d
+			or vim.fn.executable("eslint") and null_ls.builtins.diagnostics.eslint
+	end),
+	null_ls.builtins.diagnostics.luacheck,
+	null_ls_helpers.conditional(function()
+		return vim.fn.executable("scripts/bin/rubocop-daemon/rubocop")
+				and null_ls.builtins.diagnostics.rubocop.with({
+					command = "scripts/bin/rubocop-daemon/rubocop",
+				})
+			or null_ls.builtins.diagnostics.rubocop
+	end),
+	null_ls_helpers.conditional(function()
+		return vim.fn.executable("eslint_d") and null_ls.builtins.formatting.eslint_d
+			or vim.fn.executable("eslint") and null_ls.builtins.formatting.eslint
+	end),
+	null_ls.builtins.formatting.prettier.with({
+    command = require("nvim-lsp-ts-utils.utils").resolve_bin_factory("prettier"),
+  }),
+	null_ls.builtins.formatting.stylua,
+	null_ls.builtins.formatting.rustfmt,
 }
 
-local eslint_pattern = ".-:(%d+):(%d+):%s*(.*)%s*%[(.+)/(.+)%]"
-local eslint_groups = { "line", "start_col", "message", "severity", "code" }
-local eslint_severity_map = {
-	Error = vim.lsp.protocol.DiagnosticSeverity.Error,
-	Warning = vim.lsp.protocol.DiagnosticSeverity.Warning,
-}
-local eslint_parser_from_pattern = lint_parser.from_pattern(
-	eslint_pattern,
-	eslint_groups,
-	eslint_severity_map,
-	{ source = "eslint" }
-)
-
-local function eslint_parser(output, bufnr)
-	local diagnostics = eslint_parser_from_pattern(output, bufnr)
-	vim.cmd([[checktime]])
-	return diagnostics
-end
-
-lint.linters.eslint = {
-	cmd = "npx",
-	args = { "eslint", "--no-color", "--fix", "--format", "unix" },
-	stream = "stdout",
-	parser = eslint_parser,
-	ignore_exitcode = true,
-}
-
--- W:437:  5: Lint/UselessAssignment: Useless assignment to variable - foo.
-local rubocop_pattern = "(.):(%d+):%s+(%d+):%s+(.*):%s+(.+)"
-local rubocop_groups = { "severity", "line", "start_col", "code", "message" }
-local rubocop_severity_map = {
-	I = vim.lsp.protocol.DiagnosticSeverity.Info,
-	R = vim.lsp.protocol.DiagnosticSeverity.Info,
-	C = vim.lsp.protocol.DiagnosticSeverity.Warning,
-	W = vim.lsp.protocol.DiagnosticSeverity.Warning,
-	E = vim.lsp.protocol.DiagnosticSeverity.Error,
-	F = vim.lsp.protocol.DiagnosticSeverity.Error,
-}
-
-local rubocop_parser = lint_parser.from_pattern(
-	rubocop_pattern,
-	rubocop_groups,
-	rubocop_severity_map,
-	{ source = "rubocop" }
-)
-
-lint.linters.rubocop = {
-	cmd = "scripts/bin/rubocop-daemon/rubocop",
-	args = { "-f", "s", "--no-color" },
-	stream = "stdout",
-	parser = rubocop_parser,
-	ignore_exitcode = true,
-}
-
-function _G.try_lint()
-	if lint.linters_by_ft[vim.bo.filetype] then
-		lint.try_lint()
-	end
-end
-
-utils.augroup("TryLint", { "BufWritePost,InsertLeave,BufEnter * lua try_lint()" })
+null_ls.config({ sources = sources })
 
 -- lspconfig
 -- =========
@@ -252,7 +209,7 @@ local on_attach = function(client, bufnr)
 	require("lspkind").init({})
 end
 
-local servers = { "flow", "rust_analyzer", "tsserver" }
+local servers = { "flow", "rust_analyzer", "tsserver", "null-ls" }
 
 for _, lsp in ipairs(servers) do
 	if nvim_lsp[lsp] then
@@ -341,33 +298,9 @@ utils.map({
 	{ "n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<cr>", opts },
 })
 
--- neoformat
--- =========
-function _G.neoformat()
-	if vim.fn.expand("%"):find("^fugitive:") == nil then
-		vim.api.nvim_command("Neoformat")
-	end
-end
-
 utils.augroup("Autoformat", {
-	"BufWritePre *.{js,ts,tsx,rs,go,lua} silent! undojoin | lua neoformat()",
+	"BufWritePre *.{js,ts,tsx,rs,go,lua} silent! undojoin | lua vim.lsp.buf.formatting_seq_sync()",
 })
-
-g.neoformat_try_node_exe = true
-
-g.neoformat_enabled_javascript = { "prettier" }
-g.neoformat_enabled_typescript = { "prettier" }
-g.neoformat_enabled_typescriptreact = { "prettier" }
-
-g.neoformat_typescriptreact_prettier = {
-	exe = "npx",
-	args = { "prettier", "--stdin", "--parser", "typescript" },
-	stdin = 1,
-}
-
-g.neoformat_enabled_rust = { "rustfmt" }
-g.neoformat_enabled_go = { "goimports", "gofmt" }
-g.neoformat_enabled_lua = { "stylua" }
 
 -- telescope
 -- =========
