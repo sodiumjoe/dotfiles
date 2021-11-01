@@ -13,6 +13,7 @@ vim.fn["plug#"]("editorconfig/editorconfig-vim")
 vim.fn["plug#"]("haya14busa/is.vim")
 vim.fn["plug#"]("hrsh7th/cmp-nvim-lsp")
 vim.fn["plug#"]("hrsh7th/cmp-buffer")
+vim.fn["plug#"]("hrsh7th/cmp-path")
 vim.fn["plug#"]("hrsh7th/nvim-cmp")
 vim.fn["plug#"]("hrsh7th/vim-vsnip")
 vim.fn["plug#"]("jose-elias-alvarez/null-ls.nvim")
@@ -59,34 +60,39 @@ require("gitsigns").setup()
 -- ===
 local cmp = require("cmp")
 cmp.setup({
-	completion = {
-		autocomplete = true,
-	},
 	documentation = g.popup_opts,
 	mapping = {
 		["<cr>"] = cmp.mapping.confirm({ select = true }),
 	},
-	sources = {
+	sources = cmp.config.sources({
+    {
+			name = "buffer",
+			opts = {
+				get_bufnrs = function()
+					local bufs = {}
+					for _, win in ipairs(vim.api.nvim_list_wins()) do
+						bufs[vim.api.nvim_win_get_buf(win)] = true
+					end
+					return vim.tbl_keys(bufs)
+				end,
+			},
+		},
 		{ name = "nvim_lsp" },
-		{ name = "buffer" },
-	},
+		{ name = "path" },
+	}),
 	snippet = {
 		expand = function(args)
 			vim.fn["vsnip#anonymous"](args.body)
 		end,
 	},
 	formatting = {
-		format = function(entry, vim_item)
-			-- fancy icons and a name of kind
-			vim_item.kind = require("lspkind").presets.default[vim_item.kind] .. " " .. vim_item.kind
-
-			-- set a name for each source
-			vim_item.menu = ({
+		format = require("lspkind").cmp_format({
+			with_text = false,
+			menu = {
 				buffer = "[Buffer]",
 				nvim_lsp = "[LSP]",
-			})[entry.source.name]
-			return vim_item
-		end,
+			},
+		}),
 	},
 })
 
@@ -177,8 +183,8 @@ local sources = {
 			or vim.fn.executable("eslint") and null_ls.builtins.formatting.eslint
 	end),
 	null_ls.builtins.formatting.prettier.with({
-    command = require("nvim-lsp-ts-utils.utils").resolve_bin_factory("prettier"),
-  }),
+		command = require("nvim-lsp-ts-utils.utils").resolve_bin_factory("prettier"),
+	}),
 	null_ls.builtins.formatting.stylua,
 	null_ls.builtins.formatting.rustfmt,
 }
