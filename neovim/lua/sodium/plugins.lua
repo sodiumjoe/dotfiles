@@ -65,9 +65,10 @@ cmp.setup({
 		["<cr>"] = cmp.mapping.confirm({ select = true }),
 	},
 	sources = cmp.config.sources({
-    {
+		{
 			name = "buffer",
 			opts = {
+				-- completion candidates from all open buffers
 				get_bufnrs = function()
 					local bufs = {}
 					for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -87,7 +88,6 @@ cmp.setup({
 	},
 	formatting = {
 		format = require("lspkind").cmp_format({
-			with_text = false,
 			menu = {
 				buffer = "[Buffer]",
 				nvim_lsp = "[LSP]",
@@ -164,28 +164,35 @@ g.lengthmatters_excluded = {
 local null_ls = require("null-ls")
 local null_ls_helpers = require("null-ls.helpers")
 
+-- in lua, `0` evaluates as truthy
+local function is_executable(bin)
+  return vim.fn.executable(bin) > 0
+end
+
 local sources = {
 	null_ls.builtins.code_actions.gitsigns,
 	null_ls_helpers.conditional(function()
-		return vim.fn.executable("eslint_d") and null_ls.builtins.diagnostics.eslint_d
-			or vim.fn.executable("eslint") and null_ls.builtins.diagnostics.eslint
+		return is_executable("eslint_d") and null_ls.builtins.diagnostics.eslint_d
+			or is_executable("eslint") and null_ls.builtins.diagnostics.eslint
 	end),
 	null_ls.builtins.diagnostics.luacheck,
 	null_ls_helpers.conditional(function()
-		return vim.fn.executable("scripts/bin/rubocop-daemon/rubocop")
+		return is_executable("scripts/bin/rubocop-daemon/rubocop")
 				and null_ls.builtins.diagnostics.rubocop.with({
 					command = "scripts/bin/rubocop-daemon/rubocop",
 				})
 			or null_ls.builtins.diagnostics.rubocop
 	end),
 	null_ls_helpers.conditional(function()
-		return vim.fn.executable("eslint_d") and null_ls.builtins.formatting.eslint_d
-			or vim.fn.executable("eslint") and null_ls.builtins.formatting.eslint
+		return is_executable("eslint_d") and null_ls.builtins.formatting.eslint_d
+			or is_executable("eslint") and null_ls.builtins.formatting.eslint
 	end),
 	null_ls.builtins.formatting.prettier.with({
 		command = require("nvim-lsp-ts-utils.utils").resolve_bin_factory("prettier"),
 	}),
-	null_ls.builtins.formatting.stylua,
+  null_ls_helpers.conditional(function()
+    return is_executable('stylua') and null_ls.builtins.formatting.stylua
+  end),
 	null_ls.builtins.formatting.rustfmt,
 }
 
@@ -215,7 +222,11 @@ local on_attach = function(client, bufnr)
 	require("lspkind").init({})
 end
 
-local servers = { "flow", "rust_analyzer", "tsserver", "null-ls" }
+local servers = { "flow", "rust_analyzer", "null-ls" }
+
+if is_executable('tsserver') then
+  table.insert(servers, "tsserver")
+end
 
 for _, lsp in ipairs(servers) do
 	if nvim_lsp[lsp] then
@@ -313,8 +324,8 @@ utils.augroup("Autoformat", {
 local telescope = require("telescope")
 telescope.setup({
 	defaults = {
-		prompt_prefix = "❯ ",
-		selection_caret = "➤ ",
+		prompt_prefix = "➤ ",
+		selection_caret = "  ",
 		vimgrep_arguments = {
 			"rg",
 			"--vimgrep",
