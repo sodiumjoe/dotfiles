@@ -221,10 +221,12 @@ local on_attach = function(client, bufnr)
 	require("lspkind").init({})
 end
 
-local servers = { "flow", "rust_analyzer", "null-ls" }
+local servers = { "null-ls" }
 
-if is_executable("tsserver") then
-	table.insert(servers, "tsserver")
+for _, lsp in ipairs({ "flow", "rust_analyzer", "tsserver" }) do
+	if is_executable(lsp) then
+		table.insert(servers, lsp)
+	end
 end
 
 for _, lsp in ipairs(servers) do
