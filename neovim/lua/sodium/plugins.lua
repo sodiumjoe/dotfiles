@@ -133,6 +133,8 @@ utils.map({
 
 -- hop
 -- ===
+require("hop").setup()
+
 utils.map({
 	{ "n", "<leader>ew", ":HopWord<cr>", opts },
 	{ "n", "<leader>e/", ":HopPattern<cr>", opts },
@@ -166,7 +168,7 @@ local null_ls_helpers = require("null-ls.helpers")
 
 -- in lua, `0` evaluates as truthy
 local function is_executable(bin)
-  return vim.fn.executable(bin) > 0
+	return vim.fn.executable(bin) > 0
 end
 
 local sources = {
@@ -190,9 +192,9 @@ local sources = {
 	null_ls.builtins.formatting.prettier.with({
 		command = require("nvim-lsp-ts-utils.utils").resolve_bin_factory("prettier"),
 	}),
-  null_ls_helpers.conditional(function()
-    return is_executable('stylua') and null_ls.builtins.formatting.stylua
-  end),
+	null_ls_helpers.conditional(function()
+		return is_executable("stylua") and null_ls.builtins.formatting.stylua
+	end),
 	null_ls.builtins.formatting.rustfmt,
 }
 
@@ -224,8 +226,8 @@ end
 
 local servers = { "flow", "rust_analyzer", "null-ls" }
 
-if is_executable('tsserver') then
-  table.insert(servers, "tsserver")
+if is_executable("tsserver") then
+	table.insert(servers, "tsserver")
 end
 
 for _, lsp in ipairs(servers) do
@@ -375,7 +377,7 @@ require("nvim-treesitter.configs").setup({
 		disable = {},
 	},
 	indent = {
-		enable = false,
+		enable = true,
 	},
 })
 
