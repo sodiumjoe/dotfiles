@@ -61,9 +61,6 @@ require("gitsigns").setup()
 local cmp = require("cmp")
 cmp.setup({
 	documentation = g.popup_opts,
-	mapping = {
-		["<cr>"] = cmp.mapping.confirm({ select = true }),
-	},
 	sources = cmp.config.sources({
 		{
 			name = "buffer",
