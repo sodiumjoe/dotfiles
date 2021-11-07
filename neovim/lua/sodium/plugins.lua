@@ -21,8 +21,8 @@ vim.fn["plug#"]("jose-elias-alvarez/nvim-lsp-ts-utils")
 vim.fn["plug#"]("justinmk/vim-dirvish")
 vim.fn["plug#"]("kevinhwang91/nvim-hlslens")
 vim.fn["plug#"]("kyazdani42/nvim-web-devicons")
-vim.fn["plug#"]("lewis6991/gitsigns.nvim")
 vim.fn["plug#"]("matze/vim-move")
+vim.fn["plug#"]("mhinz/vim-signify")
 vim.fn["plug#"]("neovim/nvim-lspconfig")
 vim.fn["plug#"]("nvim-lua/lsp-status.nvim")
 vim.fn["plug#"]("nvim-lua/popup.nvim")
@@ -52,9 +52,12 @@ g.popup_opts = { focusable = false, border = "rounded" }
 -- =========
 require("colorizer").setup()
 
--- gitsigns
--- ========
-require("gitsigns").setup()
+-- signify
+-- =======
+g.signify_sign_add = '│'
+g.signify_sign_change = '│'
+g.signify_sign_change_delete = '_│'
+g.signify_sign_show_count = 0
 
 -- cmp
 -- ===
@@ -169,7 +172,6 @@ local function is_executable(bin)
 end
 
 local sources = {
-	null_ls.builtins.code_actions.gitsigns,
 	null_ls_helpers.conditional(function()
 		return is_executable("eslint_d") and null_ls.builtins.diagnostics.eslint_d
 			or is_executable("eslint") and null_ls.builtins.diagnostics.eslint
