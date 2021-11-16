@@ -72,7 +72,12 @@ cmp.setup({
 				get_bufnrs = function()
 					local bufs = {}
 					for _, win in ipairs(vim.api.nvim_list_wins()) do
-						bufs[vim.api.nvim_win_get_buf(win)] = true
+						local buf_num = vim.api.nvim_win_get_buf(win)
+						local ft = vim.api.nvim_buf_get_option(buf_num, "filetype")
+						-- don't complete from json and graphql buffers
+						if ft ~= "json" and ft ~= "graphql" then
+							bufs[buf_num] = true
+						end
 					end
 					return vim.tbl_keys(bufs)
 				end,
