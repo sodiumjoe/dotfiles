@@ -54,9 +54,9 @@ require("colorizer").setup()
 
 -- signify
 -- =======
-g.signify_sign_add = '│'
-g.signify_sign_change = '│'
-g.signify_sign_change_delete = '_│'
+g.signify_sign_add = "│"
+g.signify_sign_change = "│"
+g.signify_sign_change_delete = "_│"
 g.signify_sign_show_count = 0
 
 -- cmp
@@ -223,16 +223,6 @@ local lsp_status = require("lsp-status")
 vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, g.popup_opts)
 vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.signature_help, g.popup_opts)
 
-function _G.toggle_quickfix()
-	for _, win in pairs(vim.fn.getwininfo()) do
-		if win.quickfix == 1 then
-			vim.cmd("lclose")
-			return
-		end
-	end
-	vim.lsp.diagnostic.set_loclist()
-end
-
 local on_attach = function(client, bufnr)
 	-- setup lsp-status
 	lsp_status.on_attach(client, bufnr)
@@ -301,6 +291,19 @@ for type, icon in pairs(utils.icons) do
 	vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
 end
 
+local project_diagnostics_map = {
+	["tsconfig.json"] = "tsc --noEmit --pretty false",
+}
+
+function _G.project_diagnostics()
+	for config_file, command in pairs(project_diagnostics_map) do
+		if require("lspconfig/util").root_pattern(config_file)(vim.fn.getcwd()) ~= nil then
+			vim.cmd([[cexpr! system(']] .. command .. [[')]])
+			require("telescope.builtin").quickfix()
+		end
+	end
+end
+
 -- See `:help vim.lsp.*` for documentation on any of the below functions
 utils.map({
 	{ "n", "gD", "<Cmd>lua vim.lsp.buf.declaration()<cr>", opts },
@@ -330,7 +333,7 @@ utils.map({
 		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts=vim.g.popup_opts,severity_limit=4})<cr>",
 		opts,
 	},
-	{ "n", "<space>q", "<cmd>lua toggle_quickfix()<cr>", opts },
+	{ "n", "<space>q", "<cmd>lua project_diagnostics()<cr>", opts },
 	{ "n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<cr>", opts },
 })
 
