@@ -178,16 +178,18 @@ end
 
 local sources = {
 	null_ls_helpers.conditional(function()
-    return is_executable("eslint_d") and null_ls.builtins.diagnostics.eslint_d.with({
-      cwd = function(params)
-        return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-      end
-    })
-    or is_executable("eslint") and null_ls.builtins.diagnostics.eslint.with({
-      cwd = function(params)
-        return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-      end
-    })
+		return is_executable("eslint_d")
+				and null_ls.builtins.diagnostics.eslint_d.with({
+					cwd = function(params)
+						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+					end,
+				})
+			or is_executable("eslint")
+				and null_ls.builtins.diagnostics.eslint.with({
+					cwd = function(params)
+						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+					end,
+				})
 	end),
 	null_ls.builtins.diagnostics.luacheck,
 	null_ls_helpers.conditional(function()
@@ -198,16 +200,18 @@ local sources = {
 			or null_ls.builtins.diagnostics.rubocop
 	end),
 	null_ls_helpers.conditional(function()
-    return is_executable("eslint_d") and null_ls.builtins.formatting.eslint_d.with({
-      cwd = function(params)
-        return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-      end
-    })
-    or is_executable("eslint") and null_ls.builtins.formatting.eslint.with({
-      cwd = function(params)
-        return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-      end
-    })
+		return is_executable("eslint_d")
+				and null_ls.builtins.formatting.eslint_d.with({
+					cwd = function(params)
+						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+					end,
+				})
+			or is_executable("eslint")
+				and null_ls.builtins.formatting.eslint.with({
+					cwd = function(params)
+						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+					end,
+				})
 	end),
 	null_ls.builtins.formatting.prettier.with({
 		command = require("nvim-lsp-ts-utils.utils").resolve_bin_factory("prettier"),
