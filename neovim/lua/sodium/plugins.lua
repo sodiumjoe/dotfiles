@@ -138,6 +138,7 @@ utils.map({
 -- hop
 -- ===
 require("hop").setup()
+vim.api.nvim_command([[hi clear HopUnmatched]])
 
 utils.map({
 	{ "n", "<leader>ew", ":HopWord<cr>", opts },
