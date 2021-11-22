@@ -296,14 +296,24 @@ for type, icon in pairs(utils.icons) do
 end
 
 local project_diagnostics_map = {
-	["tsconfig.json"] = "tsc --noEmit --pretty false",
+	["tsconfig.json"] = {
+    "tsc --noEmit --pretty false",
+    [[,%f(%l\,%c): %t%*\w %m]]
+  },
+	[".flowconfig"] = {
+    "./node_modules/.bin/flow --quiet --unicode=never",
+    [[%E%>Error -%\\+ %f:%l:%c,%-G%\\s%\\*,%-G%.%#]]
+  },
 }
 
 function _G.project_diagnostics()
-	for config_file, command in pairs(project_diagnostics_map) do
+	for config_file, config in pairs(project_diagnostics_map) do
 		if require("lspconfig/util").root_pattern(config_file)(vim.fn.getcwd()) ~= nil then
-			vim.cmd([[cexpr! system(']] .. command .. [[')]])
+      local errorformat = vim.o.errorformat
+      vim.o.errorformat = config[2]
+			vim.cmd([[cexpr! system(']] .. config[1] .. [[')]])
 			require("telescope.builtin").quickfix()
+      vim.o.errorformat = errorformat
 		end
 	end
 end

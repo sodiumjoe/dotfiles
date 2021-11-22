@@ -25,9 +25,6 @@ if vim.fn.executable("rg") then
 	o.grepformat = [[%f:%l:%c:%m,%f:%l:%m]]
 end
 
--- error format for typescript `tsc --noEmit --pretty false`
-o.errorformat = o.errorformat .. [[,%f(%l\,%c): %t%*\w %m]]
-
 -- display
 -- =======
 o.guifont = [[Inconsolata:h16]]
