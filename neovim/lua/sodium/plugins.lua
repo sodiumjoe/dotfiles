@@ -17,7 +17,6 @@ vim.fn["plug#"]("hrsh7th/cmp-path")
 vim.fn["plug#"]("hrsh7th/nvim-cmp")
 vim.fn["plug#"]("hrsh7th/vim-vsnip")
 vim.fn["plug#"]("jose-elias-alvarez/null-ls.nvim")
-vim.fn["plug#"]("jose-elias-alvarez/nvim-lsp-ts-utils")
 vim.fn["plug#"]("justinmk/vim-dirvish")
 vim.fn["plug#"]("kevinhwang91/nvim-hlslens")
 vim.fn["plug#"]("kyazdani42/nvim-web-devicons")
@@ -186,9 +185,7 @@ local sources = {
 				})
 			or is_executable("eslint")
 				and null_ls.builtins.diagnostics.eslint.with({
-					cwd = function(params)
-						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-					end,
+					prefer_local = "node_modules/.bin",
 				})
 	end),
 	null_ls.builtins.diagnostics.luacheck,
@@ -208,13 +205,11 @@ local sources = {
 				})
 			or is_executable("eslint")
 				and null_ls.builtins.formatting.eslint.with({
-					cwd = function(params)
-						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-					end,
+					prefer_local = "node_modules/.bin",
 				})
 	end),
 	null_ls.builtins.formatting.prettier.with({
-		command = require("nvim-lsp-ts-utils.utils").resolve_bin_factory("prettier"),
+		prefer_local = "node_modules/.bin",
 	}),
 	null_ls_helpers.conditional(function()
 		return is_executable("stylua") and null_ls.builtins.formatting.stylua
