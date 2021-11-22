@@ -237,23 +237,23 @@ end
 local servers = { "null-ls" }
 
 for _, lsp in ipairs({
-  {
-    executable = "rust_analyzer",
-    root_pattern = "cargo.toml",
-    config_file = "cargo.toml",
-  },
-  {
-    executable = "tsserver",
-    root_pattern = "package.json",
-    config_file = "tsconfig.json",
-  },
-  {
-    executable = "flow",
-    root_pattern = "package.json",
-    config_file = ".flowconfig",
-  }
+	{
+		executable = "rust_analyzer",
+		root_pattern = "cargo.toml",
+		config_file = "cargo.toml",
+	},
+	{
+		executable = "tsserver",
+		root_pattern = "package.json",
+		config_file = "tsconfig.json",
+	},
+	{
+		executable = "flow",
+		root_pattern = "package.json",
+		config_file = ".flowconfig",
+	},
 }) do
-  if utils.is_project_local(lsp.root_pattern, lsp.config_file) then
+	if utils.is_project_local(lsp.root_pattern, lsp.config_file) then
 		table.insert(servers, lsp.executable)
 	end
 end

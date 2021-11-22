@@ -23,9 +23,9 @@ M.icons = {
 }
 
 function M.is_project_local(root_pattern, config_file)
-  local lspconfigUtil = require("lspconfig/util")
-  local buf_name = vim.api.nvim_buf_get_name('%')
-  return lspconfigUtil.root_pattern(root_pattern)(buf_name) == lspconfigUtil.root_pattern(config_file)(buf_name)
+	local lspconfigUtil = require("lspconfig/util")
+	local buf_name = vim.api.nvim_buf_get_name("%")
+	return lspconfigUtil.root_pattern(root_pattern)(buf_name) == lspconfigUtil.root_pattern(config_file)(buf_name)
 end
 
 return M
