@@ -137,7 +137,7 @@ utils.map({
 
 -- hop
 -- ===
-require("hop").setup()
+require("hop").setup({ create_hl_autocmd = false })
 vim.api.nvim_command([[hi clear HopUnmatched]])
 
 utils.map({
