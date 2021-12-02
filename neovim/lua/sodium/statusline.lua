@@ -12,7 +12,7 @@ local highlights = {
 local icons = {
 	error = utils.icons.Error,
 	warning = utils.icons.Warning,
-	info = utils.icons.Information,
+	info = utils.icons.Info,
 	hint = utils.icons.Hint,
 	ok = "☑",
 }

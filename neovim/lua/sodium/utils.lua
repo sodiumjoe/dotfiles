@@ -19,7 +19,7 @@ M.icons = {
 	Error = " ",
 	Warning = " ",
 	Hint = " ",
-	Information = " ",
+	Info = " ",
 }
 
 function M.is_project_local(root_pattern, config_file)

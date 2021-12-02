@@ -10,6 +10,7 @@ vim.fn["plug#"]("nvim-lua/plenary.nvim")
 vim.fn["plug#"]("benizi/vim-automkdir")
 vim.fn["plug#"]("christoomey/vim-tmux-navigator")
 vim.fn["plug#"]("editorconfig/editorconfig-vim")
+vim.fn["plug#"]("folke/trouble.nvim")
 vim.fn["plug#"]("haya14busa/is.vim")
 vim.fn["plug#"]("hrsh7th/cmp-nvim-lsp")
 vim.fn["plug#"]("hrsh7th/cmp-buffer")
@@ -45,7 +46,10 @@ vim.fn["plug#"]("whatyouhide/vim-lengthmatters")
 
 vim.fn["plug#end"]()
 
-g.popup_opts = { focusable = false, border = "rounded" }
+g.popup_opts = {
+	focusable = false,
+	border = "rounded",
+}
 
 -- colorizer
 -- =========
@@ -66,7 +70,7 @@ cmp.setup({
 	sources = cmp.config.sources({
 		{
 			name = "buffer",
-			opts = {
+			option = {
 				-- completion candidates from all open buffers
 				get_bufnrs = function()
 					local bufs = {}
@@ -225,6 +229,28 @@ null_ls.config({ sources = sources })
 local nvim_lsp = require("lspconfig")
 local lsp_status = require("lsp-status")
 
+vim.diagnostic.config({
+	signs = { priority = 11 },
+	virtual_text = false,
+	update_in_insert = false,
+	float = {
+		focusable = g.popup_opts.focusable,
+		border = g.popup_opts.border,
+		format = function(diagnostic)
+			local str = string.format("[%s] %s", diagnostic.source, diagnostic.message)
+			if diagnostic.code then
+				str = str .. " (" .. diagnostic.code .. ")"
+			end
+			return str
+		end,
+	},
+})
+
+for type, icon in pairs(utils.icons) do
+	local hl = "DiagnosticSign" .. type
+	vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
+end
+
 vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, g.popup_opts)
 vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.signature_help, g.popup_opts)
 
@@ -275,43 +301,6 @@ nvim_lsp.sorbet.setup({
 	root_dir = nvim_lsp.util.root_pattern(".git"),
 })
 
-vim.lsp.handlers["textDocument/publishDiagnostics"] = function(_, result, context, _)
-	local config = {
-		underline = true,
-		virtual_text = {
-			prefix = " 💩",
-			spacing = 4,
-		},
-		signs = true,
-		update_in_insert = false,
-	}
-	local uri = result.uri
-	local bufnr = vim.uri_to_bufnr(uri)
-
-	if not bufnr then
-		return
-	end
-
-	local diagnostics = result.diagnostics
-
-	for i, v in ipairs(diagnostics) do
-		diagnostics[i].message = string.format("%s: %s [%s] ", v.source, v.message, v.code)
-	end
-
-	vim.lsp.diagnostic.save(diagnostics, bufnr, context.client_id)
-
-	if not vim.api.nvim_buf_is_loaded(bufnr) then
-		return
-	end
-
-	vim.lsp.diagnostic.display(diagnostics, bufnr, context.client_id, config)
-end
-
-for type, icon in pairs(utils.icons) do
-	local hl = "LspDiagnosticsSign" .. type
-	vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
-end
-
 local project_diagnostics_map = {
 	["tsconfig.json"] = {
 		"tsc --noEmit --pretty false",
@@ -348,20 +337,20 @@ utils.map({
 	{
 		"n",
 		"<space>ee",
-		"<cmd>lua vim.lsp.diagnostic.show_line_diagnostics(vim.g.popup_opts)<cr>",
+		"<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<cr>",
 		opts,
 	},
 	{
 		"n",
 		"<leader>p",
 		-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
-		"<cmd>lua vim.lsp.diagnostic.goto_prev({popup_opts=vim.g.popup_opts,severity_limit=4})<cr>",
+		"<cmd>lua vim.diagnostic.goto_prev()<cr>",
 		opts,
 	},
 	{
 		"n",
 		"<leader>n",
-		"<cmd>lua vim.lsp.diagnostic.goto_next({popup_opts=vim.g.popup_opts,severity_limit=4})<cr>",
+		"<cmd>lua vim.diagnostic.goto_next()<cr>",
 		opts,
 	},
 	{ "n", "<space>q", "<cmd>lua project_diagnostics()<cr>", opts },
