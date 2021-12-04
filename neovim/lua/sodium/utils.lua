@@ -17,7 +17,7 @@ end
 
 M.icons = {
 	Error = " ",
-	Warning = " ",
+	Warn = " ",
 	Hint = " ",
 	Info = " ",
 }
