@@ -11,7 +11,7 @@ local highlights = {
 
 local icons = {
 	error = utils.icons.Error,
-	warning = utils.icons.Warning,
+	warning = utils.icons.Warn,
 	info = utils.icons.Info,
 	hint = utils.icons.Hint,
 	ok = "☑",
