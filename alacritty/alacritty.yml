@@ -824,7 +824,7 @@ key_bindings:
   - { key: N,mods: Command|Control, chars: "\x01\x0E",                       } # <C-a><C-n>
   - { key: P,mods: Command|Control, chars: "\x01\x10",                       } # <C-a><C-p>
   - { key: J,mods: Command|Control, chars: "\x01n",                          } # <C-a>n
-  - { key: N,mods: Command, action: "SpawnNewInstance",                          } # <C-a>n
+  - { key: N,mods: Command, action: "CreateNewWindow",                       }
 
 #debug:
   # Display the time it takes to redraw each frame.
