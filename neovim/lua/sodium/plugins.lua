@@ -174,7 +174,6 @@ g.lengthmatters_excluded = {
 -- null-ls
 -- =======
 local null_ls = require("null-ls")
-local null_ls_helpers = require("null-ls.helpers")
 
 -- in lua, `0` evaluates as truthy
 local function is_executable(bin)
@@ -182,48 +181,63 @@ local function is_executable(bin)
 end
 
 local sources = {
-	null_ls_helpers.conditional(function()
-		return is_executable("eslint_d")
-				and null_ls.builtins.diagnostics.eslint_d.with({
-					cwd = function(params)
-						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-					end,
-				})
-			or is_executable("eslint")
-				and null_ls.builtins.diagnostics.eslint.with({
-					prefer_local = "node_modules/.bin",
-				})
-	end),
-	null_ls.builtins.diagnostics.luacheck,
-	null_ls_helpers.conditional(function()
-		return is_executable("scripts/bin/rubocop-daemon/rubocop")
-				and null_ls.builtins.diagnostics.rubocop.with({
-					command = "scripts/bin/rubocop-daemon/rubocop",
-				})
-			or null_ls.builtins.diagnostics.rubocop
-	end),
-	null_ls_helpers.conditional(function()
-		return is_executable("eslint_d")
-				and null_ls.builtins.formatting.eslint_d.with({
-					cwd = function(params)
-						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-					end,
-				})
-			or is_executable("eslint")
-				and null_ls.builtins.formatting.eslint.with({
-					prefer_local = "node_modules/.bin",
-				})
-	end),
-	null_ls.builtins.formatting.prettier.with({
-		prefer_local = "node_modules/.bin",
-	}),
-	null_ls_helpers.conditional(function()
-		return is_executable("stylua") and null_ls.builtins.formatting.stylua
-	end),
-	null_ls.builtins.formatting.rustfmt,
-}
+  null_ls.builtins.diagnostics.eslint_d.with({
+    condition = function()
+      return is_executable("eslint_d")
+    end,
+    cwd = function(params)
+      return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+    end,
+  }),
+  null_ls.builtins.diagnostics.eslint.with({
+    condition = function()
+      return is_executable("eslint") and not is_executable("eslint_d")
+    end,
+    prefer_local = true,
+  }),
+  null_ls.builtins.diagnostics.luacheck,
+  null_ls.builtins.diagnostics.rubocop.with({
+    condition = function()
+      return is_executable("scripts/bin/rubocop-daemon/rubocop")
+    end,
+    command = "scripts/bin/rubocop-daemon/rubocop",
+  }),
+  null_ls.builtins.formatting.eslint_d.with({
+    condition = function()
+      return is_executable("eslint_d")
+    end,
+    cwd = function(params)
+      return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+    end,
+  }),
+  null_ls.builtins.formatting.eslint.with({
+    condition = function()
+      return is_executable("eslint") and not is_executable("eslint_d")
+    end,
+    prefer_local = true,
+  }),
+  null_ls.builtins.formatting.stylua.with({
+    condition = function()
+      return is_executable("stylua")
+    end
+  }),
+  null_ls.builtins.formatting.rustfmt,
+};
 
-null_ls.config({ sources = sources })
+null_ls.setup({
+  sources = sources,
+  on_attach = function(client)
+    -- setup lsp-status
+    if client.resolved_capabilities.document_formatting then
+        vim.cmd([[
+        augroup LspFormatting
+            autocmd! * <buffer>
+            autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
+        augroup END
+        ]])
+    end
+  end
+})
 
 -- lspconfig
 -- =========
@@ -257,11 +271,19 @@ vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.s
 
 local on_attach = function(client, bufnr)
 	-- setup lsp-status
+  if client.resolved_capabilities.document_formatting then
+      vim.cmd([[
+      augroup LspFormatting
+          autocmd! * <buffer>
+          autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
+      augroup END
+      ]])
+  end
 	lsp_status.on_attach(client, bufnr)
 	require("lspkind").init({})
 end
 
-local servers = { "null-ls" }
+local servers = {}
 
 for _, lsp in ipairs({
 	{
@@ -302,27 +324,9 @@ nvim_lsp.sorbet.setup({
 	root_dir = nvim_lsp.util.root_pattern(".git"),
 })
 
-local project_diagnostics_map = {
-	["tsconfig.json"] = {
-		"tsc --noEmit --pretty false",
-		[[,%f(%l\,%c): %t%*\w %m]],
-	},
-	[".flowconfig"] = {
-		"./node_modules/.bin/flow --quiet --unicode=never",
-		[[%E%>Error -%\\+ %f:%l:%c,%-G%\\s%\\*,%-G%.%#]],
-	},
-}
-
 function _G.project_diagnostics()
-	for config_file, config in pairs(project_diagnostics_map) do
-		if require("lspconfig/util").root_pattern(config_file)(vim.fn.getcwd()) ~= nil then
-			local errorformat = vim.o.errorformat
-			vim.o.errorformat = config[2]
-			vim.cmd([[cexpr! system(']] .. config[1] .. [[')]])
-			require("telescope.builtin").quickfix()
-			vim.o.errorformat = errorformat
-		end
-	end
+  vim.diagnostic.setqflist({open = false})
+  require('telescope.builtin').quickfix({initial_mode='normal'})
 end
 
 -- See `:help vim.lsp.*` for documentation on any of the below functions
@@ -358,16 +362,11 @@ utils.map({
 	{ "n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<cr>", opts },
 })
 
-utils.augroup("Autoformat", {
-	"BufWritePre *.{js,ts,tsx,rs,go,lua} silent! undojoin | lua vim.lsp.buf.formatting_seq_sync()",
-})
-
 -- telescope
 -- =========
 local telescope = require("telescope")
 telescope.setup({
 	defaults = {
-		prompt_prefix = "➤ ",
 		selection_caret = "  ",
 		vimgrep_arguments = {
 			"rg",
@@ -416,9 +415,6 @@ require("nvim-treesitter.configs").setup({
 	highlight = {
 		enable = true,
 		disable = {},
-	},
-	indent = {
-		enable = true,
 	},
 })
 
