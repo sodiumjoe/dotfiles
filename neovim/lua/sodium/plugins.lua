@@ -412,6 +412,8 @@ utils.map({
 -- ===============
 require("nvim-treesitter.configs").setup({
 	ensure_installed = "maintained",
+  -- https://github.com/nvim-treesitter/nvim-treesitter/issues/1313
+  ignore_install = { "comment", "jsdoc" },
 	highlight = {
 		enable = true,
 		disable = {},
