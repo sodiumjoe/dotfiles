@@ -181,62 +181,62 @@ local function is_executable(bin)
 end
 
 local sources = {
-  null_ls.builtins.diagnostics.eslint_d.with({
-    condition = function()
-      return is_executable("eslint_d")
-    end,
-    cwd = function(params)
-      return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-    end,
-  }),
-  null_ls.builtins.diagnostics.eslint.with({
-    condition = function()
-      return is_executable("eslint") and not is_executable("eslint_d")
-    end,
-    prefer_local = true,
-  }),
-  null_ls.builtins.diagnostics.luacheck,
-  null_ls.builtins.diagnostics.rubocop.with({
-    condition = function()
-      return is_executable("scripts/bin/rubocop-daemon/rubocop")
-    end,
-    command = "scripts/bin/rubocop-daemon/rubocop",
-  }),
-  null_ls.builtins.formatting.eslint_d.with({
-    condition = function()
-      return is_executable("eslint_d")
-    end,
-    cwd = function(params)
-      return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-    end,
-  }),
-  null_ls.builtins.formatting.eslint.with({
-    condition = function()
-      return is_executable("eslint") and not is_executable("eslint_d")
-    end,
-    prefer_local = true,
-  }),
-  null_ls.builtins.formatting.stylua.with({
-    condition = function()
-      return is_executable("stylua")
-    end
-  }),
-  null_ls.builtins.formatting.rustfmt,
-};
+	null_ls.builtins.diagnostics.eslint_d.with({
+		condition = function()
+			return is_executable("eslint_d")
+		end,
+		cwd = function(params)
+			return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+		end,
+	}),
+	null_ls.builtins.diagnostics.eslint.with({
+		condition = function()
+			return is_executable("eslint") and not is_executable("eslint_d")
+		end,
+		prefer_local = true,
+	}),
+	null_ls.builtins.diagnostics.luacheck,
+	null_ls.builtins.diagnostics.rubocop.with({
+		condition = function()
+			return is_executable("scripts/bin/rubocop-daemon/rubocop")
+		end,
+		command = "scripts/bin/rubocop-daemon/rubocop",
+	}),
+	null_ls.builtins.formatting.eslint_d.with({
+		condition = function()
+			return is_executable("eslint_d")
+		end,
+		cwd = function(params)
+			return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+		end,
+	}),
+	null_ls.builtins.formatting.eslint.with({
+		condition = function()
+			return is_executable("eslint") and not is_executable("eslint_d")
+		end,
+		prefer_local = true,
+	}),
+	null_ls.builtins.formatting.stylua.with({
+		condition = function()
+			return is_executable("stylua")
+		end,
+	}),
+	null_ls.builtins.formatting.rustfmt,
+}
 
 null_ls.setup({
-  sources = sources,
-  on_attach = function(client)
-    -- setup lsp-status
-    if client.resolved_capabilities.document_formatting then
-        vim.cmd([[
+	sources = sources,
+	on_attach = function(client)
+		-- setup lsp-status
+		if client.resolved_capabilities.document_formatting then
+			vim.cmd([[
         augroup LspFormatting
             autocmd! * <buffer>
             autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
         augroup END
         ]])
-    end
-  end
+		end
+	end,
 })
 
 -- lspconfig
@@ -271,14 +271,14 @@ vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.s
 
 local on_attach = function(client, bufnr)
 	-- setup lsp-status
-  if client.resolved_capabilities.document_formatting then
-      vim.cmd([[
+	if client.resolved_capabilities.document_formatting then
+		vim.cmd([[
       augroup LspFormatting
           autocmd! * <buffer>
           autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
       augroup END
       ]])
-  end
+	end
 	lsp_status.on_attach(client, bufnr)
 	require("lspkind").init({})
 end
@@ -325,8 +325,8 @@ nvim_lsp.sorbet.setup({
 })
 
 function _G.project_diagnostics()
-  vim.diagnostic.setqflist({open = false})
-  require('telescope.builtin').quickfix({initial_mode='normal'})
+	vim.diagnostic.setqflist({ open = false })
+	require("telescope.builtin").quickfix({ initial_mode = "normal" })
 end
 
 -- See `:help vim.lsp.*` for documentation on any of the below functions
@@ -412,8 +412,8 @@ utils.map({
 -- ===============
 require("nvim-treesitter.configs").setup({
 	ensure_installed = "maintained",
-  -- https://github.com/nvim-treesitter/nvim-treesitter/issues/1313
-  ignore_install = { "comment", "jsdoc" },
+	-- https://github.com/nvim-treesitter/nvim-treesitter/issues/1313
+	ignore_install = { "comment", "jsdoc" },
 	highlight = {
 		enable = true,
 		disable = {},
