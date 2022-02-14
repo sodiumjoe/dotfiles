@@ -171,7 +171,11 @@ function zle-keymap-select {
     if [[ ${KEYMAP} == vicmd ]] || [[ $1 = 'block' ]]; then
         >$TTY echo -ne '\e[2 q'
     elif [[ ${KEYMAP} == main ]] || [[ ${KEYMAP} == viins ]] || [[ ${KEYMAP} = '' ]] || [[ $1 = 'beam' ]]; then
+      if [[ ${ZLE_STATE} =~ "insert" ]]; then
         >$TTY echo -ne '\e[6 q'
+      else
+        >$TTY echo -ne '\e[4 q'
+      fi
     fi
 }
 
