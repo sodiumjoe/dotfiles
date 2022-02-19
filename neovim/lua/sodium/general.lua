@@ -76,6 +76,18 @@ vim.api.nvim_exec(
 	false
 )
 
+function _G.get_lg_url()
+  local stripe_dir = vim.fn.expand("~/stripe")
+  local full_path = vim.api.nvim_buf_get_name(0)
+  local line_number = vim.fn.line(".")
+  if string.find(full_path, stripe_dir) then
+    local path = string.gsub(full_path, stripe_dir, "")
+    local lg_path = string.format([[http://go/lg-view/%s/\\#L%s]], path, line_number)
+    vim.cmd([[silent exec "!open ']] .. lg_path .. [['"]])
+  end
+
+end
+
 utils.map({
 	-- copy relative path to clipboard
 	{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]], { silent = true } },
@@ -85,6 +97,7 @@ utils.map({
 	-- { "n", [[<leader>d]], [["_d]], { noremap = true } },
 	-- { "x", [[<leader>d]], [["_d]], { noremap = true } },
 	-- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
+	{ "n", [[<leader>l]], "<Cmd> lua get_lg_url()<cr>", { silent = true } },
 
 	-- movement
 	{ "n", "j", "gj", { noremap = true } },
