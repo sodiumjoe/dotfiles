@@ -269,53 +269,48 @@ end
 vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, g.popup_opts)
 vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.signature_help, g.popup_opts)
 
-local on_attach = function(client, bufnr)
-	-- setup lsp-status
-	if client.resolved_capabilities.document_formatting then
-		vim.cmd([[
-      augroup LspFormatting
-          autocmd! * <buffer>
-          autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
-      augroup END
-      ]])
-	end
-	lsp_status.on_attach(client, bufnr)
-	require("lspkind").init({})
-end
-
 local servers = {}
 
-for _, lsp in ipairs({
-	{
-		executable = "rust_analyzer",
+for lsp, options in pairs({
+	rust_analyzer = {
 		root_pattern = "cargo.toml",
 		config_file = "cargo.toml",
 	},
-	{
-		executable = "tsserver",
+	tsserver = {
 		root_pattern = "package.json",
 		config_file = "tsconfig.json",
+    disable_formatting = true,
 	},
-	{
-		executable = "flow",
+	flow = {
 		root_pattern = "package.json",
 		config_file = ".flowconfig",
 	},
 }) do
-	if utils.is_project_local(lsp.root_pattern, lsp.config_file) then
-		table.insert(servers, lsp.executable)
-	end
-end
+  local on_attach = function(client, bufnr)
+    -- setup lsp-status
+    if options.disable_formatting then
+      client.resolved_capabilities.document_formatting = false
+    end
+    if client.resolved_capabilities.document_formatting then
+      vim.cmd([[
+        augroup LspFormatting
+            autocmd! * <buffer>
+            autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
+        augroup END
+        ]])
+    end
+    lsp_status.on_attach(client, bufnr)
+    require("lspkind").init({})
+  end
 
-for _, lsp in ipairs(servers) do
-	if nvim_lsp[lsp] then
-		nvim_lsp[lsp].setup({
-			on_attach = on_attach,
-			flags = {
-				debounce_text_changes = 150,
-			},
-		})
-	end
+  if nvim_lsp[lsp] and utils.is_project_local(options.root_pattern, options.config_file) then
+    nvim_lsp[lsp].setup({
+      on_attach = on_attach,
+      flags = {
+        debounce_text_changes = 150,
+      },
+    })
+  end
 end
 
 nvim_lsp.sorbet.setup({
