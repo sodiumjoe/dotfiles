@@ -271,53 +271,45 @@ vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.s
 
 local servers = {}
 
-for lsp, options in pairs({
-	rust_analyzer = {
-		root_pattern = "cargo.toml",
-		config_file = "cargo.toml",
-	},
-	tsserver = {
-		root_pattern = "package.json",
-		config_file = "tsconfig.json",
-    disable_formatting = true,
-	},
-	flow = {
-		root_pattern = "package.json",
-		config_file = ".flowconfig",
-	},
-}) do
-  local on_attach = function(client, bufnr)
-    -- setup lsp-status
-    if options.disable_formatting then
-      client.resolved_capabilities.document_formatting = false
-    end
-    if client.resolved_capabilities.document_formatting then
-      vim.cmd([[
+local on_attach = function(client, bufnr)
+	if client.resolved_capabilities.document_formatting then
+		vim.cmd([[
         augroup LspFormatting
             autocmd! * <buffer>
             autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
         augroup END
         ]])
-    end
-    lsp_status.on_attach(client, bufnr)
-    require("lspkind").init({})
-  end
-
-  if nvim_lsp[lsp] and utils.is_project_local(options.root_pattern, options.config_file) then
-    nvim_lsp[lsp].setup({
-      on_attach = on_attach,
-      flags = {
-        debounce_text_changes = 150,
-      },
-    })
-  end
+	end
+	lsp_status.on_attach(client, bufnr)
+	require("lspkind").init({})
 end
 
-nvim_lsp.sorbet.setup({
-	cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
-	filetypes = { "ruby" },
-	root_dir = nvim_lsp.util.root_pattern(".git"),
-})
+for lsp, options in pairs({
+	rust_analyzer = {},
+	tsserver = {
+		on_attach = function(client, bufnr)
+			client.resolved_capabilities.document_formatting = false
+			on_attach(client, bufnr)
+		end,
+	},
+	sorbet = {
+		cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
+	},
+	flow = {},
+}) do
+	local setup_options = {
+		on_attach = options.on_attach || on_attach,
+		flags = {
+			debounce_text_changes = 150,
+		},
+	}
+
+	if options.cmd then
+		setup_options.cmd = options.cmd
+	end
+
+	nvim_lsp[lsp].setup(setup_options)
+end
 
 function _G.project_diagnostics()
 	vim.diagnostic.setqflist({ open = false })
