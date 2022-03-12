@@ -284,33 +284,34 @@ local on_attach = function(client, bufnr)
 	require("lspkind").init({})
 end
 
-for lsp, options in pairs({
+local servers = {
 	rust_analyzer = {},
 	tsserver = {
-    cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192"},
+		cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192" },
 		on_attach = function(client, bufnr)
 			client.resolved_capabilities.document_formatting = false
 			on_attach(client, bufnr)
 		end,
-    init_options = {
-      maxTsServerMemory = "8192"
-    },
-    filetypes = { "typescript", "typescriptreact", "typescript.tsx" }
+		init_options = {
+			maxTsServerMemory = "8192",
+		},
+		filetypes = { "typescript", "typescriptreact", "typescript.tsx" },
 	},
 	sorbet = {
 		cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
 	},
 	flow = {},
-}) do
-	local setup_options = {
-		on_attach = options.on_attach or on_attach,
+}
+
+for lsp, options in pairs(servers) do
+	local defaults = {
+		on_attach = on_attach,
 		flags = {
 			debounce_text_changes = 150,
 		},
 	}
-  for key, value in pairs(options) do
-    setup_options[key] = value
-  end
+
+	local setup_options = vim.tbl_extend("force", defaults, options)
 
 	nvim_lsp[lsp].setup(setup_options)
 end
