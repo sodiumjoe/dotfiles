@@ -287,10 +287,15 @@ end
 for lsp, options in pairs({
 	rust_analyzer = {},
 	tsserver = {
+    cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192"},
 		on_attach = function(client, bufnr)
 			client.resolved_capabilities.document_formatting = false
 			on_attach(client, bufnr)
 		end,
+    init_options = {
+      maxTsServerMemory = "8192"
+    },
+    filetypes = { "typescript", "typescriptreact", "typescript.tsx" }
 	},
 	sorbet = {
 		cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
@@ -298,15 +303,14 @@ for lsp, options in pairs({
 	flow = {},
 }) do
 	local setup_options = {
-		on_attach = options.on_attach || on_attach,
+		on_attach = options.on_attach or on_attach,
 		flags = {
 			debounce_text_changes = 150,
 		},
 	}
-
-	if options.cmd then
-		setup_options.cmd = options.cmd
-	end
+  for key, value in pairs(options) do
+    setup_options[key] = value
+  end
 
 	nvim_lsp[lsp].setup(setup_options)
 end
