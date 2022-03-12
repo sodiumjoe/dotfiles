@@ -1,5 +1,8 @@
 local diagnostics = require("lsp-status/diagnostics")
+local messages = require("lsp-status/messaging").messages
 local utils = require("sodium.utils")
+
+local spinner_frames = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" }
 
 local highlights = {
 	reset = "%*",
@@ -75,6 +78,20 @@ local function insert_diagnostic_part(status_parts, diagnostic, type)
 	end
 end
 
+local function lsp_progress()
+	local buf_messages = messages()
+
+	for _, msg in ipairs(buf_messages) do
+		if msg.progress then
+			if msg.spinner then
+				return spinner_frames[(msg.spinner % #spinner_frames) + 1]
+			end
+		end
+	end
+
+	return nil
+end
+
 local function lsp_status()
 	local bufnr = 0
 	if #vim.lsp.buf_get_clients(bufnr) == 0 then
@@ -111,6 +128,7 @@ function _G.active_line()
 	local left_segment = table.concat(left_segment_items, padding)
 
 	local right_segment_items = {}
+	insert_item(right_segment_items, pad_item(lsp_progress()))
 	insert_item(right_segment_items, pad_item(lsp_status()))
 	insert_item(right_segment_items, pad_item(get_lines()))
 	insert_item(right_segment_items, pad_item(virtual_column))

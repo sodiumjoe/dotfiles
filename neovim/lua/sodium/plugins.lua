@@ -269,7 +269,7 @@ end
 vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, g.popup_opts)
 vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.signature_help, g.popup_opts)
 
-local servers = {}
+lsp_status.register_progress()
 
 local on_attach = function(client, bufnr)
 	if client.resolved_capabilities.document_formatting then
@@ -309,6 +309,7 @@ for lsp, options in pairs(servers) do
 		flags = {
 			debounce_text_changes = 150,
 		},
+		capabilities = lsp_status.capabilities,
 	}
 
 	local setup_options = vim.tbl_extend("force", defaults, options)
