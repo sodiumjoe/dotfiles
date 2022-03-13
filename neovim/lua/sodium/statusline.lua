@@ -1,8 +1,8 @@
 local diagnostics = require("lsp-status/diagnostics")
-local messages = require("lsp-status/messaging").messages
+local redraw = require("lsp-status/redraw")
 local utils = require("sodium.utils")
 
-local spinner_frames = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" }
+local spinner_frames = { "⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾" }
 
 local highlights = {
 	reset = "%*",
@@ -78,18 +78,39 @@ local function insert_diagnostic_part(status_parts, diagnostic, type)
 	end
 end
 
-local function lsp_progress()
-	local buf_messages = messages()
+local progress_status = {}
+local spinner_index = 1
 
-	for _, msg in ipairs(buf_messages) do
-		if msg.progress then
-			if msg.spinner then
-				return spinner_frames[(msg.spinner % #spinner_frames) + 1]
-			end
-		end
+vim.lsp.handlers["$/progress"] = function(_, msg, info)
+	local client_id = tostring(info.client_id)
+
+	local token = tostring(msg.token)
+	if progress_status[client_id] == nil then
+		progress_status[client_id] = {}
 	end
 
-	return nil
+	if msg.value.kind == "end" then
+		progress_status[client_id][token] = nil
+	else
+		progress_status[client_id][token] = true
+	end
+end
+
+local function lsp_progress()
+	local in_progress_clients = 0
+	for _, client in pairs(progress_status) do
+		for _, _ in pairs(client) do
+			in_progress_clients = in_progress_clients + 1
+		end
+	end
+	if in_progress_clients > 0 then
+		local spinner_frame = spinner_frames[spinner_index + 1]
+		spinner_index = (spinner_index + 1) % #spinner_frames
+		redraw.redraw()
+		return spinner_frame
+	else
+		return nil
+	end
 end
 
 local function lsp_status()
