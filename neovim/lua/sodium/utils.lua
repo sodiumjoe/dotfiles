@@ -22,6 +22,36 @@ M.icons = {
 	Info = " ",
 }
 
+M.spinner_frames = {
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+	"",
+}
+
 function M.is_project_local(root_pattern, config_file)
 	local lspconfigUtil = require("lspconfig/util")
 	local cwd = vim.fn.getcwd()

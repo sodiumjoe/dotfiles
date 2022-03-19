@@ -2,8 +2,6 @@ local diagnostics = require("lsp-status/diagnostics")
 local redraw = require("lsp-status/redraw")
 local utils = require("sodium.utils")
 
-local spinner_frames = { "⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾" }
-
 local highlights = {
 	reset = "%*",
 	active = "%#StatusLineActiveItem#",
@@ -104,8 +102,8 @@ local function lsp_progress()
 		end
 	end
 	if in_progress_clients > 0 then
-		local spinner_frame = spinner_frames[spinner_index + 1]
-		spinner_index = (spinner_index + 1) % #spinner_frames
+		local spinner_frame = utils.spinner_frames[spinner_index + 1]
+		spinner_index = (spinner_index + 1) % #utils.spinner_frames
 		redraw.redraw()
 		return spinner_frame
 	else
