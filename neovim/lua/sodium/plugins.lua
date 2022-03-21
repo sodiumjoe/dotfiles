@@ -461,3 +461,20 @@ parser_config.markdown = {
 	used_by = "vimwiki",
 }
 parser_config.markdown.used_by = "vimwiki"
+
+
+-- goyo
+-- ====
+
+vim.cmd([[
+  function! s:goyo_enter()
+    set linebreak
+  endfunction
+
+  function! s:goyo_leave()
+    set nolinebreak
+  endfunction
+
+  autocmd! User GoyoEnter nested call <SID>goyo_enter()
+  autocmd! User GoyoLeave nested call <SID>goyo_leave()
+]])
