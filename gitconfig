@@ -4,6 +4,8 @@
 
 [includeIf "gitdir:~/stripe"]
   path = ~/stripe/.gitconfig
+[includeIf "gitdir:~/stripe-b"]
+  path = ~/stripe/.gitconfig
 
 [alias]
   co = checkout
