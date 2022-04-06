@@ -431,7 +431,7 @@ local work_wiki = {
 	syntax = "markdown",
 }
 
-if vim.fn.isdirectory("~/stripe") ~= 0 then
+if vim.fn.isdirectory(vim.fn.expand("~/stripe")) ~= 0 then
 	g.vimwiki_list = { work_wiki, wiki }
 else
 	g.vimwiki_list = { wiki }
