@@ -67,7 +67,28 @@ g.signify_sign_show_count = 0
 -- ===
 local cmp = require("cmp")
 cmp.setup({
-	documentation = g.popup_opts,
+	window = {
+		documentation = g.popup_opts,
+	},
+	view = {
+		entries = { name = "custom", selection_order = "near_cursor" },
+	},
+	mapping = cmp.mapping.preset.insert({
+		["<C-n>"] = function(fallback)
+			if cmp.visible() then
+				cmp.select_next_item()
+			else
+				fallback()
+			end
+		end,
+		["<C-p>"] = function(fallback)
+			if cmp.visible() then
+				cmp.select_prev_item()
+			else
+				fallback()
+			end
+		end,
+	}),
 	sources = cmp.config.sources({
 		{
 			name = "buffer",
@@ -384,7 +405,7 @@ utils.map({
 	-- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
 	{ "n", [[<leader>d]], [[<cmd>Telescope find_files search_dirs=%:h<cr>]] },
 	{ "n", [[<leader><C-r>]], [[<cmd>Telescope registers<cr>]] },
-	{ "n", [[<leader>g]], [[<cmd>Telescope git_status use_git_root=false<cr><esc>]] },
+	{ "n", [[<leader>g]], [[<cmd>Telescope git_status use_git_root=false<cr>]] },
 })
 
 -- vim-tmux-navigator
@@ -461,7 +482,6 @@ parser_config.markdown = {
 	used_by = "vimwiki",
 }
 parser_config.markdown.used_by = "vimwiki"
-
 
 -- goyo
 -- ====
