@@ -6,13 +6,11 @@ function M.map(mappings)
 	end
 end
 
-function M.augroup(name, cmds)
-	vim.cmd("augroup" .. " " .. name)
-	vim.cmd("autocmd!")
-	for _, cmd in ipairs(cmds) do
-		vim.cmd("autocmd" .. " " .. cmd)
-	end
-	vim.cmd("augroup END")
+function M.augroup(name, augroup_opts)
+  local group = vim.api.nvim_create_augroup(name, augroup_opts)
+  return function(event, opts)
+    vim.api.nvim_create_autocmd(event, vim.tbl_extend('force', {group=group}, opts))
+  end
 end
 
 M.icons = {

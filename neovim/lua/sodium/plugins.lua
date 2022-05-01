@@ -134,9 +134,14 @@ require("nvim-web-devicons").setup({
 
 -- dirvish
 -- =======
-utils.augroup("DirvishConfig", {
-	"FileType dirvish silent! unmap <buffer> <C-p>",
-	"FileType dirvish silent! unmap <buffer> <C-n>",
+local dirvish_autocmd = utils.augroup("DirvishConfig", {clear=true})
+dirvish_autocmd("FileType", {
+  pattern={"dirvish"},
+  command="silent! unmap <buffer> <C-p>",
+})
+dirvish_autocmd("FileType", {
+	pattern={"dirvish"},
+  command="silent! unmap <buffer> <C-n>",
 })
 
 -- editorconfig
@@ -399,7 +404,7 @@ utils.map({
 		[[<leader>s]],
 		[[<cmd>Telescope buffers show_all_buffers=true sort_mru=true ignore_current_buffer=true initial_mode=normal<cr>]],
 	},
-	{ "n", [[<leader>8]], [[<cmd>Telescope grep_string<cr><esc>]] },
+	{ "n", [[<leader>8]], [[<cmd>Telescope grep_string<cr>]] },
 	{ "n", [[<leader>/]], [[<cmd>Telescope live_grep<cr>]] },
 	{ "n", [[<leader><Space>/]], [[<cmd>Telescope live_grep cwd=%:h<cr>]] },
 	-- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
@@ -434,7 +439,11 @@ require("nvim-treesitter.configs").setup({
 
 -- vim-better-whitespace
 -- =====================
-utils.augroup("DisableBetterWhitespace", { "Filetype diff,gitcommit,qf,help,markdown,javascript DisableWhitespace" })
+
+utils.augroup("DisableBetterWhitespace", {clear=true})("Filetype", {
+  pattern={"diff","gitcommit","qf","help","markdown","javascript"},
+  command="DisableWhitespace"
+})
 
 -- vim-move
 -- ========
@@ -465,11 +474,18 @@ utils.map({
 	{ "n", "<leader>-", "<Plug>VimwikiRemoveHeaderLevel" },
 })
 
-utils.augroup("Vimwiki", {
-	"FileType vimwiki nmap <buffer> <leader>wn <Plug>VimwikiDiaryNextDay",
-	"FileType vimwiki lua require('cmp').setup.buffer { enabled = false }",
-})
+local vimwiki_autocmd = utils.augroup("Vimwiki", {clear=true})
 
+vimwiki_autocmd("FileType", {
+  pattern={"vimwiki"},
+  command="nmap <buffer> <leader>wn <Plug>VimwikiDiaryNextDay",
+})
+vimwiki_autocmd("FileType", {
+  pattern={"vimwiki"},
+  callback=function()
+    require('cmp').setup.buffer { enabled = false }
+  end,
+})
 -- tree-sitter-markdown
 -- ====================
 local parser_config = require("nvim-treesitter.parsers").get_parser_configs()

@@ -48,10 +48,14 @@ g.fillchars = [[vert:\│,eob:⌁]]
 
 -- misc
 -- ====
-utils.augroup("AutoCloseQFLL", { "FileType qf nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>" })
+utils.augroup("AutoCloseQFLL", {clear=true})("FileType", {
+  pattern={"qf"},
+  command="nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>",
+})
 
-utils.augroup("RestoreCursorPos", {
-	[[BufReadPost * if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit' |   exe "normal! g`\"" | endif]],
+utils.augroup("RestoreCursorPos", {clear=true})("BufReadPost", {
+  pattern="*",
+  command=[[if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit' |   exe "normal! g`\"" | endif]],
 })
 
 -- javascript source resolution
