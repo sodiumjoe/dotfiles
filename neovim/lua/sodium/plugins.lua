@@ -266,14 +266,11 @@ local sources = {
 null_ls.setup({
 	sources = sources,
 	on_attach = function(client)
-		-- setup lsp-status
 		if client.resolved_capabilities.document_formatting then
-			vim.cmd([[
-        augroup LspFormatting
-            autocmd! * <buffer>
-            autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
-        augroup END
-        ]])
+			utils.augroup("LspFormatting", { clear = true })("BufWritePre", {
+				pattern = { "<buffer>" },
+				callback = vim.lsp.buf.formatting_sync,
+			})
 		end
 	end,
 })
@@ -310,12 +307,10 @@ vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(vim.lsp.handlers.s
 
 local on_attach = function(client, bufnr)
 	if client.resolved_capabilities.document_formatting then
-		vim.cmd([[
-        augroup LspFormatting
-            autocmd! * <buffer>
-            autocmd BufWritePre <buffer> lua vim.lsp.buf.formatting_sync()
-        augroup END
-        ]])
+		utils.augroup("LspFormatting", { clear = true })("BufWritePre", {
+			pattern = { "<buffer>" },
+			callback = vim.lsp.buf.formatting_sync,
+		})
 	end
 	lsp_status.on_attach(client, bufnr)
 	require("lspkind").init({})
