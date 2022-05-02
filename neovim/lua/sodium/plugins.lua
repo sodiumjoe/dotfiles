@@ -177,15 +177,11 @@ utils.map({
 		"<leader>ew",
 		"",
 		{
-			callback = function()
-				require("hop").hint_words()
-			end,
+			callback = require("hop").hint_words,
 		},
 	},
 	{ "n", "<leader>e/", "", {
-		callback = function()
-			require("hop").hint_patterns()
-		end,
+		callback = require("hop").hint_patterns,
 	} },
 })
 
@@ -349,11 +345,6 @@ for lsp, options in pairs(servers) do
 	nvim_lsp[lsp].setup(setup_options)
 end
 
-function _G.project_diagnostics()
-	vim.diagnostic.setqflist({ open = false })
-	require("telescope.builtin").quickfix({ initial_mode = "normal" })
-end
-
 -- See `:help vim.lsp.*` for documentation on any of the below functions
 utils.map({
 	{ "n", "gD", "", { callback = vim.lsp.buf.declaration } },
@@ -364,25 +355,20 @@ utils.map({
 	-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
 	{ "n", "<space>ca", "", { callback = vim.lsp.buf.code_action } },
 	{ "n", "gr", "", { callback = vim.lsp.buf.references } },
+	{ "n", "<space>ee", "", { callback = vim.lsp.diagnostic.show_line_diagnostics } },
+	{ "n", "<leader>p", "", { callback = vim.diagnostic.goto_prev } },
+	{ "n", "<leader>n", "", { callback = vim.diagnostic.goto_next } },
 	{
 		"n",
-		"<space>ee",
+		"<space>q",
 		"",
-		{ callback = vim.lsp.diagnostic.show_line_diagnostics },
+		{
+			callback = function()
+				vim.diagnostic.setqflist({ open = false })
+				require("telescope.builtin").quickfix({ initial_mode = "normal" })
+			end,
+		},
 	},
-	{
-		"n",
-		"<leader>p",
-		"",
-		{ callback = vim.diagnostic.goto_prev },
-	},
-	{
-		"n",
-		"<leader>n",
-		"",
-		{ callback = vim.diagnostic.goto_next },
-	},
-	{ "n", "<space>q", "", { callback = project_diagnostics } },
 	{ "n", "<space>f", "", { callback = vim.lsp.buf.formatting } },
 })
 
@@ -471,14 +457,7 @@ utils.map({
 			end,
 		},
 	},
-	{
-		"n",
-		[[<leader><C-r>]],
-		"",
-		{
-			callback = require("telescope.builtin").registers,
-		},
-	},
+	{ "n", [[<leader><C-r>]], "", { callback = require("telescope.builtin").registers } },
 	{
 		"n",
 		[[<leader>g]],
@@ -564,6 +543,7 @@ vimwiki_autocmd("FileType", {
 		require("cmp").setup.buffer({ enabled = false })
 	end,
 })
+
 -- tree-sitter-markdown
 -- ====================
 local parser_config = require("nvim-treesitter.parsers").get_parser_configs()

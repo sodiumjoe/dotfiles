@@ -27,7 +27,6 @@ end
 
 -- display
 -- =======
-o.guifont = [[Inconsolata:h16]]
 o.background = [[dark]]
 vim.cmd([[colorscheme sodium]])
 -- folding column width
@@ -48,6 +47,11 @@ g.fillchars = [[vert:\│,eob:⌁]]
 
 -- misc
 -- ====
+
+-- opt in to filetype.lua
+g.do_filetype_lua = true
+g.did_load_filetypes = true
+
 utils.augroup("AutoCloseQFLL", { clear = true })("FileType", {
 	pattern = { "qf" },
 	command = "nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>",
@@ -105,8 +109,8 @@ utils.map({
 	} },
 
 	-- movement
-	{ "n", "j", "gj", { noremap = true } },
-	{ "n", "k", "gk", { noremap = true } },
+	{ "n", "j", "gj" },
+	{ "n", "k", "gk" },
 
 	-- search visual selection (busted)
 	-- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
