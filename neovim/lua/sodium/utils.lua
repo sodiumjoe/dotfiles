@@ -1,8 +1,14 @@
 local M = {}
 
+local opts = { noremap = true, silent = true }
+
+function M.merge(a, b)
+	return vim.tbl_extend("force", a, b)
+end
+
 function M.map(mappings)
 	for _, m in pairs(mappings) do
-		vim.api.nvim_set_keymap(m[1], m[2], m[3], m[4] or {})
+		vim.api.nvim_set_keymap(m[1], m[2], m[3], M.merge(opts, m[4] or {}))
 	end
 end
 

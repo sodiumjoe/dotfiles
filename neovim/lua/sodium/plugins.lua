@@ -172,8 +172,21 @@ require("hop").setup({ create_hl_autocmd = false })
 vim.api.nvim_command([[hi clear HopUnmatched]])
 
 utils.map({
-	{ "n", "<leader>ew", ":HopWord<cr>", opts },
-	{ "n", "<leader>e/", ":HopPattern<cr>", opts },
+	{
+		"n",
+		"<leader>ew",
+		"",
+		{
+			callback = function()
+				require("hop").hint_words()
+			end,
+		},
+	},
+	{ "n", "<leader>e/", "", {
+		callback = function()
+			require("hop").hint_patterns()
+		end,
+	} },
 })
 
 -- vim-lengthmatters
@@ -348,35 +361,34 @@ end
 
 -- See `:help vim.lsp.*` for documentation on any of the below functions
 utils.map({
-	{ "n", "gD", "<Cmd>lua vim.lsp.buf.declaration()<cr>", opts },
-	{ "n", "gd", "<Cmd>lua vim.lsp.buf.definition()<cr>", opts },
-	{ "n", "K", "<Cmd>lua vim.lsp.buf.hover()<cr>", opts },
-	{ "n", "gi", "<cmd>lua vim.lsp.buf.implementation()<cr>", opts },
-	{ "n", "<space>D", "<cmd>lua vim.lsp.buf.type_definition()<cr>", opts },
+	{ "n", "gD", "", { callback = vim.lsp.buf.declaration } },
+	{ "n", "gd", "", { callback = vim.lsp.buf.definition } },
+	{ "n", "K", "", { callback = vim.lsp.buf.hover } },
+	{ "n", "gi", "", { callback = vim.lsp.buf.implementation } },
+	{ "n", "<space>D", "", { callback = vim.lsp.buf.type_definition } },
 	-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
-	{ "n", "<space>ca", "<cmd>lua vim.lsp.buf.code_action()<cr>", opts },
-	{ "n", "gr", "<cmd>lua vim.lsp.buf.references()<cr>", opts },
+	{ "n", "<space>ca", "", { callback = vim.lsp.buf.code_action } },
+	{ "n", "gr", "", { callback = vim.lsp.buf.references } },
 	{
 		"n",
 		"<space>ee",
-		"<cmd>lua vim.lsp.diagnostic.show_line_diagnostics()<cr>",
-		opts,
+		"",
+		{ callback = vim.lsp.diagnostic.show_line_diagnostics },
 	},
 	{
 		"n",
 		"<leader>p",
-		-- disable moving into floating window when only one diagnostic: https://github.com/neovim/neovim/issues/15122
-		"<cmd>lua vim.diagnostic.goto_prev()<cr>",
-		opts,
+		"",
+		{ callback = vim.diagnostic.goto_prev },
 	},
 	{
 		"n",
 		"<leader>n",
-		"<cmd>lua vim.diagnostic.goto_next()<cr>",
-		opts,
+		"",
+		{ callback = vim.diagnostic.goto_next },
 	},
-	{ "n", "<space>q", "<cmd>lua project_diagnostics()<cr>", opts },
-	{ "n", "<space>f", "<cmd>lua vim.lsp.buf.formatting()<cr>", opts },
+	{ "n", "<space>q", "", { callback = project_diagnostics } },
+	{ "n", "<space>f", "", { callback = vim.lsp.buf.formatting } },
 })
 
 -- telescope
@@ -397,20 +409,91 @@ telescope.setup({
 telescope.load_extension("fzf")
 
 utils.map({
-	{ "n", [[<leader>r]], [[<cmd>Telescope resume initial_mode=normal<cr>]] },
-	{ "n", [[<C-p>]], [[<cmd>Telescope find_files hidden=true<cr>]] },
+	{
+		"n",
+		[[<leader>r]],
+		"",
+		{
+			callback = function()
+				require("telescope.builtin").resume({ initial_mode = "normal" })
+			end,
+		},
+	},
+	{
+		"n",
+		[[<C-p>]],
+		"",
+		{
+			callback = function()
+				require("telescope.builtin").find_files({ hidden = true })
+			end,
+		},
+	},
 	{
 		"n",
 		[[<leader>s]],
-		[[<cmd>Telescope buffers show_all_buffers=true sort_mru=true ignore_current_buffer=true initial_mode=normal<cr>]],
+		"",
+		{
+			callback = function()
+				require("telescope.builtin").buffers({
+					show_all_buffers = true,
+					sort_mru = true,
+					ignore_current_buffer = true,
+					initial_mode = "normal",
+				})
+			end,
+		},
 	},
-	{ "n", [[<leader>8]], [[<cmd>Telescope grep_string<cr>]] },
-	{ "n", [[<leader>/]], [[<cmd>Telescope live_grep<cr>]] },
-	{ "n", [[<leader><Space>/]], [[<cmd>Telescope live_grep cwd=%:h<cr>]] },
+	{ "n", [[<leader>8]], "", {
+		callback = require("telescope.builtin").grep_string,
+	} },
+	{
+		"n",
+		[[<leader>/]],
+		"",
+		{
+			callback = require("telescope.builtin").live_grep,
+		},
+	},
+	{
+		"n",
+		[[<leader><Space>/]],
+		"",
+		{
+			callback = function()
+				require("telescope.builtin").live_grep({ cwd = vim.fn.expand("%:h") })
+			end,
+		},
+	},
 	-- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
-	{ "n", [[<leader>d]], [[<cmd>Telescope find_files search_dirs=%:h<cr>]] },
-	{ "n", [[<leader><C-r>]], [[<cmd>Telescope registers<cr>]] },
-	{ "n", [[<leader>g]], [[<cmd>Telescope git_status use_git_root=false<cr>]] },
+	{
+		"n",
+		[[<leader>d]],
+		"",
+		{
+			callback = function()
+				require("telescope.builtin").find_files({ search_dirs = vim.fn.expand("%:h") })
+			end,
+		},
+	},
+	{
+		"n",
+		[[<leader><C-r>]],
+		"",
+		{
+			callback = require("telescope.builtin").registers,
+		},
+	},
+	{
+		"n",
+		[[<leader>g]],
+		"",
+		{
+			callback = function()
+				require("telescope.builtin").git_status({ use_git_root = false })
+			end,
+		},
+	},
 })
 
 -- vim-tmux-navigator
@@ -418,11 +501,11 @@ utils.map({
 g.tmux_navigator_no_mappings = 1
 
 utils.map({
-	{ "n", "<C-w>h", ":TmuxNavigateLeft<cr>", opts },
-	{ "n", "<C-w>j", ":TmuxNavigateDown<cr>", opts },
-	{ "n", "<C-w>k", ":TmuxNavigateUp<cr>", opts },
-	{ "n", "<C-w>l", ":TmuxNavigateRight<cr>", opts },
-	{ "n", "<C-w>w", ":TmuxNavigatePrevious<cr>", opts },
+	{ "n", "<C-w>h", ":TmuxNavigateLeft<cr>" },
+	{ "n", "<C-w>j", ":TmuxNavigateDown<cr>" },
+	{ "n", "<C-w>k", ":TmuxNavigateUp<cr>" },
+	{ "n", "<C-w>l", ":TmuxNavigateRight<cr>" },
+	{ "n", "<C-w>w", ":TmuxNavigatePrevious<cr>" },
 })
 
 -- nvim-treesitter

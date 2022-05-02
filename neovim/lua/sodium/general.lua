@@ -80,7 +80,7 @@ vim.api.nvim_exec(
 	false
 )
 
-function _G.get_lg_url()
+function get_lg_url()
 	local stripe_dir = vim.fn.expand("~/stripe")
 	local full_path = vim.api.nvim_buf_get_name(0)
 	local line_number = vim.fn.line(".")
@@ -93,14 +93,16 @@ end
 
 utils.map({
 	-- copy relative path to clipboard
-	{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]], { silent = true } },
+	{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
 	-- copy full path to clipboard
-	{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]], { silent = true } },
+	{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
 	-- leader d and leader p for deleting instead of cutting and pasting
 	-- { "n", [[<leader>d]], [["_d]], { noremap = true } },
 	-- { "x", [[<leader>d]], [["_d]], { noremap = true } },
 	-- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
-	{ "n", [[<leader>l]], "<Cmd> lua get_lg_url()<cr>", { silent = true } },
+	{ "n", [[<leader>l]], "", {
+		callback = get_lg_url,
+	} },
 
 	-- movement
 	{ "n", "j", "gj", { noremap = true } },
