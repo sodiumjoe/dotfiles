@@ -173,20 +173,20 @@ function _G.inactive_line()
 	return table.concat({ left_segment, right_segment }, alignment_group)
 end
 
-local autocmd = utils.augroup("StatusLine", {clear=true});
+local autocmd = utils.augroup("StatusLine", { clear = true })
 
-autocmd({"WinEnter","BufEnter"}, {
-  pattern="*",
-  callback = function()
-    vim.opt_local.statusline = [[%{%v:lua.active_line()%}]]
-  end,
-  desc = "Statusline (active)",
+autocmd({ "WinEnter", "BufEnter" }, {
+	pattern = "*",
+	callback = function()
+		vim.opt_local.statusline = [[%{%v:lua.active_line()%}]]
+	end,
+	desc = "Statusline (active)",
 })
 
-autocmd({"WinLeave","BufLeave"}, {
-  pattern = "*",
-  callback = function()
-    vim.opt_local.statusline = [[%{%v:lua.inactive_line()%}]]
-  end,
-  desc = "Statusline (inactive)",
+autocmd({ "WinLeave", "BufLeave" }, {
+	pattern = "*",
+	callback = function()
+		vim.opt_local.statusline = [[%{%v:lua.inactive_line()%}]]
+	end,
+	desc = "Statusline (inactive)",
 })

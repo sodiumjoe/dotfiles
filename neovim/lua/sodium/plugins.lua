@@ -134,14 +134,14 @@ require("nvim-web-devicons").setup({
 
 -- dirvish
 -- =======
-local dirvish_autocmd = utils.augroup("DirvishConfig", {clear=true})
+local dirvish_autocmd = utils.augroup("DirvishConfig", { clear = true })
 dirvish_autocmd("FileType", {
-  pattern={"dirvish"},
-  command="silent! unmap <buffer> <C-p>",
+	pattern = { "dirvish" },
+	command = "silent! unmap <buffer> <C-p>",
 })
 dirvish_autocmd("FileType", {
-	pattern={"dirvish"},
-  command="silent! unmap <buffer> <C-n>",
+	pattern = { "dirvish" },
+	command = "silent! unmap <buffer> <C-n>",
 })
 
 -- editorconfig
@@ -440,9 +440,9 @@ require("nvim-treesitter.configs").setup({
 -- vim-better-whitespace
 -- =====================
 
-utils.augroup("DisableBetterWhitespace", {clear=true})("Filetype", {
-  pattern={"diff","gitcommit","qf","help","markdown","javascript"},
-  command="DisableWhitespace"
+utils.augroup("DisableBetterWhitespace", { clear = true })("Filetype", {
+	pattern = { "diff", "gitcommit", "qf", "help", "markdown", "javascript" },
+	command = "DisableWhitespace",
 })
 
 -- vim-move
@@ -474,17 +474,17 @@ utils.map({
 	{ "n", "<leader>-", "<Plug>VimwikiRemoveHeaderLevel" },
 })
 
-local vimwiki_autocmd = utils.augroup("Vimwiki", {clear=true})
+local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
 
 vimwiki_autocmd("FileType", {
-  pattern={"vimwiki"},
-  command="nmap <buffer> <leader>wn <Plug>VimwikiDiaryNextDay",
+	pattern = { "vimwiki" },
+	command = "nmap <buffer> <leader>wn <Plug>VimwikiDiaryNextDay",
 })
 vimwiki_autocmd("FileType", {
-  pattern={"vimwiki"},
-  callback=function()
-    require('cmp').setup.buffer { enabled = false }
-  end,
+	pattern = { "vimwiki" },
+	callback = function()
+		require("cmp").setup.buffer({ enabled = false })
+	end,
 })
 -- tree-sitter-markdown
 -- ====================
