@@ -21,8 +21,8 @@ o.ignorecase = true
 o.inccommand = [[split]]
 
 if vim.fn.executable("rg") then
-	o.grepprg = [[rg --vimgrep --no-heading -S]]
-	o.grepformat = [[%f:%l:%c:%m,%f:%l:%m]]
+  o.grepprg = [[rg --vimgrep --no-heading -S]]
+  o.grepformat = [[%f:%l:%c:%m,%f:%l:%m]]
 end
 
 -- display
@@ -53,13 +53,13 @@ g.do_filetype_lua = true
 g.did_load_filetypes = true
 
 utils.augroup("AutoCloseQFLL", { clear = true })("FileType", {
-	pattern = { "qf" },
-	command = "nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>",
+  pattern = { "qf" },
+  command = "nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>",
 })
 
 utils.augroup("RestoreCursorPos", { clear = true })("BufReadPost", {
-	pattern = "*",
-	command = [[if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit' |   exe "normal! g`\"" | endif]],
+  pattern = "*",
+  command = [[if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit' |   exe "normal! g`\"" | endif]],
 })
 
 -- javascript source resolution
@@ -67,7 +67,7 @@ g.path = "."
 o.suffixesadd = ".js"
 
 vim.api.nvim_exec(
-	[[
+  [[
   function! LoadMainNodeModule(fname)
     let nodeModules = "./node_modules/"
     let packageJsonPath = nodeModules . a:fname . "/package.json"
@@ -80,38 +80,38 @@ vim.api.nvim_exec(
   endfunction
 
   set includeexpr=LoadMainNodeModule(v:fname)
-]],
-	false
+]] ,
+  false
 )
 
-function get_lg_url()
-	local stripe_dir = vim.fn.expand("~/stripe")
-	local full_path = vim.api.nvim_buf_get_name(0)
-	local line_number = vim.fn.line(".")
-	if string.find(full_path, stripe_dir) then
-		local path = string.gsub(full_path, stripe_dir, "")
-		local lg_path = string.format([[http://go/lg-view/%s/\\#L%s]], path, line_number)
-		vim.cmd([[silent exec "!open ']] .. lg_path .. [['"]])
-	end
+local function get_lg_url()
+  local stripe_dir = vim.fn.expand("~/stripe")
+  local full_path = vim.api.nvim_buf_get_name(0)
+  local line_number = vim.fn.line(".")
+  if string.find(full_path, stripe_dir) then
+    local path = string.gsub(full_path, stripe_dir, "")
+    local lg_path = string.format([[http://go/lg-view/%s/\\#L%s]], path, line_number)
+    vim.cmd([[silent exec "!open ']] .. lg_path .. [['"]])
+  end
 end
 
 utils.map({
-	-- copy relative path to clipboard
-	{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
-	-- copy full path to clipboard
-	{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
-	-- leader d and leader p for deleting instead of cutting and pasting
-	-- { "n", [[<leader>d]], [["_d]], { noremap = true } },
-	-- { "x", [[<leader>d]], [["_d]], { noremap = true } },
-	-- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
-	{ "n", [[<leader>l]], "", {
-		callback = get_lg_url,
-	} },
+  -- copy relative path to clipboard
+  { "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
+  -- copy full path to clipboard
+  { "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
+  -- leader d and leader p for deleting instead of cutting and pasting
+  -- { "n", [[<leader>d]], [["_d]], { noremap = true } },
+  -- { "x", [[<leader>d]], [["_d]], { noremap = true } },
+  -- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
+  { "n", [[<leader>l]], "", {
+    callback = get_lg_url,
+  } },
 
-	-- movement
-	{ "n", "j", "gj" },
-	{ "n", "k", "gk" },
+  -- movement
+  { "n", "j", "gj" },
+  { "n", "k", "gk" },
 
-	-- search visual selection (busted)
-	-- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
+  -- search visual selection (busted)
+  -- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
 })
