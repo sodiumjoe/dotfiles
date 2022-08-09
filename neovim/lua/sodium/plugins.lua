@@ -463,7 +463,7 @@ utils.map({
 		"",
 		{
 			callback = function()
-				require("telescope.builtin").git_status({ use_git_root = false })
+				require("telescope.builtin").git_status({ use_git_root = false, initial_mode = "normal" })
 			end,
 		},
 	},
