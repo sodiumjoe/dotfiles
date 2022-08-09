@@ -327,8 +327,11 @@ local servers = {
 		cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
 	},
 	flow = {},
-	-- sumneko_lua = {},
 }
+
+if is_executable("lua-language-server") then
+	servers.sumneko_lua = {}
+end
 
 for lsp, options in pairs(servers) do
 	local defaults = {
