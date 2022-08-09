@@ -562,16 +562,16 @@ vimwiki_autocmd("FileType", {
 
 -- tree-sitter-markdown
 -- ====================
--- local parser_config = require("nvim-treesitter.parsers").get_parser_configs()
--- parser_config.markdown = {
---   install_info = {
---     url = "https://github.com/ikatyang/tree-sitter-markdown",
---     files = { "src/parser.c", "src/scanner.cc" },
---   },
---   filetype = "markdown",
---   used_by = "vimwiki",
--- }
--- parser_config.markdown.used_by = "vimwiki"
+local parser_config = require("nvim-treesitter.parsers").get_parser_configs()
+parser_config.markdown = {
+	install_info = {
+		url = "https://github.com/ikatyang/tree-sitter-markdown",
+		files = { "src/parser.c", "src/scanner.cc" },
+	},
+	filetype = "markdown",
+	used_by = "vimwiki",
+}
+parser_config.markdown.used_by = "vimwiki"
 
 -- goyo
 -- ====
