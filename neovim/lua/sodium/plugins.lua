@@ -497,6 +497,7 @@ require("nvim-treesitter.configs").setup({
 		"json",
 		"lua",
 		"markdown",
+		"markdown_inline",
 		"python",
 		"ruby",
 		"rust",
@@ -505,8 +506,6 @@ require("nvim-treesitter.configs").setup({
 		"vim",
 		"yaml",
 	},
-	-- https://github.com/nvim-treesitter/nvim-treesitter/issues/1313
-	ignore_install = { "comment", "jsdoc" },
 	highlight = {
 		enable = true,
 		disable = {},
@@ -563,18 +562,8 @@ vimwiki_autocmd("FileType", {
 	end,
 })
 
--- tree-sitter-markdown
--- ====================
-local parser_config = require("nvim-treesitter.parsers").get_parser_configs()
-parser_config.markdown = {
-	install_info = {
-		url = "https://github.com/ikatyang/tree-sitter-markdown",
-		files = { "src/parser.c", "src/scanner.cc" },
-	},
-	filetype = "markdown",
-	used_by = "vimwiki",
-}
-parser_config.markdown.used_by = "vimwiki"
+local ft_to_parser = require"nvim-treesitter.parsers".filetype_to_parsername
+ft_to_parser.vimwiki = "markdown"
 
 -- goyo
 -- ====
