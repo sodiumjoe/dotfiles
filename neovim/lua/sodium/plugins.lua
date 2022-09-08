@@ -1,50 +1,75 @@
 local utils = require("sodium.utils")
 local g = vim.g
+local fn = vim.fn
 
--- vim-plug
--- ========
-vim.fn["plug#begin"]("~/.config/nvim/plugged")
+local packer_bootstrap
+local install_path = fn.stdpath("data") .. "/site/pack/packer/start/packer.nvim"
+if fn.empty(fn.glob(install_path)) > 0 then
+	packer_bootstrap = fn.system({
+		"git",
+		"clone",
+		"--depth",
+		"1",
+		"https://github.com/wbthomason/packer.nvim",
+		install_path,
+	})
+	vim.cmd([[packadd packer.nvim]])
+end
 
-vim.fn["plug#"]("nvim-lua/plenary.nvim")
-vim.fn["plug#"]("benizi/vim-automkdir")
-vim.fn["plug#"]("christoomey/vim-tmux-navigator")
-vim.fn["plug#"]("editorconfig/editorconfig-vim")
-vim.fn["plug#"]("folke/trouble.nvim")
-vim.fn["plug#"]("haya14busa/is.vim")
-vim.fn["plug#"]("hrsh7th/cmp-nvim-lsp")
-vim.fn["plug#"]("hrsh7th/cmp-buffer")
-vim.fn["plug#"]("hrsh7th/cmp-path")
-vim.fn["plug#"]("hrsh7th/nvim-cmp")
-vim.fn["plug#"]("hrsh7th/vim-vsnip")
-vim.fn["plug#"]("jose-elias-alvarez/null-ls.nvim")
-vim.fn["plug#"]("junegunn/goyo.vim")
-vim.fn["plug#"]("justinmk/vim-dirvish")
-vim.fn["plug#"]("kevinhwang91/nvim-hlslens")
-vim.fn["plug#"]("kyazdani42/nvim-web-devicons")
-vim.fn["plug#"]("matze/vim-move")
-vim.fn["plug#"]("mhinz/vim-signify")
-vim.fn["plug#"]("neovim/nvim-lspconfig")
-vim.fn["plug#"]("nvim-lua/lsp-status.nvim")
-vim.fn["plug#"]("nvim-lua/popup.nvim")
-vim.fn["plug#"]("nvim-telescope/telescope.nvim")
-vim.fn["plug#"]("nvim-telescope/telescope-fzf-native.nvim", { ["do"] = "make" })
-vim.fn["plug#"]("nvim-treesitter/nvim-treesitter", { ["do"] = ":TSUpdate" })
-vim.fn["plug#"]("ikatyang/tree-sitter-markdown")
-vim.fn["plug#"]("norcalli/nvim-colorizer.lua")
-vim.fn["plug#"]("onsails/lspkind-nvim")
-vim.fn["plug#"]("ntpeters/vim-better-whitespace")
-vim.fn["plug#"]("phaazon/hop.nvim")
-vim.fn["plug#"]("rhysd/conflict-marker.vim")
-vim.fn["plug#"]("sodiumjoe/nvim-highlite")
-vim.fn["plug#"]("tpope/vim-commentary")
-vim.fn["plug#"]("tpope/vim-eunuch")
-vim.fn["plug#"]("tpope/vim-fugitive")
-vim.fn["plug#"]("tpope/vim-repeat")
-vim.fn["plug#"]("tpope/vim-surround")
-vim.fn["plug#"]("vimwiki/vimwiki")
-vim.fn["plug#"]("whatyouhide/vim-lengthmatters")
+require("packer").startup(function(use)
+	use("wbthomason/packer.nvim")
+	use("nvim-lua/plenary.nvim")
+	use("benizi/vim-automkdir")
+	use("christoomey/vim-tmux-navigator")
+	use("editorconfig/editorconfig-vim")
+	use("folke/trouble.nvim")
+	use("haya14busa/is.vim")
+	use("hrsh7th/cmp-nvim-lsp")
+	use("hrsh7th/cmp-buffer")
+	use("hrsh7th/cmp-path")
+	use("hrsh7th/nvim-cmp")
+	use("hrsh7th/vim-vsnip")
+	use("jose-elias-alvarez/null-ls.nvim")
+	use("junegunn/goyo.vim")
+	use("justinmk/vim-dirvish")
+	use("kevinhwang91/nvim-hlslens")
+	use("kyazdani42/nvim-web-devicons")
+	use("matze/vim-move")
+	use("mhinz/vim-signify")
+	use("neovim/nvim-lspconfig")
+	use("nvim-lua/lsp-status.nvim")
+	use("nvim-lua/popup.nvim")
+	use("nvim-telescope/telescope.nvim")
+	use({ "nvim-telescope/telescope-fzf-native.nvim", run = "make" })
+	use({
+		"nvim-treesitter/nvim-treesitter",
+		run = function()
+			if vim.fn.exists(":TSUpdate") == 2 then
+				vim.cmd(":TSUpdate")
+			end
+		end,
+	})
+	use("ikatyang/tree-sitter-markdown")
+	use("norcalli/nvim-colorizer.lua")
+	use("onsails/lspkind-nvim")
+	use("ntpeters/vim-better-whitespace")
+	use("phaazon/hop.nvim")
+	use("rhysd/conflict-marker.vim")
+	use("sodiumjoe/nvim-highlite")
+	use("tpope/vim-commentary")
+	use("tpope/vim-eunuch")
+	use("tpope/vim-fugitive")
+	use("tpope/vim-repeat")
+	use("tpope/vim-surround")
+	use("vimwiki/vimwiki")
+	use("whatyouhide/vim-lengthmatters")
 
-vim.fn["plug#end"]()
+	-- Automatically set up your configuration after cloning packer.nvim
+	-- Put this at the end after all plugins
+	if packer_bootstrap then
+		require("packer").sync()
+	end
+end)
 
 g.popup_opts = {
 	focusable = false,
