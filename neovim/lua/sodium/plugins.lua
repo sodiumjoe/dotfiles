@@ -330,7 +330,12 @@ local servers = {
 }
 
 if is_executable("lua-language-server") then
-	servers.sumneko_lua = {}
+	servers.sumneko_lua = {
+		on_attach = function(client, bufnr)
+			client.resolved_capabilities.document_formatting = false
+			on_attach(client, bufnr)
+		end,
+	}
 end
 
 for lsp, options in pairs(servers) do
