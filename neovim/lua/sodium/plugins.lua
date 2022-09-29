@@ -35,6 +35,13 @@ require("packer").startup(function(use)
 				{ "n", "<C-w>w", ":TmuxNavigatePrevious<cr>" },
 			})
 		end,
+		keys = {
+			"<C-w>h",
+			"<C-w>j",
+			"<C-w>k",
+			"<C-w>l",
+			"<C-w>w",
+		},
 	})
 	use({
 		"editorconfig/editorconfig-vim",
@@ -241,6 +248,14 @@ require("packer").startup(function(use)
 				{ "n", "g#", "<Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
 			})
 		end,
+		keys = {
+			"n",
+			"N",
+			"*",
+			"#",
+			"g*",
+			"g#",
+		},
 	})
 	use({
 		"kyazdani42/nvim-web-devicons",
@@ -479,6 +494,17 @@ require("packer").startup(function(use)
 				},
 			})
 		end,
+		keys = {
+			[[<leader>r]],
+			[[<C-p>]],
+			[[<leader>s]],
+			[[<leader>8]],
+			[[<leader>/]],
+			[[<leader><Space>/]],
+			[[<leader>d]],
+			[[<leader><C-r>]],
+			[[<leader>g]],
+		},
 		requires = {
 			"nvim-telescope/telescope-fzf-native.nvim",
 		},
@@ -574,6 +600,10 @@ require("packer").startup(function(use)
 				} },
 			})
 		end,
+		keys = {
+			"<leader>ew",
+			"<leader>e/",
+		},
 	})
 	use("rhysd/conflict-marker.vim")
 	use("sodiumjoe/nvim-highlite")
