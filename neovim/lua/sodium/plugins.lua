@@ -5,6 +5,10 @@ vim.g.popup_opts = {
 	border = "rounded",
 }
 
+-- disable netrw so dirvish will work on startup
+vim.g.loaded_netrw = 1
+vim.g.loaded_netrwPlugin = 1
+
 local packer_bootstrap
 local install_path = fn.stdpath("data") .. "/site/pack/packer/start/packer.nvim"
 if fn.empty(fn.glob(install_path)) > 0 then
