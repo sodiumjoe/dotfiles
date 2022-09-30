@@ -2,10 +2,10 @@
   name = Joe Moon
   email = joe@xoxomoon.com
 
-[includeIf "gitdir:~/stripe"]
-  path = ~/stripe/.gitconfig
-[includeIf "gitdir:~/stripe-b"]
-  path = ~/stripe/.gitconfig
+[includeIf "gitdir:/Users/moon/stripe/"]
+  path = /Users/moon/stripe/.gitconfig
+[includeIf "gitdir:/Users/moon/stripe-b/"]
+  path = /Users/moon/stripe/.gitconfig
 
 [alias]
   co = checkout
@@ -23,8 +23,9 @@
 	helper = osxkeychain
 [push]
   default = current
+	autoSetupRemote = true
 [pull]
-	rebase = true
+  rebase = false
 
 [diff]
   tool = vimdiff
