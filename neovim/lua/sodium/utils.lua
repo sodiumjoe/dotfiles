@@ -2,6 +2,10 @@ local M = {}
 
 local default_mapping_opts = { noremap = true, silent = true }
 
+function M.is_executable(bin)
+	return vim.fn.executable(bin) > 0
+end
+
 function M.merge(a, b)
 	return vim.tbl_extend("force", a, b)
 end
