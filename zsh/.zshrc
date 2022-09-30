@@ -157,6 +157,9 @@ export PATH=${PATH}:~/.cargo/bin
 
 export RUSTUP_HOME=~/bin/rustup
 
+# https://gpanders.com/blog/the-definitive-guide-to-using-tmux-256color-on-macos/
+export TERMINFO_DIRS=$TERMINFO_DIRS:$HOME/.local/share/terminfo
+
 export EDITOR='nvim -U none'
 # open in editor
 autoload -z edit-command-line
