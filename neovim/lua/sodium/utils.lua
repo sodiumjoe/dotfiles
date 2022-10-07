@@ -12,7 +12,7 @@ end
 
 function M.map(mappings)
 	for _, m in pairs(mappings) do
-		vim.api.nvim_set_keymap(m[1], m[2], m[3], M.merge(default_mapping_opts, m[4] or {}))
+		vim.keymap.set(m[1], m[2], m[3], M.merge(default_mapping_opts, m[4] or {}))
 	end
 end
 

@@ -186,7 +186,7 @@ require("packer").startup(function(use)
 							group = augroup,
 							buffer = bufnr,
 							callback = function()
-								vim.lsp.buf.formatting_sync()
+								vim.lsp.buf.format()
 							end,
 						})
 					end
@@ -325,7 +325,7 @@ require("packer").startup(function(use)
 				tsserver = {
 					cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192" },
 					on_attach = function(client, bufnr)
-						client.resolved_capabilities.document_formatting = false
+						client.server_capabilities.documentFormattingProvider = false
 						on_attach(client, bufnr)
 					end,
 					init_options = {
@@ -342,7 +342,7 @@ require("packer").startup(function(use)
 			if utils.is_executable("lua-language-server") then
 				servers.sumneko_lua = {
 					on_attach = function(client, bufnr)
-						client.resolved_capabilities.document_formatting = false
+						client.server_capabilities.documentFormattingProvider = false
 						on_attach(client, bufnr)
 					end,
 				}
