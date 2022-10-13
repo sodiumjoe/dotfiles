@@ -333,6 +333,8 @@ require("packer").startup(function(use)
 				require("lspkind").init({})
 			end
 
+			local augroup = vim.api.nvim_create_augroup("RubyLspFormatting", {})
+
 			local servers = {
 				rust_analyzer = {},
 				tsserver = {
@@ -347,7 +349,26 @@ require("packer").startup(function(use)
 					filetypes = { "typescript", "typescriptreact", "typescript.tsx" },
 				},
 				sorbet = {
-					cmd = { "pay", "exec", "scripts/bin/typecheck", "--lsp" },
+					cmd = {
+						"scripts/dev_productivity/while_pay_up_connected.sh",
+						"pay",
+						"exec",
+						"scripts/bin/typecheck",
+						"--lsp",
+						"--enable-all-experimental-lsp-features",
+					},
+					settings = {},
+					on_attach = function(client, bufnr)
+						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
+						vim.api.nvim_create_autocmd("BufWritePre", {
+							group = augroup,
+							buffer = bufnr,
+							callback = function()
+								vim.lsp.buf.format()
+							end,
+						})
+						on_attach(client, bufnr)
+					end,
 				},
 				flow = {},
 			}
