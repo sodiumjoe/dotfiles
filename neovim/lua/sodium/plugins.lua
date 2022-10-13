@@ -9,6 +9,17 @@ vim.g.popup_opts = {
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
 
+local packer_augroup = vim.api.nvim_create_augroup("packer_user_config", {})
+vim.api.nvim_clear_autocmds({ group = packer_augroup })
+vim.api.nvim_create_autocmd("BufWritePost", {
+	group = packer_augroup,
+	callback = function()
+		vim.cmd([[source <afile>]])
+		require("packer").compile()
+	end,
+	pattern = vim.fn.expand("~") .. "/.dotfiles/neovim/lua/sodium/*.lua",
+})
+
 local packer_bootstrap
 local install_path = fn.stdpath("data") .. "/site/pack/packer/start/packer.nvim"
 if fn.empty(fn.glob(install_path)) > 0 then
@@ -314,10 +325,8 @@ require("packer").startup(function(use)
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
-				vim.lsp.handlers.signature_help,
-				vim.g.popup_opts
-			)
+			vim.lsp.handlers["textDocument/signatureHelp"] =
+				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
 			local on_attach = function(client, bufnr)
 				lsp_status.on_attach(client, bufnr)
