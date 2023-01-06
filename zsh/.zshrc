@@ -202,9 +202,12 @@ ZSH_AUTOSUGGEST_MANUAL_REBIND=1
 ZSH_AUTOSUGGEST_HISTORY_IGNORE="man *"
 
 # dir aliases
-hash -d dashboard=~/stripe/pay-server/manage/frontend
-hash -d pay=~/stripe/pay-server
-hash -d manage=~/stripe/pay-server/manage
+[ -f ~/stripe/pay-server/manage/frontend ] && hash -d dashboard=~/stripe/pay-server/manage/frontend
+[ -f ~/stripe/pay-server ] && hash -d pay=~/stripe/pay-server
+[ -f ~/stripe/pay-server/manage ] && hash -d manage=~/stripe/pay-server/manage
+[ -f /pay/src/pay-server/manage/frontend ] && hash -d dashboard=/pay/src/pay-server/manage/frontend
+[ -f /psy/src/pay-server ] && hash -d pay=/pay/src/pay-server
+[ -f /psy/src/pay-server/manage ] && hash -d manage=/pay/src/pay-server/manage
 hash -d config=~/.config
 
 # aliases
