@@ -213,12 +213,19 @@ alias vim='nvim'
 alias vi='nvim'
 
 alias vimdiff='nvim -d'
-alias ll='exa -la'
+if [ -x "$(command -v exa)" ]; then
+  alias ll='exa -la'
+else
+  alias ll='ls -la'
+fi
 alias zd='cd ~/stripe/pay-server/manage/frontend'
 
 # FZF
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+[ -f /usr/share/doc/fzf/examples/key-bindings.zsh ] && source /usr/share/doc/fzf/examples/key-bindings.zsh
+[ -f /usr/share/doc/fzf/examples/completion.zsh ] && source /usr/share/doc/fzf/examples/completion.zsh
+
 export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
   --height=100% \
   --no-bold \
