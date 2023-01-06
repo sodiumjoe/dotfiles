@@ -38,6 +38,16 @@ require("packer").startup(function(use)
 	use("wbthomason/packer.nvim")
 	use("nvim-lua/plenary.nvim")
 	use("benizi/vim-automkdir")
+  use({
+    "ojroques/nvim-osc52",
+    config = function()
+      vim.g.clipboard = {
+        name = 'osc52',
+        copy = {['+'] = copy, ['*'] = copy},
+        paste = {['+'] = paste, ['*'] = paste},
+      }
+    end,
+  })
 	use({
 		"christoomey/vim-tmux-navigator",
 		config = function()
