@@ -659,7 +659,12 @@ require("packer").startup(function(use)
 		},
 	})
 	use("rhysd/conflict-marker.vim")
-	use("sodiumjoe/nvim-highlite")
+	use({
+		"sodiumjoe/nvim-highlite",
+		config = function()
+			vim.cmd([[colorscheme sodium]])
+		end,
+	})
 	use("tpope/vim-commentary")
 	use("tpope/vim-eunuch")
 	use("tpope/vim-fugitive")

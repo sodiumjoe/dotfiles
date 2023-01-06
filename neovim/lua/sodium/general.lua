@@ -28,7 +28,6 @@ end
 -- display
 -- =======
 o.background = [[dark]]
-vim.cmd([[colorscheme sodium]])
 -- folding column width
 w.foldcolumn = [[0]]
 o.showtabline = 0
