@@ -843,6 +843,13 @@
   # typeset -g POWERLEVEL9K_TASKWARRIOR_VISUAL_IDENTIFIER_EXPANSION='⭐'
 
   ##################################[ context: user@hostname ]##################################
+  # custom field for remote devbox
+  if [ -f /pay/conf/mydev-remote-name ]; then
+    typeset -g CONTEXT_CONTENT="%n@$(</pay/conf/mydev-remote-name)"
+  else
+    typeset -g CONTEXT_CONTENT="%n@%m"
+  fi
+
   # Context color when running with privileges.
   typeset -g POWERLEVEL9K_CONTEXT_ROOT_FOREGROUND=1
   # Context color in SSH without privileges.
