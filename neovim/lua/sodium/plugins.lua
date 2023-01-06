@@ -446,7 +446,12 @@ require("packer").startup(function(use)
 			"nvim-telescope/telescope.nvim",
 		},
 	})
-	use("nvim-lua/lsp-status.nvim")
+	use({
+		"nvim-lua/lsp-status.nvim",
+		config = function()
+			require("sodium.statusline")
+		end,
+	})
 	use("nvim-lua/popup.nvim")
 	use({
 		"nvim-telescope/telescope.nvim",

@@ -13,4 +13,3 @@ g.python3_host_prog = "$HOMEBREW_PREFIX/bin/python3"
 
 require("sodium.plugins")
 require("sodium.general")
-require("sodium.statusline")
