@@ -154,6 +154,7 @@ export PATH=${PATH}:~/.bin
 export PATH=${PATH}:~/.bin/terraform
 export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
+export PATH=${PATH}:~/node-bin/node_modules/.bin
 
 export RUSTUP_HOME=~/bin/rustup
 
