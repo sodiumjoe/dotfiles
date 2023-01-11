@@ -57,7 +57,7 @@ require("packer").startup({
 					local line_number = vim.fn.line(".")
 					if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
 						local path = string.gsub(full_path, stripe_dir, "")
-						return string.format([[http://go/lg-view/%s/\\#L%s]], path, line_number)
+						return string.format([[http://go/lg-view/%s#L%s]], path, line_number)
 					else
 						return nil
 					end
