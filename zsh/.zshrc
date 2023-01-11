@@ -245,6 +245,47 @@ fbr() {
   git checkout $branch
 }
 
+remotes() {
+  local list remote
+  list=$(pay remote list --raw | jq -r 'sort_by(.last_accessed) | reverse | .[] as {$name, $status, $last_accessed, spec: {source_specs: [{$git_ref}]}} | $last_accessed | localtime | strflocaltime("%c") as $last | [$name, "[\($status)]", "\($git_ref)", $last] | @tsv' | column -t)
+  remote=$(echo "$list" | fzf) &&
+    pay remote ssh $(echo "$remote" | cut -w -f 1)
+}
+
+remote() {
+  local branch
+  branch="$(whoami)/$1"
+
+  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready
+}
+
+osc52copy() {
+  local encoded
+  encoded=$(echo $1 | base64)
+  printf '\033]52;c;%s\a' $encoded
+}
+
+ghpr() {
+  local origin owner branch url
+
+  origin=$(git remote -v | grep origin | grep push | cut -d ':' -f 2 | cut -d '.' -f 1 | cut -d ' ' -f 1)
+  # echo $origin
+
+  owner=$(echo "$origin" | cut -d '/' -f 1)
+  # echo $owner
+
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  # echo $branch
+
+  if [[ "$owner" == "stripe-internal" ]]; then
+    url="https://git.corp.stripe.com/$origin/compare/$branch?expand=1"
+  else
+    url="https://github.com/$origin/pull/new/$branch"
+  fi
+
+  osc52copy $url
+}
+
 alias zz='z -c'      # restrict matches to subdirs of $PWD
 alias zf='z -I'      # use fzf to select in multiple matches
 
