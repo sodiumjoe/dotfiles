@@ -84,7 +84,7 @@ require("packer").startup({
 							"",
 							{
 								callback = function()
-									copy(vim.fn.expand("%"))
+									copy({ vim.fn.expand("%") })
 								end,
 							},
 						},
@@ -95,7 +95,7 @@ require("packer").startup({
 							"",
 							{
 								callback = function()
-									copy(vim.fn.expand("%:p"))
+									copy({ vim.fn.expand("%:p") })
 								end,
 							},
 						},
