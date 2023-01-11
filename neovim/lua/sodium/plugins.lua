@@ -571,11 +571,6 @@ require("packer").startup({
 		use({ "nvim-telescope/telescope-fzf-native.nvim", run = "make" })
 		use({
 			"nvim-treesitter/nvim-treesitter",
-			run = function()
-				if vim.fn.exists(":TSUpdate") == 2 then
-					vim.cmd(":TSUpdate")
-				end
-			end,
 			config = function()
 				require("nvim-treesitter.configs").setup({
 					ensure_installed = {
