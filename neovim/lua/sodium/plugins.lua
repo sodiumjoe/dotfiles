@@ -155,6 +155,9 @@ require("packer").startup({
 				"<C-w>l",
 				"<C-w>w",
 			},
+			cond = function()
+				return os.getenv("SSH_CLIENT") == nil
+			end,
 		})
 		use({
 			"editorconfig/editorconfig-vim",
