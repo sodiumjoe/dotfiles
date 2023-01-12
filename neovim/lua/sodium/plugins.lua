@@ -137,29 +137,6 @@ require("packer").startup({
 			end,
 		})
 		use({
-			"christoomey/vim-tmux-navigator",
-			config = function()
-				vim.g.tmux_navigator_no_mappings = 1
-				require("sodium.utils").map({
-					{ "n", "<C-w>h", ":TmuxNavigateLeft<cr>" },
-					{ "n", "<C-w>j", ":TmuxNavigateDown<cr>" },
-					{ "n", "<C-w>k", ":TmuxNavigateUp<cr>" },
-					{ "n", "<C-w>l", ":TmuxNavigateRight<cr>" },
-					{ "n", "<C-w>w", ":TmuxNavigatePrevious<cr>" },
-				})
-			end,
-			keys = {
-				"<C-w>h",
-				"<C-w>j",
-				"<C-w>k",
-				"<C-w>l",
-				"<C-w>w",
-			},
-			cond = function()
-				return os.getenv("SSH_CLIENT") == nil
-			end,
-		})
-		use({
 			"editorconfig/editorconfig-vim",
 			config = function()
 				vim.g.EditorConfig_exclude_patterns = { "fugitive://.*" }
