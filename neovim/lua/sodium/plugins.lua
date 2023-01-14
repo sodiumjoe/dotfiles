@@ -257,13 +257,16 @@ require("packer").startup({
 						end,
 						prefer_local = true,
 					}),
-					null_ls.builtins.formatting.rustfmt,
+					null_ls.builtins.formatting.rustfmt.with({
+						condition = function()
+							return utils.is_executable("rustfmt")
+						end,
+					}),
 					null_ls.builtins.formatting.stylua.with({
 						condition = function()
 							return utils.is_executable("stylua")
 						end,
 					}),
-					null_ls.builtins.formatting.rustfmt,
 				}
 
 				local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
