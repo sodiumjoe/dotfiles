@@ -261,7 +261,7 @@ require("packer").startup({
 						condition = function()
 							return utils.is_executable("rustfmt")
 						end,
-					}),
+          }),
 					null_ls.builtins.formatting.stylua.with({
 						condition = function()
 							return utils.is_executable("stylua")
