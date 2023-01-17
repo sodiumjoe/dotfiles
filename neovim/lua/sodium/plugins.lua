@@ -416,7 +416,13 @@ require("packer").startup({
 				local servers = {
 					rust_analyzer = {},
 					tsserver = {
-						cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192" },
+						cmd = {
+							"/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+							"--ms-enable-electron-run-as-node",
+							"/Users/moon/.nodenv/versions/14.18.1/bin/typescript-language-server",
+							"--stdio",
+						},
+						cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192", ELECTRON_RUN_AS_NODE = "1" },
 						on_attach = function(client, bufnr)
 							client.server_capabilities.documentFormattingProvider = false
 							on_attach(client, bufnr)
