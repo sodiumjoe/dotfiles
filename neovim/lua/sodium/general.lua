@@ -3,6 +3,8 @@ local g = vim.g
 local o = vim.o
 local w = vim.wo
 
+o.number = true
+o.cursorline = true
 o.undofile = true
 o.splitbelow = true
 o.splitright = true

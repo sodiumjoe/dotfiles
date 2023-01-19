@@ -681,7 +681,9 @@ require("packer").startup({
 		use({
 			"sodiumjoe/nvim-highlite",
 			config = function()
-				vim.cmd([[colorscheme sodium]])
+				vim.cmd.colorscheme("sodium")
+				vim.api.nvim_set_hl(0, "LineNr", { fg = "#556873" })
+				vim.api.nvim_set_hl(0, "CursorLine", {})
 			end,
 		})
 		use("tpope/vim-commentary")
