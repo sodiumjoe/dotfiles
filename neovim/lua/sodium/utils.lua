@@ -12,7 +12,11 @@ end
 
 function M.map(mappings)
 	for _, m in pairs(mappings) do
-		vim.keymap.set(m[1], m[2], m[3], M.merge(default_mapping_opts, m[4] or {}))
+		local mode = m[1]
+		local lhs = m[2]
+		local rhs = m[3]
+		local opts = M.merge(default_mapping_opts, m[4] or {})
+		vim.keymap.set(mode, lhs, rhs, opts)
 	end
 end
 

@@ -81,36 +81,27 @@ require("packer").startup({
 						{
 							"n",
 							[[<leader>cr]],
-							"",
-							{
-								callback = function()
-									copy({ vim.fn.expand("%") })
-								end,
-							},
+							function()
+								copy({ vim.fn.expand("%") })
+							end,
 						},
 						-- copy full path to clipboard
 						{
 							"n",
 							[[<leader>cf]],
-							"",
-							{
-								callback = function()
-									copy({ vim.fn.expand("%:p") })
-								end,
-							},
+							function()
+								copy({ vim.fn.expand("%:p") })
+							end,
 						},
 						{
 							"n",
 							[[<leader>l]],
-							"",
-							{
-								callback = function()
-									local lg_url = get_lg_url()
-									if lg_url ~= nil then
-										copy({ lg_url })
-									end
-								end,
-							},
+							function()
+								local lg_url = get_lg_url()
+								if lg_url ~= nil then
+									copy({ lg_url })
+								end
+							end,
 						},
 					})
 				else
@@ -122,15 +113,12 @@ require("packer").startup({
 						{
 							"n",
 							[[<leader>l]],
-							"",
-							{
-								callback = function()
-									local lg_url = get_lg_url()
-									if lg_url ~= nil then
-										vim.fn.setreg("+", lg_url)
-									end
-								end,
-							},
+							function()
+								local lg_url = get_lg_url()
+								if lg_url ~= nil then
+									vim.fn.setreg("+", lg_url)
+								end
+							end,
 						},
 					})
 				end
@@ -474,29 +462,26 @@ require("packer").startup({
 					nvim_lsp[lsp].setup(setup_options)
 				end
 				utils.map({
-					{ "n", "gD", "", { callback = vim.lsp.buf.declaration } },
-					{ "n", "gd", "", { callback = vim.lsp.buf.definition } },
-					{ "n", "K", "", { callback = vim.lsp.buf.hover } },
-					{ "n", "gi", "", { callback = vim.lsp.buf.implementation } },
-					{ "n", "<space>D", "", { callback = vim.lsp.buf.type_definition } },
+					{ "n", "gD", vim.lsp.buf.declaration },
+					{ "n", "gd", vim.lsp.buf.definition },
+					{ "n", "K", vim.lsp.buf.hover },
+					{ "n", "gi", vim.lsp.buf.implementation },
+					{ "n", [[<leader>D]], vim.lsp.buf.type_definition },
 					-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
-					{ "n", "<space>ca", "", { callback = vim.lsp.buf.code_action } },
-					{ "n", "gr", "", { callback = vim.lsp.buf.references } },
-					{ "n", "<space>ee", "", { callback = vim.lsp.diagnostic.show_line_diagnostics } },
-					{ "n", "<leader>p", "", { callback = vim.diagnostic.goto_prev } },
-					{ "n", "<leader>n", "", { callback = vim.diagnostic.goto_next } },
+					{ "n", [[<leader>ca]], vim.lsp.buf.code_action },
+					{ "n", "gr", vim.lsp.buf.references },
+					{ "n", [[<leader>ee]], vim.diagnostic.open_float },
+					{ "n", [[<leader>p]], vim.diagnostic.goto_prev },
+					{ "n", [[<leader>n]], vim.diagnostic.goto_next },
 					{
 						"n",
-						"<space>q",
-						"",
-						{
-							callback = function()
-								vim.diagnostic.setqflist({ open = false })
-								require("telescope.builtin").quickfix({ initial_mode = "normal" })
-							end,
-						},
+						[[<leader>q]],
+						function()
+							vim.diagnostic.setqflist({ open = false })
+							require("telescope.builtin").quickfix({ initial_mode = "normal" })
+						end,
 					},
-					{ "n", "<space>f", "", { callback = vim.lsp.buf.formatting } },
+					{ "n", [[<leader>f]], vim.lsp.buf.formatting },
 				})
 			end,
 			requires = {
@@ -614,17 +599,6 @@ require("packer").startup({
 					},
 				})
 			end,
-			keys = {
-				[[<leader>r]],
-				[[<C-p>]],
-				[[<leader>s]],
-				[[<leader>8]],
-				[[<leader>/]],
-				[[<leader><Space>/]],
-				[[<leader>d]],
-				[[<leader><C-r>]],
-				[[<leader>g]],
-			},
 			requires = {
 				"nvim-telescope/telescope-fzf-native.nvim",
 			},
@@ -687,20 +661,20 @@ require("packer").startup({
 				require("sodium.utils").map({
 					{
 						"n",
-						"<leader>ew",
+						[[<leader>ew]],
 						"",
 						{
 							callback = require("hop").hint_words,
 						},
 					},
-					{ "n", "<leader>e/", "", {
+					{ "n", [[<leader>e/]], "", {
 						callback = require("hop").hint_patterns,
 					} },
 				})
 			end,
 			keys = {
-				"<leader>ew",
-				"<leader>e/",
+				[[<leader>ew]],
+				[[<leader>e/]],
 			},
 		})
 		use("rhysd/conflict-marker.vim")
@@ -750,15 +724,14 @@ require("packer").startup({
 				})
 
 				utils.map({
-					{ "n", "<leader>wp", "<Plug>VimwikiDiaryPrevDay" },
-					{ "n", "<leader>=", "<Plug>VimwikiAddHeaderLevel" },
-					{ "n", "<leader>-", "<Plug>VimwikiRemoveHeaderLevel" },
+					{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
+					{ "n", [[<leader>=]], "<Plug>VimwikiAddHeaderLevel" },
+					{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
 				})
 			end,
 			requires = {
 				"hrsh7th/nvim-cmp",
 			},
-			ft = "vimwiki",
 		})
 		use({
 			"whatyouhide/vim-lengthmatters",
