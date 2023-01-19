@@ -724,10 +724,6 @@ require("packer").startup({
 
 				vimwiki_autocmd("FileType", {
 					pattern = { "vimwiki" },
-					command = "nmap <buffer> <leader>wn <Plug>VimwikiDiaryNextDay",
-				})
-				vimwiki_autocmd("FileType", {
-					pattern = { "vimwiki" },
 					callback = function()
 						require("cmp").setup.buffer({ enabled = false })
 					end,
@@ -735,6 +731,7 @@ require("packer").startup({
 
 				utils.map({
 					{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
+					{ "n", [[<leader>wn]], [[<Plug>VimwikiDiaryNextDay]] },
 					{ "n", [[<leader>=]], "<Plug>VimwikiAddHeaderLevel" },
 					{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
 				})
