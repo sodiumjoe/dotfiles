@@ -685,6 +685,13 @@ require("packer").startup({
 				vim.cmd.colorscheme("sodium")
 				vim.api.nvim_set_hl(0, "LineNr", { fg = "#556873" })
 				vim.api.nvim_set_hl(0, "CursorLine", {})
+				local line_nr_autocmd = require("sodium.utils").augroup("LineNr", { clear = true })
+				line_nr_autocmd("FileType", {
+					pattern = { "vimwiki", "dirvish" },
+					callback = function()
+						vim.opt_local.number = false
+					end,
+				})
 			end,
 		})
 		use("tpope/vim-commentary")
