@@ -235,6 +235,9 @@ require("packer").startup({
 						command = "scripts/bin/rubocop-daemon/rubocop",
 					}),
 					null_ls.builtins.formatting.prettier.with({
+						condition = function()
+							return utils.is_executable("prettier")
+						end,
 						cwd = function(params)
 							return require("lspconfig/util").root_pattern("prettier.config.js")(params.bufname)
 						end,
