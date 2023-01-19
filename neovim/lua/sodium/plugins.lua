@@ -261,7 +261,7 @@ require("packer").startup({
 						condition = function()
 							return utils.is_executable("rustfmt")
 						end,
-          }),
+					}),
 					null_ls.builtins.formatting.stylua.with({
 						condition = function()
 							return utils.is_executable("stylua")
@@ -644,6 +644,7 @@ require("packer").startup({
 						"json",
 						"lua",
 						"markdown",
+						"markdown_inline",
 						"python",
 						"ruby",
 						"rust",
@@ -757,6 +758,7 @@ require("packer").startup({
 			requires = {
 				"hrsh7th/nvim-cmp",
 			},
+			ft = "vimwiki",
 		})
 		use({
 			"whatyouhide/vim-lengthmatters",
