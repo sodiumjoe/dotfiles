@@ -760,6 +760,7 @@ require("packer").startup({
 					"javascript",
 					"javascript.jsx",
 					"lua",
+					"typescript",
 				}
 			end,
 		})
