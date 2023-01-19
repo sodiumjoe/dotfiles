@@ -481,7 +481,7 @@ require("packer").startup({
 							require("telescope.builtin").quickfix({ initial_mode = "normal" })
 						end,
 					},
-					{ "n", [[<leader>f]], vim.lsp.buf.formatting },
+					{ "n", [[<leader>f]], vim.lsp.buf.format },
 				})
 			end,
 			requires = {
