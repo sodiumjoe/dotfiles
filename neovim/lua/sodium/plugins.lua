@@ -476,10 +476,7 @@ require("packer").startup({
 					{
 						"n",
 						[[<leader>q]],
-						function()
-							vim.diagnostic.setqflist({ open = false })
-							require("telescope.builtin").quickfix({ initial_mode = "normal" })
-						end,
+						"<cmd>TroubleToggle<cr>",
 					},
 					{ "n", [[<leader>f]], vim.lsp.buf.format },
 				})
