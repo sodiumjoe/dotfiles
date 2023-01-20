@@ -520,83 +520,67 @@ require("packer").startup({
 					{
 						"n",
 						[[<leader>r]],
-						"",
-						{
-							callback = function()
-								require("telescope.builtin").resume({ initial_mode = "normal" })
-							end,
-						},
+						function()
+							require("telescope.builtin").resume({ initial_mode = "normal" })
+						end,
 					},
 					{
 						"n",
 						[[<C-p>]],
-						"",
-						{
-							callback = function()
-								require("telescope.builtin").find_files({ hidden = true })
-							end,
-						},
+						function()
+							require("telescope.builtin").find_files({ hidden = true })
+						end,
 					},
 					{
 						"n",
 						[[<leader>s]],
-						"",
-						{
-							callback = function()
-								require("telescope.builtin").buffers({
-									show_all_buffers = true,
-									sort_mru = true,
-									ignore_current_buffer = true,
-									initial_mode = "normal",
-								})
-							end,
-						},
+						function()
+							require("telescope.builtin").buffers({
+								show_all_buffers = true,
+								sort_mru = true,
+								ignore_current_buffer = true,
+								initial_mode = "normal",
+							})
+						end,
 					},
-					{ "n", [[<leader>8]], "", {
-						callback = require("telescope.builtin").grep_string,
-					} },
 					{
 						"n",
 						[[<leader>/]],
-						"",
-						{
-							callback = require("telescope.builtin").live_grep,
-						},
+						function()
+							require("telescope.builtin").live_grep()
+						end,
 					},
 					{
 						"n",
 						[[<leader><Space>/]],
-						"",
-						{
-							callback = function()
-								require("telescope.builtin").live_grep({ cwd = vim.fn.expand("%:h") })
-							end,
-						},
+						function()
+							require("telescope.builtin").live_grep({ cwd = vim.fn.expand("%:h") })
+						end,
 					},
 					-- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
 					{
 						"n",
 						[[<leader>d]],
-						"",
-						{
-							callback = function()
-								require("telescope.builtin").find_files({ search_dirs = vim.fn.expand("%:h") })
-							end,
-						},
+						function()
+							require("telescope.builtin").find_files({ search_dirs = vim.fn.expand("%:h") })
+						end,
 					},
-					{ "n", [[<leader><C-r>]], "", { callback = require("telescope.builtin").registers } },
+					{
+						"n",
+						[[<leader><C-r>]],
+						function()
+							require("telescope.builtin").registers()
+						end,
+					},
 					{
 						"n",
 						[[<leader>g]],
-						"",
-						{
-							callback = function()
-								require("telescope.builtin").git_status({
-									use_git_root = false,
-									initial_mode = "normal",
-								})
-							end,
-						},
+						function()
+							require("telescope.builtin").git_status({
+								use_git_root = false,
+								initial_mode = "normal",
+							})
+						end,
 					},
 				})
 			end,
@@ -663,14 +647,17 @@ require("packer").startup({
 					{
 						"n",
 						[[<leader>ew]],
-						"",
-						{
-							callback = require("hop").hint_words,
-						},
+						function()
+							require("hop").hint_words()
+						end,
 					},
-					{ "n", [[<leader>e/]], "", {
-						callback = require("hop").hint_patterns,
-					} },
+					{
+						"n",
+						[[<leader>e/]],
+						function()
+							require("hop").hint_patterns()
+						end,
+					},
 				})
 			end,
 			keys = {
