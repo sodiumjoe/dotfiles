@@ -672,11 +672,27 @@ require("packer").startup({
 				vim.cmd.colorscheme("sodium")
 				vim.api.nvim_set_hl(0, "LineNr", { fg = "#556873" })
 				vim.api.nvim_set_hl(0, "CursorLine", {})
-				local line_nr_autocmd = require("sodium.utils").augroup("LineNr", { clear = true })
+				local utils = require("sodium.utils")
+				local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
 				line_nr_autocmd("FileType", {
 					pattern = { "vimwiki", "dirvish" },
 					callback = function()
 						vim.opt_local.number = false
+					end,
+				})
+				local cursorline_autocomd = utils.augroup("CurrentBufferCursorline", { clear = true })
+				cursorline_autocomd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
+					pattern = "*",
+					callback = function()
+						vim.opt_local.cursorline = true
+						vim.api.nvim_set_hl(0, "LineNr", { fg = "#556873" })
+					end,
+				})
+				cursorline_autocomd({ "WinLeave" }, {
+					pattern = "*",
+					callback = function()
+						vim.opt_local.cursorline = false
+						vim.api.nvim_set_hl(0, "LineNr", { fg = "blue" })
 					end,
 				})
 			end,
