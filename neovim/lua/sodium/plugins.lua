@@ -622,6 +622,13 @@ require("packer").startup({
 			end,
 		})
 		use({
+			"nvim-treesitter/nvim-treesitter-context",
+			config = function()
+				require("treesitter-context").setup()
+				vim.api.nvim_set_hl(0, "TreesitterContextLineNumber", { fg = "#E6EEF3" })
+			end,
+		})
+		use({
 			"norcalli/nvim-colorizer.lua",
 			config = function()
 				require("colorizer").setup()
