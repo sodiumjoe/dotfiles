@@ -23,13 +23,13 @@ hs.window.highlight.start()
 local gap = 22
 
 local function resetScreenRotations()
-  local middle = hs.screen.find("37D8832A-2D66-02CA-B9F7-8F30A301B230")
+  local middle = hs.screen.find("81044D97-F0BF-4515-AE1C-ACE958274C97")
   local rotated = false
   if middle:rotate() ~= 90 then
     middle:rotate(90)
     rotated = true
   end
-  local right = hs.screen.find("C65C9045-8DE8-44F4-BC3F-BD3DCA9BD776")
+  local right = hs.screen.find("D2ADD566-96EC-4E80-BAEF-5BA40FD6E2FC")
   if right:rotate() ~= 270 then
     right:rotate(270)
     rotated = true
