@@ -11,7 +11,6 @@ git clone --recursive git@github.com:zimfw/zimfw.git ${XDG_CONFIG_HOME}/zsh/.zim
 # symlink dotfiles
 
 files=(\
-  "mackup.cfg"\
   "ignore"\
   "gitconfig"\
   "tmux.conf"\
