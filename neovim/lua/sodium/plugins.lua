@@ -679,8 +679,6 @@ require("packer").startup({
 			"sodiumjoe/nvim-highlite",
 			config = function()
 				vim.cmd.colorscheme("sodium")
-				vim.api.nvim_set_hl(0, "LineNr", { fg = "#556873" })
-				vim.api.nvim_set_hl(0, "CursorLine", {})
 				local utils = require("sodium.utils")
 				local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
 				line_nr_autocmd("FileType", {
@@ -702,14 +700,12 @@ require("packer").startup({
 					pattern = "*",
 					callback = function()
 						vim.opt_local.cursorline = true
-						vim.api.nvim_set_hl(0, "LineNr", { fg = "#556873" })
 					end,
 				})
 				cursorline_autocomd({ "WinLeave" }, {
 					pattern = "*",
 					callback = function()
 						vim.opt_local.cursorline = false
-						vim.api.nvim_set_hl(0, "LineNr", { fg = "blue" })
 					end,
 				})
 			end,
