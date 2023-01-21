@@ -140,7 +140,7 @@ local function insert_item(t, value)
 	end
 end
 
-local non_standard_filetypes = { "Trouble", "" }
+local non_standard_filetypes = { "", "Trouble", "vimwiki" }
 
 local function is_non_standard_filetype(ft)
   local ret = false
