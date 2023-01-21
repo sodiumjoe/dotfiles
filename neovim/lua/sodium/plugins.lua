@@ -681,27 +681,33 @@ require("packer").startup({
 				vim.cmd.colorscheme("sodium")
 				local utils = require("sodium.utils")
 				local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
+        -- disable line number in vimwiki and dirvish
 				line_nr_autocmd("FileType", {
 					pattern = { "vimwiki", "dirvish" },
 					callback = function()
 						vim.opt_local.number = false
 					end,
 				})
-				line_nr_autocmd("BufEnter", {
+				line_nr_autocmd({ "BufNewFile", "BufRead", "BufEnter" }, {
 					pattern = "*",
 					callback = function()
-						if vim.o.filetype == "" then
+            -- disable line number in empty buffer
+						if vim.filetype.match({ buf = 0 }) == nil then
 							vim.opt_local.number = false
+						else
+							vim.opt_local.number = true
 						end
 					end,
 				})
 				local cursorline_autocomd = utils.augroup("CurrentBufferCursorline", { clear = true })
+				-- enable cursorline line number highlight in active window
 				cursorline_autocomd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
 					pattern = "*",
 					callback = function()
 						vim.opt_local.cursorline = true
 					end,
 				})
+				-- disable cursorline line number highlight in inactive windows
 				cursorline_autocomd({ "WinLeave" }, {
 					pattern = "*",
 					callback = function()
