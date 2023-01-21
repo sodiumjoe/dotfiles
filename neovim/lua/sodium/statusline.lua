@@ -140,17 +140,34 @@ local function insert_item(t, value)
 	end
 end
 
+local non_standard_filetypes = { "Trouble", "" }
+
+local function is_non_standard_filetype(ft)
+  local ret = false
+	for key, filetype in ipairs(non_standard_filetypes) do
+    if ft == nil or ft == filetype then
+      ret = true
+      break
+		end
+	end
+  return ret
+end
+
 function _G.active_line()
 	local left_segment_items = {}
 	insert_item(left_segment_items, highlight_item(get_filename(), highlights.active))
-	insert_item(left_segment_items, help_modified_read_only)
+	if not is_non_standard_filetype(vim.bo.filetype) then
+		insert_item(left_segment_items, help_modified_read_only)
+	end
 	local left_segment = table.concat(left_segment_items, padding)
 
 	local right_segment_items = {}
-	insert_item(right_segment_items, pad_item(lsp_progress()))
-	insert_item(right_segment_items, pad_item(lsp_status()))
-	insert_item(right_segment_items, pad_item(get_lines()))
-	insert_item(right_segment_items, pad_item(virtual_column))
+	if not is_non_standard_filetype(vim.bo.filetype) then
+		insert_item(right_segment_items, pad_item(lsp_progress()))
+		insert_item(right_segment_items, pad_item(lsp_status()))
+		insert_item(right_segment_items, pad_item(get_lines()))
+		insert_item(right_segment_items, pad_item(virtual_column))
+	end
 
 	local right_segment = separator .. table.concat(right_segment_items, separator)
 
