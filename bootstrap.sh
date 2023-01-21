@@ -9,7 +9,16 @@ while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
 export XDG_CONFIG_HOME = ${XDG_CONFIG_HOME:=$HOME/.config}
 mkdir -p ${XDG_CONFIG_HOME}
 
-git clone --recursive git@github.com:zimfw/zimfw.git ${XDG_CONFIG_HOME}/zsh/.zim
+local ZIM_DIR=${XDG_CONFIG_HOME}/zsh/.zim
+
+if [ -d $ZIM_DIR ]
+then
+  pushd $ZIM_DIR
+  git pull
+  popd
+else
+  git clone --recursive git@github.com:zimfw/zimfw.git ${XDG_CONFIG_HOME}/zsh/.zim
+fi
 
 # symlink dotfiles
 
@@ -25,7 +34,16 @@ files=(\
   )
 
 for file in ${files[@]}; do
-  ln -s ~/.dotfiles/${file} ~/.${file}
+  local dest=${XDG_CONFIG_HOME}/.${file}
+  if [ -L $dest ]
+  then
+    echo "${dest} symlink already exists, skipping"
+    continue
+  elif [ -f $dest] ]
+    echo "${dest} is a file, skipping"
+  else
+    ln -s ~/.dotfiles/${file} $dest
+  fi
 done
 
 xdg_files=(\
@@ -39,7 +57,18 @@ xdg_files=(\
   )
 
 for file in ${xdg_files[@]}; do
-  ln -s ~/.dotfiles/${file} ${XDG_CONFIG_HOME}/${file}
+  local dest=${XDG_CONFIG_HOME}/${file}
+  if [ -L $dest ]
+  then
+    echo "${dest} symlink already exists, skipping"
+    continue
+  elif [ -f $dest] ]
+    echo "${dest} is a file, skipping"
+  elif [ -d $dest] ]
+    echo "${dest} is a dir, skipping"
+  else
+    ln -s ~/.dotfiles/${file} $dest
+  fi
 done
 
 # http://brew.sh/
