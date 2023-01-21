@@ -1,5 +1,5 @@
 local utils = require("sodium.utils")
-local g = vim.g
+local g = vim.go
 local o = vim.o
 local w = vim.wo
 
