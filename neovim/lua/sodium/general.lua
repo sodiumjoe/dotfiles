@@ -44,7 +44,7 @@ g.diffopt = [[filler,vertical,algorithm:patience]]
 o.guicursor = [[n-v-sm:block-Cursor,i-c-ci-ve:ver25,r-cr-o:hor20]]
 w.signcolumn = [[yes]]
 w.breakindent = true
-g.fillchars = [[vert:\│,eob:⌁]]
+g.fillchars = [[eob:⌁]]
 
 -- misc
 -- ====
