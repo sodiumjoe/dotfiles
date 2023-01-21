@@ -687,6 +687,14 @@ require("packer").startup({
 						vim.opt_local.number = false
 					end,
 				})
+        line_nr_autocmd("BufEnter", {
+          pattern="*",
+          callback = function()
+            if vim.o.filetype == '' then
+              vim.opt_local.number = false
+            end
+          end
+        })
 				local cursorline_autocomd = utils.augroup("CurrentBufferCursorline", { clear = true })
 				cursorline_autocomd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
 					pattern = "*",
