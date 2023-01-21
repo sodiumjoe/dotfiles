@@ -143,14 +143,14 @@ end
 local non_standard_filetypes = { "", "Trouble", "vimwiki" }
 
 local function is_non_standard_filetype(ft)
-  local ret = false
+	local ret = false
 	for key, filetype in ipairs(non_standard_filetypes) do
-    if ft == nil or ft == filetype then
-      ret = true
-      break
+		if ft == nil or ft == filetype then
+			ret = true
+			break
 		end
 	end
-  return ret
+	return ret
 end
 
 function _G.active_line()

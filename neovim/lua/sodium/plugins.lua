@@ -395,8 +395,10 @@ require("packer").startup({
 				end
 
 				vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-				vim.lsp.handlers["textDocument/signatureHelp"] =
-					vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
+				vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
+					vim.lsp.handlers.signature_help,
+					vim.g.popup_opts
+				)
 
 				local on_attach = function(client, bufnr)
 					lsp_status.on_attach(client, bufnr)
@@ -687,14 +689,14 @@ require("packer").startup({
 						vim.opt_local.number = false
 					end,
 				})
-        line_nr_autocmd("BufEnter", {
-          pattern="*",
-          callback = function()
-            if vim.o.filetype == '' then
-              vim.opt_local.number = false
-            end
-          end
-        })
+				line_nr_autocmd("BufEnter", {
+					pattern = "*",
+					callback = function()
+						if vim.o.filetype == "" then
+							vim.opt_local.number = false
+						end
+					end,
+				})
 				local cursorline_autocomd = utils.augroup("CurrentBufferCursorline", { clear = true })
 				cursorline_autocomd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
 					pattern = "*",
