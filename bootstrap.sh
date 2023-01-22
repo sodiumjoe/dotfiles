@@ -19,8 +19,7 @@ for file in ${files[@]}; do
   local dest=${XDG_CONFIG_HOME}/.${file}
   if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
-    continue
-  elif [ -f ${dest} ]
+  elif [ -f ${dest} ]; then
     echo "${dest} is a file, skipping"
   else
     ln -s ~/.dotfiles/${file} ${dest}
@@ -42,9 +41,9 @@ for file in ${xdg_files[@]}; do
   if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
     continue
-  elif [ -f ${dest} ]
+  elif [ -f ${dest} ]; then
     echo "${dest} is a file, skipping"
-  elif [ -d ${dest} ]
+  elif [ -d ${dest} ]; then
     echo "${dest} is a dir, skipping"
   else
     ln -s ~/.dotfiles/${file} $dest
