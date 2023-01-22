@@ -58,7 +58,7 @@ if [ -d $ZIM_HOME ]; then
   popd
 else
   git clone --recursive https://github.com/zimfw/zimfw.git ${ZIM_HOME}
-  zsh -c 'curl -fsSL --create-dirs -o ${ZIM_HOME}/zimfw.zsh https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh; source ${ZIM_HOME}/zimfw.zsh init -q'
+  zsh -c 'ZIM_HOME=${ZIM_HOME} curl -fsSL --create-dirs -o ${ZIM_HOME}/zimfw.zsh https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh; source ${ZIM_HOME}/zimfw.zsh init -q'
 fi
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
