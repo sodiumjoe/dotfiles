@@ -20,7 +20,7 @@ for file in ${files[@]}; do
   if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
     continue
-  elif [ -f $dest] ]
+  elif [ -f $dest} ]
     echo "${dest} is a file, skipping"
   else
     ln -s ~/.dotfiles/${file} ${dest}
