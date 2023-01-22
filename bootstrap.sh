@@ -50,19 +50,23 @@ for file in ${xdg_files[@]}; do
   fi
 done
 
-ZIM_DIR=${XDG_CONFIG_HOME}/zsh/.zim
+ZIM_HOME=${XDG_CONFIG_HOME}/zsh/.zim
 
-if [ -d $ZIM_DIR ]; then
-  pushd $ZIM_DIR
+if [ -d $ZIM_HOME ]; then
+  pushd $ZIM_HOME
   git pull
   popd
 else
-  git clone --recursive git@github.com:zimfw/zimfw.git ${ZIM_DIR}
+  git clone --recursive git@github.com:zimfw/zimfw.git ${ZIM_HOME}
   zsh -c 'curl -fsSL --create-dirs -o ${ZIM_HOME}/zimfw.zsh https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh; source ${ZIM_HOME}/zimfw.zsh init -q'
 fi
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
-ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
+if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
+  echo "init.lua symlink already exists, skipping"
+else
+  ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
+fi
 
 # install packer
 if [ -d ~/.local/share/nvim/site/pack/packer/start/packer.nvim ]; then
