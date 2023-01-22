@@ -1,24 +1,6 @@
 #!/usr/bin/env bash
 
-# Ask for the administrator password upfront.
-sudo -v
-
-# Keep-alive: update existing `sudo` time stamp until the script has finished.
-while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
-
-export XDG_CONFIG_HOME = ${XDG_CONFIG_HOME:=$HOME/.config}
-mkdir -p ${XDG_CONFIG_HOME}
-
-local ZIM_DIR=${XDG_CONFIG_HOME}/zsh/.zim
-
-if [ -d $ZIM_DIR ]
-then
-  pushd $ZIM_DIR
-  git pull
-  popd
-else
-  git clone --recursive git@github.com:zimfw/zimfw.git ${XDG_CONFIG_HOME}/zsh/.zim
-fi
+mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 # symlink dotfiles
 
@@ -71,5 +53,31 @@ for file in ${xdg_files[@]}; do
   fi
 done
 
-# http://brew.sh/
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+local ZIM_DIR=${XDG_CONFIG_HOME}/zsh/.zim
+
+if [ -d $ZIM_DIR ]
+then
+  pushd $ZIM_DIR
+  git pull
+  popd
+else
+  git clone --recursive git@github.com:zimfw/zimfw.git ${ZIM_DIR}
+  zsh -c 'curl -fsSL --create-dirs -o ${ZIM_HOME}/zimfw.zsh https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh; source ${ZIM_HOME}/zimfw.zsh init -q'
+fi
+
+mkdir -p ${XDG_CONFIG_HOME}/nvim
+ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
+
+# install packer
+if [ -d ~/.local/share/nvim/site/pack/packer/start/packer.nvim ]
+then
+  echo "Packer already installed"
+else
+  git clone --depth 1 https://github.com/wbthomason/packer.nvim\
+    ~/.local/share/nvim/site/pack/packer/start/packer.nvim
+fi
+
+# install plugins
+nvim --headless -c 'autocmd User PackerCompileDone quitall' -c 'PackerSync'
+nvim --headless -c 'autocmd User PackerComplete quitall' -c 'PackerSnapshotRollback packer-snapshot.json'
+nvim --headless -c 'autocmd User PackerCompileDone quitall' -c 'PackerCompile'
