@@ -58,6 +58,11 @@ if [ -d $ZIM_HOME ]; then
   popd
 else
   git clone --recursive https://github.com/zimfw/zimfw.git ${ZIM_HOME}
+fi
+
+if [ -f ${ZIM_HOME}/zimfw.sh ]; then
+  echo "zimfw.sh already exists, skipping"
+else
   zsh -c 'ZIM_HOME=${ZIM_HOME} curl -fsSL --create-dirs -o ${ZIM_HOME}/zimfw.zsh https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh; source ${ZIM_HOME}/zimfw.zsh init -q'
 fi
 
