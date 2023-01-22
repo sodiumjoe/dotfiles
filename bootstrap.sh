@@ -16,7 +16,7 @@ files=(\
   )
 
 for file in ${files[@]}; do
-  dest=${XDG_CONFIG_HOME}/.${file}
+  dest=${HOME}/.${file}
   if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
   elif [ -f ${dest} ]; then
