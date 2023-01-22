@@ -17,14 +17,13 @@ files=(\
 
 for file in ${files[@]}; do
   local dest=${XDG_CONFIG_HOME}/.${file}
-  if [ -L $dest ]
-  then
+  if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
     continue
   elif [ -f $dest] ]
     echo "${dest} is a file, skipping"
   else
-    ln -s ~/.dotfiles/${file} $dest
+    ln -s ~/.dotfiles/${file} ${dest}
   fi
 done
 
@@ -40,13 +39,12 @@ xdg_files=(\
 
 for file in ${xdg_files[@]}; do
   local dest=${XDG_CONFIG_HOME}/${file}
-  if [ -L $dest ]
-  then
+  if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
     continue
-  elif [ -f $dest] ]
+  elif [ -f ${dest} ]
     echo "${dest} is a file, skipping"
-  elif [ -d $dest] ]
+  elif [ -d ${dest} ]
     echo "${dest} is a dir, skipping"
   else
     ln -s ~/.dotfiles/${file} $dest
@@ -55,8 +53,7 @@ done
 
 local ZIM_DIR=${XDG_CONFIG_HOME}/zsh/.zim
 
-if [ -d $ZIM_DIR ]
-then
+if [ -d $ZIM_DIR ]; then
   pushd $ZIM_DIR
   git pull
   popd
@@ -69,8 +66,7 @@ mkdir -p ${XDG_CONFIG_HOME}/nvim
 ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
 
 # install packer
-if [ -d ~/.local/share/nvim/site/pack/packer/start/packer.nvim ]
-then
+if [ -d ~/.local/share/nvim/site/pack/packer/start/packer.nvim ]; then
   echo "Packer already installed"
 else
   git clone --depth 1 https://github.com/wbthomason/packer.nvim\
