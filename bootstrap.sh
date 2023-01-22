@@ -16,7 +16,7 @@ files=(\
   )
 
 for file in ${files[@]}; do
-  local dest=${XDG_CONFIG_HOME}/.${file}
+  dest=${XDG_CONFIG_HOME}/.${file}
   if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
   elif [ -f ${dest} ]; then
@@ -37,7 +37,7 @@ xdg_files=(\
   )
 
 for file in ${xdg_files[@]}; do
-  local dest=${XDG_CONFIG_HOME}/${file}
+  dest=${XDG_CONFIG_HOME}/${file}
   if [ -L ${dest} ]; then
     echo "${dest} symlink already exists, skipping"
     continue
@@ -50,7 +50,7 @@ for file in ${xdg_files[@]}; do
   fi
 done
 
-local ZIM_DIR=${XDG_CONFIG_HOME}/zsh/.zim
+ZIM_DIR=${XDG_CONFIG_HOME}/zsh/.zim
 
 if [ -d $ZIM_DIR ]; then
   pushd $ZIM_DIR
