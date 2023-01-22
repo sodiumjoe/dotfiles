@@ -57,7 +57,7 @@ if [ -d $ZIM_HOME ]; then
   git pull
   popd
 else
-  git clone --recursive git@github.com:zimfw/zimfw.git ${ZIM_HOME}
+  git clone --recursive https://github.com/zimfw/zimfw.git ${ZIM_HOME}
   zsh -c 'curl -fsSL --create-dirs -o ${ZIM_HOME}/zimfw.zsh https://github.com/zimfw/zimfw/releases/latest/download/zimfw.zsh; source ${ZIM_HOME}/zimfw.zsh init -q'
 fi
 
