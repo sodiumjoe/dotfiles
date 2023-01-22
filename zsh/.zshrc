@@ -203,6 +203,7 @@ ZSH_AUTOSUGGEST_MANUAL_REBIND=1
 ZSH_AUTOSUGGEST_HISTORY_IGNORE="man *"
 
 # dir aliases
+[ -d ~/.dotfiles ] && hash -d dots=~/.dotfiles
 [ -d ~/stripe/pay-server/manage/frontend ] && hash -d dashboard=~/stripe/pay-server/manage/frontend
 [ -d ~/stripe/pay-server/manage ] && hash -d manage=~/stripe/pay-server/manage
 [ -d ~/stripe/pay-server ] && hash -d pay=~/stripe/pay-server
