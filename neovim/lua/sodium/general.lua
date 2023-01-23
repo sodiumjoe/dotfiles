@@ -29,11 +29,8 @@ end
 
 -- display
 -- =======
-o.background = [[dark]]
 -- folding column width
-w.foldcolumn = [[0]]
 o.showtabline = 0
-o.autoindent = true
 o.smartindent = true
 o.tabstop = 2
 o.shiftwidth = 2
