@@ -22,7 +22,7 @@ o.smartcase = true
 o.ignorecase = true
 o.inccommand = [[split]]
 
-if vim.fn.executable("rg") then
+if utils.is_executable("rg") then
 	o.grepprg = [[rg --vimgrep --no-heading -S]]
 	o.grepformat = [[%f:%l:%c:%m,%f:%l:%m]]
 end
