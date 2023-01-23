@@ -395,10 +395,8 @@ require("packer").startup({
 				end
 
 				vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-				vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
-					vim.lsp.handlers.signature_help,
-					vim.g.popup_opts
-				)
+				vim.lsp.handlers["textDocument/signatureHelp"] =
+					vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
 				local on_attach = function(client, bufnr)
 					lsp_status.on_attach(client, bufnr)
@@ -681,9 +679,9 @@ require("packer").startup({
 				vim.cmd.colorscheme("sodium")
 				local utils = require("sodium.utils")
 				local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
-        -- disable line number in vimwiki and dirvish
+				-- disable line number in vimwiki and dirvish
 				line_nr_autocmd("FileType", {
-					pattern = { "vimwiki", "dirvish" },
+					pattern = { "vimwiki", "dirvish", "help" },
 					callback = function()
 						vim.opt_local.number = false
 					end,
@@ -691,7 +689,7 @@ require("packer").startup({
 				line_nr_autocmd({ "BufNewFile", "BufRead", "BufEnter" }, {
 					pattern = "*",
 					callback = function()
-            -- disable line number in empty buffer
+						-- disable line number in empty buffer
 						if vim.filetype.match({ buf = 0 }) == nil then
 							vim.opt_local.number = false
 						else

@@ -140,54 +140,48 @@ local function insert_item(t, value)
 	end
 end
 
-local non_standard_filetypes = { "", "Trouble", "vimwiki" }
+local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
 
-local function is_non_standard_filetype(ft)
-	local ret = false
+local function is_standard_filetype(ft)
+	local ret = true
 	for _, filetype in ipairs(non_standard_filetypes) do
 		if ft == nil or ft == filetype then
-			ret = true
+			ret = false
 			break
 		end
 	end
 	return ret
 end
 
-function _G.active_line()
+local function get_left_segment(active, standard_filetype)
 	local left_segment_items = {}
-	insert_item(left_segment_items, highlight_item(get_filename(), highlights.active))
-	if not is_non_standard_filetype(vim.bo.filetype) then
+	local filename = get_filename()
+	local highlighted_filename = active and highlight_item(filename, highlights.active) or filename
+	insert_item(left_segment_items, highlighted_filename)
+	if standard_filetype then
 		insert_item(left_segment_items, help_modified_read_only)
 	end
-	local left_segment = table.concat(left_segment_items, padding)
-
-	local right_segment_items = {}
-	if not is_non_standard_filetype(vim.bo.filetype) then
-		insert_item(right_segment_items, pad_item(lsp_progress()))
-		insert_item(right_segment_items, pad_item(lsp_status()))
-		insert_item(right_segment_items, pad_item(get_lines()))
-		insert_item(right_segment_items, pad_item(virtual_column))
-	end
-
-	local right_segment = separator .. table.concat(right_segment_items, separator)
-
-	return table.concat({ left_segment, right_segment }, alignment_group)
+	return table.concat(left_segment_items, padding)
 end
 
-function _G.inactive_line()
-	local left_segment_items = {}
-	insert_item(left_segment_items, get_filename())
-	insert_item(left_segment_items, help_modified_read_only)
-	local left_segment = table.concat(left_segment_items, padding)
-
+local function get_right_segment(active, standard_filetype)
+	if not standard_filetype then
+		return nil
+	end
 	local right_segment_items = {}
+	insert_item(right_segment_items, pad_item(lsp_progress()))
 	insert_item(right_segment_items, pad_item(lsp_status()))
 	insert_item(right_segment_items, pad_item(get_lines()))
 	insert_item(right_segment_items, pad_item(virtual_column))
+	return separator .. table.concat(right_segment_items, separator)
+end
 
-	local right_segment = separator .. table.concat(right_segment_items, separator)
-
-	return table.concat({ left_segment, right_segment }, alignment_group)
+function _G.statusline(active)
+	local standard_filetype = is_standard_filetype(vim.bo.filetype)
+	return table.concat({
+		get_left_segment(active, standard_filetype),
+		get_right_segment(active, standard_filetype),
+	}, alignment_group)
 end
 
 local autocmd = utils.augroup("StatusLine", { clear = true })
@@ -195,7 +189,7 @@ local autocmd = utils.augroup("StatusLine", { clear = true })
 autocmd({ "WinEnter", "BufEnter" }, {
 	pattern = "*",
 	callback = function()
-		vim.opt_local.statusline = [[%{%v:lua.active_line()%}]]
+		vim.opt_local.statusline = [[%{%v:lua.statusline(1)%}]]
 	end,
 	desc = "Statusline (active)",
 })
@@ -203,7 +197,7 @@ autocmd({ "WinEnter", "BufEnter" }, {
 autocmd({ "WinLeave", "BufLeave" }, {
 	pattern = "*",
 	callback = function()
-		vim.opt_local.statusline = [[%{%v:lua.inactive_line()%}]]
+		vim.opt_local.statusline = [[%{%v:lua.statusline()%}]]
 	end,
 	desc = "Statusline (inactive)",
 })
