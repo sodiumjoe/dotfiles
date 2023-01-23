@@ -5,12 +5,12 @@ mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 # symlink dotfiles
 
 files=(\
-  "ignore"\
-  "gitconfig"\
-  "tmux.conf"\
-  "cvimrc"\
   "bin"\
   "curlrc"\
+  "cvimrc"\
+  "gitconfig"\
+  "hammerspoon"\
+  "ignore"\
   "inputrc"\
   "zshenv"\
   )
@@ -28,12 +28,11 @@ done
 
 xdg_files=(\
   "alacritty"\
-  "hammerspoon"\
-  "rg"\
-  "zsh"\
-  "tmux"\
   "karabiner"\
+  "rg"\
+  "tmux"\
   "vivid"\
+  "zsh"\
   )
 
 for file in ${xdg_files[@]}; do
