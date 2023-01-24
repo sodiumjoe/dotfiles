@@ -1,0 +1,8 @@
+{
+  "alfredsnippet" : {
+    "snippet" : "-metrics -domain:t.stripe.com -domain:qa-r.stripe.com -domain:qa-m.stripe.com -domain:m.stripe.com -domain:r.stripe.com -domain:moon-manage_ui-mydev.dev.stripe.me -url:\/sockjs-node -url:\/ajax\/devbox_events",
+    "uid" : "8DD0B589-F7A7-47D9-9CFC-8E06E9FCAD26",
+    "name" : "network filter",
+    "keyword" : "network"
+  }
+}
