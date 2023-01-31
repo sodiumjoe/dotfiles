@@ -552,6 +552,15 @@ require("packer").startup({
 					},
 					{
 						"n",
+						[[<leader>8]],
+						function()
+							require("telescope.builtin").grep_string({
+								initial_mode = "normal",
+							})
+						end,
+					},
+					{
+						"n",
 						[[<leader><Space>/]],
 						function()
 							require("telescope.builtin").live_grep({ cwd = vim.fn.expand("%:h") })
