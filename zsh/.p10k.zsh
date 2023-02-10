@@ -864,9 +864,9 @@
   typeset -g POWERLEVEL9K_CONTEXT_FOREGROUND=7
 
   # Context format when running with privileges: bold user@hostname.
-  typeset -g POWERLEVEL9K_CONTEXT_ROOT_TEMPLATE="🌎[%B${CONTEXT_CONTENT}]"
+  typeset -g POWERLEVEL9K_CONTEXT_ROOT_TEMPLATE=" [%B${CONTEXT_CONTENT}]"
   # Context format when in SSH without privileges: user@hostname.
-  typeset -g POWERLEVEL9K_CONTEXT_{REMOTE,REMOTE_SUDO}_TEMPLATE="🌎[${CONTEXT_CONTENT}]"
+  typeset -g POWERLEVEL9K_CONTEXT_{REMOTE,REMOTE_SUDO}_TEMPLATE=" [${CONTEXT_CONTENT}]"
   # Default context format (no privileges, no SSH): user@hostname.
   typeset -g POWERLEVEL9K_CONTEXT_TEMPLATE='%n@%m'
 
