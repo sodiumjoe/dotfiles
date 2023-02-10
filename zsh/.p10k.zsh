@@ -341,7 +341,7 @@
 
   #####################################[ vcs: git status ]######################################
   # Branch icon. Set this parameter to '\UE0A0 ' for the popular Powerline branch icon.
-  typeset -g POWERLEVEL9K_VCS_BRANCH_ICON='\uF126 '
+  typeset -g POWERLEVEL9K_VCS_BRANCH_ICON='\uF126'
 
   # Untracked files icon. It's really a question mark, your font isn't broken.
   # Change the value of this parameter to show a different icon.
@@ -385,6 +385,11 @@
 
     if [[ -n $VCS_STATUS_LOCAL_BRANCH ]]; then
       local branch=${(V)VCS_STATUS_LOCAL_BRANCH}
+      branch=${branch/moon\//}
+      branch=${branch/$CONTEXT_REMOTE_NAME/}
+      if [ ! -z $branch ]; then
+        branch=" $branch"
+      fi
       # If local branch name is at most 32 characters long, show it in full.
       # Otherwise show the first 12 … the last 12.
       # Tip: To always show local branch name in full without truncation, delete the next line.
@@ -845,10 +850,11 @@
   ##################################[ context: user@hostname ]##################################
   # custom field for remote devbox
   if [ -f /pay/conf/mydev-remote-name ]; then
-    typeset -g CONTEXT_CONTENT="%n@$(</pay/conf/mydev-remote-name)"
+    typeset -g CONTEXT_REMOTE_NAME="$(</pay/conf/mydev-remote-name)"
   else
-    typeset -g CONTEXT_CONTENT="%n@%m"
+    typeset -g CONTEXT_REMOTE_NAME="%m"
   fi
+  typeset -g CONTEXT_CONTENT="%n@${CONTEXT_REMOTE_NAME}"
 
   # Context color when running with privileges.
   typeset -g POWERLEVEL9K_CONTEXT_ROOT_FOREGROUND=1
