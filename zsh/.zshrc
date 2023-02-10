@@ -249,8 +249,12 @@ fbr() {
 remotes() {
   local list remote
   list=$(pay remote list --raw | jq -r 'sort_by(.last_accessed) | reverse | .[] as {$name, $status, $last_accessed, spec: {source_specs: [{$git_ref}]}} | $last_accessed | localtime | strflocaltime("%c") as $last | [$name, "[\($status)]", "\($git_ref)", $last] | @tsv' | column -t)
-  remote=$(echo "$list" | fzf) &&
-    pay remote ssh $(echo "$remote" | cut -w -f 1)
+  remote=$(echo "$list" | fzf)
+  if [ ! -z $remote ]; then
+    remote=$(echo "$remote" | cut -w -f 1)
+    tmux set -w @remote_target $remote
+    pay remote ssh $remote
+  fi
 }
 
 remote() {
@@ -258,6 +262,7 @@ remote() {
   branch="$(whoami)/$1"
 
   pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready
+  pay remote ssh $1
 }
 
 osc52copy() {
