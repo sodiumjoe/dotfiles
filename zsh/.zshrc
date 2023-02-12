@@ -252,7 +252,6 @@ remotes() {
   remote=$(echo "$list" | fzf)
   if [ ! -z $remote ]; then
     remote=$(echo "$remote" | cut -w -f 1)
-    tmux set -w @remote_target $remote
     pay remote ssh $remote
   fi
 }
