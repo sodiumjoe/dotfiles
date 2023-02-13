@@ -252,7 +252,8 @@ remotes() {
   remote=$(echo "$list" | fzf)
   if [ ! -z $remote ]; then
     remote=$(echo "$remote" | cut -w -f 1)
-    pay remote ssh $remote
+    ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux"
+    tmux unnest
   fi
 }
 
