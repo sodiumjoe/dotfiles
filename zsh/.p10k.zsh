@@ -849,12 +849,7 @@
 
   ##################################[ context: user@hostname ]##################################
   # custom field for remote devbox
-  if [ -f /pay/conf/mydev-remote-name ]; then
-    typeset -g CONTEXT_REMOTE_NAME="$(</pay/conf/mydev-remote-name)"
-  else
-    typeset -g CONTEXT_REMOTE_NAME="%m"
-  fi
-  typeset -g CONTEXT_CONTENT="%n@${CONTEXT_REMOTE_NAME}"
+  typeset -g CONTEXT_CONTENT="%n@%m"
 
   # Context color when running with privileges.
   typeset -g POWERLEVEL9K_CONTEXT_ROOT_FOREGROUND=1
@@ -866,7 +861,7 @@
   # Context format when running with privileges: bold user@hostname.
   typeset -g POWERLEVEL9K_CONTEXT_ROOT_TEMPLATE=" [%B${CONTEXT_CONTENT}]"
   # Context format when in SSH without privileges: user@hostname.
-  typeset -g POWERLEVEL9K_CONTEXT_{REMOTE,REMOTE_SUDO}_TEMPLATE=" [${CONTEXT_CONTENT}]"
+  typeset -g POWERLEVEL9K_CONTEXT_{REMOTE,REMOTE_SUDO}_TEMPLATE=""
   # Default context format (no privileges, no SSH): user@hostname.
   typeset -g POWERLEVEL9K_CONTEXT_TEMPLATE='%n@%m'
 
