@@ -262,7 +262,8 @@ remote() {
   branch="$(whoami)/$1"
 
   pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready
-  pay remote ssh $1
+  ssh -t $(pay remote ssh $1 -- hostname) "tmux a || tmux"
+  tmux unnest
 }
 
 osc52copy() {
