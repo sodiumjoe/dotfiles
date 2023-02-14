@@ -49,7 +49,7 @@ for file in ${xdg_files[@]}; do
   fi
 done
 
-ln -s ~/.dotfiles/tmux/tmux.conf ~/tmux.conf
+ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
 
 ZIM_HOME=${XDG_CONFIG_HOME}/zsh/.zim
 
