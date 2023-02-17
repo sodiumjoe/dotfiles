@@ -34,7 +34,7 @@ zmodule Aloxaf/fzf-tab -c "source {}/fzf-tab.plugin.zsh; zstyle ':completion:*' 
 zmodule zsh-users/zsh-autosuggestions
 # Fish-like syntax highlighting for Zsh.
 # zsh-users/zsh-syntax-highlighting must be sourced after completion
-zmodule zsh-users/zsh-syntax-highlighting
+# zmodule zsh-users/zsh-syntax-highlighting
 # Fish-like history search (up arrow) for Zsh.
 # zsh-users/zsh-history-substring-search must be sourced after zsh-users/zsh-syntax-highlighting
 # zmodule zsh-users/zsh-history-substring-search
