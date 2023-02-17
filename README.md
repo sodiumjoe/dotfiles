@@ -24,3 +24,8 @@ git submodule update --init
 * `zimfw upgrade`
 * `brew update`
 * `brew upgrade`
+
+```bash
+cd ~/.dotfiles
+fast-theme zsh/sodium
+```
