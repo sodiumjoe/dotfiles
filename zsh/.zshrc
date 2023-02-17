@@ -232,9 +232,10 @@ alias zd='cd ~/stripe/pay-server/manage/frontend'
 [ -f /usr/share/doc/fzf/examples/completion.zsh ] && source /usr/share/doc/fzf/examples/completion.zsh
 
 export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
+  --border=rounded \
   --height=100% \
   --no-bold \
-  --color=dark,bg+:0,fg+:4 \
+  --color=dark,bg+:0,fg+:4,border:white,pointer:red \
   --prompt='➤  ' \
   --no-reverse"
 
