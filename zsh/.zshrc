@@ -234,9 +234,9 @@ alias zd='cd ~/stripe/pay-server/manage/frontend'
 export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
   --border=rounded \
   --height=100% \
-  --no-bold \
   --color=dark,bg+:0,fg+:4,border:white,pointer:red \
-  --prompt='➤  ' \
+  --pointer='▷ '\
+  --prompt='❯ ' \
   --no-reverse"
 
 # fbr - checkout git branch (including remote branches)
