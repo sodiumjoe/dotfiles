@@ -400,8 +400,8 @@ require("packer").startup({
 					vim.g.popup_opts
 				)
 
-				local on_attach = function(client, bufnr)
-					lsp_status.on_attach(client, bufnr)
+				local on_attach = function(client)
+					lsp_status.on_attach(client)
 					require("lspkind").init({})
 				end
 
@@ -411,9 +411,9 @@ require("packer").startup({
 					rust_analyzer = {},
 					tsserver = {
 						cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192" },
-						on_attach = function(client, bufnr)
+						on_attach = function(client)
 							client.server_capabilities.documentFormattingProvider = false
-							on_attach(client, bufnr)
+							on_attach(client)
 						end,
 						init_options = {
 							maxTsServerMemory = "8192",
@@ -439,7 +439,7 @@ require("packer").startup({
 									vim.lsp.buf.format()
 								end,
 							})
-							on_attach(client, bufnr)
+							on_attach(client)
 						end,
 					},
 					flow = {},
@@ -447,10 +447,31 @@ require("packer").startup({
 
 				if utils.is_executable("lua-language-server") then
 					servers.lua_ls = {
-						on_attach = function(client, bufnr)
+						on_attach = function(client)
 							client.server_capabilities.documentFormattingProvider = false
-							on_attach(client, bufnr)
+							on_attach(client)
 						end,
+						settings = {
+							Lua = {
+								runtime = {
+									-- Tell the language server which version of Lua you're using (most likely LuaJIT in the case of Neovim)
+									version = "LuaJIT",
+								},
+								diagnostics = {
+									-- Get the language server to recognize the `vim` global
+									globals = { "vim" },
+								},
+								workspace = {
+									-- Make the server aware of Neovim runtime files
+									library = vim.api.nvim_get_runtime_file("", true),
+									checkThirdParty = false, -- THIS IS THE IMPORTANT LINE TO ADD
+								},
+								-- Do not send telemetry data containing a randomized but unique identifier
+								telemetry = {
+									enable = false,
+								},
+							},
+						},
 					}
 				end
 
