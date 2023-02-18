@@ -18,9 +18,6 @@ brew tap homebrew/cask
 # https://github.com/Homebrew/homebrew-cask-versions
 brew tap homebrew/cask-versions
 
-# https://github.com/Homebrew/homebrew-cask-fonts
-brew tap homebrew/cask-fonts
-
 brew install bat
 brew install curl
 brew install editorconfig
@@ -41,9 +38,7 @@ brew install neovim
 brew install postgresql
 brew install python
 brew install python3
-brew install ranger
 brew install ripgrep
-brew install rq
 brew install spark
 brew install sqlite
 brew install stylua
