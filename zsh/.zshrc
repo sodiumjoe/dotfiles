@@ -231,13 +231,21 @@ alias zd='cd ~/stripe/pay-server/manage/frontend'
 [ -f /usr/share/doc/fzf/examples/key-bindings.zsh ] && source /usr/share/doc/fzf/examples/key-bindings.zsh
 [ -f /usr/share/doc/fzf/examples/completion.zsh ] && source /usr/share/doc/fzf/examples/completion.zsh
 
-export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
-  --border=rounded \
+if [ -n "$remote_name" ]; then
+  export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
   --height=100% \
-  --color=dark,bg+:0,fg+:4,border:white,pointer:red \
-  --pointer='▷ '\
+  --color=dark,bg+:0,fg+:4 \
   --prompt='❯ ' \
   --no-reverse"
+else
+  export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
+    --border=rounded \
+    --height=100% \
+    --color=dark,bg+:0,fg+:4,border:white,pointer:red \
+    --pointer='▷ '\
+    --prompt='❯ ' \
+    --no-reverse"
+fi
 
 # fbr - checkout git branch (including remote branches)
 fbr() {
