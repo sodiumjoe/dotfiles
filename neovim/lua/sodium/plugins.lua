@@ -141,7 +141,10 @@ require("packer").startup({
 				local cmp = require("cmp")
 				cmp.setup({
 					window = {
-						documentation = vim.g.popup_opts,
+						completion = vim.g.popup_opts,
+						documentation = cmp.config.window.bordered({
+							winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
+						}),
 					},
 					view = {
 						entries = { name = "custom", selection_order = "near_cursor" },
