@@ -132,6 +132,7 @@ require("packer").startup({
 		})
 		use("folke/trouble.nvim")
 		use("haya14busa/is.vim")
+		use("hrsh7th/cmp-cmdline")
 		use("hrsh7th/cmp-nvim-lsp")
 		use("hrsh7th/cmp-buffer")
 		use("hrsh7th/cmp-path")
@@ -201,9 +202,29 @@ require("packer").startup({
 						}),
 					},
 				})
+				cmp.setup.cmdline("/", {
+					mapping = cmp.mapping.preset.cmdline(),
+					sources = {
+						{ name = "buffer" },
+					},
+				})
+				cmp.setup.cmdline(":", {
+					mapping = cmp.mapping.preset.cmdline(),
+					sources = cmp.config.sources({
+						{ name = "path" },
+					}, {
+						{
+							name = "cmdline",
+							option = {
+								ignore_cmds = { "Man", "!" },
+							},
+						},
+					}),
+				})
 			end,
 			requires = {
 				"onsails/lspkind-nvim",
+				"hrsh7th/cmp-cmdline",
 				"hrsh7th/cmp-nvim-lsp",
 				"hrsh7th/cmp-path",
 				"hrsh7th/vim-vsnip",
