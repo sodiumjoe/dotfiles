@@ -32,6 +32,8 @@ M.icons = {
 	Warn = " ",
 	Hint = " ",
 	Info = " ",
+	buffer = " ",
+	lsp = " ",
 }
 
 M.spinner_frames = {

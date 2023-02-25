@@ -139,6 +139,7 @@ require("packer").startup({
 		use({
 			"hrsh7th/nvim-cmp",
 			config = function()
+				local utils = require("sodium.utils")
 				local cmp = require("cmp")
 				cmp.setup({
 					window = {
@@ -196,8 +197,8 @@ require("packer").startup({
 					formatting = {
 						format = require("lspkind").cmp_format({
 							menu = {
-								buffer = " ",
-								nvim_lsp = " ",
+								buffer = utils.icons.buffer,
+								nvim_lsp = utils.icons.lsp,
 							},
 						}),
 					},
