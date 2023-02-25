@@ -196,8 +196,8 @@ require("packer").startup({
 					formatting = {
 						format = require("lspkind").cmp_format({
 							menu = {
-								buffer = "[Buffer]",
-								nvim_lsp = "[LSP]",
+								buffer = " ",
+								nvim_lsp = " ",
 							},
 						}),
 					},
