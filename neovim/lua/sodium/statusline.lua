@@ -15,7 +15,7 @@ local icons = {
 	warning = utils.icons.Warn,
 	info = utils.icons.Info,
 	hint = utils.icons.Hint,
-	ok = "☑",
+	ok = utils.icons.ok,
 }
 
 local padding = " "

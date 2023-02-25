@@ -28,12 +28,13 @@ function M.augroup(name, augroup_opts)
 end
 
 M.icons = {
-	Error = " ",
-	Warn = " ",
+	Error = " ",
+	Warn = " ",
 	Hint = " ",
 	Info = " ",
 	buffer = " ",
 	lsp = " ",
+	ok = " ",
 }
 
 M.spinner_frames = {
