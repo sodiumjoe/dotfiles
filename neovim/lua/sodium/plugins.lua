@@ -609,7 +609,6 @@ require("packer").startup({
 						[[<leader>g]],
 						function()
 							require("telescope.builtin").git_status({
-								use_git_root = false,
 								initial_mode = "normal",
 							})
 						end,
