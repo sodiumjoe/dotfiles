@@ -223,7 +223,6 @@ if [ -x "$(command -v exa)" ]; then
 else
   alias ll='ls -la'
 fi
-alias zd='cd ~/stripe/pay-server/manage/frontend'
 
 # FZF
 
@@ -231,6 +230,7 @@ alias zd='cd ~/stripe/pay-server/manage/frontend'
 [ -f /usr/share/doc/fzf/examples/key-bindings.zsh ] && source /usr/share/doc/fzf/examples/key-bindings.zsh
 [ -f /usr/share/doc/fzf/examples/completion.zsh ] && source /usr/share/doc/fzf/examples/completion.zsh
 
+# devbox has old version of fzf
 if [ -n "$remote_name" ]; then
   export FZF_DEFAULT_OPTS="--bind=ctrl-d:page-down,ctrl-u:page-up \
   --height=100% \
@@ -253,26 +253,6 @@ fbr() {
   branches=$(git branch --format="%(refname:short)" --sort=-committerdate) &&
   branch=$(echo "$branches" | fzf) &&
   git checkout $branch
-}
-
-remotes() {
-  local list remote
-  list=$(pay remote list --raw | jq -r 'sort_by(.last_accessed) | reverse | .[] as {$name, $status, $last_accessed, spec: {source_specs: [{$git_ref}]}} | $last_accessed | localtime | strflocaltime("%c") as $last | [$name, "[\($status)]", "\($git_ref)", $last] | @tsv' | column -t)
-  remote=$(echo "$list" | fzf)
-  if [ ! -z $remote ]; then
-    remote=$(echo "$remote" | cut -w -f 1)
-    ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux"
-    tmux unnest
-  fi
-}
-
-remote() {
-  local branch
-  branch="$(whoami)/$1"
-
-  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready
-  ssh -t $(pay remote ssh $1 -- hostname) "tmux a || tmux"
-  tmux unnest
 }
 
 osc52copy() {
@@ -311,11 +291,25 @@ bindkey '^n' autosuggest-accept
 export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
-
-chpwd() {
-  if [[ $(pwd) == "/Users/moon/stripe/dashboard" ]]; then
-    cd ~/stripe/pay-server/manage/frontend
+#
+remotes() {
+  local list remote
+  list=$(pay remote list --raw | jq -r 'sort_by(.last_accessed) | reverse | .[] as {$name, $status, $last_accessed, spec: {source_specs: [{$git_ref}]}} | $last_accessed | localtime | strflocaltime("%c") as $last | [$name, "[\($status)]", "\($git_ref)", $last] | @tsv' | column -t)
+  remote=$(echo "$list" | fzf)
+  if [ ! -z $remote ]; then
+    remote=$(echo "$remote" | cut -w -f 1)
+    ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux"
+    tmux unnest
   fi
+}
+
+remote() {
+  local branch
+  branch="$(whoami)/$1"
+
+  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready
+  ssh -t $(pay remote ssh $1 -- hostname) "tmux a || tmux"
+  tmux unnest
 }
 
 if [ -d ~/stripe ]
