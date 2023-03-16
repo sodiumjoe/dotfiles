@@ -1,5 +1,3 @@
-local fn = vim.fn
-
 vim.g.popup_opts = {
 	focusable = false,
 	border = "rounded",
@@ -9,307 +7,295 @@ vim.g.popup_opts = {
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
 
-local packer_augroup = vim.api.nvim_create_augroup("packer_user_config", {})
-vim.api.nvim_clear_autocmds({ group = packer_augroup })
-vim.api.nvim_create_autocmd("BufWritePost", {
-	group = packer_augroup,
-	callback = function()
-		vim.cmd([[source <afile>]])
-		require("packer").compile()
-	end,
-	pattern = vim.fn.expand("~") .. "/.dotfiles/neovim/lua/sodium/*.lua",
-})
-
-local packer_bootstrap
-local install_path = fn.stdpath("data") .. "/site/pack/packer/start/packer.nvim"
-if fn.empty(fn.glob(install_path)) > 0 then
-	packer_bootstrap = fn.system({
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+if not vim.loop.fs_stat(lazypath) then
+	vim.fn.system({
 		"git",
 		"clone",
-		"--depth",
-		"1",
-		"https://github.com/wbthomason/packer.nvim",
-		install_path,
+		"--filter=blob:none",
+		"https://github.com/folke/lazy.nvim.git",
+		"--branch=stable", -- latest stable release
+		lazypath,
 	})
-	vim.cmd([[packadd packer.nvim]])
 end
+vim.opt.rtp:prepend(lazypath)
 
-require("packer").startup({
-	function(use)
-		use("wbthomason/packer.nvim")
-		use("nvim-lua/plenary.nvim")
-		use("benizi/vim-automkdir")
-		use({
-			"ojroques/nvim-osc52",
-			config = function()
-				local utils = require("sodium.utils")
-				local remote_stripe_dir = "/pay/src/"
-				local local_stripe_dir = vim.fn.expand("~/stripe")
-				local stripe_dir = nil
-				if vim.fn.isdirectory(remote_stripe_dir) ~= 0 then
-					stripe_dir = remote_stripe_dir
-				elseif vim.fn.isdirectory(local_stripe_dir) ~= 0 then
-					stripe_dir = local_stripe_dir
-				end
+require("lazy").setup({
+	"benizi/vim-automkdir",
+	{
+		"ojroques/nvim-osc52",
+		config = function()
+			local utils = require("sodium.utils")
+			local remote_stripe_dir = "/pay/src/"
+			local local_stripe_dir = vim.fn.expand("~/stripe")
+			local stripe_dir = nil
+			if vim.fn.isdirectory(remote_stripe_dir) ~= 0 then
+				stripe_dir = remote_stripe_dir
+			elseif vim.fn.isdirectory(local_stripe_dir) ~= 0 then
+				stripe_dir = local_stripe_dir
+			end
 
-				local function get_lg_url()
-					local full_path = vim.api.nvim_buf_get_name(0)
-					local line_number = vim.fn.line(".")
-					if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
-						local path = string.gsub(full_path, stripe_dir, "")
-						return string.format([[http://go/lg-view/%s#L%s]], path, line_number)
-					else
-						return nil
-					end
-				end
-
-				if os.getenv("SSH_CLIENT") then
-					local function copy(lines, _)
-						require("osc52").copy(table.concat(lines, "\n"))
-					end
-
-					local function paste()
-						return { vim.fn.split(vim.fn.getreg(""), "\n"), vim.fn.getregtype("") }
-					end
-					vim.g.clipboard = {
-						name = "osc52",
-						copy = { ["+"] = copy, ["*"] = copy },
-						paste = { ["+"] = paste, ["*"] = paste },
-					}
-					utils.map({
-						-- copy relative path to clipboard
-						{
-							"n",
-							[[<leader>cr]],
-							function()
-								copy({ vim.fn.expand("%") })
-							end,
-						},
-						-- copy full path to clipboard
-						{
-							"n",
-							[[<leader>cf]],
-							function()
-								copy({ vim.fn.expand("%:p") })
-							end,
-						},
-						{
-							"n",
-							[[<leader>l]],
-							function()
-								local lg_url = get_lg_url()
-								if lg_url ~= nil then
-									copy({ lg_url })
-								end
-							end,
-						},
-					})
+			local function get_lg_url()
+				local full_path = vim.api.nvim_buf_get_name(0)
+				local line_number = vim.fn.line(".")
+				if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
+					local path = string.gsub(full_path, stripe_dir, "")
+					return string.format([[http://go/lg-view/%s#L%s]], path, line_number)
 				else
-					utils.map({
-						-- copy relative path to clipboard
-						{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
-						-- copy full path to clipboard
-						{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
-						{
-							"n",
-							[[<leader>l]],
-							function()
-								local lg_url = get_lg_url()
-								if lg_url ~= nil then
-									vim.fn.setreg("+", lg_url)
-								end
-							end,
-						},
-					})
+					return nil
 				end
-			end,
-		})
-		use({
-			"editorconfig/editorconfig-vim",
-			config = function()
-				vim.g.EditorConfig_exclude_patterns = { "fugitive://.*" }
-			end,
-		})
-		use("folke/trouble.nvim")
-		use("haya14busa/is.vim")
-		use("hrsh7th/cmp-cmdline")
-		use("hrsh7th/cmp-nvim-lsp")
-		use("hrsh7th/cmp-buffer")
-		use("hrsh7th/cmp-path")
-		use({
-			"hrsh7th/nvim-cmp",
-			config = function()
-				local utils = require("sodium.utils")
-				local cmp = require("cmp")
-				cmp.setup({
-					window = {
-						completion = vim.g.popup_opts,
-						documentation = cmp.config.window.bordered({
-							winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
-						}),
-					},
-					view = {
-						entries = { name = "custom", selection_order = "near_cursor" },
-					},
-					mapping = cmp.mapping.preset.insert({
-						["<C-n>"] = function(fallback)
-							if cmp.visible() then
-								cmp.select_next_item()
-							else
-								fallback()
-							end
-						end,
-						["<C-p>"] = function(fallback)
-							if cmp.visible() then
-								cmp.select_prev_item()
-							else
-								fallback()
-							end
-						end,
-					}),
-					sources = cmp.config.sources({
-						{
-							name = "buffer",
-							option = {
-								-- completion candidates from all open buffers
-								get_bufnrs = function()
-									local bufs = {}
-									for _, win in ipairs(vim.api.nvim_list_wins()) do
-										local buf_num = vim.api.nvim_win_get_buf(win)
-										local ft = vim.api.nvim_buf_get_option(buf_num, "filetype")
-										-- don't complete from json and graphql buffers
-										if ft ~= "json" and ft ~= "graphql" then
-											bufs[buf_num] = true
-										end
-									end
-									return vim.tbl_keys(bufs)
-								end,
-							},
-						},
-						{ name = "nvim_lsp" },
-						{ name = "path" },
-					}),
-					snippet = {
-						expand = function(args)
-							vim.fn["vsnip#anonymous"](args.body)
-						end,
-					},
-					formatting = {
-						format = require("lspkind").cmp_format({
-							menu = {
-								buffer = utils.icons.buffer,
-								nvim_lsp = utils.icons.lsp,
-							},
-						}),
-					},
-				})
-				cmp.setup.cmdline("/", {
-					mapping = cmp.mapping.preset.cmdline(),
-					sources = {
-						{ name = "buffer" },
-					},
-				})
-				cmp.setup.cmdline(":", {
-					mapping = cmp.mapping.preset.cmdline(),
-					sources = cmp.config.sources({
-						{ name = "path" },
-					}, {
-						{
-							name = "cmdline",
-							option = {
-								ignore_cmds = { "Man", "!" },
-							},
-						},
-					}),
-				})
-			end,
-			requires = {
-				"onsails/lspkind-nvim",
-				"hrsh7th/cmp-cmdline",
-				"hrsh7th/cmp-nvim-lsp",
-				"hrsh7th/cmp-path",
-				"hrsh7th/vim-vsnip",
-			},
-		})
-		use("hrsh7th/vim-vsnip")
-		use({
-			"jose-elias-alvarez/null-ls.nvim",
-			config = function()
-				local null_ls = require("null-ls")
-				local utils = require("sodium.utils")
+			end
 
-				local sources = {
-					null_ls.builtins.diagnostics.eslint_d.with({
-						condition = function()
-							return utils.is_executable("eslint_d")
-						end,
-						cwd = function(params)
-							return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-						end,
-					}),
-					null_ls.builtins.diagnostics.eslint.with({
-						condition = function()
-							return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
-						end,
-						prefer_local = true,
-					}),
-					null_ls.builtins.diagnostics.rubocop.with({
-						condition = function()
-							return utils.is_executable("scripts/bin/rubocop-daemon/rubocop")
-						end,
-						command = "scripts/bin/rubocop-daemon/rubocop",
-					}),
-					null_ls.builtins.formatting.prettier.with({
-						condition = function()
-							return utils.is_executable("prettier")
-						end,
-						cwd = function(params)
-							return require("lspconfig/util").root_pattern("prettier.config.js")(params.bufname)
-						end,
-					}),
-					null_ls.builtins.formatting.eslint.with({
-						condition = function()
-							return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
-						end,
-						prefer_local = true,
-					}),
-					null_ls.builtins.formatting.rustfmt.with({
-						condition = function()
-							return utils.is_executable("rustfmt")
-						end,
-					}),
-					null_ls.builtins.formatting.stylua.with({
-						condition = function()
-							return utils.is_executable("stylua")
-						end,
-					}),
+			if os.getenv("SSH_CLIENT") then
+				local function copy(lines, _)
+					require("osc52").copy(table.concat(lines, "\n"))
+				end
+
+				local function paste()
+					return { vim.fn.split(vim.fn.getreg(""), "\n"), vim.fn.getregtype("") }
+				end
+				vim.g.clipboard = {
+					name = "osc52",
+					copy = { ["+"] = copy, ["*"] = copy },
+					paste = { ["+"] = paste, ["*"] = paste },
 				}
-
-				local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
-				null_ls.setup({
-					sources = sources,
-					on_attach = function(client, bufnr)
-						if client.supports_method("textDocument/formatting") then
-							vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
-							vim.api.nvim_create_autocmd("BufWritePre", {
-								group = augroup,
-								buffer = bufnr,
-								callback = function()
-									vim.lsp.buf.format({ timeout_ms = 2000 })
-								end,
-							})
+				utils.map({
+					-- copy relative path to clipboard
+					{
+						"n",
+						[[<leader>cr]],
+						function()
+							copy({ vim.fn.expand("%") })
+						end,
+					},
+					-- copy full path to clipboard
+					{
+						"n",
+						[[<leader>cf]],
+						function()
+							copy({ vim.fn.expand("%:p") })
+						end,
+					},
+					{
+						"n",
+						[[<leader>l]],
+						function()
+							local lg_url = get_lg_url()
+							if lg_url ~= nil then
+								copy({ lg_url })
+							end
+						end,
+					},
+				})
+			else
+				utils.map({
+					-- copy relative path to clipboard
+					{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
+					-- copy full path to clipboard
+					{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
+					{
+						"n",
+						[[<leader>l]],
+						function()
+							local lg_url = get_lg_url()
+							if lg_url ~= nil then
+								vim.fn.setreg("+", lg_url)
+							end
+						end,
+					},
+				})
+			end
+		end,
+	},
+	{
+		"editorconfig/editorconfig-vim",
+		config = function()
+			vim.g.EditorConfig_exclude_patterns = { "fugitive://.*" }
+		end,
+	},
+	{
+		"folke/trouble.nvim",
+		dependencies = {
+			{
+				"kyazdani42/nvim-web-devicons",
+				opts = { default = true },
+			},
+		},
+	},
+	"haya14busa/is.vim",
+	{
+		"hrsh7th/nvim-cmp",
+		config = function()
+			local utils = require("sodium.utils")
+			local cmp = require("cmp")
+			cmp.setup({
+				window = {
+					completion = vim.g.popup_opts,
+					documentation = cmp.config.window.bordered({
+						winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
+					}),
+				},
+				view = {
+					entries = { name = "custom", selection_order = "near_cursor" },
+				},
+				mapping = cmp.mapping.preset.insert({
+					["<C-n>"] = function(fallback)
+						if cmp.visible() then
+							cmp.select_next_item()
+						else
+							fallback()
 						end
 					end,
-				})
-			end,
-			requires = {
-				"neovim/nvim-lspconfig",
-			},
-		})
-		use({
-			"junegunn/goyo.vim",
-			config = function()
-				vim.cmd([[
+					["<C-p>"] = function(fallback)
+						if cmp.visible() then
+							cmp.select_prev_item()
+						else
+							fallback()
+						end
+					end,
+				}),
+				sources = cmp.config.sources({
+					{
+						name = "buffer",
+						option = {
+							-- completion candidates from all open buffers
+							get_bufnrs = function()
+								local bufs = {}
+								for _, win in ipairs(vim.api.nvim_list_wins()) do
+									local buf_num = vim.api.nvim_win_get_buf(win)
+									local ft = vim.api.nvim_buf_get_option(buf_num, "filetype")
+									-- don't complete from json and graphql buffers
+									if ft ~= "json" and ft ~= "graphql" then
+										bufs[buf_num] = true
+									end
+								end
+								return vim.tbl_keys(bufs)
+							end,
+						},
+					},
+					{ name = "nvim_lsp" },
+					{ name = "path" },
+				}),
+				snippet = {
+					expand = function(args)
+						vim.fn["vsnip#anonymous"](args.body)
+					end,
+				},
+				formatting = {
+					format = require("lspkind").cmp_format({
+						menu = {
+							buffer = utils.icons.buffer,
+							nvim_lsp = utils.icons.lsp,
+						},
+					}),
+				},
+			})
+			cmp.setup.cmdline("/", {
+				mapping = cmp.mapping.preset.cmdline(),
+				sources = {
+					{ name = "buffer" },
+				},
+			})
+			cmp.setup.cmdline(":", {
+				mapping = cmp.mapping.preset.cmdline(),
+				sources = cmp.config.sources({
+					{ name = "path" },
+				}, {
+					{
+						name = "cmdline",
+						option = {
+							ignore_cmds = { "Man", "!" },
+						},
+					},
+				}),
+			})
+		end,
+		dependencies = {
+			"onsails/lspkind-nvim",
+			"hrsh7th/cmp-cmdline",
+			"hrsh7th/cmp-nvim-lsp",
+			"hrsh7th/cmp-path",
+			"hrsh7th/vim-vsnip",
+		},
+	},
+	{
+		"jose-elias-alvarez/null-ls.nvim",
+		config = function()
+			local null_ls = require("null-ls")
+			local utils = require("sodium.utils")
+
+			local sources = {
+				null_ls.builtins.diagnostics.eslint_d.with({
+					condition = function()
+						return utils.is_executable("eslint_d")
+					end,
+					cwd = function(params)
+						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+					end,
+				}),
+				null_ls.builtins.diagnostics.eslint.with({
+					condition = function()
+						return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
+					end,
+					prefer_local = true,
+				}),
+				null_ls.builtins.diagnostics.rubocop.with({
+					condition = function()
+						return utils.is_executable("scripts/bin/rubocop-daemon/rubocop")
+					end,
+					command = "scripts/bin/rubocop-daemon/rubocop",
+				}),
+				null_ls.builtins.formatting.prettier.with({
+					condition = function()
+						return utils.is_executable("prettier")
+					end,
+					cwd = function(params)
+						return require("lspconfig/util").root_pattern("prettier.config.js")(params.bufname)
+					end,
+				}),
+				null_ls.builtins.formatting.eslint.with({
+					condition = function()
+						return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
+					end,
+					prefer_local = true,
+				}),
+				null_ls.builtins.formatting.rustfmt.with({
+					condition = function()
+						return utils.is_executable("rustfmt")
+					end,
+				}),
+				null_ls.builtins.formatting.stylua.with({
+					condition = function()
+						return utils.is_executable("stylua")
+					end,
+				}),
+			}
+
+			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
+			null_ls.setup({
+				sources = sources,
+				on_attach = function(client, bufnr)
+					if client.supports_method("textDocument/formatting") then
+						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
+						vim.api.nvim_create_autocmd("BufWritePre", {
+							group = augroup,
+							buffer = bufnr,
+							callback = function()
+								vim.lsp.buf.format({ timeout_ms = 2000 })
+							end,
+						})
+					end
+				end,
+			})
+		end,
+		dependencies = {
+			"neovim/nvim-lspconfig",
+		},
+	},
+	{
+		"junegunn/goyo.vim",
+		config = function()
+			vim.cmd([[
         function! s:goyo_enter()
           set linebreak
         endfunction
@@ -321,533 +307,530 @@ require("packer").startup({
         autocmd! User GoyoEnter nested call <SID>goyo_enter()
         autocmd! User GoyoLeave nested call <SID>goyo_leave()
       ]])
-			end,
-		})
-		use({
-			"justinmk/vim-dirvish",
-			config = function()
-				local utils = require("sodium.utils")
-				local dirvish_autocmd = utils.augroup("DirvishConfig", { clear = true })
-				dirvish_autocmd("FileType", {
-					pattern = { "dirvish" },
-					command = "silent! unmap <buffer> <C-p>",
-				})
-				dirvish_autocmd("FileType", {
-					pattern = { "dirvish" },
-					command = "silent! unmap <buffer> <C-n>",
-				})
-			end,
-		})
-		use({
-			"kevinhwang91/nvim-hlslens",
-			config = function()
-				require("hlslens").setup({
-					calm_down = true,
-					nearest_only = false,
-				})
+		end,
+	},
+	{
+		"justinmk/vim-dirvish",
+		config = function()
+			local utils = require("sodium.utils")
+			local dirvish_autocmd = utils.augroup("DirvishConfig", { clear = true })
+			dirvish_autocmd("FileType", {
+				pattern = { "dirvish" },
+				command = "silent! unmap <buffer> <C-p>",
+			})
+			dirvish_autocmd("FileType", {
+				pattern = { "dirvish" },
+				command = "silent! unmap <buffer> <C-n>",
+			})
+		end,
+	},
+	{
+		"kevinhwang91/nvim-hlslens",
+		config = function()
+			require("hlslens").setup({
+				calm_down = true,
+				nearest_only = false,
+			})
 
-				vim.o.hlsearch = true
+			vim.o.hlsearch = true
 
-				require("sodium.utils").map({
-					{ "n", "n", "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-					{ "n", "N", "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-					{ "n", "*", "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-					{ "n", "#", "<Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-					{ "n", "g*", "<Plug>(is-g*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-					{ "n", "g#", "<Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-				})
-			end,
-			keys = {
-				"n",
-				"N",
-				"*",
-				"#",
-				"g*",
-				"g#",
-			},
-		})
-		use({
-			"kyazdani42/nvim-web-devicons",
-			config = function()
-				require("nvim-web-devicons").setup({
-					default = true,
-				})
-			end,
-		})
-		use({
-			"matze/vim-move",
-			config = function()
-				vim.g.move_key_modifier = "C"
-			end,
-		})
-		use({
-			"mhinz/vim-signify",
-			config = function()
-				vim.g.signify_sign_add = "│"
-				vim.g.signify_sign_change = "│"
-				vim.g.signify_sign_change_delete = "_│"
-				vim.g.signify_sign_show_count = 0
-				vim.g.signify_skip = { vcs = { allow = { "git" } } }
-			end,
-		})
-		use({
-			"neovim/nvim-lspconfig",
-			config = function()
-				local nvim_lsp = require("lspconfig")
-				local lsp_status = require("lsp-status")
-				local utils = require("sodium.utils")
+			require("sodium.utils").map({
+				{ "n", "n", "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "N", "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "*", "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "#", "<Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "g*", "<Plug>(is-g*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "g#", "<Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+			})
+		end,
+		keys = {
+			"n",
+			"N",
+			"*",
+			"#",
+			"g*",
+			"g#",
+		},
+	},
+	{
+		"matze/vim-move",
+		config = function()
+			vim.g.move_key_modifier = "C"
+		end,
+	},
+	{
+		"mhinz/vim-signify",
+		config = function()
+			vim.g.signify_sign_add = "│"
+			vim.g.signify_sign_change = "│"
+			vim.g.signify_sign_change_delete = "_│"
+			vim.g.signify_sign_show_count = 0
+			vim.g.signify_skip = { vcs = { allow = { "git" } } }
+		end,
+	},
+	{
+		"neovim/nvim-lspconfig",
+		config = function()
+			local nvim_lsp = require("lspconfig")
+			local lsp_status = require("lsp-status")
+			local utils = require("sodium.utils")
 
-				vim.diagnostic.config({
-					signs = { priority = 11 },
-					virtual_text = false,
-					update_in_insert = false,
-					float = {
-						focusable = vim.g.popup_opts.focusable,
-						border = vim.g.popup_opts.border,
-						format = function(diagnostic)
-							local str = string.format("[%s] %s", diagnostic.source, diagnostic.message)
-							if diagnostic.code then
-								str = str .. " (" .. diagnostic.code .. ")"
-							end
-							return str
-						end,
+			vim.diagnostic.config({
+				signs = { priority = 11 },
+				virtual_text = false,
+				update_in_insert = false,
+				float = {
+					focusable = vim.g.popup_opts.focusable,
+					border = vim.g.popup_opts.border,
+					format = function(diagnostic)
+						local str = string.format("[%s] %s", diagnostic.source, diagnostic.message)
+						if diagnostic.code then
+							str = str .. " (" .. diagnostic.code .. ")"
+						end
+						return str
+					end,
+				},
+			})
+
+			for type, icon in pairs(utils.icons) do
+				local hl = "DiagnosticSign" .. type
+				vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
+			end
+
+			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
+			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
+				vim.lsp.handlers.signature_help,
+				vim.g.popup_opts
+			)
+
+			local on_attach = function(client)
+				lsp_status.on_attach(client)
+				require("lspkind").init({})
+			end
+
+			local augroup = vim.api.nvim_create_augroup("RubyLspFormatting", {})
+
+			local servers = {
+				rust_analyzer = {},
+				tsserver = {
+					cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192" },
+					on_attach = function(client)
+						client.server_capabilities.documentFormattingProvider = false
+						on_attach(client)
+					end,
+					init_options = {
+						maxTsServerMemory = "8192",
 					},
-				})
-
-				for type, icon in pairs(utils.icons) do
-					local hl = "DiagnosticSign" .. type
-					vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
-				end
-
-				vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-				vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
-					vim.lsp.handlers.signature_help,
-					vim.g.popup_opts
-				)
-
-				local on_attach = function(client)
-					lsp_status.on_attach(client)
-					require("lspkind").init({})
-				end
-
-				local augroup = vim.api.nvim_create_augroup("RubyLspFormatting", {})
-
-				local servers = {
-					rust_analyzer = {},
-					tsserver = {
-						cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192" },
-						on_attach = function(client)
-							client.server_capabilities.documentFormattingProvider = false
-							on_attach(client)
-						end,
-						init_options = {
-							maxTsServerMemory = "8192",
-						},
-						filetypes = { "typescript", "typescriptreact", "typescript.tsx" },
+					filetypes = { "typescript", "typescriptreact", "typescript.tsx" },
+				},
+				sorbet = {
+					cmd = {
+						"scripts/dev_productivity/while_pay_up_connected.sh",
+						"pay",
+						"exec",
+						"scripts/bin/typecheck",
+						"--lsp",
+						"--enable-all-experimental-lsp-features",
 					},
-					sorbet = {
-						cmd = {
-							"scripts/dev_productivity/while_pay_up_connected.sh",
-							"pay",
-							"exec",
-							"scripts/bin/typecheck",
-							"--lsp",
-							"--enable-all-experimental-lsp-features",
-						},
-						settings = {},
-						on_attach = function(client, bufnr)
-							vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
-							vim.api.nvim_create_autocmd("BufWritePre", {
-								group = augroup,
-								buffer = bufnr,
-								callback = function()
-									vim.lsp.buf.format()
-								end,
-							})
-							on_attach(client)
-						end,
-					},
-					flow = {},
-				}
+					settings = {},
+					on_attach = function(client, bufnr)
+						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
+						vim.api.nvim_create_autocmd("BufWritePre", {
+							group = augroup,
+							buffer = bufnr,
+							callback = function()
+								vim.lsp.buf.format()
+							end,
+						})
+						on_attach(client)
+					end,
+				},
+				flow = {},
+			}
 
-				if utils.is_executable("lua-language-server") then
-					servers.lua_ls = {
-						on_attach = function(client)
-							client.server_capabilities.documentFormattingProvider = false
-							on_attach(client)
-						end,
-						settings = {
-							Lua = {
-								runtime = {
-									-- Tell the language server which version of Lua you're using (most likely LuaJIT in the case of Neovim)
-									version = "LuaJIT",
-								},
-								diagnostics = {
-									-- Get the language server to recognize the `vim` global
-									globals = { "vim" },
-								},
-								workspace = {
-									-- Make the server aware of Neovim runtime files
-									library = vim.api.nvim_get_runtime_file("", true),
-									checkThirdParty = false, -- THIS IS THE IMPORTANT LINE TO ADD
-								},
-								-- Do not send telemetry data containing a randomized but unique identifier
-								telemetry = {
-									enable = false,
-								},
+			if utils.is_executable("lua-language-server") then
+				servers.lua_ls = {
+					on_attach = function(client)
+						client.server_capabilities.documentFormattingProvider = false
+						on_attach(client)
+					end,
+					settings = {
+						Lua = {
+							runtime = {
+								-- Tell the language server which version of Lua you're using (most likely LuaJIT in the case of Neovim)
+								version = "LuaJIT",
+							},
+							diagnostics = {
+								-- Get the language server to recognize the `vim` global
+								globals = { "vim" },
+							},
+							workspace = {
+								-- Make the server aware of Neovim runtime files
+								library = vim.api.nvim_get_runtime_file("", true),
+								checkThirdParty = false, -- THIS IS THE IMPORTANT LINE TO ADD
+							},
+							-- Do not send telemetry data containing a randomized but unique identifier
+							telemetry = {
+								enable = false,
 							},
 						},
-					}
-				end
-
-				for lsp, options in pairs(servers) do
-					local defaults = {
-						on_attach = on_attach,
-						flags = {
-							debounce_text_changes = 150,
-						},
-						capabilities = lsp_status.capabilities,
-					}
-
-					local setup_options = vim.tbl_extend("force", defaults, options)
-
-					nvim_lsp[lsp].setup(setup_options)
-				end
-				utils.map({
-					{ "n", "gD", vim.lsp.buf.declaration },
-					{ "n", "gd", vim.lsp.buf.definition },
-					{ "n", "K", vim.lsp.buf.hover },
-					{ "n", "gi", vim.lsp.buf.implementation },
-					{ "n", [[<leader>D]], vim.lsp.buf.type_definition },
-					-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
-					{ "n", [[<leader>ca]], vim.lsp.buf.code_action },
-					{ "n", "gr", vim.lsp.buf.references },
-					{ "n", [[<leader>ee]], vim.diagnostic.open_float },
-					{ "n", [[<leader>p]], vim.diagnostic.goto_prev },
-					{ "n", [[<leader>n]], vim.diagnostic.goto_next },
-					{
-						"n",
-						[[<leader>q]],
-						"<cmd>TroubleToggle<cr>",
 					},
-					{ "n", [[<leader>f]], vim.lsp.buf.format },
-				})
-			end,
-			requires = {
+				}
+			end
+
+			for lsp, options in pairs(servers) do
+				local defaults = {
+					on_attach = on_attach,
+					flags = {
+						debounce_text_changes = 150,
+					},
+					capabilities = lsp_status.capabilities,
+				}
+
+				local setup_options = vim.tbl_extend("force", defaults, options)
+
+				nvim_lsp[lsp].setup(setup_options)
+			end
+			utils.map({
+				{ "n", "gD", vim.lsp.buf.declaration },
+				{ "n", "gd", vim.lsp.buf.definition },
+				{ "n", "K", vim.lsp.buf.hover },
+				{ "n", "gi", vim.lsp.buf.implementation },
+				{ "n", [[<leader>D]], vim.lsp.buf.type_definition },
+				-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
+				{ "n", [[<leader>ca]], vim.lsp.buf.code_action },
+				{ "n", "gr", vim.lsp.buf.references },
+				{ "n", [[<leader>ee]], vim.diagnostic.open_float },
+				{ "n", [[<leader>p]], vim.diagnostic.goto_prev },
+				{ "n", [[<leader>n]], vim.diagnostic.goto_next },
+				{
+					"n",
+					[[<leader>q]],
+					"<cmd>TroubleToggle<cr>",
+				},
+				{ "n", [[<leader>f]], vim.lsp.buf.format },
+			})
+		end,
+		dependencies = {
+			{
 				"nvim-lua/lsp-status.nvim",
-				"onsails/lspkind-nvim",
-				"nvim-telescope/telescope.nvim",
+				config = function()
+					require("sodium.statusline")
+				end,
 			},
-		})
-		use({
-			"nvim-lua/lsp-status.nvim",
-			config = function()
-				require("sodium.statusline")
-			end,
-		})
-		use("nvim-lua/popup.nvim")
-		use({
+			"onsails/lspkind-nvim",
 			"nvim-telescope/telescope.nvim",
-			config = function()
-				local telescope = require("telescope")
-				telescope.setup({
-					defaults = {
-						selection_caret = "  ",
-						vimgrep_arguments = {
-							"rg",
-							"--vimgrep",
-							"--no-heading",
-							"--smart-case",
-						},
+		},
+	},
+	{
+		"nvim-telescope/telescope.nvim",
+		config = function()
+			local telescope = require("telescope")
+			telescope.setup({
+				defaults = {
+					selection_caret = "  ",
+					vimgrep_arguments = {
+						"rg",
+						"--vimgrep",
+						"--no-heading",
+						"--smart-case",
 					},
-				})
+				},
+			})
 
-				telescope.load_extension("fzf")
+			telescope.load_extension("fzf")
 
-				require("sodium.utils").map({
-					{
-						"n",
-						[[<leader>r]],
-						function()
-							require("telescope.builtin").resume({ initial_mode = "normal" })
-						end,
-					},
-					{
-						"n",
-						[[<C-p>]],
-						function()
-							require("telescope.builtin").find_files({ hidden = true })
-						end,
-					},
-					{
-						"n",
-						[[<leader>s]],
-						function()
-							require("telescope.builtin").buffers({
-								show_all_buffers = true,
-								sort_mru = true,
-								ignore_current_buffer = true,
-								initial_mode = "normal",
-							})
-						end,
-					},
-					{
-						"n",
-						[[<leader>/]],
-						function()
-							require("telescope.builtin").live_grep()
-						end,
-					},
-					{
-						"n",
-						[[<leader>8]],
-						function()
-							require("telescope.builtin").grep_string({
-								initial_mode = "normal",
-							})
-						end,
-					},
-					{
-						"n",
-						[[<leader><Space>/]],
-						function()
-							require("telescope.builtin").live_grep({ cwd = vim.fn.expand("%:h") })
-						end,
-					},
-					-- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
-					{
-						"n",
-						[[<leader>d]],
-						function()
-							require("telescope.builtin").find_files({ search_dirs = vim.fn.expand("%:h") })
-						end,
-					},
-					{
-						"n",
-						[[<leader><C-r>]],
-						function()
-							require("telescope.builtin").registers()
-						end,
-					},
-					{
-						"n",
-						[[<leader>g]],
-						function()
-							require("telescope.builtin").git_status({
-								initial_mode = "normal",
-							})
-						end,
-					},
-				})
-			end,
-			requires = {
-				"nvim-telescope/telescope-fzf-native.nvim",
+			require("sodium.utils").map({
+				{
+					"n",
+					[[<leader>r]],
+					function()
+						require("telescope.builtin").resume({ initial_mode = "normal" })
+					end,
+				},
+				{
+					"n",
+					[[<C-p>]],
+					function()
+						require("telescope.builtin").find_files({ hidden = true })
+					end,
+				},
+				{
+					"n",
+					[[<leader>s]],
+					function()
+						require("telescope.builtin").buffers({
+							show_all_buffers = true,
+							sort_mru = true,
+							ignore_current_buffer = true,
+							initial_mode = "normal",
+						})
+					end,
+				},
+				{
+					"n",
+					[[<leader>/]],
+					function()
+						require("telescope.builtin").live_grep()
+					end,
+				},
+				{
+					"n",
+					[[<leader>8]],
+					function()
+						require("telescope.builtin").grep_string({
+							initial_mode = "normal",
+						})
+					end,
+				},
+				{
+					"n",
+					[[<leader><Space>/]],
+					function()
+						require("telescope.builtin").live_grep({ cwd = vim.fn.expand("%:h") })
+					end,
+				},
+				-- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
+				{
+					"n",
+					[[<leader>d]],
+					function()
+						require("telescope.builtin").find_files({ search_dirs = vim.fn.expand("%:h") })
+					end,
+				},
+				{
+					"n",
+					[[<leader><C-r>]],
+					function()
+						require("telescope.builtin").registers()
+					end,
+				},
+				{
+					"n",
+					[[<leader>g]],
+					function()
+						require("telescope.builtin").git_status({
+							initial_mode = "normal",
+						})
+					end,
+				},
+			})
+		end,
+		dependencies = {
+			{ "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
+			{
+				"kyazdani42/nvim-web-devicons",
+				opts = { default = true },
 			},
-		})
-		use({ "nvim-telescope/telescope-fzf-native.nvim", run = "make" })
-		use({
-			"nvim-treesitter/nvim-treesitter",
-			config = function()
-				require("nvim-treesitter.configs").setup({
-					ensure_installed = {
-						"bash",
-						"css",
-						"go",
-						"html",
-						"java",
-						"javascript",
-						"json",
-						"lua",
-						"markdown",
-						"markdown_inline",
-						"python",
-						"ruby",
-						"rust",
-						"tsx",
-						"typescript",
-						"vim",
-						"yaml",
-					},
-					-- https://github.com/nvim-treesitter/nvim-treesitter/issues/1313
-					ignore_install = { "comment", "jsdoc" },
-					highlight = {
-						enable = true,
-						disable = {},
-					},
-				})
-			end,
-		})
-		use({
-			"nvim-treesitter/nvim-treesitter-context",
-			config = function()
-				require("treesitter-context").setup()
-				vim.api.nvim_set_hl(0, "TreesitterContextLineNumber", { fg = "#E6EEF3" })
-			end,
-		})
-		use({
-			"norcalli/nvim-colorizer.lua",
-			config = function()
-				require("colorizer").setup()
-			end,
-		})
-		use("onsails/lspkind-nvim")
-		use({
-			"ntpeters/vim-better-whitespace",
-			config = function()
-				local utils = require("sodium.utils")
-				utils.augroup("DisableBetterWhitespace", { clear = true })("Filetype", {
-					pattern = { "diff", "gitcommit", "qf", "help", "markdown", "javascript" },
-					command = "DisableWhitespace",
-				})
-			end,
-		})
-		use({
-			"phaazon/hop.nvim",
-			config = function()
-				require("hop").setup({ create_hl_autocmd = false })
-				vim.api.nvim_command([[hi clear HopUnmatched]])
-				require("sodium.utils").map({
-					{
-						"n",
-						[[<leader>ew]],
-						function()
-							require("hop").hint_words()
-						end,
-					},
-					{
-						"n",
-						[[<leader>e/]],
-						function()
-							require("hop").hint_patterns()
-						end,
-					},
-				})
-			end,
-			keys = {
-				[[<leader>ew]],
-				[[<leader>e/]],
+			"nvim-lua/plenary.nvim",
+		},
+	},
+	{
+		"nvim-treesitter/nvim-treesitter",
+		build = ":TSUpdate",
+		opts = {
+			ensure_installed = {
+				"bash",
+				"css",
+				"go",
+				"html",
+				"java",
+				"javascript",
+				"json",
+				"lua",
+				"markdown",
+				"markdown_inline",
+				"python",
+				"ruby",
+				"rust",
+				"tsx",
+				"typescript",
+				"vim",
+				"yaml",
 			},
-		})
-		use("rhysd/conflict-marker.vim")
-		use({
-			"sodiumjoe/nvim-highlite",
-			config = function()
-				vim.cmd.colorscheme("sodium")
-				local utils = require("sodium.utils")
-				local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
-				-- disable line number in vimwiki and dirvish
-				line_nr_autocmd("FileType", {
-					pattern = { "vimwiki", "dirvish", "help" },
-					callback = function()
+			-- https://github.com/nvim-treesitter/nvim-treesitter/issues/1313
+			ignore_install = { "comment", "jsdoc" },
+			highlight = {
+				enable = true,
+				disable = {},
+			},
+		},
+	},
+	{
+		"nvim-treesitter/nvim-treesitter-context",
+		config = function()
+			require("treesitter-context").setup()
+			vim.api.nvim_set_hl(0, "TreesitterContextLineNumber", { fg = "#E6EEF3" })
+		end,
+	},
+	"norcalli/nvim-colorizer.lua",
+	{
+		"ntpeters/vim-better-whitespace",
+		config = function()
+			local utils = require("sodium.utils")
+			utils.augroup("DisableBetterWhitespace", { clear = true })("Filetype", {
+				pattern = { "diff", "gitcommit", "qf", "help", "markdown", "javascript" },
+				command = "DisableWhitespace",
+			})
+		end,
+	},
+	{
+		"phaazon/hop.nvim",
+		config = function()
+			require("hop").setup({ create_hl_autocmd = false })
+			vim.api.nvim_command([[hi clear HopUnmatched]])
+			require("sodium.utils").map({
+				{
+					"n",
+					[[<leader>ew]],
+					function()
+						require("hop").hint_words()
+					end,
+				},
+				{
+					"n",
+					[[<leader>e/]],
+					function()
+						require("hop").hint_patterns()
+					end,
+				},
+			})
+		end,
+		keys = {
+			[[<leader>ew]],
+			[[<leader>e/]],
+		},
+	},
+	"rhysd/conflict-marker.vim",
+	{
+		"sodiumjoe/nvim-highlite",
+		priority = 1000,
+		config = function()
+			vim.cmd.colorscheme("sodium")
+			local utils = require("sodium.utils")
+			local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
+			-- disable line number in vimwiki and dirvish
+			line_nr_autocmd("FileType", {
+				pattern = { "vimwiki", "dirvish", "help" },
+				callback = function()
+					vim.opt_local.number = false
+				end,
+			})
+			line_nr_autocmd({ "BufNewFile", "BufRead", "BufEnter" }, {
+				pattern = "*",
+				callback = function()
+					-- disable line number in empty buffer
+					if vim.filetype.match({ buf = 0 }) == nil then
 						vim.opt_local.number = false
-					end,
-				})
-				line_nr_autocmd({ "BufNewFile", "BufRead", "BufEnter" }, {
-					pattern = "*",
-					callback = function()
-						-- disable line number in empty buffer
-						if vim.filetype.match({ buf = 0 }) == nil then
-							vim.opt_local.number = false
-						else
-							vim.opt_local.number = true
-						end
-					end,
-				})
-				local cursorline_autocomd = utils.augroup("CurrentBufferCursorline", { clear = true })
-				-- enable cursorline line number highlight in active window
-				cursorline_autocomd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
-					pattern = "*",
-					callback = function()
-						vim.opt_local.cursorline = true
-					end,
-				})
-				-- disable cursorline line number highlight in inactive windows
-				cursorline_autocomd({ "WinLeave" }, {
-					pattern = "*",
-					callback = function()
-						vim.opt_local.cursorline = false
-					end,
-				})
-			end,
-		})
-		use("tpope/vim-commentary")
-		use("tpope/vim-eunuch")
-		use("tpope/vim-fugitive")
-		use("tpope/vim-repeat")
-		use("tpope/vim-surround")
-		use({
-			"vimwiki/vimwiki",
-			config = function()
-				local utils = require("sodium.utils")
-				local wiki = {
-					path = "~/home/todo.wiki",
-					syntax = "markdown",
-				}
-				local work_wiki = {
-					path = "~/stripe/todo.wiki",
-					path_html = "~/stripe/todo.html",
-					syntax = "markdown",
-				}
+					else
+						vim.opt_local.number = true
+					end
+				end,
+			})
+			local cursorline_autocomd = utils.augroup("CurrentBufferCursorline", { clear = true })
+			-- enable cursorline line number highlight in active window
+			cursorline_autocomd({ "VimEnter", "WinEnter", "BufWinEnter" }, {
+				pattern = "*",
+				callback = function()
+					vim.opt_local.cursorline = true
+				end,
+			})
+			-- disable cursorline line number highlight in inactive windows
+			cursorline_autocomd({ "WinLeave" }, {
+				pattern = "*",
+				callback = function()
+					vim.opt_local.cursorline = false
+				end,
+			})
+		end,
+	},
+	"tpope/vim-commentary",
+	"tpope/vim-eunuch",
+	"tpope/vim-fugitive",
+	"tpope/vim-repeat",
+	"tpope/vim-surround",
+	{
+		"vimwiki/vimwiki",
+		config = function()
+			local utils = require("sodium.utils")
+			local wiki = {
+				path = "~/home/todo.wiki",
+				syntax = "markdown",
+			}
+			local work_wiki = {
+				path = "~/stripe/todo.wiki",
+				path_html = "~/stripe/todo.html",
+				syntax = "markdown",
+			}
 
-				if vim.fn.isdirectory(vim.fn.expand("~/stripe")) ~= 0 then
-					vim.g.vimwiki_list = { work_wiki, wiki }
-				else
-					vim.g.vimwiki_list = { wiki }
-				end
-				vim.g.vimwiki_auto_header = 1
+			if vim.fn.isdirectory(vim.fn.expand("~/stripe")) ~= 0 then
+				vim.g.vimwiki_list = { work_wiki, wiki }
+			else
+				vim.g.vimwiki_list = { wiki }
+			end
+			vim.g.vimwiki_auto_header = 1
 
-				local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
+			local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
 
-				vimwiki_autocmd("FileType", {
-					pattern = { "vimwiki" },
-					callback = function()
-						require("cmp").setup.buffer({ enabled = false })
-					end,
-				})
+			vimwiki_autocmd("FileType", {
+				pattern = { "vimwiki" },
+				callback = function()
+					require("cmp").setup.buffer({ enabled = false })
+				end,
+			})
 
-				utils.map({
-					{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
-					{ "n", [[<leader>wn]], [[<Plug>VimwikiDiaryNextDay]] },
-					{ "n", [[<leader>=]], "<Plug>VimwikiAddHeaderLevel" },
-					{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
-				})
-			end,
-			requires = {
-				"hrsh7th/nvim-cmp",
-			},
-		})
-		use({
-			"whatyouhide/vim-lengthmatters",
-			config = function()
-				vim.cmd("call lengthmatters#highlight('ctermbg=0 guibg=#556873')")
-				vim.g.lengthmatters_excluded = {
-					"tagbar",
-					"startify",
-					"gundo",
-					"vimshell",
-					"w3m",
-					"nerdtree",
-					"help",
-					"qf",
-					"dirvish",
-					"gitcommit",
-					"json",
-					"vimwiki",
-					"javascript",
-					"javascript.jsx",
-					"lua",
-					"typescript",
-				}
-			end,
-		})
-
-		-- Automatically set up your configuration after cloning packer.nvim
-		-- Put this at the end after all plugins
-		if packer_bootstrap then
-			require("packer").sync()
-		end
-	end,
-	config = {
-		snapshot_path = fn.expand("~") .. "/.dotfiles",
+			utils.map({
+				{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
+				{ "n", [[<leader>wn]], [[<Plug>VimwikiDiaryNextDay]] },
+				{ "n", [[<leader>=]], "<Plug>VimwikiAddHeaderLevel" },
+				{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
+			})
+		end,
+		dependencies = {
+			"hrsh7th/nvim-cmp",
+		},
+	},
+	{
+		"whatyouhide/vim-lengthmatters",
+		config = function()
+			vim.cmd("call lengthmatters#highlight('ctermbg=0 guibg=#556873')")
+			vim.g.lengthmatters_excluded = {
+				"tagbar",
+				"startify",
+				"gundo",
+				"vimshell",
+				"w3m",
+				"nerdtree",
+				"help",
+				"qf",
+				"dirvish",
+				"gitcommit",
+				"json",
+				"vimwiki",
+				"javascript",
+				"javascript.jsx",
+				"lua",
+				"typescript",
+			}
+		end,
+	},
+}, {
+	performance = {
+		defaults = {
+			lazy = true,
+		},
+		lockfile = "~/.dotfiles/lazy-lock.json", -- lockfile generated after running update.
+		--dev = {
+		--	-- directory where you store your local plugin projects
+		--	path = "~/projects",
+		--	---@type string[] plugins that match these patterns will use your local versions instead of being fetched from GitHub
+		--	patterns = {}, -- For example {"folke"}
+		--	fallback = false, -- Fallback to git when local plugin doesn't exist
+		--},
+		rtp = {
+			---@type string[]
+			paths = { "~/.dotfiles/neovim" }, -- add any custom paths here that you want to includes in the rtp
+			---@type string[] list any plugins you want to disable here
+		},
 	},
 })
