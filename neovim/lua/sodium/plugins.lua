@@ -202,6 +202,7 @@ require("lazy").setup({
 					{ name = "path" },
 				}, {
 					{
+						keyword_length = 2,
 						name = "cmdline",
 						option = {
 							ignore_cmds = { "Man", "!" },
