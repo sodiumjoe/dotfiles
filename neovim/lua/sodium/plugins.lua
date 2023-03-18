@@ -398,10 +398,8 @@ require("lazy").setup({
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
-				vim.lsp.handlers.signature_help,
-				vim.g.popup_opts
-			)
+			vim.lsp.handlers["textDocument/signatureHelp"] =
+				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
 			local on_attach = function(client)
 				lsp_status.on_attach(client)
@@ -751,8 +749,7 @@ require("lazy").setup({
 	"tpope/vim-surround",
 	{
 		"vimwiki/vimwiki",
-		config = function()
-			local utils = require("sodium.utils")
+		init = function()
 			local wiki = {
 				path = "~/home/todo.wiki",
 				syntax = "markdown",
@@ -769,7 +766,9 @@ require("lazy").setup({
 				vim.g.vimwiki_list = { wiki }
 			end
 			vim.g.vimwiki_auto_header = 1
-
+		end,
+		config = function()
+			local utils = require("sodium.utils")
 			local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
 
 			vimwiki_autocmd("FileType", {
@@ -781,7 +780,8 @@ require("lazy").setup({
 
 			utils.map({
 				{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
-				{ "n", [[<leader>wn]], [[<Plug>VimwikiDiaryNextDay]] },
+				{ "n", [[<leader>wn]], "<Plug>VimwikiDiaryNextDay" },
+				{ "n", [[<leader>wg]], "<Plug>VimwikiGoto" },
 				{ "n", [[<leader>=]], "<Plug>VimwikiAddHeaderLevel" },
 				{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
 			})
