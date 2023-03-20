@@ -108,6 +108,29 @@ require("lazy").setup({
 			end
 		end,
 	},
+	{ "echasnovski/mini.nvim", version = "*" },
+	{
+		"echasnovski/mini.move",
+		version = "*",
+		config = function()
+			require("mini.move").setup({
+				-- Module mappings. Use `''` (empty string) to disable one.
+				mappings = {
+					-- Move visual selection in Visual mode. Defaults are Alt (Meta) + hjkl.
+					left = "",
+					right = "",
+					down = "<C-j>",
+					up = "<C-k>",
+
+					-- Move current line in Normal mode
+					line_left = "",
+					line_right = "",
+					line_down = "<C-j>",
+					line_up = "<C-k>",
+				},
+			})
+		end,
+	},
 	{
 		"editorconfig/editorconfig-vim",
 		config = function()
@@ -350,12 +373,6 @@ require("lazy").setup({
 			"g*",
 			"g#",
 		},
-	},
-	{
-		"matze/vim-move",
-		config = function()
-			vim.g.move_key_modifier = "C"
-		end,
 	},
 	{
 		"mhinz/vim-signify",
