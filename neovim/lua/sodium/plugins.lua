@@ -347,6 +347,66 @@ require("lazy").setup({
 		end,
 	},
 	{
+		"kaplanz/nvim-retrail",
+		opts = {
+			-- Highlight group to use for trailing whitespace.
+			hlgroup = "Error",
+			-- Pattern to match trailing whitespace against. Edit with caution!
+			pattern = "\\v((.*%#)@!|%#)\\s+$",
+			-- Enabled filetypes.
+			filetype = {
+				-- Strictly enable only on `include`ed filetypes. When false, only disabled
+				-- on an `exclude`ed filetype.
+				strict = false,
+				-- Included filetype list.
+				include = {},
+				-- Excluded filetype list. Overrides `include` list.
+				exclude = {
+					"",
+					"aerial",
+					"alpha",
+					"checkhealth",
+					"cmp_menu",
+					"diff",
+					"lazy",
+					"lspinfo",
+					"man",
+					"mason",
+					"TelescopePrompt",
+					"Trouble",
+					"WhichKey",
+					"markdown",
+					"javascript",
+				},
+			},
+			-- Enabled buftypes.
+			buftype = {
+				-- Strictly enable only on `include`ed buftypes. When false, only disabled
+				-- on an `exclude`ed buftype.
+				strict = false,
+				-- Included filetype list. Overrides `include` list.
+				include = {},
+				-- Excluded filetype list.
+				exclude = {
+					"help",
+					"nofile",
+					"prompt",
+					"quickfix",
+					"terminal",
+				},
+			},
+			-- Trim on write behaviour.
+			trim = {
+				-- Auto trim on BufWritePre
+				auto = true,
+				-- Trailing whitespace as highlighted.
+				whitespace = true,
+				-- Final blank (i.e. whitespace only) lines.
+				blanklines = false,
+			},
+		},
+	},
+	{
 		"kevinhwang91/nvim-hlslens",
 		config = function()
 			require("hlslens").setup({
@@ -679,15 +739,6 @@ require("lazy").setup({
 		end,
 	},
 	"norcalli/nvim-colorizer.lua",
-	{
-		"ntpeters/vim-better-whitespace",
-		config = function()
-			utils.augroup("DisableBetterWhitespace", { clear = true })("Filetype", {
-				pattern = { "diff", "gitcommit", "qf", "help", "markdown", "javascript" },
-				command = "DisableWhitespace",
-			})
-		end,
-	},
 	{
 		"phaazon/hop.nvim",
 		config = function()
