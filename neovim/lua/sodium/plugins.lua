@@ -20,12 +20,13 @@ if not vim.loop.fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
+local utils = require("sodium.utils")
+
 require("lazy").setup({
 	"benizi/vim-automkdir",
 	{
 		"ojroques/nvim-osc52",
 		config = function()
-			local utils = require("sodium.utils")
 			local remote_stripe_dir = "/pay/src/"
 			local local_stripe_dir = vim.fn.expand("~/stripe")
 			local stripe_dir = nil
@@ -126,7 +127,6 @@ require("lazy").setup({
 	{
 		"hrsh7th/nvim-cmp",
 		config = function()
-			local utils = require("sodium.utils")
 			local cmp = require("cmp")
 			cmp.setup({
 				window = {
@@ -223,7 +223,6 @@ require("lazy").setup({
 		"jose-elias-alvarez/null-ls.nvim",
 		config = function()
 			local null_ls = require("null-ls")
-			local utils = require("sodium.utils")
 
 			local sources = {
 				null_ls.builtins.diagnostics.eslint_d.with({
@@ -313,7 +312,6 @@ require("lazy").setup({
 	{
 		"justinmk/vim-dirvish",
 		config = function()
-			local utils = require("sodium.utils")
 			local dirvish_autocmd = utils.augroup("DirvishConfig", { clear = true })
 			dirvish_autocmd("FileType", {
 				pattern = { "dirvish" },
@@ -374,7 +372,6 @@ require("lazy").setup({
 		config = function()
 			local nvim_lsp = require("lspconfig")
 			local lsp_status = require("lsp-status")
-			local utils = require("sodium.utils")
 
 			vim.diagnostic.config({
 				signs = { priority = 11 },
@@ -399,8 +396,10 @@ require("lazy").setup({
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] =
-				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
+			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
+				vim.lsp.handlers.signature_help,
+				vim.g.popup_opts
+			)
 
 			local on_attach = function(client)
 				lsp_status.on_attach(client)
@@ -666,7 +665,6 @@ require("lazy").setup({
 	{
 		"ntpeters/vim-better-whitespace",
 		config = function()
-			local utils = require("sodium.utils")
 			utils.augroup("DisableBetterWhitespace", { clear = true })("Filetype", {
 				pattern = { "diff", "gitcommit", "qf", "help", "markdown", "javascript" },
 				command = "DisableWhitespace",
@@ -706,7 +704,6 @@ require("lazy").setup({
 		priority = 1000,
 		config = function()
 			vim.cmd.colorscheme("sodium")
-			local utils = require("sodium.utils")
 			local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
 			-- disable line number in vimwiki and dirvish
 			line_nr_autocmd("FileType", {
@@ -769,7 +766,6 @@ require("lazy").setup({
 			vim.g.vimwiki_auto_header = 1
 		end,
 		config = function()
-			local utils = require("sodium.utils")
 			local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
 
 			vimwiki_autocmd("FileType", {
@@ -816,22 +812,39 @@ require("lazy").setup({
 		end,
 	},
 }, {
+	defaults = {
+		lazy = true,
+	},
+	-- leave nil when passing the spec as the first argument to setup()
+	spec = nil, ---@type LazySpec
+	lockfile = "~/.dotfiles/lazy-lock.json",
+	dev = {
+		-- directory where you store your local plugin projects
+		-- path = "~/projects",
+		---@type string[] plugins that match these patterns will use your local versions instead of being fetched from GitHub
+		-- patterns = {}, -- For example {"folke"}
+		-- fallback = false, -- Fallback to git when local plugin doesn't exist
+	},
+	install = {
+		-- install missing plugins on startup. This doesn't increase startup time.
+		missing = true,
+		-- try to load one of these colorschemes when starting an installation during startup
+		colorscheme = { "sodium" },
+	},
+	ui = {
+		-- a number <1 is a percentage., >1 is a fixed size
+		size = { width = 0.8, height = 0.8 },
+		wrap = true, -- wrap the lines in the ui
+		-- The border to use for the UI window. Accepts same border values as |nvim_open_win()|.
+		border = "rounded",
+	},
 	performance = {
-		defaults = {
-			lazy = true,
+		cache = {
+			enabled = true,
 		},
-		lockfile = "~/.dotfiles/lazy-lock.json", -- lockfile generated after running update.
-		--dev = {
-		--	-- directory where you store your local plugin projects
-		--	path = "~/projects",
-		--	---@type string[] plugins that match these patterns will use your local versions instead of being fetched from GitHub
-		--	patterns = {}, -- For example {"folke"}
-		--	fallback = false, -- Fallback to git when local plugin doesn't exist
-		--},
+		reset_packpath = true, -- reset the package path to improve startup time
 		rtp = {
-			---@type string[]
 			paths = { "~/.dotfiles/neovim" }, -- add any custom paths here that you want to includes in the rtp
-			---@type string[] list any plugins you want to disable here
 		},
 	},
 })
