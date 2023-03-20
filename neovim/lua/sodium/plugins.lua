@@ -813,7 +813,7 @@ require("lazy").setup({
 	},
 }, {
 	defaults = {
-		lazy = true,
+		lazy = false,
 	},
 	-- leave nil when passing the spec as the first argument to setup()
 	spec = nil, ---@type LazySpec
