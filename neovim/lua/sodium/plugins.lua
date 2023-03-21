@@ -23,7 +23,10 @@ vim.opt.rtp:prepend(lazypath)
 local utils = require("sodium.utils")
 
 require("lazy").setup({
-	"benizi/vim-automkdir",
+	{
+		"benizi/vim-automkdir",
+		event = "BufWritePre",
+	},
 	{
 		"ojroques/nvim-osc52",
 		config = function()
@@ -108,7 +111,6 @@ require("lazy").setup({
 			end
 		end,
 	},
-	{ "echasnovski/mini.nvim", version = "*" },
 	{
 		"echasnovski/mini.move",
 		version = "*",
@@ -130,6 +132,10 @@ require("lazy").setup({
 				},
 			})
 		end,
+		keys = { "<C-j>", "<C-k>" },
+		dependencies = {
+			{ "echasnovski/mini.nvim", version = "*" },
+		},
 	},
 	{
 		"editorconfig/editorconfig-vim",
@@ -145,8 +151,9 @@ require("lazy").setup({
 				opts = { default = true },
 			},
 		},
+		cmd = { "Trouble", "TroubleToggle" },
 	},
-	"haya14busa/is.vim",
+	{ "haya14busa/is.vim", keys = { "/" } },
 	{
 		"hrsh7th/nvim-cmp",
 		config = function()
@@ -331,6 +338,7 @@ require("lazy").setup({
         autocmd! User GoyoLeave nested call <SID>goyo_leave()
       ]])
 		end,
+		cmd = { "Goyo" },
 	},
 	{
 		"justinmk/vim-dirvish",
@@ -699,6 +707,7 @@ require("lazy").setup({
 			},
 			"nvim-lua/plenary.nvim",
 		},
+		cmd = { "Telescope" },
 	},
 	{
 		"nvim-treesitter/nvim-treesitter",
@@ -808,9 +817,29 @@ require("lazy").setup({
 			})
 		end,
 	},
-	"tpope/vim-commentary",
-	"tpope/vim-eunuch",
-	"tpope/vim-fugitive",
+	{
+		"tpope/vim-commentary",
+		keys = { "gcc", { "gc", mode = "v" } },
+	},
+	{
+		"tpope/vim-eunuch",
+		cmd = {
+			"Remove",
+			"Delete",
+			"Move",
+			"Chmod",
+			"Mkdir",
+			"Cfind",
+			"Clocate",
+			"Wall",
+			"SudoWrite",
+			"SudoEdit",
+		},
+	},
+	{
+		"tpope/vim-fugitive",
+		cmd = { "Gdiffsplit", "Git" },
+	},
 	"tpope/vim-repeat",
 	"tpope/vim-surround",
 	{
@@ -854,6 +883,8 @@ require("lazy").setup({
 		dependencies = {
 			"hrsh7th/nvim-cmp",
 		},
+		keys = { "<leader>ww", "<leader>w<space>w" },
+		ft = "vimwiki",
 	},
 	{
 		"whatyouhide/vim-lengthmatters",
