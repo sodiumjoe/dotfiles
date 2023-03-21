@@ -74,15 +74,5 @@ else
   ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
 fi
 
-# install packer
-if [ -d ~/.local/share/nvim/site/pack/packer/start/packer.nvim ]; then
-  echo "Packer already installed"
-else
-  git clone --depth 1 https://github.com/wbthomason/packer.nvim\
-    ~/.local/share/nvim/site/pack/packer/start/packer.nvim
-fi
-
 # install plugins
-nvim --headless -c 'autocmd User PackerCompileDone quitall' -c 'PackerSync'
-nvim --headless -c 'autocmd User PackerComplete quitall' -c 'PackerSnapshotRollback packer-snapshot.json'
-nvim --headless -c 'autocmd User PackerCompileDone quitall' -c 'PackerCompile'
+nvim --headless "+Lazy! restore" +qa
