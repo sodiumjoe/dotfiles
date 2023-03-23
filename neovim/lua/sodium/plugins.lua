@@ -253,12 +253,18 @@ require("lazy").setup({
 			})
 		end,
 		dependencies = {
-			"onsails/lspkind-nvim",
-			"hrsh7th/cmp-cmdline",
-			"hrsh7th/cmp-nvim-lsp",
-			"hrsh7th/cmp-path",
-			"hrsh7th/vim-vsnip",
+			{ "onsails/lspkind-nvim", lazy = true },
+			{ "hrsh7th/cmp-cmdline", lazy = true },
+			{ "hrsh7th/cmp-nvim-lsp", lazy = true },
+			{ "hrsh7th/cmp-path", lazy = true },
+			{ "hrsh7th/vim-vsnip", lazy = true },
 		},
+		keys = {
+			":",
+			"/",
+			"?",
+		},
+		event = { "InsertEnter" },
 	},
 	{
 		"jose-elias-alvarez/null-ls.nvim",
@@ -427,13 +433,14 @@ require("lazy").setup({
 	},
 	{
 		"kevinhwang91/nvim-hlslens",
+		init = function()
+			vim.o.hlsearch = true
+		end,
 		config = function()
 			require("hlslens").setup({
 				calm_down = true,
 				nearest_only = false,
 			})
-
-			vim.o.hlsearch = true
 
 			require("sodium.utils").map({
 				{ "n", "n", "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
@@ -493,8 +500,10 @@ require("lazy").setup({
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] =
-				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
+			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
+				vim.lsp.handlers.signature_help,
+				vim.g.popup_opts
+			)
 
 			local on_attach = function(client)
 				lsp_status.on_attach(client)
@@ -611,7 +620,7 @@ require("lazy").setup({
 					require("sodium.statusline")
 				end,
 			},
-			"onsails/lspkind-nvim",
+			{ "onsails/lspkind-nvim", lazy = true },
 			"nvim-telescope/telescope.nvim",
 		},
 	},
