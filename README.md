@@ -7,23 +7,23 @@ xcode-select --install
 cd ~
 git clone --recursive https://github.com/sodiumjoe/dotfiles.git .dotfiles
 cd .dotfiles
-git submodule update --init
 ./bootstrap.sh
 ./brew.sh
 ./macos
 ```
 
-* [Alacritty terminfo](https://github.com/alacritty/alacritty/blob/master/INSTALL.md#terminfo)
-* filevault
-* caps -> ctrl
-* generate ssh keys
-* https://www.rustup.rs/
+- [Alacritty terminfo](https://github.com/alacritty/alacritty/blob/master/INSTALL.md#terminfo)
+- filevault
+- caps -> ctrl
+- generate ssh keys
+- https://www.rustup.rs/
 
 # Update
-* `zimfw update`
-* `zimfw upgrade`
-* `brew update`
-* `brew upgrade`
+
+- `zimfw update`
+- `zimfw upgrade`
+- `brew update`
+- `brew upgrade`
 
 ```bash
 cd ~/.dotfiles
