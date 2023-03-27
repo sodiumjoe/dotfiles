@@ -789,7 +789,12 @@ require("lazy").setup({
 			vim.api.nvim_set_hl(0, "TreesitterContextLineNumber", { fg = "#E6EEF3" })
 		end,
 	},
-	"norcalli/nvim-colorizer.lua",
+	{
+		"norcalli/nvim-colorizer.lua",
+		config = function()
+			require("colorizer").setup()
+		end,
+	},
 	{
 		"phaazon/hop.nvim",
 		config = function()
