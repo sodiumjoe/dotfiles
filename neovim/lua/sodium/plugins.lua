@@ -931,30 +931,6 @@ require("lazy").setup({
 		keys = { "<leader>ww", "<leader>w<space>w" },
 		ft = "vimwiki",
 	},
-	{
-		"whatyouhide/vim-lengthmatters",
-		config = function()
-			vim.cmd("call lengthmatters#highlight('ctermbg=0 guibg=#556873')")
-			vim.g.lengthmatters_excluded = {
-				"tagbar",
-				"startify",
-				"gundo",
-				"vimshell",
-				"w3m",
-				"nerdtree",
-				"help",
-				"qf",
-				"dirvish",
-				"gitcommit",
-				"json",
-				"vimwiki",
-				"javascript",
-				"javascript.jsx",
-				"lua",
-				"typescript",
-			}
-		end,
-	},
 }, {
 	defaults = {
 		lazy = false,
