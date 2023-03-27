@@ -908,6 +908,9 @@ require("lazy").setup({
 				vim.g.vimwiki_list = { wiki }
 			end
 			vim.g.vimwiki_auto_header = 1
+			vim.g.vimwiki_hl_headers = 1
+			vim.g.vimwiki_hl_cb_checked = 1
+			vim.g.vimwiki_listsyms = " ○◐●✓"
 		end,
 		config = function()
 			local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
