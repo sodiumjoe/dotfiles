@@ -782,13 +782,7 @@ require("lazy").setup({
 		},
 		cmd = { "TSPlaygroundToggle" },
 	},
-	{
-		"nvim-treesitter/nvim-treesitter-context",
-		config = function()
-			require("treesitter-context").setup()
-			vim.api.nvim_set_hl(0, "TreesitterContextLineNumber", { fg = "#E6EEF3" })
-		end,
-	},
+	"nvim-treesitter/nvim-treesitter-context",
 	{
 		"norcalli/nvim-colorizer.lua",
 		config = function()
