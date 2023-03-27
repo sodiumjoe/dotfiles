@@ -442,7 +442,7 @@ require("lazy").setup({
 				nearest_only = false,
 			})
 
-			require("sodium.utils").map({
+			utils.map({
 				{ "n", "n", "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
 				{ "n", "N", "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
 				{ "n", "*", "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
@@ -640,7 +640,7 @@ require("lazy").setup({
 
 			telescope.load_extension("fzf")
 
-			require("sodium.utils").map({
+			utils.map({
 				{
 					"n",
 					[[<leader>r]],
@@ -794,7 +794,7 @@ require("lazy").setup({
 		config = function()
 			require("hop").setup({ create_hl_autocmd = false })
 			vim.api.nvim_command([[hi clear HopUnmatched]])
-			require("sodium.utils").map({
+			utils.map({
 				{
 					"n",
 					[[<leader>ew]],
