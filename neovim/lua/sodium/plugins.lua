@@ -110,6 +110,7 @@ require("lazy").setup({
 				})
 			end
 		end,
+		event = "VeryLazy",
 	},
 	{
 		"echasnovski/mini.move",
