@@ -221,6 +221,9 @@ else
   alias ll='ls -la'
 fi
 
+alias gfm='git fetch origin master-passing-tests:master-passing-tests'
+alias grm='git rebase master-passing-tests'
+
 # FZF
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
