@@ -12,7 +12,6 @@ cd .dotfiles
 ./macos
 ```
 
-- [Alacritty terminfo](https://github.com/alacritty/alacritty/blob/master/INSTALL.md#terminfo)
 - filevault
 - caps -> ctrl
 - generate ssh keys
