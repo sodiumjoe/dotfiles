@@ -637,6 +637,18 @@ require("lazy").setup({
 						"--no-heading",
 						"--smart-case",
 					},
+					path_display = {
+						truncate = 3,
+					},
+				},
+				pickers = {
+					buffers = {
+						mappings = {
+							n = {
+								d = "delete_buffer",
+							},
+						},
+					},
 				},
 			})
 
