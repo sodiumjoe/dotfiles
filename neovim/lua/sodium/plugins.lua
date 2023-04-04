@@ -603,8 +603,42 @@ require("lazy").setup({
 				{ "n", [[<leader>ca]], vim.lsp.buf.code_action },
 				{ "n", "gr", vim.lsp.buf.references },
 				{ "n", [[<leader>ee]], vim.diagnostic.open_float },
-				{ "n", [[<leader>p]], vim.diagnostic.goto_prev },
-				{ "n", [[<leader>n]], vim.diagnostic.goto_next },
+				{
+					"n",
+					[[<leader>p]],
+					function()
+						vim.diagnostic.goto_prev({
+							severity = vim.diagnostic.severity.ERROR,
+						})
+					end,
+				},
+				{
+					"n",
+					[[<leader><space>p]],
+					function()
+						vim.diagnostic.goto_prev({
+							severity = vim.diagnostic.severity.WARN,
+						})
+					end,
+				},
+				{
+					"n",
+					[[<leader>n]],
+					function()
+						vim.diagnostic.goto_next({
+							severity = vim.diagnostic.severity.ERROR,
+						})
+					end,
+				},
+				{
+					"n",
+					[[<leader><space>n]],
+					function()
+						vim.diagnostic.goto_next({
+							severity = vim.diagnostic.severity.WARN,
+						})
+					end,
+				},
 				{
 					"n",
 					[[<leader>q]],
