@@ -141,7 +141,7 @@ require("lazy").setup({
 		"folke/trouble.nvim",
 		dependencies = {
 			{
-				"kyazdani42/nvim-web-devicons",
+				"nvim-tree/nvim-web-devicons",
 				opts = { default = true },
 			},
 		},
@@ -779,7 +779,7 @@ require("lazy").setup({
 		dependencies = {
 			{ "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
 			{
-				"kyazdani42/nvim-web-devicons",
+				"nvim-tree/nvim-web-devicons",
 				opts = { default = true },
 			},
 			"nvim-lua/plenary.nvim",
