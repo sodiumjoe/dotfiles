@@ -138,16 +138,10 @@ require("lazy").setup({
 		},
 	},
 	{
-		"editorconfig/editorconfig-vim",
-		config = function()
-			vim.g.EditorConfig_exclude_patterns = { "fugitive://.*" }
-		end,
-	},
-	{
 		"folke/trouble.nvim",
 		dependencies = {
 			{
-				"kyazdani42/nvim-web-devicons",
+				"nvim-tree/nvim-web-devicons",
 				opts = { default = true },
 			},
 		},
@@ -462,6 +456,26 @@ require("lazy").setup({
 		},
 	},
 	{
+		"luukvbaal/statuscol.nvim",
+		config = function()
+			local builtin = require("statuscol.builtin")
+			require("statuscol").setup({
+				relculright = true,
+				segments = {
+					{ text = { builtin.foldfunc } },
+					{
+						sign = { name = { "Diagnostic" }, maxwidth = 2, auto = true },
+					},
+					{
+						sign = { name = { ".*" }, maxwidth = 2, colwidth = 1, auto = true },
+					},
+					{ text = { builtin.lnumfunc } },
+					{ text = { " │ " } },
+				},
+			})
+		end,
+	},
+	{
 		"mhinz/vim-signify",
 		config = function()
 			vim.g.signify_sign_add = "│"
@@ -500,10 +514,8 @@ require("lazy").setup({
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
-				vim.lsp.handlers.signature_help,
-				vim.g.popup_opts
-			)
+			vim.lsp.handlers["textDocument/signatureHelp"] =
+				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
 			local on_attach = function(client)
 				lsp_status.on_attach(client)
@@ -767,7 +779,7 @@ require("lazy").setup({
 		dependencies = {
 			{ "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
 			{
-				"kyazdani42/nvim-web-devicons",
+				"nvim-tree/nvim-web-devicons",
 				opts = { default = true },
 			},
 			"nvim-lua/plenary.nvim",
