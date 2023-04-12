@@ -73,6 +73,3 @@ if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
 else
   ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
 fi
-
-# install plugins
-nvim --headless "+Lazy! restore" +qa
