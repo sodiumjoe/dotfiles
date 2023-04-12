@@ -140,6 +140,12 @@ export PATH=${PATH}:~/stripe/henson/bin
 export PATH=${PATH}:~/stripe/password-vault/bin
 export PATH=${PATH}:~/stripe/space-commander/bin
 export PATH=${PATH}:~/stripe/go/bin
+export PATH=${PATH}:~/bin
+export PATH=${PATH}:~/.bin
+export PATH=${PATH}:~/.bin/terraform
+export PATH=${PATH}:~/npm/bin
+export PATH=${PATH}:~/.cargo/bin
+export PATH=${PATH}:~/node-bin/node_modules/.bin
 export PATH=${HOMEBREW_PREFIX}/opt/python/libexec/bin:${PATH}
 export PATH=${HOMEBREW_PREFIX}/opt/curl/bin:${PATH}
 export PATH=${PATH}:/usr/local/bin
@@ -149,12 +155,6 @@ export PATH=${PATH}:/sbin
 export PATH=${PATH}:/usr/bin
 export PATH=${PATH}:/usr/X11/bin
 export PATH=${PATH}:/usr/local/share/npm/bin
-export PATH=${PATH}:~/bin
-export PATH=${PATH}:~/.bin
-export PATH=${PATH}:~/.bin/terraform
-export PATH=${PATH}:~/npm/bin
-export PATH=${PATH}:~/.cargo/bin
-export PATH=${PATH}:~/node-bin/node_modules/.bin
 
 export RUSTUP_HOME=~/bin/rustup
 
