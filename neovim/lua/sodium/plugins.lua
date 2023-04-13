@@ -539,7 +539,6 @@ require("lazy").setup({
 				},
 				sorbet = {
 					cmd = {
-						"scripts/dev_productivity/while_pay_up_connected.sh",
 						"pay",
 						"exec",
 						"scripts/bin/typecheck",
