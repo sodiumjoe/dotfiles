@@ -464,10 +464,10 @@ require("lazy").setup({
 				segments = {
 					{ text = { builtin.foldfunc } },
 					{
-						sign = { name = { "Diagnostic" }, maxwidth = 2, auto = true },
+						sign = { name = { "Diagnostic" }, colwidth = 2, auto = false },
 					},
 					{
-						sign = { name = { ".*" }, maxwidth = 2, colwidth = 1, auto = true },
+						sign = { name = { "Signify.*" }, maxwidth = 1, colwidth = 1, auto = false },
 					},
 					{ text = { builtin.lnumfunc } },
 					{ text = { " │ " } },
