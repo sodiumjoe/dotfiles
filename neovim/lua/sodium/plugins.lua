@@ -628,7 +628,7 @@ require("lazy").setup({
 					[[<leader><space>p]],
 					function()
 						vim.diagnostic.goto_prev({
-							severity = vim.diagnostic.severity.WARN,
+							severity = { max = vim.diagnostic.severity.WARN },
 						})
 					end,
 				},
@@ -646,7 +646,7 @@ require("lazy").setup({
 					[[<leader><space>n]],
 					function()
 						vim.diagnostic.goto_next({
-							severity = vim.diagnostic.severity.WARN,
+							severity = { max = vim.diagnostic.severity.WARN },
 						})
 					end,
 				},
