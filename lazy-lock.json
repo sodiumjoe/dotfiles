@@ -17,7 +17,6 @@
   "nvim-highlite": { "branch": "master", "commit": "0ceb4ddda7de8e3e765521d76ca5837840675f0b" },
   "nvim-hlslens": { "branch": "main", "commit": "5e3e9088fba7508cee3612ee50b14dfdd3ab19af" },
   "nvim-lspconfig": { "branch": "master", "commit": "6fe69025b8825029ea9bf291ab3b1750f9bcb39e" },
-  "nvim-osc52": { "branch": "main", "commit": "47ce7ee2396fa3ee4fb6b0e0ef14ba06f9c9bd31" },
   "nvim-retrail": { "branch": "main", "commit": "d04fdf1524057e9d8956a1f6aada9a23abd7a476" },
   "nvim-treesitter": { "branch": "master", "commit": "18f9e1a47fc25272836a84aa8adb03925c73b33d" },
   "nvim-treesitter-context": { "branch": "master", "commit": "38203f5e6c62617b3c07662dc71ce3047ecd90d3" },
