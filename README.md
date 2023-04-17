@@ -23,6 +23,7 @@ cd .dotfiles
 - `zimfw upgrade`
 - `brew update`
 - `brew upgrade`
+- `vivid generate sodium`
 
 ```bash
 cd ~/.dotfiles
