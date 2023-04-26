@@ -86,9 +86,6 @@ require("lazy").setup({
 						winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
 					}),
 				},
-				view = {
-					entries = { name = "custom", selection_order = "near_cursor" },
-				},
 				mapping = cmp.mapping.preset.insert({
 					["<C-n>"] = function(fallback)
 						if cmp.visible() then
@@ -110,18 +107,11 @@ require("lazy").setup({
 						name = "buffer",
 						option = {
 							-- completion candidates from all open buffers
-							get_bufnrs = function()
-								local bufs = {}
-								for _, win in ipairs(vim.api.nvim_list_wins()) do
-									local buf_num = vim.api.nvim_win_get_buf(win)
-									local ft = vim.api.nvim_buf_get_option(buf_num, "filetype")
-									-- don't complete from json and graphql buffers
-									if ft ~= "json" and ft ~= "graphql" then
-										bufs[buf_num] = true
-									end
-								end
-								return vim.tbl_keys(bufs)
-							end,
+							option = {
+								get_bufnrs = function()
+									return vim.api.nvim_list_bufs()
+								end,
+							},
 						},
 					},
 					{ name = "nvim_lsp" },
