@@ -103,6 +103,7 @@ require("lazy").setup({
 					end,
 				}),
 				sources = cmp.config.sources({
+					{ name = "nvim_lsp" },
 					{
 						name = "buffer",
 						option = {
@@ -114,7 +115,6 @@ require("lazy").setup({
 							},
 						},
 					},
-					{ name = "nvim_lsp" },
 					{ name = "path" },
 				}),
 				snippet = {
