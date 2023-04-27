@@ -80,6 +80,27 @@ vim.api.nvim_exec(
 	false
 )
 
+local remote_stripe_dir = "/pay/src/"
+local local_stripe_dir = vim.fn.expand("~/stripe")
+
+local function get_lg_url()
+	local stripe_dir = nil
+	if vim.fn.isdirectory(remote_stripe_dir) ~= 0 then
+		stripe_dir = remote_stripe_dir
+	elseif vim.fn.isdirectory(local_stripe_dir) ~= 0 then
+		stripe_dir = local_stripe_dir
+	end
+
+	local full_path = vim.api.nvim_buf_get_name(0)
+	local line_number = vim.fn.line(".")
+	if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
+		local path = string.gsub(full_path, stripe_dir, "")
+		return string.format([[http://go/lg-view/%s#L%s]], path, line_number)
+	else
+		return nil
+	end
+end
+
 utils.map({
 	-- leader d and leader p for deleting instead of cutting and pasting
 	-- { "n", [[<leader>d]], [["_d]], { noremap = true } },
@@ -92,4 +113,19 @@ utils.map({
 
 	-- search visual selection (busted)
 	-- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
+
+	-- copy relative path to clipboard
+	{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
+	-- copy full path to clipboard
+	{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
+	{
+		"n",
+		[[<leader>l]],
+		function()
+			local lg_url = get_lg_url()
+			if lg_url ~= nil then
+				vim.fn.setreg("+", lg_url)
+			end
+		end,
+	},
 })
