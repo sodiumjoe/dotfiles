@@ -364,20 +364,22 @@ require("lazy").setup({
 	},
 	{
 		"luukvbaal/statuscol.nvim",
+		init = function()
+			vim.diagnostic.config({ severity_sort = true })
+		end,
 		config = function()
 			local builtin = require("statuscol.builtin")
 			require("statuscol").setup({
-				relculright = true,
 				segments = {
-					{ text = { builtin.foldfunc } },
 					{
-						sign = { name = { "Diagnostic" }, colwidth = 2, auto = false },
+						text = { builtin.lnumfunc },
+						sign = { name = { "Diagnostic" }, colwidth = 1 },
 					},
+					{ text = { " " } },
 					{
-						sign = { name = { "Signify.*" }, maxwidth = 1, colwidth = 1, auto = false },
+						sign = { name = { "Signify.*" } },
 					},
-					{ text = { builtin.lnumfunc } },
-					{ text = { " │ " } },
+					{ text = { "│ " } },
 				},
 			})
 		end,
