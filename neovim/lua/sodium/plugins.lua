@@ -373,15 +373,19 @@ require("lazy").setup({
 				segments = {
 					{
 						text = { builtin.lnumfunc },
-						sign = { name = { "Diagnostic" }, colwidth = 1 },
+						sign = { name = { "Diagnostic" } },
 					},
-					{ text = { " " } },
 					{
-						sign = { name = { "Signify.*" } },
+						sign = {
+							name = { "Signify.*" },
+							fillchar = "│",
+							colwidth = 1,
+						},
 					},
-					{ text = { "│ " } },
 				},
 			})
+			vim.api.nvim_command([[hi link SignColumn LineNr]])
+			vim.api.nvim_command([[hi link CursorLineSign CursorLineNr]])
 		end,
 	},
 	{
@@ -423,10 +427,8 @@ require("lazy").setup({
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
-				vim.lsp.handlers.signature_help,
-				vim.g.popup_opts
-			)
+			vim.lsp.handlers["textDocument/signatureHelp"] =
+				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
 			local on_attach = function(client)
 				lsp_status.on_attach(client)
