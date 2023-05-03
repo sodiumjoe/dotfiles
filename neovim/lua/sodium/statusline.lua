@@ -116,8 +116,8 @@ end
 
 vim.lsp.handlers["$/progress"] = function(_, msg, info)
 	local client_id = tostring(info.client_id)
-
 	local token = tostring(msg.token)
+
 	if progress_status[client_id] == nil then
 		progress_status[client_id] = {}
 	end
@@ -128,6 +128,22 @@ vim.lsp.handlers["$/progress"] = function(_, msg, info)
 		progress_status[client_id][token] = true
 		start_timer()
 	end
+end
+
+-- Templated off of https://github.com/sorbet/sorbet/blob/23836cbded86135219da1b204d79675a1615cc49/vscode_extension/src/SorbetStatusBarEntry.ts#L119
+vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context, config)
+	if err ~= nil then
+		error(err)
+		return
+	end
+	local message = {
+		token = result.operationName,
+		value = {
+			kind = result.status == "end" and "end" or "begin",
+			title = result.description,
+		},
+	}
+	vim.lsp.handlers["$/progress"](err, message, context, config)
 end
 
 local function lsp_status()

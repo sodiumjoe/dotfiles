@@ -460,6 +460,10 @@ require("lazy").setup({
 						"--lsp",
 						"--enable-all-experimental-lsp-features",
 					},
+					init_options = {
+						supportsOperationNotifications = true,
+						supportsSorbetURIs = true,
+					},
 					settings = {},
 					on_attach = function(client, bufnr)
 						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
