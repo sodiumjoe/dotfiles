@@ -375,6 +375,7 @@ require("lazy").setup({
 						text = { builtin.lnumfunc },
 						sign = { name = { "Diagnostic" } },
 					},
+					{ text = { " " } },
 					{
 						sign = {
 							name = { "Signify.*" },
@@ -382,6 +383,7 @@ require("lazy").setup({
 							colwidth = 1,
 						},
 					},
+					{ text = { " " } },
 				},
 			})
 			vim.api.nvim_command([[hi link SignColumn LineNr]])
