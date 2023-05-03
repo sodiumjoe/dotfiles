@@ -512,7 +512,7 @@ require("lazy").setup({
 					flags = {
 						debounce_text_changes = 150,
 					},
-					capabilities = lsp_status.capabilities,
+					capabilities = vim.tbl_extend("keep", options.capabilities or {}, lsp_status.capabilities),
 				}
 
 				local setup_options = vim.tbl_extend("force", defaults, options)

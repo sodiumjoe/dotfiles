@@ -78,6 +78,41 @@ end
 
 local progress_status = {}
 local spinner_index = 1
+local timer
+
+local function lsp_progress()
+	local in_progress_clients = 0
+	for _, client in pairs(progress_status) do
+		for _, _ in pairs(client) do
+			in_progress_clients = in_progress_clients + 1
+		end
+	end
+	if in_progress_clients > 0 then
+		return true
+	else
+		return false
+	end
+end
+
+local function start_timer()
+	if timer == nil then
+		timer = vim.loop.new_timer()
+		timer:start(
+			0,
+			100,
+			vim.schedule_wrap(function()
+				if lsp_progress() then
+					spinner_index = (spinner_index + 1) % #utils.spinner_frames
+					redraw.redraw()
+				else
+					spinner_index = 1
+					timer:close()
+					timer = nil
+				end
+			end)
+		)
+	end
+end
 
 vim.lsp.handlers["$/progress"] = function(_, msg, info)
 	local client_id = tostring(info.client_id)
@@ -91,23 +126,7 @@ vim.lsp.handlers["$/progress"] = function(_, msg, info)
 		progress_status[client_id][token] = nil
 	else
 		progress_status[client_id][token] = true
-	end
-end
-
-local function lsp_progress()
-	local in_progress_clients = 0
-	for _, client in pairs(progress_status) do
-		for _, _ in pairs(client) do
-			in_progress_clients = in_progress_clients + 1
-		end
-	end
-	if in_progress_clients > 0 then
-		local spinner_frame = utils.spinner_frames[spinner_index + 1]
-		spinner_index = (spinner_index + 1) % #utils.spinner_frames
-		redraw.redraw()
-		return spinner_frame
-	else
-		return nil
+		start_timer()
 	end
 end
 
@@ -129,9 +148,21 @@ local function lsp_status()
 	insert_diagnostic_part(status_parts, buf_diagnostics.hints, "hint")
 
 	if #status_parts == 0 then
-		return icons.ok
+		if lsp_progress() then
+			return nil
+		else
+			return icons.ok
+		end
 	end
 	return table.concat(status_parts, " ")
+end
+
+local function progress_spinner()
+	if lsp_progress() then
+		return utils.spinner_frames[spinner_index + 1]
+	else
+		return nil
+	end
 end
 
 local function insert_item(t, value)
@@ -169,7 +200,7 @@ local function get_right_segment(active, standard_filetype)
 		return nil
 	end
 	local right_segment_items = {}
-	insert_item(right_segment_items, pad_item(lsp_progress()))
+	insert_item(right_segment_items, pad_item(progress_spinner()))
 	insert_item(right_segment_items, pad_item(lsp_status()))
 	insert_item(right_segment_items, pad_item(get_lines()))
 	insert_item(right_segment_items, pad_item(virtual_column))
