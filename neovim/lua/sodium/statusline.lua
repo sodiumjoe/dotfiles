@@ -104,7 +104,7 @@ local function start_timer()
 				if lsp_progress() then
 					spinner_index = (spinner_index + 1) % #utils.spinner_frames
 					redraw.redraw()
-				else
+				elseif timer then
 					spinner_index = 1
 					timer:close()
 					timer = nil
