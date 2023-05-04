@@ -108,6 +108,7 @@ local function start_timer()
 					spinner_index = 1
 					timer:close()
 					timer = nil
+					redraw.redraw()
 				end
 			end)
 		)
