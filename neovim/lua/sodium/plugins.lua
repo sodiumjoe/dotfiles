@@ -222,6 +222,9 @@ require("lazy").setup({
 			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 			null_ls.setup({
 				sources = sources,
+				should_attach = function(bufnr)
+					return not vim.api.nvim_buf_get_name(bufnr):match("^fugitive://")
+				end,
 				on_attach = function(client, bufnr)
 					if client.supports_method("textDocument/formatting") then
 						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
@@ -796,9 +799,11 @@ require("lazy").setup({
 	},
 	"rhysd/conflict-marker.vim",
 	{
-		"sodiumjoe/nvim-highlite",
-		priority = 1000,
+		"sodiumjoe/sodium.nvim",
+		-- dir = "~/home/sodium.nvim",
+		-- dev = true,
 		config = function()
+			require("sodium")
 			vim.cmd.colorscheme("sodium")
 			local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
 			-- disable line number in vimwiki and dirvish
@@ -835,6 +840,9 @@ require("lazy").setup({
 				end,
 			})
 		end,
+		dependencies = {
+			"rktjmp/lush.nvim",
+		},
 	},
 	{
 		"tpope/vim-commentary",
