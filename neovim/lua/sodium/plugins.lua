@@ -389,8 +389,6 @@ require("lazy").setup({
 					{ text = { " " } },
 				},
 			})
-			vim.api.nvim_command([[hi link SignColumn LineNr]])
-			vim.api.nvim_command([[hi link CursorLineSign CursorLineNr]])
 		end,
 	},
 	{
