@@ -893,13 +893,6 @@ require("lazy").setup({
 		config = function()
 			local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
 
-			vimwiki_autocmd("FileType", {
-				pattern = { "vimwiki" },
-				callback = function()
-					require("cmp").setup.buffer({ enabled = false })
-				end,
-			})
-
 			utils.map({
 				{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
 				{ "n", [[<leader>wn]], "<Plug>VimwikiDiaryNextDay" },
