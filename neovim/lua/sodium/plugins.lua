@@ -788,9 +788,11 @@ require("lazy").setup({
 	},
 	"rhysd/conflict-marker.vim",
 	{
-		"sodiumjoe/nvim-highlite",
-		priority = 1000,
+		"sodiumjoe/sodium.nvim",
+		-- dir = "~/home/sodium.nvim",
+		-- dev = true,
 		config = function()
+			require("sodium")
 			vim.cmd.colorscheme("sodium")
 			local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
 			-- disable line number in vimwiki and dirvish
@@ -827,6 +829,9 @@ require("lazy").setup({
 				end,
 			})
 		end,
+		dependencies = {
+			"rktjmp/lush.nvim",
+		},
 	},
 	{
 		"tpope/vim-commentary",
