@@ -222,6 +222,9 @@ require("lazy").setup({
 			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 			null_ls.setup({
 				sources = sources,
+				should_attach = function(bufnr)
+					return not vim.api.nvim_buf_get_name(bufnr):match("^fugitive://")
+				end,
 				on_attach = function(client, bufnr)
 					if client.supports_method("textDocument/formatting") then
 						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
