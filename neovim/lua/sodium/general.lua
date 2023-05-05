@@ -128,4 +128,12 @@ utils.map({
 			end
 		end,
 	},
+	{
+		"n",
+		[[<leader>h]],
+		function()
+			local result = vim.treesitter.get_captures_at_cursor(0)
+			print(vim.inspect(result))
+		end,
+	},
 })
