@@ -430,8 +430,10 @@ require("lazy").setup({
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] =
-				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
+			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
+				vim.lsp.handlers.signature_help,
+				vim.g.popup_opts
+			)
 
 			local on_attach = function(client)
 				lsp_status.on_attach(client)
