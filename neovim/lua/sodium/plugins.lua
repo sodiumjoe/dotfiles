@@ -26,6 +26,9 @@ require("lazy").setup({
 	{
 		"rktjmp/shipwright.nvim",
 		cmd = { "Shipwright" },
+		dependencies = {
+			"rktjmp/lush.nvim",
+		},
 	},
 	{
 		"benizi/vim-automkdir",
@@ -845,9 +848,6 @@ require("lazy").setup({
 				end,
 			})
 		end,
-		dependencies = {
-			"rktjmp/lush.nvim",
-		},
 	},
 	{
 		"tpope/vim-commentary",
