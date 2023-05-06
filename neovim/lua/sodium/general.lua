@@ -132,8 +132,9 @@ utils.map({
 		"n",
 		[[<leader>h]],
 		function()
-			local result = vim.treesitter.get_captures_at_cursor(0)
-			print(vim.inspect(result))
+			local ts_result = vim.treesitter.get_captures_at_cursor(0)
+			local lsp_result = vim.lsp.semantic_tokens.get_at_pos()
+			print(vim.inspect({ ts = ts_result, lsp = lsp_result }))
 		end,
 	},
 })
