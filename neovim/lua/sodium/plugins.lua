@@ -24,6 +24,10 @@ local utils = require("sodium.utils")
 
 require("lazy").setup({
 	{
+		"rktjmp/shipwright.nvim",
+		cmd = { "Shipwright" },
+	},
+	{
 		"benizi/vim-automkdir",
 		event = "BufWritePre",
 	},
