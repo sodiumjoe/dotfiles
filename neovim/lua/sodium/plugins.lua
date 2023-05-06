@@ -436,6 +436,7 @@ require("lazy").setup({
 			)
 
 			local on_attach = function(client)
+				client.server_capabilities.semanticTokensProvider = nil
 				lsp_status.on_attach(client)
 				require("lspkind").init({})
 			end
