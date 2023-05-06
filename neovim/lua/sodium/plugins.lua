@@ -891,8 +891,6 @@ require("lazy").setup({
 			vim.g.vimwiki_listsyms = " ○◐●✓"
 		end,
 		config = function()
-			local vimwiki_autocmd = utils.augroup("Vimwiki", { clear = true })
-
 			utils.map({
 				{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
 				{ "n", [[<leader>wn]], "<Plug>VimwikiDiaryNextDay" },
