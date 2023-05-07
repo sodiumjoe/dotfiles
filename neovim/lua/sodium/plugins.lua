@@ -814,17 +814,17 @@ require("lazy").setup({
 			require("sodium")
 			vim.cmd.colorscheme("sodium")
 			local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
-			-- disable line number in vimwiki and dirvish
+			-- disable line number in these filetypes
 			line_nr_autocmd("FileType", {
 				pattern = { "vimwiki", "dirvish", "help" },
 				callback = function()
 					vim.opt_local.number = false
 				end,
 			})
+			-- disable line number in empty buffer
 			line_nr_autocmd({ "BufNewFile", "BufRead", "BufEnter" }, {
 				pattern = "*",
 				callback = function()
-					-- disable line number in empty buffer
 					if vim.filetype.match({ buf = 0 }) == nil then
 						vim.opt_local.number = false
 					else
