@@ -25,7 +25,7 @@
   "playground": { "branch": "master", "commit": "2b81a018a49f8e476341dfcb228b7b808baba68b" },
   "plenary.nvim": { "branch": "master", "commit": "9ac3e9541bbabd9d73663d757e4fe48a675bb054" },
   "shipwright.nvim": { "branch": "master", "commit": "ab70e80bb67b7ed3350bec89dd73473539893932" },
-  "sodium.nvim": { "branch": "main", "commit": "055c956abb6e298dde333656d59f4c38d1521b73" },
+  "sodium.nvim": { "branch": "main", "commit": "db4053e0817578e4b1028fa8b64128a88429f974" },
   "statuscol.nvim": { "branch": "main", "commit": "7ee8d982331019fec3a90ec87b98d6b4405cacbe" },
   "telescope-fzf-native.nvim": { "branch": "main", "commit": "580b6c48651cabb63455e97d7e131ed557b8c7e2" },
   "telescope.nvim": { "branch": "master", "commit": "713d26b98583b160b50fb827adb751f768238ed3" },
