@@ -47,9 +47,7 @@ local function get_filename()
 
 	local filename
 
-	if filetype == "dirvish" then
-		filename = '%<%{expand("%:~")}'
-	elseif filetype == "help" then
+	if filetype == "help" then
 		filename = '%<%{expand("%:t:r")}'
 	else
 		filename = '%<%{expand("%:~:.")}'
