@@ -5,8 +5,10 @@ local chromeFilter = hs.window.filter.new(false):setAppFilter("Google Chrome", {
 local calendarFilter = hs.window.filter.new(false):setAppFilter("Google Calendar", { visible = true })
 local chatFilter = hs.window.filter.new(false):setAppFilter("Google Chat", { visible = true })
 local alacrittyFilter = hs.window.filter.new(false):setAppFilter("Alacritty")
-local zoomFilter =
-	hs.window.filter.new(false):setAppFilter("zoom.us", { visible = true }):setSortOrder(hs.window.filter.sortByCreated)
+local zoomFilter = hs.window.filter
+	.new(false)
+	:setAppFilter("zoom.us", { visible = true, allowRoles = { "AXStandardWindow" } })
+	:setSortOrder(hs.window.filter.sortByCreated)
 local zoomNonMeetingFilter = hs.window.filter
 	.copy(zoomFilter)
 	:setOverrideFilter({ rejectTitles = "Zoom Meeting" })
