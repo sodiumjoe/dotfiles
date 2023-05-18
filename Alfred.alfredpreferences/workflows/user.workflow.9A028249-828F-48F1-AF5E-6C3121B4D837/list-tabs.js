@@ -35,8 +35,12 @@ function run(args) {
         subtitle: url,
         windowIndex: w,
         tabIndex: t,
+        quicklookurl: url,
         arg: `${w},${t},${url}`,
-        match: `${title} ${matchUrl}`,
+        match: `${title} ${decodeURIComponent(matchUrl).replace(
+          /[^\w]/g,
+          " ",
+        )}`,
       };
     }
   }
