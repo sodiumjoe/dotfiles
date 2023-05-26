@@ -414,6 +414,22 @@ require("lazy").setup({
 			local nvim_lsp = require("lspconfig")
 			local lsp_status = require("lsp-status")
 
+			local severity_levels = {
+				vim.diagnostic.severity.ERROR,
+				vim.diagnostic.severity.WARN,
+				vim.diagnostic.severity.INFO,
+				vim.diagnostic.severity.HINT,
+			}
+
+			local function get_highest_error_severity()
+				for _, level in ipairs(severity_levels) do
+					local diags = vim.diagnostic.get(0, { severity = { min = level } })
+					if #diags > 0 then
+						return level, diags
+					end
+				end
+			end
+
 			vim.diagnostic.config({
 				signs = { priority = 11 },
 				virtual_text = false,
@@ -437,10 +453,8 @@ require("lazy").setup({
 			end
 
 			vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-			vim.lsp.handlers["textDocument/signatureHelp"] = vim.lsp.with(
-				vim.lsp.handlers.signature_help,
-				vim.g.popup_opts
-			)
+			vim.lsp.handlers["textDocument/signatureHelp"] =
+				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
 			local on_attach = function(client)
 				client.server_capabilities.semanticTokensProvider = nil
@@ -549,16 +563,7 @@ require("lazy").setup({
 					[[<leader>p]],
 					function()
 						vim.diagnostic.goto_prev({
-							severity = vim.diagnostic.severity.ERROR,
-						})
-					end,
-				},
-				{
-					"n",
-					[[<leader><space>p]],
-					function()
-						vim.diagnostic.goto_prev({
-							severity = { max = vim.diagnostic.severity.WARN },
+							severity = get_highest_error_severity(),
 						})
 					end,
 				},
@@ -567,16 +572,7 @@ require("lazy").setup({
 					[[<leader>n]],
 					function()
 						vim.diagnostic.goto_next({
-							severity = vim.diagnostic.severity.ERROR,
-						})
-					end,
-				},
-				{
-					"n",
-					[[<leader><space>n]],
-					function()
-						vim.diagnostic.goto_next({
-							severity = { max = vim.diagnostic.severity.WARN },
+							severity = get_highest_error_severity(),
 						})
 					end,
 				},
