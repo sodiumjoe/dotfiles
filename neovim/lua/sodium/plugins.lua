@@ -200,6 +200,13 @@ require("lazy").setup({
 					end,
 					command = "scripts/bin/rubocop-daemon/rubocop",
 				}),
+				null_ls.builtins.formatting.eslint.with({
+					condition = function()
+						return utils.is_executable("eslint")
+					end,
+					prefer_local = true,
+					timeout = 30000,
+				}),
 				null_ls.builtins.formatting.prettier.with({
 					condition = function()
 						return utils.is_executable("prettier")
@@ -207,12 +214,6 @@ require("lazy").setup({
 					cwd = function(params)
 						return require("lspconfig/util").root_pattern("prettier.config.js")(params.bufname)
 					end,
-				}),
-				null_ls.builtins.formatting.eslint.with({
-					condition = function()
-						return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
-					end,
-					prefer_local = true,
 				}),
 				null_ls.builtins.formatting.rustfmt.with({
 					condition = function()
@@ -239,7 +240,7 @@ require("lazy").setup({
 							group = augroup,
 							buffer = bufnr,
 							callback = function()
-								vim.lsp.buf.format({ timeout_ms = 2000 })
+								vim.lsp.buf.format({ timeout_ms = 30000 })
 							end,
 						})
 					end
@@ -496,7 +497,7 @@ require("lazy").setup({
 							group = augroup,
 							buffer = bufnr,
 							callback = function()
-								vim.lsp.buf.format()
+								vim.lsp.buf.format({ timeout_ms = 30000 })
 							end,
 						})
 						on_attach(client)
@@ -581,7 +582,13 @@ require("lazy").setup({
 					[[<leader>q]],
 					"<cmd>TroubleToggle<cr>",
 				},
-				{ "n", [[<leader>f]], vim.lsp.buf.format },
+				{
+					"n",
+					[[<leader>f]],
+					function()
+						vim.lsp.buf.format({ timeout_ms = 30000 })
+					end,
+				},
 			})
 		end,
 		dependencies = {
