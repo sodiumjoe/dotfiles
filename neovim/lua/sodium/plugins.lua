@@ -467,17 +467,6 @@ require("lazy").setup({
 
 			local servers = {
 				rust_analyzer = {},
-				tsserver = {
-					cmd_env = { NODE_OPTIONS = "--max-old-space-size=8192" },
-					on_attach = function(client)
-						client.server_capabilities.documentFormattingProvider = false
-						on_attach(client)
-					end,
-					init_options = {
-						maxTsServerMemory = "8192",
-					},
-					filetypes = { "typescript", "typescriptreact", "typescript.tsx" },
-				},
 				sorbet = {
 					cmd = {
 						"pay",
@@ -807,6 +796,11 @@ require("lazy").setup({
 			[[<leader>ew]],
 			[[<leader>e/]],
 		},
+	},
+	{
+		"pmizio/typescript-tools.nvim",
+		dependencies = { "nvim-lua/plenary.nvim", "neovim/nvim-lspconfig" },
+		opts = {},
 	},
 	"rhysd/conflict-marker.vim",
 	{
