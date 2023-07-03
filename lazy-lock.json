@@ -11,6 +11,7 @@
   "lsp-status.nvim": { "branch": "master", "commit": "54f48eb5017632d81d0fd40112065f1d062d0629" },
   "lspkind-nvim": { "branch": "master", "commit": "57610d5ab560c073c465d6faf0c19f200cb67e6e" },
   "lush.nvim": { "branch": "main", "commit": "b10ef2bfff0647e701b691019ade3edd5e44eb50" },
+  "mini.files": { "branch": "main", "commit": "4c8cb663d88473afdc1dbb30654419cfbd159a94" },
   "mini.move": { "branch": "main", "commit": "3afd39873eb9171684e554a214c055482444a47d" },
   "mini.nvim": { "branch": "main", "commit": "296ebbbd3e5ba5e43f5125efe18ad76fe3b632cc" },
   "null-ls.nvim": { "branch": "main", "commit": "aac27a1fa550de3d0b2c651168167cc0d5366a9a" },

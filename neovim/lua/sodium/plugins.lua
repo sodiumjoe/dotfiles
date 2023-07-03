@@ -61,6 +61,27 @@ require("lazy").setup({
 		},
 	},
 	{
+		"echasnovski/mini.files",
+		config = function()
+			local MiniFiles = require("mini.files")
+			MiniFiles.setup()
+
+			utils.map({
+				{
+					"n",
+					"=",
+					function()
+						MiniFiles.open(vim.api.nvim_buf_get_name(0))
+					end,
+				},
+			})
+		end,
+		version = "*",
+		dependencies = {
+			{ "echasnovski/mini.nvim", version = "*" },
+		},
+	},
+	{
 		"folke/trouble.nvim",
 		dependencies = {
 			{
@@ -269,20 +290,20 @@ require("lazy").setup({
 		end,
 		cmd = { "Goyo" },
 	},
-	{
-		"justinmk/vim-dirvish",
-		config = function()
-			local dirvish_autocmd = utils.augroup("DirvishConfig", { clear = true })
-			dirvish_autocmd("FileType", {
-				pattern = { "dirvish" },
-				command = "silent! unmap <buffer> <C-p>",
-			})
-			dirvish_autocmd("FileType", {
-				pattern = { "dirvish" },
-				command = "silent! unmap <buffer> <C-n>",
-			})
-		end,
-	},
+	-- {
+	-- 	"justinmk/vim-dirvish",
+	-- 	config = function()
+	-- 		local dirvish_autocmd = utils.augroup("DirvishConfig", { clear = true })
+	-- 		dirvish_autocmd("FileType", {
+	-- 			pattern = { "dirvish" },
+	-- 			command = "silent! unmap <buffer> <C-p>",
+	-- 		})
+	-- 		dirvish_autocmd("FileType", {
+	-- 			pattern = { "dirvish" },
+	-- 			command = "silent! unmap <buffer> <C-n>",
+	-- 		})
+	-- 	end,
+	-- },
 	{
 		"kaplanz/nvim-retrail",
 		opts = {
