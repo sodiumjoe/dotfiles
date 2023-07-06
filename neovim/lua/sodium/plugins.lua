@@ -221,9 +221,9 @@ require("lazy").setup({
 					end,
 					command = "scripts/bin/rubocop-daemon/rubocop",
 				}),
-				null_ls.builtins.formatting.eslint.with({
+				null_ls.builtins.formatting.eslint_d.with({
 					condition = function()
-						return utils.is_executable("eslint")
+						return utils.is_executable("eslint_d")
 					end,
 					prefer_local = true,
 					timeout = 30000,
