@@ -64,7 +64,11 @@ require("lazy").setup({
 		"echasnovski/mini.files",
 		config = function()
 			local MiniFiles = require("mini.files")
-			MiniFiles.setup()
+			MiniFiles.setup({
+				mappings = {
+					go_in_plus = "<CR>",
+				},
+			})
 
 			utils.map({
 				{
