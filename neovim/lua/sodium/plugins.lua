@@ -827,6 +827,9 @@ require("lazy").setup({
 		dependencies = { "nvim-lua/plenary.nvim", "neovim/nvim-lspconfig" },
 		config = function()
 			require("typescript-tools").setup({
+				settings = {
+					tsserver_path = vim.fn.expand("$HOME/node-bin/node_modules/typescript/bin/tsserver"),
+				},
 				on_attach = function(client)
 					client.server_capabilities.documentFormattingProvider = false
 					client.server_capabilities.documentRangeFormattingProvider = false
