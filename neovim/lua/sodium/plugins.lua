@@ -73,7 +73,7 @@ require("lazy").setup({
 			utils.map({
 				{
 					"n",
-					"=",
+					"-",
 					function()
 						MiniFiles.open(vim.api.nvim_buf_get_name(0))
 					end,
