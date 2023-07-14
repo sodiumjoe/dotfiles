@@ -312,6 +312,10 @@ remote() {
   tmux unnest
 }
 
+remote_url() {
+  osc52copy $(pay remote url $remote_name "$@")
+}
+
 if [ -d ~/stripe ]
 then
   source ~/stripe/space-commander/bin/sc-aliases
