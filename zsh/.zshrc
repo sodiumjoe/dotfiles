@@ -307,7 +307,7 @@ remote() {
   local branch
   branch="$(whoami)/$1"
 
-  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready -s manage -s manage_ui_metro
+  pay remote new "$1" -r "pay-server:$branch" -r "gocode:master-passing-tests" --skip-confirm --no-open-code --notify-on-ready -s manage -s manage_ui_metro
   ssh -t $(pay remote ssh $1 -- hostname) "tmux a || tmux"
   tmux unnest
 }
