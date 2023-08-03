@@ -1,6 +1,6 @@
 {
   "alfredsnippet" : {
-    "snippet" : "require \"debug\"; binding.break",
+    "snippet" : "require \"pry\"; binding.pry",
     "uid" : "7C5B6CF4-79A3-4536-B300-93EBB7940CAF",
     "name" : "pry",
     "keyword" : "pry"
