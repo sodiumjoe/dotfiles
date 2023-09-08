@@ -281,6 +281,14 @@ local function layout()
 	end
 end
 
+local function mute_zoom_or_global()
+	if #zoomFilter:getWindows() > 1 then
+		hs.eventtap.keyStroke({ "cmd", "shift" }, "a", nil, hs.application.find("zoom"))
+	else
+		hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
+	end
+end
+
 local function reload()
 	hs.reload()
 end
@@ -308,5 +316,6 @@ end)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "r", reload)
 hs.hotkey.bind({ "ctrl" }, "h", focusLeft)
 hs.hotkey.bind({ "ctrl" }, "l", focusRight)
+hs.hotkey.bind({}, "f20", mute_zoom_or_global)
 -- hs.hotkey.bind({"ctrl"}, 'o', focusUp)
 -- hs.hotkey.bind({"ctrl"}, '.', focusDown)
