@@ -804,6 +804,7 @@ require("lazy").setup({
 			require("typescript-tools").setup({
 				settings = {
 					tsserver_path = vim.fn.expand("$HOME/node-bin/node_modules/typescript/bin/tsserver"),
+					tsserver_max_memory = 16384,
 				},
 				on_attach = function(client)
 					client.server_capabilities.documentFormattingProvider = false
