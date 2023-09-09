@@ -86,6 +86,9 @@ require("lazy").setup({
 		"hrsh7th/nvim-cmp",
 		config = function()
 			local cmp = require("cmp")
+			local cmdline_mapping = cmp.mapping.preset.cmdline()
+			cmdline_mapping["<Tab>"] = nil
+
 			cmp.setup({
 				window = {
 					completion = vim.g.popup_opts,
@@ -139,13 +142,13 @@ require("lazy").setup({
 				},
 			})
 			cmp.setup.cmdline({ "/", "?" }, {
-				mapping = cmp.mapping.preset.cmdline(),
+				mapping = cmdline_mapping,
 				sources = {
 					{ name = "buffer" },
 				},
 			})
 			cmp.setup.cmdline(":", {
-				mapping = cmp.mapping.preset.cmdline(),
+				mapping = cmdline_mapping,
 				sources = cmp.config.sources({
 					{ name = "path" },
 				}, {
