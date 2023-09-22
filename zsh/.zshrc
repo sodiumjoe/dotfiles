@@ -155,8 +155,8 @@ export PATH=${PATH}:/sbin
 export PATH=${PATH}:/usr/bin
 export PATH=${PATH}:/usr/X11/bin
 export PATH=${PATH}:/usr/local/share/npm/bin
-
-export RUSTUP_HOME=~/bin/rustup
+export PATH=${PATH}:~/stripe/.cargo/bin
+export PATH=${PATH}:~/stripe/.cargo/env
 
 export EDITOR='nvim -U none'
 # open in editor
@@ -323,7 +323,10 @@ then
   . /Users/moon/.rbenvrc
   . ~/.stripe-repos.sh
 
-  export GOPATH=${HOME}/stripe/go
+  export GOPATH="${HOME}/stripe/go"
+  export CARGO_HOME="${HOME}/stripe/.cargo"
+  export RUSTUP_HOME=~/stripe/.rustup
+
 fi
 
 eval "$(nodenv init -)"

@@ -11,3 +11,4 @@ ZDOTDIR=${XDG_CONFIG_HOME}/zsh
 # Define Zim location
 : ${ZIM_HOME=${ZDOTDIR:-${HOME}}/.zim}
 # }}} End configuration added by Zim install
+. "$HOME/stripe/.cargo/env"
