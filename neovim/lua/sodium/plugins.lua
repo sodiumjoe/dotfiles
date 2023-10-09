@@ -462,6 +462,7 @@ require("lazy").setup({
 
 			local servers = {
 				rust_analyzer = {},
+				starlark_rust = {},
 				sorbet = {
 					cmd = {
 						"pay",
@@ -721,6 +722,7 @@ require("lazy").setup({
 				"python",
 				"ruby",
 				"rust",
+				"starlark",
 				"tsx",
 				"typescript",
 				"vim",
