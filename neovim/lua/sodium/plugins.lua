@@ -780,7 +780,7 @@ require("lazy").setup({
 					client.server_capabilities.documentFormattingProvider = false
 					client.server_capabilities.documentRangeFormattingProvider = false
 				end,
-				filetypes = { "typescript" },
+				filetypes = { "typescript", "typescriptreact" },
 			})
 		end,
 	},
