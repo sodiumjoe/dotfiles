@@ -178,75 +178,6 @@ require("lazy").setup({
 		event = { "InsertEnter" },
 	},
 	{
-		"jose-elias-alvarez/null-ls.nvim",
-		config = function()
-			local null_ls = require("null-ls")
-
-			local sources = {
-				null_ls.builtins.diagnostics.eslint_d.with({
-					condition = function()
-						return utils.is_executable("eslint_d")
-					end,
-					cwd = function(params)
-						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-					end,
-				}),
-				null_ls.builtins.diagnostics.eslint.with({
-					condition = function()
-						return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
-					end,
-					prefer_local = true,
-				}),
-				null_ls.builtins.diagnostics.rubocop.with({
-					condition = function()
-						return utils.is_executable("scripts/bin/rubocop-daemon/rubocop")
-					end,
-					command = "scripts/bin/rubocop-daemon/rubocop",
-				}),
-				null_ls.builtins.formatting.eslint_d.with({
-					condition = function()
-						return utils.is_executable("eslint_d")
-					end,
-					prefer_local = true,
-					timeout = 30000,
-				}),
-				null_ls.builtins.formatting.rustfmt.with({
-					condition = function()
-						return utils.is_executable("rustfmt")
-					end,
-				}),
-				null_ls.builtins.formatting.stylua.with({
-					condition = function()
-						return utils.is_executable("stylua")
-					end,
-				}),
-			}
-
-			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
-			null_ls.setup({
-				sources = sources,
-				should_attach = function(bufnr)
-					return not vim.api.nvim_buf_get_name(bufnr):match("^fugitive://")
-				end,
-				on_attach = function(client, bufnr)
-					if client.supports_method("textDocument/formatting") then
-						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
-						vim.api.nvim_create_autocmd("BufWritePre", {
-							group = augroup,
-							buffer = bufnr,
-							callback = function()
-								vim.lsp.buf.format({ timeout_ms = 30000 })
-							end,
-						})
-					end
-				end,
-			})
-		end,
-		dependencies = {
-			"neovim/nvim-lspconfig",
-		},
-	},
-	{
 		"junegunn/goyo.vim",
 		config = function()
 			vim.cmd([[
@@ -766,6 +697,75 @@ require("lazy").setup({
 		config = function()
 			require("colorizer").setup()
 		end,
+	},
+	{
+		"nvimtools/none-ls.nvim",
+		config = function()
+			local null_ls = require("null-ls")
+
+			local sources = {
+				null_ls.builtins.diagnostics.eslint_d.with({
+					condition = function()
+						return utils.is_executable("eslint_d")
+					end,
+					cwd = function(params)
+						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
+					end,
+				}),
+				null_ls.builtins.diagnostics.eslint.with({
+					condition = function()
+						return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
+					end,
+					prefer_local = true,
+				}),
+				null_ls.builtins.diagnostics.rubocop.with({
+					condition = function()
+						return utils.is_executable("scripts/bin/rubocop-daemon/rubocop")
+					end,
+					command = "scripts/bin/rubocop-daemon/rubocop",
+				}),
+				null_ls.builtins.formatting.eslint_d.with({
+					condition = function()
+						return utils.is_executable("eslint_d")
+					end,
+					prefer_local = true,
+					timeout = 30000,
+				}),
+				null_ls.builtins.formatting.rustfmt.with({
+					condition = function()
+						return utils.is_executable("rustfmt")
+					end,
+				}),
+				null_ls.builtins.formatting.stylua.with({
+					condition = function()
+						return utils.is_executable("stylua")
+					end,
+				}),
+			}
+
+			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
+			null_ls.setup({
+				sources = sources,
+				should_attach = function(bufnr)
+					return not vim.api.nvim_buf_get_name(bufnr):match("^fugitive://")
+				end,
+				on_attach = function(client, bufnr)
+					if client.supports_method("textDocument/formatting") then
+						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
+						vim.api.nvim_create_autocmd("BufWritePre", {
+							group = augroup,
+							buffer = bufnr,
+							callback = function()
+								vim.lsp.buf.format({ timeout_ms = 30000 })
+							end,
+						})
+					end
+				end,
+			})
+		end,
+		dependencies = {
+			"neovim/nvim-lspconfig",
+		},
 	},
 	{
 		"pmizio/typescript-tools.nvim",
