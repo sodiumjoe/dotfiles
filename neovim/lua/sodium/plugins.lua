@@ -789,7 +789,6 @@ require("lazy").setup({
 		"smoka7/hop.nvim",
 		config = function()
 			require("hop").setup({ create_hl_autocmd = false })
-			vim.api.nvim_command([[hi clear HopUnmatched]])
 			utils.map({
 				{
 					"n",
@@ -807,10 +806,11 @@ require("lazy").setup({
 				},
 			})
 		end,
-		keys = {
-			[[<leader>ew]],
-			[[<leader>e/]],
-		},
+		-- don't lazy load until https://github.com/smoka7/hop.nvim/issues/43 is fixed
+		-- keys = {
+		-- 	[[<leader>ew]],
+		-- 	[[<leader>e/]],
+		-- },
 	},
 	{
 		"sodiumjoe/sodium.nvim",
