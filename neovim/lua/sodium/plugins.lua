@@ -787,11 +787,8 @@ require("lazy").setup({
 	"rhysd/conflict-marker.vim",
 	{
 		"smoka7/hop.nvim",
-		-- don't lazy load until https://github.com/smoka7/hop.nvim/issues/43 is fixed
-		init = function()
-			require("hop").setup({ create_hl_autocmd = false })
-		end,
 		config = function()
+			require("hop").setup({ create_hl_autocmd = false })
 			utils.map({
 				{
 					"n",
@@ -809,11 +806,10 @@ require("lazy").setup({
 				},
 			})
 		end,
-		-- don't lazy load until https://github.com/smoka7/hop.nvim/issues/43 is fixed
-		-- keys = {
-		-- 	[[<leader>ew]],
-		-- 	[[<leader>e/]],
-		-- },
+		keys = {
+			[[<leader>ew]],
+			[[<leader>e/]],
+		},
 	},
 	{
 		"sodiumjoe/sodium.nvim",
