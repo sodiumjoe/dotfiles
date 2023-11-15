@@ -111,6 +111,7 @@ require("lazy").setup({
 							fallback()
 						end
 					end,
+					["<CR>"] = cmp.mapping.confirm({ select = true }),
 				}),
 				sources = cmp.config.sources({
 					{ name = "nvim_lsp" },
