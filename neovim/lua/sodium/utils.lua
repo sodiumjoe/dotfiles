@@ -30,7 +30,7 @@ end
 M.icons = {
 	Error = " ",
 	Warn = " ",
-	Hint = " ",
+	Hint = " ",
 	Info = " ",
 	buffer = " ",
 	lsp = " ",
