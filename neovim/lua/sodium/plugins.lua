@@ -620,6 +620,7 @@ require("lazy").setup({
 					function()
 						require("telescope.builtin").git_status({
 							initial_mode = "normal",
+							timeout = 100000,
 						})
 					end,
 				},
