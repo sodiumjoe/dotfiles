@@ -1,0 +1,109 @@
+[colors]
+draw_bold_text_with_bright_colors = true
+
+[colors.bright]
+black = "#899BA6"
+blue = "#83AFE5"
+cyan = "#7FC1CA"
+green = "#A8CE93"
+magenta = "#D18EC2"
+red = "#F2C38F"
+white = "#E6EEF3"
+yellow = "#DADA93"
+
+[colors.cursor]
+cursor = "#C5D4DD"
+text = "#3C4C55"
+
+[colors.normal]
+black = "#3C4C55"
+blue = "#83AFE5"
+cyan = "#7FC1CA"
+green = "#A8CE93"
+magenta = "#9A93E1"
+red = "#DF8C8C"
+white = "#C5D4DD"
+yellow = "#DADA93"
+
+[colors.primary]
+background = "#3C4C55"
+foreground = "#C5D4DD"
+
+[font]
+builtin_box_drawing = true
+size = 13.0
+
+[font.bold]
+family = "BerkeleyMono Nerd Font"
+
+[font.bold_italic]
+family = "BerkeleyMono Nerd Font"
+
+[font.italic]
+family = "BerkeleyMono Nerd Font"
+
+[font.normal]
+family = "BerkeleyMono Nerd Font"
+style = "Regular"
+
+[[keyboard.bindings]]
+chars = "\u0001p"
+key = "K"
+mods = "Command|Control"
+
+[[keyboard.bindings]]
+chars = "\u0000"
+key = "Space"
+mods = "Control"
+
+[[keyboard.bindings]]
+chars = "\u0001n"
+key = "Tab"
+mods = "Control"
+
+[[keyboard.bindings]]
+chars = "\u0001p"
+key = "Tab"
+mods = "Shift|Control"
+
+[[keyboard.bindings]]
+chars = "\u0001\u000E"
+key = "N"
+mods = "Command|Control"
+
+[[keyboard.bindings]]
+chars = "\u0001\u0010"
+key = "P"
+mods = "Command|Control"
+
+[[keyboard.bindings]]
+chars = "\u0001n"
+key = "J"
+mods = "Command|Control"
+
+[[keyboard.bindings]]
+action = "CreateNewWindow"
+key = "N"
+mods = "Command"
+
+[mouse]
+hide_when_typing = true
+
+[scrolling]
+history = 0
+
+[shell]
+args = ["-l", "-c", "tmux attach || tmux"]
+program = "/bin/zsh"
+
+[window]
+decorations = "buttonless"
+dynamic_padding = true
+
+[window.dimensions]
+columns = 80
+lines = 24
+
+[window.padding]
+x = 50
+y = 30
