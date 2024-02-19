@@ -35,6 +35,8 @@
 [difftool "vimdiff"]
   cmd = nvim -d \"$LOCAL\" \"$REMOTE\"
 
+[merge]
+  conflictStyle = zdiff3
 [transfer]
   fsckobjects = false
 [fetch]
