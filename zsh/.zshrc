@@ -294,7 +294,7 @@ remotes() {
   remote=$(echo "$list" | fzf)
   if [ ! -z $remote ]; then
     remote=$(echo "$remote" | cut -w -f 1)
-    ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux"
+    ssh -o "LocalCommand tmux nest" -t $(pay remote ssh $remote -- hostname) "tmux a || tmux"
     tmux unnest
   fi
 }
@@ -304,7 +304,7 @@ remote() {
   branch="$(whoami)/$1"
 
   pay remote new "$1" -r "pay-server:$branch" -r "gocode:master-passing-tests" --skip-confirm --no-open-code --notify-on-ready -s manage -s manage_ui_metro
-  ssh -t $(pay remote ssh $1 -- hostname) "tmux a || tmux"
+  ssh -o "LocalCommand tmux nest" -t $(pay remote ssh $remote -- hostname) "tmux a || tmux"
   tmux unnest
 }
 
