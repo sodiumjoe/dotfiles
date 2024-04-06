@@ -470,13 +470,13 @@ require("lazy").setup({
 			end
 			utils.map({
 				{ "n", "gD", vim.lsp.buf.declaration },
-				{ "n", "gd", vim.lsp.buf.definition },
+				-- { "n", "gd", vim.lsp.buf.definition },
 				{ "n", "K", vim.lsp.buf.hover },
 				{ "n", "gi", vim.lsp.buf.implementation },
 				{ "n", [[<leader>D]], vim.lsp.buf.type_definition },
 				-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
 				{ "n", [[<leader>ca]], vim.lsp.buf.code_action },
-				{ "n", "gr", vim.lsp.buf.references },
+				-- { "n", "gr", vim.lsp.buf.references },
 				{ "n", [[<leader>ee]], vim.diagnostic.open_float },
 				{
 					"n",
@@ -623,6 +623,24 @@ require("lazy").setup({
 						require("telescope.builtin").git_status({
 							initial_mode = "normal",
 							timeout = 100000,
+						})
+					end,
+				},
+				{
+					"n",
+					[[gd]],
+					function()
+						require("telescope.builtin").lsp_definitions({
+							initial_mode = "normal",
+						})
+					end,
+				},
+				{
+					"n",
+					[[gr]],
+					function()
+						require("telescope.builtin").lsp_references({
+							initial_mode = "normal",
 						})
 					end,
 				},
