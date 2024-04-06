@@ -15,7 +15,7 @@ o.joinspaces = false
 o.clipboard = [[unnamedplus]]
 -- don't show intro message
 o.shortmess = [[aoOtI]]
-o.completeopt = [[menu,menuone,noselect]]
+o.completeopt = [[menu,menuone,noselect,preview]]
 o.modeline = false
 
 o.infercase = true

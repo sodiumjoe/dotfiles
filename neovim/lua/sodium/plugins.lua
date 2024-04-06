@@ -35,6 +35,18 @@ require("lazy").setup({
 		event = "BufWritePre",
 	},
 	{
+		"echasnovski/mini.completion",
+		version = "*",
+		config = function()
+			require("mini.completion").setup({
+				window = {
+					info = { height = 25, width = 80, border = vim.g.popup_opts.border },
+					signature = { height = 25, width = 80, border = vim.g.popup_opts.border },
+				},
+			})
+		end,
+	},
+	{
 		"echasnovski/mini.move",
 		version = "*",
 		config = function()
@@ -82,102 +94,102 @@ require("lazy").setup({
 			"g#",
 		},
 	},
-	{
-		"hrsh7th/nvim-cmp",
-		config = function()
-			local cmp = require("cmp")
-			local cmdline_mapping = cmp.mapping.preset.cmdline()
-			cmdline_mapping["<Tab>"] = nil
+	-- {
+	-- 	"hrsh7th/nvim-cmp",
+	-- 	config = function()
+	-- 		local cmp = require("cmp")
+	-- 		local cmdline_mapping = cmp.mapping.preset.cmdline()
+	-- 		cmdline_mapping["<Tab>"] = nil
 
-			cmp.setup({
-				window = {
-					completion = vim.g.popup_opts,
-					documentation = cmp.config.window.bordered({
-						winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
-					}),
-				},
-				mapping = cmp.mapping.preset.insert({
-					["<C-n>"] = function(fallback)
-						if cmp.visible() then
-							cmp.select_next_item()
-						else
-							fallback()
-						end
-					end,
-					["<C-p>"] = function(fallback)
-						if cmp.visible() then
-							cmp.select_prev_item()
-						else
-							fallback()
-						end
-					end,
-					["<CR>"] = cmp.mapping.confirm({ select = false }),
-				}),
-				sources = cmp.config.sources({
-					{ name = "nvim_lsp" },
-					{
-						name = "buffer",
-						option = {
-							-- completion candidates from all open buffers
-							option = {
-								get_bufnrs = function()
-									return vim.api.nvim_list_bufs()
-								end,
-							},
-						},
-					},
-					{ name = "path" },
-				}),
-				snippet = {
-					expand = function(args)
-						vim.fn["vsnip#anonymous"](args.body)
-					end,
-				},
-				formatting = {
-					format = require("lspkind").cmp_format({
-						menu = {
-							buffer = utils.icons.buffer,
-							nvim_lsp = utils.icons.lsp,
-						},
-					}),
-				},
-			})
-			cmp.setup.cmdline({ "/", "?" }, {
-				mapping = cmdline_mapping,
-				sources = {
-					{ name = "buffer" },
-				},
-			})
-			cmp.setup.cmdline(":", {
-				mapping = cmdline_mapping,
-				sources = cmp.config.sources({
-					{ name = "path" },
-				}, {
-					{
-						keyword_length = 2,
-						name = "cmdline",
-						option = {
-							ignore_cmds = { "Man", "!" },
-						},
-					},
-				}),
-			})
-		end,
-		dependencies = {
-			{ "onsails/lspkind-nvim", lazy = true },
-			{ "hrsh7th/cmp-buffer", lazy = true },
-			{ "hrsh7th/cmp-cmdline", lazy = true },
-			{ "hrsh7th/cmp-nvim-lsp", lazy = true },
-			{ "hrsh7th/cmp-path", lazy = true },
-			{ "hrsh7th/vim-vsnip", lazy = true },
-		},
-		keys = {
-			":",
-			"/",
-			"?",
-		},
-		event = { "InsertEnter" },
-	},
+	-- 		cmp.setup({
+	-- 			window = {
+	-- 				completion = vim.g.popup_opts,
+	-- 				documentation = cmp.config.window.bordered({
+	-- 					winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
+	-- 				}),
+	-- 			},
+	-- 			mapping = cmp.mapping.preset.insert({
+	-- 				["<C-n>"] = function(fallback)
+	-- 					if cmp.visible() then
+	-- 						cmp.select_next_item()
+	-- 					else
+	-- 						fallback()
+	-- 					end
+	-- 				end,
+	-- 				["<C-p>"] = function(fallback)
+	-- 					if cmp.visible() then
+	-- 						cmp.select_prev_item()
+	-- 					else
+	-- 						fallback()
+	-- 					end
+	-- 				end,
+	-- 				["<CR>"] = cmp.mapping.confirm({ select = false }),
+	-- 			}),
+	-- 			sources = cmp.config.sources({
+	-- 				{ name = "nvim_lsp" },
+	-- 				{
+	-- 					name = "buffer",
+	-- 					option = {
+	-- 						-- completion candidates from all open buffers
+	-- 						option = {
+	-- 							get_bufnrs = function()
+	-- 								return vim.api.nvim_list_bufs()
+	-- 							end,
+	-- 						},
+	-- 					},
+	-- 				},
+	-- 				{ name = "path" },
+	-- 			}),
+	-- 			snippet = {
+	-- 				expand = function(args)
+	-- 					vim.fn["vsnip#anonymous"](args.body)
+	-- 				end,
+	-- 			},
+	-- 			formatting = {
+	-- 				format = require("lspkind").cmp_format({
+	-- 					menu = {
+	-- 						buffer = utils.icons.buffer,
+	-- 						nvim_lsp = utils.icons.lsp,
+	-- 					},
+	-- 				}),
+	-- 			},
+	-- 		})
+	-- 		cmp.setup.cmdline({ "/", "?" }, {
+	-- 			mapping = cmdline_mapping,
+	-- 			sources = {
+	-- 				{ name = "buffer" },
+	-- 			},
+	-- 		})
+	-- 		cmp.setup.cmdline(":", {
+	-- 			mapping = cmdline_mapping,
+	-- 			sources = cmp.config.sources({
+	-- 				{ name = "path" },
+	-- 			}, {
+	-- 				{
+	-- 					keyword_length = 2,
+	-- 					name = "cmdline",
+	-- 					option = {
+	-- 						ignore_cmds = { "Man", "!" },
+	-- 					},
+	-- 				},
+	-- 			}),
+	-- 		})
+	-- 	end,
+	-- 	dependencies = {
+	-- 		{ "onsails/lspkind-nvim", lazy = true },
+	-- 		{ "hrsh7th/cmp-buffer", lazy = true },
+	-- 		{ "hrsh7th/cmp-cmdline", lazy = true },
+	-- 		{ "hrsh7th/cmp-nvim-lsp", lazy = true },
+	-- 		{ "hrsh7th/cmp-path", lazy = true },
+	-- 		{ "hrsh7th/vim-vsnip", lazy = true },
+	-- 	},
+	-- 	keys = {
+	-- 		":",
+	-- 		"/",
+	-- 		"?",
+	-- 	},
+	-- 	event = { "InsertEnter" },
+	-- },
 	{
 		"junegunn/goyo.vim",
 		config = function()
@@ -933,9 +945,9 @@ require("lazy").setup({
 				{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
 			})
 		end,
-		dependencies = {
-			"hrsh7th/nvim-cmp",
-		},
+		-- dependencies = {
+		-- 	"hrsh7th/nvim-cmp",
+		-- },
 		keys = { "<leader>ww", "<leader>w<space>w" },
 		ft = "vimwiki",
 	},
