@@ -35,18 +35,6 @@ require("lazy").setup({
 		event = "BufWritePre",
 	},
 	{
-		"echasnovski/mini.completion",
-		version = "*",
-		config = function()
-			require("mini.completion").setup({
-				window = {
-					info = { height = 25, width = 80, border = vim.g.popup_opts.border },
-					signature = { height = 25, width = 80, border = vim.g.popup_opts.border },
-				},
-			})
-		end,
-	},
-	{
 		"echasnovski/mini.move",
 		version = "*",
 		config = function()
@@ -94,102 +82,128 @@ require("lazy").setup({
 			"g#",
 		},
 	},
-	-- {
-	-- 	"hrsh7th/nvim-cmp",
-	-- 	config = function()
-	-- 		local cmp = require("cmp")
-	-- 		local cmdline_mapping = cmp.mapping.preset.cmdline()
-	-- 		cmdline_mapping["<Tab>"] = nil
+	{
+		"hrsh7th/nvim-cmp",
+		config = function()
+			local luasnip = require("luasnip")
+			local cmp = require("cmp")
+			local cmdline_mapping = cmp.mapping.preset.cmdline()
+			cmdline_mapping["<Tab>"] = nil
 
-	-- 		cmp.setup({
-	-- 			window = {
-	-- 				completion = vim.g.popup_opts,
-	-- 				documentation = cmp.config.window.bordered({
-	-- 					winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
-	-- 				}),
-	-- 			},
-	-- 			mapping = cmp.mapping.preset.insert({
-	-- 				["<C-n>"] = function(fallback)
-	-- 					if cmp.visible() then
-	-- 						cmp.select_next_item()
-	-- 					else
-	-- 						fallback()
-	-- 					end
-	-- 				end,
-	-- 				["<C-p>"] = function(fallback)
-	-- 					if cmp.visible() then
-	-- 						cmp.select_prev_item()
-	-- 					else
-	-- 						fallback()
-	-- 					end
-	-- 				end,
-	-- 				["<CR>"] = cmp.mapping.confirm({ select = false }),
-	-- 			}),
-	-- 			sources = cmp.config.sources({
-	-- 				{ name = "nvim_lsp" },
-	-- 				{
-	-- 					name = "buffer",
-	-- 					option = {
-	-- 						-- completion candidates from all open buffers
-	-- 						option = {
-	-- 							get_bufnrs = function()
-	-- 								return vim.api.nvim_list_bufs()
-	-- 							end,
-	-- 						},
-	-- 					},
-	-- 				},
-	-- 				{ name = "path" },
-	-- 			}),
-	-- 			snippet = {
-	-- 				expand = function(args)
-	-- 					vim.fn["vsnip#anonymous"](args.body)
-	-- 				end,
-	-- 			},
-	-- 			formatting = {
-	-- 				format = require("lspkind").cmp_format({
-	-- 					menu = {
-	-- 						buffer = utils.icons.buffer,
-	-- 						nvim_lsp = utils.icons.lsp,
-	-- 					},
-	-- 				}),
-	-- 			},
-	-- 		})
-	-- 		cmp.setup.cmdline({ "/", "?" }, {
-	-- 			mapping = cmdline_mapping,
-	-- 			sources = {
-	-- 				{ name = "buffer" },
-	-- 			},
-	-- 		})
-	-- 		cmp.setup.cmdline(":", {
-	-- 			mapping = cmdline_mapping,
-	-- 			sources = cmp.config.sources({
-	-- 				{ name = "path" },
-	-- 			}, {
-	-- 				{
-	-- 					keyword_length = 2,
-	-- 					name = "cmdline",
-	-- 					option = {
-	-- 						ignore_cmds = { "Man", "!" },
-	-- 					},
-	-- 				},
-	-- 			}),
-	-- 		})
-	-- 	end,
-	-- 	dependencies = {
-	-- 		{ "onsails/lspkind-nvim", lazy = true },
-	-- 		{ "hrsh7th/cmp-buffer", lazy = true },
-	-- 		{ "hrsh7th/cmp-cmdline", lazy = true },
-	-- 		{ "hrsh7th/cmp-nvim-lsp", lazy = true },
-	-- 		{ "hrsh7th/cmp-path", lazy = true },
-	-- 		{ "hrsh7th/vim-vsnip", lazy = true },
-	-- 	},
-	-- 	keys = {
-	-- 		":",
-	-- 		"/",
-	-- 		"?",
-	-- 	},
-	-- 	event = { "InsertEnter" },
-	-- },
+			cmp.setup({
+				window = {
+					completion = vim.g.popup_opts,
+					documentation = cmp.config.window.bordered({
+						winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
+					}),
+				},
+				mapping = cmp.mapping.preset.insert({
+					["<C-n>"] = function(fallback)
+						if cmp.visible() then
+							cmp.select_next_item()
+						else
+							fallback()
+						end
+					end,
+					["<C-p>"] = function(fallback)
+						if cmp.visible() then
+							cmp.select_prev_item()
+						else
+							fallback()
+						end
+					end,
+					["<CR>"] = cmp.mapping.confirm({ select = false }),
+					["<Tab>"] = cmp.mapping(function(fallback)
+						if luasnip.expand_or_jumpable() then
+							luasnip.expand_or_jump()
+						else
+							fallback()
+						end
+					end, {
+						"i",
+						"s",
+					}),
+
+					["<S-Tab>"] = cmp.mapping(function(fallback)
+						if cmp.visible() then
+							cmp.select_prev_item()
+						elseif luasnip.jumpable(-1) then
+							luasnip.jump(-1)
+						else
+							fallback()
+						end
+					end, {
+						"i",
+						"s",
+					}),
+				}),
+				sources = cmp.config.sources({
+					{ name = "nvim_lsp" },
+					{
+						name = "buffer",
+						option = {
+							-- completion candidates from all open buffers
+							option = {
+								get_bufnrs = function()
+									return vim.api.nvim_list_bufs()
+								end,
+							},
+						},
+					},
+					{ name = "path" },
+					{ name = "luasnip" },
+				}),
+				snippet = {
+					expand = function(args)
+						require("luasnip").lsp_expand(args.body)
+					end,
+				},
+				formatting = {
+					format = require("lspkind").cmp_format({
+						menu = {
+							buffer = utils.icons.buffer,
+							nvim_lsp = utils.icons.lsp,
+						},
+					}),
+				},
+			})
+			cmp.setup.cmdline({ "/", "?" }, {
+				mapping = cmdline_mapping,
+				sources = {
+					{ name = "buffer" },
+				},
+			})
+			cmp.setup.cmdline(":", {
+				mapping = cmdline_mapping,
+				sources = cmp.config.sources({
+					{ name = "path" },
+				}, {
+					{
+						keyword_length = 2,
+						name = "cmdline",
+						option = {
+							ignore_cmds = { "Man", "!" },
+						},
+					},
+				}),
+			})
+		end,
+		dependencies = {
+			{ "onsails/lspkind-nvim", lazy = true },
+			{ "hrsh7th/cmp-buffer", lazy = true },
+			{ "hrsh7th/cmp-cmdline", lazy = true },
+			{ "hrsh7th/cmp-nvim-lsp", lazy = true },
+			{ "hrsh7th/cmp-path", lazy = true },
+			{ "L3MON4D3/LuaSnip", lazy = true },
+			{ "saadparwaiz1/cmp_luasnip", lazy = true },
+		},
+		keys = {
+			":",
+			"/",
+			"?",
+		},
+		event = { "InsertEnter" },
+	},
 	{
 		"junegunn/goyo.vim",
 		config = function()
@@ -311,6 +325,36 @@ require("lazy").setup({
 			"g*",
 			"g#",
 		},
+	},
+	{
+		"L3MON4D3/LuaSnip",
+		-- follow latest release.
+		version = "v2.*", -- Replace <CurrentMajor> by the latest released major (first number of latest release)
+		-- install jsregexp (optional!).
+		-- build = "make install_jsregexp",
+		dependencies = {
+			{ "rafamadriz/friendly-snippets", lazy = true },
+			{ "saadparwaiz1/cmp_luasnip", lazy = true },
+		},
+		config = function()
+			require("luasnip.loaders.from_vscode").lazy_load()
+			local ls = require("luasnip")
+			local s = ls.snippet
+			local t = ls.text_node
+			local i = ls.insert_node
+			local f = ls.function_node
+			ls.add_snippets("rust", {
+				s("debug", {
+					t([[tracing::debug!("]]),
+					i(1),
+					t([[: {:#?}", ]]),
+					f(function(args)
+						return args[1][1]
+					end, { 1 }),
+					t([[);]]),
+				}),
+			})
+		end,
 	},
 	{
 		"luukvbaal/statuscol.nvim",
@@ -818,6 +862,7 @@ require("lazy").setup({
 			})
 		end,
 	},
+	"rafamadriz/friendly-snippets",
 	"rhysd/conflict-marker.vim",
 	{
 		"smoka7/hop.nvim",
@@ -945,9 +990,9 @@ require("lazy").setup({
 				{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
 			})
 		end,
-		-- dependencies = {
-		-- 	"hrsh7th/nvim-cmp",
-		-- },
+		dependencies = {
+			"hrsh7th/nvim-cmp",
+		},
 		keys = { "<leader>ww", "<leader>w<space>w" },
 		ft = "vimwiki",
 	},
