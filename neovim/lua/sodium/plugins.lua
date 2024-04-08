@@ -442,13 +442,22 @@ require("lazy").setup({
 				vim.g.popup_opts
 			)
 
-			local on_attach = function(client)
+			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
+			local on_attach = function(client, bufnr)
 				client.server_capabilities.semanticTokensProvider = nil
 				lsp_status.on_attach(client)
+				if client.supports_method("textDocument/formatting") then
+					vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
+					vim.api.nvim_create_autocmd("BufWritePre", {
+						group = augroup,
+						buffer = bufnr,
+						callback = function()
+							vim.lsp.buf.format({ timeout_ms = 30000 })
+						end,
+					})
+				end
 				require("lspkind").init({})
 			end
-
-			local augroup = vim.api.nvim_create_augroup("RubyLspFormatting", {})
 
 			local servers = {
 				rust_analyzer = {},
@@ -466,18 +475,9 @@ require("lazy").setup({
 						supportsSorbetURIs = true,
 					},
 					settings = {},
-					on_attach = function(client, bufnr)
-						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
-						vim.api.nvim_create_autocmd("BufWritePre", {
-							group = augroup,
-							buffer = bufnr,
-							callback = function()
-								vim.lsp.buf.format({ timeout_ms = 30000 })
-							end,
-						})
-						on_attach(client)
-					end,
+					on_attach = on_attach,
 				},
+				eslint = {},
 				flow = {},
 			}
 
@@ -782,37 +782,11 @@ require("lazy").setup({
 			local null_ls = require("null-ls")
 
 			local sources = {
-				null_ls.builtins.diagnostics.eslint_d.with({
-					condition = function()
-						return utils.is_executable("eslint_d")
-					end,
-					cwd = function(params)
-						return require("lspconfig/util").root_pattern(".eslintrc.js")(params.bufname)
-					end,
-				}),
-				null_ls.builtins.diagnostics.eslint.with({
-					condition = function()
-						return utils.is_executable("eslint") and not utils.is_executable("eslint_d")
-					end,
-					prefer_local = true,
-				}),
 				null_ls.builtins.diagnostics.rubocop.with({
 					condition = function()
 						return utils.is_executable("scripts/bin/rubocop-daemon/rubocop")
 					end,
 					command = "scripts/bin/rubocop-daemon/rubocop",
-				}),
-				null_ls.builtins.formatting.eslint_d.with({
-					condition = function()
-						return utils.is_executable("eslint_d")
-					end,
-					prefer_local = true,
-					timeout = 30000,
-				}),
-				null_ls.builtins.formatting.rustfmt.with({
-					condition = function()
-						return utils.is_executable("rustfmt")
-					end,
 				}),
 				null_ls.builtins.formatting.stylua.with({
 					condition = function()
@@ -821,7 +795,7 @@ require("lazy").setup({
 				}),
 			}
 
-			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
+			local augroup = vim.api.nvim_create_augroup("NoneLspFormatting", {})
 			null_ls.setup({
 				sources = sources,
 				should_attach = function(bufnr)
