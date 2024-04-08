@@ -27,7 +27,7 @@ require("lazy").setup({
 		"rktjmp/shipwright.nvim",
 		cmd = { "Shipwright" },
 		dependencies = {
-			"rktjmp/lush.nvim",
+			{ "rktjmp/lush.nvim", lazy = true },
 		},
 	},
 	{
@@ -446,6 +446,7 @@ require("lazy").setup({
 			local on_attach = function(client, bufnr)
 				client.server_capabilities.semanticTokensProvider = nil
 				lsp_status.on_attach(client)
+
 				if client.supports_method("textDocument/formatting") then
 					vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
 					vim.api.nvim_create_autocmd("BufWritePre", {
@@ -979,7 +980,7 @@ require("lazy").setup({
 	lockfile = "~/.dotfiles/lazy-lock.json",
 	dev = {
 		-- directory where you store your local plugin projects
-		-- path = "~/home",
+		path = "~/home",
 		-- --@type string[] plugins that match these patterns will use your local versions instead of being fetched from GitHub
 		-- patterns = { "sodiumjoe" }, -- For example {"folke"}
 		fallback = false, -- Fallback to git when local plugin doesn't exist
