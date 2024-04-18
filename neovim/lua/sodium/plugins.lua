@@ -442,7 +442,6 @@ require("lazy").setup({
 
 			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 			local on_attach = function(client, bufnr)
-				client.server_capabilities.semanticTokensProvider = nil
 				lsp_status.on_attach(client)
 
 				if client.supports_method("textDocument/formatting") then
@@ -482,10 +481,6 @@ require("lazy").setup({
 
 			if utils.is_executable("lua-language-server") then
 				servers.lua_ls = {
-					on_attach = function(client)
-						client.server_capabilities.documentFormattingProvider = false
-						on_attach(client)
-					end,
 					settings = {
 						Lua = {
 							runtime = {
