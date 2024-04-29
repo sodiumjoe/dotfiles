@@ -5,20 +5,8 @@ local chromeFilter = hs.window.filter.new(false):setAppFilter("Google Chrome", {
 local calendarFilter = hs.window.filter.new(false):setAppFilter("Google Calendar", { visible = true })
 local chatFilter = hs.window.filter.new(false):setAppFilter("Google Chat", { visible = true })
 local alacrittyFilter = hs.window.filter.new(false):setAppFilter("Alacritty")
-local zoomFilter = hs.window.filter
-	.new(false)
-	:setAppFilter("zoom.us", { visible = true, allowRoles = { "AXStandardWindow" } })
-	:setSortOrder(hs.window.filter.sortByCreated)
-local zoomNonMeetingFilter = hs.window.filter
-	.copy(zoomFilter)
-	:setOverrideFilter({ rejectTitles = "Zoom Meeting" })
-	:setSortOrder(hs.window.filter.sortByCreated)
-hs.window.filter
-	.new(false)
-	:setAppFilter("zoom.us", { visible = true })
-	:setOverrideFilter({ rejectTitles = "" })
-	:setSortOrder(hs.window.filter.sortByCreated)
-	:setOverrideFilter({ rejectTitles = "Zoom Meeting" })
+local zoomFilter = hs.window.filter.new(false):setAppFilter("zoom.us", { visible = true })
+local zoomNonMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ rejectTitles = "Zoom Meeting" })
 local zoomMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ allowTitles = "Zoom Meeting" })
 local slackFilter = hs.window.filter.new(false):setAppFilter("Slack", { visible = true })
 
@@ -247,7 +235,7 @@ local function layout()
 	local zoomMeetings = zoomMeetingFilter:getWindows()
 	local zoomNonMeetingWindows = zoomNonMeetingFilter:getWindows()
 	local mainZoomWindow = zoomNonMeetingWindows[1]
-	local zoom = zoomNonMeetingWindows[2]
+	local zoom = zoomMeetings[2]
 	local zoomMeeting = zoomMeetings[1]
 
 	if mainZoomWindow then
