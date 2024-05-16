@@ -781,6 +781,11 @@ require("lazy").setup({
 			local null_ls = require("null-ls")
 
 			local sources = {
+				null_ls.builtins.formatting.buildifier.with({
+					condition = function()
+						return utils.is_executable("buildifier")
+					end,
+				}),
 				null_ls.builtins.diagnostics.rubocop.with({
 					condition = function()
 						return utils.is_executable("scripts/bin/rubocop-daemon/rubocop")
