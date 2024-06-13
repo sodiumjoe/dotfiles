@@ -874,7 +874,7 @@ require("lazy").setup({
 		-- dev = true,
 		config = function()
 			require("sodium")
-			vim.cmd.colorscheme("sodium")
+			vim.cmd.colorscheme("sodium-dark")
 			local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
 			-- disable line number in these filetypes
 			line_nr_autocmd("FileType", {
