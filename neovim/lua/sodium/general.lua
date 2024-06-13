@@ -3,7 +3,7 @@ local g = vim.go
 local o = vim.o
 local w = vim.wo
 
-g.mouse = nil
+g.mouse = ""
 o.number = true
 o.cursorline = true
 o.undofile = true
