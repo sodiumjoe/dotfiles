@@ -1,8 +1,8 @@
 {
   "alfredsnippet" : {
-    "snippet" : "-metrics -domain:t.stripe.com -domain:qa-r.stripe.com -domain:qa-m.stripe.com -domain:m.stripe.com -domain:r.stripe.com -domain:moon-manage_ui-mydev.dev.stripe.me -url:\/sockjs-node -url:\/ajax\/devbox_events",
+    "snippet" : "-metrics -domain:t.stripe.com -domain:qa-r.stripe.com -domain:qa-m.stripe.com -domain:m.stripe.com -domain:r.stripe.com -domain:api.sprig.com -url:\/ajax\/devbox_events -domain:ccpkofodpfiaecjkkgfgogebbgeelcgg -domain:aeblfdkhhhdcdjpifhhbdiojplfjncoa",
     "uid" : "A76B0FDD-0820-424B-84E7-F465C090D577",
     "name" : "chrome network filter",
-    "keyword" : "filter"
+    "keyword" : "network"
   }
 }
