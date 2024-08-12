@@ -83,7 +83,7 @@ vim.api.nvim_exec(
 local remote_stripe_dir = "/pay/src/"
 local local_stripe_dir = vim.fn.expand("~/stripe")
 
-local function get_lg_url()
+local function get_sg_url()
 	local stripe_dir = nil
 	if vim.fn.isdirectory(remote_stripe_dir) ~= 0 then
 		stripe_dir = remote_stripe_dir
@@ -94,8 +94,16 @@ local function get_lg_url()
 	local full_path = vim.api.nvim_buf_get_name(0)
 	local line_number = vim.fn.line(".")
 	if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
-		local path = string.gsub(full_path, stripe_dir, "")
-		return string.format([[http://go/lg-view/%s#L%s]], path, line_number)
+		local path_with_repo = string.gsub(full_path, stripe_dir, "")
+		local i, j = string.find(path_with_repo, "^/.-/")
+		local repo = string.sub(path_with_repo, i + 1, j - 1)
+		local path = string.sub(path_with_repo, j + 1)
+		return string.format(
+			[[https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/%s/-/blob/%s?L%s]],
+			repo,
+			path,
+			line_number
+		)
 	else
 		return nil
 	end
@@ -122,9 +130,9 @@ utils.map({
 		"n",
 		[[<leader>l]],
 		function()
-			local lg_url = get_lg_url()
-			if lg_url ~= nil then
-				vim.fn.setreg("+", lg_url)
+			local sg_url = get_sg_url()
+			if sg_url ~= nil then
+				vim.fn.setreg("+", sg_url)
 			end
 		end,
 	},
