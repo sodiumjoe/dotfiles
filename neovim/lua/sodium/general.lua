@@ -81,7 +81,7 @@ vim.api.nvim_exec(
 )
 
 local remote_stripe_dir = "/pay/src/"
-local local_stripe_dir = vim.fn.expand("~/stripe")
+local local_stripe_dir = vim.fn.expand("~/stripe/")
 
 local function get_sg_url()
 	local stripe_dir = nil
@@ -95,8 +95,8 @@ local function get_sg_url()
 	local line_number = vim.fn.line(".")
 	if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
 		local path_with_repo = string.gsub(full_path, stripe_dir, "")
-		local i, j = string.find(path_with_repo, "^/.-/")
-		local repo = string.sub(path_with_repo, i + 1, j - 1)
+		local i, j = string.find(path_with_repo, "^.-/")
+		local repo = string.sub(path_with_repo, i, j - 1)
 		local path = string.sub(path_with_repo, j + 1)
 		return string.format(
 			[[https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/%s/-/blob/%s?L%s]],
