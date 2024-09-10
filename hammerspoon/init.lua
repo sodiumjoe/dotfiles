@@ -195,7 +195,7 @@ end
 local function layout()
 	local screens = hs.screen.allScreens()
 
-	local speakers = hs.audiodevice.findOutputByName("CalDigit Thunderbolt 3 Audio")
+	local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
 		or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
 	if speakers then
 		speakers:setDefaultOutputDevice()
