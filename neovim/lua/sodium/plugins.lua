@@ -661,7 +661,9 @@ require("lazy").setup({
 					"n",
 					[[<leader>d]],
 					function()
-						require("telescope.builtin").find_files({ search_dirs = vim.fn.expand("%:h") })
+						require("telescope.builtin").find_files({
+							search_dirs = vim.fn.expand("%:h"),
+						})
 					end,
 				},
 				{
