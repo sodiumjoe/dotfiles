@@ -396,7 +396,20 @@ require("lazy").setup({
 		"neovim/nvim-lspconfig",
 		config = function()
 			local nvim_lsp = require("lspconfig")
+			local configs = require("lspconfig.configs")
+			local util = require("lspconfig/util")
 			local lsp_status = require("lsp-status")
+
+			configs.bazel = {
+				default_config = {
+					cmd = { "scripts/dev/bazel-lsp" },
+					filetypes = { "star", "bzl", "BUILD.bazel" },
+					root_dir = util.find_git_ancestor,
+				},
+				docs = {
+					description = [[]],
+				},
+			}
 
 			local severity_levels = {
 				vim.diagnostic.severity.ERROR,
@@ -458,8 +471,16 @@ require("lazy").setup({
 			end
 
 			local servers = {
-				rust_analyzer = {},
-				starlark_rust = {},
+				rust_analyzer = {
+					settings = {
+						["rust-analyzer"] = {
+							cargo = {
+								features = "all",
+							},
+						},
+					},
+				},
+				bazel = {},
 				sorbet = {
 					cmd = {
 						"pay",
