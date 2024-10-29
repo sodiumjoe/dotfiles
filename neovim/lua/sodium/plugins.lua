@@ -806,8 +806,9 @@ require("lazy").setup({
 			local sources = {
 				null_ls.builtins.formatting.buildifier.with({
 					condition = function()
-						return utils.is_executable("buildifier")
+						return utils.is_executable("scripts/dev/buildifier")
 					end,
+					command = "scripts/dev/buildifier",
 				}),
 				null_ls.builtins.diagnostics.rubocop.with({
 					condition = function()
