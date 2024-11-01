@@ -101,3 +101,5 @@
 	host = git.corp.stripe.com
 [rerere]
 	enabled = true
+[stripe]
+	gitAddOverrideQuiet = true
