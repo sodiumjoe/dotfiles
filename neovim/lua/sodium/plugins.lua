@@ -411,6 +411,8 @@ require("lazy").setup({
 				},
 			}
 
+			configs.vtsls = require("vtsls").lspconfig
+
 			local severity_levels = {
 				vim.diagnostic.severity.ERROR,
 				vim.diagnostic.severity.WARN,
@@ -505,6 +507,19 @@ require("lazy").setup({
 				},
 				flow = {},
 			}
+			if vim.fn.isdirectory("/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib") then
+				servers.vtsls = {
+					settings = {
+						vtsls = {
+							typescript = {
+								globalTsdk = "/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib",
+							},
+						},
+					},
+				}
+			else
+				servers.vtsls = {}
+			end
 
 			if utils.is_executable("lua-language-server") then
 				servers.lua_ls = {
@@ -848,23 +863,6 @@ require("lazy").setup({
 			"neovim/nvim-lspconfig",
 		},
 	},
-	{
-		"pmizio/typescript-tools.nvim",
-		dependencies = { "nvim-lua/plenary.nvim", "neovim/nvim-lspconfig" },
-		config = function()
-			require("typescript-tools").setup({
-				settings = {
-					tsserver_path = vim.fn.expand("$HOME/node-bin/node_modules/typescript/bin/tsserver"),
-					tsserver_max_memory = 16384,
-				},
-				on_attach = function(client)
-					client.server_capabilities.documentFormattingProvider = false
-					client.server_capabilities.documentRangeFormattingProvider = false
-				end,
-				filetypes = { "typescript", "typescriptreact" },
-			})
-		end,
-	},
 	"rafamadriz/friendly-snippets",
 	{
 		"rachartier/tiny-devicons-auto-colors.nvim",
@@ -1037,6 +1035,7 @@ require("lazy").setup({
 		keys = { "<leader>ww", "<leader>w<space>w" },
 		ft = "vimwiki",
 	},
+	"yioneko/nvim-vtsls",
 }, {
 	defaults = {
 		lazy = false,
