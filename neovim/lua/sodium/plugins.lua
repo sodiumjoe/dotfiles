@@ -497,6 +497,7 @@ require("lazy").setup({
 					on_attach = on_attach,
 				},
 				eslint = {
+					cmd_env = { BROWSERSLIST_IGNORE_OLD_DATA = "1" },
 					on_attach = function(client, bufnr)
 						vim.api.nvim_create_autocmd("BufWritePre", { buffer = bufnr, command = "EslintFixAll" })
 						on_attach(client, bufnr)
