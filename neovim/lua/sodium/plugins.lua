@@ -191,12 +191,12 @@ require("lazy").setup({
 			})
 		end,
 		dependencies = {
-			{ "onsails/lspkind-nvim", lazy = true },
-			{ "hrsh7th/cmp-buffer", lazy = true },
-			{ "hrsh7th/cmp-cmdline", lazy = true },
-			{ "hrsh7th/cmp-nvim-lsp", lazy = true },
-			{ "hrsh7th/cmp-path", lazy = true },
-			{ "L3MON4D3/LuaSnip", lazy = true },
+			{ "onsails/lspkind-nvim",     lazy = true },
+			{ "hrsh7th/cmp-buffer",       lazy = true },
+			{ "hrsh7th/cmp-cmdline",      lazy = true },
+			{ "hrsh7th/cmp-nvim-lsp",     lazy = true },
+			{ "hrsh7th/cmp-path",         lazy = true },
+			{ "L3MON4D3/LuaSnip",         lazy = true },
 			{ "saadparwaiz1/cmp_luasnip", lazy = true },
 		},
 		keys = {
@@ -310,10 +310,10 @@ require("lazy").setup({
 			})
 
 			utils.map({
-				{ "n", "n", "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-				{ "n", "N", "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-				{ "n", "*", "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-				{ "n", "#", "<Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "n",  "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "N",  "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "*",  "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
+				{ "n", "#",  "<Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
 				{ "n", "g*", "<Plug>(is-g*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
 				{ "n", "g#", "<Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
 			})
@@ -336,7 +336,7 @@ require("lazy").setup({
 		-- build = "make install_jsregexp",
 		dependencies = {
 			{ "rafamadriz/friendly-snippets", lazy = true },
-			{ "saadparwaiz1/cmp_luasnip", lazy = true },
+			{ "saadparwaiz1/cmp_luasnip",     lazy = true },
 		},
 		config = function()
 			require("luasnip.loaders.from_vscode").lazy_load()
@@ -565,11 +565,11 @@ require("lazy").setup({
 				nvim_lsp[lsp].setup(setup_options)
 			end
 			utils.map({
-				{ "n", "gD", vim.lsp.buf.declaration },
+				{ "n", "gD",           vim.lsp.buf.declaration },
 				-- { "n", "gd", vim.lsp.buf.definition },
-				{ "n", "K", vim.lsp.buf.hover },
-				{ "n", "gi", vim.lsp.buf.implementation },
-				{ "n", [[<leader>D]], vim.lsp.buf.type_definition },
+				{ "n", "K",            vim.lsp.buf.hover },
+				{ "n", "gi",           vim.lsp.buf.implementation },
+				{ "n", [[<leader>D]],  vim.lsp.buf.type_definition },
 				-- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
 				{ "n", [[<leader>ca]], vim.lsp.buf.code_action },
 				-- { "n", "gr", vim.lsp.buf.references },
@@ -1029,8 +1029,8 @@ require("lazy").setup({
 				{ "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
 				{ "n", [[<leader>wn]], "<Plug>VimwikiDiaryNextDay" },
 				{ "n", [[<leader>wg]], "<Plug>VimwikiGoto" },
-				{ "n", [[<leader>=]], "<Plug>VimwikiAddHeaderLevel" },
-				{ "n", [[<leader>-]], "<Plug>VimwikiRemoveHeaderLevel" },
+				{ "n", [[<leader>=]],  "<Plug>VimwikiAddHeaderLevel" },
+				{ "n", [[<leader>-]],  "<Plug>VimwikiRemoveHeaderLevel" },
 			})
 		end,
 		dependencies = {
@@ -1071,7 +1071,7 @@ require("lazy").setup({
 		cache = {
 			enabled = true,
 		},
-		reset_packpath = true, -- reset the package path to improve startup time
+		reset_packpath = true,       -- reset the package path to improve startup time
 		rtp = {
 			paths = { "~/.dotfiles/neovim" }, -- add any custom paths here that you want to includes in the rtp
 		},
