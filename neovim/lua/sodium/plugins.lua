@@ -499,7 +499,6 @@ require("lazy").setup({
 						supportsSorbetURIs = true,
 					},
 					settings = {},
-					on_attach = on_attach,
 				},
 				eslint = {
 					cmd_env = { BROWSERSLIST_IGNORE_OLD_DATA = "1" },
