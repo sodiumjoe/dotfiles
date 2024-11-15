@@ -22,6 +22,8 @@ vim.opt.rtp:prepend(lazypath)
 
 local utils = require("sodium.utils")
 
+local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
+
 require("lazy").setup({
 	{
 		"rktjmp/shipwright.nvim",
@@ -455,14 +457,13 @@ require("lazy").setup({
 			vim.lsp.handlers["textDocument/signatureHelp"] =
 				vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
-			local augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 			local on_attach = function(client, bufnr)
 				lsp_status.on_attach(client)
 
 				if client.supports_method("textDocument/formatting") then
-					vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
+					vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
 					vim.api.nvim_create_autocmd("BufWritePre", {
-						group = augroup,
+						group = autoformat_augroup,
 						buffer = bufnr,
 						callback = function()
 							vim.lsp.buf.format({ timeout_ms = 30000 })
@@ -543,6 +544,9 @@ require("lazy").setup({
 							},
 							-- Do not send telemetry data containing a randomized but unique identifier
 							telemetry = {
+								enable = false,
+							},
+							format = {
 								enable = false,
 							},
 						},
@@ -842,7 +846,6 @@ require("lazy").setup({
 				}),
 			}
 
-			local augroup = vim.api.nvim_create_augroup("NoneLspFormatting", {})
 			null_ls.setup({
 				sources = sources,
 				should_attach = function(bufnr)
@@ -850,9 +853,9 @@ require("lazy").setup({
 				end,
 				on_attach = function(client, bufnr)
 					if client.supports_method("textDocument/formatting") then
-						vim.api.nvim_clear_autocmds({ group = augroup, buffer = bufnr })
+						vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
 						vim.api.nvim_create_autocmd("BufWritePre", {
-							group = augroup,
+							group = autoformat_augroup,
 							buffer = bufnr,
 							callback = function()
 								vim.lsp.buf.format({ timeout_ms = 30000 })
