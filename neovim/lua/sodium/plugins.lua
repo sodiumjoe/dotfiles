@@ -472,6 +472,8 @@ require("lazy").setup({
 				require("lspkind").init({})
 			end
 
+			local devbox_tsserver_path = "/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib"
+
 			local servers = {
 				rust_analyzer = {
 					settings = {
@@ -506,20 +508,21 @@ require("lazy").setup({
 					end,
 				},
 				flow = {},
-			}
-			if vim.fn.isdirectory("/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib") then
-				servers.vtsls = {
+				vtsls = {
 					settings = {
-						vtsls = {
+						vtsls = vim.fn.isdirectory(devbox_tsserver_path) == 1 and {
 							typescript = {
-								globalTsdk = "/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib",
+								globalTsdk = devbox_tsserver_path,
+							},
+						} or {},
+						typescript = {
+							format = {
+								enable = false,
 							},
 						},
 					},
-				}
-			else
-				servers.vtsls = {}
-			end
+				},
+			}
 
 			if utils.is_executable("lua-language-server") then
 				servers.lua_ls = {
