@@ -24,8 +24,8 @@ o.ignorecase = true
 o.inccommand = [[split]]
 
 if utils.is_executable("rg") then
-	o.grepprg = [[rg --vimgrep --no-heading -S]]
-	o.grepformat = [[%f:%l:%c:%m,%f:%l:%m]]
+    o.grepprg = [[rg --vimgrep --no-heading -S]]
+    o.grepformat = [[%f:%l:%c:%m,%f:%l:%m]]
 end
 
 -- display
@@ -49,13 +49,13 @@ g.splitkeep = "screen"
 -- ====
 
 utils.augroup("AutoCloseQFLL", { clear = true })("FileType", {
-	pattern = { "qf" },
-	command = "nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>",
+    pattern = { "qf" },
+    command = "nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>",
 })
 
 utils.augroup("RestoreCursorPos", { clear = true })("BufReadPost", {
-	pattern = "*",
-	command = [[if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit' |   exe "normal! g`\"" | endif]],
+    pattern = "*",
+    command = [[if line("'\"") > 1 && line("'\"") <= line("$") && &ft !~# 'commit' |   exe "normal! g`\"" | endif]],
 })
 
 -- javascript source resolution
@@ -63,7 +63,7 @@ g.path = "."
 o.suffixesadd = ".js"
 
 vim.api.nvim_exec(
-	[[
+    [[
   function! LoadMainNodeModule(fname)
     let nodeModules = "./node_modules/"
     let packageJsonPath = nodeModules . a:fname . "/package.json"
@@ -77,72 +77,72 @@ vim.api.nvim_exec(
 
   set includeexpr=LoadMainNodeModule(v:fname)
 ]],
-	false
+    false
 )
 
 local remote_stripe_dir = "/pay/src/"
 local local_stripe_dir = vim.fn.expand("~/stripe/")
 
 local function get_sg_url()
-	local stripe_dir = nil
-	if vim.fn.isdirectory(remote_stripe_dir) ~= 0 then
-		stripe_dir = remote_stripe_dir
-	elseif vim.fn.isdirectory(local_stripe_dir) ~= 0 then
-		stripe_dir = local_stripe_dir
-	end
+    local stripe_dir = nil
+    if vim.fn.isdirectory(remote_stripe_dir) ~= 0 then
+        stripe_dir = remote_stripe_dir
+    elseif vim.fn.isdirectory(local_stripe_dir) ~= 0 then
+        stripe_dir = local_stripe_dir
+    end
 
-	local full_path = vim.api.nvim_buf_get_name(0)
-	local line_number = vim.fn.line(".")
-	if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
-		local path_with_repo = string.gsub(full_path, stripe_dir, "")
-		local i, j = string.find(path_with_repo, "^.-/")
-		local repo = string.sub(path_with_repo, i, j - 1)
-		local path = string.sub(path_with_repo, j + 1)
-		return string.format(
-			[[https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/%s/-/blob/%s?L%s]],
-			repo,
-			path,
-			line_number
-		)
-	else
-		return nil
-	end
+    local full_path = vim.api.nvim_buf_get_name(0)
+    local line_number = vim.fn.line(".")
+    if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
+        local path_with_repo = string.gsub(full_path, stripe_dir, "")
+        local i, j = string.find(path_with_repo, "^.-/")
+        local repo = string.sub(path_with_repo, i, j - 1)
+        local path = string.sub(path_with_repo, j + 1)
+        return string.format(
+            [[https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/%s/-/blob/%s?L%s]],
+            repo,
+            path,
+            line_number
+        )
+    else
+        return nil
+    end
 end
 
 utils.map({
-	-- leader d and leader p for deleting instead of cutting and pasting
-	-- { "n", [[<leader>d]], [["_d]], { noremap = true } },
-	-- { "x", [[<leader>d]], [["_d]], { noremap = true } },
-	-- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
+    -- leader d and leader p for deleting instead of cutting and pasting
+    -- { "n", [[<leader>d]], [["_d]], { noremap = true } },
+    -- { "x", [[<leader>d]], [["_d]], { noremap = true } },
+    -- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
 
-	-- movement
-	{ "n", "j",            "gj" },
-	{ "n", "k",            "gk" },
+    -- movement
+    { "n", "j",            "gj" },
+    { "n", "k",            "gk" },
 
-	-- search visual selection (busted)
-	-- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
+    -- search visual selection (busted)
+    -- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
 
-	-- copy relative path to clipboard
-	{ "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
-	-- copy full path to clipboard
-	{ "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
-	{
-		"n",
-		[[<leader>l]],
-		function()
-			local sg_url = get_sg_url()
-			if sg_url ~= nil then
-				vim.fn.setreg("+", sg_url)
-			end
-		end,
-	},
-	{
-		"n",
-		[[<leader>h]],
-		function()
-			local ts_result = vim.treesitter.get_captures_at_cursor(0)
-			local lsp_result = vim.lsp.semantic_tokens.get_at_pos()
-			print(vim.inspect({ ts = ts_result, lsp = lsp_result }))
-		end,
-	},
+    -- copy relative path to clipboard
+    { "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
+    -- copy full path to clipboard
+    { "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
+    {
+        "n",
+        [[<leader>l]],
+        function()
+            local sg_url = get_sg_url()
+            if sg_url ~= nil then
+                vim.fn.setreg("+", sg_url)
+            end
+        end,
+    },
+    {
+        "n",
+        [[<leader>h]],
+        function()
+            local ts_result = vim.treesitter.get_captures_at_cursor(0)
+            local lsp_result = vim.lsp.semantic_tokens.get_at_pos()
+            print(vim.inspect({ ts = ts_result, lsp = lsp_result }))
+        end,
+    },
 })
