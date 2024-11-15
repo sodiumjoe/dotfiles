@@ -546,9 +546,6 @@ require("lazy").setup({
 							telemetry = {
 								enable = false,
 							},
-							format = {
-								enable = false,
-							},
 						},
 					},
 				}
@@ -838,11 +835,6 @@ require("lazy").setup({
 						return utils.is_executable("scripts/bin/rubocop-daemon/rubocop")
 					end,
 					command = "scripts/bin/rubocop-daemon/rubocop",
-				}),
-				null_ls.builtins.formatting.stylua.with({
-					condition = function()
-						return utils.is_executable("stylua")
-					end,
 				}),
 				null_ls.builtins.formatting.prettier.with({
 					prefer_local = "node_modules/.bin",
