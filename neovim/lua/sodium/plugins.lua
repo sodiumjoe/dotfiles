@@ -529,6 +529,11 @@ require("lazy").setup({
                                 enable = false,
                             },
                         },
+                        javascript = {
+                            format = {
+                                enable = false,
+                            },
+                        },
                     },
                     handlers = {
                         ["textDocument/publishDiagnostics"] = function(_, result, ctx, config)
