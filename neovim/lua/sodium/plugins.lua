@@ -94,128 +94,6 @@ require("lazy").setup({
         },
     },
     {
-        "hrsh7th/nvim-cmp",
-        config = function()
-            local luasnip = require("luasnip")
-            local cmp = require("cmp")
-            local cmdline_mapping = cmp.mapping.preset.cmdline()
-            cmdline_mapping["<Tab>"] = nil
-
-            cmp.setup({
-                window = {
-                    completion = vim.g.popup_opts,
-                    documentation = cmp.config.window.bordered({
-                        winhighlight = "Normal:Pmenu,FloatBorder:Pmenu,CursorLine:PmenuSel,Search:None",
-                    }),
-                },
-                mapping = cmp.mapping.preset.insert({
-                    ["<C-n>"] = function(fallback)
-                        if cmp.visible() then
-                            cmp.select_next_item()
-                        else
-                            fallback()
-                        end
-                    end,
-                    ["<C-p>"] = function(fallback)
-                        if cmp.visible() then
-                            cmp.select_prev_item()
-                        else
-                            fallback()
-                        end
-                    end,
-                    ["<CR>"] = cmp.mapping.confirm({ select = false }),
-                    ["<Tab>"] = cmp.mapping(function(fallback)
-                        if luasnip.expand_or_jumpable() then
-                            luasnip.expand_or_jump()
-                        else
-                            fallback()
-                        end
-                    end, {
-                        "i",
-                        "s",
-                    }),
-
-                    ["<S-Tab>"] = cmp.mapping(function(fallback)
-                        if cmp.visible() then
-                            cmp.select_prev_item()
-                        elseif luasnip.jumpable(-1) then
-                            luasnip.jump(-1)
-                        else
-                            fallback()
-                        end
-                    end, {
-                        "i",
-                        "s",
-                    }),
-                }),
-                sources = cmp.config.sources({
-                    { name = "nvim_lsp" },
-                    {
-                        name = "buffer",
-                        option = {
-                            -- completion candidates from all open buffers
-                            option = {
-                                get_bufnrs = function()
-                                    return vim.api.nvim_list_bufs()
-                                end,
-                            },
-                        },
-                    },
-                    { name = "path" },
-                    { name = "luasnip" },
-                }),
-                snippet = {
-                    expand = function(args)
-                        require("luasnip").lsp_expand(args.body)
-                    end,
-                },
-                formatting = {
-                    format = require("lspkind").cmp_format({
-                        menu = {
-                            buffer = utils.icons.buffer,
-                            nvim_lsp = utils.icons.lsp,
-                        },
-                    }),
-                },
-            })
-            cmp.setup.cmdline({ "/", "?" }, {
-                mapping = cmdline_mapping,
-                sources = {
-                    { name = "buffer" },
-                },
-            })
-            cmp.setup.cmdline(":", {
-                mapping = cmdline_mapping,
-                sources = cmp.config.sources({
-                    { name = "path" },
-                }, {
-                    {
-                        keyword_length = 2,
-                        name = "cmdline",
-                        option = {
-                            ignore_cmds = { "Man", "!" },
-                        },
-                    },
-                }),
-            })
-        end,
-        dependencies = {
-            { "onsails/lspkind-nvim",     lazy = true },
-            { "hrsh7th/cmp-buffer",       lazy = true },
-            { "hrsh7th/cmp-cmdline",      lazy = true },
-            { "hrsh7th/cmp-nvim-lsp",     lazy = true },
-            { "hrsh7th/cmp-path",         lazy = true },
-            { "L3MON4D3/LuaSnip",         lazy = true },
-            { "saadparwaiz1/cmp_luasnip", lazy = true },
-        },
-        keys = {
-            ":",
-            "/",
-            "?",
-        },
-        event = { "InsertEnter" },
-    },
-    {
         "junegunn/goyo.vim",
         config = function()
             vim.cmd([[
@@ -267,7 +145,6 @@ require("lazy").setup({
                     "aerial",
                     "alpha",
                     "checkhealth",
-                    "cmp_menu",
                     "diff",
                     "lazy",
                     "lspinfo",
@@ -345,7 +222,6 @@ require("lazy").setup({
         -- build = "make install_jsregexp",
         dependencies = {
             { "rafamadriz/friendly-snippets", lazy = true },
-            { "saadparwaiz1/cmp_luasnip",     lazy = true },
         },
         config = function()
             require("luasnip.loaders.from_vscode").lazy_load()
@@ -410,6 +286,7 @@ require("lazy").setup({
             local configs = require("lspconfig.configs")
             local util = require("lspconfig/util")
             local lsp_status = require("lsp-status")
+            local blink = require("blink.cmp")
 
             configs.bazel = {
                 default_config = {
@@ -602,6 +479,7 @@ require("lazy").setup({
                 }
 
                 local setup_options = vim.tbl_extend("force", defaults, options)
+                setup_options.capabilities = blink.get_lsp_capabilities(setup_options.capabilities)
 
                 nvim_lsp[lsp].setup(setup_options)
             end
@@ -656,6 +534,7 @@ require("lazy").setup({
             },
             { "onsails/lspkind-nvim", lazy = true },
             "nvim-telescope/telescope.nvim",
+            "saghen/blink.cmp",
         },
     },
     {
@@ -972,6 +851,32 @@ require("lazy").setup({
         keys = {
             [[<leader>ew]],
             [[<leader>e/]],
+        },
+    },
+    {
+        'saghen/blink.cmp',
+        lazy = false, -- lazy loading handled internally
+        dependencies = 'rafamadriz/friendly-snippets',
+
+        -- use a release tag to download pre-built binaries
+        version = 'v0.*',
+
+        ---@module 'blink.cmp'
+        ---@type blink.cmp.Config
+        opts = {
+            keymap = {
+                preset = 'default',
+            },
+
+            completion = {
+                menu = {
+                    border = 'rounded'
+                },
+                list = {
+                    selection = "auto_insert",
+                },
+            },
+
         },
     },
     {
