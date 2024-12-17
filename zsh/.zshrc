@@ -304,7 +304,7 @@ remote() {
   remote="$1"
   branch="$(whoami)/$remote"
 
-  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready -s manage -s manage_ui_metro && \
+  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready -s manage -s manage_vite && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
 }
