@@ -92,7 +92,7 @@ hide_when_typing = true
 [scrolling]
 history = 0
 
-[shell]
+[terminal.shell]
 args = ["-l", "-c", "tmux attach || tmux"]
 program = "/bin/zsh"
 
