@@ -220,8 +220,8 @@ alias vim='nvim'
 alias vi='nvim'
 
 alias vimdiff='nvim -d'
-if [ -x "$(command -v exa)" ]; then
-  alias ll='exa -la'
+if [ -x "$(command -v eza)" ]; then
+  alias ll='eza -la'
 else
   alias ll='ls -la'
 fi
