@@ -274,24 +274,15 @@ require("lazy").setup({
                 calm_down = true,
                 nearest_only = false,
             })
-
-            utils.map({
-                { "n", "n",  "<Plug>(is-n)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-                { "n", "N",  "<Plug>(is-N)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-                { "n", "*",  "<Plug>(is-*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-                { "n", "#",  "<Plug>(is-#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-                { "n", "g*", "<Plug>(is-g*)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-                { "n", "g#", "<Plug>(is-g#)<Plug>(is-nohl-1)<Cmd>lua require('hlslens').start()<cr>" },
-            })
         end,
         keys = {
-            "/",
-            "n",
-            "N",
-            "*",
-            "#",
-            "g*",
-            "g#",
+            { 'n',         [[<Cmd>execute('normal! ' . v:count1 . 'n')<CR><Cmd>lua require('hlslens').start()<CR>]] },
+            { 'N',         [[<Cmd>execute('normal! ' . v:count1 . 'N')<CR><Cmd>lua require('hlslens').start()<CR>]] },
+            { '*',         [[*<Cmd>lua require('hlslens').start()<CR>]] },
+            { '#',         [[#<Cmd>lua require('hlslens').start()<CR>]] },
+            { 'g*',        [[g*<Cmd>lua require('hlslens').start()<CR>]] },
+            { 'g#',        [[g#<Cmd>lua require('hlslens').start()<CR>]] },
+            { '<Leader>n', '<Cmd>noh<CR>' },
         },
     },
     {
@@ -565,48 +556,41 @@ require("lazy").setup({
 
                 nvim_lsp[lsp].setup(setup_options)
             end
-            utils.map({
-                { "n", "gD",           vim.lsp.buf.declaration },
-                -- { "n", "gd", vim.lsp.buf.definition },
-                { "n", "K",            vim.lsp.buf.hover },
-                { "n", "gi",           vim.lsp.buf.implementation },
-                { "n", [[<leader>D]],  vim.lsp.buf.type_definition },
-                -- { "n", "<space>rn", "<cmd>lua vim.lsp.buf.rename()<cr>", opts },
-                { "n", [[<leader>ca]], vim.lsp.buf.code_action },
-                -- { "n", "gr", vim.lsp.buf.references },
-                { "n", [[<leader>ee]], vim.diagnostic.open_float },
-                {
-                    "n",
-                    [[<leader>p]],
-                    function()
-                        vim.diagnostic.goto_prev({
-                            severity = get_highest_error_severity(),
-                        })
-                    end,
-                },
-                {
-                    "n",
-                    [[<leader>n]],
-                    function()
-                        vim.diagnostic.goto_next({
-                            severity = get_highest_error_severity(),
-                        })
-                    end,
-                },
-                {
-                    "n",
-                    [[<leader>q]],
-                    "<cmd>TroubleToggle<cr>",
-                },
-                {
-                    "n",
-                    [[<leader>f]],
-                    function()
-                        vim.lsp.buf.format({ timeout_ms = 30000 })
-                    end,
-                },
-            })
         end,
+        keys = {
+            { "gD",           vim.lsp.buf.declaration },
+            { "K",            vim.lsp.buf.hover },
+            { "gi",           vim.lsp.buf.implementation },
+            { [[<leader>D]],  vim.lsp.buf.type_definition },
+            { [[<leader>ca]], vim.lsp.buf.code_action },
+            { [[<leader>ee]], vim.diagnostic.open_float },
+            {
+                [[<leader>p]],
+                function()
+                    vim.diagnostic.goto_prev({
+                        severity = get_highest_error_severity(),
+                    })
+                end,
+            },
+            {
+                [[<leader>n]],
+                function()
+                    vim.diagnostic.goto_next({
+                        severity = get_highest_error_severity(),
+                    })
+                end,
+            },
+            {
+                [[<leader>q]],
+                "<cmd>TroubleToggle<cr>",
+            },
+            {
+                [[<leader>f]],
+                function()
+                    vim.lsp.buf.format({ timeout_ms = 30000 })
+                end,
+            },
+        },
         dependencies = {
             {
                 "nvim-lua/lsp-status.nvim",
@@ -915,26 +899,16 @@ require("lazy").setup({
         "smoka7/hop.nvim",
         config = function()
             require("hop").setup({ create_hl_autocmd = false })
-            utils.map({
-                {
-                    "n",
-                    [[<leader>ew]],
-                    function()
-                        require("hop").hint_words()
-                    end,
-                },
-                {
-                    "n",
-                    [[<leader>e/]],
-                    function()
-                        require("hop").hint_patterns()
-                    end,
-                },
-            })
         end,
         keys = {
-            [[<leader>ew]],
-            [[<leader>e/]],
+            {
+                [[<leader>ew]],
+                function() require("hop").hint_words() end,
+            },
+            {
+                [[<leader>e/]],
+                function() require("hop").hint_patterns() end,
+            },
         },
     },
     {
@@ -1054,20 +1028,18 @@ require("lazy").setup({
             vim.g.vimwiki_hl_cb_checked = 1
             vim.g.vimwiki_listsyms = " ○◐●✓"
         end,
-        config = function()
-            utils.map({
-                { "n", [[<leader>wp]], "<Plug>VimwikiDiaryPrevDay" },
-                { "n", [[<leader>wn]], "<Plug>VimwikiDiaryNextDay" },
-                { "n", [[<leader>wg]], "<Plug>VimwikiGoto" },
-                { "n", [[<leader>=]],  "<Plug>VimwikiAddHeaderLevel" },
-                { "n", [[<leader>-]],  "<Plug>VimwikiRemoveHeaderLevel" },
-            })
-        end,
         dependencies = {
             "hrsh7th/nvim-cmp",
         },
-        keys = { "<leader>ww", "<leader>w<space>w" },
-        ft = "vimwiki",
+        keys = {
+            { [[<leader>wp]], "<cmd>VimwikiDiaryPrevDay<cr>" },
+            { [[<leader>wn]], "<Plug>VimwikiDiaryNextDay<cr>" },
+            { [[<leader>wg]], "<cmd>VimwikiGoto<cr>" },
+            { [[<leader>=]],  "<cmd>VimwikiAddHeaderLevel<cr>" },
+            { [[<leader>-]],  "<cmd>VimwikiRemoveHeaderLevel<cr>" },
+            "<leader>ww",
+            "<leader>w<space>w",
+        },
     },
     "yioneko/nvim-vtsls",
 }, {
