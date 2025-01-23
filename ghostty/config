@@ -1,0 +1,20 @@
+font-family = "TX-02"
+font-family-bold = "TX-02 Bold"
+font-family-italic = "TX-02 Oblique"
+font-family-bold-italic = "TX-02 Bold Oblique"
+
+font-size = 13
+font-thicken = true
+
+theme = sodium
+
+window-padding-x = 50
+window-padding-y = 30
+window-padding-balance = true
+macos-titlebar-style = hidden
+
+command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
+initial-command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
+
+keybind = cmd+ctrl+j=text:\x01n
+keybind = cmd+ctrl+k=text:\x01p
