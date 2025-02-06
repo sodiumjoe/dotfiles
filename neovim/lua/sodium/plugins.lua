@@ -24,6 +24,23 @@ local utils = require("sodium.utils")
 
 local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 
+
+local severity_levels = {
+    vim.diagnostic.severity.ERROR,
+    vim.diagnostic.severity.WARN,
+    vim.diagnostic.severity.INFO,
+    vim.diagnostic.severity.HINT,
+}
+
+local function get_highest_error_severity()
+    for _, level in ipairs(severity_levels) do
+        local diags = vim.diagnostic.get(0, { severity = { min = level } })
+        if #diags > 0 then
+            return level, diags
+        end
+    end
+end
+
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -106,11 +123,11 @@ require("lazy").setup({
             scroll = { enabled = true },
         },
         keys = {
-            { "<leader>sb",       function() Snacks.picker.buffers({ on_show = function() vim.cmd.stopinsert() end }) end,         desc = "Buffers" },
-            { "<leader>/",        function() Snacks.picker.grep({ hidden = true }) end,                                            desc = "Grep" },
-            { "<leader><Space>/", function() Snacks.picker.grep({ dirs = { vim.fn.expand("%:h") }, hidden = true }) end,           desc = "Grep cwd" },
-            { "<leader>:",        function() Snacks.picker.command_history({ on_show = function() vim.cmd.stopinsert() end }) end, desc = "Command History" },
-            { "<C-p>",            function() Snacks.picker.files({ hidden = true }) end,                                           desc = "Find Files" },
+            { "<leader>sb",       function() Snacks.picker.buffers({ on_show = function() vim.cmd.stopinsert() end, current = false }) end, desc = "Buffers" },
+            { "<leader>/",        function() Snacks.picker.grep({ hidden = true }) end,                                                     desc = "Grep" },
+            { "<leader><Space>/", function() Snacks.picker.grep({ dirs = { vim.fn.expand("%:h") }, hidden = true }) end,                    desc = "Grep cwd" },
+            { "<leader>:",        function() Snacks.picker.command_history({ on_show = function() vim.cmd.stopinsert() end }) end,          desc = "Command History" },
+            { "<C-p>",            function() Snacks.picker.files({ hidden = true }) end,                                                    desc = "Find Files" },
             {
                 "<leader>8",
                 function()
@@ -276,13 +293,13 @@ require("lazy").setup({
             })
         end,
         keys = {
-            { 'n',         [[<Cmd>execute('normal! ' . v:count1 . 'n')<CR><Cmd>lua require('hlslens').start()<CR>]] },
-            { 'N',         [[<Cmd>execute('normal! ' . v:count1 . 'N')<CR><Cmd>lua require('hlslens').start()<CR>]] },
-            { '*',         [[*<Cmd>lua require('hlslens').start()<CR>]] },
-            { '#',         [[#<Cmd>lua require('hlslens').start()<CR>]] },
-            { 'g*',        [[g*<Cmd>lua require('hlslens').start()<CR>]] },
-            { 'g#',        [[g#<Cmd>lua require('hlslens').start()<CR>]] },
-            { '<Leader>n', '<Cmd>noh<CR>' },
+            { 'n',  [[<Cmd>execute('normal! ' . v:count1 . 'n')<CR><Cmd>lua require('hlslens').start()<CR>]] },
+            { 'N',  [[<Cmd>execute('normal! ' . v:count1 . 'N')<CR><Cmd>lua require('hlslens').start()<CR>]] },
+            { '*',  [[*<Cmd>lua require('hlslens').start()<CR>]] },
+            { '#',  [[#<Cmd>lua require('hlslens').start()<CR>]] },
+            { 'g*', [[g*<Cmd>lua require('hlslens').start()<CR>]] },
+            { 'g#', [[g#<Cmd>lua require('hlslens').start()<CR>]] },
+            -- { '<Leader>n', '<Cmd>noh<CR>' },
         },
     },
     {
@@ -371,22 +388,6 @@ require("lazy").setup({
             }
 
             configs.vtsls = require("vtsls").lspconfig
-
-            local severity_levels = {
-                vim.diagnostic.severity.ERROR,
-                vim.diagnostic.severity.WARN,
-                vim.diagnostic.severity.INFO,
-                vim.diagnostic.severity.HINT,
-            }
-
-            local function get_highest_error_severity()
-                for _, level in ipairs(severity_levels) do
-                    local diags = vim.diagnostic.get(0, { severity = { min = level } })
-                    if #diags > 0 then
-                        return level, diags
-                    end
-                end
-            end
 
             vim.diagnostic.config({
                 signs = { priority = 11 },
