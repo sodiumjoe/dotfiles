@@ -28,23 +28,6 @@ local utils = require("sodium.utils")
 
 local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 
-
-local severity_levels = {
-    vim.diagnostic.severity.ERROR,
-    vim.diagnostic.severity.WARN,
-    vim.diagnostic.severity.INFO,
-    vim.diagnostic.severity.HINT,
-}
-
-local function get_highest_error_severity()
-    for _, level in ipairs(severity_levels) do
-        local diags = vim.diagnostic.get(0, { severity = { min = level } })
-        if #diags > 0 then
-            return level, diags
-        end
-    end
-end
-
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -376,7 +359,6 @@ require("lazy").setup({
         config = function()
             local nvim_lsp = require("lspconfig")
             local configs = require("lspconfig.configs")
-            local util = require("lspconfig/util")
             local lsp_status = require("lsp-status")
             local blink = require("blink.cmp")
 
@@ -384,7 +366,7 @@ require("lazy").setup({
                 default_config = {
                     cmd = { "scripts/dev/bazel-lsp" },
                     filetypes = { "star", "bzl", "BUILD.bazel" },
-                    root_dir = util.find_git_ancestor,
+                    root_dir = utils.find_git_ancestor,
                 },
                 docs = {
                     description = [[]],
@@ -573,7 +555,7 @@ require("lazy").setup({
                 [[<leader>p]],
                 function()
                     vim.diagnostic.goto_prev({
-                        severity = get_highest_error_severity(),
+                        severity = utils.get_highest_error_severity(),
                     })
                 end,
             },
@@ -581,7 +563,7 @@ require("lazy").setup({
                 [[<leader>n]],
                 function()
                     vim.diagnostic.goto_next({
-                        severity = get_highest_error_severity(),
+                        severity = utils.get_highest_error_severity(),
                     })
                 end,
             },
@@ -829,8 +811,8 @@ require("lazy").setup({
                 }),
                 null_ls.builtins.formatting.prettier.with({
                     prefer_local = "node_modules/.bin",
-                    condition = function(utils)
-                        return utils.root_has_file("prettier.config.js")
+                    condition = function(util)
+                        return util.root_has_file("prettier.config.js")
                     end,
                 }),
             }
