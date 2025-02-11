@@ -234,7 +234,6 @@ require("lazy").setup({
                     "lspinfo",
                     "man",
                     "mason",
-                    "TelescopePrompt",
                     "Trouble",
                     "WhichKey",
                     "markdown",
@@ -286,7 +285,6 @@ require("lazy").setup({
             { '#',  [[#<Cmd>lua require('hlslens').start()<CR>]] },
             { 'g*', [[g*<Cmd>lua require('hlslens').start()<CR>]] },
             { 'g#', [[g#<Cmd>lua require('hlslens').start()<CR>]] },
-            -- { '<Leader>n', '<Cmd>noh<CR>' },
         },
     },
     {
@@ -586,147 +584,9 @@ require("lazy").setup({
                 end,
             },
             { "onsails/lspkind-nvim", lazy = true },
-            -- "nvim-telescope/telescope.nvim",
             "saghen/blink.cmp",
         },
     },
-    -- {
-    --     "nvim-telescope/telescope.nvim",
-    --     config = function()
-    --         local telescope = require("telescope")
-    --         telescope.setup({
-    --             defaults = {
-    --                 selection_caret = "  ",
-    --                 vimgrep_arguments = {
-    --                     "rg",
-    --                     "--vimgrep",
-    --                     "--no-heading",
-    --                     "--smart-case",
-    --                 },
-    --                 path_display = {
-    --                     truncate = 3,
-    --                 },
-    --             },
-    --             pickers = {
-    --                 buffers = {
-    --                     mappings = {
-    --                         n = {
-    --                             d = "delete_buffer",
-    --                         },
-    --                     },
-    --                 },
-    --             },
-    --         })
-
-    --         telescope.load_extension("fzf")
-
-    --         utils.map({
-    --             {
-    --                 "n",
-    --                 [[<leader>r]],
-    --                 function()
-    --                     require("telescope.builtin").resume({ initial_mode = "normal" })
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[<C-p>]],
-    --                 function()
-    --                     require("telescope.builtin").find_files({ hidden = true })
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[<leader>s]],
-    --                 function()
-    --                     require("telescope.builtin").buffers({
-    --                         show_all_buffers = true,
-    --                         sort_mru = true,
-    --                         ignore_current_buffer = true,
-    --                         initial_mode = "normal",
-    --                     })
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[<leader>/]],
-    --                 function()
-    --                     require("telescope.builtin").live_grep()
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[<leader>8]],
-    --                 function()
-    --                     require("telescope.builtin").grep_string({
-    --                         initial_mode = "normal",
-    --                     })
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[<leader><Space>/]],
-    --                 function()
-    --                     require("telescope.builtin").live_grep({ cwd = vim.fn.expand("%:h") })
-    --                 end,
-    --             },
-    --             -- { "n", [[<leader>d]], [[:lua require('telescope.builtin').find_files({search_dirs={'%:h'}})<cr>]] },
-    --             {
-    --                 "n",
-    --                 [[<leader>d]],
-    --                 function()
-    --                     require("telescope.builtin").find_files({
-    --                         search_dirs = vim.fn.expand("%:h"),
-    --                     })
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[<leader><C-r>]],
-    --                 function()
-    --                     require("telescope.builtin").registers()
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[<leader>g]],
-    --                 function()
-    --                     require("telescope.builtin").git_status({
-    --                         initial_mode = "normal",
-    --                         timeout = 100000,
-    --                     })
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[gd]],
-    --                 function()
-    --                     require("telescope.builtin").lsp_definitions({
-    --                         initial_mode = "normal",
-    --                     })
-    --                 end,
-    --             },
-    --             {
-    --                 "n",
-    --                 [[gr]],
-    --                 function()
-    --                     require("telescope.builtin").lsp_references({
-    --                         initial_mode = "normal",
-    --                     })
-    --                 end,
-    --             },
-    --         })
-    --     end,
-    --     dependencies = {
-    --         { "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
-    --         {
-    --             "nvim-tree/nvim-web-devicons",
-    --             opts = { default = true },
-    --         },
-    --         "nvim-lua/plenary.nvim",
-    --     },
-    --     cmd = { "Telescope" },
-    -- },
     {
         "nvim-treesitter/nvim-treesitter",
         build = ":TSUpdate",
