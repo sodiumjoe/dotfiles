@@ -566,6 +566,18 @@ require("lazy").setup({
                 end,
             },
             {
+                [[<leader><Space>n]],
+                function()
+                    vim.diagnostic.goto_next()
+                end,
+            },
+            {
+                [[<leader><Space>p]],
+                function()
+                    vim.diagnostic.goto_prev()
+                end,
+            },
+            {
                 [[<leader>q]],
                 "<cmd>TroubleToggle<cr>",
             },
