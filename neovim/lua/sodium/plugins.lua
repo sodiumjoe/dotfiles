@@ -887,9 +887,6 @@ require("lazy").setup({
             vim.g.vimwiki_hl_cb_checked = 1
             vim.g.vimwiki_listsyms = " ○◐●✓"
         end,
-        dependencies = {
-            "hrsh7th/nvim-cmp",
-        },
         keys = {
             { [[<leader>wp]], "<cmd>VimwikiDiaryPrevDay<cr>" },
             { [[<leader>wn]], "<Plug>VimwikiDiaryNextDay<cr>" },
