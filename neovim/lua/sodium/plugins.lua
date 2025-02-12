@@ -120,10 +120,10 @@ require("lazy").setup({
                 function()
                     Snacks.picker.grep_word({
                         hidden = true,
-                        on_show = function() vim.cmd.stopinsert() end
+                        on_show = function() vim.cmd.stopinsert() end,
                     })
                 end,
-                desc = "Find Files"
+                desc = "Find Files",
             },
             -- find
             {
@@ -133,7 +133,7 @@ require("lazy").setup({
                         on_show = function() vim.cmd.stopinsert() end,
                     })
                 end,
-                desc = "Git Status"
+                desc = "Git Status",
             },
             -- Grep
             { '<leader>s"', function() Snacks.picker.registers() end,                                               desc = "Registers" },
@@ -497,7 +497,7 @@ require("lazy").setup({
                                 config
                             )
                         end,
-                    }
+                    },
                 },
             }
 
@@ -788,7 +788,7 @@ require("lazy").setup({
 
             completion = {
                 menu = {
-                    border = 'rounded'
+                    border = 'rounded',
                 },
                 list = {
                     selection = { preselect = false, auto_insert = true },

@@ -29,7 +29,7 @@ max_line_length = 120
 table_separator_style = none
 
 #optional keep/never/always/smart
-trailing_table_separator = keep
+trailing_table_separator = smart
 
 # keep/remove/remove_table_only/remove_string_only
 call_arg_parentheses = keep
