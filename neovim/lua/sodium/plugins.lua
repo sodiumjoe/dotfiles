@@ -783,6 +783,7 @@ require("lazy").setup({
         opts = {
             keymap = {
                 preset = 'default',
+                ['<CR>'] = { 'accept', 'fallback' },
             },
 
             completion = {
@@ -790,7 +791,7 @@ require("lazy").setup({
                     border = 'rounded'
                 },
                 list = {
-                    selection = "auto_insert",
+                    selection = { preselect = false, auto_insert = true },
                 },
             },
 
