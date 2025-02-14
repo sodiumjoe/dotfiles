@@ -7,7 +7,7 @@
 [includeIf "gitdir:/Users/moon/stripe-b/"]
   path = /Users/moon/stripe/.gitconfig
 [includeIf "gitdir:/pay/src/"]
-  path = /home/moon/.stripe.gitconfig
+  path = /home/owner/.stripe.gitconfig
 
 
 [alias]
