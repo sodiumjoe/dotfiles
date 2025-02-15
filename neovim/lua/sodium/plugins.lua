@@ -136,34 +136,24 @@ require("lazy").setup({
                 desc = "Git Status",
             },
             -- Grep
-            { '<leader>s"', function() Snacks.picker.registers() end,                                               desc = "Registers" },
-            { "<leader>sa", function() Snacks.picker.autocmds() end,                                                desc = "Autocmds" },
-            { "<leader>sc", function() Snacks.picker.command_history() end,                                         desc = "Command History" },
-            { "<leader>sC", function() Snacks.picker.commands() end,                                                desc = "Commands" },
-            { "<leader>sd", function() Snacks.picker.diagnostics() end,                                             desc = "Diagnostics" },
-            { "<leader>sh", function() Snacks.picker.help() end,                                                    desc = "Help Pages" },
-            { "<leader>sH", function() Snacks.picker.highlights() end,                                              desc = "Highlights" },
-            { "<leader>sj", function() Snacks.picker.jumps() end,                                                   desc = "Jumps" },
-            { "<leader>sk", function() Snacks.picker.keymaps() end,                                                 desc = "Keymaps" },
-            { "<leader>sl", function() Snacks.picker.loclist() end,                                                 desc = "Location List" },
-            { "<leader>sM", function() Snacks.picker.man() end,                                                     desc = "Man Pages" },
-            { "<leader>sm", function() Snacks.picker.marks() end,                                                   desc = "Marks" },
-            { "<leader>r",  function() Snacks.picker.resume({ on_show = function() vim.cmd.stopinsert() end }) end, desc = "Resume" },
-            { "<leader>sq", function() Snacks.picker.qflist() end,                                                  desc = "Quickfix List" },
+            { '<leader>s"', function() Snacks.picker.registers() end,                                                    desc = "Registers" },
+            { "<leader>sa", function() Snacks.picker.autocmds() end,                                                     desc = "Autocmds" },
+            { "<leader>sc", function() Snacks.picker.command_history() end,                                              desc = "Command History" },
+            { "<leader>sC", function() Snacks.picker.commands() end,                                                     desc = "Commands" },
+            { "<leader>sd", function() Snacks.picker.diagnostics({ on_show = function() vim.cmd.stopinsert() end }) end, desc = "Diagnostics" },
+            { "<leader>sh", function() Snacks.picker.help() end,                                                         desc = "Help Pages" },
+            { "<leader>sH", function() Snacks.picker.highlights() end,                                                   desc = "Highlights" },
+            { "<leader>sj", function() Snacks.picker.jumps() end,                                                        desc = "Jumps" },
+            { "<leader>sk", function() Snacks.picker.keymaps() end,                                                      desc = "Keymaps" },
+            { "<leader>sl", function() Snacks.picker.loclist() end,                                                      desc = "Location List" },
+            { "<leader>sM", function() Snacks.picker.man() end,                                                          desc = "Man Pages" },
+            { "<leader>sm", function() Snacks.picker.marks() end,                                                        desc = "Marks" },
+            { "<leader>r",  function() Snacks.picker.resume({ on_show = function() vim.cmd.stopinsert() end }) end,      desc = "Resume" },
+            { "<leader>sq", function() Snacks.picker.qflist() end,                                                       desc = "Quickfix List" },
             -- LSP
-            { "gd",         function() Snacks.picker.lsp_definitions() end,                                         desc = "Goto Definition" },
-            { "gr",         function() Snacks.picker.lsp_references() end,                                          nowait = true,           desc = "References" },
+            { "gd",         function() Snacks.picker.lsp_definitions() end,                                              desc = "Goto Definition" },
+            { "gr",         function() Snacks.picker.lsp_references() end,                                               nowait = true,           desc = "References" },
         },
-    },
-    {
-        "folke/trouble.nvim",
-        dependencies = {
-            {
-                "nvim-tree/nvim-web-devicons",
-                opts = { default = true },
-            },
-        },
-        cmd = { "Trouble", "TroubleToggle" },
     },
     {
         "haya14busa/is.vim",
@@ -234,7 +224,6 @@ require("lazy").setup({
                     "lspinfo",
                     "man",
                     "mason",
-                    "Trouble",
                     "WhichKey",
                     "markdown",
                     "javascript",
@@ -578,10 +567,6 @@ require("lazy").setup({
                 end,
             },
             {
-                [[<leader>q]],
-                "<cmd>TroubleToggle<cr>",
-            },
-            {
                 [[<leader>f]],
                 function()
                     vim.lsp.buf.format({ timeout_ms = 30000 })
@@ -711,7 +696,6 @@ require("lazy").setup({
         dependencies = {
             "neovim/nvim-lspconfig",
             "nvim-lua/plenary.nvim",
-
         },
     },
     "rafamadriz/friendly-snippets",

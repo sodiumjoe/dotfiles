@@ -29,7 +29,6 @@
   "sodium.nvim": { "branch": "main", "commit": "a3a08fdcedd0ddfa2544c0823f3cd5ab52ef7496" },
   "statuscol.nvim": { "branch": "main", "commit": "a2a0e3ed55ba0f636ce0b2ccf61bca4050edd288" },
   "tiny-devicons-auto-colors.nvim": { "branch": "main", "commit": "51f548421f8a74680eff27d283c9d5ea6e8d0074" },
-  "trouble.nvim": { "branch": "main", "commit": "6f380b8826fb819c752c8fd7daaee9ef96d4c689" },
   "vim-automkdir": { "branch": "master", "commit": "dec143a8d9b266f73a42c63ede85bfc26280f79d" },
   "vim-commentary": { "branch": "master", "commit": "64a654ef4a20db1727938338310209b6a63f60c9" },
   "vim-dirvish": { "branch": "master", "commit": "5d1d1ef45c6161af14c7d3d3097057e8fb5ac257" },
