@@ -287,15 +287,35 @@ bindkey '^n' autosuggest-accept
 export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
-#
+
+fetch_remotes() {
+  local list=$(\
+    pay remote list --raw \
+    | jq -r '
+      sort_by(.last_accessed)
+      | reverse
+      | .[] as {$name, $status, $last_accessed_human_readable, $emoji, $go_dev_url}
+      | ["[" + $emoji + "]" + $name, "[\($status)]", $go_dev_url, $last_accessed_human_readable]
+      | @tsv
+    '\
+    | column -t \
+  )
+  print $list
+}
+
 remotes() {
-  local list remote
-  list=$(pay remote list --raw | jq -r 'sort_by(.last_accessed) | reverse | .[] as {$name, $status, $last_accessed, spec: {source_specs: [{$git_ref}]}} | $last_accessed | localtime | strflocaltime("%c") as $last | [$name, "[\($status)]", "\($git_ref)", $last] | @tsv' | column -t)
-  remote=$(echo "$list" | fzf)
+  remote=$(fetch_remotes | fzf)
   if [ ! -z $remote ]; then
-    remote=$(echo "$remote" | cut -w -f 1)
+    remote=$(echo "$remote" | cut -w -f 1 | cut -d ] -f 2)
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
       tmux unnest
+  fi
+}
+
+godev() {
+  remote=$(fetch_remotes | fzf)
+  if [ ! -z $remote ]; then
+    echo "$remote" | cut -w -f 3
   fi
 }
 
