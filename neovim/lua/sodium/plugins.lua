@@ -351,7 +351,7 @@ require("lazy").setup({
 
             configs.bazel = {
                 default_config = {
-                    cmd = { "scripts/dev/bazel-lsp" },
+                    cmd = { "pay", "exec", "scripts/dev/bazel-lsp" },
                     filetypes = { "star", "bzl", "BUILD.bazel" },
                     root_dir = utils.find_git_ancestor,
                 },
