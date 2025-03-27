@@ -655,8 +655,8 @@ require("lazy").setup({
 
             local sources = {
                 null_ls.builtins.formatting.buildifier.with({
-                    condition = function()
-                        return utils.root_has_file({ "scripts/dev/buildifier" })
+                    condition = function(util)
+                        return util.root_has_file({ "scripts/dev/buildifier" })
                     end,
                     command = "scripts/dev/buildifier",
                 }),
