@@ -268,7 +268,7 @@ require("lazy").setup({
             })
         end,
         keys = {
-            { 'n',  [[<Cmd>execute('normal! ' . v:count1 . 'n')<CR><Cmd>lua require('hlslens').start()<CR>]] },
+            { 'n',  [[<Cmd>execute('normal! ' . v:count1 . 'n')<CR><Cmd>/ua require('hlslens').start()<CR>]] },
             { 'N',  [[<Cmd>execute('normal! ' . v:count1 . 'N')<CR><Cmd>lua require('hlslens').start()<CR>]] },
             { '*',  [[*<Cmd>lua require('hlslens').start()<CR>]] },
             { '#',  [[#<Cmd>lua require('hlslens').start()<CR>]] },
@@ -276,35 +276,35 @@ require("lazy").setup({
             { 'g#', [[g#<Cmd>lua require('hlslens').start()<CR>]] },
         },
     },
-    {
-        "L3MON4D3/LuaSnip",
-        -- follow latest release.
-        version = "v2.*", -- Replace <CurrentMajor> by the latest released major (first number of latest release)
-        -- install jsregexp (optional!).
-        -- build = "make install_jsregexp",
-        dependencies = {
-            { "rafamadriz/friendly-snippets", lazy = true },
-        },
-        config = function()
-            require("luasnip.loaders.from_vscode").lazy_load()
-            local ls = require("luasnip")
-            local s = ls.snippet
-            local t = ls.text_node
-            local i = ls.insert_node
-            local f = ls.function_node
-            ls.add_snippets("rust", {
-                s("debug", {
-                    t([[tracing::debug!("]]),
-                    i(1),
-                    t([[: {:#?}", ]]),
-                    f(function(args)
-                        return args[1][1]
-                    end, { 1 }),
-                    t([[);]]),
-                }),
-            })
-        end,
-    },
+    -- {
+    --     "L3MON4D3/p/LuaSnip",
+    --     -- follow latest release.
+    --     version = "v2.*", -- Replace <CurrentMajor> by the latest released major (first number of latest release)
+    --     -- install jsregexp (optional!).
+    --     -- build = "make install_jsregexp",
+    --     dependencies = {
+    --         { "rafamadriz/friendly-snippets", lazy = true },
+    --     },
+    --     config = function()
+    --         require("luasnip.loaders.from_vscode").lazy_load()
+    --         local ls = require("luasnip")
+    --         local s = ls.snippet
+    --         local t = ls.text_node
+    --         local i = ls.insert_node
+    --         local f = ls.function_node
+    --         ls.add_snippets("rust", {
+    --             s("debug", {
+    --                 t([[tracing::debug!("]]),
+    --                 i(1),
+    --                 t([[: {:#?}", ]]),
+    --                 f(function(args)
+    --                     return args[1][1]
+    --                 end, { 1 }),
+    --                 t([[);]]),
+    --             }),
+    --         })
+    --     end,
+    -- },
     {
         "luukvbaal/statuscol.nvim",
         init = function()
@@ -365,6 +365,7 @@ require("lazy").setup({
             vim.diagnostic.config({
                 signs = { priority = 11 },
                 virtual_text = false,
+                virtual_lines = true,
                 update_in_insert = false,
                 float = {
                     focusable = vim.g.popup_opts.focusable,
@@ -383,10 +384,6 @@ require("lazy").setup({
                 local hl = "DiagnosticSign" .. type
                 vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
             end
-
-            vim.lsp.handlers["textDocument/hover"] = vim.lsp.with(vim.lsp.handlers.hover, vim.g.popup_opts)
-            vim.lsp.handlers["textDocument/signatureHelp"] =
-                vim.lsp.with(vim.lsp.handlers.signature_help, vim.g.popup_opts)
 
             local on_attach = function(client, bufnr)
                 lsp_status.on_attach(client)
@@ -460,7 +457,7 @@ require("lazy").setup({
                         },
                     },
                     handlers = {
-                        ["textDocument/publishDiagnostics"] = function(_, result, ctx, config)
+                        ["textDocument/publishDiagnostics"] = function(_, result, ctx)
                             if result.diagnostics == nil then return end
                             -- ignore some tsserver diagnostics
                             local idx = 1
@@ -482,8 +479,7 @@ require("lazy").setup({
                             vim.lsp.diagnostic.on_publish_diagnostics(
                                 _,
                                 result,
-                                ctx,
-                                config
+                                ctx
                             )
                         end,
                     },
@@ -533,7 +529,7 @@ require("lazy").setup({
         end,
         keys = {
             { "gD",           vim.lsp.buf.declaration },
-            { "K",            vim.lsp.buf.hover },
+            { "K",            function() vim.lsp.buf.hover(vim.g.popup_opts) end },
             { "gi",           vim.lsp.buf.implementation },
             { [[<leader>D]],  vim.lsp.buf.type_definition },
             { [[<leader>ca]], vim.lsp.buf.code_action },
@@ -541,7 +537,8 @@ require("lazy").setup({
             {
                 [[<leader>p]],
                 function()
-                    vim.diagnostic.goto_prev({
+                    vim.diagnostic.jump({
+                        count = 1,
                         severity = utils.get_highest_error_severity(),
                     })
                 end,
@@ -549,7 +546,8 @@ require("lazy").setup({
             {
                 [[<leader>n]],
                 function()
-                    vim.diagnostic.goto_next({
+                    vim.diagnostic.jump({
+                        count = -1,
                         severity = utils.get_highest_error_severity(),
                     })
                 end,
@@ -557,13 +555,13 @@ require("lazy").setup({
             {
                 [[<leader><Space>n]],
                 function()
-                    vim.diagnostic.goto_next()
+                    vim.diagnostic.jump({ count = 1 })
                 end,
             },
             {
                 [[<leader><Space>p]],
                 function()
-                    vim.diagnostic.goto_prev()
+                    vim.diagnostic.jump({ count = -1 })
                 end,
             },
             {
@@ -760,7 +758,7 @@ require("lazy").setup({
         dependencies = 'rafamadriz/friendly-snippets',
 
         -- use a release tag to download pre-built binaries
-        version = 'v0.*',
+        version = 'v1.*',
 
         ---@module 'blink.cmp'
         ---@type blink.cmp.Config
@@ -769,16 +767,15 @@ require("lazy").setup({
                 preset = 'default',
                 ['<CR>'] = { 'accept', 'fallback' },
             },
-
             completion = {
                 menu = {
                     border = 'rounded',
+                    auto_show = true,
                 },
                 list = {
                     selection = { preselect = false, auto_insert = true },
                 },
             },
-
         },
     },
     {
