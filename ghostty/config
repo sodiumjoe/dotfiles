@@ -16,5 +16,5 @@ macos-titlebar-style = hidden
 command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
 initial-command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
 
-keybind = cmd+ctrl+j=text:\x01n
-keybind = cmd+ctrl+k=text:\x01p
+keybind = ctrl+tab=text:\x01n
+keybind = shift+ctrl+tab=text:\x01p
