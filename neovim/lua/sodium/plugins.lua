@@ -589,6 +589,7 @@ require("lazy").setup({
                 "markdown",
                 "markdown_inline",
                 "python",
+                "regex",
                 "ruby",
                 "rust",
                 "starlark",
