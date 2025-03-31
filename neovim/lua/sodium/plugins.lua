@@ -488,27 +488,17 @@ require("lazy").setup({
 
             if utils.is_executable("lua-language-server") then
                 servers.lua_ls = {
-                    settings = {
-                        Lua = {
+                    on_init = function(client)
+                        client.config.settings.Lua = vim.tbl_deep_extend('force', client.config.settings.Lua or {}, {
                             runtime = {
-                                -- Tell the language server which version of Lua you're using (most likely LuaJIT in the case of Neovim)
-                                version = "LuaJIT",
-                            },
-                            diagnostics = {
-                                -- Get the language server to recognize the `vim` global
-                                globals = { "vim" },
+                                version = 'LuaJIT',
                             },
                             workspace = {
-                                -- Make the server aware of Neovim runtime files
+                                checkThirdParty = false,
                                 library = vim.api.nvim_get_runtime_file("", true),
-                                checkThirdParty = false, -- THIS IS THE IMPORTANT LINE TO ADD
                             },
-                            -- Do not send telemetry data containing a randomized but unique identifier
-                            telemetry = {
-                                enable = false,
-                            },
-                        },
-                    },
+                        })
+                    end,
                 }
             end
 
