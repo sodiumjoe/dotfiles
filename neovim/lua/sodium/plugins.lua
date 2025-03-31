@@ -388,7 +388,7 @@ require("lazy").setup({
             local on_attach = function(client, bufnr)
                 lsp_status.on_attach(client)
 
-                if client.supports_method("textDocument/formatting") then
+                if client:supports_method("textDocument/formatting") then
                     vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
                     vim.api.nvim_create_autocmd("BufWritePre", {
                         group = autoformat_augroup,
@@ -669,7 +669,7 @@ require("lazy").setup({
                     return not vim.api.nvim_buf_get_name(bufnr):match("^fugitive://")
                 end,
                 on_attach = function(client, bufnr)
-                    if client.supports_method("textDocument/formatting") then
+                    if client:supports_method("textDocument/formatting") then
                         vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
                         vim.api.nvim_create_autocmd("BufWritePre", {
                             group = autoformat_augroup,
