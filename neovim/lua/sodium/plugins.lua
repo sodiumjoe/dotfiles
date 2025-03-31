@@ -378,7 +378,21 @@ require("lazy").setup({
             configs.vtsls = require("vtsls").lspconfig
 
             vim.diagnostic.config({
-                signs = { priority = 11 },
+                signs = {
+                    { priority = 11 },
+                    text = {
+                        [vim.diagnostic.severity.ERROR] = utils.icons.Error,
+                        [vim.diagnostic.severity.WARN] = utils.icons.Warn,
+                        [vim.diagnostic.severity.INFO] = utils.icons.Info,
+                        [vim.diagnostic.severity.HINT] = utils.icons.Hint,
+                    },
+                    numhl = {
+                        [vim.diagnostic.severity.ERROR] = "",
+                        [vim.diagnostic.severity.WARN] = "",
+                        [vim.diagnostic.severity.HINT] = "",
+                        [vim.diagnostic.severity.INFO] = "",
+                    },
+                },
                 virtual_text = false,
                 virtual_lines = true,
                 update_in_insert = false,
