@@ -94,22 +94,24 @@ end
 
 local function start_timer()
     if timer == nil then
-        timer = vim.loop.new_timer()
-        timer:start(
-            0,
-            100,
-            vim.schedule_wrap(function()
-                if lsp_progress() then
-                    spinner_index = (spinner_index + 1) % #utils.spinner_frames
-                    redraw.redraw()
-                elseif timer then
-                    spinner_index = 1
-                    timer:close()
-                    timer = nil
-                    redraw.redraw()
-                end
-            end)
-        )
+        timer = vim.uv.new_timer()
+        if timer ~= nil then
+            timer:start(
+                0,
+                100,
+                vim.schedule_wrap(function()
+                    if lsp_progress() then
+                        spinner_index = (spinner_index + 1) % #utils.spinner_frames
+                        redraw.redraw()
+                    elseif timer then
+                        spinner_index = 1
+                        timer:close()
+                        timer = nil
+                        redraw.redraw()
+                    end
+                end)
+            )
+        end
     end
 end
 
@@ -130,7 +132,7 @@ vim.lsp.handlers["$/progress"] = function(_, msg, info)
 end
 
 -- Templated off of https://github.com/sorbet/sorbet/blob/23836cbded86135219da1b204d79675a1615cc49/vscode_extension/src/SorbetStatusBarEntry.ts#L119
-vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context, config)
+vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context)
     if err ~= nil then
         error(err)
         return
@@ -142,12 +144,12 @@ vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context, config
             title = result.description,
         },
     }
-    vim.lsp.handlers["$/progress"](err, message, context, config)
+    vim.lsp.handlers["$/progress"](err, message, context)
 end
 
 local function lsp_status()
     local bufnr = 0
-    if #vim.lsp.buf_get_clients(bufnr) == 0 then
+    if #vim.lsp.get_clients({ bufnr = bufnr }) == 0 then
         return nil
     end
     local buf_diagnostics = diagnostics(bufnr) or nil
@@ -210,7 +212,7 @@ local function get_left_segment(active, standard_filetype)
     return table.concat(left_segment_items, padding)
 end
 
-local function get_right_segment(active, standard_filetype)
+local function get_right_segment(_, standard_filetype)
     if not standard_filetype then
         return nil
     end
