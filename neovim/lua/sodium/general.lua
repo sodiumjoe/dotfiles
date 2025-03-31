@@ -62,7 +62,7 @@ utils.augroup("RestoreCursorPos", { clear = true })("BufReadPost", {
 g.path = "."
 o.suffixesadd = ".js"
 
-vim.api.nvim_exec(
+vim.api.nvim_exec2(
     [[
   function! LoadMainNodeModule(fname)
     let nodeModules = "./node_modules/"
@@ -77,7 +77,7 @@ vim.api.nvim_exec(
 
   set includeexpr=LoadMainNodeModule(v:fname)
 ]],
-    false
+    {}
 )
 
 local remote_stripe_dir = "/pay/src/"
@@ -96,7 +96,7 @@ local function get_sg_url()
     if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
         local path_with_repo = string.gsub(full_path, stripe_dir, "")
         local i, j = string.find(path_with_repo, "^.-/")
-        local repo = string.sub(path_with_repo, i, j - 1)
+        local repo = string.sub(path_with_repo, i or 0, j - 1)
         local path = string.sub(path_with_repo, j + 1)
         return string.format(
             [[https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/%s/-/blob/%s?L%s]],
