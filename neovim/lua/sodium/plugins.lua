@@ -41,6 +41,10 @@ require("lazy").setup({
         event = "BufWritePre",
     },
     {
+        "catgoose/nvim-colorizer.lua",
+        event = "BufReadPre",
+    },
+    {
         "davidosomething/format-ts-errors.nvim",
         config = function()
             require("format-ts-errors").setup({
@@ -391,11 +395,6 @@ require("lazy").setup({
                 },
             })
 
-            for type, icon in pairs(utils.icons) do
-                local hl = "DiagnosticSign" .. type
-                vim.fn.sign_define(hl, { text = icon, texthl = hl, numhl = "" })
-            end
-
             local on_attach = function(client, bufnr)
                 lsp_status.on_attach(client)
 
@@ -642,12 +641,6 @@ require("lazy").setup({
         cmd = { "TSPlaygroundToggle" },
     },
     "nvim-treesitter/nvim-treesitter-context",
-    {
-        "norcalli/nvim-colorizer.lua",
-        config = function()
-            require("colorizer").setup()
-        end,
-    },
     {
         "nvimtools/none-ls.nvim",
         config = function()
