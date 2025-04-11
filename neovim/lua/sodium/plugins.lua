@@ -256,35 +256,6 @@ require("lazy").setup({
             { 'g#', [[g#<Cmd>lua require('hlslens').start()<CR>]] },
         },
     },
-    -- {
-    --     "L3MON4D3/p/LuaSnip",
-    --     -- follow latest release.
-    --     version = "v2.*", -- Replace <CurrentMajor> by the latest released major (first number of latest release)
-    --     -- install jsregexp (optional!).
-    --     -- build = "make install_jsregexp",
-    --     dependencies = {
-    --         { "rafamadriz/friendly-snippets", lazy = true },
-    --     },
-    --     config = function()
-    --         require("luasnip.loaders.from_vscode").lazy_load()
-    --         local ls = require("luasnip")
-    --         local s = ls.snippet
-    --         local t = ls.text_node
-    --         local i = ls.insert_node
-    --         local f = ls.function_node
-    --         ls.add_snippets("rust", {
-    --             s("debug", {
-    --                 t([[tracing::debug!("]]),
-    --                 i(1),
-    --                 t([[: {:#?}", ]]),
-    --                 f(function(args)
-    --                     return args[1][1]
-    --                 end, { 1 }),
-    --                 t([[);]]),
-    --             }),
-    --         })
-    --     end,
-    -- },
     {
         "luukvbaal/statuscol.nvim",
         init = function()
