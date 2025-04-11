@@ -424,10 +424,7 @@ require("lazy").setup({
                         end,
                     },
                 },
-            }
-
-            if utils.is_executable("lua-language-server") then
-                servers.lua_ls = {
+                lua_ls = {
                     on_init = function(client)
                         client.config.settings.Lua = vim.tbl_deep_extend('force', client.config.settings.Lua or {}, {
                             runtime = {
@@ -439,8 +436,8 @@ require("lazy").setup({
                             },
                         })
                     end,
-                }
-            end
+                },
+            }
 
             for lsp, options in pairs(servers) do
                 local defaults = {
