@@ -832,18 +832,13 @@ require("lazy").setup({
     },
     "yioneko/nvim-vtsls",
 }, {
-    defaults = {
-        lazy = false,
-    },
     -- leave nil when passing the spec as the first argument to setup()
-    spec = nil, ---@type LazySpec
     lockfile = "~/.dotfiles/lazy-lock.json",
     dev = {
         -- directory where you store your local plugin projects
         path = "~/home",
         -- --@type string[] plugins that match these patterns will use your local versions instead of being fetched from GitHub
         -- patterns = { "sodiumjoe" }, -- For example {"folke"}
-        fallback = false, -- Fallback to git when local plugin doesn't exist
     },
     install = {
         -- install missing plugins on startup. This doesn't increase startup time.
@@ -852,17 +847,10 @@ require("lazy").setup({
         colorscheme = { "sodium" },
     },
     ui = {
-        -- a number <1 is a percentage., >1 is a fixed size
-        size = { width = 0.8, height = 0.8 },
-        wrap = true, -- wrap the lines in the ui
         -- The border to use for the UI window. Accepts same border values as |nvim_open_win()|.
         border = "rounded",
     },
     performance = {
-        cache = {
-            enabled = true,
-        },
-        reset_packpath = true,                -- reset the package path to improve startup time
         rtp = {
             paths = { "~/.dotfiles/neovim" }, -- add any custom paths here that you want to includes in the rtp
         },
