@@ -237,26 +237,6 @@ require("lazy").setup({
         },
     },
     {
-        "kevinhwang91/nvim-hlslens",
-        init = function()
-            vim.o.hlsearch = true
-        end,
-        config = function()
-            require("hlslens").setup({
-                calm_down = true,
-                nearest_only = false,
-            })
-        end,
-        keys = {
-            { 'n',  [[<Cmd>execute('normal! ' . v:count1 . 'n')<CR><Cmd>/ua require('hlslens').start()<CR>]] },
-            { 'N',  [[<Cmd>execute('normal! ' . v:count1 . 'N')<CR><Cmd>lua require('hlslens').start()<CR>]] },
-            { '*',  [[*<Cmd>lua require('hlslens').start()<CR>]] },
-            { '#',  [[#<Cmd>lua require('hlslens').start()<CR>]] },
-            { 'g*', [[g*<Cmd>lua require('hlslens').start()<CR>]] },
-            { 'g#', [[g#<Cmd>lua require('hlslens').start()<CR>]] },
-        },
-    },
-    {
         "luukvbaal/statuscol.nvim",
         init = function()
             vim.diagnostic.config({ severity_sort = true })
