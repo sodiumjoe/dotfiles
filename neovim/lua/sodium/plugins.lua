@@ -1,8 +1,3 @@
-vim.g.popup_opts = {
-    focusable = false,
-    border = "rounded",
-}
-
 -- disable netrw so dirvish will work on startup
 vim.g.loaded_netrw = 1
 vim.g.loaded_netrwPlugin = 1
@@ -313,8 +308,7 @@ require("lazy").setup({
                 virtual_lines = true,
                 update_in_insert = false,
                 float = {
-                    focusable = vim.g.popup_opts.focusable,
-                    border = vim.g.popup_opts.border,
+                    focusable = false,
                     format = function(diagnostic)
                         local str = string.format("[%s] %s", diagnostic.source, diagnostic.message)
                         if diagnostic.code then
@@ -456,7 +450,7 @@ require("lazy").setup({
         end,
         keys = {
             { "gD",           vim.lsp.buf.declaration },
-            { "K",            function() vim.lsp.buf.hover(vim.g.popup_opts) end },
+            { "K",            function() vim.lsp.buf.hover({ focusable = false }) end },
             { "gi",           vim.lsp.buf.implementation },
             { [[<leader>D]],  vim.lsp.buf.type_definition },
             { [[<leader>ca]], vim.lsp.buf.code_action },
@@ -697,7 +691,6 @@ require("lazy").setup({
             },
             completion = {
                 menu = {
-                    border = 'rounded',
                     auto_show = true,
                 },
                 list = {
@@ -822,10 +815,6 @@ require("lazy").setup({
         missing = true,
         -- try to load one of these colorschemes when starting an installation during startup
         colorscheme = { "sodium" },
-    },
-    ui = {
-        -- The border to use for the UI window. Accepts same border values as |nvim_open_win()|.
-        border = "rounded",
     },
     performance = {
         rtp = {

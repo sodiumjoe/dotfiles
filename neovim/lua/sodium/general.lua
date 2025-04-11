@@ -44,6 +44,7 @@ o.signcolumn = [[number]]
 w.breakindent = true
 g.fillchars = [[vert:│,eob:⌁]]
 g.splitkeep = "screen"
+o.winborder = "rounded"
 
 -- misc
 -- ====
