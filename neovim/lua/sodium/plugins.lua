@@ -115,13 +115,6 @@ require("lazy").setup({
                         },
                     },
                 },
-                win = {
-                    list = {
-                        keys = {
-                            ["a"] = "focus_input",
-                        },
-                    },
-                },
             },
             quickfile = { enabled = true },
             scroll = { enabled = true },
