@@ -334,11 +334,6 @@ remote_url() {
 }
 
 if [ -d ~/stripe ]; then
-  source ~/stripe/space-commander/bin/sc-aliases
-
-  . /Users/moon/.rbenvrc
-  . ~/.stripe-repos.sh
-
   export GOPATH="${HOME}/stripe/go"
   export CARGO_HOME="${HOME}/stripe/.cargo"
   export RUSTUP_HOME=~/stripe/.rustup
