@@ -363,8 +363,9 @@ autoload -Uz bashcompinit; bashcompinit
 # Feel free to add your customizations in this
 # file (~/.bash_profile) after the Stripe config
 # is sourced.
-if [[ -f ~/.stripe/shellinit/bash_profile ]]; then
-  source ~/.stripe/shellinit/bash_profile
+__STRIPE_SHELLINIT_ZSH_SKIP_COMPINIT=1
+if [[ -f ~/.stripe/shellinit/zshrc ]]; then
+  source ~/.stripe/shellinit/zshrc
 fi
 ### END STRIPE
 
