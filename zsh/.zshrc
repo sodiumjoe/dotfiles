@@ -49,6 +49,8 @@ WORDCHARS=${WORDCHARS//[\/]}
 # Module configuration
 # --------------------
 
+zstyle ':zim:zmodule' use 'degit'
+
 #
 # completion
 #
