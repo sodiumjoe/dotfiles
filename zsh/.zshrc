@@ -49,8 +49,6 @@ WORDCHARS=${WORDCHARS//[\/]}
 # Module configuration
 # --------------------
 
-zstyle ':zim:zmodule' use 'degit'
-
 #
 # completion
 #
@@ -326,7 +324,7 @@ remote() {
   remote="$1"
   branch="$(whoami)/$remote"
 
-  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready -s manage -s manage_vite && \
+  pay remote new "$1" -r "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready -s admin && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
 }
