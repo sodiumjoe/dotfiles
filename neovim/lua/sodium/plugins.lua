@@ -482,7 +482,7 @@ require("lazy").setup({
                 function()
                     vim.diagnostic.jump({
                         count = 1,
-                        severity = utils.get_highest_error_severity(),
+                        severity = vim.diagnostic.severity.ERROR,
                     })
                 end,
             },
@@ -491,20 +491,30 @@ require("lazy").setup({
                 function()
                     vim.diagnostic.jump({
                         count = -1,
-                        severity = utils.get_highest_error_severity(),
+                        severity = vim.diagnostic.severity.ERROR,
                     })
                 end,
             },
             {
                 [[<leader><Space>n]],
                 function()
-                    vim.diagnostic.jump({ count = 1 })
+                    vim.diagnostic.jump({
+                        count = 1,
+                        severity = {
+                            max = vim.diagnostic.severity.WARN,
+                        },
+                    })
                 end,
             },
             {
                 [[<leader><Space>p]],
                 function()
-                    vim.diagnostic.jump({ count = -1 })
+                    vim.diagnostic.jump({
+                        count = -1,
+                        severity = {
+                            max = vim.diagnostic.severity.WARN,
+                        },
+                    })
                 end,
             },
             {
