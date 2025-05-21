@@ -254,7 +254,7 @@ require("lazy").setup({
                 segments = {
                     {
                         text = { builtin.lnumfunc },
-                        sign = { name = { "Diagnostic" } },
+                        sign = { namespace = { "diagnostic" } },
                     },
                     { text = { " " } },
                     {
@@ -302,7 +302,7 @@ require("lazy").setup({
 
             vim.diagnostic.config({
                 signs = {
-                    { priority = 11 },
+                    priority = 11,
                     text = {
                         [vim.diagnostic.severity.ERROR] = utils.icons.Error,
                         [vim.diagnostic.severity.WARN] = utils.icons.Warn,
