@@ -317,7 +317,17 @@ require("lazy").setup({
                     },
                 },
                 virtual_text = false,
-                virtual_lines = true,
+                underline = {
+                    severity = {
+                        max = vim.diagnostic.severity.WARN,
+                    },
+                },
+                virtual_lines = {
+                    severity = {
+                        min = vim.diagnostic.severity.ERROR,
+                        format = utils.virtual_lines_format,
+                    },
+                },
                 update_in_insert = false,
                 float = {
                     focusable = false,
