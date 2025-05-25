@@ -504,7 +504,7 @@ require("lazy").setup({
                 [[<leader>p]],
                 function()
                     vim.diagnostic.jump({
-                        count = 1,
+                        count = -1,
                         severity = vim.diagnostic.severity.ERROR,
                     })
                 end,
@@ -513,7 +513,7 @@ require("lazy").setup({
                 [[<leader>n]],
                 function()
                     vim.diagnostic.jump({
-                        count = -1,
+                        count = 1,
                         severity = vim.diagnostic.severity.ERROR,
                     })
                 end,
