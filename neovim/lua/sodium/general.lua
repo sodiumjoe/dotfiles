@@ -49,6 +49,8 @@ o.winborder = "rounded"
 -- misc
 -- ====
 
+vim.g.loaded_perl_provider = 0
+
 utils.augroup("AutoCloseQFLL", { clear = true })("FileType", {
     pattern = { "qf" },
     command = "nnoremap <silent> <buffer> <CR> <CR>:cclose<CR>:lclose<CR>",
