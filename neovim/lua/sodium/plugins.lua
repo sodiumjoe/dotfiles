@@ -390,6 +390,27 @@ require("lazy").setup({
                         vim.api.nvim_create_autocmd("BufWritePre", { buffer = bufnr, command = "EslintFixAll" })
                         on_attach(client, bufnr)
                     end,
+                    handlers = {
+                        ["textDocument/publishDiagnostics"] = function(_, result, ctx)
+                            if result.diagnostics == nil then return end
+                            -- ignore prettier diagnostics since it autofixes anyway
+                            local idx = 1
+                            while idx <= #result.diagnostics do
+                                local entry = result.diagnostics[idx]
+                                if entry.code == "prettier/prettier" then
+                                    table.remove(result.diagnostics, idx)
+                                else
+                                    idx = idx + 1
+                                end
+                            end
+
+                            vim.lsp.diagnostic.on_publish_diagnostics(
+                                _,
+                                result,
+                                ctx
+                            )
+                        end,
+                    },
                 },
                 flow = {},
                 vtsls = {
