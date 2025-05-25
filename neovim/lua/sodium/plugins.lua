@@ -327,8 +327,8 @@ require("lazy").setup({
                 virtual_lines = {
                     severity = {
                         min = vim.diagnostic.severity.ERROR,
-                        format = utils.virtual_lines_format,
                     },
+                    format = utils.virtual_lines_format,
                 },
                 update_in_insert = false,
                 float = {
