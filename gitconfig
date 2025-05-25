@@ -55,14 +55,6 @@
   showBranch = auto
   interactive = auto
   grep = auto
-[color "status"]
-  header = black bold
-  branch = cyan
-  nobranch = red
-  unmerged = red
-  untracked = cyan
-  added = green
-  changed = red bold
 [color "diff"]
   meta = red bold
   frag = black bold
