@@ -9,7 +9,6 @@ files=(\
   "curlrc"\
   "cvimrc"\
   "gitconfig"\
-  "hammerspoon"\
   "ignore"\
   "inputrc"\
   "zshenv"\
@@ -28,6 +27,7 @@ done
 
 xdg_files=(\
   "alacritty"\
+  "hammerspoon"\
   "karabiner"\
   "rg"\
   "tmux"\
