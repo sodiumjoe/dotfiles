@@ -1,7 +1,7 @@
-font-family = "TX-02"
-font-family-bold = "TX-02 Bold"
-font-family-italic = "TX-02 Oblique"
-font-family-bold-italic = "TX-02 Bold Oblique"
+font-family = "BerkeleyMono Nerd Font"
+font-family-bold = "BerkeleyMono Nerd Font"
+font-family-italic = "BerkeleyMono Nerd Font"
+font-family-bold-italic = "BerkeleyMono Nerd Font"
 
 font-size = 13
 font-thicken = true
