@@ -27,6 +27,7 @@ done
 
 xdg_files=(\
   "alacritty"\
+  "ghostty"\
   "hammerspoon"\
   "karabiner"\
   "rg"\
