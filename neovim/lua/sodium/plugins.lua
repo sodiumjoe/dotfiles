@@ -37,40 +37,35 @@ require("lazy").setup({
     },
     {
         "catgoose/nvim-colorizer.lua",
-        config = function()
-            require('colorizer').setup()
-        end,
+        opts = {},
     },
     {
         "davidosomething/format-ts-errors.nvim",
-        config = function()
-            require("format-ts-errors").setup({
-                add_markdown = true,    -- wrap output with markdown ```ts ``` markers
-                start_indent_level = 0, -- initial indent
-            })
-        end,
+        opts = {
+            add_markdown = true,    -- wrap output with markdown ```ts ``` markers
+            start_indent_level = 0, -- initial indent
+        },
+        lazy = true,
     },
     {
         "echasnovski/mini.move",
         version = "*",
-        config = function()
-            require("mini.move").setup({
-                -- Module mappings. Use `''` (empty string) to disable one.
-                mappings = {
-                    -- Move visual selection in Visual mode. Defaults are Alt (Meta) + hjkl.
-                    left = "",
-                    right = "",
-                    down = "<C-j>",
-                    up = "<C-k>",
+        opts = {
+            -- Module mappings. Use `''` (empty string) to disable one.
+            mappings = {
+                -- Move visual selection in Visual mode. Defaults are Alt (Meta) + hjkl.
+                left = "",
+                right = "",
+                down = "<C-j>",
+                up = "<C-k>",
 
-                    -- Move current line in Normal mode
-                    line_left = "",
-                    line_right = "",
-                    line_down = "<C-j>",
-                    line_up = "<C-k>",
-                },
-            })
-        end,
+                -- Move current line in Normal mode
+                line_left = "",
+                line_right = "",
+                line_down = "<C-j>",
+                line_up = "<C-k>",
+            },
+        },
         keys = { "<C-j>", "<C-k>", "v", "V", "<C-v>" },
         dependencies = {
             { "echasnovski/mini.nvim", version = "*" },
@@ -247,9 +242,6 @@ require("lazy").setup({
     },
     {
         "luukvbaal/statuscol.nvim",
-        init = function()
-            vim.diagnostic.config({ severity_sort = true })
-        end,
         config = function()
             local builtin = require("statuscol.builtin")
             require("statuscol").setup({
@@ -668,48 +660,10 @@ require("lazy").setup({
         },
     },
     "rafamadriz/friendly-snippets",
-    {
-        "rachartier/tiny-devicons-auto-colors.nvim",
-        dependencies = { "nvim-tree/nvim-web-devicons" },
-        event = "VeryLazy",
-        config = function()
-            require("tiny-devicons-auto-colors").setup({
-                colors = {
-                    "#3C4C55",
-                    "#556873",
-                    "#6A7D89",
-                    "#899BA6",
-                    "#C5D4DD",
-                    "#E6EEF3",
-                    "#A76969",
-                    "#DF8C8C",
-                    "#E7A9A9",
-                    "#F2C38F",
-                    "#F5D2AB",
-                    "#DADA93",
-                    "#93B481",
-                    "#A8CE93",
-                    "#BEDAAE",
-                    "#93B9E8",
-                    "#83AFE5",
-                    "#7399C8",
-                    "#7FC1CA",
-                    "#9A93E1",
-                    "#B3AEE8",
-                    "#D18EC2",
-                    "#DDAAD1",
-                    "#bb0099",
-                    "#d5508f",
-                },
-            })
-        end,
-    },
     "rhysd/conflict-marker.vim",
     {
         "smoka7/hop.nvim",
-        config = function()
-            require("hop").setup({ create_hl_autocmd = false })
-        end,
+        opts = { create_hl_autocmd = false },
         keys = {
             {
                 [[<leader>ew]],
