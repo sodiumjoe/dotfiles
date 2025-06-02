@@ -27,9 +27,11 @@ require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
         cmd = { "Shipwright" },
-        dependencies = {
-            { "rktjmp/lush.nvim", lazy = true },
-        },
+        lazy = true,
+    },
+    {
+        "rktjmp/lush.nvim",
+        lazy = true,
     },
     {
         "benizi/vim-automkdir",
@@ -38,6 +40,7 @@ require("lazy").setup({
     {
         "catgoose/nvim-colorizer.lua",
         opts = {},
+        lazy = true,
     },
     {
         "davidosomething/format-ts-errors.nvim",
@@ -45,6 +48,11 @@ require("lazy").setup({
             add_markdown = true,    -- wrap output with markdown ```ts ``` markers
             start_indent_level = 0, -- initial indent
         },
+        lazy = true,
+    },
+    {
+        "echasnovski/mini.nvim",
+        version = "*",
         lazy = true,
     },
     {
@@ -67,9 +75,7 @@ require("lazy").setup({
             },
         },
         keys = { "<C-j>", "<C-k>", "v", "V", "<C-v>" },
-        dependencies = {
-            { "echasnovski/mini.nvim", version = "*" },
-        },
+        lazy = true,
     },
     {
         "folke/lazydev.nvim",
@@ -81,6 +87,7 @@ require("lazy").setup({
                 { path = "lazy.nvim",          words = { "LazyVim" } },
             },
         },
+        lazy = true,
     },
     {
         "folke/snacks.nvim",
@@ -539,16 +546,14 @@ require("lazy").setup({
                 end,
             },
         },
-        dependencies = {
-            {
-                "nvim-lua/lsp-status.nvim",
-                config = function()
-                    require("sodium.statusline")
-                end,
-            },
-            { "onsails/lspkind-nvim", lazy = true },
-            "saghen/blink.cmp",
-        },
+        lazy = false,
+    },
+    {
+        "nvim-lua/lsp-status.nvim",
+        config = function()
+            require("sodium.statusline")
+        end,
+        lazy = true,
     },
     {
         "nvim-treesitter/nvim-treesitter",
@@ -607,6 +612,7 @@ require("lazy").setup({
             },
         },
         cmd = { "TSPlaygroundToggle" },
+        lazy = true,
     },
     "nvim-treesitter/nvim-treesitter-context",
     {
@@ -654,13 +660,44 @@ require("lazy").setup({
                 end,
             })
         end,
-        dependencies = {
-            "neovim/nvim-lspconfig",
-            "nvim-lua/plenary.nvim",
+        lazy = true,
+    },
+    {
+        "nvim-lua/plenary.nvim",
+        lazy = true,
+    },
+    {
+        "onsails/lspkind-nvim",
+        lazy = true,
+    },
+    {
+        "rafamadriz/friendly-snippets",
+        lazy = true,
+    },
+    "rhysd/conflict-marker.vim",
+    {
+        'saghen/blink.cmp',
+        lazy = false, -- lazy loading handled internally
+        -- use a release tag to download pre-built binaries
+        version = 'v1.*',
+
+        ---@module 'blink.cmp'
+        ---@type blink.cmp.Config
+        opts = {
+            keymap = {
+                preset = 'default',
+                ['<CR>'] = { 'accept', 'fallback' },
+            },
+            completion = {
+                menu = {
+                    auto_show = true,
+                },
+                list = {
+                    selection = { preselect = false, auto_insert = true },
+                },
+            },
         },
     },
-    "rafamadriz/friendly-snippets",
-    "rhysd/conflict-marker.vim",
     {
         "smoka7/hop.nvim",
         opts = { create_hl_autocmd = false },
@@ -682,31 +719,7 @@ require("lazy").setup({
                 end,
             },
         },
-    },
-    {
-        'saghen/blink.cmp',
-        lazy = false, -- lazy loading handled internally
-        dependencies = 'rafamadriz/friendly-snippets',
-
-        -- use a release tag to download pre-built binaries
-        version = 'v1.*',
-
-        ---@module 'blink.cmp'
-        ---@type blink.cmp.Config
-        opts = {
-            keymap = {
-                preset = 'default',
-                ['<CR>'] = { 'accept', 'fallback' },
-            },
-            completion = {
-                menu = {
-                    auto_show = true,
-                },
-                list = {
-                    selection = { preselect = false, auto_insert = true },
-                },
-            },
-        },
+        lazy = true,
     },
     {
         "sodiumjoe/sodium.nvim",
@@ -809,7 +822,10 @@ require("lazy").setup({
             "<leader>w<space>w",
         },
     },
-    "yioneko/nvim-vtsls",
+    {
+        "yioneko/nvim-vtsls",
+        lazy = true,
+    },
 }, {
     -- leave nil when passing the spec as the first argument to setup()
     lockfile = "~/.dotfiles/lazy-lock.json",
