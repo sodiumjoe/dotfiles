@@ -392,20 +392,20 @@ require("lazy").setup({
                         on_attach(client, bufnr)
                     end,
                     handlers = {
-                        ["textDocument/publishDiagnostics"] = function(_, result, ctx)
-                            if result.diagnostics == nil then return end
+                        ["textDocument/diagnostic"] = function(_, result, ctx)
+                            if result.items == nil then return end
                             -- ignore prettier diagnostics since it autofixes anyway
                             local idx = 1
-                            while idx <= #result.diagnostics do
-                                local entry = result.diagnostics[idx]
+                            while idx <= #result.items do
+                                local entry = result.items[idx]
                                 if entry.code == "prettier/prettier" then
-                                    table.remove(result.diagnostics, idx)
+                                    table.remove(result.items, idx)
                                 else
                                     idx = idx + 1
                                 end
                             end
 
-                            vim.lsp.diagnostic.on_publish_diagnostics(
+                            vim.lsp.diagnostic.on_diagnostic(
                                 _,
                                 result,
                                 ctx
