@@ -24,7 +24,7 @@
   "plenary.nvim": { "branch": "master", "commit": "857c5ac632080dba10aae49dba902ce3abf91b35" },
   "shipwright.nvim": { "branch": "master", "commit": "e596ab48328c31873f4f4d2e070243bf9de16ff3" },
   "snacks.nvim": { "branch": "main", "commit": "bc0630e43be5699bb94dadc302c0d21615421d93" },
-  "sodium.nvim": { "branch": "main", "commit": "9a6f937c2e93310207c534594d681d5d79c67249" },
+  "sodium.nvim": { "branch": "main", "commit": "db73bd52f6772dcc28b3ea698a7740a70ee1abf6" },
   "statuscol.nvim": { "branch": "main", "commit": "a2580e009a3b4c51b5978768d907dafae2c919ac" },
   "tiny-devicons-auto-colors.nvim": { "branch": "main", "commit": "51f548421f8a74680eff27d283c9d5ea6e8d0074" },
   "vim-automkdir": { "branch": "master", "commit": "dec143a8d9b266f73a42c63ede85bfc26280f79d" },
