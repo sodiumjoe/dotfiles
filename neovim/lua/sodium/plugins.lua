@@ -765,10 +765,6 @@ require("lazy").setup({
         end,
     },
     {
-        "tpope/vim-commentary",
-        keys = { "gcc", { "gc", mode = "v" } },
-    },
-    {
         "tpope/vim-eunuch",
         cmd = {
             "Remove",
