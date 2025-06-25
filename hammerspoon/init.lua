@@ -89,11 +89,19 @@ local function moveToSlot(slot, win)
 end
 
 local function focusLeft()
-    hs.window.frontmostWindow():focusWindowWest(hs.window.filter.defaultCurrentSpace:getWindows(), true)
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    if not focusedWindow:focusWindowSouth(windows, true, true) then
+        focusedWindow:focusWindowWest(windows, true, true)
+    end
 end
 
 local function focusRight()
-    hs.window.frontmostWindow():focusWindowEast(hs.window.filter.defaultCurrentSpace:getWindows(), true)
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    if not focusedWindow:focusWindowEast(windows, true) then
+        focusedWindow:focusWindowNorth(windows, true)
+    end
 end
 
 -- local function focusUp()
