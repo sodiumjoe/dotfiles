@@ -14,7 +14,7 @@ local function deleteBorder()
 end
 
 local function drawBorder()
-    local win = hs.window.focusedWindow()
+    local win = hs.window.frontmostWindow()
 
     deleteBorder()
 
@@ -44,11 +44,10 @@ hs.window.filter.new():subscribe({
     hs.window.filter.windowMoved,
     hs.window.filter.windowUnminimized,
     hs.window.filter.windowUnhidden,
-}, drawBorder):subscribe({
     hs.window.filter.windowUnfocused,
     hs.window.filter.windowDestroyed,
     hs.window.filter.windowMinimized,
     hs.window.filter.windowHidden,
-}, deleteBorder)
+}, drawBorder)
 
 return obj
