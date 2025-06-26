@@ -91,26 +91,26 @@ end
 local function focusLeft()
     local focusedWindow = hs.window.frontmostWindow()
     local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-    if not focusedWindow:focusWindowSouth(windows, true, true) then
-        focusedWindow:focusWindowWest(windows, true, true)
-    end
+    focusedWindow:focusWindowWest(windows, true, true)
 end
 
 local function focusRight()
     local focusedWindow = hs.window.frontmostWindow()
     local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-    if not focusedWindow:focusWindowEast(windows, true) then
-        focusedWindow:focusWindowNorth(windows, true)
-    end
+    focusedWindow:focusWindowEast(windows, true)
 end
 
--- local function focusUp()
--- 	hs.window.frontmostWindow():focusWindowNorth(nil, true)
--- end
+local function focusUp()
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    focusedWindow:focusWindowNorth(windows, true)
+end
 
--- local function focusDown()
--- 	hs.window.frontmostWindow():focusWindowSouth(nil, true)
--- end
+local function focusDown()
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    focusedWindow:focusWindowSouth(windows, true)
+end
 
 local function pushLeft()
     local win = hs.window.frontmostWindow()
@@ -312,8 +312,10 @@ hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "4", function()
     moveToSlot(4)
 end)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "r", reload)
-hs.hotkey.bind({ "ctrl" }, "h", focusLeft)
-hs.hotkey.bind({ "ctrl" }, "l", focusRight)
+hs.hotkey.bind({ "ctrl", "shift" }, "h", focusLeft)
+hs.hotkey.bind({ "ctrl", "shift" }, "l", focusRight)
+hs.hotkey.bind({ "ctrl", "shift" }, "j", focusDown)
+hs.hotkey.bind({ "ctrl", "shift" }, "k", focusUp)
 hs.hotkey.bind({}, "f20", mute_zoom_or_global)
 -- hs.hotkey.bind({"ctrl"}, 'o', focusUp)
 -- hs.hotkey.bind({"ctrl"}, '.', focusDown)
