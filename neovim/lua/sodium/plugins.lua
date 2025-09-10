@@ -393,7 +393,8 @@ require("lazy").setup({
                     end,
                     handlers = {
                         ["textDocument/diagnostic"] = function(_, result, ctx)
-                            if result.items == nil then return end
+                            if result == nil or result.items == nil then return end
+
                             -- ignore prettier diagnostics since it autofixes anyway
                             local idx = 1
                             while idx <= #result.items do
