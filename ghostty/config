@@ -2,8 +2,11 @@ font-family = "BerkeleyMono Nerd Font"
 font-family-bold = "BerkeleyMono Nerd Font"
 font-family-italic = "BerkeleyMono Nerd Font"
 font-family-bold-italic = "BerkeleyMono Nerd Font"
-
 font-size = 13
+
+https://github.com/ghostty-org/ghostty/issues/4504
+adjust-cell-width = "-5%"
+adjust-cell-height = "5%"
 font-thicken = true
 
 theme = sodium
@@ -12,6 +15,7 @@ window-padding-x = 50
 window-padding-y = 30
 window-padding-balance = true
 macos-titlebar-style = hidden
+mouse-hide-while-typing = true
 
 command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
 initial-command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
