@@ -4,7 +4,7 @@ hs.window.animationDuration = 0.01
 local chromeFilter = hs.window.filter.new(false):setAppFilter("Google Chrome", { visible = true })
 local calendarFilter = hs.window.filter.new(false):setAppFilter("Google Calendar", { visible = true })
 local chatFilter = hs.window.filter.new(false):setAppFilter("Google Chat", { visible = true })
-local alacrittyFilter = hs.window.filter.new(false):setAppFilter("Alacritty")
+local ghosttyFilter = hs.window.filter.new(false):setAppFilter("Ghostty")
 local zoomFilter = hs.window.filter.new(false):setAppFilter("zoom.us", { visible = true })
 local zoomNonMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ rejectTitles = "Zoom Meeting" })
 local zoomMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ allowTitles = "Zoom Meeting" })
@@ -233,7 +233,7 @@ local function layout()
     resetGrid()
 
     layoutApp(chatFilter, 2, positions.bottom)
-    layoutApp(alacrittyFilter, 2, positions.bottom)
+    layoutApp(ghosttyFilter, 2, positions.bottom)
     layoutApp(calendarFilter, 2, positions.top)
 
     local slack = slackFilter:getWindows()[1]
@@ -258,7 +258,7 @@ local function layout()
     if zoomMeeting then
         -- move chrome windows to the right
         layoutApp(chromeFilter, 2, positions.bottom)
-        layoutApp(alacrittyFilter, 2, positions.bottom)
+        layoutApp(ghosttyFilter, 2, positions.bottom)
 
         if hs.grid.get(zoomMeeting) == positions.topZoom then
             layoutWin(zoomMeeting, 1, positions.bottomZoom)
