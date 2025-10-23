@@ -4,8 +4,6 @@
 
 [includeIf "gitdir:/Users/moon/stripe/"]
   path = /Users/moon/stripe/.gitconfig
-[includeIf "gitdir:/Users/moon/stripe-b/"]
-  path = /Users/moon/stripe/.gitconfig
 [includeIf "gitdir:/pay/src/"]
   path = /home/owner/.stripe.gitconfig
 
