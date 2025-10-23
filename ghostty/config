@@ -4,7 +4,7 @@ font-family-italic = "BerkeleyMono Nerd Font"
 font-family-bold-italic = "BerkeleyMono Nerd Font"
 font-size = 13
 
-https://github.com/ghostty-org/ghostty/issues/4504
+# https://github.com/ghostty-org/ghostty/issues/4504
 adjust-cell-width = "-5%"
 adjust-cell-height = "5%"
 font-thicken = true
