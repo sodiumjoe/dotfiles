@@ -411,8 +411,9 @@ require("lazy").setup({
                 },
             }))
 
-            -- Configure rust_analyzer
             vim.lsp.config('rust_analyzer', {
+                filetypes = { 'rust' },
+                root_markers = { 'Cargo.toml' },
                 settings = {
                     ["rust-analyzer"] = {
                         cargo = {
@@ -422,7 +423,6 @@ require("lazy").setup({
                 },
             })
 
-            -- Configure sorbet
             vim.lsp.config('sorbet', {
                 cmd = {
                     "pay",
@@ -470,8 +470,8 @@ require("lazy").setup({
 
             -- Configure lua_ls
             vim.lsp.config('lua_ls', {
-                on_init = function(client)
-                    client.config.settings.Lua = vim.tbl_deep_extend('force', client.config.settings.Lua or {}, {
+                settings = {
+                    Lua = {
                         runtime = {
                             version = 'LuaJIT',
                         },
@@ -479,8 +479,8 @@ require("lazy").setup({
                             checkThirdParty = false,
                             library = { vim.env.VIMRUNTIME },
                         },
-                    })
-                end,
+                    },
+                },
             })
 
             -- Create autocmd to attach LSP functionality and enable servers
@@ -497,7 +497,7 @@ require("lazy").setup({
                     if client.name == "eslint" then
                         vim.api.nvim_create_autocmd("BufWritePre", {
                             buffer = args.buf,
-                            command = "EslintFixAll"
+                            command = "LspEslintFixAll",
                         })
                     end
                 end,
