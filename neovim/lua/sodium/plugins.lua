@@ -283,23 +283,8 @@ require("lazy").setup({
     {
         "neovim/nvim-lspconfig",
         config = function()
-            local nvim_lsp = require("lspconfig")
-            local configs = require("lspconfig.configs")
             local lsp_status = require("lsp-status")
             local blink = require("blink.cmp")
-
-            configs.bazel = {
-                default_config = {
-                    cmd = { "pay", "exec", "scripts/dev/bazel-lsp" },
-                    filetypes = { "star", "bzl", "BUILD.bazel" },
-                    root_dir = utils.find_git_ancestor,
-                },
-                docs = {
-                    description = [[]],
-                },
-            }
-
-            configs.vtsls = require("vtsls").lspconfig
 
             vim.diagnostic.config({
                 signs = {
@@ -360,138 +345,174 @@ require("lazy").setup({
 
             local devbox_tsserver_path = "/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib"
 
-            local servers = {
-                rust_analyzer = {
-                    settings = {
-                        ["rust-analyzer"] = {
-                            cargo = {
-                                features = "all",
-                            },
-                        },
-                    },
-                },
-                bazel = {},
-                sorbet = {
-                    cmd = {
-                        "pay",
-                        "exec",
-                        "scripts/bin/typecheck",
-                        "--lsp",
-                        "--enable-all-experimental-lsp-features",
-                    },
-                    init_options = {
-                        supportsOperationNotifications = true,
-                        supportsSorbetURIs = true,
-                    },
-                    settings = {},
-                },
-                eslint = {
-                    cmd_env = { BROWSERSLIST_IGNORE_OLD_DATA = "1" },
-                    on_attach = function(client, bufnr)
-                        vim.api.nvim_create_autocmd("BufWritePre", { buffer = bufnr, command = "EslintFixAll" })
-                        on_attach(client, bufnr)
-                    end,
-                    handlers = {
-                        ["textDocument/diagnostic"] = function(_, result, ctx)
-                            if result == nil or result.items == nil then return end
+            -- Set global defaults for all LSP servers
+            local base_capabilities = vim.tbl_extend("keep", {}, lsp_status.capabilities)
+            base_capabilities = blink.get_lsp_capabilities(base_capabilities)
 
-                            -- ignore prettier diagnostics since it autofixes anyway
-                            local idx = 1
-                            while idx <= #result.items do
-                                local entry = result.items[idx]
-                                if entry.code == "prettier/prettier" then
-                                    table.remove(result.items, idx)
-                                else
-                                    idx = idx + 1
-                                end
-                            end
+            vim.lsp.config('*', {
+                capabilities = base_capabilities,
+            })
 
-                            vim.lsp.diagnostic.on_diagnostic(
-                                _,
-                                result,
-                                ctx
-                            )
-                        end,
-                    },
-                },
-                flow = {},
-                vtsls = {
-                    settings = {
-                        vtsls = vim.fn.isdirectory(devbox_tsserver_path) == 1 and {
-                            typescript = {
-                                globalTsdk = devbox_tsserver_path,
-                            },
-                        } or {
-                            autoUseWorkspaceTsdk = true,
-                        },
+            -- Configure bazel LSP
+            vim.lsp.config('bazel', {
+                cmd = { "pay", "exec", "scripts/dev/bazel-lsp" },
+                filetypes = { "star", "bzl", "BUILD.bazel" },
+                root_markers = { '.git' },
+            })
+
+            -- Configure vtsls
+            local vtsls_config = require("vtsls").lspconfig
+            vim.lsp.config('vtsls', vim.tbl_deep_extend('force', vtsls_config, {
+                settings = {
+                    vtsls = vim.fn.isdirectory(devbox_tsserver_path) == 1 and {
                         typescript = {
-                            format = {
-                                enable = false,
-                            },
+                            globalTsdk = devbox_tsserver_path,
                         },
-                        javascript = {
-                            format = {
-                                enable = false,
-                            },
+                    } or {
+                        autoUseWorkspaceTsdk = true,
+                    },
+                    typescript = {
+                        format = {
+                            enable = false,
                         },
                     },
-                    handlers = {
-                        ["textDocument/publishDiagnostics"] = function(_, result, ctx)
-                            if result.diagnostics == nil then return end
-                            -- ignore some tsserver diagnostics
-                            local idx = 1
-                            while idx <= #result.diagnostics do
-                                local entry = result.diagnostics[idx]
-
-                                local formatter = require('format-ts-errors')[entry.code]
-                                entry.message = formatter and formatter(entry.message) or entry.message
-
-                                -- codes: https://github.com/microsoft/TypeScript/blob/main/src/compiler/diagnosticMessages.json
-                                if entry.code == 80001 then
-                                    -- { message = "File is a CommonJS module; it may be converted to an ES module.", }
-                                    table.remove(result.diagnostics, idx)
-                                else
-                                    idx = idx + 1
-                                end
-                            end
-
-                            vim.lsp.diagnostic.on_publish_diagnostics(
-                                _,
-                                result,
-                                ctx
-                            )
-                        end,
+                    javascript = {
+                        format = {
+                            enable = false,
+                        },
                     },
                 },
-                lua_ls = {
-                    on_init = function(client)
-                        client.config.settings.Lua = vim.tbl_deep_extend('force', client.config.settings.Lua or {}, {
-                            runtime = {
-                                version = 'LuaJIT',
-                            },
-                            workspace = {
-                                checkThirdParty = false,
-                                library = { vim.env.VIMRUNTIME },
-                            },
-                        })
+                handlers = {
+                    ["textDocument/publishDiagnostics"] = function(_, result, ctx)
+                        if result.diagnostics == nil then return end
+                        -- ignore some tsserver diagnostics
+                        local idx = 1
+                        while idx <= #result.diagnostics do
+                            local entry = result.diagnostics[idx]
+
+                            local formatter = require('format-ts-errors')[entry.code]
+                            entry.message = formatter and formatter(entry.message) or entry.message
+
+                            -- codes: https://github.com/microsoft/TypeScript/blob/main/src/compiler/diagnosticMessages.json
+                            if entry.code == 80001 then
+                                -- { message = "File is a CommonJS module; it may be converted to an ES module.", }
+                                table.remove(result.diagnostics, idx)
+                            else
+                                idx = idx + 1
+                            end
+                        end
+
+                        vim.lsp.diagnostic.on_publish_diagnostics(
+                            _,
+                            result,
+                            ctx
+                        )
                     end,
                 },
-            }
+            }))
 
-            for lsp, options in pairs(servers) do
-                local defaults = {
-                    on_attach = on_attach,
-                    flags = {
-                        debounce_text_changes = 150,
+            -- Configure rust_analyzer
+            vim.lsp.config('rust_analyzer', {
+                settings = {
+                    ["rust-analyzer"] = {
+                        cargo = {
+                            features = "all",
+                        },
                     },
-                    capabilities = vim.tbl_extend("keep", options.capabilities or {}, lsp_status.capabilities),
-                }
+                },
+            })
 
-                local setup_options = vim.tbl_extend("force", defaults, options)
-                setup_options.capabilities = blink.get_lsp_capabilities(setup_options.capabilities)
+            -- Configure sorbet
+            vim.lsp.config('sorbet', {
+                cmd = {
+                    "pay",
+                    "exec",
+                    "scripts/bin/typecheck",
+                    "--lsp",
+                    "--enable-all-experimental-lsp-features",
+                },
+                init_options = {
+                    supportsOperationNotifications = true,
+                    supportsSorbetURIs = true,
+                },
+                settings = {},
+            })
 
-                nvim_lsp[lsp].setup(setup_options)
-            end
+            -- Configure eslint with custom handlers
+            vim.lsp.config('eslint', {
+                cmd_env = { BROWSERSLIST_IGNORE_OLD_DATA = "1" },
+                handlers = {
+                    ["textDocument/diagnostic"] = function(_, result, ctx)
+                        if result == nil or result.items == nil then return end
+
+                        -- ignore prettier diagnostics since it autofixes anyway
+                        local idx = 1
+                        while idx <= #result.items do
+                            local entry = result.items[idx]
+                            if entry.code == "prettier/prettier" then
+                                table.remove(result.items, idx)
+                            else
+                                idx = idx + 1
+                            end
+                        end
+
+                        vim.lsp.diagnostic.on_diagnostic(
+                            _,
+                            result,
+                            ctx
+                        )
+                    end,
+                },
+            })
+
+            -- Configure flow
+            vim.lsp.config('flow', {})
+
+            -- Configure lua_ls
+            vim.lsp.config('lua_ls', {
+                on_init = function(client)
+                    client.config.settings.Lua = vim.tbl_deep_extend('force', client.config.settings.Lua or {}, {
+                        runtime = {
+                            version = 'LuaJIT',
+                        },
+                        workspace = {
+                            checkThirdParty = false,
+                            library = { vim.env.VIMRUNTIME },
+                        },
+                    })
+                end,
+            })
+
+            -- Create autocmd to attach LSP functionality and enable servers
+            local lsp_attach_group = vim.api.nvim_create_augroup("UserLspAttach", { clear = true })
+            vim.api.nvim_create_autocmd("LspAttach", {
+                group = lsp_attach_group,
+                callback = function(args)
+                    local client = vim.lsp.get_client_by_id(args.data.client_id)
+                    if not client then return end
+
+                    on_attach(client, args.buf)
+
+                    -- Special handling for eslint
+                    if client.name == "eslint" then
+                        vim.api.nvim_create_autocmd("BufWritePre", {
+                            buffer = args.buf,
+                            command = "EslintFixAll"
+                        })
+                    end
+                end,
+            })
+
+            -- Enable all configured servers
+            vim.lsp.enable({
+                'rust_analyzer',
+                'bazel',
+                'sorbet',
+                'eslint',
+                'flow',
+                'vtsls',
+                'lua_ls',
+            })
         end,
         keys = {
             { "gD",           vim.lsp.buf.declaration },
