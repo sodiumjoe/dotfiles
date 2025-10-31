@@ -283,7 +283,6 @@ require("lazy").setup({
     {
         "neovim/nvim-lspconfig",
         config = function()
-            local lsp_status = require("lsp-status")
             local blink = require("blink.cmp")
 
             vim.diagnostic.config({
@@ -328,8 +327,6 @@ require("lazy").setup({
             })
 
             local on_attach = function(client, bufnr)
-                lsp_status.on_attach(client)
-
                 if client:supports_method("textDocument/formatting") then
                     vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
                     vim.api.nvim_create_autocmd("BufWritePre", {
@@ -341,26 +338,24 @@ require("lazy").setup({
                     })
                 end
                 require("lspkind").init({})
+
+                require("sodium.statusline").on_attach()
             end
 
             local devbox_tsserver_path = "/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib"
 
-            -- Set global defaults for all LSP servers
-            local base_capabilities = vim.tbl_extend("keep", {}, lsp_status.capabilities)
-            base_capabilities = blink.get_lsp_capabilities(base_capabilities)
+            local base_capabilities = blink.get_lsp_capabilities(vim.lsp.protocol.make_client_capabilities())
 
             vim.lsp.config('*', {
                 capabilities = base_capabilities,
             })
 
-            -- Configure bazel LSP
             vim.lsp.config('bazel', {
                 cmd = { "pay", "exec", "scripts/dev/bazel-lsp" },
                 filetypes = { "star", "bzl", "BUILD.bazel" },
                 root_markers = { '.git' },
             })
 
-            -- Configure vtsls
             local vtsls_config = require("vtsls").lspconfig
             vim.lsp.config('vtsls', vim.tbl_deep_extend('force', vtsls_config, {
                 settings = {
@@ -438,7 +433,6 @@ require("lazy").setup({
                 settings = {},
             })
 
-            -- Configure eslint with custom handlers
             vim.lsp.config('eslint', {
                 cmd_env = { BROWSERSLIST_IGNORE_OLD_DATA = "1" },
                 handlers = {
@@ -465,10 +459,8 @@ require("lazy").setup({
                 },
             })
 
-            -- Configure flow
             vim.lsp.config('flow', {})
 
-            -- Configure lua_ls
             vim.lsp.config('lua_ls', {
                 settings = {
                     Lua = {
@@ -483,7 +475,6 @@ require("lazy").setup({
                 },
             })
 
-            -- Create autocmd to attach LSP functionality and enable servers
             local lsp_attach_group = vim.api.nvim_create_augroup("UserLspAttach", { clear = true })
             vim.api.nvim_create_autocmd("LspAttach", {
                 group = lsp_attach_group,
@@ -493,7 +484,6 @@ require("lazy").setup({
 
                     on_attach(client, args.buf)
 
-                    -- Special handling for eslint
                     if client.name == "eslint" then
                         vim.api.nvim_create_autocmd("BufWritePre", {
                             buffer = args.buf,
@@ -503,7 +493,6 @@ require("lazy").setup({
                 end,
             })
 
-            -- Enable all configured servers
             vim.lsp.enable({
                 'rust_analyzer',
                 'bazel',
@@ -571,11 +560,11 @@ require("lazy").setup({
         lazy = false,
     },
     {
-        "nvim-lua/lsp-status.nvim",
+        "nvim-lualine/lualine.nvim",
         config = function()
             require("sodium.statusline")
         end,
-        lazy = true,
+        lazy = false,
     },
     {
         "nvim-treesitter/nvim-treesitter",

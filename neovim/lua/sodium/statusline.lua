@@ -1,77 +1,43 @@
-local diagnostics = require("lsp-status/diagnostics")
-local redraw = require("lsp-status/redraw")
+local lualine = require("lualine")
 local utils = require("sodium.utils")
 
-local highlights = {
-    reset = "%*",
-    active = "%#StatusLineActiveItem#",
-    error = "%#StatusLineError#",
-    warning = "%#StatusLineWarning#",
-    separator = "%#StatusLineSeparator#",
-}
+local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
 
-local icons = {
-    error = utils.icons.Error,
-    warning = utils.icons.Warn,
-    info = utils.icons.Info,
-    hint = utils.icons.Hint,
-    ok = utils.icons.ok,
-}
+-- Track if LSP has attached at least once
+local lsp_attached = false
 
-local padding = " "
-local separator = highlights.separator .. "│" .. highlights.reset
-local alignment_group = "%="
-
-local help_modified_read_only = "%(%h%m%r%)"
-local virtual_column = "C%02v"
-
-local function highlight_item(item, h)
-    if item == nil then
-        return nil
-    end
-    return h .. item .. highlights.reset
-end
-
-local function pad_item(item)
-    if item == nil then
-        return nil
-    end
-    return padding .. item .. padding
-end
-
-local function get_filename()
-    local filetype = vim.bo.filetype
-    if vim.api.nvim_buf_get_name(0) == "" then
-        return nil
-    end
-
-    local filename
-
-    if filetype == "help" then
-        filename = '%<%{expand("%:t:r")}'
-    else
-        filename = '%<%{expand("%:~:.")}'
-    end
-
-    return pad_item(filename)
-end
-
-local function get_lines()
-    -- pad current line number to number of digits in total lines to keep length
-    -- of segment consistent
-    local num_lines = vim.fn.line("$")
-    local num_digits = string.len(num_lines)
-    return "L%0" .. num_digits .. "l/%L"
-end
-
-local function insert_diagnostic_part(status_parts, diagnostic, type)
-    if diagnostic and diagnostic > 0 then
-        if highlights[type] then
-            table.insert(status_parts, highlight_item(icons[type] .. padding .. diagnostic, highlights[type]))
-        else
-            table.insert(status_parts, icons[type] .. padding .. diagnostic)
+local function is_standard_filetype()
+    local ft = vim.bo.filetype
+    for _, filetype in ipairs(non_standard_filetypes) do
+        if ft == nil or ft == filetype then
+            return false
         end
     end
+    return true
+end
+
+local filename_active = {
+    "filename",
+    cond = is_standard_filetype,
+    path = 1,
+    color = "StatusLineActiveItem",
+}
+
+local filename_inactive = {
+    "filename",
+    cond = is_standard_filetype,
+    path = 1,
+}
+
+local function get_lines()
+    local current_line = vim.fn.line(".")
+    local num_lines = vim.fn.line("$")
+    local num_digits = string.len(tostring(num_lines))
+    return string.format("L%0" .. num_digits .. "d/%d", current_line, num_lines)
+end
+
+local function get_column()
+    return string.format("C%02d", vim.fn.virtcol("."))
 end
 
 local progress_status = {}
@@ -85,11 +51,7 @@ local function lsp_progress()
             in_progress_clients = in_progress_clients + 1
         end
     end
-    if in_progress_clients > 0 then
-        return true
-    else
-        return false
-    end
+    return in_progress_clients > 0
 end
 
 local function start_timer()
@@ -101,13 +63,13 @@ local function start_timer()
                 100,
                 vim.schedule_wrap(function()
                     if lsp_progress() then
-                        spinner_index = (spinner_index + 1) % #utils.spinner_frames
-                        redraw.redraw()
+                        spinner_index = (spinner_index % #utils.spinner_frames) + 1
+                        lualine.refresh()
                     elseif timer then
                         spinner_index = 1
                         timer:close()
                         timer = nil
-                        redraw.redraw()
+                        lualine.refresh()
                     end
                 end)
             )
@@ -115,7 +77,15 @@ local function start_timer()
     end
 end
 
-vim.lsp.handlers["$/progress"] = function(_, msg, info)
+local original_progress_handler = vim.lsp.handlers["$/progress"]
+
+---@diagnostic disable-next-line: duplicate-set-field
+vim.lsp.handlers["$/progress"] = function(err, msg, info)
+    -- Call original handler if it exists
+    if original_progress_handler then
+        original_progress_handler(err, msg, info)
+    end
+
     local client_id = tostring(info.client_id)
     local token = tostring(msg.token)
 
@@ -131,8 +101,14 @@ vim.lsp.handlers["$/progress"] = function(_, msg, info)
     end
 end
 
--- Templated off of https://github.com/sorbet/sorbet/blob/23836cbded86135219da1b204d79675a1615cc49/vscode_extension/src/SorbetStatusBarEntry.ts#L119
+local original_sorbet_handler = vim.lsp.handlers["sorbet/showOperation"]
+
+---@diagnostic disable-next-line: duplicate-set-field
 vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context)
+    if original_sorbet_handler then
+        original_sorbet_handler(err, result, context)
+    end
+
     if err ~= nil then
         error(err)
         return
@@ -147,105 +123,144 @@ vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context)
     vim.lsp.handlers["$/progress"](err, message, context)
 end
 
-local function lsp_status()
+local function lsp_status_component()
+    if lsp_progress() then
+        return utils.spinner_frames[spinner_index]
+    end
+
     local bufnr = 0
-    if #vim.lsp.get_clients({ bufnr = bufnr }) == 0 then
-        return nil
-    end
-    local buf_diagnostics = diagnostics(bufnr) or nil
-    if buf_diagnostics == nil then
-        return nil
-    end
+    local error_count = #vim.diagnostic.get(bufnr, { severity = vim.diagnostic.severity.ERROR })
+    local warn_count = #vim.diagnostic.get(bufnr, { severity = vim.diagnostic.severity.WARN })
+    local info_count = #vim.diagnostic.get(bufnr, { severity = vim.diagnostic.severity.INFO })
+    local hint_count = #vim.diagnostic.get(bufnr, { severity = vim.diagnostic.severity.HINT })
 
     local status_parts = {}
-
-    insert_diagnostic_part(status_parts, buf_diagnostics.errors, "error")
-    insert_diagnostic_part(status_parts, buf_diagnostics.warnings, "warning")
-    insert_diagnostic_part(status_parts, buf_diagnostics.info, "info")
-    insert_diagnostic_part(status_parts, buf_diagnostics.hints, "hint")
+    if error_count > 0 then
+        table.insert(status_parts, {
+            text = utils.icons.Error .. " " .. error_count,
+            color = "StatusLineError",
+        })
+    end
+    if warn_count > 0 then
+        table.insert(status_parts, {
+            text = utils.icons.Warn .. " " .. warn_count,
+            color = "StatusLineWarning",
+        })
+    end
+    if info_count > 0 then
+        table.insert(status_parts, {
+            text = utils.icons.Info .. " " .. info_count,
+            color = "StatusLine",
+        })
+    end
+    if hint_count > 0 then
+        table.insert(status_parts, {
+            text = utils.icons.Hint .. " " .. hint_count,
+            color = "StatusLine",
+        })
+    end
 
     if #status_parts == 0 then
-        if lsp_progress() then
-            return nil
+        return utils.icons.ok
+    end
+
+    local result_parts = {}
+    for _, part in ipairs(status_parts) do
+        local hl = vim.api.nvim_get_hl(0, { name = part.color })
+        if hl.fg then
+            table.insert(result_parts, string.format("%%#%s#%s%%*", part.color, part.text))
         else
-            return icons.ok
+            table.insert(result_parts, part.text)
         end
     end
-    return table.concat(status_parts, " ")
+
+    return table.concat(result_parts, " ")
 end
 
-local function progress_spinner()
-    if lsp_progress() then
-        return utils.spinner_frames[spinner_index + 1]
-    else
-        return nil
-    end
-end
-
-local function insert_item(t, value)
-    if value then
-        table.insert(t, value)
-    end
-end
-
-local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
-
-local function is_standard_filetype(ft)
-    local ret = true
-    for _, filetype in ipairs(non_standard_filetypes) do
-        if ft == nil or ft == filetype then
-            ret = false
-            break
-        end
-    end
-    return ret
-end
-
-local function get_left_segment(active, standard_filetype)
-    local left_segment_items = {}
-    local filename = get_filename()
-    local highlighted_filename = active and highlight_item(filename, highlights.active) or filename
-    insert_item(left_segment_items, highlighted_filename)
-    if standard_filetype then
-        insert_item(left_segment_items, help_modified_read_only)
-    end
-    return table.concat(left_segment_items, padding)
-end
-
-local function get_right_segment(_, standard_filetype)
-    if not standard_filetype then
-        return nil
-    end
-    local right_segment_items = {}
-    insert_item(right_segment_items, pad_item(progress_spinner()))
-    insert_item(right_segment_items, pad_item(lsp_status()))
-    insert_item(right_segment_items, pad_item(get_lines()))
-    insert_item(right_segment_items, pad_item(virtual_column))
-    return separator .. table.concat(right_segment_items, separator)
-end
-
-function _G.statusline(active)
-    local standard_filetype = is_standard_filetype(vim.bo.filetype)
-    return table.concat({
-        get_left_segment(active, standard_filetype),
-        get_right_segment(active, standard_filetype),
-    }, alignment_group)
-end
-
-local autocmd = utils.augroup("StatusLine", { clear = true })
-
-autocmd({ "WinEnter", "BufEnter" }, {
-    pattern = "*",
-    callback = function()
-        vim.opt_local.statusline = [[%{%v:lua.statusline(1)%}]]
+local lsp_status = {
+    lsp_status_component,
+    cond = function()
+        return lsp_attached and is_standard_filetype() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
     end,
-    desc = "Statusline (active)",
+    padding = 1,
+}
+
+local separator = {
+    function() return "│" end,
+    cond = is_standard_filetype,
+    color = "StatusLineSeparator",
+    padding = 0,
+}
+
+local separator_before_lsp = {
+    function() return "│" end,
+    cond = function()
+        return lsp_attached and is_standard_filetype() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
+    end,
+    color = "StatusLineSeparator",
+    padding = 0,
+}
+
+local lines = {
+    get_lines,
+    cond = is_standard_filetype,
+    padding = 1,
+}
+
+local column = {
+    get_column,
+    cond = is_standard_filetype,
+    padding = 1,
+}
+
+local sections = {
+    lualine_a = { filename_active },
+    lualine_b = {},
+    lualine_c = {},
+    lualine_x = { separator_before_lsp, lsp_status, separator, lines, separator, column },
+    lualine_y = {},
+    lualine_z = {},
+}
+
+local inactive_sections = {
+    lualine_a = { filename_inactive },
+    lualine_b = {},
+    lualine_c = {},
+    lualine_x = { separator_before_lsp, lsp_status, separator, lines, separator, column },
+    lualine_y = {},
+    lualine_z = {},
+}
+
+local normal = {
+    a = { bg = "NONE", fg = "NONE" },
+    b = { bg = "NONE", fg = "NONE" },
+    c = { bg = "NONE", fg = "NONE" },
+}
+
+local theme = {
+    normal = normal,
+    insert = normal,
+    visual = normal,
+    replace = normal,
+    command = normal,
+    inactive = normal,
+}
+
+lualine.setup({
+    options = {
+        theme = theme,
+        component_separators = { left = "", right = "" },
+        section_separators = { left = "", right = "" },
+    },
+    sections = sections,
+    inactive_sections = inactive_sections,
 })
 
-autocmd({ "WinLeave", "BufLeave" }, {
-    pattern = "*",
-    callback = function()
-        vim.opt_local.statusline = [[%{%v:lua.statusline()%}]]
-    end,
-    desc = "Statusline (inactive)",
-})
+local M = {}
+
+function M.on_attach()
+    lsp_attached = true
+    lualine.refresh()
+end
+
+return M
