@@ -95,6 +95,10 @@ require("lazy").setup({
         lazy = false,
         opts = {
             picker = {
+                main = {
+                    file = false,
+                    current = true,
+                },
                 prompt = "❯ ",
                 reverse = true,
                 layout = {
