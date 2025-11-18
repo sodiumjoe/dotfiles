@@ -2,7 +2,7 @@ local obj = {}
 
 local borderColor = { red = 1, green = 1, blue = 1, alpha = 0.5 }
 local borderWidth = 2
-local borderRadius = 10
+local borderRadius = 18
 
 local focusBorder = nil
 
