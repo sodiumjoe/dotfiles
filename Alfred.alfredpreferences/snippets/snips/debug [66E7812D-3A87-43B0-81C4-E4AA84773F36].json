@@ -1,8 +1,0 @@
-{
-  "alfredsnippet" : {
-    "snippet" : "require \"debug\"; binding.break",
-    "uid" : "66E7812D-3A87-43B0-81C4-E4AA84773F36",
-    "name" : "debug",
-    "keyword" : "debug"
-  }
-}
