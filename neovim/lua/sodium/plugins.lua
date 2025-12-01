@@ -23,6 +23,13 @@ local utils = require("sodium.utils")
 
 local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 
+local function claude_horizontal(cmd)
+    vim.cmd(cmd)
+    vim.schedule(function()
+        vim.cmd("wincmd J")
+    end)
+end
+
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -41,6 +48,41 @@ require("lazy").setup({
         "catgoose/nvim-colorizer.lua",
         opts = {},
         lazy = true,
+    },
+    {
+        "coder/claudecode.nvim",
+        dependencies = { "folke/snacks.nvim" },
+        config = function()
+            require("claudecode").setup({
+                terminal = {
+                    provider = "native",
+                    auto_close = true,
+                    show_native_term_exit_tip = true,
+                    snacks_win_opts = {},
+                },
+            })
+        end,
+        keys = {
+            { "<leader>ac", function() claude_horizontal("ClaudeCode") end,          desc = "Toggle Claude" },
+            { "<leader>af", "<cmd>ClaudeCodeFocus<cr>",                              desc = "Focus Claude" },
+            { "<leader>ar", function() claude_horizontal("ClaudeCode --resume") end, desc = "Resume Claude" },
+            { "<leader>aC", function() claude_horizontal("ClaudeCode --continue") end, desc = "Continue Claude" },
+            { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
+            { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>",       desc = "Add current buffer" },
+            { "<leader>as", "<cmd>ClaudeCodeSend<cr>",        mode = "v",                  desc = "Send to Claude" },
+            {
+                "<leader>as",
+                "<cmd>ClaudeCodeTreeAdd<cr>",
+                desc = "Add file",
+                ft = { "NvimTree", "neo-tree", "oil", "minifiles", "netrw" },
+            },
+            -- Diff management
+            { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+            { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>",   desc = "Deny diff" },
+        },
+        cmd = {
+            "ClaudeCode",
+        },
     },
     {
         "davidosomething/format-ts-errors.nvim",
