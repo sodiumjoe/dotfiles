@@ -129,6 +129,8 @@ utils.map({
     { "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
     -- copy full path to clipboard
     { "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
+    -- escape for normal mode in terminal
+    { "t", [[<Esc>]], [[<C-\><C-n>]] },
     {
         "n",
         [[<leader>l]],
