@@ -497,15 +497,27 @@ require("lazy").setup({
                 end,
             })
 
-            vim.lsp.enable({
-                'rust_analyzer',
-                'bazel',
-                'sorbet',
-                'eslint',
-                'flow',
-                'vtsls',
-                'lua_ls',
-            })
+            local lsp_servers = {
+                { 'rust_analyzer', 'rust-analyzer' },
+                { 'bazel', nil },
+                { 'sorbet', nil },
+                { 'eslint', nil },
+                { 'flow', nil },
+                { 'vtsls', nil },
+                { 'lua_ls', nil },
+            }
+
+            local enabled_servers = {}
+            for _, entry in ipairs(lsp_servers) do
+                local server, executable = entry[1], entry[2]
+                if executable == nil or vim.fn.executable(executable) == 1 then
+                    table.insert(enabled_servers, server)
+                end
+            end
+
+            vim.lsp.enable(enabled_servers)
+
+
         end,
         keys = {
             { "gD",           vim.lsp.buf.declaration },
