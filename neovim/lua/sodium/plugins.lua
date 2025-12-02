@@ -23,13 +23,6 @@ local utils = require("sodium.utils")
 
 local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 
-local function claude_horizontal(cmd)
-    vim.cmd(cmd)
-    vim.schedule(function()
-        vim.cmd("wincmd J")
-    end)
-end
-
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -52,21 +45,25 @@ require("lazy").setup({
     {
         "coder/claudecode.nvim",
         dependencies = { "folke/snacks.nvim" },
-        config = function()
-            require("claudecode").setup({
-                terminal = {
-                    provider = "native",
-                    auto_close = true,
-                    show_native_term_exit_tip = true,
-                    snacks_win_opts = {},
+        opts = {
+            terminal = {
+                provider = "snacks",
+                auto_close = true,
+                show_native_term_exit_tip = true,
+                snacks_win_opts = {
+                    height = .5,
+                    position = "bottom",
+                    wo = {
+                        winbar = "",
+                    },
                 },
-            })
-        end,
+            },
+        },
         keys = {
-            { "<leader>ac", function() claude_horizontal("ClaudeCode") end,          desc = "Toggle Claude" },
-            { "<leader>af", "<cmd>ClaudeCodeFocus<cr>",                              desc = "Focus Claude" },
-            { "<leader>ar", function() claude_horizontal("ClaudeCode --resume") end, desc = "Resume Claude" },
-            { "<leader>aC", function() claude_horizontal("ClaudeCode --continue") end, desc = "Continue Claude" },
+            { "<leader>ac", "<cmd>ClaudeCode<cr>",            desc = "Toggle Claude" },
+            { "<leader>af", "<cmd>ClaudeCodeFocus<cr>",       desc = "Focus Claude" },
+            { "<leader>ar", "<cmd>ClaudeCode --resume<cr>",   desc = "Resume Claude" },
+            { "<leader>aC", "<cmd>ClaudeCode --continue<cr>", desc = "Continue Claude" },
             { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
             { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>",       desc = "Add current buffer" },
             { "<leader>as", "<cmd>ClaudeCodeSend<cr>",        mode = "v",                  desc = "Send to Claude" },
