@@ -56,6 +56,17 @@ require("lazy").setup({
                     wo = {
                         winbar = "",
                     },
+                    keys = {
+                        term_normal = {
+                            "<esc>",
+                            function(self)
+                                vim.cmd("stopinsert")
+                            end,
+                            mode = "t",
+                            expr = false,
+                            desc = "Exit terminal mode",
+                        },
+                    },
                 },
             },
         },
