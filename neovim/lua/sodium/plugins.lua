@@ -737,7 +737,6 @@ require("lazy").setup({
                 end,
             })
         end,
-        lazy = true,
     },
     {
         "nvim-lua/plenary.nvim",
