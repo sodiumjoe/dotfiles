@@ -283,7 +283,12 @@ local function mute_zoom_or_global()
     if #zoomFilter:getWindows() > 1 then
         hs.eventtap.keyStroke({ "cmd", "shift" }, "a", nil, hs.application.find("zoom"))
     else
-        hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
+        local youtubeMusic = hs.application.find("YouTube Music")
+        if youtubeMusic then
+            hs.eventtap.keyStroke({}, ";", nil, youtubeMusic)
+        else
+            hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
+        end
     end
 end
 
