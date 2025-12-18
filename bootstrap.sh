@@ -26,6 +26,7 @@ for file in ${files[@]}; do
 done
 
 xdg_files=(\
+  "CLAUDE.md"\
   "alacritty"\
   "ghostty"\
   "hammerspoon"\
