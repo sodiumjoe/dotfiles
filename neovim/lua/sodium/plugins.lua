@@ -410,56 +410,6 @@ require("lazy").setup({
                 root_markers = { '.git' },
             })
 
-            local vtsls_config = require("vtsls").lspconfig
-            vim.lsp.config('vtsls', vim.tbl_deep_extend('force', vtsls_config, {
-                settings = {
-                    vtsls = vim.fn.isdirectory(devbox_tsserver_path) == 1 and {
-                        typescript = {
-                            globalTsdk = devbox_tsserver_path,
-                        },
-                    } or {
-                        autoUseWorkspaceTsdk = true,
-                    },
-                    typescript = {
-                        format = {
-                            enable = false,
-                        },
-                    },
-                    javascript = {
-                        format = {
-                            enable = false,
-                        },
-                    },
-                },
-                handlers = {
-                    ["textDocument/publishDiagnostics"] = function(_, result, ctx)
-                        if result.diagnostics == nil then return end
-                        -- ignore some tsserver diagnostics
-                        local idx = 1
-                        while idx <= #result.diagnostics do
-                            local entry = result.diagnostics[idx]
-
-                            local formatter = require('format-ts-errors')[entry.code]
-                            entry.message = formatter and formatter(entry.message) or entry.message
-
-                            -- codes: https://github.com/microsoft/TypeScript/blob/main/src/compiler/diagnosticMessages.json
-                            if entry.code == 80001 then
-                                -- { message = "File is a CommonJS module; it may be converted to an ES module.", }
-                                table.remove(result.diagnostics, idx)
-                            else
-                                idx = idx + 1
-                            end
-                        end
-
-                        vim.lsp.diagnostic.on_publish_diagnostics(
-                            _,
-                            result,
-                            ctx
-                        )
-                    end,
-                },
-            }))
-
             vim.lsp.config('rust_analyzer', {
                 filetypes = { 'rust' },
                 root_markers = { 'Cargo.toml' },
@@ -553,7 +503,7 @@ require("lazy").setup({
                 { 'sorbet', nil },
                 { 'eslint', nil },
                 { 'flow', nil },
-                { 'vtsls', nil },
+                { 'tsgo', nil },
                 { 'lua_ls', nil },
             }
 
@@ -893,10 +843,6 @@ require("lazy").setup({
             "<leader>ww",
             "<leader>w<space>w",
         },
-    },
-    {
-        "yioneko/nvim-vtsls",
-        lazy = true,
     },
 }, {
     -- leave nil when passing the spec as the first argument to setup()
