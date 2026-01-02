@@ -396,7 +396,7 @@ require("lazy").setup({
                 require("sodium.statusline").on_attach()
             end
 
-            local devbox_tsserver_path = "/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib"
+            -- local devbox_tsserver_path = "/pay/src/pay-server/frontend/js-scripts/node_modules/typescript/lib"
 
             local base_capabilities = blink.get_lsp_capabilities(vim.lsp.protocol.make_client_capabilities())
 
@@ -499,12 +499,12 @@ require("lazy").setup({
 
             local lsp_servers = {
                 { 'rust_analyzer', 'rust-analyzer' },
-                { 'bazel', nil },
-                { 'sorbet', nil },
-                { 'eslint', nil },
-                { 'flow', nil },
-                { 'tsgo', nil },
-                { 'lua_ls', nil },
+                { 'bazel',         nil },
+                { 'sorbet',        nil },
+                { 'eslint',        nil },
+                { 'flow',          nil },
+                { 'tsgo',          nil },
+                { 'lua_ls',        nil },
             }
 
             local enabled_servers = {}
@@ -516,8 +516,6 @@ require("lazy").setup({
             end
 
             vim.lsp.enable(enabled_servers)
-
-
         end,
         keys = {
             { "gD",           vim.lsp.buf.declaration },
