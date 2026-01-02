@@ -2,6 +2,7 @@ local lualine = require("lualine")
 local utils = require("sodium.utils")
 
 local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
+local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
 
 -- Track if LSP has attached at least once
 local lsp_attached = false
@@ -185,21 +186,20 @@ local lsp_status = {
     padding = 1,
 }
 
-local separator = {
-    function() return "│" end,
-    cond = is_standard_filetype,
-    color = "StatusLineSeparator",
-    padding = 0,
-}
+local function separator_if(cond_fn)
+    return {
+        function() return "│" end,
+        cond = cond_fn,
+        color = "StatusLineSeparator",
+        padding = 0,
+    }
+end
 
-local separator_before_lsp = {
-    function() return "│" end,
-    cond = function()
-        return lsp_attached and is_standard_filetype() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
-    end,
-    color = "StatusLineSeparator",
-    padding = 0,
-}
+local separator = separator_if(is_standard_filetype)
+
+local separator_before_lsp = separator_if(function()
+    return lsp_attached and is_standard_filetype() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
+end)
 
 local lines = {
     get_lines,
@@ -246,6 +246,50 @@ local theme = {
     inactive = normal,
 }
 
+local function get_agentic_title()
+    local ft = vim.bo.filetype
+    if ft == "AgenticChat" then
+        return "󰻞 Agentic Chat"
+    elseif ft == "AgenticInput" then
+        return "󰦨 Prompt"
+    elseif ft == "AgenticCode" then
+        return "󰪸 Selected Code Snippets"
+    elseif ft == "AgenticFiles" then
+        return "󰪸 Referenced Files"
+    elseif ft == "AgenticTodos" then
+        return "☐ TODO Items"
+    end
+    return ""
+end
+
+local function get_agentic_mode()
+    if vim.bo.filetype ~= "AgenticChat" then
+        return ""
+    end
+
+    local ok, session_registry = pcall(require, "agentic.session_registry")
+    if not ok then
+        return ""
+    end
+
+    local tab_page_id = vim.api.nvim_get_current_tabpage()
+    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
+    if not session_manager or not session_manager.agent_modes or not session_manager.agent_modes.current_mode_id then
+        return ""
+    end
+
+    local mode = session_manager.agent_modes:get_mode(session_manager.agent_modes.current_mode_id)
+    if mode then
+        return mode.name
+    end
+
+    return ""
+end
+
+local separator_before_agentic_mode = separator_if(function()
+    return vim.bo.filetype == "AgenticChat" and get_agentic_mode() ~= ""
+end)
+
 lualine.setup({
     options = {
         theme = theme,
@@ -254,6 +298,50 @@ lualine.setup({
     },
     sections = sections,
     inactive_sections = inactive_sections,
+    extensions = {
+        {
+            filetypes = agentic_filetypes,
+            sections = {
+                lualine_a = {
+                    {
+                        get_agentic_title,
+                        color = "StatusLineActiveItem",
+                    },
+                },
+                lualine_b = {},
+                lualine_c = {},
+                lualine_x = {
+                    separator_before_agentic_mode,
+                    {
+                        get_agentic_mode,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
+                },
+                lualine_y = {},
+                lualine_z = {},
+            },
+            inactive_sections = {
+                lualine_a = {
+                    get_agentic_title,
+                },
+                lualine_b = {},
+                lualine_c = {},
+                lualine_x = {
+                    separator_before_agentic_mode,
+                    {
+                        get_agentic_mode,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
+                },
+                lualine_y = {},
+                lualine_z = {},
+            },
+        },
+    },
 })
 
 local M = {}

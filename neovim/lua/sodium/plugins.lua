@@ -43,53 +43,55 @@ require("lazy").setup({
         lazy = true,
     },
     {
-        "coder/claudecode.nvim",
-        dependencies = { "folke/snacks.nvim" },
+        "carlos-algms/agentic.nvim",
         opts = {
-            terminal = {
-                provider = "snacks",
-                auto_close = true,
-                show_native_term_exit_tip = true,
-                snacks_win_opts = {
-                    height = .5,
-                    position = "bottom",
-                    wo = {
-                        winbar = "",
-                    },
-                    keys = {
-                        term_normal = {
-                            "<esc>",
-                            function(self)
-                                vim.cmd("stopinsert")
-                            end,
-                            mode = "t",
-                            expr = false,
-                            desc = "Exit terminal mode",
-                        },
+            provider = "claude-acp",
+            acp_providers = {
+                ["claude-acp"] = {
+                    command = "claude-code-acp",
+                    env = {
+                        CLAUDE_CODE_EXECUTABLE = "/usr/local/bin/claude",
+                        NODE_NO_WARNINGS = "1",
+                        IS_AI_TERMINAL = "1",
                     },
                 },
             },
         },
+        config = function(_, opts)
+            local ChatWidget = require("agentic.ui.chat_widget")
+            local original_open_win = ChatWidget._open_win
+
+            ChatWidget._open_win = function(self, bufnr, enter, win_config_opts, win_opts)
+                local modified_win_opts = vim.tbl_deep_extend("force", win_opts or {}, {
+                    foldcolumn = "1",
+                })
+                return original_open_win(self, bufnr, enter, win_config_opts, modified_win_opts)
+            end
+
+            ChatWidget.render_header = function() end
+
+            require("agentic").setup(opts)
+        end,
         keys = {
-            { "<leader>ac", "<cmd>ClaudeCode<cr>",            desc = "Toggle Claude" },
-            { "<leader>af", "<cmd>ClaudeCodeFocus<cr>",       desc = "Focus Claude" },
-            { "<leader>ar", "<cmd>ClaudeCode --resume<cr>",   desc = "Resume Claude" },
-            { "<leader>aC", "<cmd>ClaudeCode --continue<cr>", desc = "Continue Claude" },
-            { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
-            { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>",       desc = "Add current buffer" },
-            { "<leader>as", "<cmd>ClaudeCodeSend<cr>",        mode = "v",                  desc = "Send to Claude" },
             {
-                "<leader>as",
-                "<cmd>ClaudeCodeTreeAdd<cr>",
-                desc = "Add file",
-                ft = { "NvimTree", "neo-tree", "oil", "minifiles", "netrw" },
+                "<leader>ac",
+                function() require("agentic").toggle() end,
+                mode = { "n", "i" },
+                desc = "Toggle Agentic Chat",
             },
-            -- Diff management
-            { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
-            { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>",   desc = "Deny diff" },
-        },
-        cmd = {
-            "ClaudeCode",
+            {
+                "<leader>aa",
+                function() require("agentic").add_selection_or_file_to_context() end,
+                mode = { "n", "v" },
+                desc = "Add file or selection to Agentic to Context",
+            },
+            {
+                "<leader>ao",
+                function() require("agentic").open() end,
+                mode = { "n", "v" },
+                desc = "Open Agentic Chat",
+            },
+
         },
     },
     {
