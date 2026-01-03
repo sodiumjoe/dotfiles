@@ -90,6 +90,12 @@ require("lazy").setup({
                 mode = { "n", "v" },
                 desc = "Open Agentic Chat",
             },
+            {
+                "<leader>an",
+                function() require("agentic").new_session() end,
+                mode = { "n", "v" },
+                desc = "Open Agentic Chat",
+            },
 
         },
     },
