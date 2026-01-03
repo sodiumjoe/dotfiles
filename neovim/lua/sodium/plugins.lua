@@ -23,6 +23,8 @@ local utils = require("sodium.utils")
 
 local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 
+local function noop() return "" end
+
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -43,7 +45,7 @@ require("lazy").setup({
         lazy = true,
     },
     {
-        "carlos-algms/agentic.nvim",
+        "sodiumjoe/agentic.nvim",
         opts = {
             provider = "claude-acp",
             acp_providers = {
@@ -56,22 +58,19 @@ require("lazy").setup({
                     },
                 },
             },
-        },
-        config = function(_, opts)
-            local ChatWidget = require("agentic.ui.chat_widget")
-            local original_open_win = ChatWidget._open_win
-
-            ChatWidget._open_win = function(self, bufnr, enter, win_config_opts, win_opts)
-                local modified_win_opts = vim.tbl_deep_extend("force", win_opts or {}, {
+            windows = {
+                win_opts = {
                     foldcolumn = "1",
-                })
-                return original_open_win(self, bufnr, enter, win_config_opts, modified_win_opts)
-            end
-
-            ChatWidget.render_header = function() end
-
-            require("agentic").setup(opts)
-        end,
+                },
+            },
+            headers = {
+                chat = noop,
+                input = noop,
+                code = noop,
+                files = noop,
+                todos = noop,
+            },
+        },
         keys = {
             {
                 "<leader>ac",
