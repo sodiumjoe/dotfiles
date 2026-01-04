@@ -25,6 +25,9 @@ local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 
 local function noop() return "" end
 
+local nodenv_root = vim.env.NODENV_ROOT or (vim.env.HOME .. "/.nodenv")
+local nodenv_shims = nodenv_root .. "/shims"
+
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -50,11 +53,12 @@ require("lazy").setup({
             provider = "claude-acp",
             acp_providers = {
                 ["claude-acp"] = {
-                    command = "claude-code-acp",
+                    command = nodenv_shims .. "/claude-code-acp",
                     env = {
                         CLAUDE_CODE_EXECUTABLE = "/usr/local/bin/claude",
                         NODE_NO_WARNINGS = "1",
                         IS_AI_TERMINAL = "1",
+                        NODENV_VERSION = "24.9.0",
                     },
                 },
             },
@@ -75,7 +79,7 @@ require("lazy").setup({
             {
                 "<leader>ac",
                 function() require("agentic").toggle() end,
-                mode = { "n", "i" },
+                mode = { "n" },
                 desc = "Toggle Agentic Chat",
             },
             {
@@ -87,13 +91,13 @@ require("lazy").setup({
             {
                 "<leader>ao",
                 function() require("agentic").open() end,
-                mode = { "n", "v" },
+                mode = { "n" },
                 desc = "Open Agentic Chat",
             },
             {
                 "<leader>an",
                 function() require("agentic").new_session() end,
-                mode = { "n", "v" },
+                mode = { "n" },
                 desc = "Open Agentic Chat",
             },
 
