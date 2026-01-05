@@ -607,6 +607,7 @@ require("lazy").setup({
         build = ":TSUpdate",
         main = "nvim-treesitter.configs",
         opts = {
+            additional_vim_regex_highlighting = false,
             ensure_installed = {
                 "bash",
                 "css",
@@ -885,3 +886,4 @@ require("lazy").setup({
         },
     },
 })
+
