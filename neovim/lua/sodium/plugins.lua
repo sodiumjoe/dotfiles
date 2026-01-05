@@ -179,6 +179,11 @@ require("lazy").setup({
                         },
                     },
                 },
+                previewers = {
+                    diff = {
+                        style = "syntax",
+                    },
+                },
             },
             quickfile = { enabled = true },
             scroll = { enabled = true },
