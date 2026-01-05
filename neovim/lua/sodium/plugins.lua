@@ -515,7 +515,7 @@ require("lazy").setup({
                 { 'eslint',        nil },
                 { 'flow',          nil },
                 { 'tsgo',          nil },
-                { 'lua_ls',        nil },
+                { 'lua_ls',        'lua-language-server' },
             }
 
             local enabled_servers = {}
