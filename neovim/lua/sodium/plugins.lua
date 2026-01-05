@@ -25,6 +25,8 @@ local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
 
 local function noop() return "" end
 
+local claude_path = vim.fn.exepath("claude")
+
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -54,6 +56,7 @@ require("lazy").setup({
                         NODE_NO_WARNINGS = "1",
                         IS_AI_TERMINAL = "1",
                         NODENV_VERSION = "24.9.0",
+                        CLAUDE_CODE_EXECUTABLE = claude_path,
                     },
                 },
             },
