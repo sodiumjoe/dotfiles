@@ -22,6 +22,10 @@ local function drawBorder()
         return
     end
 
+    if win:isFullScreen() then
+        return
+    end
+
     local frame = win:frame()
 
     if focusBorder then
