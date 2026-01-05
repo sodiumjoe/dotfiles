@@ -27,6 +27,12 @@ local function noop() return "" end
 
 local claude_path = vim.fn.exepath("claude")
 
+local window_opts = {
+    win_opts = {
+        foldcolumn = "1",
+    },
+}
+
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -61,9 +67,11 @@ require("lazy").setup({
                 },
             },
             windows = {
-                win_opts = {
-                    foldcolumn = "1",
-                },
+                code = window_opts,
+                files = window_opts,
+                input = window_opts,
+                todos = window_opts,
+                chat = window_opts,
             },
             headers = {
                 chat = noop,
