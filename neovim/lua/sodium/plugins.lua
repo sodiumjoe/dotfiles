@@ -404,14 +404,17 @@ require("lazy").setup({
 
             local on_attach = function(client, bufnr)
                 if client:supports_method("textDocument/formatting") then
-                    vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
-                    vim.api.nvim_create_autocmd("BufWritePre", {
-                        group = autoformat_augroup,
-                        buffer = bufnr,
-                        callback = function()
-                            vim.lsp.buf.format({ timeout_ms = 30000 })
-                        end,
-                    })
+                    local bufname = vim.api.nvim_buf_get_name(bufnr)
+                    if not bufname:match("^fugitive://") then
+                        vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
+                        vim.api.nvim_create_autocmd("BufWritePre", {
+                            group = autoformat_augroup,
+                            buffer = bufnr,
+                            callback = function()
+                                vim.lsp.buf.format({ timeout_ms = 30000 })
+                            end,
+                        })
+                    end
                 end
                 require("lspkind").init({})
 
@@ -886,4 +889,3 @@ require("lazy").setup({
         },
     },
 })
-
