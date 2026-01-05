@@ -513,7 +513,7 @@ require("lazy").setup({
                 { 'bazel',         nil },
                 { 'sorbet',        nil },
                 { 'eslint',        nil },
-                { 'flow',          nil },
+                { 'flow',          'flow' },
                 { 'tsgo',          nil },
                 { 'lua_ls',        'lua-language-server' },
             }
