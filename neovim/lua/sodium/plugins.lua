@@ -363,7 +363,6 @@ require("lazy").setup({
 
             vim.diagnostic.config({
                 signs = {
-                    priority = 11,
                     text = {
                         [vim.diagnostic.severity.ERROR] = utils.icons.Error,
                         [vim.diagnostic.severity.WARN] = utils.icons.Warn,
@@ -377,6 +376,7 @@ require("lazy").setup({
                         [vim.diagnostic.severity.INFO] = "",
                     },
                 },
+                severity_sort = true,
                 virtual_text = false,
                 underline = {
                     severity = {
