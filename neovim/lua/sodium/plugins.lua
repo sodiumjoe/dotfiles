@@ -547,7 +547,7 @@ require("lazy").setup({
                 vim.diagnostic.config({
                     virtual_lines = new_config and {
                         format = utils.virtual_lines_format,
-                    } or false
+                    } or false,
                 })
             end },
             {
