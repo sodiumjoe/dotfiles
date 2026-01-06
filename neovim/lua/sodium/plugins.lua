@@ -379,9 +379,6 @@ require("lazy").setup({
                 severity_sort = true,
                 virtual_text = false,
                 virtual_lines = {
-                    severity = {
-                        min = vim.diagnostic.severity.ERROR,
-                    },
                     format = utils.virtual_lines_format,
                 },
                 update_in_insert = false,
@@ -827,6 +824,14 @@ require("lazy").setup({
     {
         "tpope/vim-fugitive",
         cmd = { "Gdiffsplit", "Git" },
+        init = function()
+            vim.api.nvim_create_autocmd("BufEnter", {
+                pattern = "fugitive://*",
+                callback = function(args)
+                    vim.diagnostic.enable(false, { bufnr = args.buf })
+                end,
+            })
+        end,
     },
     "tpope/vim-repeat",
     "tpope/vim-surround",
