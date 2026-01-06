@@ -174,6 +174,15 @@ function M.virtual_lines_format(diagnostic)
     local center_width = 5
     local left_width = 1
 
+    local severity_icons = {
+        [vim.diagnostic.severity.ERROR] = M.icons.Error,
+        [vim.diagnostic.severity.WARN] = M.icons.Warn,
+        [vim.diagnostic.severity.INFO] = M.icons.Info,
+        [vim.diagnostic.severity.HINT] = M.icons.Hint,
+    }
+    local icon = severity_icons[diagnostic.severity] or ''
+    local source = diagnostic.source and ('[' .. diagnostic.source .. '] ') or ''
+
     ---@type string[]
     local lines = {}
     for msg_line in diagnostic.message:gmatch '([^\n]+)' do
@@ -181,27 +190,10 @@ function M.virtual_lines_format(diagnostic)
         vim.list_extend(lines, split_line(msg_line, max_width))
     end
 
-    return table.concat(lines, '\n')
+    return icon .. source .. table.concat(lines, '\n')
 end
-
--- Don't show virtual text on curresnt line since we'll show virtual_lines
----@param diagnostic vim.Diagnostic
-local function virtual_text_format(diagnostic)
-    if vim.fn.line '.' == diagnostic.lnum + 1 then
-        return nil
-    end
-
-    return diagnostic.message
-end
-
--- vim.diagnostic.config {
---     virtual_text = { format = virtual_text_format, severity = { min = vim.diagnostic.severity.WARN } },
---     virtual_lines = { format = virtual_lines_format, current_line = true },
---     severity_sort = { reverse = false },
--- }
 
 -- Re-draw diagnostics each line change to account for virtual_text changes
-
 local last_line = vim.fn.line '.'
 
 vim.api.nvim_create_autocmd({ 'CursorMoved' }, {
