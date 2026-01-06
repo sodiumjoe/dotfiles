@@ -33,6 +33,39 @@ local window_opts = {
     },
 }
 
+local diagnostic_config = {
+    signs = {
+        text = {
+            [vim.diagnostic.severity.ERROR] = utils.icons.Error,
+            [vim.diagnostic.severity.WARN] = utils.icons.Warn,
+            [vim.diagnostic.severity.INFO] = utils.icons.Info,
+            [vim.diagnostic.severity.HINT] = utils.icons.Hint,
+        },
+        numhl = {
+            [vim.diagnostic.severity.ERROR] = "",
+            [vim.diagnostic.severity.WARN] = "",
+            [vim.diagnostic.severity.HINT] = "",
+            [vim.diagnostic.severity.INFO] = "",
+        },
+    },
+    severity_sort = true,
+    virtual_text = false,
+    virtual_lines = {
+        format = utils.virtual_lines_format,
+    },
+    update_in_insert = false,
+    float = {
+        focusable = false,
+        format = function(diagnostic)
+            local str = string.format("[%s] %s", diagnostic.source, diagnostic.message)
+            if diagnostic.code then
+                str = str .. " (" .. diagnostic.code .. ")"
+            end
+            return str
+        end,
+    },
+}
+
 require("lazy").setup({
     {
         "rktjmp/shipwright.nvim",
@@ -361,38 +394,7 @@ require("lazy").setup({
         config = function()
             local blink = require("blink.cmp")
 
-            vim.diagnostic.config({
-                signs = {
-                    text = {
-                        [vim.diagnostic.severity.ERROR] = utils.icons.Error,
-                        [vim.diagnostic.severity.WARN] = utils.icons.Warn,
-                        [vim.diagnostic.severity.INFO] = utils.icons.Info,
-                        [vim.diagnostic.severity.HINT] = utils.icons.Hint,
-                    },
-                    numhl = {
-                        [vim.diagnostic.severity.ERROR] = "",
-                        [vim.diagnostic.severity.WARN] = "",
-                        [vim.diagnostic.severity.HINT] = "",
-                        [vim.diagnostic.severity.INFO] = "",
-                    },
-                },
-                severity_sort = true,
-                virtual_text = false,
-                virtual_lines = {
-                    format = utils.virtual_lines_format,
-                },
-                update_in_insert = false,
-                float = {
-                    focusable = false,
-                    format = function(diagnostic)
-                        local str = string.format("[%s] %s", diagnostic.source, diagnostic.message)
-                        if diagnostic.code then
-                            str = str .. " (" .. diagnostic.code .. ")"
-                        end
-                        return str
-                    end,
-                },
-            })
+            vim.diagnostic.config(diagnostic_config)
 
             local on_attach = function(client, bufnr)
                 if client:supports_method("textDocument/formatting") then
@@ -540,7 +542,14 @@ require("lazy").setup({
             { "gi",           vim.lsp.buf.implementation },
             { [[<leader>D]],  vim.lsp.buf.type_definition },
             { [[<leader>ca]], vim.lsp.buf.code_action },
-            { [[<leader>ee]], vim.diagnostic.open_float },
+            { [[<leader>ee]], function()
+                local new_config = not vim.diagnostic.config().virtual_lines
+                vim.diagnostic.config({
+                    virtual_lines = new_config and {
+                        format = utils.virtual_lines_format,
+                    } or false
+                })
+            end },
             {
                 [[<leader>p]],
                 function()
