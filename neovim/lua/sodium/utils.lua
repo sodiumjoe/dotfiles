@@ -74,8 +74,8 @@ M.spinner_frames = {
 function M.is_project_local(root_pattern, config_file)
     local lspconfigUtil = require("lspconfig/util")
     local cwd = vim.fn.getcwd()
-    local cwd_root_pattern = lspconfigUtil.path.join(cwd, root_pattern)
-    local cwd_config_file = lspconfigUtil.path.join(cwd, config_file)
+    local cwd_root_pattern = table.concat({ cwd, root_pattern }, "/")
+    local cwd_config_file = table.concat({ cwd, config_file }, "/")
     if M.path_exists(cwd_root_pattern) then
         return M.path_exists(cwd_config_file)
     end
