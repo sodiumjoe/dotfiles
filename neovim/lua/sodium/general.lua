@@ -129,7 +129,7 @@ utils.map({
     -- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },
 
     -- copy relative path to clipboard
-    { "n", [[<leader>cr]], [[:let @+ = expand("%")<cr>]] },
+    { "n", [[<leader>cr]], [[:let @+ = expand("%:.")<cr>]] },
     -- copy full path to clipboard
     { "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
     {
