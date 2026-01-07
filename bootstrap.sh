@@ -6,6 +6,7 @@ mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 files=(\
   "bin"\
+  "claude"\
   "curlrc"\
   "cvimrc"\
   "gitconfig"\
@@ -26,7 +27,6 @@ for file in ${files[@]}; do
 done
 
 xdg_files=(\
-  "CLAUDE.md"\
   "alacritty"\
   "ghostty"\
   "hammerspoon"\
