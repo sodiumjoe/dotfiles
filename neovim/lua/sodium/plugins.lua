@@ -782,7 +782,7 @@ require("lazy").setup({
             local line_nr_autocmd = utils.augroup("LineNr", { clear = true })
             -- disable line number in these filetypes
             line_nr_autocmd("FileType", {
-                pattern = { "vimwiki", "dirvish", "help" },
+                pattern = { "dirvish", "help" },
                 callback = function()
                     vim.opt_local.number = false
                 end,
@@ -836,39 +836,6 @@ require("lazy").setup({
     },
     "tpope/vim-repeat",
     "tpope/vim-surround",
-    {
-        "vimwiki/vimwiki",
-        init = function()
-            local wiki = {
-                path = "~/home/todo.wiki",
-                syntax = "markdown",
-            }
-            local work_wiki = {
-                path = "~/stripe/todo.wiki",
-                path_html = "~/stripe/todo.html",
-                syntax = "markdown",
-            }
-
-            if vim.fn.isdirectory(vim.fn.expand("~/stripe")) ~= 0 then
-                vim.g.vimwiki_list = { work_wiki, wiki }
-            else
-                vim.g.vimwiki_list = { wiki }
-            end
-            vim.g.vimwiki_auto_header = 1
-            vim.g.vimwiki_hl_headers = 1
-            vim.g.vimwiki_hl_cb_checked = 1
-            vim.g.vimwiki_listsyms = " ○◐●✓"
-        end,
-        keys = {
-            { [[<leader>wp]], "<cmd>VimwikiDiaryPrevDay<cr>" },
-            { [[<leader>wn]], "<Plug>VimwikiDiaryNextDay<cr>" },
-            { [[<leader>wg]], "<cmd>VimwikiGoto<cr>" },
-            { [[<leader>=]],  "<cmd>VimwikiAddHeaderLevel<cr>" },
-            { [[<leader>-]],  "<cmd>VimwikiRemoveHeaderLevel<cr>" },
-            "<leader>ww",
-            "<leader>w<space>w",
-        },
-    },
 }, {
     -- leave nil when passing the spec as the first argument to setup()
     lockfile = "~/.dotfiles/lazy-lock.json",
