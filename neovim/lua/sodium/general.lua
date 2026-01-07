@@ -49,6 +49,9 @@ o.winborder = "rounded"
 -- misc
 -- ====
 
+-- Disable regex highlighting in favor of treesitter
+vim.cmd("syntax off")
+
 vim.g.loaded_perl_provider = 0
 
 utils.augroup("AutoCloseQFLL", { clear = true })("FileType", {
