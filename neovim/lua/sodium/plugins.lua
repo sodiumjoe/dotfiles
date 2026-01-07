@@ -509,7 +509,9 @@ require("lazy").setup({
                 group = lsp_attach_group,
                 callback = function(args)
                     if is_fugitive_buffer(args.buf) then
-                        vim.lsp.buf_detach_client(args.buf, args.data.client_id)
+                        vim.schedule(function()
+                            vim.diagnostic.enable(false, { bufnr = args.buf })
+                        end)
                         return
                     end
 
