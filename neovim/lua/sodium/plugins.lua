@@ -21,7 +21,26 @@ vim.opt.rtp:prepend(lazypath)
 
 local utils = require("sodium.utils")
 
-local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", {})
+local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", { clear = true })
+
+local function is_fugitive_buffer(bufnr)
+    return vim.api.nvim_buf_get_name(bufnr):match("^fugitive://") ~= nil
+end
+
+local function setup_format_on_save(client, bufnr)
+    if not client:supports_method("textDocument/formatting") or is_fugitive_buffer(bufnr) then
+        return
+    end
+
+    vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
+    vim.api.nvim_create_autocmd("BufWritePre", {
+        group = autoformat_augroup,
+        buffer = bufnr,
+        callback = function()
+            vim.lsp.buf.format({ timeout_ms = 30000 })
+        end,
+    })
+end
 
 local function noop() return "" end
 
@@ -397,21 +416,8 @@ require("lazy").setup({
             vim.diagnostic.config(diagnostic_config)
 
             local on_attach = function(client, bufnr)
-                if client:supports_method("textDocument/formatting") then
-                    local bufname = vim.api.nvim_buf_get_name(bufnr)
-                    if not bufname:match("^fugitive://") then
-                        vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
-                        vim.api.nvim_create_autocmd("BufWritePre", {
-                            group = autoformat_augroup,
-                            buffer = bufnr,
-                            callback = function()
-                                vim.lsp.buf.format({ timeout_ms = 30000 })
-                            end,
-                        })
-                    end
-                end
+                setup_format_on_save(client, bufnr)
                 require("lspkind").init({})
-
                 require("sodium.statusline").on_attach()
             end
 
@@ -502,6 +508,11 @@ require("lazy").setup({
             vim.api.nvim_create_autocmd("LspAttach", {
                 group = lsp_attach_group,
                 callback = function(args)
+                    if is_fugitive_buffer(args.buf) then
+                        vim.lsp.buf_detach_client(args.buf, args.data.client_id)
+                        return
+                    end
+
                     local client = vim.lsp.get_client_by_id(args.data.client_id)
                     if not client then return end
 
@@ -696,20 +707,9 @@ require("lazy").setup({
             null_ls.setup({
                 sources = sources,
                 should_attach = function(bufnr)
-                    return not vim.api.nvim_buf_get_name(bufnr):match("^fugitive://")
+                    return not is_fugitive_buffer(bufnr)
                 end,
-                on_attach = function(client, bufnr)
-                    if client:supports_method("textDocument/formatting") then
-                        vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
-                        vim.api.nvim_create_autocmd("BufWritePre", {
-                            group = autoformat_augroup,
-                            buffer = bufnr,
-                            callback = function()
-                                vim.lsp.buf.format({ timeout_ms = 30000 })
-                            end,
-                        })
-                    end
-                end,
+                on_attach = setup_format_on_save,
             })
         end,
     },
@@ -833,14 +833,6 @@ require("lazy").setup({
     {
         "tpope/vim-fugitive",
         cmd = { "Gdiffsplit", "Git" },
-        init = function()
-            vim.api.nvim_create_autocmd("BufEnter", {
-                pattern = "fugitive://*",
-                callback = function(args)
-                    vim.diagnostic.enable(false, { bufnr = args.buf })
-                end,
-            })
-        end,
     },
     "tpope/vim-repeat",
     "tpope/vim-surround",
