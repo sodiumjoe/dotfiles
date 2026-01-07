@@ -7,6 +7,10 @@ local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "Agent
 -- Track if LSP has attached at least once
 local lsp_attached = false
 
+local function is_fugitive_buffer()
+    return vim.api.nvim_buf_get_name(0):match("^fugitive://") ~= nil
+end
+
 local function is_standard_filetype()
     local ft = vim.bo.filetype
     for _, filetype in ipairs(non_standard_filetypes) do
@@ -17,17 +21,24 @@ local function is_standard_filetype()
     return true
 end
 
+local function get_filename()
+    local bufname = vim.api.nvim_buf_get_name(0)
+    local _, _, filepath = bufname:match("^fugitive://(.+)//(%x+)/(.+)$")
+    if filepath then
+        return "[staged]: " .. filepath
+    end
+    return vim.fn.fnamemodify(bufname, ":~:.")
+end
+
 local filename_active = {
-    "filename",
+    get_filename,
     cond = is_standard_filetype,
-    path = 1,
     color = "StatusLineActiveItem",
 }
 
 local filename_inactive = {
-    "filename",
+    get_filename,
     cond = is_standard_filetype,
-    path = 1,
 }
 
 local function get_lines()
@@ -181,7 +192,7 @@ end
 local lsp_status = {
     lsp_status_component,
     cond = function()
-        return lsp_attached and is_standard_filetype() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
+        return lsp_attached and is_standard_filetype() and not is_fugitive_buffer() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
     end,
     padding = 1,
 }
@@ -198,7 +209,7 @@ end
 local separator = separator_if(is_standard_filetype)
 
 local separator_before_lsp = separator_if(function()
-    return lsp_attached and is_standard_filetype() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
+    return lsp_attached and is_standard_filetype() and not is_fugitive_buffer() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
 end)
 
 local lines = {
