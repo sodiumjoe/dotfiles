@@ -9,4 +9,4 @@ zsh/.zsh_sessions
 karabiner/assets/*
 karabiner/automatic_backups/*
 karabiner/Icon*
-.claude/*.json
+.claude
