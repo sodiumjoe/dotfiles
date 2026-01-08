@@ -316,6 +316,12 @@ require("lazy").setup({
                 pattern = { "dirvish" },
                 command = "silent! unmap <buffer> <C-n>",
             })
+            dirvish_autocmd("FileType", {
+                pattern = "dirvish",
+                callback = function()
+                    vim.cmd("syntax on")
+                end,
+            })
         end,
     },
     {
@@ -495,6 +501,10 @@ require("lazy").setup({
                     Lua = {
                         runtime = {
                             version = 'LuaJIT',
+                        },
+                        path = {
+                            'lua/?.lua',
+                            'lua/?/init.lua',
                         },
                         workspace = {
                             checkThirdParty = false,
