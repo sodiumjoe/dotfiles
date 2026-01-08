@@ -496,23 +496,7 @@ require("lazy").setup({
 
             vim.lsp.config('flow', {})
 
-            vim.lsp.config('lua_ls', {
-                settings = {
-                    Lua = {
-                        runtime = {
-                            version = 'LuaJIT',
-                        },
-                        path = {
-                            'lua/?.lua',
-                            'lua/?/init.lua',
-                        },
-                        workspace = {
-                            checkThirdParty = false,
-                            library = { vim.env.VIMRUNTIME },
-                        },
-                    },
-                },
-            })
+            vim.lsp.config('lua_ls', {})
 
             local lsp_attach_group = vim.api.nvim_create_augroup("UserLspAttach", { clear = true })
             vim.api.nvim_create_autocmd("LspAttach", {
