@@ -6,7 +6,6 @@ mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 files=(\
   "bin"\
-  "claude"\
   "curlrc"\
   "cvimrc"\
   "gitconfig"\
@@ -52,6 +51,8 @@ for file in ${xdg_files[@]}; do
 done
 
 ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
+
+ln -s ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
