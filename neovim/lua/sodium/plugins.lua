@@ -106,7 +106,9 @@ require("lazy").setup({
     },
     {
         "sodiumjoe/agentic.nvim",
-        config = function()
+        config = function(_, opts)
+            require("agentic").setup(opts)
+
             local agentic_autocmd = utils.augroup("AgenticConfig", { clear = true })
             agentic_autocmd("FileType", {
                 pattern = "agentic",
@@ -165,7 +167,7 @@ require("lazy").setup({
                 "<leader>an",
                 function() require("agentic").new_session() end,
                 mode = { "n" },
-                desc = "Open Agentic Chat",
+                desc = "New Agentic Chat session",
             },
 
         },
