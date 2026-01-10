@@ -21,3 +21,4 @@
 
 - Do not write comments in code by default
 - Only add comments when explicitly requested
+- Do not add trailing new lines to the end of files
