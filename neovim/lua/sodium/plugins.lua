@@ -106,17 +106,6 @@ require("lazy").setup({
     },
     {
         "sodiumjoe/agentic.nvim",
-        config = function(_, opts)
-            require("agentic").setup(opts)
-
-            local agentic_autocmd = utils.augroup("AgenticConfig", { clear = true })
-            agentic_autocmd("FileType", {
-                pattern = "agentic",
-                callback = function()
-                    vim.cmd("syntax off")
-                end,
-            })
-        end,
         opts = {
             provider = "claude-acp",
             acp_providers = {
