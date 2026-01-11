@@ -276,6 +276,68 @@ local function get_agentic_title()
     return ""
 end
 
+local agentic_spinner_index = 1
+local agentic_timer
+
+local function start_agentic_timer()
+    if agentic_timer == nil then
+        agentic_timer = vim.uv.new_timer()
+        if agentic_timer ~= nil then
+            agentic_timer:start(
+                0,
+                100,
+                vim.schedule_wrap(function()
+                    local ok, session_registry = pcall(require, "agentic.session_registry")
+                    if not ok then
+                        if agentic_timer then
+                            agentic_timer:close()
+                            agentic_timer = nil
+                        end
+                        return
+                    end
+
+                    local tab_page_id = vim.api.nvim_get_current_tabpage()
+                    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
+
+                    if session_manager and session_manager.is_generating then
+                        agentic_spinner_index = (agentic_spinner_index % #utils.spinner_frames) + 1
+                        lualine.refresh()
+                    elseif agentic_timer then
+                        agentic_spinner_index = 1
+                        agentic_timer:close()
+                        agentic_timer = nil
+                        lualine.refresh()
+                    end
+                end)
+            )
+        end
+    end
+end
+
+local function get_agentic_status()
+    if vim.bo.filetype ~= "AgenticChat" then
+        return ""
+    end
+
+    local ok, session_registry = pcall(require, "agentic.session_registry")
+    if not ok then
+        return ""
+    end
+
+    local tab_page_id = vim.api.nvim_get_current_tabpage()
+    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
+    if not session_manager then
+        return ""
+    end
+
+    if session_manager.is_generating then
+        start_agentic_timer()
+        return utils.spinner_frames[agentic_spinner_index]
+    end
+
+    return utils.icons.ok
+end
+
 local function get_agentic_mode()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
@@ -299,6 +361,10 @@ local function get_agentic_mode()
 
     return ""
 end
+
+local separator_before_agentic_status = separator_if(function()
+    return vim.bo.filetype == "AgenticChat"
+end)
 
 local separator_before_agentic_mode = separator_if(function()
     return vim.bo.filetype == "AgenticChat" and get_agentic_mode() ~= ""
@@ -325,6 +391,13 @@ lualine.setup({
                 lualine_b = {},
                 lualine_c = {},
                 lualine_x = {
+                    separator_before_agentic_status,
+                    {
+                        get_agentic_status,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
                     separator_before_agentic_mode,
                     {
                         get_agentic_mode,
@@ -343,6 +416,13 @@ lualine.setup({
                 lualine_b = {},
                 lualine_c = {},
                 lualine_x = {
+                    separator_before_agentic_status,
+                    {
+                        get_agentic_status,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
                     separator_before_agentic_mode,
                     {
                         get_agentic_mode,
@@ -366,3 +446,4 @@ function M.on_attach()
 end
 
 return M
+
