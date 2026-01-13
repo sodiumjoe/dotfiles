@@ -3,9 +3,9 @@
   email = joe@xoxomoon.com
 
 [includeIf "gitdir:/Users/moon/stripe/"]
-  path = /Users/moon/stripe/.gitconfig
+  path = ~/stripe/.gitconfig
 [includeIf "gitdir:/pay/src/"]
-  path = /home/owner/.stripe.gitconfig
+  path = ~/.stripe.gitconfig
 
 
 [alias]
