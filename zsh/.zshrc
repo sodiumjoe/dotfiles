@@ -203,9 +203,9 @@ ZSH_AUTOSUGGEST_HISTORY_IGNORE="man *"
 
 # dir aliases
 [ -d ~/.dotfiles ] && hash -d dots=~/.dotfiles
-[ -d ~/stripe/pay-server/manage/frontend ] && hash -d dashboard=~/stripe/pay-server/manage/frontend
-[ -d ~/stripe/pay-server/manage ] && hash -d manage=~/stripe/pay-server/manage
-[ -d ~/stripe/pay-server ] && hash -d pay=~/stripe/pay-server
+[ -d ~/stripe/pay-server/manage/frontend ] && hash -d dashboard=~/stripe/mint/pay-server/manage/frontend
+[ -d ~/stripe/pay-server/manage ] && hash -d manage=~/stripe/mint/pay-server/manage
+[ -d ~/stripe/pay-server ] && hash -d pay=~/stripe/mint/pay-server
 [ -d /pay/src/pay-server/manage/frontend ] && hash -d dashboard=/pay/src/pay-server/manage/frontend
 [ -d /pay/src/pay-server/manage ] && hash -d manage=/pay/src/pay-server/manage
 [ -d /pay/src/pay-server ] && hash -d pay=/pay/src/pay-server
@@ -321,7 +321,7 @@ remote() {
   remote="$1"
   branch="$(whoami)/$remote"
 
-  pay remote new "$1" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready && \
+  pay remote new "$1" --repo "pay-server:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
 }
