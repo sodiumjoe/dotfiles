@@ -10,7 +10,7 @@ local zoomNonMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter
 local zoomMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ allowTitles = "Zoom Meeting" })
 local slackFilter = hs.window.filter.new(false):setAppFilter("Slack", { visible = true })
 
-hs.loadSpoon('highlight_focused_window')
+hs.loadSpoon("highlight_focused_window")
 
 -- hs.window.highlight.ui.overlay=true
 hs.window.highlight.ui.overlayColor = { 0, 0, 0, 0.001 }

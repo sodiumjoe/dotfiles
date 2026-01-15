@@ -1,7 +1,6 @@
 local lualine = require("lualine")
 local utils = require("sodium.utils")
 
-
 local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
 
@@ -193,15 +192,19 @@ end
 local lsp_status = {
     lsp_status_component,
     cond = function()
-        return lsp_attached and is_standard_filetype() and not is_fugitive_buffer() and
-            #vim.lsp.get_clients({ bufnr = 0 }) > 0
+        return lsp_attached
+            and is_standard_filetype()
+            and not is_fugitive_buffer()
+            and #vim.lsp.get_clients({ bufnr = 0 }) > 0
     end,
     padding = 1,
 }
 
 local function separator_if(cond_fn)
     return {
-        function() return "│" end,
+        function()
+            return "│"
+        end,
         cond = cond_fn,
         color = "StatusLineSeparator",
         padding = 0,
@@ -211,8 +214,10 @@ end
 local separator = separator_if(is_standard_filetype)
 
 local separator_before_lsp = separator_if(function()
-    return lsp_attached and is_standard_filetype() and not is_fugitive_buffer() and
-        #vim.lsp.get_clients({ bufnr = 0 }) > 0
+    return lsp_attached
+        and is_standard_filetype()
+        and not is_fugitive_buffer()
+        and #vim.lsp.get_clients({ bufnr = 0 }) > 0
 end)
 
 local lines = {
@@ -446,4 +451,3 @@ function M.on_attach()
 end
 
 return M
-

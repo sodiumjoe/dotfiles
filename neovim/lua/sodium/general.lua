@@ -122,8 +122,8 @@ utils.map({
     -- { "x", [[<leader>p]], [["_dP]], { noremap = true } },
 
     -- movement
-    { "n", "j",            "gj" },
-    { "n", "k",            "gk" },
+    { "n", "j", "gj" },
+    { "n", "k", "gk" },
 
     -- search visual selection (busted)
     -- { "v", [[//]], [[y/<C-R>"<CR>]], { noremap = true } },

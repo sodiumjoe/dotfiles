@@ -443,8 +443,21 @@ require("lazy").setup({
                 desc = "Quickfix List",
             },
             -- LSP
-            { "gd",         function() Snacks.picker.lsp_definitions() end,                                              desc = "Goto Definition" },
-            { "gr",         function() Snacks.picker.lsp_references() end,                                               nowait = true,           desc = "References" },
+            {
+                "gd",
+                function()
+                    Snacks.picker.lsp_definitions()
+                end,
+                desc = "Goto Definition",
+            },
+            {
+                "gr",
+                function()
+                    Snacks.picker.lsp_references()
+                end,
+                nowait = true,
+                desc = "References",
+            },
         },
     },
     {
@@ -586,19 +599,19 @@ require("lazy").setup({
 
             local base_capabilities = blink.get_lsp_capabilities(vim.lsp.protocol.make_client_capabilities())
 
-            vim.lsp.config('*', {
+            vim.lsp.config("*", {
                 capabilities = base_capabilities,
             })
 
-            vim.lsp.config('bazel', {
+            vim.lsp.config("bazel", {
                 cmd = { "pay", "exec", "scripts/dev/bazel-lsp" },
                 filetypes = { "star", "bzl", "BUILD.bazel" },
-                root_markers = { '.git' },
+                root_markers = { ".git" },
             })
 
-            vim.lsp.config('rust_analyzer', {
-                filetypes = { 'rust' },
-                root_markers = { 'Cargo.toml' },
+            vim.lsp.config("rust_analyzer", {
+                filetypes = { "rust" },
+                root_markers = { "Cargo.toml" },
                 settings = {
                     ["rust-analyzer"] = {
                         cargo = {
@@ -608,7 +621,7 @@ require("lazy").setup({
                 },
             })
 
-            vim.lsp.config('sorbet', {
+            vim.lsp.config("sorbet", {
                 cmd = {
                     "pay",
                     "exec",
@@ -623,11 +636,13 @@ require("lazy").setup({
                 settings = {},
             })
 
-            vim.lsp.config('eslint', {
+            vim.lsp.config("eslint", {
                 cmd_env = { BROWSERSLIST_IGNORE_OLD_DATA = "1" },
                 handlers = {
                     ["textDocument/diagnostic"] = function(_, result, ctx)
-                        if result == nil or result.items == nil then return end
+                        if result == nil or result.items == nil then
+                            return
+                        end
 
                         -- ignore prettier diagnostics since it autofixes anyway
                         local idx = 1
@@ -640,18 +655,14 @@ require("lazy").setup({
                             end
                         end
 
-                        vim.lsp.diagnostic.on_diagnostic(
-                            _,
-                            result,
-                            ctx
-                        )
+                        vim.lsp.diagnostic.on_diagnostic(_, result, ctx)
                     end,
                 },
             })
 
-            vim.lsp.config('flow', {})
+            vim.lsp.config("flow", {})
 
-            vim.lsp.config('lua_ls', {})
+            vim.lsp.config("lua_ls", {})
 
             local lsp_attach_group = vim.api.nvim_create_augroup("UserLspAttach", { clear = true })
             vim.api.nvim_create_autocmd("LspAttach", {
@@ -665,7 +676,9 @@ require("lazy").setup({
                     end
 
                     local client = vim.lsp.get_client_by_id(args.data.client_id)
-                    if not client then return end
+                    if not client then
+                        return
+                    end
 
                     on_attach(client, args.buf)
 
@@ -679,13 +692,13 @@ require("lazy").setup({
             })
 
             local lsp_servers = {
-                { 'rust_analyzer', 'rust-analyzer' },
-                { 'bazel',         nil },
-                { 'sorbet',        nil },
-                { 'eslint',        nil },
-                { 'flow',          'flow' },
-                { 'tsgo',          nil },
-                { 'lua_ls',        'lua-language-server' },
+                { "rust_analyzer", "rust-analyzer" },
+                { "bazel", nil },
+                { "sorbet", nil },
+                { "eslint", nil },
+                { "flow", "flow" },
+                { "tsgo", nil },
+                { "lua_ls", "lua-language-server" },
                 { "stylua", "stylua" },
             }
 
@@ -700,19 +713,27 @@ require("lazy").setup({
             vim.lsp.enable(enabled_servers)
         end,
         keys = {
-            { "gD",           vim.lsp.buf.declaration },
-            { "K",            function() vim.lsp.buf.hover({ focusable = false }) end },
-            { "gi",           vim.lsp.buf.implementation },
-            { [[<leader>D]],  vim.lsp.buf.type_definition },
+            { "gD", vim.lsp.buf.declaration },
+            {
+                "K",
+                function()
+                    vim.lsp.buf.hover({ focusable = false })
+                end,
+            },
+            { "gi", vim.lsp.buf.implementation },
+            { [[<leader>D]], vim.lsp.buf.type_definition },
             { [[<leader>ca]], vim.lsp.buf.code_action },
-            { [[<leader>ee]], function()
-                local new_config = not vim.diagnostic.config().virtual_lines
-                vim.diagnostic.config({
-                    virtual_lines = new_config and {
-                        format = utils.virtual_lines_format,
-                    } or false,
-                })
-            end },
+            {
+                [[<leader>ee]],
+                function()
+                    local new_config = not vim.diagnostic.config().virtual_lines
+                    vim.diagnostic.config({
+                        virtual_lines = new_config and {
+                            format = utils.virtual_lines_format,
+                        } or false,
+                    })
+                end,
+            },
             {
                 [[<leader>p]],
                 function()
@@ -810,7 +831,7 @@ require("lazy").setup({
             playground = {
                 enable = true,
                 disable = {},
-                updatetime = 25,         -- Debounced time for highlighting nodes in the playground from source code
+                updatetime = 25, -- Debounced time for highlighting nodes in the playground from source code
                 persist_queries = false, -- Whether the query persists across vim sessions
                 keybindings = {
                     toggle_query_editor = "o",
@@ -854,7 +875,6 @@ require("lazy").setup({
                         return util.root_has_file("prettier.config.js")
                     end,
                 }),
-                null_ls.builtins.formatting.stylua,
             }
 
             null_ls.setup({
@@ -880,17 +900,17 @@ require("lazy").setup({
     },
     "rhysd/conflict-marker.vim",
     {
-        'saghen/blink.cmp',
+        "saghen/blink.cmp",
         lazy = false, -- lazy loading handled internally
         -- use a release tag to download pre-built binaries
-        version = 'v1.*',
+        version = "v1.*",
 
         ---@module 'blink.cmp'
         ---@type blink.cmp.Config
         opts = {
             keymap = {
-                preset = 'default',
-                ['<CR>'] = { 'accept', 'fallback' },
+                preset = "default",
+                ["<CR>"] = { "accept", "fallback" },
             },
             completion = {
                 menu = {

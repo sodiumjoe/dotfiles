@@ -84,7 +84,7 @@ function M.is_project_local(root_pattern, config_file)
 end
 
 function M.find_git_ancestor(startpath)
-    return vim.fs.dirname(vim.fs.find('.git', { path = startpath, upward = true })[1])
+    return vim.fs.dirname(vim.fs.find(".git", { path = startpath, upward = true })[1])
 end
 
 local severity_levels = {
@@ -140,9 +140,9 @@ local function split_line(str, max_width)
     end
 
     local lines = {}
-    local current_line = ''
+    local current_line = ""
 
-    for word in string.gmatch(str, '%S+') do
+    for word in string.gmatch(str, "%S+") do
         -- If adding this word would exceed max_width
         if #current_line + #word + 1 > max_width then
             -- Add the current line to our results
@@ -150,8 +150,8 @@ local function split_line(str, max_width)
             current_line = word
         else
             -- Add word to the current line with a space if needed
-            if current_line ~= '' then
-                current_line = current_line .. ' ' .. word
+            if current_line ~= "" then
+                current_line = current_line .. " " .. word
             else
                 current_line = word
             end
@@ -159,7 +159,7 @@ local function split_line(str, max_width)
     end
 
     -- Don't forget the last line
-    if current_line ~= '' then
+    if current_line ~= "" then
         table.insert(lines, current_line)
     end
 
@@ -180,25 +180,25 @@ function M.virtual_lines_format(diagnostic)
         [vim.diagnostic.severity.INFO] = M.icons.Info,
         [vim.diagnostic.severity.HINT] = M.icons.Hint,
     }
-    local icon = severity_icons[diagnostic.severity] or ''
-    local source = diagnostic.source and ('[' .. diagnostic.source .. '] ') or ''
+    local icon = severity_icons[diagnostic.severity] or ""
+    local source = diagnostic.source and ("[" .. diagnostic.source .. "] ") or ""
 
     ---@type string[]
     local lines = {}
-    for msg_line in diagnostic.message:gmatch '([^\n]+)' do
+    for msg_line in diagnostic.message:gmatch("([^\n]+)") do
         local max_width = text_area_width - diagnostic.col - center_width - left_width
         vim.list_extend(lines, split_line(msg_line, max_width))
     end
 
-    return icon .. source .. table.concat(lines, '\n')
+    return icon .. source .. table.concat(lines, "\n")
 end
 
 -- Re-draw diagnostics each line change to account for virtual_text changes
-local last_line = vim.fn.line '.'
+local last_line = vim.fn.line(".")
 
-vim.api.nvim_create_autocmd({ 'CursorMoved' }, {
+vim.api.nvim_create_autocmd({ "CursorMoved" }, {
     callback = function()
-        local current_line = vim.fn.line '.'
+        local current_line = vim.fn.line(".")
 
         -- Check if the cursor has moved to a different line
         if current_line ~= last_line then
@@ -213,7 +213,7 @@ vim.api.nvim_create_autocmd({ 'CursorMoved' }, {
 
 -- Re-render diagnostics when the window is resized
 
-vim.api.nvim_create_autocmd('VimResized', {
+vim.api.nvim_create_autocmd("VimResized", {
     callback = function()
         vim.diagnostic.hide()
         vim.diagnostic.show()
