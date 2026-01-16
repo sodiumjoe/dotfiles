@@ -103,8 +103,8 @@ require("lazy").setup({
     },
     {
         "catgoose/nvim-colorizer.lua",
+        event = "BufReadPre",
         opts = {},
-        lazy = true,
     },
     {
         "sodiumjoe/agentic.nvim",
@@ -661,6 +661,8 @@ require("lazy").setup({
             })
 
             vim.lsp.config("flow", {})
+
+            vim.lsp.config("tsgo", {})
 
             vim.lsp.config("lua_ls", {})
 
