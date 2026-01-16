@@ -9,6 +9,7 @@ local zoomFilter = hs.window.filter.new(false):setAppFilter("zoom.us", { visible
 local zoomNonMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ rejectTitles = "Zoom Meeting" })
 local zoomMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ allowTitles = "Zoom Meeting" })
 local slackFilter = hs.window.filter.new(false):setAppFilter("Slack", { visible = true })
+local youtubeMusicFilter = hs.window.filter.new(false):setAppFilter("YouTube Music")
 
 hs.loadSpoon("highlight_focused_window")
 
@@ -283,9 +284,8 @@ local function mute_zoom_or_global()
     if #zoomFilter:getWindows() > 1 then
         hs.eventtap.keyStroke({ "cmd", "shift" }, "a", nil, hs.application.find("zoom"))
     else
-        local youtubeMusic = hs.application.find("YouTube Music")
-        if youtubeMusic then
-            hs.eventtap.keyStroke({}, ";", nil, youtubeMusic)
+        if #youtubeMusicFilter:getWindows() > 0 then
+            hs.eventtap.keyStroke({}, ";", nil, hs.application.get("YouTube Music"))
         else
             hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
         end
