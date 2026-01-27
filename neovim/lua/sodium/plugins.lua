@@ -46,7 +46,7 @@ local function noop()
     return ""
 end
 
-local claude_path = vim.fn.exepath("claude")
+local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
 
 local window_opts = {
     win_opts = {
