@@ -1,5 +1,5 @@
 hs.window.animationDuration = 0.01
--- local log = hs.logger.new("foo", 5)
+local log = hs.logger.new("window_focus", 5)
 -- log.log("logging enabled")
 local chromeFilter = hs.window.filter.new(false):setAppFilter("Google Chrome", { visible = true })
 local calendarFilter = hs.window.filter.new(false):setAppFilter("Google Calendar", { visible = true })
@@ -23,14 +23,14 @@ local gap = 22
 
 local function resetScreenRotations()
     local middle = hs.screen.find("8D4ABB98-899E-4A68-8C45-171987AD4460") or
-    hs.screen.find("54E424F3-7B0B-450B-B9C7-7231969D83CB")
+        hs.screen.find("54E424F3-7B0B-450B-B9C7-7231969D83CB")
     local rotated = false
     if middle:rotate() ~= 90 then
         middle:rotate(90)
         rotated = true
     end
     local right = hs.screen.find("C9663195-14A9-4530-814C-4C63B2214E99") or
-    hs.screen.find("6427002F-49C0-4754-BF96-A480C3EC8512")
+        hs.screen.find("6427002F-49C0-4754-BF96-A480C3EC8512")
     if right:rotate() ~= 270 then
         right:rotate(270)
         rotated = true
@@ -100,7 +100,7 @@ end
 local function focusRight()
     local focusedWindow = hs.window.frontmostWindow()
     local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-    focusedWindow:focusWindowEast(windows, true)
+    focusedWindow:focusWindowEast(windows, true, true)
 end
 
 local function focusUp()
