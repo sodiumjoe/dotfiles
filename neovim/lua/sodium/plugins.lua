@@ -918,7 +918,15 @@ require("lazy").setup({
             },
             completion = {
                 menu = {
-                    auto_show = true,
+                    auto_show = function(ctx)
+                        return ctx.mode ~= "cmdline" and not vim.tbl_contains({
+                            "AgenticInput",
+                            "AgenticChat",
+                            "AgenticTodos",
+                            "AgenticCode",
+                            "AgenticFiles",
+                        }, vim.bo[ctx.bufnr].filetype)
+                    end,
                 },
                 list = {
                     selection = { preselect = false, auto_insert = true },
