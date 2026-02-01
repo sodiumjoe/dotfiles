@@ -110,8 +110,11 @@ require("lazy").setup({
     },
     {
         "sodiumjoe/agentic.nvim",
+        cond = function()
+            return vim.fn.executable(claude_path) == 1 or vim.fn.executable("gemini") == 1
+        end,
         opts = {
-            provider = "claude-acp",
+            provider = vim.fn.executable("claude") == 1 and "claude-acp" or "gemini-acp",
             acp_providers = {
                 ["claude-acp"] = {
                     env = {
@@ -120,6 +123,11 @@ require("lazy").setup({
                         NODENV_VERSION = "24.9.0",
                         CLAUDE_CODE_EXECUTABLE = claude_path,
                     },
+                },
+                ["gemini-acp"] = {
+                    command = "gemini",
+                    args = { "--experimental-acp" },
+                    env = {},
                 },
             },
             windows = {
