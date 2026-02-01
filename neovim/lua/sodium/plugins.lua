@@ -38,6 +38,8 @@ local function setup_format_on_save(client, bufnr)
         buffer = bufnr,
         callback = function()
             vim.lsp.buf.format({ timeout_ms = 30000 })
+            vim.bo[bufnr].endofline = true
+            vim.bo[bufnr].fixendofline = true
         end,
     })
 end
