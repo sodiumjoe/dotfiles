@@ -711,7 +711,6 @@ require("lazy").setup({
                 { "flow", "flow" },
                 { "tsgo", nil },
                 { "lua_ls", "lua-language-server" },
-                { "stylua", "stylua" },
             }
 
             local enabled_servers = {}
@@ -885,6 +884,11 @@ require("lazy").setup({
                     prefer_local = "node_modules/.bin",
                     condition = function(util)
                         return util.root_has_file("prettier.config.js")
+                    end,
+                }),
+                null_ls.builtins.formatting.stylua.with({
+                    condition = function()
+                        return utils.is_executable("stylua")
                     end,
                 }),
             }
