@@ -182,6 +182,14 @@ require("lazy").setup({
                 mode = { "n" },
                 desc = "New Agentic Chat session",
             },
+            {
+                "<leader>ar",
+                function()
+                    require("agentic").restore_session()
+                end,
+                mode = { "n" },
+                desc = "Restore Agentic Chat session",
+            },
         },
     },
     {
@@ -471,6 +479,28 @@ require("lazy").setup({
                 end,
                 nowait = true,
                 desc = "References",
+            },
+            {
+                "<leader>sp",
+                function()
+                    local plans_dir = vim.fn.expand("~/.claude/plans")
+                    local cwd = vim.fn.getcwd()
+                    local plans_files = vim.fn.glob(plans_dir .. "/*.md", false, true)
+                    local cwd_files = vim.fn.glob(cwd .. "/*.md", false, true)
+                    local all_files = vim.list_extend(plans_files, cwd_files)
+                    local items = {}
+                    for _, file in ipairs(all_files) do
+                        table.insert(items, { file = file, text = file })
+                    end
+                    Snacks.picker({
+                        items = items,
+                        format = "file",
+                        on_show = function()
+                            vim.cmd.stopinsert()
+                        end,
+                    })
+                end,
+                desc = "Claude Plans",
             },
         },
     },
