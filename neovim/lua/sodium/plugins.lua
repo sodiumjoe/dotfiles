@@ -493,8 +493,12 @@ require("lazy").setup({
                     local all_files = vim.list_extend(plans_files, cwd_files)
                     local items = {}
                     for _, file in ipairs(all_files) do
-                        table.insert(items, { file = file, text = file })
+                        local mtime = vim.fn.getftime(file)
+                        table.insert(items, { file = file, text = file, mtime = mtime })
                     end
+                    table.sort(items, function(a, b)
+                        return a.mtime > b.mtime
+                    end)
                     Snacks.picker({
                         items = items,
                         format = "file",
