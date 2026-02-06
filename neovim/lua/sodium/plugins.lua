@@ -56,6 +56,11 @@ local window_opts = {
     },
 }
 
+local virtual_lines_config = {
+    format = utils.virtual_lines_format,
+    current_line = true,
+}
+
 local diagnostic_config = {
     signs = {
         text = {
@@ -73,9 +78,7 @@ local diagnostic_config = {
     },
     severity_sort = true,
     virtual_text = false,
-    virtual_lines = {
-        format = utils.virtual_lines_format,
-    },
+    virtual_lines = virtual_lines_config,
     update_in_insert = false,
     float = {
         focusable = false,
@@ -773,9 +776,7 @@ require("lazy").setup({
                 function()
                     local new_config = not vim.diagnostic.config().virtual_lines
                     vim.diagnostic.config({
-                        virtual_lines = new_config and {
-                            format = utils.virtual_lines_format,
-                        } or false,
+                        virtual_lines = new_config and virtual_lines_config or false,
                     })
                 end,
             },
