@@ -141,6 +141,7 @@ require("lazy").setup({
                 },
             },
             windows = {
+                position = "bottom",
                 code = window_opts,
                 files = window_opts,
                 input = window_opts,
