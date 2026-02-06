@@ -117,6 +117,9 @@ require("lazy").setup({
             return vim.fn.executable(claude_path) == 1 or vim.fn.executable("gemini") == 1
         end,
         opts = {
+            image_paste = {
+                enabled = false,
+            },
             file_picker = {
                 enabled = false,
             },
