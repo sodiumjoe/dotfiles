@@ -1,6 +1,5 @@
 return {
-    "sodiumjoe/agentic.nvim",
-    branch = "feature/horizontal-layout",
+    "carlos-algms/agentic.nvim",
     cond = function()
         local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
         return vim.fn.executable(claude_path) == 1 or vim.fn.executable("gemini") == 1
