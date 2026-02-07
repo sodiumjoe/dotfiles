@@ -306,6 +306,10 @@ remotes() {
     remote=$(echo "$remote" | cut -w -f 1 | cut -d ] -f 2)
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
       tmux unnest
+    local exit_code=$?
+    if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
+      reset
+    fi
   fi
 }
 
@@ -324,6 +328,10 @@ remote() {
   pay remote new "$1" --repo "pay-server:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
+  local exit_code=$?
+  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
+    reset
+  fi
 }
 
 remote_url() {
