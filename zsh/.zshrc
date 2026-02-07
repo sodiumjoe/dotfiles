@@ -320,12 +320,26 @@ godev() {
   fi
 }
 
+mremote() {
+  local branch remote
+  remote="$1"
+  branch="$(whoami)/$remote"
+
+  pay remote new "$1" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready && \
+    tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
+    tmux unnest
+  local exit_code=$?
+  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
+    reset
+  fi
+}
+
 remote() {
   local branch remote
   remote="$1"
   branch="$(whoami)/$remote"
 
-  pay remote new "$1" --repo "pay-server:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready && \
+  pay remote new "$1" --repo "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
   local exit_code=$?
