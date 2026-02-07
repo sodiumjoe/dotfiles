@@ -4,12 +4,7 @@ local utils = require("sodium.utils")
 local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
 
--- Track if LSP has attached at least once
 local lsp_attached = false
-
-local function is_fugitive_buffer()
-    return vim.api.nvim_buf_get_name(0):match("^fugitive://") ~= nil
-end
 
 local function is_standard_filetype()
     local ft = vim.bo.filetype
@@ -194,7 +189,7 @@ local lsp_status = {
     cond = function()
         return lsp_attached
             and is_standard_filetype()
-            and not is_fugitive_buffer()
+            and not utils.is_fugitive_buffer()
             and #vim.lsp.get_clients({ bufnr = 0 }) > 0
     end,
     padding = 1,
@@ -216,7 +211,7 @@ local separator = separator_if(is_standard_filetype)
 local separator_before_lsp = separator_if(function()
     return lsp_attached
         and is_standard_filetype()
-        and not is_fugitive_buffer()
+        and not utils.is_fugitive_buffer()
         and #vim.lsp.get_clients({ bufnr = 0 }) > 0
 end)
 

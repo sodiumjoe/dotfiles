@@ -71,36 +71,9 @@ M.spinner_frames = {
     "",
 }
 
-function M.is_project_local(root_pattern, config_file)
-    local lspconfigUtil = require("lspconfig/util")
-    local cwd = vim.fn.getcwd()
-    local cwd_root_pattern = table.concat({ cwd, root_pattern }, "/")
-    local cwd_config_file = table.concat({ cwd, config_file }, "/")
-    if M.path_exists(cwd_root_pattern) then
-        return M.path_exists(cwd_config_file)
-    end
-    local buf_name = vim.api.nvim_buf_get_name(0)
-    return lspconfigUtil.root_pattern(root_pattern)(buf_name) == lspconfigUtil.root_pattern(config_file)(buf_name)
-end
-
-function M.find_git_ancestor(startpath)
-    return vim.fs.dirname(vim.fs.find(".git", { path = startpath, upward = true })[1])
-end
-
-local severity_levels = {
-    vim.diagnostic.severity.ERROR,
-    vim.diagnostic.severity.WARN,
-    vim.diagnostic.severity.INFO,
-    vim.diagnostic.severity.HINT,
-}
-
-function M.get_highest_error_severity()
-    for _, level in ipairs(severity_levels) do
-        local diags = vim.diagnostic.get(0, { severity = { min = level } })
-        if #diags > 0 then
-            return level, diags
-        end
-    end
+function M.is_fugitive_buffer(bufnr)
+    bufnr = bufnr or 0
+    return vim.api.nvim_buf_get_name(bufnr):match("^fugitive://") ~= nil
 end
 
 -- The following is from
