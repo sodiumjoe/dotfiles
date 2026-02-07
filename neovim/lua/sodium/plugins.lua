@@ -63,17 +63,11 @@ local virtual_lines_config = {
 
 local diagnostic_config = {
     signs = {
-        text = {
-            [vim.diagnostic.severity.ERROR] = utils.icons.Error,
-            [vim.diagnostic.severity.WARN] = utils.icons.Warn,
-            [vim.diagnostic.severity.INFO] = utils.icons.Info,
-            [vim.diagnostic.severity.HINT] = utils.icons.Hint,
-        },
         numhl = {
-            [vim.diagnostic.severity.ERROR] = "",
-            [vim.diagnostic.severity.WARN] = "",
-            [vim.diagnostic.severity.HINT] = "",
-            [vim.diagnostic.severity.INFO] = "",
+            [vim.diagnostic.severity.ERROR] = "DiagnosticSignError",
+            [vim.diagnostic.severity.WARN] = "DiagnosticSignWarn",
+            [vim.diagnostic.severity.HINT] = "DiagnosticSignHint",
+            [vim.diagnostic.severity.INFO] = "DiagnosticSignInfo",
         },
     },
     severity_sort = true,
