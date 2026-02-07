@@ -107,6 +107,7 @@ require("lazy").setup({
     },
     {
         "sodiumjoe/agentic.nvim",
+        branch = "feature/horizontal-layout",
         cond = function()
             return vim.fn.executable(claude_path) == 1 or vim.fn.executable("gemini") == 1
         end,
