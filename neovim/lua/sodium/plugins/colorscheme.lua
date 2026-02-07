@@ -57,22 +57,16 @@ return {
                 options = {
                     transparent = false,
                     dim_inactive = false,
-                    styles = {
-                        comments = "italic",
-                        keywords = "NONE",
-                        types = "NONE",
-                        constants = "NONE",
-                        strings = "NONE",
-                        functions = "NONE",
-                        numbers = "NONE",
-                        variables = "NONE",
-                        conditionals = "NONE",
-                        operators = "NONE",
-                    },
                 },
-                palettes = require("sodium.nightfox.palette"),
-                specs = require("sodium.nightfox.spec"),
-                groups = require("sodium.nightfox.groups"),
+                palettes = {
+                    all = require("sodium.config.colorscheme").palette,
+                },
+                specs = {
+                    all = require("sodium.config.colorscheme").spec,
+                },
+                groups = {
+                    all = require("sodium.config.colorscheme").groups,
+                },
             })
 
             vim.cmd.colorscheme("nightfox")
