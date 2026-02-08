@@ -25,13 +25,14 @@
 
 ## Planning
 
+- Always start in plan mode
 - Always create a plan file before any implementation work
-- Write plan files to the working directory (e.g., `plan.md`, `implementation-plan.md`, `investigation.md`)
-- Do not use the EnterPlanMode tool
-- Create plans as regular markdown files in the project root
-- After writing the plan, use AskUserQuestion to get approval before implementation
+- Use a descriptive name for the plan filename
+- Use the plan file to keep notes from investigations under a separate H1
+- Use the plan file to track progress with checklists under a separate H1
 - When requesting approval, list any destructive or modifying bash commands that will be needed (write operations, deletions, installations, deployments, etc.)
 - Do not request permission for read-only operations (file reads, git status, ls, grep, etc.)
+- Predict all bash commands that will need permission (installs, builds, test runs, git operations) and request them upfront with the plan approval
 
 ## Work Tracking
 
