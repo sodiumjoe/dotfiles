@@ -9,6 +9,8 @@ zsh/.zsh_sessions
 karabiner/assets/*
 karabiner/automatic_backups/*
 karabiner/Icon*
-.cclaude
+.claude
 claude/*
 !claude/CLAUDE.md
+Alfred.alfredpreferences/remote/
+Alfred.alfredpreferences/preferences/local/
