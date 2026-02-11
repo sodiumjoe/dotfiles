@@ -331,6 +331,7 @@ mremote() {
   local exit_code=$?
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
+    echo "disconnected from $remote"
   fi
 }
 
@@ -345,6 +346,7 @@ remote() {
   local exit_code=$?
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
+    echo "disconnected from $remote"
   fi
 }
 
