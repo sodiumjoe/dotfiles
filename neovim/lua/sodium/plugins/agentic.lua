@@ -56,7 +56,7 @@ return {
                     env = {
                         NODE_NO_WARNINGS = "1",
                         IS_AI_TERMINAL = "1",
-                        NODENV_VERSION = "24.9.0",
+                        NODENV_VERSION = "24.13.0",
                         CLAUDE_CODE_EXECUTABLE = claude_path,
                     },
                 },
