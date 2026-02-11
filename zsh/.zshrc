@@ -332,6 +332,7 @@ mremote() {
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
+    tmux unnest
   fi
 }
 
@@ -347,6 +348,7 @@ remote() {
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
+    tmux unnest
   fi
 }
 
