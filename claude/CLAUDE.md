@@ -25,20 +25,18 @@
 
 ## Planning
 
-- Always create a plan file before any implementation work
-- Write plan files to the working directory (e.g., `plan.md`, `implementation-plan.md`, `investigation.md`)
-- Do not use the EnterPlanMode tool
-- Create plans as regular markdown files in the project root
-- After writing the plan, use AskUserQuestion to get approval before implementation
+- Use EnterPlanMode for implementation planning
+- Name plan files with date prefix: `YYYY-MM-DD-description.md`
+- Ask clarifying questions
 - When requesting approval, list any destructive or modifying bash commands that will be needed (write operations, deletions, installations, deployments, etc.)
 - Do not request permission for read-only operations (file reads, git status, ls, grep, etc.)
 
 ## Work Tracking
 
-- Maintain a changelog in the plan file documenting:
+- Log work in the plan file under a `## Changelog` section
+- Format changelog entries as completed tasks with date: `- [x] YYYY-MM-DD HH:MM Description of work done`
+  - This allows the daily note to query completed work from all plans
+- Maintain notes in the plan file documenting:
   - What was investigated or implemented
   - What was found or discovered
-  - What changes were made
-  - Timestamps for significant actions
 - Update the plan file as work progresses
-- Keep the plan file as the source of truth for the session's work

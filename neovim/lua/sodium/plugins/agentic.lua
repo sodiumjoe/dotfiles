@@ -59,6 +59,7 @@ return {
                         NODENV_VERSION = "24.13.0",
                         CLAUDE_CODE_EXECUTABLE = claude_path,
                     },
+                    default_mode = "plan",
                 },
                 ["gemini-acp"] = {
                     command = "gemini",
