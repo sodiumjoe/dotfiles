@@ -285,6 +285,23 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
 
+_sync_plans_to_remote() {
+  local name="$1"
+  local local_plans="/Users/moon/stripe/work/plans"
+  local remote_plans="remote:~/.claude/plans"
+  
+  pay remote ssh "$name" -- "mkdir -p ~/.claude/plans" && \
+    pay remote copy "$name" "$local_plans"/* "$remote_plans/"
+}
+
+_sync_plans_from_remote() {
+  local name="$1"
+  local local_plans="/Users/moon/stripe/work/plans"
+  local remote_plans="remote:~/.claude/plans"
+  
+  pay remote copy "$name" "$remote_plans"/* "$local_plans/"
+}
+
 fetch_remotes() {
   local list=$(\
     pay remote list --raw \
@@ -304,9 +321,15 @@ remotes() {
   remote=$(fetch_remotes | fzf)
   if [ ! -z $remote ]; then
     remote=$(echo "$remote" | cut -w -f 1 | cut -d ] -f 2)
-    tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
-      tmux unnest
+    
+    _sync_plans_to_remote "$remote"
+    
+    tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && tmux unnest
+    
     local exit_code=$?
+    
+    _sync_plans_from_remote "$remote"
+    
     if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
       reset
     fi
@@ -326,9 +349,14 @@ mremote() {
   branch="$(whoami)/$remote"
 
   pay remote new "$1" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready && \
+    _sync_plans_to_remote "$remote" && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
+  
   local exit_code=$?
+  
+  _sync_plans_from_remote "$remote"
+  
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
@@ -342,9 +370,14 @@ remote() {
   branch="$(whoami)/$remote"
 
   pay remote new "$1" --repo "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready && \
+    _sync_plans_to_remote "$remote" && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
+  
   local exit_code=$?
+  
+  _sync_plans_from_remote "$remote"
+  
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
