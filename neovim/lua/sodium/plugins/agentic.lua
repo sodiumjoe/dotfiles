@@ -68,6 +68,7 @@ return {
                 },
             },
             windows = {
+                height = 0.5,
                 position = "bottom",
                 code = diagnostics.window_opts,
                 files = diagnostics.window_opts,
