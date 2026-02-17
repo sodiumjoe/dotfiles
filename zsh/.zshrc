@@ -297,9 +297,10 @@ _sync_plans_to_remote() {
 _sync_plans_from_remote() {
   local name="$1"
   local local_plans="/Users/moon/stripe/work/plans"
-  local remote_plans="remote:~/.claude/plans"
-  
-  pay remote copy "$name" "$remote_plans"/* "$local_plans/"
+
+  pay remote ssh "$name" -- "ls ~/.claude/plans/*.md 2>/dev/null" | while read -r file; do
+    pay remote copy "$name" "remote:$file" "$local_plans/"
+  done
 }
 
 fetch_remotes() {
