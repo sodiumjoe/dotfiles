@@ -49,7 +49,6 @@ return {
             file_picker = {
                 enabled = false,
             },
-            debug = true,
             provider = vim.fn.executable("claude") == 1 and "claude-acp" or "gemini-acp",
             acp_providers = {
                 ["claude-acp"] = {
