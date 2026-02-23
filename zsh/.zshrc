@@ -289,7 +289,7 @@ _sync_plans_to_remote() {
   local name="$1"
   local local_plans="/Users/moon/stripe/work/plans"
   local remote_plans="remote:~/.claude/plans"
-  
+
   pay remote ssh "$name" -- "mkdir -p ~/.claude/plans" && \
     pay remote copy "$name" "$local_plans"/* "$remote_plans/"
 }
@@ -309,8 +309,14 @@ fetch_remotes() {
     | jq -r '
       sort_by(.last_accessed)
       | reverse
-      | .[] as {$name, $status, $last_accessed_human_readable, $emoji, $go_dev_url}
-      | ["[" + $emoji + "]" + $name, "[\($status)]", $go_dev_url, $last_accessed_human_readable]
+      | .[]
+      | . as {$name, $status, $last_accessed_human_readable, $emoji, $go_dev_url}
+      | (
+          [.current_working_copies // [] | .[] | select(.branch != "master-passing-tests")]
+          | sort_by(.commit_timestamp) | reverse | first // null
+        ) as $wc
+      | ($wc | if . then .branch else "" end) as $branch
+      | ["[" + $emoji + "]" + $name, "[\($status)]", $branch, $go_dev_url, $last_accessed_human_readable]
       | @tsv
     '\
     | column -t \
@@ -322,15 +328,15 @@ remotes() {
   remote=$(fetch_remotes | fzf)
   if [ ! -z $remote ]; then
     remote=$(echo "$remote" | cut -w -f 1 | cut -d ] -f 2)
-    
+
     _sync_plans_to_remote "$remote"
-    
+
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && tmux unnest
-    
+
     local exit_code=$?
-    
+
     _sync_plans_from_remote "$remote"
-    
+
     if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
       reset
     fi
@@ -353,11 +359,11 @@ mremote() {
     _sync_plans_to_remote "$remote" && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
-  
+
   local exit_code=$?
-  
+
   _sync_plans_from_remote "$remote"
-  
+
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
@@ -374,11 +380,11 @@ remote() {
     _sync_plans_to_remote "$remote" && \
     tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
     tmux unnest
-  
+
   local exit_code=$?
-  
+
   _sync_plans_from_remote "$remote"
-  
+
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
