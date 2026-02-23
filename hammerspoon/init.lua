@@ -9,7 +9,6 @@ local zoomFilter = hs.window.filter.new(false):setAppFilter("zoom.us", { visible
 local zoomNonMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ rejectTitles = "Zoom Meeting" })
 local zoomMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ allowTitles = "Zoom Meeting" })
 local slackFilter = hs.window.filter.new(false):setAppFilter("Slack", { visible = true })
-local youtubeMusicFilter = hs.window.filter.new(false):setAppFilter("YouTube Music")
 
 hs.loadSpoon("highlight_focused_window")
 
@@ -283,14 +282,24 @@ local function layout()
 end
 
 local function mute_zoom_or_global()
-    if #zoomFilter:getWindows() > 1 then
-        hs.eventtap.keyStroke({ "cmd", "shift" }, "a", nil, hs.application.find("zoom"))
-    else
-        if #youtubeMusicFilter:getWindows() > 0 then
-            hs.eventtap.keyStroke({}, ";", nil, hs.application.find("YouTube Music"))
+    local ok, err = pcall(function()
+        local zoomWindows = zoomFilter:getWindows()
+        if #zoomWindows > 1 then
+            local app = zoomWindows[1]:application()
+            if app then
+                hs.eventtap.keyStroke({ "cmd", "shift" }, "a", nil, app)
+            end
         else
-            hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
+            local ytApp = hs.application.find("YouTube Music", true)
+            if ytApp then
+                hs.eventtap.keyStroke({}, ";", nil, ytApp)
+            else
+                hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
+            end
         end
+    end)
+    if not ok then
+        log.e("mute_zoom_or_global error: " .. tostring(err))
     end
 end
 
@@ -323,6 +332,14 @@ hs.hotkey.bind({ "ctrl", "shift" }, "h", focusLeft)
 hs.hotkey.bind({ "ctrl", "shift" }, "l", focusRight)
 hs.hotkey.bind({ "ctrl", "shift" }, "j", focusDown)
 hs.hotkey.bind({ "ctrl", "shift" }, "k", focusUp)
-hs.hotkey.bind({}, "f20", mute_zoom_or_global)
+muteWatcher = hs.eventtap.new({ hs.eventtap.event.types.systemDefined }, function(event)
+    local systemKey = event:systemKey()
+    if systemKey.key == "MUTE" and systemKey.down then
+        mute_zoom_or_global()
+        return true
+    end
+    return false
+end)
+muteWatcher:start()
 -- hs.hotkey.bind({"ctrl"}, 'o', focusUp)
 -- hs.hotkey.bind({"ctrl"}, '.', focusDown)
