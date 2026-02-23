@@ -34,7 +34,8 @@
 ## Work Tracking
 
 - Log work in the plan file under a `## Changelog` section
-- Format changelog entries as completed tasks with date: `- [x] YYYY-MM-DD HH:MM Description of work done`
+- Format changelog entries as completed tasks: `- [x] Description of work done ✅ YYYY-MM-DD`
+  - The `✅ YYYY-MM-DD` suffix is required Obsidian Tasks done-date metadata
   - This allows the daily note to query completed work from all plans
 - Maintain notes in the plan file documenting:
   - What was investigated or implemented
