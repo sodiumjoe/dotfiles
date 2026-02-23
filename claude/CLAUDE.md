@@ -28,8 +28,7 @@
 - Use EnterPlanMode for implementation planning
 - Name plan files with date prefix: `YYYY-MM-DD-description.md`
 - Ask clarifying questions
-- When requesting approval, list any destructive or modifying bash commands that will be needed (write operations, deletions, installations, deployments, etc.)
-- Do not request permission for read-only operations (file reads, git status, ls, grep, etc.)
+- Before executing a plan, gather all permissions requirements (write operations, deletions, installations, deployments, config changes, etc.) and request them in a single batch
 
 ## Work Tracking
 

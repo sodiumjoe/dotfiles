@@ -18,7 +18,7 @@
       "Bash(fzf*)",
 
       "Bash(awk*)",
-      "Bash(sed -n*)",
+      "Bash(sed*)",
       "Bash(cut*)",
       "Bash(sort*)",
       "Bash(uniq*)",
@@ -26,6 +26,7 @@
       "Bash(jq*)",
       "Bash(wc*)",
 
+      "Bash(cd*)",
       "Bash(pwd*)",
       "Bash(tree*)",
       "Bash(stat*)",
@@ -59,6 +60,8 @@
       "Bash(git stash list*)",
       "Bash(git tag -l*)",
       "Bash(git describe*)",
+
+      "Bash(pay js:run*)",
 
       "Read(*)",
       "Grep(*)",
