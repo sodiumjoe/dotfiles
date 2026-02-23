@@ -53,6 +53,7 @@ done
 ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
 
 ln -s ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
+ln -s ~/.dotfiles/claude/settings.json ~/.claude/settings.json
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then

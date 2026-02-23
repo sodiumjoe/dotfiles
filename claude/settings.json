@@ -1,0 +1,125 @@
+{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "toolshed"
+  ],
+  "spinnerTipsEnabled": false,
+  "model": "opus",
+  "permissions": {
+    "allow": [
+      "Bash(ls*)",
+      "Bash(cat*)",
+      "Bash(head*)",
+      "Bash(tail*)",
+      "Bash(grep*)",
+      "Bash(rg*)",
+      "Bash(find*)",
+      "Bash(fd*)",
+      "Bash(fzf*)",
+
+      "Bash(awk*)",
+      "Bash(sed -n*)",
+      "Bash(cut*)",
+      "Bash(sort*)",
+      "Bash(uniq*)",
+      "Bash(tr*)",
+      "Bash(jq*)",
+      "Bash(wc*)",
+
+      "Bash(pwd*)",
+      "Bash(tree*)",
+      "Bash(stat*)",
+      "Bash(file*)",
+      "Bash(which*)",
+      "Bash(whereis*)",
+      "Bash(type*)",
+      "Bash(date*)",
+
+      "Bash(basename*)",
+      "Bash(dirname*)",
+      "Bash(realpath*)",
+      "Bash(readlink*)",
+      "Bash(diff*)",
+      "Bash(comm*)",
+      "Bash(cmp*)",
+
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git ls-files*)",
+      "Bash(git ls-tree*)",
+      "Bash(git config --get*)",
+      "Bash(git rev-parse*)",
+      "Bash(git symbolic-ref*)",
+      "Bash(git remote -v*)",
+      "Bash(git branch -l*)",
+      "Bash(git branch -a*)",
+      "Bash(git branch -r*)",
+      "Bash(git stash list*)",
+      "Bash(git tag -l*)",
+      "Bash(git describe*)",
+
+      "Read(*)",
+      "Grep(*)",
+
+      "Write(/tmp/*)",
+      "Edit(/tmp/*)",
+
+      "mcp__toolshed__get_ci_build_logs",
+      "mcp__toolshed__get_ci_build_failures",
+      "mcp__toolshed__get_ci_build_status",
+      "mcp__toolshed__get_ci_test_failures",
+      "mcp__toolshed__sourcegraph_*",
+      "mcp__toolshed__code_get_pull_request",
+      "mcp__toolshed__code_get_branch_info",
+      "mcp__toolshed__code_get_commit_diff",
+      "mcp__toolshed__execute_internal_search",
+      "mcp__toolshed__fetch_internal_search_result",
+      "mcp__toolshed__get_trailhead_doc",
+      "mcp__toolshed__get_trailhead_space",
+      "mcp__toolshed__get_jira_ticket",
+      "mcp__toolshed__search_jira"
+    ],
+    "deny": [
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git branch -D*)",
+
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~*)",
+      "Bash(rm -rf .*)",
+
+      "Bash(sudo*)",
+      "Bash(su *)",
+
+      "Bash(eval*)",
+      "Bash(exec*)",
+      "Bash(source*)",
+      "Bash(. *)"
+    ],
+    "ask": [
+      "Bash(curl*)",
+      "Bash(wget*)",
+      "Bash(ssh*)",
+      "Bash(scp*)",
+
+      "Bash(chmod*)",
+      "Bash(chown*)",
+
+      "Bash(docker*)",
+      "Bash(kubectl*)",
+
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git pull*)",
+      "Bash(git fetch*)",
+      "Bash(git merge*)",
+      "Bash(git rebase*)",
+      "Bash(git branch -d*)",
+      "Bash(git checkout*)",
+      "Bash(git switch*)"
+    ]
+  }
+}

@@ -10,7 +10,5 @@ karabiner/assets/*
 karabiner/automatic_backups/*
 karabiner/Icon*
 .claude
-claude/*
-!claude/CLAUDE.md
 Alfred.alfredpreferences/remote/
 Alfred.alfredpreferences/preferences/local/
