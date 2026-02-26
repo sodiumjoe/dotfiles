@@ -1,0 +1,20 @@
+{
+  "name": "personal",
+  "owner": {
+    "name": "Joe Moon"
+  },
+  "plugins": [
+    {
+      "name": "daily-workflow",
+      "source": "./plugins/daily-workflow",
+      "description": "Daily work tracking with Obsidian integration — daily notes, plan management, devbox sync detection",
+      "version": "1.1.0"
+    },
+    {
+      "name": "plan-reviewer",
+      "source": "./plugins/plan-reviewer",
+      "description": "Reviews implementation plans for completeness, risks, and codebase alignment",
+      "version": "1.0.0"
+    }
+  ]
+}

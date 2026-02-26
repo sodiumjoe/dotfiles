@@ -29,6 +29,26 @@
 - Name plan files with date prefix: `YYYY-MM-DD-description.md`
 - Ask clarifying questions
 - Before executing a plan, gather all permissions requirements (write operations, deletions, installations, deployments, config changes, etc.) and request them in a single batch
+- Add YAML frontmatter to new plan files:
+  ```yaml
+  ---
+  status: active
+  ---
+  ```
+- After creating a new plan file, open it in the neovim editor window using `mcp__neovim__vim_command` with this Lua snippet (skip silently if the tool is unavailable):
+  ```lua
+  local agentic = {AgenticChat=1, AgenticTodos=1, AgenticCode=1, AgenticFiles=1, AgenticInput=1}
+  local path = '<absolute-path-to-plan-file>'
+  for _, w in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(w)
+    local ft = vim.api.nvim_get_option_value('filetype', {buf=buf})
+    if not agentic[ft] then
+      vim.api.nvim_set_current_win(w)
+      vim.cmd('edit ' .. path)
+      break
+    end
+  end
+  ```
 
 ## Work Tracking
 
@@ -40,3 +60,10 @@
   - What was investigated or implemented
   - What was found or discovered
 - Update the plan file as work progresses
+
+## Daily Note
+
+- The daily note is at `~/stripe/work/YYYY-MM-DD.md` (today's date)
+- Use `/start-day` to initialize, `/log` to record completions, `/next` for what to work on, `/note` for freeform entries, `/end-day` to wrap up
+- When completing work outside of `/log`, still update both the daily note log and the plan changelog
+- Do not overwrite existing daily note content. Append or edit specific sections.

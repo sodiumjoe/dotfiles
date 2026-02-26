@@ -1,0 +1,8 @@
+{
+  "name": "plan-reviewer",
+  "description": "Reviews implementation plans for completeness, risks, and codebase alignment",
+  "version": "1.0.0",
+  "author": {
+    "name": "Joe Moon"
+  }
+}
