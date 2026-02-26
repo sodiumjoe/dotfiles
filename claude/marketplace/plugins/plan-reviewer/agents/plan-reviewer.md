@@ -1,7 +1,7 @@
 ---
 name: plan-reviewer
 description: Reviews implementation plans for completeness, risks, and codebase alignment. Use after writing a plan and before executing it.
-model: sonnet
+model: opus
 tools: Read, Glob, Grep, mcp__acp__Read, mcp__*__sourcegraph_read_file, mcp__*__sourcegraph_keyword_search, mcp__*__sourcegraph_nls_search, mcp__*__sourcegraph_search_definitions, mcp__*__sourcegraph_search_usages, mcp__*__sourcegraph_list_files
 ---
 

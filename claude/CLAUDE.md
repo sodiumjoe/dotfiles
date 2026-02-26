@@ -28,6 +28,7 @@
 - Use EnterPlanMode for implementation planning
 - Name plan files with date prefix: `YYYY-MM-DD-description.md`
 - Ask clarifying questions
+- Before executing a plan, run the `plan-reviewer` agent (via Task tool with `subagent_type: "plan-reviewer"`) to review it for completeness, accuracy, and risks. Share the review findings with the user before proceeding.
 - Before executing a plan, gather all permissions requirements (write operations, deletions, installations, deployments, config changes, etc.) and request them in a single batch
 - Add YAML frontmatter to new plan files:
   ```yaml
