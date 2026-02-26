@@ -15,6 +15,12 @@
       "source": "./plugins/plan-reviewer",
       "description": "Reviews implementation plans for completeness, risks, and codebase alignment",
       "version": "1.0.0"
+    },
+    {
+      "name": "nvim-remote",
+      "source": "./plugins/nvim-remote",
+      "description": "Remote Neovim control via socket — execute Lua, open files",
+      "version": "1.0.0"
     }
   ]
 }

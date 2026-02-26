@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+[[ -z "$NVIM_SOCKET_PATH" ]] && exit 0
+
+win=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --window) win="$2"; shift 2 ;;
+    *) file="$1"; shift ;;
+  esac
+done
+
+[[ -z "$file" ]] && exit 1
+
+if [[ -n "$win" ]]; then
+  lua="(function() vim.api.nvim_set_current_win(${win}) vim.cmd('edit '..vim.fn.fnameescape(_A)) return 0 end)()"
+else
+  lua="(function() vim.cmd('edit '..vim.fn.fnameescape(_A)) return 0 end)()"
+fi
+
+file_escaped="${file//\\/\\\\}"
+file_escaped="${file_escaped//\"/\\\"}"
+lua_escaped="${lua//\\/\\\\}"
+lua_escaped="${lua_escaped//\"/\\\"}"
+
+nvim --server "$NVIM_SOCKET_PATH" --remote-expr "luaeval(\"${lua_escaped}\", \"${file_escaped}\")"

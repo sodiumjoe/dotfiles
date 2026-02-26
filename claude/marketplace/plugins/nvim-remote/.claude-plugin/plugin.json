@@ -1,0 +1,6 @@
+{
+  "name": "nvim-remote",
+  "description": "Remote Neovim control via socket — execute Lua, open files",
+  "version": "1.0.0",
+  "author": { "name": "Joe Moon" }
+}
