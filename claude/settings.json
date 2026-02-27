@@ -69,7 +69,8 @@
       "mcp__toolshed__get_trailhead_space",
       "mcp__toolshed__get_jira_ticket",
       "mcp__toolshed__search_jira",
-      "Bash(~/.dotfiles/claude/marketplace/plugins/nvim-remote/scripts/*)"
+      "Bash(~/.dotfiles/claude/marketplace/plugins/nvim-remote/scripts/*)",
+      "mcp__toolshed_extras__*google_drive*"
     ],
     "deny": [
       "Bash(git reset --hard*)",
