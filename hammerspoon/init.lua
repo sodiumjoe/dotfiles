@@ -292,7 +292,14 @@ local function mute_zoom_or_global()
         else
             local ytApp = hs.application.find("YouTube Music", true)
             if ytApp then
-                hs.eventtap.keyStroke({}, ";", nil, ytApp)
+                ytApp:unhide()
+                ytApp:activate()
+                hs.timer.doAfter(0.2, function()
+                    hs.eventtap.keyStroke({}, ";")
+                    hs.timer.doAfter(0.2, function()
+                        ytApp:hide()
+                    end)
+                end)
             else
                 hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
             end
@@ -332,14 +339,6 @@ hs.hotkey.bind({ "ctrl", "shift" }, "h", focusLeft)
 hs.hotkey.bind({ "ctrl", "shift" }, "l", focusRight)
 hs.hotkey.bind({ "ctrl", "shift" }, "j", focusDown)
 hs.hotkey.bind({ "ctrl", "shift" }, "k", focusUp)
-muteWatcher = hs.eventtap.new({ hs.eventtap.event.types.systemDefined }, function(event)
-    local systemKey = event:systemKey()
-    if systemKey.key == "MUTE" and systemKey.down then
-        mute_zoom_or_global()
-        return true
-    end
-    return false
-end)
-muteWatcher:start()
+hs.hotkey.bind({}, "f20", mute_zoom_or_global)
 -- hs.hotkey.bind({"ctrl"}, 'o', focusUp)
 -- hs.hotkey.bind({"ctrl"}, '.', focusDown)
