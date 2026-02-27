@@ -71,6 +71,15 @@ M.spinner_frames = {
     "",
 }
 
+function M.editor_window()
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+        local ft = vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) })
+        if not ft:match("^Agentic") then
+            return w
+        end
+    end
+end
+
 function M.is_fugitive_buffer(bufnr)
     bufnr = bufnr or 0
     return vim.api.nvim_buf_get_name(bufnr):match("^fugitive://") ~= nil

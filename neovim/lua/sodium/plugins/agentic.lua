@@ -57,6 +57,7 @@ return {
                         IS_AI_TERMINAL = "1",
                         NODENV_VERSION = "24.13.0",
                         CLAUDE_CODE_EXECUTABLE = claude_path,
+                        NVIM = vim.v.servername,
                     },
                     default_mode = "plan",
                 },
