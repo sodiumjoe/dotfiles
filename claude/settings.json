@@ -113,7 +113,8 @@
   ],
   "enabledPlugins": {
     "obsidian@obsidian-skills": true,
-    "daily-workflow@personal": true
+    "daily-workflow@personal": true,
+    "plan-reviewer@personal": true
   },
   "spinnerTipsEnabled": false,
   "spinnerVerbs": {

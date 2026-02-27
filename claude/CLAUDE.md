@@ -41,6 +41,33 @@
   ~/.dotfiles/claude/marketplace/plugins/daily-workflow/scripts/nvim-edit '<absolute-path-to-plan-file>'
   ```
 
+## Plan Design
+
+When designing implementation plans, follow these guidelines:
+
+### Required sections
+
+Every plan file must include:
+- **Context** — why this change is needed, what prompted it
+- **Approach** — the chosen implementation strategy (not alternatives)
+- **Files to modify** — explicit list of file paths with what changes each needs
+- **Verification** — how to test the changes end-to-end
+- **Notes** — investigation findings, discoveries, tangential issues found
+- **Changelog** — completed work entries in `- [x] Description ✅ YYYY-MM-DD` format
+
+### Investigation requirements
+
+- Read every file you plan to modify before proposing changes
+- Search for existing implementations before proposing new code
+- Identify existing patterns in the codebase and follow them
+- Cite file paths and line numbers for referenced code
+
+### Proactive improvements
+
+- Propose pre-emptive refactoring that would make the result better, clearer, or better-architected
+- Flag tangential issues discovered during investigation — log them in the plan's Notes section even if out of scope for the current task
+- Suggest architectural improvements when the surrounding code would benefit
+
 ## Work Tracking
 
 - Log work in the plan file under a `## Changelog` section
