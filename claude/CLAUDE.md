@@ -36,19 +36,9 @@
   status: active
   ---
   ```
-- After creating a new plan file, open it in the neovim editor window using `mcp__neovim__vim_command` with this Lua snippet (skip silently if the tool is unavailable):
-  ```lua
-  local agentic = {AgenticChat=1, AgenticTodos=1, AgenticCode=1, AgenticFiles=1, AgenticInput=1}
-  local path = '<absolute-path-to-plan-file>'
-  for _, w in ipairs(vim.api.nvim_list_wins()) do
-    local buf = vim.api.nvim_win_get_buf(w)
-    local ft = vim.api.nvim_get_option_value('filetype', {buf=buf})
-    if not agentic[ft] then
-      vim.api.nvim_set_current_win(w)
-      vim.cmd('edit ' .. path)
-      break
-    end
-  end
+- After creating a new plan file, open it in the neovim editor window (skip silently if the command fails):
+  ```bash
+  ~/.dotfiles/claude/marketplace/plugins/daily-workflow/scripts/nvim-edit '<absolute-path-to-plan-file>'
   ```
 
 ## Work Tracking
