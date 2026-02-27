@@ -286,21 +286,13 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 ## stripe
 
 _sync_plans_to_remote() {
-  local name="$1"
-  local local_plans="/Users/moon/stripe/work/plans"
-  local remote_plans="remote:~/.claude/plans"
-
-  pay remote ssh "$name" -- "mkdir -p ~/.claude/plans" && \
-    pay remote copy "$name" "$local_plans"/* "$remote_plans/"
+  local host="$1"
+  rsync -az --delete "/Users/moon/stripe/work/plans/" "$host:~/.claude/plans/"
 }
 
 _sync_plans_from_remote() {
-  local name="$1"
-  local local_plans="/Users/moon/stripe/work/plans"
-
-  pay remote ssh "$name" -- "ls ~/.claude/plans/*.md 2>/dev/null" | while read -r file; do
-    pay remote copy "$name" "remote:$file" "$local_plans/"
-  done
+  local host="$1"
+  rsync -az "$host:~/.claude/plans/" "/Users/moon/stripe/work/plans/"
 }
 
 fetch_remotes() {
@@ -329,13 +321,15 @@ remotes() {
   if [ ! -z $remote ]; then
     remote=$(echo "$remote" | cut -w -f 1 | cut -d ] -f 2)
 
-    _sync_plans_to_remote "$remote"
+    local host=$(pay remote ssh $remote -- hostname)
 
-    tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && tmux unnest
+    (_sync_plans_to_remote "$host" &)
+
+    tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
     local exit_code=$?
 
-    _sync_plans_from_remote "$remote"
+    (_sync_plans_from_remote "$host" &)
 
     if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
       reset
@@ -355,14 +349,17 @@ mremote() {
   remote="$1"
   branch="$(whoami)/$remote"
 
-  pay remote new "$1" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready && \
-    _sync_plans_to_remote "$remote" && \
-    tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
-    tmux unnest
+  pay remote new "$1" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
+
+  local host=$(pay remote ssh $remote -- hostname)
+
+  (_sync_plans_to_remote "$host" &)
+
+  tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
   local exit_code=$?
 
-  _sync_plans_from_remote "$remote"
+  (_sync_plans_from_remote "$host" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -376,14 +373,17 @@ remote() {
   remote="$1"
   branch="$(whoami)/$remote"
 
-  pay remote new "$1" --repo "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready && \
-    _sync_plans_to_remote "$remote" && \
-    tmux nest && ssh -t $(pay remote ssh $remote -- hostname) "tmux a || tmux" && \
-    tmux unnest
+  pay remote new "$1" --repo "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready || return
+
+  local host=$(pay remote ssh $remote -- hostname)
+
+  (_sync_plans_to_remote "$host" &)
+
+  tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
   local exit_code=$?
 
-  _sync_plans_from_remote "$remote"
+  (_sync_plans_from_remote "$host" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
