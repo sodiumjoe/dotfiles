@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-[[ -z "$NVIM_SOCKET_PATH" ]] && exit 0
+NVIM_ADDR="${NVIM_SOCKET_PATH:-$NVIM}"
+[[ -z "$NVIM_ADDR" ]] && exit 0
 
 win=""
 while [[ $# -gt 0 ]]; do
@@ -22,4 +23,4 @@ file_escaped="${file_escaped//\"/\\\"}"
 lua_escaped="${lua//\\/\\\\}"
 lua_escaped="${lua_escaped//\"/\\\"}"
 
-nvim --server "$NVIM_SOCKET_PATH" --remote-expr "luaeval(\"${lua_escaped}\", \"${file_escaped}\")"
+nvim --server "$NVIM_ADDR" --remote-expr "luaeval(\"${lua_escaped}\", \"${file_escaped}\")"

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-[[ -z "$NVIM_SOCKET_PATH" ]] && exit 0
+NVIM_ADDR="${NVIM_SOCKET_PATH:-$NVIM}"
+[[ -z "$NVIM_ADDR" ]] && exit 0
 [[ -z "$1" ]] && exit 1
 lua="$1"
 lua="${lua//\\/\\\\}"
 lua="${lua//\"/\\\"}"
-nvim --server "$NVIM_SOCKET_PATH" --remote-expr "luaeval(\"(function() ${lua} end)()\")"
+nvim --server "$NVIM_ADDR" --remote-expr "luaeval(\"(function() ${lua} end)()\")"
