@@ -400,7 +400,7 @@ if [ -d ~/stripe ]; then
   export GOPATH="${HOME}/stripe/go"
   export CARGO_HOME="${HOME}/stripe/.cargo"
   export RUSTUP_HOME=~/stripe/.rustup
-
+  export STRIPE_CLAUDE_DISABLE_SPINNER_VERBS=1
 fi
 
 eval "$(nodenv init -)"
