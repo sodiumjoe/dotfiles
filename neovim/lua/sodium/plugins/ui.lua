@@ -39,30 +39,6 @@ return {
         lazy = true,
     },
     {
-        "MeanderingProgrammer/render-markdown.nvim",
-        -- dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-mini/mini.nvim" }, -- if you use the mini.nvim suite
-        -- dependencies = { 'nvim-treesitter/nvim-treesitter', 'nvim-mini/mini.icons' },        -- if you use standalone mini plugins
-        dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" }, -- if you prefer nvim-web-devicons
-        opts = {
-            heading = {
-                width = "block",
-                left_pad = 1,
-                right_pad = 2,
-                border = true,
-                border_virtual = true,
-            },
-            code = {
-                left_margin = 2,
-                border = "thin",
-                width = "block",
-                language_pad = 2,
-                left_pad = 2,
-                right_pad = 2,
-                inline = false,
-            },
-        },
-    },
-    {
         "mhinz/vim-signify",
         config = function()
             vim.g.signify_sign_add = "│"
