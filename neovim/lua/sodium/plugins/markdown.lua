@@ -111,12 +111,9 @@ return {
             "nvim-lua/plenary.nvim",
         },
         opts = {
-            workspaces = {
-                {
-                    name = "work",
-                    path = "~/stripe/work",
-                },
-            },
+            workspaces = vim.fn.isdirectory(vim.fn.expand("~/stripe/work")) == 1
+                and { { name = "work", path = "~/stripe/work" } }
+                or {},
             completion = {
                 nvim_cmp = false,
                 min_chars = 2,
