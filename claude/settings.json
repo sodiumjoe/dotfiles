@@ -55,9 +55,9 @@
       "Grep(*)",
       "Write(/tmp/*)",
       "Edit(/tmp/*)",
+      "mcp__sourcegraph__*",
       "mcp__toolshed__*",
       "mcp__toolshed_extras__*",
-      "mcp__sourcegraph__*",
       "Bash(~/.dotfiles/claude/marketplace/plugins/nvim-remote/scripts/*)"
     ],
     "deny": [
