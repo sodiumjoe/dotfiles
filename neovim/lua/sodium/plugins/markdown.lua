@@ -83,7 +83,8 @@ return {
             heading = {
                 width = "block",
                 left_pad = 1,
-                right_pad = 2,
+                right_pad = 1,
+                position = "inline",
                 -- border = true,
                 -- border_virtual = true,
             },
