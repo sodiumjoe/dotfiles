@@ -137,5 +137,21 @@ return {
             mode = { "n" },
             desc = "Restore Agentic Chat session",
         },
+        {
+            "<leader>ad",
+            function()
+                require("agentic").add_current_line_diagnostics()
+            end,
+            desc = "Add current line diagnostic to Agentic",
+            mode = { "n" },
+        },
+        {
+            "<leader>aD",
+            function()
+                require("agentic").add_buffer_diagnostics()
+            end,
+            desc = "Add all buffer diagnostics to Agentic",
+            mode = { "n" },
+        },
     },
 }
