@@ -75,6 +75,20 @@ vim.api.nvim_create_autocmd("FileType", {
     end,
 })
 
+vim.api.nvim_create_user_command("InterviewNote", function()
+    local date = os.date("%Y-%m-%d")
+    local vault = vim.fn.expand("~/stripe/work")
+    local template = vault .. "/Interview template.md"
+    local target = vault .. "/" .. date .. "-interview.md"
+    if vim.fn.filereadable(target) == 1 then
+        vim.cmd.edit(target)
+        return
+    end
+    local lines = vim.fn.readfile(template)
+    vim.fn.writefile(lines, target)
+    vim.cmd.edit(target)
+end, {})
+
 return {
     {
         "MeanderingProgrammer/render-markdown.nvim",
@@ -101,37 +115,34 @@ return {
         },
     },
     {
-        "epwalsh/obsidian.nvim",
+        "obsidian-nvim/obsidian.nvim",
         version = "*",
         lazy = true,
         ft = "markdown",
         keys = {
-            { "<leader>ww", "<cmd>ObsidianToday<cr>" },
+            { "<leader>ww", "<cmd>Obsidian today<cr>" },
+            { "<leader>wi", "<cmd>InterviewNote<cr>" },
         },
         dependencies = {
             "nvim-lua/plenary.nvim",
         },
         opts = {
+            legacy_commands = false,
             workspaces = vim.fn.isdirectory(vim.fn.expand("~/stripe/work")) == 1
                 and { { name = "work", path = "~/stripe/work" } }
                 or {},
             completion = {
-                nvim_cmp = false,
+                blink = true,
                 min_chars = 2,
             },
-            mappings = {
-                ["gf"] = {
-                    action = function()
-                        return require("obsidian").util.gf_passthrough()
-                    end,
-                    opts = { noremap = false, expr = true, buffer = true },
-                },
-                ["<C-Space>"] = {
-                    action = function()
-                        return require("obsidian").util.toggle_checkbox({ " ", "/", "x" })
-                    end,
-                    opts = { buffer = true },
-                },
+            callbacks = {
+                enter_note = function()
+                    vim.keymap.set("n", "gf", require("obsidian.api").smart_action, { buffer = true })
+                    vim.keymap.set("n", "<C-Space>", "<cmd>Obsidian toggle_checkbox<cr>", { buffer = true })
+                end,
+            },
+            checkbox = {
+                order = { " ", "/", "x" },
             },
             ui = {
                 enable = false,
