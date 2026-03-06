@@ -53,8 +53,8 @@ done
 
 ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
 
-ln -s ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
-ln -s ~/.dotfiles/claude/settings.json ~/.claude/settings.json
+ln -sf ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
+ln -sf ~/.dotfiles/claude/settings.json ~/.claude/settings.json
 
 # personal marketplace plugins
 ln -sf ~/stripe/work/personal-marketplace/work/bin/work ~/bin/work
