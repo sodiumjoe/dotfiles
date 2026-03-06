@@ -287,12 +287,23 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 _sync_plans_to_remote() {
   local host="$1"
-  rsync -az --delete "/Users/moon/stripe/work/plans/" "$host:~/.claude/plans/"
+  rsync -az --delete "$HOME/stripe/work/plans/" "$host:~/.claude/plans/"
+  rsync -az "$HOME/stripe/work/projects/" "$host:~/.claude/projects/"
+  rsync -az --delete "$HOME/stripe/work/personal-marketplace/work/" "$host:~/stripe/work/personal-marketplace/work/"
 }
 
 _sync_plans_from_remote() {
   local host="$1"
-  rsync -az "$host:~/.claude/plans/" "/Users/moon/stripe/work/plans/"
+  rsync -az "$host:~/.claude/plans/" "$HOME/stripe/work/plans/"
+  rsync -az "$host:~/.claude/projects/" "$HOME/stripe/work/projects/"
+}
+
+_sync_project_to_remote() {
+  local host="$1" slug="$2"
+  local proj_file="$HOME/stripe/work/projects/${slug}.md"
+  [ -f "$proj_file" ] || return 0
+  ssh "$host" "mkdir -p ~/.claude/projects" 2>/dev/null
+  rsync -az "$proj_file" "$host:~/.claude/projects/${slug}.md"
 }
 
 fetch_remotes() {
@@ -394,6 +405,76 @@ remote() {
 
 remote_url() {
   osc52copy $(pay remote url $remote_name "$@")
+}
+
+dev() {
+  local tasks=()
+  while IFS=$'\t' read -r sts desc proj_slug; do
+    case "$sts" in
+      " ") local indicator="[ ]" ;;
+      "/") local indicator="[/]" ;;
+      *) continue ;;
+    esac
+    tasks+=("${indicator} ${desc}	${proj_slug}")
+  done < <(work queue)
+
+  if [ ${#tasks[@]} -eq 0 ]; then
+    echo "no open queue items" >&2; return 1
+  fi
+
+  local selected=$(printf '%s\n' "${tasks[@]}" | cut -f1 | fzf --prompt="task> ")
+  [ -z "$selected" ] && return 0
+
+  local proj_slug=""
+  for t in "${tasks[@]}"; do
+    local display=$(echo "$t" | cut -f1)
+    if [ "$display" = "$selected" ]; then
+      proj_slug=$(echo "$t" | cut -f2)
+      break
+    fi
+  done
+
+  local task_desc=$(echo "$selected" | sed 's/^\[.\] //')
+
+  if [[ "$selected" == "[ ]"* ]]; then
+    work mark "$task_desc" '[/]'
+  fi
+
+  local remotes_list=$(fetch_remotes)
+  local picked=$(printf '%s\n%s\n' "$remotes_list" "[create new]" | fzf --prompt="devbox> ")
+  [ -z "$picked" ] && return 0
+
+  local remote_name
+  if [ "$picked" = "[create new]" ]; then
+    printf "devbox name: "; read devbox_name
+    printf "repo (pay-server/mint) [pay-server]: "; read repo_choice
+    repo_choice="${repo_choice:-pay-server}"
+    local branch="$(whoami)/$devbox_name"
+    if [ "$repo_choice" = "mint" ]; then
+      pay remote new "$devbox_name" --repo "mint:$branch" \
+        --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
+    else
+      pay remote new "$devbox_name" --repo "pay-server:$branch" \
+        --skip-confirm --no-open-code --notify-on-ready || return
+    fi
+    remote_name="$devbox_name"
+  else
+    remote_name=$(echo "$picked" | awk '{print $1}' | cut -d] -f2)
+  fi
+
+  local host=$(pay remote ssh "$remote_name" -- hostname)
+
+  (_sync_plans_to_remote "$host" &)
+
+  tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
+
+  local exit_code=$?
+
+  (_sync_plans_from_remote "$host" &)
+
+  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
+    reset
+  fi
 }
 
 if [ -d ~/stripe ]; then

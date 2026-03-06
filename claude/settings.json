@@ -58,7 +58,7 @@
       "mcp__sourcegraph__*",
       "mcp__toolshed__*",
       "mcp__toolshed_extras__*",
-      "Bash(~/.dotfiles/claude/marketplace/plugins/nvim-remote/scripts/*)"
+      "Bash(nvim-edit:*)"
     ],
     "deny": [
       "Bash(git reset --hard*)",
@@ -102,8 +102,7 @@
   ],
   "enabledPlugins": {
     "obsidian@obsidian-skills": true,
-    "daily-workflow@personal": true,
-    "plan-reviewer@personal": true
+    "work@personal": true
   },
   "spinnerTipsEnabled": false,
   "spinnerVerbs": {

@@ -80,6 +80,7 @@ return {
         "MeanderingProgrammer/render-markdown.nvim",
         dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" },
         opts = {
+            nested = false,
             heading = {
                 width = "block",
                 left_pad = 1,

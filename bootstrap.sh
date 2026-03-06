@@ -55,6 +55,10 @@ ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
 ln -s ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
 ln -s ~/.dotfiles/claude/settings.json ~/.claude/settings.json
 
+# personal marketplace plugins
+ln -sf ~/stripe/work/personal-marketplace/work/bin/work ~/bin/work
+ln -sf ~/stripe/work/personal-marketplace/work/scripts/nvim-edit ~/bin/nvim-edit
+
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
   echo "init.lua symlink already exists, skipping"
