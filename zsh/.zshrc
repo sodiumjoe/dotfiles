@@ -289,6 +289,7 @@ _sync_plans_to_remote() {
   local host="$1"
   rsync -az --delete "$HOME/stripe/work/plans/" "$host:~/.claude/plans/"
   rsync -az "$HOME/stripe/work/projects/" "$host:~/.claude/projects/"
+  ssh "$host" "mkdir -p ~/stripe/work/personal-marketplace/work" 2>/dev/null
   rsync -az --delete "$HOME/stripe/work/personal-marketplace/work/" "$host:~/stripe/work/personal-marketplace/work/"
 }
 
@@ -324,12 +325,12 @@ fetch_remotes() {
     '\
     | column -t \
   )
-  print $list
+  print -r -- "$list"
 }
 
 remotes() {
-  remote=$(fetch_remotes | fzf)
-  if [ ! -z $remote ]; then
+  remote=$(fzf < <(fetch_remotes))
+  if [ ! -z "$remote" ]; then
     remote=$(echo "$remote" | cut -w -f 1 | cut -d ] -f 2)
 
     local host=$(pay remote ssh $remote -- hostname)
@@ -349,8 +350,8 @@ remotes() {
 }
 
 godev() {
-  remote=$(fetch_remotes | fzf)
-  if [ ! -z $remote ]; then
+  remote=$(fzf < <(fetch_remotes))
+  if [ ! -z "$remote" ]; then
     echo "$remote" | cut -w -f 3
   fi
 }
