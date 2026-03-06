@@ -33,6 +33,7 @@ xdg_files=(\
   "rg"\
   "tmux"\
   "vivid"\
+  "work"\
   "zsh"\
   )
 
