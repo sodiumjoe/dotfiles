@@ -117,6 +117,16 @@ M.groups = {
     SnacksNotifierError = { fg = "diag.error" },
     SnacksNotifierDebug = { fg = "palette.fg1" },
     SnacksNotifierTrace = { fg = "palette.fg1" },
+    SnacksNotifierTitleInfo = { fg = "diag.info" },
+    SnacksNotifierTitleWarn = { fg = "diag.warn" },
+    SnacksNotifierTitleError = { fg = "diag.error" },
+    SnacksNotifierTitleDebug = { fg = "palette.fg1" },
+    SnacksNotifierTitleTrace = { fg = "palette.fg1" },
+    SnacksNotifierIconInfo = { fg = "diag.info" },
+    SnacksNotifierIconWarn = { fg = "diag.warn" },
+    SnacksNotifierIconError = { fg = "diag.error" },
+    SnacksNotifierIconDebug = { fg = "palette.fg1" },
+    SnacksNotifierIconTrace = { fg = "palette.fg1" },
 }
 
 return M

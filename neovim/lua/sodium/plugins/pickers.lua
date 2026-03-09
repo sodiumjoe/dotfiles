@@ -46,7 +46,10 @@ return {
         },
         quickfile = { enabled = true },
         scroll = { enabled = true },
-        notifier = { enabled = true },
+        notifier = {
+            enabled = true,
+            top_down = false,
+        },
     },
     keys = {
         {
