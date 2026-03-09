@@ -106,6 +106,17 @@ M.groups = {
     DiffText = { fg = "bg1", bg = "palette.yellow" },
 
     TreesitterContextLineNumber = { fg = "palette.fg0" },
+
+    SnacksNotifierBorderInfo = { fg = "diag.info" },
+    SnacksNotifierBorderWarn = { fg = "diag.warn" },
+    SnacksNotifierBorderError = { fg = "diag.error" },
+    SnacksNotifierBorderDebug = { fg = "palette.fg1" },
+    SnacksNotifierBorderTrace = { fg = "palette.fg1" },
+    SnacksNotifierInfo = { fg = "diag.info" },
+    SnacksNotifierWarn = { fg = "diag.warn" },
+    SnacksNotifierError = { fg = "diag.error" },
+    SnacksNotifierDebug = { fg = "palette.fg1" },
+    SnacksNotifierTrace = { fg = "palette.fg1" },
 }
 
 return M
