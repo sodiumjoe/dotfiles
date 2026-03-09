@@ -55,10 +55,18 @@
       "Grep(*)",
       "Write(/tmp/*)",
       "Edit(/tmp/*)",
+      "Find(*)",
       "mcp__sourcegraph__*",
       "mcp__toolshed__*",
       "mcp__toolshed_extras__*",
-      "Bash(nvim-edit:*)"
+      "Bash(nvim-edit:*)",
+      "Bash(find * | head *)",
+      "Bash(find * | tail *)",
+      "Bash(find * | sort *)",
+      "Bash(find * | wc *)",
+      "Bash(ls * | head *)",
+      "Bash(ls * | tail *)",
+      "Bash(env * | grep * | head *)
     ],
     "deny": [
       "Bash(git reset --hard*)",
