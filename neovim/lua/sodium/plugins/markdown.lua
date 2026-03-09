@@ -127,7 +127,37 @@ return {
         lazy = true,
         ft = "markdown",
         keys = {
-            { "<leader>ww", "<cmd>Obsidian today<cr>" },
+            {
+                "<leader>ww",
+                function()
+                    vim.fn.system("work tick")
+                    vim.cmd("Obsidian today")
+                end,
+            },
+            {
+                "<leader>w w",
+                function()
+                    local work_dir = vim.fn.expand("~/stripe/work")
+                    local files = vim.fn.glob(work_dir .. "/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md", false, true)
+                    local items = {}
+                    table.sort(files, function(a, b)
+                        return a > b
+                    end)
+                    local items = {}
+                    for _, file in ipairs(files) do
+                        table.insert(items, { file = file, text = file })
+                    end
+                    Snacks.picker({
+                        title = "Daily Notes",
+                        items = items,
+                        format = "file",
+                        on_show = function()
+                            vim.cmd.stopinsert()
+                        end,
+                    })
+                end,
+                desc = "Daily Notes",
+            },
             { "<leader>wi", "<cmd>InterviewNote<cr>" },
         },
         dependencies = {
