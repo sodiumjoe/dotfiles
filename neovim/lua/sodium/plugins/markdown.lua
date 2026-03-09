@@ -95,6 +95,13 @@ return {
         dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" },
         opts = {
             nested = false,
+            checkbox = {
+                left_pad = 3,
+                custom = {
+                    todo = { raw = '[-]', rendered = '󰥔 ', highlight = 'RenderMarkdownTodo' },
+                    progress = { raw = '[/]', rendered = '󰡖 ', highlight = 'RenderMarkdownTodo' },
+                },
+            },
             heading = {
                 width = "block",
                 left_pad = 1,
