@@ -5,7 +5,6 @@ mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 # symlink dotfiles
 
 files=(\
-  "bin"\
   "curlrc"\
   "cvimrc"\
   "gitconfig"\
@@ -56,9 +55,25 @@ ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
 ln -sf ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
 ln -sf ~/.dotfiles/claude/settings.json ~/.claude/settings.json
 
-# personal marketplace plugins
-ln -sf ~/stripe/work/personal-marketplace/work/bin/work ~/bin/work
-ln -sf ~/stripe/work/personal-marketplace/work/scripts/nvim-edit ~/bin/nvim-edit
+# symlink scripts into ~/bin
+mkdir -p ~/bin
+for script in ~/.dotfiles/bin/*; do
+  ln -sf "$script" ~/bin/$(basename "$script")
+done
+
+# launchd agents (macOS only)
+if [ "$(uname)" = "Darwin" ]; then
+  mkdir -p ~/Library/LaunchAgents
+  for plist in ~/.dotfiles/launchd/*.plist; do
+    dest=~/Library/LaunchAgents/$(basename "$plist")
+    if [ -L "$dest" ]; then
+      echo "$dest symlink already exists, skipping"
+    else
+      ln -sf "$plist" "$dest"
+      launchctl load "$dest" 2>/dev/null
+    fi
+  done
+fi
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
