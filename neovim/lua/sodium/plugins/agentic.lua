@@ -1,3 +1,176 @@
+local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/work"
+local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
+
+local function start_project_session(proj, task)
+    local Config = require("agentic.config")
+    local AgentInstance = require("agentic.acp.agent_instance")
+    local SessionRegistry = require("agentic.session_registry")
+
+    local provider = Config.provider or "claude-acp"
+    local instance = AgentInstance._instances[provider]
+    if instance then
+        SessionRegistry.destroy_session()
+        pcall(function()
+            instance:stop()
+        end)
+        AgentInstance._instances[provider] = nil
+    end
+
+    Config.acp_providers[provider].env.CLAUDE_PROJECT = proj
+    Config.acp_providers[provider].env.CLAUDE_TASK = task
+
+    require("agentic").new_session({ auto_add_to_context = false })
+end
+
+local function pick_task()
+    vim.system({ work_bin, "gather" }, {}, function()
+        vim.system({ work_bin, "scan" }, { text = true }, function(result)
+            vim.schedule(function()
+                local items = {}
+                for line in (result.stdout or ""):gmatch("[^\n]+") do
+                    local _file, name, desc, _kind, state, slug = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.)\t(.-)$")
+                    if slug and desc then
+                        items[#items + 1] = {
+                            state = state,
+                            text = desc,
+                            proj = slug,
+                            name = name,
+                            file = slug ~= "" and (projects_dir .. slug .. ".md") or nil,
+                        }
+                    end
+                end
+
+                Snacks.picker({
+                    title = "Work Queue",
+                    items = items,
+                    preview = function(ctx)
+                        if ctx.item.file then
+                            return Snacks.picker.preview.file(ctx)
+                        end
+                        ctx.preview:reset()
+                        ctx.preview:set_lines({ "(no project)" })
+                    end,
+                    format = function(item, _ctx)
+                        local status = item.state == "/" and "/ " or "  "
+                        local ret = { { status, item.state == "/" and "SnacksPickerIdx" or nil } }
+                        ret[#ret + 1] = { item.text }
+                        if item.proj ~= "" then
+                            ret[#ret + 1] = { " 󱃶 " .. (item.name or item.proj), "SnacksPickerDir" }
+                        end
+                        return ret
+                    end,
+                    on_show = function()
+                        vim.cmd.stopinsert()
+                    end,
+                    confirm = function(picker, item)
+                        picker:close()
+                        if not item then
+                            return
+                        end
+                        if item.file then
+                            vim.cmd.edit(item.file)
+                        end
+                        start_project_session(item.proj, item.text)
+                    end,
+                })
+            end)
+        end)
+    end)
+end
+
+local function new_project()
+    vim.ui.input({ prompt = "Project title: " }, function(title)
+        if not title or title == "" then
+            return
+        end
+        local slug = title:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", "")
+        vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(result)
+            vim.schedule(function()
+                if result.code ~= 0 then
+                    vim.notify("create-project failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+                    return
+                end
+                local project_file = projects_dir .. slug .. ".md"
+                vim.cmd.edit(project_file)
+                start_project_session(slug, title)
+            end)
+        end)
+    end)
+end
+
+local function add_task()
+    vim.ui.input({ prompt = "Task: " }, function(description)
+        if not description or description == "" then
+            return
+        end
+
+        vim.system({ work_bin, "scan" }, { text = true }, function(result)
+            vim.schedule(function()
+                local projects_seen = {}
+                local projects = { { title = "[New Project]", slug = nil, file = nil } }
+
+                for line in (result.stdout or ""):gmatch("[^\n]+") do
+                    local _file, name, _desc, _kind, _state, slug = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.)\t(.-)$")
+                    if slug and slug ~= "" and not projects_seen[slug] then
+                        projects_seen[slug] = true
+                        table.insert(projects, {
+                            title = name,
+                            slug = slug,
+                            file = projects_dir .. slug .. ".md",
+                        })
+                    end
+                end
+
+                Snacks.picker({
+                    title = "Select Project",
+                    items = projects,
+                    format = function(item)
+                        return item.title
+                    end,
+                    confirm = function(item)
+                        if item.slug then
+                            vim.system({ work_bin, "append-task", item.file, description }, {}, function(r)
+                                vim.schedule(function()
+                                    if r.code == 0 then
+                                        vim.notify("Added task to " .. item.title, vim.log.levels.INFO)
+                                    else
+                                        vim.notify("Failed to add task", vim.log.levels.ERROR)
+                                    end
+                                end)
+                            end)
+                        else
+                            vim.ui.input({ prompt = "Project title: " }, function(title)
+                                if not title or title == "" then
+                                    return
+                                end
+                                local slug = title:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", "")
+                                vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(cr)
+                                    vim.schedule(function()
+                                        if cr.code ~= 0 then
+                                            vim.notify("create-project failed: " .. (cr.stderr or ""), vim.log.levels.ERROR)
+                                            return
+                                        end
+                                        local file = projects_dir .. slug .. ".md"
+                                        vim.system({ work_bin, "append-task", file, description }, {}, function(ar)
+                                            vim.schedule(function()
+                                                if ar.code == 0 then
+                                                    vim.notify("Created project and added task", vim.log.levels.INFO)
+                                                else
+                                                    vim.notify("Failed to add task", vim.log.levels.ERROR)
+                                                end
+                                            end)
+                                        end)
+                                    end)
+                                end)
+                            end)
+                        end
+                    end,
+                })
+            end)
+        end)
+    end)
+end
+
 return {
     "carlos-algms/agentic.nvim",
     cond = function()
@@ -152,6 +325,24 @@ return {
             end,
             desc = "Add all buffer diagnostics to Agentic",
             mode = { "n" },
+        },
+        {
+            "<leader>ap",
+            pick_task,
+            mode = { "n" },
+            desc = "Pick task and start Agentic session",
+        },
+        {
+            "<leader>aP",
+            new_project,
+            mode = { "n" },
+            desc = "Create project and start Agentic session",
+        },
+        {
+            "<leader>at",
+            add_task,
+            mode = { "n" },
+            desc = "Add task to project",
         },
     },
 }

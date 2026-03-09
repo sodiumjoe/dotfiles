@@ -113,6 +113,27 @@ Every plan file must include:
 
 ## Work Tracking
 
+### Completing Work
+
+When completing a task, use the `work complete` command:
+```bash
+work complete <file> <description>
+```
+
+This single command:
+- Marks the item complete in the source file (project or plan)
+- Adds it to today's daily note log with proper metadata
+- Handles project/plan context automatically
+
+Example:
+```bash
+work complete ~/stripe/work/projects/dotfiles.md "Fix shell config"
+```
+
+Do not manually call `work check-off` or `work append-log` separately. Always use `work complete` for consistency.
+
+### Changelog Format
+
 - If the plan has a `project` field, log work in the **project file's** `## Changelog` section
 - If the plan has no `project` field (standalone), log work in the plan file's own `## Changelog` section
 - Format changelog entries as completed tasks: `- [x] Description of work done ✅ YYYY-MM-DD`
