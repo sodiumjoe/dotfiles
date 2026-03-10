@@ -19,6 +19,10 @@ local function start_project_session(proj, task)
     Config.acp_providers[provider].env.CLAUDE_PROJECT = proj
     Config.acp_providers[provider].env.CLAUDE_TASK = task
 
+    if proj and proj ~= "" then
+        vim.fn.system(string.format("tmux label '%s' 2>/dev/null || true", proj))
+    end
+
     require("agentic").new_session({ auto_add_to_context = false })
 end
 
@@ -26,11 +30,11 @@ local function pick_task()
     vim.system({ work_bin, "gather" }, {}, function()
         vim.system({ work_bin, "scan" }, { text = true }, function(result)
             vim.schedule(function()
-                local items = {}
+                local raw = {}
                 for line in (result.stdout or ""):gmatch("[^\n]+") do
                     local _file, name, desc, _kind, state, slug = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.)\t(.-)$")
                     if slug and desc then
-                        items[#items + 1] = {
+                        raw[#raw + 1] = {
                             state = state,
                             text = desc,
                             proj = slug,
@@ -40,9 +44,24 @@ local function pick_task()
                     end
                 end
 
+                table.sort(raw, function(a, b)
+                    local ap = a.proj == "" and "\xff" or a.proj:lower()
+                    local bp = b.proj == "" and "\xff" or b.proj:lower()
+                    if ap ~= bp then return ap < bp end
+                    return (a.text or "") < (b.text or "")
+                end)
+
+                for i, item in ipairs(raw) do
+                    item.sort_idx = i
+                end
+
                 Snacks.picker({
                     title = "Work Queue",
-                    items = items,
+                    items = raw,
+                    sort = function(a, b)
+                        if a.score ~= b.score then return a.score > b.score end
+                        return a.sort_idx < b.sort_idx
+                    end,
                     preview = function(ctx)
                         if ctx.item.file then
                             return Snacks.picker.preview.file(ctx)
@@ -63,11 +82,13 @@ local function pick_task()
                         vim.cmd.stopinsert()
                     end,
                     confirm = function(picker, item)
+                        if not item then return end
                         picker:close()
-                        if not item then
-                            return
-                        end
                         if item.file then
+                            local editor_win = require("sodium.utils").editor_window()
+                            if editor_win then
+                                vim.api.nvim_set_current_win(editor_win)
+                            end
                             vim.cmd.edit(item.file)
                         end
                         start_project_session(item.proj, item.text)
@@ -125,13 +146,15 @@ local function add_task()
                     title = "Select Project",
                     items = projects,
                     format = function(item)
-                        return item.title
+                        return { { item.title } }
                     end,
-                    confirm = function(item)
+                    confirm = function(picker, item)
+                        picker:close()
                         if item.slug then
                             vim.system({ work_bin, "append-task", item.file, description }, {}, function(r)
                                 vim.schedule(function()
                                     if r.code == 0 then
+                                        vim.cmd.edit(item.file)
                                         vim.notify("Added task to " .. item.title, vim.log.levels.INFO)
                                     else
                                         vim.notify("Failed to add task", vim.log.levels.ERROR)
@@ -147,7 +170,10 @@ local function add_task()
                                 vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(cr)
                                     vim.schedule(function()
                                         if cr.code ~= 0 then
-                                            vim.notify("create-project failed: " .. (cr.stderr or ""), vim.log.levels.ERROR)
+                                            vim.notify(
+                                                "create-project failed: " .. (cr.stderr or ""),
+                                                vim.log.levels.ERROR
+                                            )
                                             return
                                         end
                                         local file = projects_dir .. slug .. ".md"
