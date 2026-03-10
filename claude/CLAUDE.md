@@ -78,7 +78,11 @@ When writing documents, proposals, design docs, plans, or work logs:
   project: "[[projects/project-slug]]"
   ---
   ```
-  The `project` field is required when the plan belongs to a project. It links the plan to its parent project file. Omit `project` only for standalone plans with no parent project.
+  **Project field rules:**
+  - Every plan must be associated with a project. The `project` field is required.
+  - If session context includes a "Project:" line (from SessionStart hook), extract the project slug and use it
+  - If no session context, ask the user which project this plan belongs to before creating the plan
+  - The project field links the plan to its parent project file and ensures tasks appear grouped correctly in daily notes
 - After creating a new plan file, open it in the neovim editor window (skip silently if the command fails):
   ```bash
   nvim-edit '<absolute-path-to-plan-file>'
@@ -96,7 +100,10 @@ Every plan file must include:
 - **Files to modify** — explicit list of file paths with what changes each needs
 - **Verification** — how to test the changes end-to-end
 - **Notes** — investigation findings, discoveries, tangential issues found
-- **Changelog** — completed work entries in `- [x] Description ✅ YYYY-MM-DD` format. **Omit this section** if the plan has a `project` field — the project file owns the canonical changelog.
+- **Changelog** — completed work entries in `- [x] Description ✅ YYYY-MM-DD` format. Since all plans must have a `project` field, omit this section — the project file owns the canonical changelog.
+
+**Task management:**
+- All plans must have a `project` field, so all open tasks must be added to the project file's `## Tasks` section, never in the plan
 
 ### Investigation requirements
 
@@ -134,8 +141,7 @@ Do not manually call `work check-off` or `work append-log` separately. Always us
 
 ### Changelog Format
 
-- If the plan has a `project` field, log work in the **project file's** `## Changelog` section
-- If the plan has no `project` field (standalone), log work in the plan file's own `## Changelog` section
+- All plans must have a `project` field, so always log work in the **project file's** `## Changelog` section
 - Format changelog entries as completed tasks: `- [x] Description of work done ✅ YYYY-MM-DD`
   - The `✅ YYYY-MM-DD` suffix is required Obsidian Tasks done-date metadata
   - This allows the daily note to query completed work from all plans and projects
