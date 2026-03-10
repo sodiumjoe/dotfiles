@@ -66,7 +66,8 @@
       "Bash(find * | wc *)",
       "Bash(ls * | head *)",
       "Bash(ls * | tail *)",
-      "Bash(env * | grep * | head *)
+      "Bash(env * | grep * | head *)",
+      "Bash(work complete*)"
     ],
     "deny": [
       "Bash(git reset --hard*)",
