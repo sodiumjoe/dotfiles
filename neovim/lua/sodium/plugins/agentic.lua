@@ -1,7 +1,7 @@
 local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/work"
 local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
 
-local function start_project_session(proj, task)
+local function start_project_session(proj)
     local Config = require("agentic.config")
     local AgentInstance = require("agentic.acp.agent_instance")
     local SessionRegistry = require("agentic.session_registry")
@@ -17,7 +17,6 @@ local function start_project_session(proj, task)
     end
 
     Config.acp_providers[provider].env.CLAUDE_PROJECT = proj
-    Config.acp_providers[provider].env.CLAUDE_TASK = task
 
     if proj and proj ~= "" then
         vim.fn.system(string.format("tmux label '%s' 2>/dev/null || true", proj))
@@ -26,75 +25,59 @@ local function start_project_session(proj, task)
     require("agentic").new_session({ auto_add_to_context = false })
 end
 
-local function pick_task()
-    vim.system({ work_bin, "gather" }, {}, function()
-        vim.system({ work_bin, "scan" }, { text = true }, function(result)
-            vim.schedule(function()
-                local raw = {}
-                for line in (result.stdout or ""):gmatch("[^\n]+") do
-                    local _file, name, desc, _kind, state, slug = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.)\t(.-)$")
-                    if slug and desc then
-                        raw[#raw + 1] = {
-                            state = state,
-                            text = desc,
-                            proj = slug,
-                            name = name,
-                            file = slug ~= "" and (projects_dir .. slug .. ".md") or nil,
-                        }
-                    end
+local function pick_project()
+    vim.system({ work_bin, "list-projects" }, { text = true }, function(result)
+        vim.schedule(function()
+            local items = {}
+            for line in (result.stdout or ""):gmatch("[^\n]+") do
+                local slug, title, status = line:match("^(.-)\t(.-)\t(.-)$")
+                if slug then
+                    items[#items + 1] = {
+                        text = title,
+                        slug = slug,
+                        status = status,
+                        file = projects_dir .. slug .. ".md",
+                    }
                 end
+            end
 
-                table.sort(raw, function(a, b)
-                    local ap = a.proj == "" and "\xff" or a.proj:lower()
-                    local bp = b.proj == "" and "\xff" or b.proj:lower()
-                    if ap ~= bp then return ap < bp end
-                    return (a.text or "") < (b.text or "")
-                end)
-
-                for i, item in ipairs(raw) do
-                    item.sort_idx = i
-                end
-
-                Snacks.picker({
-                    title = "Work Queue",
-                    items = raw,
-                    sort = function(a, b)
-                        if a.score ~= b.score then return a.score > b.score end
-                        return a.sort_idx < b.sort_idx
-                    end,
-                    preview = function(ctx)
-                        if ctx.item.file then
-                            return Snacks.picker.preview.file(ctx)
-                        end
-                        ctx.preview:reset()
-                        ctx.preview:set_lines({ "(no project)" })
-                    end,
-                    format = function(item, _ctx)
-                        local status = item.state == "/" and "/ " or "  "
-                        local ret = { { status, item.state == "/" and "SnacksPickerIdx" or nil } }
-                        ret[#ret + 1] = { item.text }
-                        if item.proj ~= "" then
-                            ret[#ret + 1] = { " 󱃶 " .. (item.name or item.proj), "SnacksPickerDir" }
-                        end
-                        return ret
-                    end,
-                    on_show = function()
-                        vim.cmd.stopinsert()
-                    end,
-                    confirm = function(picker, item)
-                        if not item then return end
-                        picker:close()
-                        if item.file then
-                            local editor_win = require("sodium.utils").editor_window()
-                            if editor_win then
-                                vim.api.nvim_set_current_win(editor_win)
-                            end
-                            vim.cmd.edit(item.file)
-                        end
-                        start_project_session(item.proj, item.text)
-                    end,
-                })
+            table.sort(items, function(a, b)
+                return a.text:lower() < b.text:lower()
             end)
+
+            for i, item in ipairs(items) do
+                item.sort_idx = i
+            end
+
+            Snacks.picker({
+                title = "Projects",
+                items = items,
+                sort = function(a, b)
+                    if a.score ~= b.score then return a.score > b.score end
+                    return a.sort_idx < b.sort_idx
+                end,
+                preview = "file",
+                format = function(item)
+                    local ret = { { item.text } }
+                    if item.status == "evergreen" then
+                        ret[#ret + 1] = { " (evergreen)", "SnacksPickerDir" }
+                    end
+                    return ret
+                end,
+                on_show = function()
+                    vim.cmd.stopinsert()
+                end,
+                confirm = function(picker, item)
+                    if not item then return end
+                    picker:close()
+                    local editor_win = require("sodium.utils").editor_window()
+                    if editor_win then
+                        vim.api.nvim_set_current_win(editor_win)
+                    end
+                    vim.cmd.edit(item.file)
+                    start_project_session(item.slug)
+                end,
+            })
         end)
     end)
 end
@@ -113,8 +96,185 @@ local function new_project()
                 end
                 local project_file = projects_dir .. slug .. ".md"
                 vim.cmd.edit(project_file)
-                start_project_session(slug, title)
+                start_project_session(slug)
             end)
+        end)
+    end)
+end
+
+local state_cycle = { [" "] = "in-progress", ["/"] = "done", ["x"] = "open" }
+local state_char = { ["in-progress"] = "/", ["done"] = "x", ["open"] = " " }
+local state_display = { [" "] = "[ ]", ["/"] = "[/]", ["x"] = "[x]" }
+
+local function show_task_picker(items, show_project)
+    for i, item in ipairs(items) do
+        item.sort_idx = i
+    end
+
+    Snacks.picker({
+        title = show_project and "All Tasks" or "Tasks",
+        items = items,
+        sort = function(a, b)
+            if a.score ~= b.score then return a.score > b.score end
+            return a.sort_idx < b.sort_idx
+        end,
+        preview = "file",
+        format = function(item)
+            local ret = { { state_display[item.state] .. " ", item.state == "/" and "SnacksPickerLabel" or item.state == "x" and "SnacksPickerComment" or "SnacksPickerDir" } }
+            ret[#ret + 1] = { item.description }
+            if show_project then
+                ret[#ret + 1] = { " (" .. item.title .. ")", "SnacksPickerDir" }
+            end
+            return ret
+        end,
+        on_show = function()
+            vim.cmd.stopinsert()
+        end,
+        confirm = function(picker, item)
+            if not item then return end
+            picker:close()
+            local editor_win = require("sodium.utils").editor_window()
+            if editor_win then
+                vim.api.nvim_set_current_win(editor_win)
+            end
+            vim.cmd.edit(item.file)
+            vim.api.nvim_win_set_cursor(0, { item.line_num, 0 })
+        end,
+        win = {
+            input = {
+                keys = {
+                    ["<Tab>"] = { "cycle_state", mode = { "n", "i" } },
+                },
+            },
+        },
+        actions = {
+            cycle_state = function(picker)
+                local item = picker:current()
+                if not item then return end
+                local next_state = state_cycle[item.state]
+                if not next_state then return end
+                vim.system(
+                    { work_bin, "set-task-state", item.file, tostring(item.line_num), next_state },
+                    { text = true },
+                    function(result)
+                        vim.schedule(function()
+                            if result.code == 0 then
+                                item.state = state_char[next_state]
+                                local bufnr = vim.fn.bufnr(item.file)
+                                if bufnr ~= -1 then
+                                    local lnum = item.line_num - 1
+                                    local f = io.open(item.file, "r")
+                                    if f then
+                                        local disk_line
+                                        for _ = 1, item.line_num do
+                                            disk_line = f:read("*l")
+                                        end
+                                        f:close()
+                                        if disk_line then
+                                            vim.api.nvim_buf_set_lines(bufnr, lnum, lnum + 1, false, { disk_line })
+                                            vim.bo[bufnr].modified = false
+                                        end
+                                    end
+                                end
+                            end
+                            picker.list:update({ force = true })
+                        end)
+                    end
+                )
+            end,
+        },
+    })
+end
+
+local function parse_task_items(stdout)
+    local items = {}
+    for line in (stdout or ""):gmatch("[^\n]+") do
+        local file, line_num, state, title, description = line:match("^(.-)\t(.-)\t(.)\t(.-)\t(.-)$")
+        if file then
+            items[#items + 1] = {
+                text = description,
+                file = file,
+                line_num = tonumber(line_num),
+                state = state,
+                title = title,
+                description = description,
+            }
+        end
+    end
+    return items
+end
+
+local function pick_task_state()
+    local bufname = vim.api.nvim_buf_get_name(0)
+    local project_file = nil
+
+    if bufname:match(projects_dir .. ".*%.md$") then
+        project_file = bufname
+    else
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_loaded(buf) then
+                local name = vim.api.nvim_buf_get_name(buf)
+                if name:match(projects_dir .. ".*%.md$") then
+                    project_file = name
+                    break
+                end
+            end
+        end
+    end
+
+    if project_file then
+        vim.system({ work_bin, "list-tasks", project_file }, { text = true }, function(result)
+            vim.schedule(function()
+                show_task_picker(parse_task_items(result.stdout), false)
+            end)
+        end)
+    else
+        vim.system({ work_bin, "list-projects" }, { text = true }, function(result)
+            vim.schedule(function()
+                local items = {}
+                for line in (result.stdout or ""):gmatch("[^\n]+") do
+                    local slug, title, status = line:match("^(.-)\t(.-)\t(.-)$")
+                    if slug then
+                        items[#items + 1] = {
+                            text = title,
+                            slug = slug,
+                            status = status,
+                            file = projects_dir .. slug .. ".md",
+                        }
+                    end
+                end
+                Snacks.picker({
+                    title = "Select Project",
+                    items = items,
+                    format = function(item)
+                        local ret = { { item.text } }
+                        if item.status == "evergreen" then
+                            ret[#ret + 1] = { " (evergreen)", "SnacksPickerDir" }
+                        end
+                        return ret
+                    end,
+                    on_show = function()
+                        vim.cmd.stopinsert()
+                    end,
+                    confirm = function(picker, item)
+                        if not item then return end
+                        picker:close()
+                        vim.system({ work_bin, "list-tasks", item.file }, { text = true }, function(r)
+                            vim.schedule(function()
+                                show_task_picker(parse_task_items(r.stdout), false)
+                            end)
+                        end)
+                    end,
+                })
+            end)
+        end)
+    end
+end
+
+local function pick_all_tasks()
+    vim.system({ work_bin, "list-tasks" }, { text = true }, function(result)
+        vim.schedule(function()
+            show_task_picker(parse_task_items(result.stdout), true)
         end)
     end)
 end
@@ -125,17 +285,16 @@ local function add_task()
             return
         end
 
-        vim.system({ work_bin, "scan" }, { text = true }, function(result)
+        vim.system({ work_bin, "list-projects" }, { text = true }, function(result)
             vim.schedule(function()
-                local projects_seen = {}
-                local projects = { { title = "[New Project]", slug = nil, file = nil } }
+                local projects = { { text = "[New Project]", title = "[New Project]", slug = nil, file = nil } }
 
                 for line in (result.stdout or ""):gmatch("[^\n]+") do
-                    local _file, name, _desc, _kind, _state, slug = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.)\t(.-)$")
-                    if slug and slug ~= "" and not projects_seen[slug] then
-                        projects_seen[slug] = true
+                    local slug, title = line:match("^(.-)\t(.-)\t")
+                    if slug and slug ~= "" then
                         table.insert(projects, {
-                            title = name,
+                            text = title,
+                            title = title,
                             slug = slug,
                             file = projects_dir .. slug .. ".md",
                         })
@@ -149,12 +308,18 @@ local function add_task()
                         return { { item.title } }
                     end,
                     confirm = function(picker, item)
+                        if not item then return end
                         picker:close()
                         if item.slug then
                             vim.system({ work_bin, "append-task", item.file, description }, {}, function(r)
                                 vim.schedule(function()
                                     if r.code == 0 then
-                                        vim.cmd.edit(item.file)
+                                        local bufnr = vim.fn.bufnr(item.file)
+                                        if bufnr ~= -1 then
+                                            vim.api.nvim_buf_call(bufnr, function() vim.cmd("edit") end)
+                                        else
+                                            vim.cmd.edit(item.file)
+                                        end
                                         vim.notify("Added task to " .. item.title, vim.log.levels.INFO)
                                     else
                                         vim.notify("Failed to add task", vim.log.levels.ERROR)
@@ -354,9 +519,9 @@ return {
         },
         {
             "<leader>ap",
-            pick_task,
+            pick_project,
             mode = { "n" },
-            desc = "Pick task and start Agentic session",
+            desc = "Pick project and start Agentic session",
         },
         {
             "<leader>aP",
@@ -369,6 +534,18 @@ return {
             add_task,
             mode = { "n" },
             desc = "Add task to project",
+        },
+        {
+            "<leader>st",
+            pick_task_state,
+            mode = { "n" },
+            desc = "Task state picker (context-aware)",
+        },
+        {
+            "<leader>sT",
+            pick_all_tasks,
+            mode = { "n" },
+            desc = "Task state picker (all projects)",
         },
     },
 }

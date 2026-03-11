@@ -20,8 +20,8 @@
     <integer>0</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>/tmp/work-tick.log</string>
+  <string>/Users/moon/Library/Logs/work-tick.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/work-tick.log</string>
+  <string>/Users/moon/Library/Logs/work-tick.log</string>
 </dict>
 </plist>

@@ -83,9 +83,10 @@ When writing documents, proposals, design docs, plans, or work logs:
   - If session context includes a "Project:" line (from SessionStart hook), extract the project slug and use it
   - If no session context, ask the user which project this plan belongs to before creating the plan
   - The project field links the plan to its parent project file and ensures tasks appear grouped correctly in daily notes
-- After creating a new plan file, open it in the neovim editor window (skip silently if the command fails):
+- After creating a new plan file, open it in the neovim editor window (skip silently if any step fails):
   ```bash
-  nvim-edit '<absolute-path-to-plan-file>'
+  win=$(nvim-lua "return require('sodium.utils').editor_window()")
+  [[ -n "$win" ]] && nvim-open --window "$win" '<absolute-path-to-plan-file>'
   ```
 
 ## Plan Design

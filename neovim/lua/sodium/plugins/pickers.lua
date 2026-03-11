@@ -266,5 +266,30 @@ return {
             end,
             desc = "Claude Plans",
         },
+        {
+            "<leader>sP",
+            function()
+                local projects_dir = vim.env.HOME .. "/stripe/work/projects"
+                local files = vim.fn.glob(projects_dir .. "/*.md", false, true)
+                local items = {}
+                for _, file in ipairs(files) do
+                    if not file:match("_template%.md$") then
+                        local mtime = vim.fn.getftime(file)
+                        table.insert(items, { file = file, text = file, mtime = mtime })
+                    end
+                end
+                table.sort(items, function(a, b)
+                    return a.mtime > b.mtime
+                end)
+                Snacks.picker({
+                    items = items,
+                    format = "file",
+                    on_show = function()
+                        vim.cmd.stopinsert()
+                    end,
+                })
+            end,
+            desc = "Projects",
+        },
     },
 }
