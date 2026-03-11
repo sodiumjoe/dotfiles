@@ -300,6 +300,9 @@ local function add_task()
                     format = function(item)
                         return { { item.title } }
                     end,
+                    on_show = function()
+                        vim.cmd.startinsert()
+                    end,
                     confirm = function(picker, item)
                         if not item then return end
                         picker:close()
