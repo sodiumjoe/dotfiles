@@ -5,6 +5,7 @@ local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
 
 local lsp_attached = false
+local M = {}
 
 local function is_standard_filetype()
     local ft = vim.bo.filetype
@@ -16,7 +17,7 @@ local function is_standard_filetype()
     return true
 end
 
-local function get_filename()
+function M.get_filename()
     local bufname = vim.api.nvim_buf_get_name(0)
     local _, _, filepath = bufname:match("^fugitive://(.+)//(%x+)/(.+)$")
     if filepath then
@@ -26,13 +27,13 @@ local function get_filename()
 end
 
 local filename_active = {
-    get_filename,
+    M.get_filename,
     cond = is_standard_filetype,
     color = "StatusLineActiveItem",
 }
 
 local filename_inactive = {
-    get_filename,
+    M.get_filename,
     cond = is_standard_filetype,
 }
 
@@ -260,7 +261,7 @@ local theme = {
     inactive = normal,
 }
 
-local function get_agentic_title()
+function M.get_agentic_title()
     local ft = vim.bo.filetype
     if ft == "AgenticChat" then
         return "󰻞 Agentic Chat"
@@ -384,7 +385,7 @@ lualine.setup({
             sections = {
                 lualine_a = {
                     {
-                        get_agentic_title,
+                        M.get_agentic_title,
                         color = "StatusLineActiveItem",
                     },
                 },
@@ -411,7 +412,7 @@ lualine.setup({
             },
             inactive_sections = {
                 lualine_a = {
-                    get_agentic_title,
+                    M.get_agentic_title,
                 },
                 lualine_b = {},
                 lualine_c = {},
@@ -437,8 +438,6 @@ lualine.setup({
         },
     },
 })
-
-local M = {}
 
 function M.on_attach()
     lsp_attached = true
