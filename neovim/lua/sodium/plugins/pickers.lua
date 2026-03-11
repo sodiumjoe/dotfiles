@@ -244,10 +244,7 @@ return {
             "<leader>sp",
             function()
                 local plans_dir = vim.fn.expand("~/.claude/plans")
-                local cwd = vim.fn.getcwd()
-                local plans_files = vim.fn.glob(plans_dir .. "/*.md", false, true)
-                local cwd_files = vim.fn.glob(cwd .. "/*.md", false, true)
-                local all_files = vim.list_extend(plans_files, cwd_files)
+                local all_files = vim.fn.glob(plans_dir .. "/*.md", false, true)
                 local items = {}
                 for _, file in ipairs(all_files) do
                     local mtime = vim.fn.getftime(file)
