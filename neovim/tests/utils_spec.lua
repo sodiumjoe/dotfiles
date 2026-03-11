@@ -1,0 +1,43 @@
+local utils = require("sodium.utils")
+
+describe("sodium.utils", function()
+    describe("merge", function()
+        it("merges two tables", function()
+            local result = utils.merge({ a = 1, b = 2 }, { b = 3, c = 4 })
+            assert.are.equal(1, result.a)
+            assert.are.equal(3, result.b)
+            assert.are.equal(4, result.c)
+        end)
+
+        it("second table wins on conflict", function()
+            local result = utils.merge({ x = "old" }, { x = "new" })
+            assert.are.equal("new", result.x)
+        end)
+    end)
+
+    describe("is_executable", function()
+        it("returns true for known executables", function()
+            assert.is_true(utils.is_executable("ls"))
+        end)
+
+        it("returns false for nonexistent binaries", function()
+            assert.is_false(utils.is_executable("__nonexistent_binary_xyz__"))
+        end)
+    end)
+
+    describe("path_exists", function()
+        it("returns truthy for existing path", function()
+            assert.is_truthy(utils.path_exists(vim.fn.expand("~/.dotfiles/init.lua")))
+        end)
+
+        it("returns falsy for missing path", function()
+            assert.is_falsy(utils.path_exists("/tmp/__does_not_exist_xyz__"))
+        end)
+    end)
+
+    describe("is_fugitive_buffer", function()
+        it("returns false for normal buffer", function()
+            assert.is_false(utils.is_fugitive_buffer(0))
+        end)
+    end)
+end)
