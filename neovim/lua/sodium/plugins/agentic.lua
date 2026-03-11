@@ -307,6 +307,10 @@ local function add_task()
                             vim.system({ work_bin, "append-task", item.file, description }, {}, function(r)
                                 vim.schedule(function()
                                     if r.code == 0 then
+                                        local editor_win = require("sodium.utils").editor_window()
+                                        if editor_win then
+                                            vim.api.nvim_set_current_win(editor_win)
+                                        end
                                         local bufnr = vim.fn.bufnr(item.file)
                                         if bufnr ~= -1 then
                                             vim.api.nvim_buf_call(bufnr, function() vim.cmd("edit") end)
