@@ -1,40 +1,13 @@
-local function get_list_prefix(line)
-    local indent = line:match("^(%s*)%- %[[ /xX]%] ")
-    if indent then
-        return indent .. "- [ ] "
-    end
-    local indent2, marker = line:match("^(%s*)([-*] )")
-    if indent2 then
-        return indent2 .. marker
-    end
-    local indent3, num, dot = line:match("^(%s*)(%d+)([.)]) ")
-    if indent3 then
-        return indent3 .. tostring(tonumber(num) + 1) .. dot .. " "
-    end
-    return nil
-end
-
-local function has_text_after_prefix(line)
-    if line:match("^%s*%- %[.%] .+") then
-        return true
-    end
-    if line:match("^%s*[-*] .+") then
-        return true
-    end
-    if line:match("^%s*%d+[.)] .+") then
-        return true
-    end
-    return false
-end
+local md = require("sodium.markdown")
 
 local function continue_list(key)
     return function()
         local line = vim.api.nvim_get_current_line()
-        local prefix = get_list_prefix(line)
+        local prefix = md.get_list_prefix(line)
         if not prefix then
             return vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "n", false)
         end
-        if not has_text_after_prefix(line) then
+        if not md.has_text_after_prefix(line) then
             vim.api.nvim_set_current_line("")
             return
         end
@@ -53,11 +26,11 @@ end
 
 local function cr_continue_list()
     local line = vim.api.nvim_get_current_line()
-    local prefix = get_list_prefix(line)
+    local prefix = md.get_list_prefix(line)
     if not prefix then
         return vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "n", false)
     end
-    if not has_text_after_prefix(line) then
+    if not md.has_text_after_prefix(line) then
         vim.api.nvim_set_current_line("")
         return
     end
