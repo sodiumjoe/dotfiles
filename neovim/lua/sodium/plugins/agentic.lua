@@ -1,5 +1,6 @@
 local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/work"
 local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
+local agentic_utils = require("sodium.agentic_utils")
 
 local function start_project_session(proj)
     local Config = require("agentic.config")
@@ -87,7 +88,7 @@ local function new_project()
         if not title or title == "" then
             return
         end
-        local slug = title:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", "")
+        local slug = agentic_utils.slugify(title)
         vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(result)
             vim.schedule(function()
                 if result.code ~= 0 then
@@ -101,10 +102,6 @@ local function new_project()
         end)
     end)
 end
-
-local state_cycle = { [" "] = "in-progress", ["/"] = "done", ["x"] = "open" }
-local state_char = { ["in-progress"] = "/", ["done"] = "x", ["open"] = " " }
-local state_display = { [" "] = "[ ]", ["/"] = "[/]", ["x"] = "[x]" }
 
 local function show_task_picker(items, show_project)
     for i, item in ipairs(items) do
@@ -120,7 +117,7 @@ local function show_task_picker(items, show_project)
         end,
         preview = "file",
         format = function(item)
-            local ret = { { state_display[item.state] .. " ", item.state == "/" and "SnacksPickerLabel" or item.state == "x" and "SnacksPickerComment" or "SnacksPickerDir" } }
+            local ret = { { agentic_utils.state_display[item.state] .. " ", item.state == "/" and "SnacksPickerLabel" or item.state == "x" and "SnacksPickerComment" or "SnacksPickerDir" } }
             ret[#ret + 1] = { item.description }
             if show_project then
                 ret[#ret + 1] = { " (" .. item.title .. ")", "SnacksPickerDir" }
@@ -151,7 +148,7 @@ local function show_task_picker(items, show_project)
             cycle_state = function(picker)
                 local item = picker:current()
                 if not item then return end
-                local next_state = state_cycle[item.state]
+                local next_state = agentic_utils.state_cycle[item.state]
                 if not next_state then return end
                 vim.system(
                     { work_bin, "set-task-state", item.file, tostring(item.line_num), next_state },
@@ -159,7 +156,7 @@ local function show_task_picker(items, show_project)
                     function(result)
                         vim.schedule(function()
                             if result.code == 0 then
-                                item.state = state_char[next_state]
+                                item.state = agentic_utils.state_char[next_state]
                                 local bufnr = vim.fn.bufnr(item.file)
                                 if bufnr ~= -1 then
                                     local lnum = item.line_num - 1
@@ -186,24 +183,6 @@ local function show_task_picker(items, show_project)
     })
 end
 
-local function parse_task_items(stdout)
-    local items = {}
-    for line in (stdout or ""):gmatch("[^\n]+") do
-        local file, line_num, state, title, description = line:match("^(.-)\t(.-)\t(.)\t(.-)\t(.-)$")
-        if file then
-            items[#items + 1] = {
-                text = description,
-                file = file,
-                line_num = tonumber(line_num),
-                state = state,
-                title = title,
-                description = description,
-            }
-        end
-    end
-    return items
-end
-
 local function pick_task_state()
     local bufname = vim.api.nvim_buf_get_name(0)
     local project_file = nil
@@ -225,7 +204,7 @@ local function pick_task_state()
     if project_file then
         vim.system({ work_bin, "list-tasks", project_file }, { text = true }, function(result)
             vim.schedule(function()
-                show_task_picker(parse_task_items(result.stdout), false)
+                show_task_picker(agentic_utils.parse_task_items(result.stdout), false)
             end)
         end)
     else
@@ -261,7 +240,7 @@ local function pick_task_state()
                         picker:close()
                         vim.system({ work_bin, "list-tasks", item.file }, { text = true }, function(r)
                             vim.schedule(function()
-                                show_task_picker(parse_task_items(r.stdout), false)
+                                show_task_picker(agentic_utils.parse_task_items(r.stdout), false)
                             end)
                         end)
                     end,
@@ -274,7 +253,7 @@ end
 local function pick_all_tasks()
     vim.system({ work_bin, "list-tasks" }, { text = true }, function(result)
         vim.schedule(function()
-            show_task_picker(parse_task_items(result.stdout), true)
+            show_task_picker(agentic_utils.parse_task_items(result.stdout), true)
         end)
     end)
 end
@@ -331,7 +310,7 @@ local function add_task()
                                 if not title or title == "" then
                                     return
                                 end
-                                local slug = title:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", "")
+                                local slug = agentic_utils.slugify(title)
                                 vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(cr)
                                     vim.schedule(function()
                                         if cr.code ~= 0 then
