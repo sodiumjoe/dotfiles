@@ -17,7 +17,9 @@ function M.get_list_prefix(line)
 end
 
 function M.has_text_after_prefix(line)
-    if line:match("^%s*%- %[.%] .+") then return true end
+    if line:match("^%s*%- %[.%] ") then
+        return line:match("^%s*%- %[.%] .+") ~= nil
+    end
     if line:match("^%s*[-*] .+") then return true end
     if line:match("^%s*%d+[.)] .+") then return true end
     return false
