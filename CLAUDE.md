@@ -56,9 +56,17 @@ Test files live in `neovim/tests/`. `minimal_init.lua` bootstraps the subprocess
 
 **Registry tests**: `keymaps_spec` (core + plugin keymap declarations), `plugins_spec` (all expected plugins declared in specs).
 
+**Planning requirement**: every implementation plan that touches neovim code must include a testing section. Decide which category applies and describe what tests to add:
+- New extracted module or pure function → unit tests
+- New autocmd, keymap callback, or window behavior → behavioral test
+- New keymap declaration or plugin spec → registry test entry
+- If the change is untestable in headless plenary (e.g. requires interactive UI, external plugin runtime), state why explicitly
+
 Caveats:
 - Plenary subprocess doesn't fully initialize lazy.nvim plugins. Tests that need plugin side-effects (e.g. colorscheme augroups) must call the config function directly or `require` the spec module.
 - Insert-mode `feedkeys` is unreliable in headless. CR continuation tests invoke the callback directly from the buffer-local keymap table.
+- Window state leaks between tests in plenary. Create scratch buffers with `nvim_create_buf(false, true)` and delete them with `nvim_buf_delete(buf, { force = true })` in each test. Do not rely on `before_each`/`after_each` for window cleanup.
+- To test a local function from a plugin spec, extract the callback via the spec's `keys` table (e.g. find the entry matching the keymap lhs and call its function directly).
 
 ## External Integrations
 
@@ -88,3 +96,12 @@ Work vault: `~/stripe/work/` (configured in `work/config.json`).
 ### devbox
 
 Shell prompt displays devbox context when in remote dev environment (referenced in `zsh/.p10k.zsh`). No other filesystem integration.
+
+## Committing Changes
+
+After completing a logical unit of work, commit the changes. Do not wait to be asked.
+
+- Stage specific files by name. Do not use `git add -A` or `git add .`.
+- Write concise commit messages. Match the style of recent commits in `git log --oneline -10`.
+- Do not push unless explicitly asked.
+- Do not commit `lazy-lock.json` unless the change was intentional (i.e. a plugin upgrade).

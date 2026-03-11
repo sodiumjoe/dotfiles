@@ -2,6 +2,20 @@ local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/wor
 local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
 local agentic_utils = require("sodium.agentic_utils")
 
+local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
+
+local function resize_agentic_split()
+    local target = math.floor(vim.o.lines * 0.5)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local buf = vim.api.nvim_win_get_buf(win)
+        local ft = vim.bo[buf].filetype
+        if vim.tbl_contains(agentic_filetypes, ft) then
+            vim.api.nvim_win_set_height(win, target)
+            return
+        end
+    end
+end
+
 local function start_project_session(proj)
     local Config = require("agentic.config")
     local AgentInstance = require("agentic.acp.agent_instance")
@@ -438,6 +452,10 @@ return {
                 end,
             },
         })
+
+        utils.augroup("AgenticResize", { clear = true })("VimResized", {
+            callback = resize_agentic_split,
+        })
     end,
     keys = {
         {
@@ -525,6 +543,12 @@ return {
             pick_all_tasks,
             mode = { "n" },
             desc = "Task state picker (all projects)",
+        },
+        {
+            "<leader>a=",
+            resize_agentic_split,
+            mode = { "n" },
+            desc = "Rebalance agentic split to 50%",
         },
     },
 }

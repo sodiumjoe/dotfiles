@@ -72,5 +72,12 @@ describe("keymaps", function()
         it("declares leader-e/ in editing spec", function()
             assert.is_true(spec_has_key(editing, "<leader>e/"))
         end)
+
+        local ok, agentic = pcall(require, "sodium.plugins.agentic")
+        if ok then
+            it("declares leader-a= in agentic spec", function()
+                assert.is_true(spec_has_key(agentic, "<leader>a="))
+            end)
+        end
     end)
 end)
