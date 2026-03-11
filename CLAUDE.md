@@ -1,61 +1,90 @@
 # Agent Instructions
 
-## Repository Links
+Dotfiles repo. Manages shell, neovim, tmux, git, and other tool configs via symlinks. Install with `./bootstrap.sh`.
+
+## Symlink Strategy
+
+`bootstrap.sh` creates symlinks in two categories:
+
+**Root files** → `~/.<file>`: `curlrc`, `cvimrc`, `gitconfig`, `ignore`, `inputrc`, `zshenv`
+
+**XDG directories** → `~/.config/<dir>`: `alacritty`, `ghostty`, `hammerspoon`, `karabiner`, `rg`, `tmux`, `vivid`, `work`, `zsh`
+
+**Special cases:**
+- `init.lua` → `~/.config/nvim/init.lua`
+- `tmux/tmux.conf` → `~/.tmux.conf`
+- `claude/CLAUDE.md` → `~/.claude/CLAUDE.md`
+- `claude/settings.json` → `~/.claude/settings.json`
+- `bin/*` → `~/bin/*`
+- `launchd/*.plist` → `~/Library/LaunchAgents/`
+
+**Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
+
+When adding new config: add the file or directory, then add it to the appropriate list in `bootstrap.sh` (`files` array for home dotfiles, `xdg_files` array for XDG configs, or a new `ln -s` for special cases).
+
+## Neovim Architecture
+
+Entry point: `init.lua` (repo root). Bootstraps lazy.nvim with interleaved loading:
+
+1. `sodium.config.options`, `sodium.config.diagnostics` — before plugins
+2. `lazy.setup({ import = "sodium.plugins" })` — plugin specs
+3. `sodium.config.autocmds`, `sodium.config.keymaps` — after plugins
+4. `sodium.config.stripe` — conditional, only in stripe repos
+
+**Config modules** (`neovim/lua/sodium/config/`): `options`, `keymaps`, `autocmds`, `diagnostics`, `colorscheme`, `stripe`
+
+**Plugin specs** (`neovim/lua/sodium/plugins/`): one file per feature category, each returns a lazy.nvim spec table or array of tables. Lazy.nvim auto-imports the directory.
+
+**Grouped plugins**: subdirectory with `init.lua` that requires and returns individual specs (see `plugins/lsp/`).
+
+**Extracted modules** (pure functions, testable independently):
+- `neovim/lua/sodium/markdown.lua` — markdown list prefix parsing (`get_list_prefix`, `has_text_after_prefix`)
+- `neovim/lua/sodium/agentic_utils.lua` — task parsing, slugify, state cycle tables
+- `neovim/lua/sodium/utils.lua` — keymaps, augroups, path checks, etc.
+
+**Lockfile**: `lazy-lock.json` (repo root)
+
+## Testing
+
+Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run single file: `./test-nvim.sh neovim/tests/markdown_spec.lua`.
+
+Test files live in `neovim/tests/`. `minimal_init.lua` bootstraps the subprocess with all lazy plugin paths on rtp.
+
+**Unit tests**: `markdown_spec`, `agentic_functions_spec`, `utils_spec`, `statusline_spec` — pure function tests for extracted modules.
+
+**Behavioral tests**: `cursor_restore_spec`, `quickfix_spec`, `markdown_behavior_spec`, `colorscheme_spec` — test autocmds and buffer-local keymaps.
+
+**Registry tests**: `keymaps_spec` (core + plugin keymap declarations), `plugins_spec` (all expected plugins declared in specs).
+
+Caveats:
+- Plenary subprocess doesn't fully initialize lazy.nvim plugins. Tests that need plugin side-effects (e.g. colorscheme augroups) must call the config function directly or `require` the spec module.
+- Insert-mode `feedkeys` is unreliable in headless. CR continuation tests invoke the callback directly from the buffer-local keymap table.
+
+## External Integrations
 
 ### personal-marketplace
 
-Location: `~/stripe/work/personal-marketplace/work/bin/work`
+Repo: `~/stripe/work/personal-marketplace/`
 
-Integration: Hard-coded filesystem path (not git submodule or symlink)
+Binary: `~/stripe/work/personal-marketplace/work/bin/work`
 
-Used by:
-- neovim/lua/sodium/plugins/agentic.lua:1 (work_bin variable)
-- .claude/settings.local.json:34-65 (permission allowlist)
-- launchd/com.moon.work-tick.plist:9 (via ~/bin/work symlink)
+Access: `~/bin/work` symlink (used by launchd), hardcoded full path in `neovim/lua/sodium/plugins/agentic.lua` (work_bin variable).
 
-Provides work management CLI. Neovim keybindings:
+Also referenced by: `.claude/settings.local.json` (permission allowlist), `launchd/com.moon.work-tick.plist` (hourly background sync).
+
+Neovim keybindings:
 - `<leader>ap` — pick task from work queue
 - `<leader>aP` — create new project
 - `<leader>at` — add task to project
 
-Background sync: launchd runs `work tick` hourly to maintain work state.
+Work vault: `~/stripe/work/` (configured in `work/config.json`).
 
-Work vault configured at `~/stripe/work` (see work/config.json).
+### claude/
+
+- `claude/CLAUDE.md` → `~/.claude/CLAUDE.md` (global agent instructions)
+- `claude/settings.json` → `~/.claude/settings.json` (global permissions, model config, plugins)
+- Project-specific overrides in `.claude/settings.local.json`
 
 ### devbox
 
-Referenced in: zsh/.p10k.zsh:851 (prompt context)
-
-Integration: Shell prompt displays devbox context when in remote development environment. No other filesystem integration.
-
-## Changelog Maintenance
-
-When completing work in this repository, maintain changelog entries per CLAUDE.md guidelines.
-
-Format: `- [x] Description ✅ YYYY-MM-DD`
-
-Location depends on context:
-- If working under a project: update project file's `## Changelog` section
-- If working standalone: update plan file's `## Changelog` section
-
-Use `work complete <file> <description>` command (not manual editing):
-- Marks item complete in source file
-- Adds entry to daily note log with metadata
-- Handles project/plan context automatically
-
-Example:
-```bash
-work complete ~/stripe/work/projects/dotfiles.md "Document agent integration"
-```
-
-Do not call `work check-off` or `work append-log` separately. Always use `work complete`.
-
-## Integration Notes
-
-Repository acts as configuration hub:
-- Symlinks configs via bootstrap.sh to `$XDG_CONFIG_HOME` and `~/`
-- Integrates with personal-marketplace through filesystem paths
-- Runs background sync via launchd
-- Provides neovim keybindings for work CLI access
-
-No git submodules or version control relationship with external repos. All integration is through shell commands and file paths.
+Shell prompt displays devbox context when in remote dev environment (referenced in `zsh/.p10k.zsh`). No other filesystem integration.
