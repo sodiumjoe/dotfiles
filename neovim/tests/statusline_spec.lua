@@ -1,6 +1,10 @@
-local statusline = require("sodium.statusline")
-
 describe("sodium.statusline", function()
+    local statusline
+
+    before_each(function()
+        statusline = require("sodium.statusline")
+    end)
+
     describe("get_filename", function()
         it("returns staged prefix for fugitive buffers", function()
             local buf = vim.api.nvim_create_buf(false, true)
