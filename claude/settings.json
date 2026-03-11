@@ -67,6 +67,7 @@
       "Bash(ls * | head *)",
       "Bash(ls * | tail *)",
       "Bash(env * | grep * | head *)",
+      "Bash(git add * && git commit -m *)",
       "Bash(work *)"
     ],
     "deny": [
