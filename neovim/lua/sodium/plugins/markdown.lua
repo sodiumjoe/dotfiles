@@ -148,22 +148,26 @@ return {
             callbacks = {
                 enter_note = function()
                     local api = require("obsidian.api")
-                    vim.keymap.set("n", "gf", function()
-                        if api.cursor_link() then
-                            vim.cmd("Obsidian follow_link")
-                        else
-                            vim.cmd("normal! gF")
+                    local function follow_link_or(fallback)
+                        return function()
+                            if api.cursor_link() then
+                                vim.cmd("Obsidian follow_link")
+                                return
+                            end
+                            local url = vim.fn.expand("<cWORD>"):match("https?://[%w_.~!*'();:@&=+$,/?#%[%]%%%-]+")
+                            if url then
+                                vim.ui.open(url)
+                            else
+                                fallback()
+                            end
                         end
-                    end, { buffer = true })
-                    vim.keymap.set("n", "<CR>", function()
-                        if api.cursor_link() then
-                            vim.cmd("Obsidian follow_link")
-                        elseif api.cursor_checkbox() then
+                    end
+                    vim.keymap.set("n", "gf", follow_link_or(function() vim.cmd("normal! gF") end), { buffer = true })
+                    vim.keymap.set("n", "<CR>", follow_link_or(function()
+                        if api.cursor_checkbox() then
                             vim.cmd("Obsidian toggle_checkbox")
-                        else
-                            vim.cmd("normal! gF")
                         end
-                    end, { buffer = true })
+                    end), { buffer = true })
                     vim.keymap.set("n", "<C-Space>", "<cmd>Obsidian toggle_checkbox<cr>", { buffer = true })
                 end,
             },
