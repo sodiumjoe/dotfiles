@@ -147,7 +147,23 @@ return {
             },
             callbacks = {
                 enter_note = function()
-                    vim.keymap.set("n", "gf", require("obsidian.actions").smart_action, { expr = true, buffer = true })
+                    local api = require("obsidian.api")
+                    vim.keymap.set("n", "gf", function()
+                        if api.cursor_link() then
+                            vim.cmd("Obsidian follow_link")
+                        else
+                            vim.cmd("normal! gF")
+                        end
+                    end, { buffer = true })
+                    vim.keymap.set("n", "<CR>", function()
+                        if api.cursor_link() then
+                            vim.cmd("Obsidian follow_link")
+                        elseif api.cursor_checkbox() then
+                            vim.cmd("Obsidian toggle_checkbox")
+                        else
+                            vim.cmd("normal! gF")
+                        end
+                    end, { buffer = true })
                     vim.keymap.set("n", "<C-Space>", "<cmd>Obsidian toggle_checkbox<cr>", { buffer = true })
                 end,
             },
