@@ -85,8 +85,7 @@ When writing documents, proposals, design docs, plans, or work logs:
   - The project field links the plan to its parent project file and ensures tasks appear grouped correctly in daily notes
 - After creating a new plan file, open it in the neovim editor window (skip silently if any step fails):
   ```bash
-  win=$(nvim-lua "return require('sodium.utils').editor_window()")
-  [[ -n "$win" ]] && nvim-open --window "$win" '<absolute-path-to-plan-file>'
+  nvim-open --editor '<absolute-path-to-plan-file>'
   ```
 
 ## Plan Design

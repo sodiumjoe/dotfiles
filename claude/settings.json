@@ -34,6 +34,9 @@
       "Bash(diff*)",
       "Bash(comm*)",
       "Bash(cmp*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git add * && git commit -m *)",
       "Bash(git status*)",
       "Bash(git log*)",
       "Bash(git diff*)",
@@ -67,8 +70,9 @@
       "Bash(ls * | head *)",
       "Bash(ls * | tail *)",
       "Bash(env * | grep * | head *)",
-      "Bash(git add * && git commit -m *)",
-      "Bash(work *)"
+      "Bash(work *)",
+      "Bash(nvim-lua *)",
+      "Bash(nvim-open *)"
     ],
     "deny": [
       "Bash(git reset --hard*)",
@@ -93,8 +97,6 @@
       "Bash(chown*)",
       "Bash(docker*)",
       "Bash(kubectl*)",
-      "Bash(git add*)",
-      "Bash(git commit*)",
       "Bash(git push*)",
       "Bash(git pull*)",
       "Bash(git fetch*)",
