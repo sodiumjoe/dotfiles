@@ -272,92 +272,87 @@ local function pick_all_tasks()
     end)
 end
 
+local function add_task_finish(file, title, description)
+    vim.system({ work_bin, "append-task", file, description }, {}, function(r)
+        vim.schedule(function()
+            if r.code ~= 0 then
+                vim.notify("Failed to add task", vim.log.levels.ERROR)
+                return
+            end
+            local editor_win = require("sodium.utils").editor_window()
+            if editor_win then
+                vim.api.nvim_set_current_win(editor_win)
+            end
+            local bufnr = vim.fn.bufnr(file)
+            if bufnr ~= -1 then
+                vim.api.nvim_buf_call(bufnr, function() vim.cmd("edit") end)
+            else
+                vim.cmd.edit(file)
+            end
+            vim.system({ work_bin, "tick" })
+            vim.notify("Added task to " .. title, vim.log.levels.INFO)
+        end)
+    end)
+end
+
 local function add_task()
-    vim.ui.input({ prompt = "Task: " }, function(description)
-        if not description or description == "" then
-            return
-        end
+    vim.system({ work_bin, "list-projects" }, { text = true }, function(result)
+        vim.schedule(function()
+            local projects = { { text = "[New Project]", title = "[New Project]", slug = nil, file = nil } }
 
-        vim.system({ work_bin, "list-projects" }, { text = true }, function(result)
-            vim.schedule(function()
-                local projects = { { text = "[New Project]", title = "[New Project]", slug = nil, file = nil } }
-
-                for line in (result.stdout or ""):gmatch("[^\n]+") do
-                    local slug, title = line:match("^(.-)\t(.-)\t")
-                    if slug and slug ~= "" then
-                        table.insert(projects, {
-                            text = title,
-                            title = title,
-                            slug = slug,
-                            file = projects_dir .. slug .. ".md",
-                        })
-                    end
+            for line in (result.stdout or ""):gmatch("[^\n]+") do
+                local slug, title = line:match("^(.-)\t(.-)\t")
+                if slug and slug ~= "" then
+                    table.insert(projects, {
+                        text = title,
+                        title = title,
+                        slug = slug,
+                        file = projects_dir .. slug .. ".md",
+                    })
                 end
+            end
 
-                Snacks.picker({
-                    title = "Select Project",
-                    items = projects,
-                    format = function(item)
-                        return { { item.title } }
-                    end,
-                    on_show = function()
-                        vim.cmd.startinsert()
-                    end,
-                    confirm = function(picker, item)
-                        if not item then return end
-                        picker:close()
-                        if item.slug then
-                            vim.system({ work_bin, "append-task", item.file, description }, {}, function(r)
+            Snacks.picker({
+                title = "Select Project",
+                items = projects,
+                format = function(item)
+                    return { { item.title } }
+                end,
+                on_show = function()
+                    vim.cmd.startinsert()
+                end,
+                confirm = function(picker, item)
+                    if not item then return end
+                    picker:close()
+                    if item.slug then
+                        vim.ui.input({ prompt = "Task: " }, function(description)
+                            if not description or description == "" then return end
+                            add_task_finish(item.file, item.title, description)
+                        end)
+                    else
+                        vim.ui.input({ prompt = "Project title: " }, function(title)
+                            if not title or title == "" then return end
+                            local slug = agentic_utils.slugify(title)
+                            vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(cr)
                                 vim.schedule(function()
-                                    if r.code == 0 then
-                                        local editor_win = require("sodium.utils").editor_window()
-                                        if editor_win then
-                                            vim.api.nvim_set_current_win(editor_win)
-                                        end
-                                        local bufnr = vim.fn.bufnr(item.file)
-                                        if bufnr ~= -1 then
-                                            vim.api.nvim_buf_call(bufnr, function() vim.cmd("edit") end)
-                                        else
-                                            vim.cmd.edit(item.file)
-                                        end
-                                        vim.notify("Added task to " .. item.title, vim.log.levels.INFO)
-                                    else
-                                        vim.notify("Failed to add task", vim.log.levels.ERROR)
+                                    if cr.code ~= 0 then
+                                        vim.notify(
+                                            "create-project failed: " .. (cr.stderr or ""),
+                                            vim.log.levels.ERROR
+                                        )
+                                        return
                                     end
-                                end)
-                            end)
-                        else
-                            vim.ui.input({ prompt = "Project title: " }, function(title)
-                                if not title or title == "" then
-                                    return
-                                end
-                                local slug = agentic_utils.slugify(title)
-                                vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(cr)
-                                    vim.schedule(function()
-                                        if cr.code ~= 0 then
-                                            vim.notify(
-                                                "create-project failed: " .. (cr.stderr or ""),
-                                                vim.log.levels.ERROR
-                                            )
-                                            return
-                                        end
-                                        local file = projects_dir .. slug .. ".md"
-                                        vim.system({ work_bin, "append-task", file, description }, {}, function(ar)
-                                            vim.schedule(function()
-                                                if ar.code == 0 then
-                                                    vim.notify("Created project and added task", vim.log.levels.INFO)
-                                                else
-                                                    vim.notify("Failed to add task", vim.log.levels.ERROR)
-                                                end
-                                            end)
-                                        end)
+                                    local file = projects_dir .. slug .. ".md"
+                                    vim.ui.input({ prompt = "Task: " }, function(description)
+                                        if not description or description == "" then return end
+                                        add_task_finish(file, title, description)
                                     end)
                                 end)
                             end)
-                        end
-                    end,
-                })
-            end)
+                        end)
+                    end
+                end,
+            })
         end)
     end)
 end
