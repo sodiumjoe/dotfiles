@@ -103,7 +103,7 @@ end
 
 local function pick_pr()
     vim.system(
-        { "gh", "pr", "list", "--json", "number,title,author,headRefName,baseRefName,reviewDecision,isDraft", "--limit", "30" },
+        { "gh", "pr", "list", "--search", "review-requested:@me", "--json", "number,title,author,headRefName,baseRefName,reviewDecision,isDraft", "--limit", "30" },
         { text = true },
         function(result)
             vim.schedule(function()
