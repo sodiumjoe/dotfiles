@@ -148,6 +148,7 @@ return {
             callbacks = {
                 enter_note = function()
                     vim.keymap.set("n", "gf", require("obsidian.api").smart_action, { buffer = true })
+                    vim.keymap.set("n", "<CR>", require("obsidian.api").smart_action, { buffer = true })
                     vim.keymap.set("n", "<C-Space>", "<cmd>Obsidian toggle_checkbox<cr>", { buffer = true })
                 end,
             },
