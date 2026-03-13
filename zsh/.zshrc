@@ -221,8 +221,8 @@ else
   alias ll='ls -la'
 fi
 
-alias gfm='git fetch origin master-passing-tests:master-passing-tests'
-alias grm='git rebase master-passing-tests'
+alias gfm='git fetch origin green:green'
+alias grm='git rebase green'
 
 # FZF
 
@@ -314,7 +314,7 @@ fetch_remotes() {
       | .[]
       | . as {$name, $status, $last_accessed_human_readable, $emoji, $go_dev_url}
       | (
-          [.current_working_copies // [] | .[] | select(.branch != "master-passing-tests")]
+          [.current_working_copies // [] | .[] | select(.branch != "green")]
           | sort_by(.commit_timestamp) | reverse | first // null
         ) as $wc
       | ($wc | if . then .branch else "" end) as $branch
