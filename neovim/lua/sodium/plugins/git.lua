@@ -183,8 +183,22 @@ local function pick_pr()
                         picker:close()
                         item.toplevel = git_toplevel()
                         review.set_current_pr(item)
-                        vim.system({ "git", "fetch", "origin", item.baseRefName })
-                        pick_pr_files()
+                        vim.notify("Checking out PR #" .. item.number .. "...")
+                        vim.system(
+                            { "gh", "pr", "checkout", tostring(item.number) },
+                            { text = true },
+                            function(r)
+                                vim.schedule(function()
+                                    if r.code ~= 0 then
+                                        vim.notify("gh pr checkout failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                                        return
+                                    end
+                                    vim.system({ "git", "fetch", "origin", item.baseRefName })
+                                    vim.cmd("checktime")
+                                    pick_pr_files()
+                                end)
+                            end
+                        )
                     end,
                 })
             end)
