@@ -55,8 +55,6 @@ local function pick_pr_files()
                     }
                 end
 
-                local target_win = require("sodium.utils").editor_window() or vim.api.nvim_get_current_win()
-
                 Snacks.picker({
                     title = string.format("PR #%d Files (%s)", pr.number, pr.headRefName),
                     items = items,
@@ -75,16 +73,6 @@ local function pick_pr_files()
                     end,
                     on_show = function()
                         vim.cmd.stopinsert()
-                    end,
-                    confirm = function(picker, item)
-                        if not item then return end
-                        picker:close()
-                        vim.schedule(function()
-                            if vim.api.nvim_win_is_valid(target_win) then
-                                vim.api.nvim_set_current_win(target_win)
-                            end
-                            vim.cmd.edit(item.file)
-                        end)
                     end,
                     win = {
                         input = {
@@ -107,14 +95,7 @@ local function pick_pr_files()
                             if not item then return end
                             picker:close()
                             vim.schedule(function()
-                                if vim.api.nvim_win_is_valid(target_win) then
-                                    vim.api.nvim_set_current_win(target_win)
-                                end
-                                vim.cmd.edit(item.file)
-                                local ok, _ = pcall(vim.cmd, "Gdiffsplit origin/" .. pr.baseRefName)
-                                if not ok then
-                                    vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
-                                end
+                                open_diff(item.file, pr.baseRefName)
                             end)
                         end,
                     },
