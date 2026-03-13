@@ -77,11 +77,13 @@ local function pick_pr_files()
                     confirm = function(picker, item)
                         if not item then return end
                         picker:close()
-                        local editor_win = require("sodium.utils").editor_window()
-                        if editor_win then
-                            vim.api.nvim_set_current_win(editor_win)
-                        end
-                        vim.cmd.edit(item.file)
+                        vim.schedule(function()
+                            local editor_win = require("sodium.utils").editor_window()
+                            if editor_win then
+                                vim.api.nvim_set_current_win(editor_win)
+                            end
+                            vim.cmd.edit(item.file)
+                        end)
                     end,
                     win = {
                         input = {
@@ -103,7 +105,9 @@ local function pick_pr_files()
                             local item = picker:current()
                             if not item then return end
                             picker:close()
-                            open_diff(item.file, pr.baseRefName)
+                            vim.schedule(function()
+                                open_diff(item.file, pr.baseRefName)
+                            end)
                         end,
                     },
                 })
