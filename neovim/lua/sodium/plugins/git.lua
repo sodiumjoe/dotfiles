@@ -20,6 +20,29 @@ local function open_diff(filepath, base_ref)
     end
 end
 
+local function fetch_and_display_comments(pr)
+    local root = pr.toplevel or git_toplevel() or ""
+    if root == "" then return end
+    vim.system(
+        { "gh", "api", "repos/{owner}/{repo}/pulls/" .. tostring(pr.number) .. "/comments", "--paginate" },
+        { text = true },
+        function(r)
+            vim.schedule(function()
+                if r.code ~= 0 then
+                    vim.notify("Failed to fetch PR comments: " .. (r.stderr or ""), vim.log.levels.WARN)
+                    return
+                end
+                local by_id, files = review.parse_gh_comments(r.stdout)
+                if not next(by_id) then return end
+                local data = review.build_comments_v2(by_id, files)
+                local path = root .. "/.nvim-comments.json"
+                review.write_comments_json(path, data)
+                pcall(vim.cmd, "CommentRefresh")
+            end)
+        end
+    )
+end
+
 local function pick_pr_files()
     local pr = review.get_current_pr()
     if not pr then
@@ -204,6 +227,20 @@ local function pick_pr()
                         picker:close()
                         item.toplevel = git_toplevel()
                         review.set_current_pr(item)
+                        setup_gdiffsplit_override()
+                        local branch_result = vim.system({ "git", "rev-parse", "--abbrev-ref", "HEAD" }, { text = true }):wait()
+                        if branch_result.code == 0 and branch_result.stdout then
+                            review.set_previous_branch(vim.trim(branch_result.stdout))
+                        end
+                        vim.system({ "gh", "api", "user", "--jq", ".login" }, { text = true }, function(u)
+                            vim.schedule(function()
+                                if u.code == 0 and u.stdout then
+                                    local user = vim.trim(u.stdout)
+                                    review.set_current_user(user)
+                                    vim.g.comment_overlay_actor = user
+                                end
+                            end)
+                        end)
                         vim.notify("Checking out PR #" .. item.number .. "...")
                         vim.system(
                             { "gh", "pr", "checkout", tostring(item.number) },
@@ -214,9 +251,16 @@ local function pick_pr()
                                         vim.notify("gh pr checkout failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
                                         return
                                     end
-                                    vim.system({ "git", "fetch", "origin", item.baseRefName })
-                                    vim.cmd("checktime")
-                                    pick_pr_files()
+                                    vim.system({ "git", "fetch", "origin", item.baseRefName }, {}, function(fetch_result)
+                                        vim.schedule(function()
+                                            if fetch_result.code ~= 0 then
+                                                vim.notify("git fetch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
+                                            end
+                                            vim.cmd("checktime")
+                                            fetch_and_display_comments(item)
+                                            pick_pr_files()
+                                        end)
+                                    end)
                                 end)
                             end
                         )
@@ -227,13 +271,31 @@ local function pick_pr()
     )
 end
 
+local function setup_gdiffsplit_override()
+    vim.api.nvim_create_user_command("Gdiffsplit", function(opts)
+        local pr = review.get_current_pr()
+        if opts.args ~= "" or not pr then
+            vim.cmd("Gitsplit " .. opts.args)
+        else
+            local ok2, _ = pcall(vim.cmd, "Gitsplit origin/" .. pr.baseRefName)
+            if not ok2 then
+                vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
+            end
+        end
+    end, { nargs = "?", bang = true })
+end
+
+local function teardown_gdiffsplit_override()
+    pcall(vim.api.nvim_del_user_command, "Gdiffsplit")
+end
+
 local function diff_current_file()
     local pr = review.get_current_pr()
     if not pr then
         vim.notify("No PR selected", vim.log.levels.WARN)
         return
     end
-    local ok, _ = pcall(vim.cmd, "Gdiffsplit origin/" .. pr.baseRefName)
+    local ok, _ = pcall(vim.cmd, "Gdiffsplit")
     if not ok then
         vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
     end
@@ -262,14 +324,150 @@ local function review_and_next()
     pick_pr_files()
 end
 
+local function restore_branch_prompt(callback)
+    local branch = review.get_previous_branch()
+    if not branch then
+        if callback then callback() end
+        return
+    end
+    vim.ui.select({ "yes", "no" }, { prompt = "Restore branch " .. branch .. "?" }, function(choice)
+        if choice == "yes" then
+            vim.system({ "git", "checkout", branch }, { text = true }, function(r)
+                vim.schedule(function()
+                    if r.code ~= 0 then
+                        vim.notify("git checkout failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                    else
+                        vim.cmd("checktime")
+                        vim.notify("Restored branch " .. branch)
+                    end
+                    if callback then callback() end
+                end)
+            end)
+        else
+            if callback then callback() end
+        end
+    end)
+end
+
+local function clear_review_state()
+    restore_branch_prompt(function()
+        local root = (review.get_current_pr() or {}).toplevel or git_toplevel() or ""
+        if root ~= "" then
+            os.remove(root .. "/.nvim-comments.json")
+            pcall(vim.cmd, "CommentRefresh")
+        end
+        teardown_gdiffsplit_override()
+        review.reset()
+        vim.notify("PR review state cleared")
+    end)
+end
+
+local function add_comment()
+    local pr = review.get_current_pr()
+    if not pr then
+        vim.notify("No PR selected", vim.log.levels.WARN)
+        return
+    end
+    vim.cmd("CommentAdd")
+end
+
+local function refresh_comments()
+    local pr = review.get_current_pr()
+    if not pr then
+        vim.notify("No PR selected", vim.log.levels.WARN)
+        return
+    end
+    fetch_and_display_comments(pr)
+    vim.notify("Refreshing PR comments...")
+end
+
+local function submit_review()
+    local pr = review.get_current_pr()
+    if not pr then
+        vim.notify("No PR selected", vim.log.levels.WARN)
+        return
+    end
+    local root = pr.toplevel or git_toplevel() or ""
+    local current_user = review.get_current_user()
+    local path = root ~= "" and (root .. "/.nvim-comments.json") or nil
+    local local_comments = {}
+    if path then
+        local data = review.read_comments_json(path)
+        if data then
+            local_comments = review.filter_local_comments(data, current_user)
+        end
+    end
+
+    local event_map = { approve = "APPROVE", comment = "COMMENT", ["request changes"] = "REQUEST_CHANGES" }
+    vim.ui.select({ "approve", "comment", "request changes" }, { prompt = "Review type:" }, function(choice)
+        if not choice then return end
+        local event = event_map[choice]
+        vim.ui.input({ prompt = "Review body (optional): " }, function(body)
+            local api_comments = {}
+            for _, c in ipairs(local_comments) do
+                api_comments[#api_comments + 1] = {
+                    path = c.file,
+                    line = c.line,
+                    side = "RIGHT",
+                    body = c.body,
+                }
+            end
+            local payload = { event = event, body = body or "" }
+            if #api_comments > 0 then
+                payload.comments = api_comments
+            end
+            local payload_json = vim.json.encode(payload)
+            vim.system(
+                { "gh", "api", "repos/{owner}/{repo}/pulls/" .. tostring(pr.number) .. "/reviews",
+                  "-X", "POST", "--input", "-" },
+                { text = true, stdin = payload_json },
+                function(r)
+                    vim.schedule(function()
+                        if r.code ~= 0 then
+                            vim.notify("Review submit failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                            return
+                        end
+                        vim.notify("Review submitted: " .. choice)
+                        if path then
+                            os.remove(path)
+                            pcall(vim.cmd, "CommentRefresh")
+                        end
+                        restore_branch_prompt()
+                    end)
+                end
+            )
+        end)
+    end)
+end
+
 return {
-    "tpope/vim-fugitive",
-    cmd = { "Gdiffsplit", "Git" },
-    keys = {
-        { "<leader>pr", pick_pr, mode = "n", desc = "PR list picker" },
-        { "<leader>pf", pick_pr_files, mode = "n", desc = "PR changed files picker" },
-        { "<leader>pd", diff_current_file, mode = "n", desc = "Diff current file against PR base" },
-        { "<leader>pn", review_and_next, mode = "n", desc = "Mark reviewed and return to file picker" },
-        { "<leader>px", function() review.reset() vim.notify("PR review state cleared") end, mode = "n", desc = "Clear PR review state" },
+    {
+        "tpope/vim-fugitive",
+        cmd = { "Gdiffsplit", "Git" },
+        keys = {
+            { "<leader>pr", pick_pr, mode = "n", desc = "PR list picker" },
+            { "<leader>pf", pick_pr_files, mode = "n", desc = "PR changed files picker" },
+            { "<leader>pd", diff_current_file, mode = "n", desc = "Diff current file against PR base" },
+            { "<leader>pn", review_and_next, mode = "n", desc = "Mark reviewed and return to file picker" },
+            { "<leader>px", clear_review_state, mode = "n", desc = "Clear PR review state" },
+            { "<leader>pa", add_comment, mode = "n", desc = "Add PR comment on current line" },
+            { "<leader>pc", refresh_comments, mode = "n", desc = "Refresh PR comments from GitHub" },
+            { "<leader>ps", submit_review, mode = "n", desc = "Submit PR review" },
+        },
+    },
+    {
+        "huashuai/nvim-comment-overlay",
+        event = "BufReadPost",
+        config = function()
+            require("comment-overlay").setup({
+                keymaps = {
+                    add = false, delete = false, edit = false,
+                    next = false, prev = false,
+                    toggle_list = false, toggle_global_list = false,
+                    toggle_signs = false, copy_storage_path = false,
+                    open_storage = false,
+                },
+            })
+        end,
     },
 }

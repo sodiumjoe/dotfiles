@@ -71,6 +71,7 @@ describe("plugin registry", function()
             "none-ls.nvim",
             "lazydev.nvim",
             "vim-fugitive",
+            "nvim-comment-overlay",
             "vim-signify",
             "render-markdown.nvim",
             "obsidian.nvim",

@@ -163,4 +163,133 @@ describe("sodium.review", function()
             assert.is_nil(review.get_current_pr())
         end)
     end)
+
+    describe("previous_branch state", function()
+        it("stores and retrieves previous branch", function()
+            review.set_previous_branch("main")
+            assert.are.equal("main", review.get_previous_branch())
+        end)
+
+        it("returns nil by default", function()
+            assert.is_nil(review.get_previous_branch())
+        end)
+
+        it("reset clears previous branch", function()
+            review.set_previous_branch("feature-x")
+            review.reset()
+            assert.is_nil(review.get_previous_branch())
+        end)
+    end)
+
+    describe("current_user state", function()
+        it("stores and retrieves current user", function()
+            review.set_current_user("alice")
+            assert.are.equal("alice", review.get_current_user())
+        end)
+
+        it("returns nil by default", function()
+            assert.is_nil(review.get_current_user())
+        end)
+
+        it("reset clears current user", function()
+            review.set_current_user("bob")
+            review.reset()
+            assert.is_nil(review.get_current_user())
+        end)
+    end)
+
+    describe("parse_gh_comments", function()
+        it("parses basic comments", function()
+            local json = vim.json.encode({
+                { id = 100, path = "foo.lua", line = 10, body = "looks good",
+                  user = { login = "alice" }, created_at = "2026-01-01T00:00:00Z" },
+            })
+            local by_id, files = review.parse_gh_comments(json)
+            assert.is_not_nil(by_id["100"])
+            assert.are.equal("foo.lua", by_id["100"].file)
+            assert.are.equal(10, by_id["100"].line)
+            assert.are.equal("alice: looks good", by_id["100"].body)
+            assert.are.equal("comment", by_id["100"].kind)
+            assert.is_not_nil(files["foo.lua"])
+            assert.are.equal(1, #files["foo.lua"])
+        end)
+
+        it("groups replies under parent", function()
+            local json = vim.json.encode({
+                { id = 100, path = "foo.lua", line = 10, body = "nit",
+                  user = { login = "alice" }, created_at = "2026-01-01T00:00:00Z" },
+                { id = 101, path = "foo.lua", line = 10, body = "fixed",
+                  user = { login = "bob" }, created_at = "2026-01-01T01:00:00Z",
+                  in_reply_to_id = 100 },
+            })
+            local by_id, _ = review.parse_gh_comments(json)
+            assert.are.equal("comment", by_id["100"].kind)
+            assert.are.equal(1, #by_id["100"].reply_ids)
+            assert.are.equal("101", by_id["100"].reply_ids[1])
+            assert.are.equal("reply", by_id["101"].kind)
+            assert.are.equal("100", by_id["101"].root_id)
+        end)
+
+        it("skips comments with nil line (outdated)", function()
+            local json = vim.json.encode({
+                { id = 200, path = "bar.lua", line = vim.NIL, body = "outdated",
+                  user = { login = "alice" }, created_at = "2026-01-01T00:00:00Z" },
+            })
+            local by_id, files = review.parse_gh_comments(json)
+            assert.is_nil(by_id["200"])
+            assert.is_nil(files["bar.lua"])
+        end)
+
+        it("returns empty for nil input", function()
+            local by_id, files = review.parse_gh_comments(nil)
+            assert.are.same({}, by_id)
+            assert.are.same({}, files)
+        end)
+
+        it("returns empty for invalid JSON", function()
+            local by_id, files = review.parse_gh_comments("not json")
+            assert.are.same({}, by_id)
+            assert.are.same({}, files)
+        end)
+
+        it("returns empty for empty array", function()
+            local by_id, files = review.parse_gh_comments("[]")
+            assert.are.same({}, by_id)
+            assert.are.same({}, files)
+        end)
+    end)
+
+    describe("filter_local_comments", function()
+        it("returns comments by current user with non-numeric IDs", function()
+            local data = {
+                comments = {
+                    ["abc-123"] = { actor = "alice", file = "foo.lua", line = 1, body = "local comment" },
+                    ["456"] = { actor = "alice", file = "bar.lua", line = 2, body = "github comment" },
+                    ["def-789"] = { actor = "bob", file = "baz.lua", line = 3, body = "someone else" },
+                },
+            }
+            local result = review.filter_local_comments(data, "alice")
+            assert.are.equal(1, #result)
+            assert.are.equal("local comment", result[1].body)
+        end)
+
+        it("returns empty when no local comments", function()
+            local data = {
+                comments = {
+                    ["100"] = { actor = "alice", file = "foo.lua", line = 1, body = "from github" },
+                },
+            }
+            local result = review.filter_local_comments(data, "alice")
+            assert.are.equal(0, #result)
+        end)
+
+        it("returns empty for nil data", function()
+            assert.are.same({}, review.filter_local_comments(nil, "alice"))
+        end)
+
+        it("returns empty for nil user", function()
+            local data = { comments = { ["abc"] = { actor = "alice" } } }
+            assert.are.same({}, review.filter_local_comments(data, nil))
+        end)
+    end)
 end)
