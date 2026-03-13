@@ -103,8 +103,17 @@ return {
             {
                 "<leader>ww",
                 function()
-                    vim.fn.system("work tick")
+                    local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/work"
+                    vim.fn.system({ work_bin, "ensure" })
                     vim.cmd("Obsidian today")
+                    vim.system({ work_bin, "tick" }, { text = true }, function(r)
+                        vim.schedule(function()
+                            vim.cmd("checktime")
+                            if r.code ~= 0 then
+                                vim.notify("work tick failed (exit " .. r.code .. ")", vim.log.levels.WARN)
+                            end
+                        end)
+                    end)
                 end,
             },
             {
