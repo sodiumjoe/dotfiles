@@ -66,6 +66,61 @@ describe("sodium.review", function()
         end)
     end)
 
+    describe("parse_file_diffs", function()
+        it("splits multi-file diff", function()
+            local diff = table.concat({
+                "diff --git a/foo.lua b/foo.lua",
+                "index abc..def 100644",
+                "--- a/foo.lua",
+                "+++ b/foo.lua",
+                "@@ -1,3 +1,4 @@",
+                " line1",
+                "+added",
+                "diff --git a/bar.lua b/bar.lua",
+                "index 111..222 100644",
+                "--- a/bar.lua",
+                "+++ b/bar.lua",
+                "@@ -1 +1 @@",
+                "-old",
+                "+new",
+            }, "\n")
+            local diffs, files = review.parse_file_diffs(diff)
+            assert.are.equal(2, #files)
+            assert.are.equal("foo.lua", files[1])
+            assert.are.equal("bar.lua", files[2])
+            assert.is_truthy(diffs["foo.lua"]:find("+added"))
+            assert.is_truthy(diffs["bar.lua"]:find("+new"))
+        end)
+
+        it("handles single file diff", function()
+            local diff = "diff --git a/x.lua b/x.lua\n--- a/x.lua\n+++ b/x.lua\n@@ -1 +1 @@\n-a\n+b"
+            local diffs, files = review.parse_file_diffs(diff)
+            assert.are.equal(1, #files)
+            assert.are.equal("x.lua", files[1])
+            assert.is_truthy(diffs["x.lua"])
+        end)
+
+        it("handles new file", function()
+            local diff = "diff --git a/new.lua b/new.lua\nnew file mode 100644\n--- /dev/null\n+++ b/new.lua\n@@ -0,0 +1 @@\n+content"
+            local diffs, files = review.parse_file_diffs(diff)
+            assert.are.equal(1, #files)
+            assert.are.equal("new.lua", files[1])
+            assert.is_truthy(diffs["new.lua"]:find("+content"))
+        end)
+
+        it("returns empty for nil", function()
+            local diffs, files = review.parse_file_diffs(nil)
+            assert.are.same({}, diffs)
+            assert.are.same({}, files)
+        end)
+
+        it("returns empty for empty string", function()
+            local diffs, files = review.parse_file_diffs("")
+            assert.are.same({}, diffs)
+            assert.are.same({}, files)
+        end)
+    end)
+
     describe("reviewed state", function()
         it("tracks reviewed files per PR", function()
             review.set_current_pr({ number = 42 })

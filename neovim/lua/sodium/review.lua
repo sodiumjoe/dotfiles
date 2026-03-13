@@ -67,4 +67,30 @@ function M.parse_changed_files(stdout)
     return files
 end
 
+function M.parse_file_diffs(diff_text)
+    if not diff_text or diff_text == "" then return {}, {} end
+    local diffs = {}
+    local files = {}
+    local current_file = nil
+    local current_lines = {}
+    for line in diff_text:gmatch("[^\n]*\n?") do
+        line = line:gsub("\n$", "")
+        local b_path = line:match("^diff %-%-git a/.+ b/(.+)$")
+        if b_path then
+            if current_file then
+                diffs[current_file] = table.concat(current_lines, "\n")
+            end
+            current_file = b_path
+            files[#files + 1] = b_path
+            current_lines = { line }
+        elseif current_file then
+            current_lines[#current_lines + 1] = line
+        end
+    end
+    if current_file then
+        diffs[current_file] = table.concat(current_lines, "\n")
+    end
+    return diffs, files
+end
+
 return M

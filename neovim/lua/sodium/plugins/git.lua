@@ -28,7 +28,7 @@ local function pick_pr_files()
     end
 
     vim.system(
-        { "gh", "pr", "diff", tostring(pr.number), "--name-only" },
+        { "gh", "pr", "diff", tostring(pr.number) },
         { text = true },
         function(result)
             vim.schedule(function()
@@ -36,7 +36,7 @@ local function pick_pr_files()
                     vim.notify("gh pr diff failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
                     return
                 end
-                local files = review.parse_changed_files(result.stdout)
+                local file_diffs, files = review.parse_file_diffs(result.stdout)
                 if #files == 0 then
                     vim.notify("No changed files", vim.log.levels.INFO)
                     return
@@ -58,7 +58,17 @@ local function pick_pr_files()
                 Snacks.picker({
                     title = string.format("PR #%d Files (%s)", pr.number, pr.headRefName),
                     items = items,
-                    preview = "file",
+                    preview = function(ctx)
+                        local item = ctx.item
+                        if not item then return end
+                        local diff = file_diffs[item.rel]
+                        if diff then
+                            ctx.preview:set_lines(vim.split(diff, "\n"))
+                            ctx.preview:highlight({ ft = "diff" })
+                        else
+                            ctx.preview:set_lines({ "No diff available" })
+                        end
+                    end,
                     sort = function(a, b)
                         if a.score ~= b.score then return a.score > b.score end
                         return a.sort_idx < b.sort_idx
@@ -78,10 +88,17 @@ local function pick_pr_files()
                         input = {
                             keys = {
                                 ["<Tab>"] = { "toggle_reviewed", mode = { "n", "i" } },
-                                ["<C-d>"] = { "open_diff", mode = { "n", "i" } },
+                                ["<C-o>"] = { "open_file", mode = { "n", "i" } },
                             },
                         },
                     },
+                    confirm = function(picker, item)
+                        if not item then return end
+                        picker:close()
+                        vim.schedule(function()
+                            open_diff(item.file, pr.baseRefName)
+                        end)
+                    end,
                     actions = {
                         toggle_reviewed = function(picker)
                             local item = picker:current()
@@ -90,12 +107,16 @@ local function pick_pr_files()
                             item.reviewed = review.is_reviewed(item.rel)
                             picker.list:update({ force = true })
                         end,
-                        open_diff = function(picker)
+                        open_file = function(picker)
                             local item = picker:current()
                             if not item then return end
                             picker:close()
                             vim.schedule(function()
-                                open_diff(item.file, pr.baseRefName)
+                                local editor_win = require("sodium.utils").editor_window()
+                                if editor_win then
+                                    vim.api.nvim_set_current_win(editor_win)
+                                end
+                                vim.cmd.edit(item.file)
                             end)
                         end,
                     },
@@ -218,6 +239,30 @@ local function diff_current_file()
     end
 end
 
+local function review_and_next()
+    local pr = review.get_current_pr()
+    if not pr then
+        vim.notify("No PR selected", vim.log.levels.WARN)
+        return
+    end
+    local root = pr.toplevel or git_toplevel() or ""
+    local filepath = vim.api.nvim_buf_get_name(0)
+    if root ~= "" and filepath:sub(1, #root + 1) == root .. "/" then
+        filepath = filepath:sub(#root + 2)
+    end
+    review.toggle_reviewed(filepath)
+    local is_reviewed = review.is_reviewed(filepath)
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(buf)
+        if require("sodium.utils").is_fugitive_buffer(name) then
+            vim.api.nvim_buf_delete(buf, { force = true })
+        end
+    end
+    local marker = is_reviewed and "reviewed" or "unreviewed"
+    vim.notify(filepath .. " marked " .. marker)
+    pick_pr_files()
+end
+
 return {
     "tpope/vim-fugitive",
     cmd = { "Gdiffsplit", "Git" },
@@ -225,6 +270,7 @@ return {
         { "<leader>pr", pick_pr, mode = "n", desc = "PR list picker" },
         { "<leader>pf", pick_pr_files, mode = "n", desc = "PR changed files picker" },
         { "<leader>pd", diff_current_file, mode = "n", desc = "Diff current file against PR base" },
+        { "<leader>pn", review_and_next, mode = "n", desc = "Mark reviewed and return to file picker" },
         { "<leader>px", function() review.reset() vim.notify("PR review state cleared") end, mode = "n", desc = "Clear PR review state" },
     },
 }
