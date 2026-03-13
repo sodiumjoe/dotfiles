@@ -1,12 +1,20 @@
 local review = require("sodium.review")
 
+local function git_toplevel()
+    local result = vim.system({ "git", "rev-parse", "--show-toplevel" }, { text = true }):wait()
+    if result.code == 0 and result.stdout then
+        return vim.trim(result.stdout)
+    end
+    return nil
+end
+
 local function open_diff(filepath, base_ref)
     local editor_win = require("sodium.utils").editor_window()
     if editor_win then
         vim.api.nvim_set_current_win(editor_win)
     end
     vim.cmd.edit(filepath)
-    local ok, err = pcall(vim.cmd, "Gdiffsplit origin/" .. base_ref)
+    local ok, _ = pcall(vim.cmd, "Gdiffsplit origin/" .. base_ref)
     if not ok then
         vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
     end
@@ -34,11 +42,14 @@ local function pick_pr_files()
                     return
                 end
 
+                local root = pr.toplevel or git_toplevel() or ""
                 local items = {}
                 for i, filepath in ipairs(files) do
+                    local abs = root ~= "" and (root .. "/" .. filepath) or filepath
                     items[#items + 1] = {
                         text = filepath,
-                        file = filepath,
+                        file = abs,
+                        rel = filepath,
                         sort_idx = i,
                         reviewed = review.is_reviewed(filepath),
                     }
@@ -57,7 +68,7 @@ local function pick_pr_files()
                         local hl = item.reviewed and "SnacksPickerComment" or "SnacksPickerDir"
                         return {
                             { marker, hl },
-                            { item.file },
+                            { item.rel },
                         }
                     end,
                     on_show = function()
@@ -84,8 +95,8 @@ local function pick_pr_files()
                         toggle_reviewed = function(picker)
                             local item = picker:current()
                             if not item then return end
-                            review.toggle_reviewed(item.file)
-                            item.reviewed = review.is_reviewed(item.file)
+                            review.toggle_reviewed(item.rel)
+                            item.reviewed = review.is_reviewed(item.rel)
                             picker.list:update({ force = true })
                         end,
                         open_diff = function(picker)
@@ -149,6 +160,7 @@ local function pick_pr()
                     confirm = function(picker, item)
                         if not item then return end
                         picker:close()
+                        item.toplevel = git_toplevel()
                         review.set_current_pr(item)
                         vim.system({ "git", "fetch", "origin", item.baseRefName })
                         pick_pr_files()
