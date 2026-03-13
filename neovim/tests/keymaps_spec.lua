@@ -101,5 +101,15 @@ describe("keymaps", function()
         it("declares leader-pn in git spec", function()
             assert.is_true(spec_has_key(git, "<leader>pn"))
         end)
+
+        local markdown = require("sodium.plugins.markdown")
+
+        it("declares leader-wp in markdown spec", function()
+            assert.is_true(spec_has_key(markdown, "<leader>wp"))
+        end)
+
+        it("declares leader-ww in markdown spec", function()
+            assert.is_true(spec_has_key(markdown, "<leader>ww"))
+        end)
     end)
 end)

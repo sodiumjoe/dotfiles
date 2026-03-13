@@ -141,6 +141,25 @@ return {
                 desc = "Daily Notes",
             },
             { "<leader>wi", "<cmd>InterviewNote<cr>" },
+            {
+                "<leader>wp",
+                function()
+                    local work_dir = vim.fn.expand("~/stripe/work")
+                    local bufname = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t")
+                    local ref = bufname:match("^(%d%d%d%d%-%d%d%-%d%d)%.md$") or os.date("%Y-%m-%d")
+                    local files = vim.fn.glob(work_dir .. "/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md", false, true)
+                    table.sort(files, function(a, b) return a > b end)
+                    for _, file in ipairs(files) do
+                        local date = vim.fn.fnamemodify(file, ":t"):match("^(%d%d%d%d%-%d%d%-%d%d)%.md$")
+                        if date and date < ref then
+                            vim.cmd("edit " .. vim.fn.fnameescape(file))
+                            return
+                        end
+                    end
+                    vim.notify("No previous daily note", vim.log.levels.WARN)
+                end,
+                desc = "Previous Daily Note",
+            },
         },
         dependencies = {
             "nvim-lua/plenary.nvim",
