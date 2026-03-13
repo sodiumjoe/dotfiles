@@ -132,9 +132,37 @@ local function pick_pr()
                     item.sort_idx = i
                 end
 
+                local diff_cache = {}
+
                 Snacks.picker({
                     title = "Pull Requests",
                     items = items,
+                    preview = function(ctx)
+                        local item = ctx.item
+                        if not item then return end
+                        local cached = diff_cache[item.number]
+                        if cached then
+                            ctx.preview:set_lines(vim.split(cached, "\n"))
+                            ctx.preview:highlight({ ft = "diff" })
+                            return
+                        end
+                        ctx.preview:set_lines({ "Loading diff..." })
+                        vim.system(
+                            { "gh", "pr", "diff", tostring(item.number) },
+                            { text = true },
+                            function(r)
+                                vim.schedule(function()
+                                    local text = r.code == 0 and r.stdout or ("Error: " .. (r.stderr or ""))
+                                    diff_cache[item.number] = text
+                                    local current = ctx.picker:current()
+                                    if current and current.number == item.number then
+                                        ctx.preview:set_lines(vim.split(text, "\n"))
+                                        ctx.preview:highlight({ ft = "diff" })
+                                    end
+                                end)
+                            end
+                        )
+                    end,
                     sort = function(a, b)
                         if a.score ~= b.score then return a.score > b.score end
                         return a.sort_idx < b.sort_idx
