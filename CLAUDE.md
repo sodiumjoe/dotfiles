@@ -16,7 +16,6 @@ Dotfiles repo. Manages shell, neovim, tmux, git, and other tool configs via syml
 - `claude/CLAUDE.md` → `~/.claude/CLAUDE.md`
 - `claude/settings.json` → `~/.claude/settings.json`
 - `bin/*` → `~/bin/*`
-- `launchd/*.plist` → `~/Library/LaunchAgents/`
 
 **Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
 
@@ -76,9 +75,9 @@ Repo: `~/stripe/work/personal-marketplace/`
 
 Binary: `~/stripe/work/personal-marketplace/work/bin/work`
 
-Access: `~/bin/work` symlink (used by launchd), hardcoded full path in `neovim/lua/sodium/plugins/agentic.lua` (work_bin variable).
+Access: `~/bin/work` symlink, hardcoded full path in `neovim/lua/sodium/plugins/agentic.lua` (work_bin variable).
 
-Also referenced by: `.claude/settings.local.json` (permission allowlist), `launchd/com.moon.work-tick.plist` (hourly background sync).
+Also referenced by: `.claude/settings.local.json` (permission allowlist).
 
 Neovim keybindings:
 - `<leader>ap` — pick task from work queue

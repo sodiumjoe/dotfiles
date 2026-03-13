@@ -289,7 +289,17 @@ local function add_task_finish(file, title, description)
             else
                 vim.cmd.edit(file)
             end
-            vim.system({ work_bin, "tick" })
+            vim.system({ work_bin, "tick" }, { text = true }, function(r)
+                if r.code ~= 0 then
+                    vim.schedule(function()
+                        local msg = "work tick failed (exit " .. r.code .. ")"
+                        if r.stderr and r.stderr ~= "" then
+                            msg = msg .. "\n" .. vim.trim(r.stderr)
+                        end
+                        vim.notify(msg, vim.log.levels.WARN)
+                    end)
+                end
+            end)
             vim.notify("Added task to " .. title, vim.log.levels.INFO)
         end)
     end)

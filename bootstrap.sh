@@ -61,20 +61,6 @@ for script in ~/.dotfiles/bin/*; do
   ln -sf "$script" ~/bin/$(basename "$script")
 done
 
-# launchd agents (macOS only)
-if [ "$(uname)" = "Darwin" ]; then
-  mkdir -p ~/Library/LaunchAgents
-  for plist in ~/.dotfiles/launchd/*.plist; do
-    dest=~/Library/LaunchAgents/$(basename "$plist")
-    if [ -L "$dest" ]; then
-      echo "$dest symlink already exists, skipping"
-    else
-      ln -sf "$plist" "$dest"
-      launchctl load "$dest" 2>/dev/null
-    fi
-  done
-fi
-
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
   echo "init.lua symlink already exists, skipping"
