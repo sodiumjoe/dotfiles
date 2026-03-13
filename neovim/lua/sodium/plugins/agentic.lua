@@ -68,7 +68,9 @@ local function pick_project()
                 title = "Projects",
                 items = items,
                 sort = function(a, b)
-                    if a.score ~= b.score then return a.score > b.score end
+                    if a.score ~= b.score then
+                        return a.score > b.score
+                    end
                     return a.sort_idx < b.sort_idx
                 end,
                 preview = "file",
@@ -79,11 +81,10 @@ local function pick_project()
                     end
                     return ret
                 end,
-                on_show = function()
-                    vim.cmd.stopinsert()
-                end,
                 confirm = function(picker, item)
-                    if not item then return end
+                    if not item then
+                        return
+                    end
                     picker:close()
                     local editor_win = require("sodium.utils").editor_window()
                     if editor_win then
@@ -126,12 +127,21 @@ local function show_task_picker(items, show_project)
         title = show_project and "All Tasks" or "Tasks",
         items = items,
         sort = function(a, b)
-            if a.score ~= b.score then return a.score > b.score end
+            if a.score ~= b.score then
+                return a.score > b.score
+            end
             return a.sort_idx < b.sort_idx
         end,
         preview = "file",
         format = function(item)
-            local ret = { { agentic_utils.state_display[item.state] .. " ", item.state == "/" and "SnacksPickerLabel" or item.state == "x" and "SnacksPickerComment" or "SnacksPickerDir" } }
+            local ret = {
+                {
+                    agentic_utils.state_display[item.state] .. " ",
+                    item.state == "/" and "SnacksPickerLabel"
+                        or item.state == "x" and "SnacksPickerComment"
+                        or "SnacksPickerDir",
+                },
+            }
             ret[#ret + 1] = { item.description }
             if show_project then
                 ret[#ret + 1] = { " (" .. item.title .. ")", "SnacksPickerDir" }
@@ -142,7 +152,9 @@ local function show_task_picker(items, show_project)
             vim.cmd.stopinsert()
         end,
         confirm = function(picker, item)
-            if not item then return end
+            if not item then
+                return
+            end
             picker:close()
             local editor_win = require("sodium.utils").editor_window()
             if editor_win then
@@ -161,9 +173,13 @@ local function show_task_picker(items, show_project)
         actions = {
             cycle_state = function(picker)
                 local item = picker:current()
-                if not item then return end
+                if not item then
+                    return
+                end
                 local next_state = agentic_utils.state_cycle[item.state]
-                if not next_state then return end
+                if not next_state then
+                    return
+                end
                 vim.system(
                     { work_bin, "set-task-state", item.file, tostring(item.line_num), next_state },
                     { text = true },
@@ -250,7 +266,9 @@ local function pick_task_state()
                         vim.cmd.stopinsert()
                     end,
                     confirm = function(picker, item)
-                        if not item then return end
+                        if not item then
+                            return
+                        end
                         picker:close()
                         vim.system({ work_bin, "list-tasks", item.file }, { text = true }, function(r)
                             vim.schedule(function()
@@ -285,7 +303,9 @@ local function add_task_finish(file, title, description)
             end
             local bufnr = vim.fn.bufnr(file)
             if bufnr ~= -1 then
-                vim.api.nvim_buf_call(bufnr, function() vim.cmd("edit") end)
+                vim.api.nvim_buf_call(bufnr, function()
+                    vim.cmd("edit")
+                end)
             else
                 vim.cmd.edit(file)
             end
@@ -332,29 +352,34 @@ local function add_task()
                     vim.cmd.startinsert()
                 end,
                 confirm = function(picker, item)
-                    if not item then return end
+                    if not item then
+                        return
+                    end
                     picker:close()
                     if item.slug then
                         vim.ui.input({ prompt = "Task: " }, function(description)
-                            if not description or description == "" then return end
+                            if not description or description == "" then
+                                return
+                            end
                             add_task_finish(item.file, item.title, description)
                         end)
                     else
                         vim.ui.input({ prompt = "Project title: " }, function(title)
-                            if not title or title == "" then return end
+                            if not title or title == "" then
+                                return
+                            end
                             local slug = agentic_utils.slugify(title)
                             vim.system({ work_bin, "create-project", slug, title }, { text = true }, function(cr)
                                 vim.schedule(function()
                                     if cr.code ~= 0 then
-                                        vim.notify(
-                                            "create-project failed: " .. (cr.stderr or ""),
-                                            vim.log.levels.ERROR
-                                        )
+                                        vim.notify("create-project failed: " .. (cr.stderr or ""), vim.log.levels.ERROR)
                                         return
                                     end
                                     local file = projects_dir .. slug .. ".md"
                                     vim.ui.input({ prompt = "Task: " }, function(description)
-                                        if not description or description == "" then return end
+                                        if not description or description == "" then
+                                            return
+                                        end
                                         add_task_finish(file, title, description)
                                     end)
                                 end)
