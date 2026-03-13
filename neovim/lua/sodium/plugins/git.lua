@@ -253,8 +253,7 @@ local function review_and_next()
     review.toggle_reviewed(filepath)
     local is_reviewed = review.is_reviewed(filepath)
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-        local name = vim.api.nvim_buf_get_name(buf)
-        if require("sodium.utils").is_fugitive_buffer(name) then
+        if require("sodium.utils").is_fugitive_buffer(buf) then
             vim.api.nvim_buf_delete(buf, { force = true })
         end
     end
