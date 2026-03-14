@@ -23,13 +23,13 @@ end
 local function setup_gdiffsplit_override()
     vim.api.nvim_create_user_command("Gdiffsplit", function(opts)
         local pr = review.get_current_pr()
-        if opts.args ~= "" or not pr then
-            vim.cmd("Gitsplit " .. opts.args)
-        else
-            local ok2, err2 = pcall(vim.cmd, "Gitsplit origin/" .. pr.baseRefName)
-            if not ok2 then
-                vim.notify("Gdiffsplit failed: " .. (err2 or "unknown error"), vim.log.levels.WARN)
-            end
+        local arg = opts.args
+        if arg == "" and pr then
+            arg = "origin/" .. pr.baseRefName
+        end
+        local ok2, err2 = pcall(vim.cmd, "Gitsplit " .. arg)
+        if not ok2 then
+            vim.notify("Gdiffsplit failed: " .. (err2 or "unknown error"), vim.log.levels.WARN)
         end
     end, { nargs = "?", bang = true })
 end
@@ -261,16 +261,21 @@ local function pick_pr()
                         end)
                         vim.notify("Checking out PR #" .. item.number .. "...")
                         local function after_checkout()
-                            vim.system({ "git", "fetch", "origin", item.baseRefName }, {}, function(fetch_result)
-                                vim.schedule(function()
-                                    if fetch_result.code ~= 0 then
-                                        vim.notify("git fetch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
-                                    end
-                                    vim.cmd("checktime")
-                                    fetch_and_display_comments(item)
-                                    pick_pr_files()
-                                end)
-                            end)
+                            local base = item.baseRefName
+                            vim.system(
+                                { "git", "fetch", "origin", base .. ":" .. "refs/remotes/origin/" .. base },
+                                { text = true },
+                                function(fetch_result)
+                                    vim.schedule(function()
+                                        if fetch_result.code ~= 0 then
+                                            vim.notify("git fetch base branch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
+                                        end
+                                        vim.cmd("checktime")
+                                        fetch_and_display_comments(item)
+                                        pick_pr_files()
+                                    end)
+                                end
+                            )
                         end
                         local pr_num = tostring(item.number)
                         vim.system(
