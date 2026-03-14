@@ -49,6 +49,7 @@ return {
         notifier = {
             enabled = true,
             top_down = false,
+            style = "fancy",
         },
     },
     keys = {
