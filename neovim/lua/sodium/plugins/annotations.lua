@@ -6,15 +6,16 @@ return {
         "CommentResolve", "CommentNext", "CommentPrev",
     },
     config = function()
-        require("comment-overlay").setup({
-            keymaps = {
-                add = false, delete = false, edit = false,
-                next = false, prev = false,
-                toggle_list = false, toggle_global_list = false,
-                toggle_signs = false, copy_storage_path = false,
-                open_storage = false,
-            },
-        })
+        require("comment-overlay").setup({})
+        local default_keymaps = {
+            "<leader>ca", "<leader>cd", "<leader>ce",
+            "]c", "[c", "<leader>cl", "cL",
+            "<leader>cs", "<leader>cy", "<leader>co",
+        }
+        for _, lhs in ipairs(default_keymaps) do
+            pcall(vim.keymap.del, "n", lhs)
+        end
+        pcall(vim.keymap.del, "v", "<leader>ca")
     end,
     keys = {
         { "<leader>ca", "<cmd>CommentAdd<cr>", mode = { "n", "v" }, desc = "Add annotation" },
