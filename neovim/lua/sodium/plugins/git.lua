@@ -278,20 +278,16 @@ local function pick_pr()
                         vim.notify("Checking out PR #" .. item.number .. "...")
                         local function after_checkout()
                             local base = item.baseRefName
-                            vim.system(
+                            local fetch_result = vim.system(
                                 { "git", "fetch", "origin", base .. ":" .. "refs/remotes/origin/" .. base },
-                                { text = true },
-                                function(fetch_result)
-                                    vim.schedule(function()
-                                        if fetch_result.code ~= 0 then
-                                            vim.notify("git fetch base branch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
-                                        end
-                                        vim.cmd("checktime")
-                                        fetch_and_display_comments(item)
-                                        pick_pr_files()
-                                    end)
-                                end
-                            )
+                                { text = true }
+                            ):wait()
+                            if fetch_result.code ~= 0 then
+                                vim.notify("git fetch base branch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
+                            end
+                            vim.cmd("checktime")
+                            fetch_and_display_comments(item)
+                            pick_pr_files()
                         end
                         local pr_num = tostring(item.number)
                         local ref = "pr-" .. pr_num
