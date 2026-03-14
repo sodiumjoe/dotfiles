@@ -25,6 +25,7 @@ describe("plugin registry", function()
 
     local all_plugins = {}
     local spec_modules = {
+        "sodium.plugins.annotations",
         "sodium.plugins.colorscheme",
         "sodium.plugins.completion",
         "sodium.plugins.editing",

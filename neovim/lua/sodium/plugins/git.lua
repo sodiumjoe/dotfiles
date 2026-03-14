@@ -537,20 +537,4 @@ return {
             { "<leader>ps", submit_review, mode = "n", desc = "Submit PR review" },
         },
     },
-    {
-        "huashuai/nvim-comment-overlay",
-        cmd = { "CommentAdd", "CommentRefresh", "CommentDelete", "CommentEdit", "CommentList", "CommentReply", "CommentResolve" },
-        config = function()
-            require("comment-overlay").setup({})
-            local default_keymaps = {
-                "<leader>ca", "<leader>cd", "<leader>ce",
-                "]c", "[c", "<leader>cl", "cL",
-                "<leader>cs", "<leader>cy", "<leader>co",
-            }
-            for _, lhs in ipairs(default_keymaps) do
-                pcall(vim.keymap.del, "n", lhs)
-            end
-            pcall(vim.keymap.del, "v", "<leader>ca")
-        end,
-    },
 }

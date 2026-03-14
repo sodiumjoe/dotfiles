@@ -392,6 +392,63 @@ local function add_task()
     end)
 end
 
+local function send_annotations_to_agentic()
+    local store = require("comment-overlay.store")
+    store.reload_if_changed()
+
+    local files = store.get_files_with_comments()
+    if #files == 0 then
+        vim.notify("No annotations", vim.log.levels.INFO)
+        return
+    end
+
+    local project_root = store.get_project_root()
+    local lines = { "I've annotated several files. Address each annotation.", "" }
+    local root_ids = {}
+
+    for _, rel_path in ipairs(files) do
+        table.insert(lines, "File: " .. rel_path)
+        table.insert(lines, "")
+        local roots = store.get_for_file(rel_path, { roots_only = true })
+        for _, root in ipairs(roots) do
+            if not root.resolved then
+                table.insert(root_ids, root.id)
+                local thread = store.get_thread(root.id)
+                local range = root.line_start == root.line_end
+                    and string.format("L%d", root.line_start)
+                    or string.format("L%d-L%d", root.line_start, root.line_end)
+                if #thread == 1 then
+                    table.insert(lines, string.format("  %s: %q", range, root.body))
+                else
+                    table.insert(lines, string.format("  %s (thread):", range))
+                    for _, c in ipairs(thread) do
+                        table.insert(lines, string.format("    - %q", c.body))
+                    end
+                end
+            end
+        end
+        table.insert(lines, "")
+    end
+
+    local SessionRegistry = require("agentic.session_registry")
+    SessionRegistry.get_session_for_tab_page(nil, function(session)
+        for _, rel_path in ipairs(files) do
+            session.file_list:add(project_root .. "/" .. rel_path)
+        end
+
+        local input_buf = session.widget.buf_nrs.input
+        vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, lines)
+        session.widget:show()
+        session.widget:_submit_input()
+
+        for _, id in ipairs(root_ids) do
+            store.delete(id)
+        end
+        store.save()
+        pcall(vim.cmd, "CommentRefresh")
+    end)
+end
+
 return {
     "carlos-algms/agentic.nvim",
     cond = function()
@@ -586,6 +643,12 @@ return {
             resize_agentic_split,
             mode = { "n" },
             desc = "Rebalance agentic split to 50%",
+        },
+        {
+            "<leader>ai",
+            send_annotations_to_agentic,
+            mode = { "n" },
+            desc = "Inject annotations into Agentic",
         },
     },
 }
