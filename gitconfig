@@ -18,7 +18,7 @@
 [core]
   preloadindex = true
   editor = nvim
-  excludesfile = ~/gitignore
+  excludesfile = ~/.ignore
 
 [credential]
 	helper = osxkeychain
