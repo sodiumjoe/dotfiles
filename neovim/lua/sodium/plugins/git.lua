@@ -290,6 +290,10 @@ local function pick_pr()
                                         return
                                     end
                                     vim.notify("gh pr checkout failed, trying refspec fallback...")
+                                    local prev = review.get_previous_branch()
+                                    if prev then
+                                        vim.system({ "git", "checkout", prev }, { text = true }):wait()
+                                    end
                                     vim.system({ "git", "branch", "-D", "pr-" .. pr_num }, { text = true }):wait()
                                     vim.system(
                                         { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:pr-" .. pr_num },
