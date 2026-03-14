@@ -290,8 +290,9 @@ local function pick_pr()
                                         return
                                     end
                                     vim.notify("gh pr checkout failed, trying refspec fallback...")
+                                    vim.system({ "git", "branch", "-D", "pr-" .. pr_num }, { text = true }):wait()
                                     vim.system(
-                                        { "git", "fetch", "origin", "pull/" .. pr_num .. "/head" },
+                                        { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:pr-" .. pr_num },
                                         { text = true },
                                         function(f)
                                             vim.schedule(function()
@@ -299,7 +300,7 @@ local function pick_pr()
                                                     vim.notify("PR checkout failed: " .. (f.stderr or ""), vim.log.levels.ERROR)
                                                     return
                                                 end
-                                                vim.system({ "git", "checkout", "FETCH_HEAD" }, { text = true }, function(co)
+                                                vim.system({ "git", "checkout", "pr-" .. pr_num }, { text = true }, function(co)
                                                     vim.schedule(function()
                                                         if co.code ~= 0 then
                                                             vim.notify("git checkout failed: " .. (co.stderr or ""), vim.log.levels.ERROR)
