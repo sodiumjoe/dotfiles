@@ -209,6 +209,13 @@ end
 
 local separator = separator_if(is_standard_filetype)
 
+local separator_after_lsp_or_review = separator_if(function()
+    if not is_standard_filetype() then return false end
+    local ok, review = pcall(require, "sodium.review")
+    if ok and review.get_current_pr() then return false end
+    return true
+end)
+
 local function pr_review_component()
     local ok, review = pcall(require, "sodium.review")
     if not ok then return "" end
@@ -251,7 +258,7 @@ local sections = {
     lualine_a = { filename_active },
     lualine_b = {},
     lualine_c = {},
-    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator, lines, separator, column },
+    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator_after_lsp_or_review, lines, separator, column },
     lualine_y = {},
     lualine_z = {},
 }
@@ -260,7 +267,7 @@ local inactive_sections = {
     lualine_a = { filename_inactive },
     lualine_b = {},
     lualine_c = {},
-    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator, lines, separator, column },
+    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator_after_lsp_or_review, lines, separator, column },
     lualine_y = {},
     lualine_z = {},
 }
