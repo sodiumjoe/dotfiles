@@ -441,13 +441,20 @@ local function send_annotations_to_agentic()
         local input_buf = session.widget.buf_nrs.input
         vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, lines)
         session.widget:show()
-        session.widget:_submit_input()
 
-        for _, id in ipairs(root_ids) do
-            store.delete(id)
+        local function try_submit()
+            if session.session_id then
+                session.widget:_submit_input()
+                for _, id in ipairs(root_ids) do
+                    store.delete(id)
+                end
+                store.save()
+                pcall(vim.cmd, "CommentRefresh")
+            else
+                vim.defer_fn(function() try_submit() end, 200)
+            end
         end
-        store.save()
-        pcall(vim.cmd, "CommentRefresh")
+        try_submit()
     end)
 end
 
