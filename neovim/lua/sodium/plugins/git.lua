@@ -13,6 +13,7 @@ local function open_diff(filepath, base_ref)
     if editor_win then
         vim.api.nvim_set_current_win(editor_win)
     end
+    pcall(vim.cmd, "only")
     vim.cmd.edit(filepath)
     local ok, err = pcall(vim.cmd, "Gdiffsplit origin/" .. base_ref)
     if not ok then
