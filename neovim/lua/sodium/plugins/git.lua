@@ -336,6 +336,26 @@ local function diff_current_file()
     end
 end
 
+local function open_pr_diff_buffer()
+    local pr = review.get_current_pr()
+    if not pr then
+        vim.notify("No PR selected", vim.log.levels.WARN)
+        return
+    end
+    local result = vim.system({ "gh", "pr", "diff", tostring(pr.number) }, { text = true }):wait()
+    if result.code ~= 0 then
+        vim.notify("gh pr diff failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+        return
+    end
+    local buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(result.stdout, "\n"))
+    vim.api.nvim_buf_set_name(buf, string.format("pr-%d.diff", pr.number))
+    vim.bo[buf].filetype = "diff"
+    vim.bo[buf].modifiable = false
+    pcall(vim.cmd, "only")
+    vim.api.nvim_set_current_buf(buf)
+end
+
 local function review_and_next()
     local pr = review.get_current_pr()
     if not pr then
@@ -486,6 +506,7 @@ return {
             { "<leader>pr", pick_pr, mode = "n", desc = "PR list picker" },
             { "<leader>pf", pick_pr_files, mode = "n", desc = "PR changed files picker" },
             { "<leader>pd", diff_current_file, mode = "n", desc = "Diff current file against PR base" },
+            { "<leader>pD", open_pr_diff_buffer, mode = "n", desc = "Open full PR diff in buffer" },
             { "<leader>pn", review_and_next, mode = "n", desc = "Mark reviewed and return to file picker" },
             { "<leader>px", clear_review_state, mode = "n", desc = "Clear PR review state" },
             { "<leader>pa", add_comment, mode = "n", desc = "Add PR comment on current line" },

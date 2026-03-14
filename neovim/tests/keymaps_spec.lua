@@ -94,6 +94,10 @@ describe("keymaps", function()
             assert.is_true(spec_has_key(git, "<leader>pd"))
         end)
 
+        it("declares leader-pD in git spec", function()
+            assert.is_true(spec_has_key(git, "<leader>pD"))
+        end)
+
         it("declares leader-px in git spec", function()
             assert.is_true(spec_has_key(git, "<leader>px"))
         end)
