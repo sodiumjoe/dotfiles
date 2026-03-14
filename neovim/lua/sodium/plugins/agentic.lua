@@ -414,9 +414,11 @@ local function send_annotations_to_agentic()
             if not root.resolved then
                 table.insert(root_ids, root.id)
                 local thread = store.get_thread(root.id)
-                local range = root.line_start == root.line_end
-                    and string.format("L%d", root.line_start)
-                    or string.format("L%d-L%d", root.line_start, root.line_end)
+                local ls = root.line_start or root.line
+                local le = root.line_end or root.line
+                local range = (not ls) and "?" or ls == le
+                    and string.format("L%d", ls)
+                    or string.format("L%d-L%d", ls, le)
                 if #thread == 1 then
                     table.insert(lines, string.format("  %s: %q", range, root.body))
                 else
