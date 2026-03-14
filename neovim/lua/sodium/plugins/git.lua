@@ -27,7 +27,9 @@ local function setup_gdiffsplit_override()
         if arg == "" and pr then
             arg = "origin/" .. pr.baseRefName
         end
-        local ok2, err2 = pcall(vim.cmd, "Gitsplit " .. arg)
+        local bang = opts.bang and 1 or 0
+        local mods = opts.mods or ""
+        local ok2, err2 = pcall(vim.fn["fugitive#Diffsplit"], 1, bang, mods, arg)
         if not ok2 then
             vim.notify("Gdiffsplit failed: " .. (err2 or "unknown error"), vim.log.levels.WARN)
         end
