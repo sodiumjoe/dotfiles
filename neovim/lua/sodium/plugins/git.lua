@@ -436,7 +436,7 @@ local function submit_review()
     local event_map = { approve = "APPROVE", comment = "COMMENT", ["request changes"] = "REQUEST_CHANGES" }
     vim.ui.select({ "approve", "comment", "request changes" }, {
         prompt = "Review type:",
-        snacks = { preview = false },
+        snacks = { layout = { preview = false } },
     }, function(choice)
         if not choice then return end
         local event = event_map[choice]
