@@ -14,9 +14,9 @@ local function open_diff(filepath, base_ref)
         vim.api.nvim_set_current_win(editor_win)
     end
     vim.cmd.edit(filepath)
-    local ok, _ = pcall(vim.cmd, "Gdiffsplit origin/" .. base_ref)
+    local ok, err = pcall(vim.cmd, "Gdiffsplit origin/" .. base_ref)
     if not ok then
-        vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
+        vim.notify("Gdiffsplit failed: " .. (err or "unknown error"), vim.log.levels.WARN)
     end
 end
 
@@ -26,9 +26,9 @@ local function setup_gdiffsplit_override()
         if opts.args ~= "" or not pr then
             vim.cmd("Gitsplit " .. opts.args)
         else
-            local ok2, _ = pcall(vim.cmd, "Gitsplit origin/" .. pr.baseRefName)
+            local ok2, err2 = pcall(vim.cmd, "Gitsplit origin/" .. pr.baseRefName)
             if not ok2 then
-                vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
+                vim.notify("Gdiffsplit failed: " .. (err2 or "unknown error"), vim.log.levels.WARN)
             end
         end
     end, { nargs = "?", bang = true })
