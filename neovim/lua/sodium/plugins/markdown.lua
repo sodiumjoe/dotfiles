@@ -194,9 +194,13 @@ return {
                     vim.keymap.set("n", "<CR>", follow_link_or(function()
                         if api.cursor_checkbox() then
                             vim.cmd("Obsidian toggle_checkbox")
+                            vim.cmd("write")
                         end
                     end), { buffer = true })
-                    vim.keymap.set("n", "<C-Space>", "<cmd>Obsidian toggle_checkbox<cr>", { buffer = true })
+                    vim.keymap.set("n", "<C-Space>", function()
+                        vim.cmd("Obsidian toggle_checkbox")
+                        vim.cmd("write")
+                    end, { buffer = true })
                 end,
             },
             checkbox = {
