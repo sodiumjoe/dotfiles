@@ -273,6 +273,17 @@ describe("sodium.review", function()
             assert.are.equal("local comment", result[1].body)
         end)
 
+        it("matches author field from nvim-comment-overlay", function()
+            local data = {
+                comments = {
+                    ["20260313_a1b2"] = { author = "alice", file = "foo.lua", line_start = 5, body = "overlay comment" },
+                },
+            }
+            local result = review.filter_local_comments(data, "alice")
+            assert.are.equal(1, #result)
+            assert.are.equal("overlay comment", result[1].body)
+        end)
+
         it("returns empty when no local comments", function()
             local data = {
                 comments = {

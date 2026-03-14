@@ -196,7 +196,8 @@ function M.filter_local_comments(data, current_user)
     if not data or not data.comments or not current_user then return {} end
     local result = {}
     for id, comment in pairs(data.comments) do
-        if comment.actor == current_user and not tonumber(id) then
+        local author = comment.actor or comment.author
+        if author == current_user and not tonumber(id) then
             result[#result + 1] = comment
         end
     end

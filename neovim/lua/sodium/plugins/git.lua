@@ -456,7 +456,7 @@ local function submit_review()
             for _, c in ipairs(local_comments) do
                 api_comments[#api_comments + 1] = {
                     path = c.file,
-                    line = c.line,
+                    line = c.line or c.line_start,
                     side = "RIGHT",
                     body = c.body,
                 }
