@@ -20,6 +20,24 @@ local function open_diff(filepath, base_ref)
     end
 end
 
+local function setup_gdiffsplit_override()
+    vim.api.nvim_create_user_command("Gdiffsplit", function(opts)
+        local pr = review.get_current_pr()
+        if opts.args ~= "" or not pr then
+            vim.cmd("Gitsplit " .. opts.args)
+        else
+            local ok2, _ = pcall(vim.cmd, "Gitsplit origin/" .. pr.baseRefName)
+            if not ok2 then
+                vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
+            end
+        end
+    end, { nargs = "?", bang = true })
+end
+
+local function teardown_gdiffsplit_override()
+    pcall(vim.api.nvim_del_user_command, "Gdiffsplit")
+end
+
 local function fetch_and_display_comments(pr)
     local root = pr.toplevel or git_toplevel() or ""
     if root == "" then return end
@@ -269,24 +287,6 @@ local function pick_pr()
             end)
         end
     )
-end
-
-local function setup_gdiffsplit_override()
-    vim.api.nvim_create_user_command("Gdiffsplit", function(opts)
-        local pr = review.get_current_pr()
-        if opts.args ~= "" or not pr then
-            vim.cmd("Gitsplit " .. opts.args)
-        else
-            local ok2, _ = pcall(vim.cmd, "Gitsplit origin/" .. pr.baseRefName)
-            if not ok2 then
-                vim.notify("File is new in this PR (no base to diff against)", vim.log.levels.INFO)
-            end
-        end
-    end, { nargs = "?", bang = true })
-end
-
-local function teardown_gdiffsplit_override()
-    pcall(vim.api.nvim_del_user_command, "Gdiffsplit")
 end
 
 local function diff_current_file()
