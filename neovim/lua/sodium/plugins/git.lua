@@ -31,6 +31,7 @@ local function setup_gdiffsplit_override()
         end
         local bang = opts.bang and 1 or 0
         local mods = opts.mods or ""
+        if mods == "" then mods = "leftabove" end
         local ok2, err2 = pcall(vim.fn["fugitive#Diffsplit"], 1, bang, mods, arg)
         if not ok2 then
             vim.notify("Gdiffsplit failed: " .. (err2 or "unknown error"), vim.log.levels.WARN)
