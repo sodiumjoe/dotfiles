@@ -77,7 +77,8 @@ local function fetch_and_display_comments(pr)
     )
 end
 
-local function pick_pr_files()
+local function pick_pr_files(opts)
+    opts = opts or {}
     local pr = review.get_current_pr()
     if not pr then
         vim.notify("No PR selected. Use <leader>pr first.", vim.log.levels.WARN)
@@ -110,6 +111,11 @@ local function pick_pr_files()
                         sort_idx = i,
                         reviewed = review.is_reviewed(filepath),
                     }
+                end
+
+                if opts.open_first and items[1] then
+                    open_diff(items[1].file, pr.baseRefName)
+                    return
                 end
 
                 Snacks.picker({
@@ -287,7 +293,7 @@ local function pick_pr()
                             end
                             vim.cmd("checktime")
                             fetch_and_display_comments(item)
-                            pick_pr_files()
+                            pick_pr_files({ open_first = true })
                         end
                         local pr_num = tostring(item.number)
                         local ref = "pr-" .. pr_num
