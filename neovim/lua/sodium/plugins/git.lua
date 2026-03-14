@@ -20,6 +20,8 @@ local function open_diff(filepath, base_ref)
     end
 end
 
+local review_augroup = vim.api.nvim_create_augroup("sodium_pr_review", { clear = true })
+
 local function setup_gdiffsplit_override()
     vim.api.nvim_create_user_command("Gdiffsplit", function(opts)
         local pr = review.get_current_pr()
@@ -34,10 +36,20 @@ local function setup_gdiffsplit_override()
             vim.notify("Gdiffsplit failed: " .. (err2 or "unknown error"), vim.log.levels.WARN)
         end
     end, { nargs = "?", bang = true })
+    vim.api.nvim_create_autocmd("VimLeavePre", {
+        group = review_augroup,
+        callback = function()
+            local prev = review.get_previous_branch()
+            if prev and review.get_current_pr() then
+                vim.system({ "git", "checkout", prev }, { text = true }):wait()
+            end
+        end,
+    })
 end
 
 local function teardown_gdiffsplit_override()
     pcall(vim.api.nvim_del_user_command, "Gdiffsplit")
+    vim.api.nvim_clear_autocmds({ group = review_augroup })
 end
 
 local function fetch_and_display_comments(pr)
