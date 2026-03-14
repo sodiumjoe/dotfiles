@@ -260,25 +260,51 @@ local function pick_pr()
                             end)
                         end)
                         vim.notify("Checking out PR #" .. item.number .. "...")
+                        local function after_checkout()
+                            vim.system({ "git", "fetch", "origin", item.baseRefName }, {}, function(fetch_result)
+                                vim.schedule(function()
+                                    if fetch_result.code ~= 0 then
+                                        vim.notify("git fetch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
+                                    end
+                                    vim.cmd("checktime")
+                                    fetch_and_display_comments(item)
+                                    pick_pr_files()
+                                end)
+                            end)
+                        end
+                        local pr_num = tostring(item.number)
                         vim.system(
-                            { "gh", "pr", "checkout", tostring(item.number) },
+                            { "gh", "pr", "checkout", pr_num },
                             { text = true },
                             function(r)
                                 vim.schedule(function()
-                                    if r.code ~= 0 then
-                                        vim.notify("gh pr checkout failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                                    if r.code == 0 then
+                                        after_checkout()
                                         return
                                     end
-                                    vim.system({ "git", "fetch", "origin", item.baseRefName }, {}, function(fetch_result)
-                                        vim.schedule(function()
-                                            if fetch_result.code ~= 0 then
-                                                vim.notify("git fetch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
-                                            end
-                                            vim.cmd("checktime")
-                                            fetch_and_display_comments(item)
-                                            pick_pr_files()
-                                        end)
-                                    end)
+                                    local ref = "pr-" .. pr_num
+                                    vim.notify("gh pr checkout failed, trying refspec fallback...")
+                                    vim.system(
+                                        { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:" .. ref },
+                                        { text = true },
+                                        function(f)
+                                            vim.schedule(function()
+                                                if f.code ~= 0 then
+                                                    vim.notify("PR checkout failed: " .. (f.stderr or ""), vim.log.levels.ERROR)
+                                                    return
+                                                end
+                                                vim.system({ "git", "checkout", ref }, { text = true }, function(co)
+                                                    vim.schedule(function()
+                                                        if co.code ~= 0 then
+                                                            vim.notify("git checkout failed: " .. (co.stderr or ""), vim.log.levels.ERROR)
+                                                            return
+                                                        end
+                                                        after_checkout()
+                                                    end)
+                                                end)
+                                            end)
+                                        end
+                                    )
                                 end)
                             end
                         )
