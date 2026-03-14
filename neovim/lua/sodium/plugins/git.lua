@@ -43,7 +43,7 @@ local function setup_gdiffsplit_override()
         callback = function()
             local prev = review.get_previous_branch()
             if prev and review.get_current_pr() then
-                vim.system({ "git", "checkout", prev }, { text = true }):wait()
+                vim.fn.system({ "git", "checkout", prev })
             end
         end,
     })
