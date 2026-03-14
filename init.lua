@@ -40,6 +40,9 @@ require("lazy").setup({ import = "sodium.plugins" }, {
         missing = true,
         colorscheme = { "sodium" },
     },
+    change_detection = {
+        enabled = false,
+    },
     performance = {
         rtp = {
             paths = { "~/.dotfiles/neovim" },
