@@ -290,7 +290,7 @@ local function pick_pr()
                                     local ref = "pr-" .. pr_num
                                     vim.notify("gh pr checkout failed, trying refspec fallback...")
                                     vim.system(
-                                        { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:" .. ref },
+                                        { "git", "fetch", "origin", "+pull/" .. pr_num .. "/head:" .. ref },
                                         { text = true },
                                         function(f)
                                             vim.schedule(function()
@@ -488,17 +488,18 @@ return {
     },
     {
         "huashuai/nvim-comment-overlay",
-        event = "BufReadPost",
+        cmd = { "CommentAdd", "CommentRefresh", "CommentDelete", "CommentEdit", "CommentList", "CommentReply", "CommentResolve" },
         config = function()
-            require("comment-overlay").setup({
-                keymaps = {
-                    add = false, delete = false, edit = false,
-                    next = false, prev = false,
-                    toggle_list = false, toggle_global_list = false,
-                    toggle_signs = false, copy_storage_path = false,
-                    open_storage = false,
-                },
-            })
+            require("comment-overlay").setup({})
+            local default_keymaps = {
+                "<leader>ca", "<leader>cd", "<leader>ce",
+                "]c", "[c", "<leader>cl", "cL",
+                "<leader>cs", "<leader>cy", "<leader>co",
+            }
+            for _, lhs in ipairs(default_keymaps) do
+                pcall(vim.keymap.del, "n", lhs)
+            end
+            pcall(vim.keymap.del, "v", "<leader>ca")
         end,
     },
 }
