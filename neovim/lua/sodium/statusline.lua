@@ -228,12 +228,6 @@ local pr_review = {
     padding = 1,
 }
 
-local separator_before_review = separator_if(function()
-    local ok, review = pcall(require, "sodium.review")
-    if not ok then return false end
-    return is_standard_filetype() and review.get_current_pr() ~= nil
-end)
-
 local separator_before_lsp = separator_if(function()
     return lsp_attached
         and is_standard_filetype()
@@ -257,7 +251,7 @@ local sections = {
     lualine_a = { filename_active },
     lualine_b = {},
     lualine_c = {},
-    lualine_x = { separator_before_review, pr_review, separator_before_lsp, lsp_status, separator, lines, separator, column },
+    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator, lines, separator, column },
     lualine_y = {},
     lualine_z = {},
 }
@@ -266,7 +260,7 @@ local inactive_sections = {
     lualine_a = { filename_inactive },
     lualine_b = {},
     lualine_c = {},
-    lualine_x = { separator_before_review, pr_review, separator_before_lsp, lsp_status, separator, lines, separator, column },
+    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator, lines, separator, column },
     lualine_y = {},
     lualine_z = {},
 }
