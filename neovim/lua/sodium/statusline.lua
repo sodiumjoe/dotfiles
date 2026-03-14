@@ -70,7 +70,9 @@ local function start_timer()
                 0,
                 100,
                 vim.schedule_wrap(function()
-                    if lsp_progress() then
+                    local ok, review = pcall(require, "sodium.review")
+                    local spinning = lsp_progress() or (ok and review.is_loading())
+                    if spinning then
                         spinner_index = (spinner_index % #utils.spinner_frames) + 1
                         lualine.refresh()
                     elseif timer then
@@ -212,13 +214,16 @@ local separator = separator_if(is_standard_filetype)
 local separator_after_lsp_or_review = separator_if(function()
     if not is_standard_filetype() then return false end
     local ok, review = pcall(require, "sodium.review")
-    if ok and review.get_current_pr() then return false end
+    if ok and (review.get_current_pr() or review.is_loading()) then return false end
     return true
 end)
 
 local function pr_review_component()
     local ok, review = pcall(require, "sodium.review")
     if not ok then return "" end
+    if review.is_loading() then
+        return utils.spinner_frames[spinner_index] .. " Loading PR..."
+    end
     local pr = review.get_current_pr()
     if not pr then return "" end
     return "PR #" .. pr.number
@@ -229,7 +234,7 @@ local pr_review = {
     cond = function()
         local ok, review = pcall(require, "sodium.review")
         if not ok then return false end
-        return is_standard_filetype() and review.get_current_pr() ~= nil
+        return is_standard_filetype() and (review.get_current_pr() ~= nil or review.is_loading())
     end,
     color = "StatusLineActiveItem",
     padding = 1,

@@ -1,5 +1,28 @@
 local review = require("sodium.review")
 
+local loading_timer = nil
+local function start_loading()
+    review.set_loading(true)
+    if loading_timer then return end
+    local lualine = require("lualine")
+    loading_timer = vim.uv.new_timer()
+    if loading_timer then
+        loading_timer:start(0, 100, vim.schedule_wrap(function()
+            if review.is_loading() then
+                lualine.refresh()
+            elseif loading_timer then
+                loading_timer:close()
+                loading_timer = nil
+                lualine.refresh()
+            end
+        end))
+    end
+end
+
+local function stop_loading()
+    review.set_loading(false)
+end
+
 local function git_toplevel()
     local result = vim.system({ "git", "rev-parse", "--show-toplevel" }, { text = true }):wait()
     if result.code == 0 and result.stdout then
@@ -114,9 +137,12 @@ local function pick_pr_files(opts)
                 end
 
                 if opts.open_first and items[1] then
+                    stop_loading()
                     open_diff(items[1].file, pr.baseRefName)
                     return
                 end
+
+                stop_loading()
 
                 Snacks.picker({
                     title = string.format("PR #%d Files (%s)", pr.number, pr.headRefName),
@@ -281,7 +307,7 @@ local function pick_pr()
                                 end
                             end)
                         end)
-                        vim.notify("Checking out PR #" .. item.number .. "...")
+                        start_loading()
                         local function after_checkout()
                             local base = item.baseRefName
                             local fetch_result = vim.system(
@@ -308,12 +334,14 @@ local function pick_pr()
                             function(f)
                                 vim.schedule(function()
                                     if f.code ~= 0 then
+                                        stop_loading()
                                         vim.notify("PR checkout failed: " .. (f.stderr or ""), vim.log.levels.ERROR)
                                         return
                                     end
                                     vim.system({ "git", "checkout", ref }, { text = true }, function(co)
                                         vim.schedule(function()
                                             if co.code ~= 0 then
+                                                stop_loading()
                                                 vim.notify("git checkout failed: " .. (co.stderr or ""), vim.log.levels.ERROR)
                                                 return
                                             end
