@@ -33,7 +33,7 @@
     # os_icon               # os identifier
     context                 # user@hostname
     dir                     # current directory
-    vcs                     # git status
+    git_branch              # git branch (pure zsh, no libgit2)
     prompt_char             # prompt symbol
   )
 
@@ -468,8 +468,6 @@
   # of `git ls-files | wc -l`. Alternatively, add `bash.showDirtyState = false` to the repository's
   # config: `git config bash.showDirtyState false`.
   typeset -g POWERLEVEL9K_VCS_MAX_INDEX_SIZE_DIRTY=-1
-
-  typeset -g POWERLEVEL9K_VCS_MAX_SYNC_LATENCY_SECONDS=0.05
 
   # Don't show Git status in prompt for repositories whose workdir matches this pattern.
   # For example, if set to '~', the Git repository at $HOME/.git will be ignored.
@@ -1597,6 +1595,26 @@
   # User-defined prompt segments can be customized the same way as built-in segments.
   # typeset -g POWERLEVEL9K_EXAMPLE_FOREGROUND=208
   # typeset -g POWERLEVEL9K_EXAMPLE_VISUAL_IDENTIFIER_EXPANSION='⭐'
+
+  function prompt_git_branch() {
+    local dir=$PWD
+    while [[ $dir != / ]]; do
+      [[ -d $dir/.git ]] && break
+      dir=${dir:h}
+    done
+    [[ $dir == / ]] && return
+    local head
+    head=$(<$dir/.git/HEAD) || return
+    local branch
+    if [[ $head == ref:\ refs/heads/* ]]; then
+      branch=${head#ref: refs/heads/}
+    else
+      branch=${head[1,8]}
+    fi
+    branch=${branch/moon\//}
+    (( $#branch > 32 )) && branch[13,-13]="…"
+    p10k segment -f 2 -i $'\uF126' -t "${branch//\%/%%}"
+  }
 
   # Transient prompt works similarly to the builtin transient_rprompt option. It trims down prompt
   # when accepting a command line. Supported values:
