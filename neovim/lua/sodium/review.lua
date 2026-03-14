@@ -5,7 +5,6 @@ M._state = {
     reviewed = {},
     previous_branch = nil,
     current_user = nil,
-    loading = false,
 }
 
 function M.set_current_pr(pr)
@@ -20,15 +19,7 @@ function M.get_current_pr()
 end
 
 function M.reset()
-    M._state = { current_pr = nil, reviewed = {}, previous_branch = nil, current_user = nil, loading = false }
-end
-
-function M.set_loading(val)
-    M._state.loading = val
-end
-
-function M.is_loading()
-    return M._state.loading
+    M._state = { current_pr = nil, reviewed = {}, previous_branch = nil, current_user = nil }
 end
 
 function M.set_previous_branch(branch)
