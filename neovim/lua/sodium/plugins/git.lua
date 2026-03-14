@@ -294,42 +294,30 @@ local function pick_pr()
                             )
                         end
                         local pr_num = tostring(item.number)
+                        local ref = "pr-" .. pr_num
+                        local prev = review.get_previous_branch()
+                        if prev then
+                            vim.system({ "git", "checkout", prev }, { text = true }):wait()
+                        end
+                        vim.system({ "git", "branch", "-D", ref }, { text = true }):wait()
                         vim.system(
-                            { "gh", "pr", "checkout", pr_num },
+                            { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:" .. ref },
                             { text = true },
-                            function(r)
+                            function(f)
                                 vim.schedule(function()
-                                    if r.code == 0 then
-                                        after_checkout()
+                                    if f.code ~= 0 then
+                                        vim.notify("PR checkout failed: " .. (f.stderr or ""), vim.log.levels.ERROR)
                                         return
                                     end
-                                    vim.notify("gh pr checkout failed, trying refspec fallback...")
-                                    local prev = review.get_previous_branch()
-                                    if prev then
-                                        vim.system({ "git", "checkout", prev }, { text = true }):wait()
-                                    end
-                                    vim.system({ "git", "branch", "-D", "pr-" .. pr_num }, { text = true }):wait()
-                                    vim.system(
-                                        { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:pr-" .. pr_num },
-                                        { text = true },
-                                        function(f)
-                                            vim.schedule(function()
-                                                if f.code ~= 0 then
-                                                    vim.notify("PR checkout failed: " .. (f.stderr or ""), vim.log.levels.ERROR)
-                                                    return
-                                                end
-                                                vim.system({ "git", "checkout", "pr-" .. pr_num }, { text = true }, function(co)
-                                                    vim.schedule(function()
-                                                        if co.code ~= 0 then
-                                                            vim.notify("git checkout failed: " .. (co.stderr or ""), vim.log.levels.ERROR)
-                                                            return
-                                                        end
-                                                        after_checkout()
-                                                    end)
-                                                end)
-                                            end)
-                                        end
-                                    )
+                                    vim.system({ "git", "checkout", ref }, { text = true }, function(co)
+                                        vim.schedule(function()
+                                            if co.code ~= 0 then
+                                                vim.notify("git checkout failed: " .. (co.stderr or ""), vim.log.levels.ERROR)
+                                                return
+                                            end
+                                            after_checkout()
+                                        end)
+                                    end)
                                 end)
                             end
                         )
