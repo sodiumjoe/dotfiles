@@ -28,6 +28,29 @@ end
 local remote_stripe_dir = "/pay/src/"
 local local_stripe_dir = vim.fn.expand("~/stripe/")
 
+function M.build_sg_url(stripe_dir, full_path, line_number)
+    if stripe_dir == nil or not string.find(full_path, stripe_dir) then
+        return nil
+    end
+    local path_with_repo = string.gsub(full_path, stripe_dir, "")
+    local i, j = string.find(path_with_repo, "^.-/")
+    local repo = string.sub(path_with_repo, i or 0, j - 1)
+    local path = string.sub(path_with_repo, j + 1)
+    if repo == "mint" then
+        local ni, nj = string.find(path, "^.-/")
+        if ni then
+            repo = string.sub(path, ni, nj - 1)
+            path = string.sub(path, nj + 1)
+        end
+    end
+    return string.format(
+        [[https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/%s/-/blob/%s?L%s]],
+        repo,
+        path,
+        line_number
+    )
+end
+
 local function get_sg_url()
     local stripe_dir = nil
     if vim.fn.isdirectory(remote_stripe_dir) ~= 0 then
@@ -35,23 +58,9 @@ local function get_sg_url()
     elseif vim.fn.isdirectory(local_stripe_dir) ~= 0 then
         stripe_dir = local_stripe_dir
     end
-
     local full_path = vim.api.nvim_buf_get_name(0)
     local line_number = vim.fn.line(".")
-    if stripe_dir ~= nil and string.find(full_path, stripe_dir) then
-        local path_with_repo = string.gsub(full_path, stripe_dir, "")
-        local i, j = string.find(path_with_repo, "^.-/")
-        local repo = string.sub(path_with_repo, i or 0, j - 1)
-        local path = string.sub(path_with_repo, j + 1)
-        return string.format(
-            [[https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/%s/-/blob/%s?L%s]],
-            repo,
-            path,
-            line_number
-        )
-    else
-        return nil
-    end
+    return M.build_sg_url(stripe_dir, full_path, line_number)
 end
 
 function M.setup_sourcegraph_keymap()
