@@ -386,6 +386,7 @@
     if [[ -n $VCS_STATUS_LOCAL_BRANCH ]]; then
       local branch=${(V)VCS_STATUS_LOCAL_BRANCH}
       branch=${branch/moon\//}
+      branch=${branch/green/}
       branch=${branch/$remote_name/}
       if [ ! -z $branch ]; then
         branch=" $branch"
@@ -1612,6 +1613,7 @@
       branch=${head[1,8]}
     fi
     branch=${branch/moon\//}
+    branch=${branch/green/}
     (( $#branch > 32 )) && branch[13,-13]="…"
     p10k segment -f 2 -i $'\uF126' -t "${branch//\%/%%}"
   }
