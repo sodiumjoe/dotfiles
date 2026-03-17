@@ -31,11 +31,7 @@ When writing documents, proposals, design docs, plans, or work logs:
 
 ### Sentence mechanics
 
-- Short declarative sentences. Fragments for emphasis or enumeration.
-- Parenthetical asides for context without disrupting flow.
-- "i.e." / "e.g." / "viz." / "modulo" used naturally.
-- Plain words over jargon: "because ruby" over "due to the single-threaded nature of the Ruby runtime."
-- Assume reader competence. Do not define terms the audience knows.
+Write in full, declarative sentences that flow into each other. Keep them short, but always complete. Chain sentences with natural connective tissue (conjunctions, relative clauses, parentheticals) rather than fragmenting into bullet lists. Use fragments only for enumerating discrete items (file names, flags, options), never for explanatory prose. Parenthetical asides are fine for adding context without disrupting flow. "i.e." / "e.g." / "viz." / "modulo" used naturally. Jargon is acceptable if it's for precision, but not for its own sake. Assume reader competence.
 
 ### What to avoid in prose
 
@@ -46,10 +42,7 @@ When writing documents, proposals, design docs, plans, or work logs:
 
 ### Document structure
 
-- Use headers, sub-headers, bullet lists, and tables aggressively
-- Prose paragraphs: 1-3 sentences max before returning to structure
-- Emoji in document titles only, never in body text
-- Work logs and notes can use terse fragments. Formal sections use complete sentences.
+Use headers, sub-headers, and tables for navigation and scannability. Within sections, prefer flowing paragraphs over bullet lists when explaining reasoning or heuristics. Bullet lists are for enumerating discrete items (files, steps, options with costs), not for making arguments or stating rationale. Work logs and daily notes can use terse fragments. Emoji in document titles only, never in body text.
 
 ### Argumentation
 
@@ -95,6 +88,7 @@ When designing implementation plans, follow these guidelines:
 ### Required sections
 
 Every plan file must include:
+
 - **Context** — why this change is needed, what prompted it
 - **Approach** — the chosen implementation strategy (not alternatives)
 - **Files to modify** — explicit list of file paths with what changes each needs
@@ -103,6 +97,7 @@ Every plan file must include:
 - **Changelog** — completed work entries in `- [x] Description ✅ YYYY-MM-DD` format. Since all plans must have a `project` field, omit this section — the project file owns the canonical changelog.
 
 **Task management:**
+
 - All plans must have a `project` field, so all open tasks must be added to the project file's `## Tasks` section, never in the plan
 
 ### Investigation requirements
@@ -123,16 +118,19 @@ Every plan file must include:
 ### Completing Work
 
 When completing a task, use the `work complete` command:
+
 ```bash
 work complete <file> <description>
 ```
 
 This single command:
+
 - Marks the item complete in the source file (project or plan)
 - Adds it to today's daily note log with proper metadata
 - Handles project/plan context automatically
 
 Example:
+
 ```bash
 work complete ~/stripe/work/projects/dotfiles.md "Fix shell config"
 ```
