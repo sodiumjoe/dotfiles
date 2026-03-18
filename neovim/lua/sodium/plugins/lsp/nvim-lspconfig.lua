@@ -23,9 +23,9 @@ return {
         })
 
         vim.lsp.config("bazel", {
-            cmd = { "pay", "exec", "scripts/dev/bazel-lsp" },
-            filetypes = { "star", "bzl", "BUILD.bazel" },
-            root_markers = { ".git" },
+            cmd = { "scripts/dev/bazel-lsp" },
+            filetypes = { "bzl" },
+            root_markers = { "WORKSPACE", "WORKSPACE.bazel", "MODULE.bazel" },
         })
 
         vim.lsp.config("rust_analyzer", {
