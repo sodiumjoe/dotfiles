@@ -1,3 +1,4 @@
 {
-  "vault": "~/stripe/work"
+  "vault": "~/stripe/work",
+  "plans": "~/stripe/work/plans"
 }

@@ -285,24 +285,24 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 _sync_plans_to_remote() {
   local host="$1"
-  rsync -az --delete "$HOME/stripe/work/plans/" "$host:~/.claude/plans/"
-  rsync -az "$HOME/stripe/work/projects/" "$host:~/.claude/projects/"
-  ssh "$host" "mkdir -p ~/stripe/work/personal-marketplace/work" 2>/dev/null
+  ssh "$host" "mkdir -p ~/stripe/work/{plans,projects,personal-marketplace/work}" 2>/dev/null
+  rsync -az --delete "$HOME/stripe/work/plans/" "$host:~/stripe/work/plans/"
+  rsync -az "$HOME/stripe/work/projects/" "$host:~/stripe/work/projects/"
   rsync -az --delete "$HOME/stripe/work/personal-marketplace/work/" "$host:~/stripe/work/personal-marketplace/work/"
 }
 
 _sync_plans_from_remote() {
   local host="$1"
-  rsync -az "$host:~/.claude/plans/" "$HOME/stripe/work/plans/"
-  rsync -az "$host:~/.claude/projects/" "$HOME/stripe/work/projects/"
+  rsync -az "$host:~/stripe/work/plans/" "$HOME/stripe/work/plans/"
+  rsync -az "$host:~/stripe/work/projects/" "$HOME/stripe/work/projects/"
 }
 
 _sync_project_to_remote() {
   local host="$1" slug="$2"
   local proj_file="$HOME/stripe/work/projects/${slug}.md"
   [ -f "$proj_file" ] || return 0
-  ssh "$host" "mkdir -p ~/.claude/projects" 2>/dev/null
-  rsync -az "$proj_file" "$host:~/.claude/projects/${slug}.md"
+  ssh "$host" "mkdir -p ~/stripe/work/projects" 2>/dev/null
+  rsync -az "$proj_file" "$host:~/stripe/work/projects/${slug}.md"
 }
 
 fetch_remotes() {

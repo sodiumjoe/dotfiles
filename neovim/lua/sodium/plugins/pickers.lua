@@ -244,7 +244,7 @@ return {
         {
             "<leader>sp",
             function()
-                local plans_dir = vim.fn.expand("~/.claude/plans")
+                local plans_dir = vim.fn.expand("~/stripe/work/plans")
                 local all_files = vim.fn.glob(plans_dir .. "/*.md", false, true)
                 local items = {}
                 for _, file in ipairs(all_files) do

@@ -123,5 +123,6 @@
       "Working"
     ]
   },
-  "effortLevel": "medium"
+  "effortLevel": "medium",
+  "plansDirectory": "~/stripe/work/plans"
 }
