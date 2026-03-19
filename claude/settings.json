@@ -124,5 +124,18 @@
     ]
   },
   "effortLevel": "medium",
-  "plansDirectory": "~/stripe/work/plans"
+  "plansDirectory": "~/stripe/work/plans",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-format-edit"
+          }
+        ]
+      }
+    ]
+  }
 }

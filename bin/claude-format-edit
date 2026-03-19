@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+FILE_PATH=$(jq -r '.tool_input.file_path // empty')
+[[ -z "$FILE_PATH" ]] && exit 0
+if ! fmt-file "$FILE_PATH" 2>&1; then
+  echo "fmt-file failed for $FILE_PATH" >&2
+  exit 2
+fi

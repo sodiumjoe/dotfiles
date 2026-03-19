@@ -469,35 +469,6 @@ return {
         local diagnostics = require("sodium.config.diagnostics")
         local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
 
-        local agentic_modified_files = {}
-        local agentic_tracking_augroup = vim.api.nvim_create_augroup("AgenticFileTracking", { clear = true })
-
-        local function start_tracking_agentic_writes()
-            vim.api.nvim_create_autocmd("BufWritePost", {
-                group = agentic_tracking_augroup,
-                callback = function(args)
-                    local filepath = vim.api.nvim_buf_get_name(args.buf)
-                    if filepath ~= "" and not utils.is_fugitive_buffer(args.buf) then
-                        agentic_modified_files[filepath] = true
-                    end
-                end,
-            })
-        end
-
-        local function stop_tracking_agentic_writes()
-            vim.api.nvim_clear_autocmds({ group = agentic_tracking_augroup })
-        end
-
-        local function format_modified_files()
-            for filepath, _ in pairs(agentic_modified_files) do
-                local bufnr = vim.fn.bufnr(filepath)
-                if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
-                    vim.lsp.buf.format({ bufnr = bufnr, timeout_ms = 30000 })
-                end
-            end
-            agentic_modified_files = {}
-        end
-
         local function noop()
             return ""
         end
@@ -542,17 +513,6 @@ return {
                 code = noop,
                 files = noop,
                 todos = noop,
-            },
-            hooks = {
-                on_prompt_submit = function()
-                    start_tracking_agentic_writes()
-                end,
-                on_response_complete = function()
-                    vim.schedule(function()
-                        stop_tracking_agentic_writes()
-                        format_modified_files()
-                    end)
-                end,
             },
         })
 
