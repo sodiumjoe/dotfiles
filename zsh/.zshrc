@@ -297,6 +297,19 @@ _sync_plans_from_remote() {
   rsync -az "$host:~/stripe/work/projects/" "$HOME/stripe/work/projects/"
 }
 
+_copy_gh_auth_to_remote() {
+  local host="$1"
+  local token=$(gh auth token -h git.corp.stripe.com 2>/dev/null)
+  [ -z "$token" ] && return 0
+  ssh "$host" "mkdir -p \$HOME/.config/gh && cat > \$HOME/.config/gh/hosts.yml" <<EOF
+git.corp.stripe.com:
+    git_protocol: ssh
+    user: $(whoami)
+    oauth_token: $token
+EOF
+  ssh "$host" "gh config set http_unix_socket \$HOME/.stripeproxy" 2>/dev/null
+}
+
 _sync_project_to_remote() {
   local host="$1" slug="$2"
   local proj_file="$HOME/stripe/work/projects/${slug}.md"
@@ -334,6 +347,7 @@ remotes() {
     local host=$(pay remote ssh $remote -- hostname)
 
     (_sync_plans_to_remote "$host" &)
+    (_copy_gh_auth_to_remote "$host" &)
 
     tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
@@ -364,6 +378,7 @@ mremote() {
   local host=$(pay remote ssh $remote -- hostname)
 
   (_sync_plans_to_remote "$host" &)
+  (_copy_gh_auth_to_remote "$host" &)
 
   tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
@@ -388,6 +403,7 @@ remote() {
   local host=$(pay remote ssh $remote -- hostname)
 
   (_sync_plans_to_remote "$host" &)
+  (_copy_gh_auth_to_remote "$host" &)
 
   tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
@@ -464,6 +480,7 @@ dev() {
   local host=$(pay remote ssh "$remote_name" -- hostname)
 
   (_sync_plans_to_remote "$host" &)
+  (_copy_gh_auth_to_remote "$host" &)
 
   tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
