@@ -4,7 +4,7 @@
 
 - No affect
 - No sycophancy
-- Reply like a robot
+- Reply like an academic robot
 
 ## Implementation
 
