@@ -283,14 +283,14 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
 
-_sync_plans_to_remote() {
+_sync_work_to_remote() {
   local host="$1"
   ssh "$host" "mkdir -p ~/stripe/work/{projects,personal-marketplace/work}" 2>/dev/null
   rsync -az "$HOME/stripe/work/projects/" "$host:~/stripe/work/projects/"
   rsync -az --delete "$HOME/stripe/work/personal-marketplace/work/" "$host:~/stripe/work/personal-marketplace/work/"
 }
 
-_sync_plans_from_remote() {
+_sync_work_from_remote() {
   local host="$1"
   rsync -az "$host:~/stripe/work/projects/" "$HOME/stripe/work/projects/"
 }
@@ -344,14 +344,14 @@ remotes() {
 
     local host=$(pay remote ssh $remote -- hostname)
 
-    (_sync_plans_to_remote "$host" &)
+    (_sync_work_to_remote "$host" &)
     (_copy_gh_auth_to_remote "$host" &)
 
     tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
     local exit_code=$?
 
-    (_sync_plans_from_remote "$host" &)
+    (_sync_work_from_remote "$host" &)
 
     if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
       reset
@@ -375,14 +375,14 @@ mremote() {
 
   local host=$(pay remote ssh $remote -- hostname)
 
-  (_sync_plans_to_remote "$host" &)
+  (_sync_work_to_remote "$host" &)
   (_copy_gh_auth_to_remote "$host" &)
 
   tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
   local exit_code=$?
 
-  (_sync_plans_from_remote "$host" &)
+  (_sync_work_from_remote "$host" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -400,14 +400,14 @@ remote() {
 
   local host=$(pay remote ssh $remote -- hostname)
 
-  (_sync_plans_to_remote "$host" &)
+  (_sync_work_to_remote "$host" &)
   (_copy_gh_auth_to_remote "$host" &)
 
   tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
   local exit_code=$?
 
-  (_sync_plans_from_remote "$host" &)
+  (_sync_work_from_remote "$host" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -477,14 +477,14 @@ dev() {
 
   local host=$(pay remote ssh "$remote_name" -- hostname)
 
-  (_sync_plans_to_remote "$host" &)
+  (_sync_work_to_remote "$host" &)
   (_copy_gh_auth_to_remote "$host" &)
 
   tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
 
   local exit_code=$?
 
-  (_sync_plans_from_remote "$host" &)
+  (_sync_work_from_remote "$host" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
