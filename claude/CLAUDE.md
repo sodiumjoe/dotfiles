@@ -59,59 +59,15 @@ Use headers, sub-headers, and tables for navigation and scannability. Within sec
 
 ## Planning
 
-- Use EnterPlanMode for implementation planning
-- Name plan files with date prefix: `YYYY-MM-DD-description.md`
-- Ask clarifying questions
+- Use `work:create-project` to start new work (brainstorm + create project)
+- Use `work:write-plan` to create implementation plans within a project
+- Use `work:execute-plan` to execute plans from any session
 - Before executing a plan, run the `plan-reviewer` agent (via Task tool with `subagent_type: "work:plan-reviewer"`) to review it for completeness, accuracy, and risks. Share the review findings with the user before proceeding.
-- Before executing a plan, gather all permissions requirements (write operations, deletions, installations, deployments, config changes, etc.) and request them in a single batch
-- Add YAML frontmatter to new plan files:
-  ```yaml
-  ---
-  status: active
-  project: "[[projects/project-slug]]"
-  ---
-  ```
-  **Project field rules:**
-  - Every plan must be associated with a project. The `project` field is required.
-  - If session context includes a "Project:" line (from SessionStart hook), extract the project slug and use it
-  - If no session context, ask the user which project this plan belongs to before creating the plan
-  - The project field links the plan to its parent project file and ensures tasks appear grouped correctly in daily notes
-- After creating a new plan file, open it in the neovim editor window (skip silently if any step fails):
+- Before executing a plan, gather all permissions requirements and request them in a single batch
+- After creating a new plan or project file, open it in neovim:
   ```bash
-  nvim-open --editor '<absolute-path-to-plan-file>'
+  nvim-open --editor '<absolute-path-to-file>'
   ```
-
-## Plan Design
-
-When designing implementation plans, follow these guidelines:
-
-### Required sections
-
-Every plan file must include:
-
-- **Context** — why this change is needed, what prompted it
-- **Approach** — the chosen implementation strategy (not alternatives)
-- **Files to modify** — explicit list of file paths with what changes each needs
-- **Verification** — how to test the changes end-to-end
-- **Notes** — investigation findings, discoveries, tangential issues found
-- **Changelog** — completed work entries in `- [x] Description ✅ YYYY-MM-DD` format. Since all plans must have a `project` field, omit this section — the project file owns the canonical changelog.
-
-**Task management:**
-
-- All plans must have a `project` field, so all open tasks must be added to the project file's `## Tasks` section, never in the plan
-
-### Investigation requirements
-
-- Read every file you plan to modify before proposing changes
-- Search for existing implementations before proposing new code
-- Identify existing patterns in the codebase and follow them
-- Cite file paths and line numbers for referenced code
-
-### Proactive improvements
-
-- Propose pre-emptive refactoring that would make the result better, clearer, or better-architected
-- Flag tangential issues discovered during investigation — log them in the plan's Notes section even if out of scope for the current task
-- Suggest architectural improvements when the surrounding code would benefit
 
 ## Work Tracking
 
@@ -132,7 +88,7 @@ This single command:
 Example:
 
 ```bash
-work complete ~/stripe/work/projects/dotfiles.md "Fix shell config"
+work complete ~/stripe/work/projects/dotfiles/project.md "Fix shell config"
 ```
 
 Do not manually call `work check-off` or `work append-log` separately. Always use `work complete` for consistency.

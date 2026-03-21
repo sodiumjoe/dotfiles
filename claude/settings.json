@@ -109,22 +109,7 @@
   },
   "model": "opus",
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "toolshed"
-  ],
-  "enabledPlugins": {
-    "obsidian@obsidian-skills": true,
-    "work@personal": true
-  },
-  "spinnerTipsEnabled": false,
-  "spinnerVerbs": {
-    "mode": "replace",
-    "verbs": [
-      "Working"
-    ]
-  },
-  "effortLevel": "medium",
-  "plansDirectory": "~/stripe/work/plans",
+  "enabledMcpjsonServers": ["toolshed"],
   "hooks": {
     "PostToolUse": [
       {
@@ -137,5 +122,16 @@
         ]
       }
     ]
-  }
+  },
+  "enabledPlugins": {
+    "obsidian@obsidian-skills": true,
+    "work@personal": true,
+    "superpowers@stripe-internal-marketplace": true
+  },
+  "spinnerTipsEnabled": false,
+  "spinnerVerbs": {
+    "mode": "replace",
+    "verbs": ["Working"]
+  },
+  "effortLevel": "medium"
 }
