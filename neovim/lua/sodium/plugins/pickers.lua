@@ -244,8 +244,11 @@ return {
         {
             "<leader>sp",
             function()
-                local plans_dir = vim.fn.expand("~/stripe/work/plans")
-                local all_files = vim.fn.glob(plans_dir .. "/*.md", false, true)
+                local projects_dir = vim.fn.expand("~/stripe/work/projects")
+                local all_files = vim.fn.glob(projects_dir .. "/*/*.md", false, true)
+                all_files = vim.tbl_filter(function(f)
+                    return vim.fn.fnamemodify(f, ":t") ~= "project.md"
+                end, all_files)
                 local items = {}
                 for _, file in ipairs(all_files) do
                     local mtime = vim.fn.getftime(file)
@@ -268,20 +271,19 @@ return {
             "<leader>sP",
             function()
                 local projects_dir = vim.env.HOME .. "/stripe/work/projects"
-                local files = vim.fn.glob(projects_dir .. "/*.md", false, true)
+                local files = vim.fn.glob(projects_dir .. "/*/project.md", false, true)
                 local items = {}
                 for _, file in ipairs(files) do
-                    if not file:match("_template%.md$") then
-                        local mtime = vim.fn.getftime(file)
-                        table.insert(items, { file = file, text = file, mtime = mtime })
-                    end
+                    local slug = vim.fn.fnamemodify(file, ":h:t")
+                    local mtime = vim.fn.getftime(file)
+                    table.insert(items, { file = file, text = slug, mtime = mtime })
                 end
                 table.sort(items, function(a, b)
                     return a.mtime > b.mtime
                 end)
                 Snacks.picker({
                     items = items,
-                    format = "file",
+                    preview = "file",
                     on_show = function()
                         vim.cmd.stopinsert()
                     end,

@@ -51,7 +51,7 @@ local function pick_project()
                         text = title,
                         slug = slug,
                         status = status,
-                        file = projects_dir .. slug .. ".md",
+                        file = projects_dir .. slug .. "/project.md",
                     }
                 end
             end
@@ -110,7 +110,7 @@ local function new_project()
                     vim.notify("create-project failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
                     return
                 end
-                local project_file = projects_dir .. slug .. ".md"
+                local project_file = projects_dir .. slug .. "/project.md"
                 vim.cmd.edit(project_file)
                 start_project_session(slug)
             end)
@@ -248,7 +248,7 @@ local function pick_task_state()
                             text = title,
                             slug = slug,
                             status = status,
-                            file = projects_dir .. slug .. ".md",
+                            file = projects_dir .. slug .. "/project.md",
                         }
                     end
                 end
@@ -337,7 +337,7 @@ local function add_task()
                         text = title,
                         title = title,
                         slug = slug,
-                        file = projects_dir .. slug .. ".md",
+                        file = projects_dir .. slug .. "/project.md",
                     })
                 end
             end
@@ -375,7 +375,7 @@ local function add_task()
                                         vim.notify("create-project failed: " .. (cr.stderr or ""), vim.log.levels.ERROR)
                                         return
                                     end
-                                    local file = projects_dir .. slug .. ".md"
+                                    local file = projects_dir .. slug .. "/project.md"
                                     vim.ui.input({ prompt = "Task: " }, function(description)
                                         if not description or description == "" then
                                             return
@@ -416,8 +416,8 @@ local function send_annotations_to_agentic()
                 local thread = store.get_thread(root.id)
                 local ls = root.line_start or root.line
                 local le = root.line_end or root.line
-                local range = (not ls) and "?" or ls == le
-                    and string.format("L%d", ls)
+                local range = (not ls) and "?"
+                    or ls == le and string.format("L%d", ls)
                     or string.format("L%d-L%d", ls, le)
                 if #thread == 1 then
                     table.insert(lines, string.format("  %s: %q", range, root.body))
@@ -451,7 +451,9 @@ local function send_annotations_to_agentic()
                 store.save()
                 pcall(vim.cmd, "CommentRefresh")
             else
-                vim.defer_fn(function() try_submit() end, 200)
+                vim.defer_fn(function()
+                    try_submit()
+                end, 200)
             end
         end
         try_submit()
