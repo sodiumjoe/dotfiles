@@ -26,6 +26,7 @@ done
 
 xdg_files=(\
   "alacritty"\
+  "efm-langserver"\
   "ghostty"\
   "hammerspoon"\
   "karabiner"\

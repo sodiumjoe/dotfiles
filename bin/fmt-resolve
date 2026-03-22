@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec_mode=false
+stdin_mode=false
+while [[ "${1:-}" == --* ]]; do
+  case "$1" in
+    --exec) exec_mode=true; shift ;;
+    --stdin) stdin_mode=true; shift ;;
+    *) shift ;;
+  esac
+done
+
+[[ -z "${1:-}" ]] && exit 0
+file="$1"
+
+find_up() {
+  local dir="$1" name="$2"
+  while [[ "$dir" != "/" ]]; do
+    [[ -e "$dir/$name" ]] && echo "$dir" && return 0
+    dir=$(dirname "$dir")
+  done
+  return 1
+}
+
+filedir=$(cd "$(dirname "$file")" 2>/dev/null && pwd || dirname "$file")
+cmd=()
+
+case "${file##*.}" in
+  lua)
+    command -v stylua &>/dev/null || exit 0
+    if $stdin_mode; then
+      cmd=(stylua --search-parent-directories --stdin-filepath "$file" -)
+    else
+      cmd=(stylua --search-parent-directories "$file")
+    fi
+    ;;
+  js|ts|jsx|tsx|css|json)
+    prettier_dir=$(find_up "$filedir" "node_modules/.bin/prettier") || true
+    if [[ -n "${prettier_dir:-}" ]]; then
+      prettier_bin="$prettier_dir/node_modules/.bin/prettier"
+    else
+      prettier_bin=$(command -v prettier 2>/dev/null || echo "")
+    fi
+    [[ -z "$prettier_bin" ]] && exit 0
+    if $stdin_mode; then
+      cmd=("$prettier_bin" --stdin-filepath "$file")
+    else
+      cmd=("$prettier_bin" --write "$file")
+    fi
+    ;;
+  bzl)
+    root=$(find_up "$filedir" "scripts/dev/buildifier") || exit 0
+    if $stdin_mode; then
+      cmd=("$root/scripts/dev/buildifier" -mode=fix -stdin -path "$file")
+    else
+      cmd=("$root/scripts/dev/buildifier" "$file")
+    fi
+    ;;
+  rb)
+    root=$(find_up "$filedir" "scripts/bin/rubocop-server/rubocop") || exit 0
+    cmd=("$root/scripts/bin/rubocop-server/rubocop" --autocorrect "$file")
+    ;;
+esac
+
+[[ ${#cmd[@]} -eq 0 ]] && exit 0
+
+if $exec_mode || $stdin_mode; then
+  exec "${cmd[@]}"
+else
+  printf '%q ' "${cmd[@]}"
+  echo
+fi

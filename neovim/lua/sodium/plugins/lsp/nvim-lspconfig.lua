@@ -84,6 +84,25 @@ return {
 
         vim.lsp.config("lua_ls", {})
 
+        vim.lsp.config("efm", {
+            cmd = { "efm-langserver" },
+            filetypes = {
+                "lua",
+                "javascript",
+                "javascriptreact",
+                "typescript",
+                "typescriptreact",
+                "css",
+                "json",
+                "bzl",
+                "ruby",
+            },
+            init_options = {
+                documentFormatting = true,
+            },
+            root_markers = { ".git" },
+        })
+
         local lsp_attach_group = vim.api.nvim_create_augroup("UserLspAttach", { clear = true })
         vim.api.nvim_create_autocmd("LspAttach", {
             group = lsp_attach_group,
@@ -119,6 +138,7 @@ return {
             { "flow", "flow" },
             { "tsgo", nil },
             { "lua_ls", "lua-language-server" },
+            { "efm", "efm-langserver" },
         }
 
         local enabled_servers = {}
@@ -195,7 +215,7 @@ return {
         {
             [[<leader>f]],
             function()
-                vim.lsp.buf.format({ timeout_ms = 30000 })
+                require("sodium.config.lsp.formatting").format(0)
             end,
         },
     },

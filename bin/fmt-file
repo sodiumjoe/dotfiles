@@ -1,27 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 [[ -z "${1:-}" ]] && exit 1
-file="$1"
-
-find_up() {
-  local dir="$1" name="$2"
-  while [[ "$dir" != "/" ]]; do
-    [[ -e "$dir/$name" ]] && echo "$dir/$name" && return 0
-    dir=$(dirname "$dir")
-  done
-  return 1
-}
-
-root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
-filedir=$(dirname "$file")
-
-case "${file##*.}" in
-  lua)
-    command -v stylua &>/dev/null && stylua --search-parent-directories "$file" ;;
-  js|ts|jsx|tsx|css|json)
-    prettier_bin=$(find_up "$filedir" "node_modules/.bin/prettier") \
-      || prettier_bin=$(command -v prettier 2>/dev/null || echo "")
-    [[ -n "$prettier_bin" ]] && "$prettier_bin" --write "$file" ;;
-  bzl)
-    [[ -n "$root" && -x "$root/scripts/dev/buildifier" ]] && "$root/scripts/dev/buildifier" "$file" ;;
-esac
+exec fmt-resolve --exec "$1"

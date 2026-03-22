@@ -1,0 +1,43 @@
+version: 2
+root-markers:
+  - .git/
+
+tools:
+  fmt-resolve: &fmt-resolve
+    format-command: 'fmt-resolve --stdin ${INPUT}'
+    format-stdin: true
+
+  fmt-resolve-file: &fmt-resolve-file
+    format-command: 'fmt-resolve --exec ${INPUT}'
+    format-stdin: false
+
+  rubocop-lint: &rubocop-lint
+    lint-command: 'scripts/bin/rubocop-server/rubocop --format emacs --force-exclusion --stdin ${INPUT}'
+    lint-stdin: true
+    lint-formats:
+      - '%f:%l:%c: %t: %m'
+    lint-source: rubocop
+    lint-ignore-exit-code: true
+    root-markers:
+      - .rubocop.yml
+
+languages:
+  lua:
+    - <<: *fmt-resolve
+  javascript:
+    - <<: *fmt-resolve
+  javascriptreact:
+    - <<: *fmt-resolve
+  typescript:
+    - <<: *fmt-resolve
+  typescriptreact:
+    - <<: *fmt-resolve
+  css:
+    - <<: *fmt-resolve
+  json:
+    - <<: *fmt-resolve
+  bzl:
+    - <<: *fmt-resolve
+  ruby:
+    - <<: *fmt-resolve-file
+    - <<: *rubocop-lint

@@ -4,6 +4,14 @@ local M = {}
 
 local autoformat_augroup = vim.api.nvim_create_augroup("LspFormatting", { clear = true })
 
+function M.format(bufnr)
+    local efm_attached = #vim.lsp.get_clients({ bufnr = bufnr, name = "efm" }) > 0
+    vim.lsp.buf.format({
+        timeout_ms = 30000,
+        name = efm_attached and "efm" or nil,
+    })
+end
+
 function M.setup_format_on_save(client, bufnr)
     if not client:supports_method("textDocument/formatting") or utils.is_fugitive_buffer(bufnr) then
         return
@@ -14,7 +22,7 @@ function M.setup_format_on_save(client, bufnr)
         group = autoformat_augroup,
         buffer = bufnr,
         callback = function()
-            vim.lsp.buf.format({ timeout_ms = 30000 })
+            M.format(bufnr)
             vim.bo[bufnr].endofline = true
             vim.bo[bufnr].fixendofline = true
         end,
