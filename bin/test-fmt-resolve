@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pass=0
+fail=0
+errors=()
+
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [[ "$expected" == "$actual" ]]; then
+    ((++pass))
+  else
+    ((++fail))
+    errors+=("FAIL: $label\n  expected: '$expected'\n  actual:   '$actual'")
+  fi
+}
+
+assert_empty() {
+  local label="$1" actual="$2"
+  if [[ -z "$actual" ]]; then
+    ((++pass))
+  else
+    ((++fail))
+    errors+=("FAIL: $label\n  expected empty, got: '$actual'")
+  fi
+}
+
+assert_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    ((++pass))
+  else
+    ((++fail))
+    errors+=("FAIL: $label\n  expected to contain: '$needle'\n  in: '$haystack'")
+  fi
+}
+
+DIR=$(cd "$(dirname "$0")/.." && pwd)
+FMT_RESOLVE="$DIR/bin/fmt-resolve"
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+mkdir -p "$tmpdir/project/node_modules/.bin"
+mkdir -p "$tmpdir/project/scripts/dev"
+mkdir -p "$tmpdir/project/scripts/bin/rubocop-server"
+touch "$tmpdir/project/node_modules/.bin/prettier" && chmod +x "$tmpdir/project/node_modules/.bin/prettier"
+touch "$tmpdir/project/scripts/dev/buildifier" && chmod +x "$tmpdir/project/scripts/dev/buildifier"
+touch "$tmpdir/project/scripts/bin/rubocop-server/rubocop" && chmod +x "$tmpdir/project/scripts/bin/rubocop-server/rubocop"
+mkdir -p "$tmpdir/project/src"
+touch "$tmpdir/project/src/app.ts"
+touch "$tmpdir/project/src/style.css"
+touch "$tmpdir/project/src/data.json"
+touch "$tmpdir/project/src/file.rb"
+touch "$tmpdir/project/src/defs.bzl"
+touch "$tmpdir/project/src/BUILD.bazel"
+touch "$tmpdir/project/src/unknown.xyz"
+
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/app.ts")
+assert_contains "ts resolves prettier" "prettier" "$out"
+assert_contains "ts uses --write" "--write" "$out"
+
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/style.css")
+assert_contains "css resolves prettier" "prettier" "$out"
+
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/data.json")
+assert_contains "json resolves prettier" "prettier" "$out"
+
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/file.rb")
+assert_contains "rb resolves rubocop" "rubocop" "$out"
+assert_contains "rb uses --autocorrect" "--autocorrect" "$out"
+
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/defs.bzl")
+assert_contains "bzl resolves buildifier" "buildifier" "$out"
+
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/BUILD.bazel")
+assert_contains "BUILD.bazel resolves buildifier" "buildifier" "$out"
+
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/unknown.xyz")
+assert_empty "unknown ext produces no output" "$out"
+
+out=$("$FMT_RESOLVE" "" || true)
+assert_empty "empty arg produces no output" "$out"
+
+mkdir -p "$tmpdir/project/src/deep/nested"
+touch "$tmpdir/project/src/deep/nested/comp.tsx"
+out=$("$FMT_RESOLVE" "$tmpdir/project/src/deep/nested/comp.tsx")
+assert_contains "nested tsx finds prettier" "prettier" "$out"
+
+if ! command -v prettier &>/dev/null; then
+  mkdir -p "$tmpdir/orphan"
+  touch "$tmpdir/orphan/app.ts"
+  out=$("$FMT_RESOLVE" "$tmpdir/orphan/app.ts")
+  assert_empty "ts outside project with no prettier" "$out"
+fi
+
+if command -v stylua &>/dev/null; then
+  touch "$tmpdir/project/src/init.lua"
+  out=$("$FMT_RESOLVE" "$tmpdir/project/src/init.lua")
+  assert_contains "lua resolves stylua" "stylua" "$out"
+fi
+
+echo ""
+echo "fmt-resolve tests: $pass passed, $fail failed"
+if [[ $fail -gt 0 ]]; then
+  echo ""
+  for e in "${errors[@]}"; do
+    echo -e "$e"
+  done
+  exit 1
+fi
