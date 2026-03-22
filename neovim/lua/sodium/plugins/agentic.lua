@@ -492,7 +492,6 @@ return {
                         CLAUDE_CODE_EXECUTABLE = claude_path,
                         NVIM = vim.v.servername,
                     },
-                    default_mode = "plan",
                 },
                 ["gemini-acp"] = {
                     command = "gemini",
