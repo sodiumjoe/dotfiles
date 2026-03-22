@@ -1,7 +1,9 @@
 describe("keymaps", function()
     local function find_nmap(lhs)
         for _, m in ipairs(vim.api.nvim_get_keymap("n")) do
-            if m.lhs == lhs then return m end
+            if m.lhs == lhs then
+                return m
+            end
         end
         return nil
     end
@@ -34,18 +36,24 @@ describe("keymaps", function()
 
     describe("plugin keymaps (declared in specs)", function()
         local function spec_has_key(specs, lhs)
-            if type(specs) ~= "table" then return false end
+            if type(specs) ~= "table" then
+                return false
+            end
             if specs[1] and type(specs[1]) == "string" then
                 if specs.keys then
                     for _, key in ipairs(specs.keys) do
                         local key_lhs = type(key) == "table" and key[1] or key
-                        if key_lhs == lhs then return true end
+                        if key_lhs == lhs then
+                            return true
+                        end
                     end
                 end
                 return false
             end
             for _, spec in ipairs(specs) do
-                if spec_has_key(spec, lhs) then return true end
+                if spec_has_key(spec, lhs) then
+                    return true
+                end
             end
             return false
         end
@@ -126,6 +134,16 @@ describe("keymaps", function()
 
         it("declares leader-ww in markdown spec", function()
             assert.is_true(spec_has_key(markdown, "<leader>ww"))
+        end)
+
+        local lsp_specs = require("sodium.plugins.lsp")
+
+        it("declares leader-f in lsp spec", function()
+            assert.is_true(spec_has_key(lsp_specs, "<leader>f"))
+        end)
+
+        it("declares leader-ca in lsp spec", function()
+            assert.is_true(spec_has_key(lsp_specs, "<leader>ca"))
         end)
     end)
 end)

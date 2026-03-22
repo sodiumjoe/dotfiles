@@ -3,13 +3,19 @@ describe("plugin registry", function()
         names = names or {}
         if type(specs) == "string" then
             local name = specs:match("[^/]+$")
-            if name then names[name] = { specs } end
+            if name then
+                names[name] = { specs }
+            end
             return names
         end
-        if type(specs) ~= "table" then return names end
+        if type(specs) ~= "table" then
+            return names
+        end
         if specs[1] and type(specs[1]) == "string" then
             local name = specs[1]:match("[^/]+$")
-            if name then names[name] = specs end
+            if name then
+                names[name] = specs
+            end
             if specs.dependencies then
                 for _, dep in ipairs(specs.dependencies) do
                     collect_plugin_names(dep, names)
@@ -69,7 +75,7 @@ describe("plugin registry", function()
             "lspkind-nvim",
             "friendly-snippets",
             "nvim-lspconfig",
-            "none-ls.nvim",
+
             "lazydev.nvim",
             "vim-fugitive",
             "nvim-comment-overlay",
