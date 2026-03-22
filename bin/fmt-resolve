@@ -49,7 +49,7 @@ case "${file##*.}" in
       cmd=("$prettier_bin" --write "$file")
     fi
     ;;
-  bzl)
+  bzl|bazel|BUILD)
     root=$(find_up "$filedir" "scripts/dev/buildifier") || exit 0
     if $stdin_mode; then
       cmd=("$root/scripts/dev/buildifier" -mode=fix -stdin -path "$file")
