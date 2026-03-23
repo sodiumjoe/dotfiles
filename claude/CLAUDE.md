@@ -104,6 +104,40 @@ Do not manually call `work check-off` or `work append-log` separately. Always us
   - What was found or discovered
 - Update the plan file as work progresses
 
+## Stripe Monorepo (Mint)
+
+Stripe's monorepo ("Mint") unifies pay-server, zoolander, and gocode under a single git repository. On a devbox it lives at `/pay/src/`; on a laptop at `~/stripe/mint/`. Each former repo is a "namespace" (i.e. a top-level directory: `pay-server/`, `zoolander/`, `gocode/`).
+
+### GitFS (sparse checkout)
+
+Mint uses `pay gitfs` to manage which directories git tracks. Do not use raw `git sparse-checkout` commands — they bypass Stripe's internal bookkeeping and will cause breakage.
+
+- `pay gitfs set <namespace>` — track a single namespace (pay-server, zoolander, gocode). Use when switching between namespaces.
+- `pay gitfs add <dir1> <dir2> ...` — add directories to the tracked set without removing existing ones.
+- `pay gitfs replace <dir1> ...` — overwrite the tracked set entirely.
+- `pay gitfs status` — show current tracked paths and revisions.
+- `pay gitfs profile <name>` — load a predefined profile from `.gitfsconfig`.
+- `pay gitfs disable` — disable gitfs (slow, takes several minutes).
+
+Files outside the tracked set remain on disk but are invisible to `git status`. Modifications to untracked files will not appear in diffs.
+
+### Green branches (replacing master-passing-tests)
+
+Do not use `master-passing-tests` — it has been deprecated. Use `green` branches as the base for new feature branches. These point to recent master commits where CI passed.
+
+- In mint, use the namespaced variant matching your working namespace: `green-pay-server`, `green-zoolander`, `green-gocode`.
+- In a legacy threepo, use `green-<repo>` or just `green`.
+- Or skip the decision: `git fetch origin master && git checkout -b my-feature $(pay find-dev-branch-head)`.
+
+Do not target green branches in PRs — they are read-only references for branching, not merge targets.
+
+### Workflow constraints
+
+- Changes are limited to a single namespace per branch (while online merge replication is active).
+- Migrate branches from threepos with `pay stack migrate`.
+- Enable/disable mint on laptop: `pay mint --enable` / `pay mint --disable`.
+- New devbox: `pay remote new --repo=mint`.
+
 ## Daily Note
 
 - The daily note is at `~/stripe/work/YYYY-MM-DD.md` (today's date)
