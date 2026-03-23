@@ -7,10 +7,6 @@ tools:
     format-command: 'fmt-resolve --stdin ${INPUT}'
     format-stdin: true
 
-  fmt-resolve-file: &fmt-resolve-file
-    format-command: 'fmt-resolve --exec ${INPUT}'
-    format-stdin: false
-
   rubocop-lint: &rubocop-lint
     lint-command: 'scripts/bin/rubocop-server/rubocop --format emacs --force-exclusion --stdin ${INPUT}'
     lint-stdin: true
@@ -39,5 +35,5 @@ languages:
   bzl:
     - <<: *fmt-resolve
   ruby:
-    - <<: *fmt-resolve-file
+    - <<: *fmt-resolve
     - <<: *rubocop-lint

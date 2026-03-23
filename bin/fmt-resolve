@@ -24,9 +24,10 @@ find_up() {
 }
 
 filedir=$(cd "$(dirname "$file")" 2>/dev/null && pwd || dirname "$file")
+basename=$(basename "$file")
 cmd=()
 
-case "${file##*.}" in
+case "${basename##*.}" in
   lua)
     command -v stylua &>/dev/null || exit 0
     if $stdin_mode; then
@@ -43,9 +44,29 @@ case "${file##*.}" in
       prettier_bin=$(command -v prettier 2>/dev/null || echo "")
     fi
     [[ -z "$prettier_bin" ]] && exit 0
+    eslint_bin=""
+    case "${basename##*.}" in
+      js|ts|jsx|tsx)
+        eslint_dir=$(find_up "$filedir" "node_modules/.bin/eslint") || true
+        if [[ -n "${eslint_dir:-}" ]]; then
+          eslint_bin="$eslint_dir/node_modules/.bin/eslint"
+        fi
+        ;;
+    esac
     if $stdin_mode; then
-      cmd=("$prettier_bin" --stdin-filepath "$file")
+      if [[ -n "$eslint_bin" ]]; then
+        tmp=$(mktemp --suffix=".${basename##*.}")
+        trap 'rm -f "$tmp"' EXIT
+        cat > "$tmp"
+        "$eslint_bin" --fix --no-error-on-unmatched-pattern "$tmp" 2>/dev/null || true
+        exec "$prettier_bin" --stdin-filepath "$file" < "$tmp"
+      else
+        cmd=("$prettier_bin" --stdin-filepath "$file")
+      fi
     else
+      if [[ -n "$eslint_bin" ]]; then
+        "$eslint_bin" --fix --no-error-on-unmatched-pattern "$file" 2>/dev/null || true
+      fi
       cmd=("$prettier_bin" --write "$file")
     fi
     ;;
@@ -59,7 +80,14 @@ case "${file##*.}" in
     ;;
   rb)
     root=$(find_up "$filedir" "scripts/bin/rubocop-server/rubocop") || exit 0
-    cmd=("$root/scripts/bin/rubocop-server/rubocop" --autocorrect "$file")
+    if $stdin_mode; then
+      "$root/scripts/bin/rubocop-server/rubocop" --autocorrect --stdin "$file" 2>/dev/null \
+        | sed -n '/^====================$/,$ { /^====================$/d; p; }' \
+        | sed -z 's/\n\n1\n\n$/\n/'
+      exit 0
+    else
+      cmd=("$root/scripts/bin/rubocop-server/rubocop" --autocorrect "$file")
+    fi
     ;;
 esac
 
