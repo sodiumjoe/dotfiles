@@ -71,8 +71,8 @@ return {
             checkbox = {
                 left_pad = 3,
                 custom = {
-                    todo = { raw = '[-]', rendered = '󰥔 ', highlight = 'RenderMarkdownTodo' },
-                    progress = { raw = '[/]', rendered = '󰡖 ', highlight = 'RenderMarkdownTodo' },
+                    todo = { raw = "[-]", rendered = "󰥔 ", highlight = "RenderMarkdownTodo" },
+                    progress = { raw = "[/]", rendered = "󰡖 ", highlight = "RenderMarkdownTodo" },
                 },
             },
             heading = {
@@ -104,10 +104,13 @@ return {
                 "<leader>ww",
                 function()
                     local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/work"
+                    local spin = require("sodium.spinner")
+                    spin.start("work")
                     vim.fn.system({ work_bin, "ensure" })
                     vim.cmd("Obsidian today")
                     vim.system({ work_bin, "tick" }, { text = true }, function(r)
                         vim.schedule(function()
+                            spin.stop("work")
                             vim.cmd("checktime")
                             if r.code ~= 0 then
                                 vim.notify("work tick failed (exit " .. r.code .. ")", vim.log.levels.WARN)
@@ -148,7 +151,9 @@ return {
                     local bufname = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t")
                     local ref = bufname:match("^(%d%d%d%d%-%d%d%-%d%d)%.md$") or os.date("%Y-%m-%d")
                     local files = vim.fn.glob(work_dir .. "/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md", false, true)
-                    table.sort(files, function(a, b) return a > b end)
+                    table.sort(files, function(a, b)
+                        return a > b
+                    end)
                     for _, file in ipairs(files) do
                         local date = vim.fn.fnamemodify(file, ":t"):match("^(%d%d%d%d%-%d%d%-%d%d)%.md$")
                         if date and date < ref then
@@ -166,9 +171,9 @@ return {
         },
         opts = {
             legacy_commands = false,
-            workspaces = vim.fn.isdirectory(vim.fn.expand("~/stripe/work")) == 1
-                and { { name = "work", path = "~/stripe/work" } }
-                or {},
+            workspaces = vim.fn.isdirectory(vim.fn.expand("~/stripe/work")) == 1 and {
+                { name = "work", path = "~/stripe/work" },
+            } or {},
             completion = {
                 blink = true,
                 min_chars = 2,
@@ -190,13 +195,25 @@ return {
                             end
                         end
                     end
-                    vim.keymap.set("n", "gf", follow_link_or(function() vim.cmd("normal! gF") end), { buffer = true })
-                    vim.keymap.set("n", "<CR>", follow_link_or(function()
-                        if api.cursor_checkbox() then
-                            vim.cmd("Obsidian toggle_checkbox")
-                            vim.cmd("write")
-                        end
-                    end), { buffer = true })
+                    vim.keymap.set(
+                        "n",
+                        "gf",
+                        follow_link_or(function()
+                            vim.cmd("normal! gF")
+                        end),
+                        { buffer = true }
+                    )
+                    vim.keymap.set(
+                        "n",
+                        "<CR>",
+                        follow_link_or(function()
+                            if api.cursor_checkbox() then
+                                vim.cmd("Obsidian toggle_checkbox")
+                                vim.cmd("write")
+                            end
+                        end),
+                        { buffer = true }
+                    )
                     vim.keymap.set("n", "<C-Space>", function()
                         vim.cmd("Obsidian toggle_checkbox")
                         vim.cmd("write")
