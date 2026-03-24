@@ -182,8 +182,14 @@ local spinner_component = {
     padding = 1,
 }
 
-local separator_before_spinner = separator_if(function()
-    return spinner.active() and is_standard_filetype()
+local separator_before_status = separator_if(function()
+    if not is_standard_filetype() then
+        return false
+    end
+    if spinner.active() then
+        return true
+    end
+    return lsp_attached and not utils.is_fugitive_buffer() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
 end)
 
 local diagnostics = {
@@ -216,7 +222,7 @@ local sections = {
     lualine_c = {},
     lualine_x = {
         pr_review,
-        separator_before_spinner,
+        separator_before_status,
         spinner_component,
         diagnostics,
         separator_after_lsp_or_review,
@@ -234,7 +240,7 @@ local inactive_sections = {
     lualine_c = {},
     lualine_x = {
         pr_review,
-        separator_before_spinner,
+        separator_before_status,
         spinner_component,
         diagnostics,
         separator_after_lsp_or_review,
