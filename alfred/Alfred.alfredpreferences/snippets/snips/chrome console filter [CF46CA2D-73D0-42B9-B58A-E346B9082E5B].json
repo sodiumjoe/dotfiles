@@ -1,0 +1,8 @@
+{
+  "alfredsnippet" : {
+    "snippet" : "-csp-report -\/Report Only\/ -proxy.js -api.sprig -UserLeap",
+    "uid" : "CF46CA2D-73D0-42B9-B58A-E346B9082E5B",
+    "name" : "chrome console filter",
+    "keyword" : "console"
+  }
+}
