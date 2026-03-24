@@ -56,6 +56,11 @@ ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
 ln -sf ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
 ln -sf ~/.dotfiles/claude/settings.json ~/.claude/settings.json
 
+mkdir -p ~/.claude/hooks
+for hook in ~/.dotfiles/claude/hooks/*; do
+  ln -sf "$hook" ~/.claude/hooks/$(basename "$hook")
+done
+
 # symlink scripts into ~/bin
 mkdir -p ~/bin
 for script in ~/.dotfiles/bin/*; do

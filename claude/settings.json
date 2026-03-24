@@ -111,6 +111,17 @@
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": ["toolshed"],
   "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/notify-on-stop.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
