@@ -1,5 +1,6 @@
 local lualine = require("lualine")
 local utils = require("sodium.utils")
+local spinner = require("sodium.spinner")
 
 local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
@@ -48,64 +49,18 @@ local function get_column()
     return string.format("C%02d", vim.fn.virtcol("."))
 end
 
-local progress_status = {}
-local spinner_index = 1
-local timer
-
-local function lsp_progress()
-    local in_progress_clients = 0
-    for _, client in pairs(progress_status) do
-        for _, _ in pairs(client) do
-            in_progress_clients = in_progress_clients + 1
-        end
-    end
-    return in_progress_clients > 0
-end
-
-local function start_timer()
-    if timer == nil then
-        timer = vim.uv.new_timer()
-        if timer ~= nil then
-            timer:start(
-                0,
-                100,
-                vim.schedule_wrap(function()
-                    if lsp_progress() then
-                        spinner_index = (spinner_index % #utils.spinner_frames) + 1
-                        lualine.refresh()
-                    elseif timer then
-                        spinner_index = 1
-                        timer:close()
-                        timer = nil
-                        lualine.refresh()
-                    end
-                end)
-            )
-        end
-    end
-end
-
 local original_progress_handler = vim.lsp.handlers["$/progress"]
 
 ---@diagnostic disable-next-line: duplicate-set-field
 vim.lsp.handlers["$/progress"] = function(err, msg, info)
-    -- Call original handler if it exists
     if original_progress_handler then
         original_progress_handler(err, msg, info)
     end
-
-    local client_id = tostring(info.client_id)
-    local token = tostring(msg.token)
-
-    if progress_status[client_id] == nil then
-        progress_status[client_id] = {}
-    end
-
+    local key = "lsp:" .. info.client_id .. ":" .. tostring(msg.token)
     if msg.value.kind == "end" then
-        progress_status[client_id][token] = nil
+        spinner.stop(key)
     else
-        progress_status[client_id][token] = true
-        start_timer()
+        spinner.start(key)
     end
 end
 
@@ -131,11 +86,7 @@ vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context)
     vim.lsp.handlers["$/progress"](err, message, context)
 end
 
-local function lsp_status_component()
-    if lsp_progress() then
-        return utils.spinner_frames[spinner_index]
-    end
-
+local function diagnostics_component()
     local bufnr = 0
     local error_count = #vim.diagnostic.get(bufnr, { severity = vim.diagnostic.severity.ERROR })
     local warn_count = #vim.diagnostic.get(bufnr, { severity = vim.diagnostic.severity.WARN })
@@ -144,28 +95,16 @@ local function lsp_status_component()
 
     local status_parts = {}
     if error_count > 0 then
-        table.insert(status_parts, {
-            text = utils.icons.Error .. " " .. error_count,
-            color = "StatusLineError",
-        })
+        table.insert(status_parts, { text = utils.icons.Error .. " " .. error_count, color = "StatusLineError" })
     end
     if warn_count > 0 then
-        table.insert(status_parts, {
-            text = utils.icons.Warn .. " " .. warn_count,
-            color = "StatusLineWarning",
-        })
+        table.insert(status_parts, { text = utils.icons.Warn .. " " .. warn_count, color = "StatusLineWarning" })
     end
     if info_count > 0 then
-        table.insert(status_parts, {
-            text = utils.icons.Info .. " " .. info_count,
-            color = "StatusLine",
-        })
+        table.insert(status_parts, { text = utils.icons.Info .. " " .. info_count, color = "StatusLine" })
     end
     if hint_count > 0 then
-        table.insert(status_parts, {
-            text = utils.icons.Hint .. " " .. hint_count,
-            color = "StatusLine",
-        })
+        table.insert(status_parts, { text = utils.icons.Hint .. " " .. hint_count, color = "StatusLine" })
     end
 
     if #status_parts == 0 then
@@ -181,20 +120,8 @@ local function lsp_status_component()
             table.insert(result_parts, part.text)
         end
     end
-
     return table.concat(result_parts, " ")
 end
-
-local lsp_status = {
-    lsp_status_component,
-    cond = function()
-        return lsp_attached
-            and is_standard_filetype()
-            and not utils.is_fugitive_buffer()
-            and #vim.lsp.get_clients({ bufnr = 0 }) > 0
-    end,
-    padding = 1,
-}
 
 local function separator_if(cond_fn)
     return {
@@ -210,17 +137,25 @@ end
 local separator = separator_if(is_standard_filetype)
 
 local separator_after_lsp_or_review = separator_if(function()
-    if not is_standard_filetype() then return false end
+    if not is_standard_filetype() then
+        return false
+    end
     local ok, review = pcall(require, "sodium.review")
-    if ok and review.get_current_pr() then return false end
+    if ok and review.get_current_pr() then
+        return false
+    end
     return true
 end)
 
 local function pr_review_component()
     local ok, review = pcall(require, "sodium.review")
-    if not ok then return "" end
+    if not ok then
+        return ""
+    end
     local pr = review.get_current_pr()
-    if not pr then return "" end
+    if not pr then
+        return ""
+    end
     return "PR #" .. pr.number
 end
 
@@ -228,19 +163,40 @@ local pr_review = {
     pr_review_component,
     cond = function()
         local ok, review = pcall(require, "sodium.review")
-        if not ok then return false end
+        if not ok then
+            return false
+        end
         return is_standard_filetype() and review.get_current_pr() ~= nil
     end,
     color = "StatusLineActiveItem",
     padding = 1,
 }
 
-local separator_before_lsp = separator_if(function()
-    return lsp_attached
-        and is_standard_filetype()
-        and not utils.is_fugitive_buffer()
-        and #vim.lsp.get_clients({ bufnr = 0 }) > 0
+local spinner_component = {
+    function()
+        return spinner.frame()
+    end,
+    cond = function()
+        return spinner.active() and is_standard_filetype()
+    end,
+    padding = 1,
+}
+
+local separator_before_spinner = separator_if(function()
+    return spinner.active() and is_standard_filetype()
 end)
+
+local diagnostics = {
+    diagnostics_component,
+    cond = function()
+        return not spinner.active()
+            and lsp_attached
+            and is_standard_filetype()
+            and not utils.is_fugitive_buffer()
+            and #vim.lsp.get_clients({ bufnr = 0 }) > 0
+    end,
+    padding = 1,
+}
 
 local lines = {
     get_lines,
@@ -258,7 +214,16 @@ local sections = {
     lualine_a = { filename_active },
     lualine_b = {},
     lualine_c = {},
-    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator_after_lsp_or_review, lines, separator, column },
+    lualine_x = {
+        pr_review,
+        separator_before_spinner,
+        spinner_component,
+        diagnostics,
+        separator_after_lsp_or_review,
+        lines,
+        separator,
+        column,
+    },
     lualine_y = {},
     lualine_z = {},
 }
@@ -267,7 +232,16 @@ local inactive_sections = {
     lualine_a = { filename_inactive },
     lualine_b = {},
     lualine_c = {},
-    lualine_x = { pr_review, separator_before_lsp, lsp_status, separator_after_lsp_or_review, lines, separator, column },
+    lualine_x = {
+        pr_review,
+        separator_before_spinner,
+        spinner_component,
+        diagnostics,
+        separator_after_lsp_or_review,
+        lines,
+        separator,
+        column,
+    },
     lualine_y = {},
     lualine_z = {},
 }
@@ -303,65 +277,24 @@ function M.get_agentic_title()
     return ""
 end
 
-local agentic_spinner_index = 1
-local agentic_timer
-
-local function start_agentic_timer()
-    if agentic_timer == nil then
-        agentic_timer = vim.uv.new_timer()
-        if agentic_timer ~= nil then
-            agentic_timer:start(
-                0,
-                100,
-                vim.schedule_wrap(function()
-                    local ok, session_registry = pcall(require, "agentic.session_registry")
-                    if not ok then
-                        if agentic_timer then
-                            agentic_timer:close()
-                            agentic_timer = nil
-                        end
-                        return
-                    end
-
-                    local tab_page_id = vim.api.nvim_get_current_tabpage()
-                    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
-
-                    if session_manager and session_manager.is_generating then
-                        agentic_spinner_index = (agentic_spinner_index % #utils.spinner_frames) + 1
-                        lualine.refresh()
-                    elseif agentic_timer then
-                        agentic_spinner_index = 1
-                        agentic_timer:close()
-                        agentic_timer = nil
-                        lualine.refresh()
-                    end
-                end)
-            )
-        end
-    end
-end
-
 local function get_agentic_status()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
     end
-
     local ok, session_registry = pcall(require, "agentic.session_registry")
     if not ok then
         return ""
     end
-
     local tab_page_id = vim.api.nvim_get_current_tabpage()
     local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
     if not session_manager then
         return ""
     end
-
     if session_manager.is_generating then
-        start_agentic_timer()
-        return utils.spinner_frames[agentic_spinner_index]
+        spinner.start("agentic")
+        return spinner.frame()
     end
-
+    spinner.stop("agentic")
     return utils.icons.ok
 end
 
