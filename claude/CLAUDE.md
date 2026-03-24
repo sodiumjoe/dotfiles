@@ -59,9 +59,9 @@ Use headers, sub-headers, and tables for navigation and scannability. Within sec
 
 ## Planning
 
-- Use `work:create-project` to start new work (brainstorm + create project)
-- Use `work:write-plan` to create implementation plans within a project
-- Use `work:execute-plan` to execute plans from any session
+- Use `work:brainstorming` to start new work (brainstorm + create project)
+- Use `work:writing-plans` to create implementation plans within a project
+- Use `work:executing-plans` to execute plans from any session
 - Before executing a plan, run the `plan-reviewer` agent (via Task tool with `subagent_type: "work:plan-reviewer"`) to review it for completeness, accuracy, and risks. Share the review findings with the user before proceeding.
 - Before executing a plan, gather all permissions requirements and request them in a single batch
 - After creating a new plan or project file, open it in neovim:
