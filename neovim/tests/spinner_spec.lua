@@ -1,0 +1,50 @@
+describe("sodium.spinner", function()
+    local spinner
+
+    before_each(function()
+        package.loaded["sodium.spinner"] = nil
+        spinner = require("sodium.spinner")
+    end)
+
+    describe("active", function()
+        it("returns false with no active slots", function()
+            assert.is_false(spinner.active())
+        end)
+
+        it("returns true after start", function()
+            spinner.start("test")
+            assert.is_true(spinner.active("test"))
+            assert.is_true(spinner.active())
+            spinner.stop("test")
+        end)
+
+        it("returns false for inactive key", function()
+            spinner.start("a")
+            assert.is_false(spinner.active("b"))
+            spinner.stop("a")
+        end)
+
+        it("returns false after stop", function()
+            spinner.start("test")
+            spinner.stop("test")
+            assert.is_false(spinner.active("test"))
+            assert.is_false(spinner.active())
+        end)
+
+        it("stays active when one of multiple slots stops", function()
+            spinner.start("a")
+            spinner.start("b")
+            spinner.stop("a")
+            assert.is_false(spinner.active("a"))
+            assert.is_true(spinner.active("b"))
+            assert.is_true(spinner.active())
+            spinner.stop("b")
+        end)
+    end)
+
+    describe("frame", function()
+        it("returns a string", function()
+            assert.is_string(spinner.frame())
+        end)
+    end)
+end)
