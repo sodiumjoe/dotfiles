@@ -1,3 +1,5 @@
+.DS_Store
+
 # netrw
 .netrwhist
 zsh/.zcompdump*
@@ -10,5 +12,3 @@ karabiner/assets/*
 karabiner/automatic_backups/*
 karabiner/Icon*
 .claude
-Alfred.alfredpreferences/remote/
-Alfred.alfredpreferences/preferences/local/
