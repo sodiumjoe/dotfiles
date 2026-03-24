@@ -347,7 +347,7 @@ remotes() {
     (_sync_work_to_remote "$host" &)
     (_copy_gh_auth_to_remote "$host" &)
 
-    tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
+    ssh -t "$host" "tmux a || tmux"
 
     local exit_code=$?
 
@@ -378,7 +378,7 @@ mremote() {
   (_sync_work_to_remote "$host" &)
   (_copy_gh_auth_to_remote "$host" &)
 
-  tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
+  ssh -t "$host" "tmux a || tmux"
 
   local exit_code=$?
 
@@ -387,7 +387,6 @@ mremote() {
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
-    tmux unnest
   fi
 }
 
@@ -403,7 +402,7 @@ remote() {
   (_sync_work_to_remote "$host" &)
   (_copy_gh_auth_to_remote "$host" &)
 
-  tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
+  ssh -t "$host" "tmux a || tmux"
 
   local exit_code=$?
 
@@ -412,7 +411,6 @@ remote() {
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
     echo "disconnected from $remote"
-    tmux unnest
   fi
 }
 
@@ -480,7 +478,7 @@ dev() {
   (_sync_work_to_remote "$host" &)
   (_copy_gh_auth_to_remote "$host" &)
 
-  tmux nest && ssh -t "$host" "tmux a || tmux" && tmux unnest
+  ssh -t "$host" "tmux a || tmux"
 
   local exit_code=$?
 
