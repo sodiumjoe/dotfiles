@@ -38,7 +38,7 @@ M.icons = {
     Info = " ",
     buffer = " ",
     lsp = " ",
-    ok = " ",
+    ok = "",
 }
 
 M.spinner_frames = {
