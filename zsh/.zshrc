@@ -305,7 +305,6 @@ git.corp.stripe.com:
     user: $(whoami)
     oauth_token: $token
 EOF
-  ssh "$host" "gh config set http_unix_socket \$HOME/.stripeproxy" 2>/dev/null
 }
 
 _sync_project_to_remote() {
