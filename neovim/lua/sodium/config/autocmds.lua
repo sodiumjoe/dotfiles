@@ -16,3 +16,9 @@ utils.augroup("SilenceWorkSwap", { clear = true })("SwapExists", {
         vim.v.swapchoice = "e"
     end,
 })
+
+utils.augroup("AutoReloadExternalChanges", { clear = true })("FocusGained", {
+    callback = function()
+        vim.cmd("checktime")
+    end,
+})
