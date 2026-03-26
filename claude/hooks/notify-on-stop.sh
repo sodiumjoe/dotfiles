@@ -15,6 +15,7 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 PROJECT="${CLAUDE_PROJECT:-}"
+WINDOW=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null)
 
 (
   sleep "$DELAY"
@@ -27,8 +28,9 @@ PROJECT="${CLAUDE_PROJECT:-}"
     exit 0
   fi
 
-  if [ -n "$PROJECT" ]; then
-    MSG="Claude is waiting for input ($PROJECT)"
+  LABEL="${WINDOW:-$PROJECT}"
+  if [ -n "$LABEL" ]; then
+    MSG="Claude is waiting for input ($LABEL)"
   else
     MSG="Claude is waiting for input"
   fi
