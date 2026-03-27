@@ -71,15 +71,7 @@ Use headers, sub-headers, and tables for navigation and scannability. Within sec
 
 ## Neovim RPC Commands
 
-When running inside neovim (i.e., `$NVIM` or `$NVIM_SOCKET_PATH` is set), use these commands to interact with the running editor:
-
-- `nvim-lua '<lua-expression>'` — execute arbitrary Lua in the running neovim instance
-- `nvim-open --editor '<absolute-path>'` — open a file in the first non-agentic editor window
-- `nvim-diff <file_a> <file_b>` — open a vimdiff of two files
-- `nvim-diff <file> <ref>` — vimdiff of file at git ref vs working tree
-- `nvim-diff <file> <ref_a> <ref_b>` — vimdiff of file at two git refs
-
-Use `nvim-diff` to walk the user through changes (e.g., showing diffs of files you edited, or reviewing PR changes). Use `nvim-open` to open files for the user to read or edit.
+When running inside neovim (i.e., `$NVIM` or `$NVIM_SOCKET_PATH` is set), use `nvim-open`, `nvim-diff`, and `nvim-lua` to interact with the running editor. See the `neovim-rpc` skill for full usage details.
 
 ## Work Tracking
 

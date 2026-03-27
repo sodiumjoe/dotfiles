@@ -61,6 +61,11 @@ for hook in ~/.dotfiles/claude/hooks/*; do
   ln -sf "$hook" ~/.claude/hooks/$(basename "$hook")
 done
 
+mkdir -p ~/.claude/skills
+for skill in ~/.dotfiles/claude/skills/*/; do
+  ln -sfn "$skill" ~/.claude/skills/$(basename "$skill")
+done
+
 # symlink scripts into ~/bin
 mkdir -p ~/bin
 for script in ~/.dotfiles/bin/*; do
