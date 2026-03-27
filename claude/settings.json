@@ -73,7 +73,8 @@
       "Bash(env * | grep * | head *)",
       "Bash(work *)",
       "Bash(nvim-lua *)",
-      "Bash(nvim-open *)"
+      "Bash(nvim-open *)",
+      "Bash(nvim-diff *)"
     ],
     "deny": [
       "Bash(git reset --hard*)",
