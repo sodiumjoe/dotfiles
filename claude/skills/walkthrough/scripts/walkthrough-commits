@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+base="${1:-}"
+
+if [[ -z "$base" ]]; then
+  if remote_head=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null); then
+    base="${remote_head#origin/}"
+  fi
+fi
+
+if [[ -z "$base" ]]; then
+  root=$(git rev-parse --show-toplevel 2>/dev/null)
+  for ns in pay-server zoolander gocode; do
+    if [[ -d "$root/$ns" ]]; then
+      ref="green-$ns"
+      if git rev-parse --verify "origin/$ref" &>/dev/null || git rev-parse --verify "$ref" &>/dev/null; then
+        base="$ref"
+        break
+      fi
+    fi
+  done
+fi
+
+if [[ -z "$base" ]]; then
+  for candidate in main master; do
+    if git rev-parse --verify "$candidate" &>/dev/null || git rev-parse --verify "origin/$candidate" &>/dev/null; then
+      base="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$base" ]]; then
+  echo '{"error":"could not detect base branch"}' >&2
+  exit 1
+fi
+
+merge_base=$(git merge-base "$base" HEAD 2>/dev/null || echo "$base")
+
+commits=$(git log --reverse --format='%H %s' "$merge_base..HEAD" 2>/dev/null)
+
+if [[ -z "$commits" ]]; then
+  echo '{"error":"no commits found between '"$base"' and HEAD"}'
+  exit 0
+fi
+
+while IFS= read -r line; do
+  sha="${line%% *}"
+  subject="${line#* }"
+  subject_escaped=$(printf '%s' "$subject" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  git diff-tree --no-commit-id --name-only -r "$sha" | while IFS= read -r file; do
+    file_escaped=$(printf '%s' "$file" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"commit":"%s","subject":"%s","file":"%s"}\n' "$sha" "$subject_escaped" "$file_escaped"
+  done
+done <<< "$commits"

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: walkthrough-show <file> <commit>" >&2
+  exit 1
+fi
+
+file="$1"
+commit="$2"
+
+echo "=== Commit ==="
+git log -1 --format="hash:    %H%nsubject: %s%nauthor:  %an <%ae>%ndate:    %ad%n" --date=short "$commit"
+
+body=$(git log -1 --format="%b" "$commit")
+if [[ -n "$body" ]]; then
+  echo "$body"
+  echo
+fi
+
+echo "=== Diff: $file ==="
+git diff "$commit^..$commit" -- "$file" 2>/dev/null || git diff --root "$commit" -- "$file"
+echo
+
+nvim_diff="$(dirname "$0")/../../neovim/scripts/nvim-diff"
+if [[ -x "$nvim_diff" ]]; then
+  "$nvim_diff" "$file" "${commit}^" "$commit" 2>/dev/null || true
+fi
