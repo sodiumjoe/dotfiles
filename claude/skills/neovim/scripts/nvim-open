@@ -15,7 +15,7 @@ done
 [[ -z "$file" ]] && exit 1
 
 if [[ "$editor" == true && -z "$win" ]]; then
-  win=$(nvim-lua "return require('sodium.utils').editor_window()")
+  win=$("$(dirname "$0")/nvim-lua" "return require('sodium.utils').editor_window()")
   [[ -z "$win" ]] && exit 0
 fi
 

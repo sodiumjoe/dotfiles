@@ -71,9 +71,6 @@ mkdir -p ~/bin
 for script in ~/.dotfiles/bin/*; do
   ln -sf "$script" ~/bin/$(basename "$script")
 done
-for script in ~/.dotfiles/claude/skills/*/scripts/*; do
-  [ -f "$script" ] && ln -sf "$script" ~/bin/$(basename "$script")
-done
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
