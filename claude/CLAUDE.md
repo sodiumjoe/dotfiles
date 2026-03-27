@@ -64,14 +64,11 @@ Use headers, sub-headers, and tables for navigation and scannability. Within sec
 - Use `work:executing-plans` to execute plans from any session
 - Before executing a plan, run the `plan-reviewer` agent (via Task tool with `subagent_type: "work:plan-reviewer"`) to review it for completeness, accuracy, and risks. Share the review findings with the user before proceeding.
 - Before executing a plan, gather all permissions requirements and request them in a single batch
-- After creating a new plan or project file, open it in neovim:
-  ```bash
-  nvim-open --editor '<absolute-path-to-file>'
-  ```
+- After creating a new plan or project file, open it in neovim using `nvim-open` from the neovim skill.
 
 ## Neovim RPC Commands
 
-When running inside neovim (i.e., `$NVIM` or `$NVIM_SOCKET_PATH` is set), use `nvim-open`, `nvim-diff`, and `nvim-lua` to interact with the running editor. See the `neovim-rpc` skill for full usage details.
+When running inside neovim (i.e., `$NVIM` or `$NVIM_SOCKET_PATH` is set), use `nvim-open`, `nvim-diff`, and `nvim-lua` from the neovim skill to interact with the running editor. The neovim skill provides the resolved paths to these scripts.
 
 ## Work Tracking
 

@@ -2,7 +2,7 @@
 name: neovim-rpc
 description: Interact with a running neovim instance over RPC — open files, show diffs, execute Lua. Use when you need to open a file in the user's editor, show a vimdiff, or run arbitrary Lua in neovim. Requires $NVIM or $NVIM_SOCKET_PATH to be set.
 user-invocable: false
-allowed-tools: Bash(nvim-lua *), Bash(nvim-open *), Bash(nvim-diff *)
+allowed-tools: Bash(*/skills/neovim/scripts/nvim-lua *), Bash(*/skills/neovim/scripts/nvim-open *), Bash(*/skills/neovim/scripts/nvim-diff *)
 ---
 
 # Neovim RPC Commands
@@ -16,7 +16,7 @@ Three commands for interacting with a running neovim instance over its RPC socke
 Execute arbitrary Lua in the running neovim instance.
 
 ```bash
-nvim-lua '<lua-expression>'
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua '<lua-expression>'
 ```
 
 The expression is wrapped in `(function() ... end)()`. Return values are printed to stdout.
@@ -24,9 +24,9 @@ The expression is wrapped in `(function() ... end)()`. Return values are printed
 Examples:
 
 ```bash
-nvim-lua "return vim.fn.expand('%:p')"
-nvim-lua "return require('sodium.utils').editor_window()"
-nvim-lua "vim.cmd('echom \"hello\"') return 0"
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua "return vim.fn.expand('%:p')"
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua "return require('sodium.utils').editor_window()"
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua "vim.cmd('echom \"hello\"') return 0"
 ```
 
 ### nvim-open
@@ -34,7 +34,7 @@ nvim-lua "vim.cmd('echom \"hello\"') return 0"
 Open a file in the running neovim instance.
 
 ```bash
-nvim-open --editor '<absolute-path>'
+${CLAUDE_SKILL_DIR}/scripts/nvim-open --editor '<absolute-path>'
 ```
 
 The `--editor` flag targets the first non-agentic window (i.e., skips windows with Agentic* filetypes). Without `--editor`, opens in whichever window is current.
@@ -42,7 +42,7 @@ The `--editor` flag targets the first non-agentic window (i.e., skips windows wi
 You can also target a specific window by ID:
 
 ```bash
-nvim-open --window <win-id> '<absolute-path>'
+${CLAUDE_SKILL_DIR}/scripts/nvim-open --window <win-id> '<absolute-path>'
 ```
 
 Use this after creating plan files, project files, or any file the user should see immediately.
@@ -54,7 +54,7 @@ Open a vimdiff view in the running neovim instance. Three modes based on argumen
 **Two files:**
 
 ```bash
-nvim-diff <file_a> <file_b>
+${CLAUDE_SKILL_DIR}/scripts/nvim-diff <file_a> <file_b>
 ```
 
 Opens both files side by side with `diffthis`.
@@ -62,7 +62,7 @@ Opens both files side by side with `diffthis`.
 **File vs git ref (working tree on the right):**
 
 ```bash
-nvim-diff <file> <ref>
+${CLAUDE_SKILL_DIR}/scripts/nvim-diff <file> <ref>
 ```
 
 Shows the file at `<ref>` on the left, the working tree version on the right. The working tree buffer is editable.
@@ -70,7 +70,7 @@ Shows the file at `<ref>` on the left, the working tree version on the right. Th
 **File at two git refs:**
 
 ```bash
-nvim-diff <file> <ref_a> <ref_b>
+${CLAUDE_SKILL_DIR}/scripts/nvim-diff <file> <ref_a> <ref_b>
 ```
 
 Shows the file at two different commits in read-only scratch buffers.
@@ -83,12 +83,12 @@ All modes find the first non-agentic editor window (same as `nvim-open --editor`
 
 | Situation | Command |
 |---|---|
-| Open a file for the user to read or edit | `nvim-open --editor` |
-| Walk the user through changes you made | `nvim-diff <file> <before-ref> <after-ref>` |
-| Show uncommitted changes | `nvim-diff <file> HEAD` |
-| Compare two files | `nvim-diff <file_a> <file_b>` |
-| PR review: show file diff against base | `nvim-diff <file> <base-ref> HEAD` |
-| Run arbitrary neovim commands | `nvim-lua` |
+| Open a file for the user to read or edit | `${CLAUDE_SKILL_DIR}/scripts/nvim-open --editor` |
+| Walk the user through changes you made | `${CLAUDE_SKILL_DIR}/scripts/nvim-diff <file> <before-ref> <after-ref>` |
+| Show uncommitted changes | `${CLAUDE_SKILL_DIR}/scripts/nvim-diff <file> HEAD` |
+| Compare two files | `${CLAUDE_SKILL_DIR}/scripts/nvim-diff <file_a> <file_b>` |
+| PR review: show file diff against base | `${CLAUDE_SKILL_DIR}/scripts/nvim-diff <file> <base-ref> HEAD` |
+| Run arbitrary neovim commands | `${CLAUDE_SKILL_DIR}/scripts/nvim-lua` |
 
 ## Notes
 
