@@ -36,8 +36,10 @@ WINDOW=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null)
   fi
 
   if [ -f /pay/conf/box-type ]; then
-    cd /pay/src/pay-server
-    pay exec ruby -e "require_relative 'devbox/clients/service_client'; Opus::Devbox::Clients::ServiceClient.new.slack_notify(ARGV[0])" -- ":claude: $MSG" 2>/dev/null
+    PANE_TTY=$(tmux display-message -p -t "$PANE" '#{pane_tty}' 2>/dev/null)
+    if [ -n "$PANE_TTY" ]; then
+      printf '\ePtmux;\e\e]9;%s\e\e\\\e\\' "$MSG" > "$PANE_TTY"
+    fi
   else
     osascript -e "display notification \"$MSG\" with title \"Claude Code\""
   fi
