@@ -534,14 +534,21 @@ dev() {
 
   local host=$(pay remote ssh "$remote_name" -- hostname)
 
-  (_sync_work_to_remote "$host" &)
+  if [ -n "$proj_slug" ]; then
+    local existing=$(_project_for_devbox "$remote_name")
+    if [ -z "$existing" ]; then
+      _associate_devbox "$remote_name" "$proj_slug"
+    fi
+    (_devbox_sync_push "$host" "$proj_slug" &)
+  fi
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
-
   local exit_code=$?
 
-  (_sync_work_from_remote "$host" &)
+  if [ -n "$proj_slug" ]; then
+    (_devbox_sync_pull "$host" "$proj_slug" &)
+  fi
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
