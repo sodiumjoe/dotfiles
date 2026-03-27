@@ -15,6 +15,9 @@ Dotfiles repo. Manages shell, neovim, tmux, git, and other tool configs via syml
 - `tmux/tmux.conf` → `~/.tmux.conf`
 - `claude/CLAUDE.md` → `~/.claude/CLAUDE.md`
 - `claude/settings.json` → `~/.claude/settings.json`
+- `claude/hooks/*` → `~/.claude/hooks/*`
+- `claude/skills/*/` → `~/.claude/skills/*/`
+- `claude/skills/*/scripts/*` → `~/bin/*`
 - `bin/*` → `~/bin/*`
 
 **Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
