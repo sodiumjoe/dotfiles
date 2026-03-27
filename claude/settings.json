@@ -136,8 +136,7 @@
   },
   "enabledPlugins": {
     "obsidian@obsidian-skills": true,
-    "work@personal": true,
-    "superpowers@stripe-internal-marketplace": true
+    "work@personal": true
   },
   "spinnerTipsEnabled": false,
   "spinnerVerbs": {
