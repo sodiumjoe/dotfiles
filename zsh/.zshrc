@@ -330,6 +330,30 @@ _associate_devbox() {
   fi
 }
 
+_devbox_sync_push() {
+  local host="$1" slug="$2"
+  ssh "$host" "mkdir -p ~/stripe/work/{projects/${slug},personal-marketplace/work}" 2>/dev/null
+  rsync -az --exclude='*.jsonl' "$HOME/stripe/work/projects/${slug}/" "$host:~/stripe/work/projects/${slug}/"
+  rsync -az --delete "$HOME/stripe/work/personal-marketplace/work/" "$host:~/stripe/work/personal-marketplace/work/"
+}
+
+_devbox_sync_pull() {
+  local host="$1" slug="$2"
+  rsync -az --exclude='*.jsonl' "$host:~/stripe/work/projects/${slug}/" "$HOME/stripe/work/projects/${slug}/"
+}
+
+_devbox_ensure_project() {
+  local remote_name="$1"
+  local slug
+  slug=$(_project_for_devbox "$remote_name")
+  if [ -z "$slug" ]; then
+    slug=$(_pick_project)
+    [ -z "$slug" ] && return 1
+    _associate_devbox "$remote_name" "$slug"
+  fi
+  echo "$slug"
+}
+
 _copy_gh_auth_to_remote() {
   local host="$1"
   local token=$(gh auth token -h git.corp.stripe.com 2>/dev/null)
