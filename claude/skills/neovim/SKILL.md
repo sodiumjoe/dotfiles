@@ -2,6 +2,7 @@
 name: neovim-rpc
 description: Interact with a running neovim instance over RPC — open files, show diffs, execute Lua. Use when you need to open a file in the user's editor, show a vimdiff, or run arbitrary Lua in neovim. Requires $NVIM or $NVIM_SOCKET_PATH to be set.
 user-invocable: false
+allowed-tools: Bash(nvim-lua *), Bash(nvim-open *), Bash(nvim-diff *)
 ---
 
 # Neovim RPC Commands
