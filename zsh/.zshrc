@@ -426,50 +426,50 @@ godev() {
 }
 
 mremote() {
-  local branch remote
-  remote="$1"
-  branch="$(whoami)/$remote"
+  local remote_name="$1"
+  local branch="$(whoami)/$remote_name"
 
-  pay remote new "$1" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
+  pay remote new "$remote_name" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
 
-  local host=$(pay remote ssh $remote -- hostname)
+  local host=$(pay remote ssh "$remote_name" -- hostname)
+  local slug
+  slug=$(_devbox_ensure_project "$remote_name") || return 1
 
-  (_sync_work_to_remote "$host" &)
+  (_devbox_sync_push "$host" "$slug" &)
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
-
   local exit_code=$?
 
-  (_sync_work_from_remote "$host" &)
+  (_devbox_sync_pull "$host" "$slug" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
-    echo "disconnected from $remote"
+    echo "disconnected from $remote_name"
   fi
 }
 
 remote() {
-  local branch remote
-  remote="$1"
-  branch="$(whoami)/$remote"
+  local remote_name="$1"
+  local branch="$(whoami)/$remote_name"
 
-  pay remote new "$1" --repo "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready || return
+  pay remote new "$remote_name" --repo "pay-server:$branch" --skip-confirm --no-open-code --notify-on-ready || return
 
-  local host=$(pay remote ssh $remote -- hostname)
+  local host=$(pay remote ssh "$remote_name" -- hostname)
+  local slug
+  slug=$(_devbox_ensure_project "$remote_name") || return 1
 
-  (_sync_work_to_remote "$host" &)
+  (_devbox_sync_push "$host" "$slug" &)
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
-
   local exit_code=$?
 
-  (_sync_work_from_remote "$host" &)
+  (_devbox_sync_pull "$host" "$slug" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
-    echo "disconnected from $remote"
+    echo "disconnected from $remote_name"
   fi
 }
 
