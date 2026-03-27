@@ -23,7 +23,7 @@ local function open_diff(filepath, base_ref)
     if editor_win then
         vim.api.nvim_set_current_win(editor_win)
     end
-    pcall(vim.cmd, "only")
+    require("sodium.utils").close_non_agentic_windows()
     vim.cmd.edit(filepath)
     local ok, err = pcall(vim.cmd, "Gdiffsplit origin/" .. base_ref)
     if not ok then
@@ -42,7 +42,9 @@ local function setup_gdiffsplit_override()
         end
         local bang = opts.bang and 1 or 0
         local mods = opts.mods or ""
-        if mods == "" then mods = "leftabove" end
+        if mods == "" then
+            mods = "leftabove"
+        end
         local ok2, err2 = pcall(vim.fn["fugitive#Diffsplit"], 1, bang, mods, arg)
         if not ok2 then
             vim.notify("Gdiffsplit failed: " .. (err2 or "unknown error"), vim.log.levels.WARN)
@@ -66,7 +68,9 @@ end
 
 local function fetch_and_display_comments(pr)
     local root = pr.toplevel or git_toplevel() or ""
-    if root == "" then return end
+    if root == "" then
+        return
+    end
     vim.system(
         { "gh", "api", "repos/{owner}/{repo}/pulls/" .. tostring(pr.number) .. "/comments", "--paginate" },
         { text = true },
@@ -77,7 +81,9 @@ local function fetch_and_display_comments(pr)
                     return
                 end
                 local by_id, files = review.parse_gh_comments(r.stdout)
-                if not next(by_id) then return end
+                if not next(by_id) then
+                    return
+                end
                 local data = review.build_comments_v2(by_id, files)
                 local path = root .. "/.nvim-comments.json"
                 review.write_comments_json(path, data)
@@ -95,256 +101,277 @@ local function pick_pr_files(opts)
         return
     end
 
-    vim.system(
-        { "gh", "pr", "diff", tostring(pr.number) },
-        { text = true },
-        function(result)
-            vim.schedule(function()
-                if result.code ~= 0 then
-                    dismiss_loading()
-                    vim.notify("gh pr diff failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
-                    return
-                end
-                local file_diffs, files = review.parse_file_diffs(result.stdout)
-                if #files == 0 then
-                    dismiss_loading()
-                    vim.notify("No changed files", vim.log.levels.INFO)
-                    return
-                end
-
-                local root = pr.toplevel or git_toplevel() or ""
-                local items = {}
-                for i, filepath in ipairs(files) do
-                    local abs = root ~= "" and (root .. "/" .. filepath) or filepath
-                    items[#items + 1] = {
-                        text = filepath,
-                        file = abs,
-                        rel = filepath,
-                        sort_idx = i,
-                        reviewed = review.is_reviewed(filepath),
-                    }
-                end
-
-                if opts.open_first and items[1] then
-                    dismiss_loading()
-                    open_diff(items[1].file, pr.baseRefName)
-                    return
-                end
-
+    vim.system({ "gh", "pr", "diff", tostring(pr.number) }, { text = true }, function(result)
+        vim.schedule(function()
+            if result.code ~= 0 then
                 dismiss_loading()
+                vim.notify("gh pr diff failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+                return
+            end
+            local file_diffs, files = review.parse_file_diffs(result.stdout)
+            if #files == 0 then
+                dismiss_loading()
+                vim.notify("No changed files", vim.log.levels.INFO)
+                return
+            end
 
-                Snacks.picker({
-                    title = string.format("PR #%d Files (%s)", pr.number, pr.headRefName),
-                    items = items,
-                    preview = function(ctx)
-                        local item = ctx.item
-                        if not item then return end
-                        local diff = file_diffs[item.rel]
-                        if diff then
-                            ctx.preview:set_lines(vim.split(diff, "\n"))
-                            ctx.preview:highlight({ ft = "diff" })
-                        else
-                            ctx.preview:set_lines({ "No diff available" })
-                        end
-                    end,
-                    sort = function(a, b)
-                        if a.score ~= b.score then return a.score > b.score end
-                        return a.sort_idx < b.sort_idx
-                    end,
-                    format = function(item)
-                        local marker = item.reviewed and "[x] " or "[ ] "
-                        local hl = item.reviewed and "SnacksPickerComment" or "SnacksPickerDir"
-                        return {
-                            { marker, hl },
-                            { item.rel },
-                        }
-                    end,
-                    on_show = function()
-                        vim.cmd.stopinsert()
-                    end,
-                    win = {
-                        input = {
-                            keys = {
-                                ["<Tab>"] = { "toggle_reviewed", mode = { "n", "i" } },
-                                ["<C-o>"] = { "open_file", mode = { "n", "i" } },
-                            },
+            local root = pr.toplevel or git_toplevel() or ""
+            local items = {}
+            for i, filepath in ipairs(files) do
+                local abs = root ~= "" and (root .. "/" .. filepath) or filepath
+                items[#items + 1] = {
+                    text = filepath,
+                    file = abs,
+                    rel = filepath,
+                    sort_idx = i,
+                    reviewed = review.is_reviewed(filepath),
+                }
+            end
+
+            if opts.open_first and items[1] then
+                dismiss_loading()
+                open_diff(items[1].file, pr.baseRefName)
+                return
+            end
+
+            dismiss_loading()
+
+            Snacks.picker({
+                title = string.format("PR #%d Files (%s)", pr.number, pr.headRefName),
+                items = items,
+                preview = function(ctx)
+                    local item = ctx.item
+                    if not item then
+                        return
+                    end
+                    local diff = file_diffs[item.rel]
+                    if diff then
+                        ctx.preview:set_lines(vim.split(diff, "\n"))
+                        ctx.preview:highlight({ ft = "diff" })
+                    else
+                        ctx.preview:set_lines({ "No diff available" })
+                    end
+                end,
+                sort = function(a, b)
+                    if a.score ~= b.score then
+                        return a.score > b.score
+                    end
+                    return a.sort_idx < b.sort_idx
+                end,
+                format = function(item)
+                    local marker = item.reviewed and "[x] " or "[ ] "
+                    local hl = item.reviewed and "SnacksPickerComment" or "SnacksPickerDir"
+                    return {
+                        { marker, hl },
+                        { item.rel },
+                    }
+                end,
+                on_show = function()
+                    vim.cmd.stopinsert()
+                end,
+                win = {
+                    input = {
+                        keys = {
+                            ["<Tab>"] = { "toggle_reviewed", mode = { "n", "i" } },
+                            ["<C-o>"] = { "open_file", mode = { "n", "i" } },
                         },
                     },
-                    confirm = function(picker, item)
-                        if not item then return end
+                },
+                confirm = function(picker, item)
+                    if not item then
+                        return
+                    end
+                    picker:close()
+                    vim.schedule(function()
+                        open_diff(item.file, pr.baseRefName)
+                    end)
+                end,
+                actions = {
+                    toggle_reviewed = function(picker)
+                        local item = picker:current()
+                        if not item then
+                            return
+                        end
+                        review.toggle_reviewed(item.rel)
+                        item.reviewed = review.is_reviewed(item.rel)
+                        picker.list:update({ force = true })
+                    end,
+                    open_file = function(picker)
+                        local item = picker:current()
+                        if not item then
+                            return
+                        end
                         picker:close()
                         vim.schedule(function()
-                            open_diff(item.file, pr.baseRefName)
+                            local editor_win = require("sodium.utils").editor_window()
+                            if editor_win then
+                                vim.api.nvim_set_current_win(editor_win)
+                            end
+                            vim.cmd.edit(item.file)
                         end)
                     end,
-                    actions = {
-                        toggle_reviewed = function(picker)
-                            local item = picker:current()
-                            if not item then return end
-                            review.toggle_reviewed(item.rel)
-                            item.reviewed = review.is_reviewed(item.rel)
-                            picker.list:update({ force = true })
-                        end,
-                        open_file = function(picker)
-                            local item = picker:current()
-                            if not item then return end
-                            picker:close()
-                            vim.schedule(function()
-                                local editor_win = require("sodium.utils").editor_window()
-                                if editor_win then
-                                    vim.api.nvim_set_current_win(editor_win)
-                                end
-                                vim.cmd.edit(item.file)
-                            end)
-                        end,
-                    },
-                })
-            end)
-        end
-    )
+                },
+            })
+        end)
+    end)
 end
 
 local function pick_pr()
-    vim.system(
-        { "gh", "pr", "list", "--assignee", "@me", "--json", "number,title,author,headRefName,baseRefName,reviewDecision,isDraft", "--limit", "30" },
-        { text = true },
-        function(result)
-            vim.schedule(function()
-                if result.code ~= 0 then
-                    vim.notify("gh pr list failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
-                    return
-                end
-                local items = review.parse_pr_list(result.stdout)
-                if #items == 0 then
-                    vim.notify("No open PRs", vim.log.levels.INFO)
-                    return
-                end
+    vim.system({
+        "gh",
+        "pr",
+        "list",
+        "--assignee",
+        "@me",
+        "--json",
+        "number,title,author,headRefName,baseRefName,reviewDecision,isDraft",
+        "--limit",
+        "30",
+    }, { text = true }, function(result)
+        vim.schedule(function()
+            if result.code ~= 0 then
+                vim.notify("gh pr list failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+                return
+            end
+            local items = review.parse_pr_list(result.stdout)
+            if #items == 0 then
+                vim.notify("No open PRs", vim.log.levels.INFO)
+                return
+            end
 
-                for i, item in ipairs(items) do
-                    item.sort_idx = i
-                end
+            for i, item in ipairs(items) do
+                item.sort_idx = i
+            end
 
-                local diff_cache = {}
+            local diff_cache = {}
 
-                Snacks.picker({
-                    title = "Pull Requests",
-                    items = items,
-                    preview = function(ctx)
-                        local item = ctx.item
-                        if not item then return end
-                        local cached = diff_cache[item.number]
-                        if cached then
-                            ctx.preview:set_lines(vim.split(cached, "\n"))
-                            ctx.preview:highlight({ ft = "diff" })
-                            return
-                        end
-                        ctx.preview:set_lines({ "Loading diff..." })
-                        vim.system(
-                            { "gh", "pr", "diff", tostring(item.number) },
-                            { text = true },
-                            function(r)
-                                vim.schedule(function()
-                                    local text = r.code == 0 and r.stdout or ("Error: " .. (r.stderr or ""))
-                                    diff_cache[item.number] = text
-                                    local current = ctx.picker:current()
-                                    if current and current.number == item.number then
-                                        ctx.preview:set_lines(vim.split(text, "\n"))
-                                        ctx.preview:highlight({ ft = "diff" })
-                                    end
-                                end)
+            Snacks.picker({
+                title = "Pull Requests",
+                items = items,
+                preview = function(ctx)
+                    local item = ctx.item
+                    if not item then
+                        return
+                    end
+                    local cached = diff_cache[item.number]
+                    if cached then
+                        ctx.preview:set_lines(vim.split(cached, "\n"))
+                        ctx.preview:highlight({ ft = "diff" })
+                        return
+                    end
+                    ctx.preview:set_lines({ "Loading diff..." })
+                    vim.system({ "gh", "pr", "diff", tostring(item.number) }, { text = true }, function(r)
+                        vim.schedule(function()
+                            local text = r.code == 0 and r.stdout or ("Error: " .. (r.stderr or ""))
+                            diff_cache[item.number] = text
+                            local current = ctx.picker:current()
+                            if current and current.number == item.number then
+                                ctx.preview:set_lines(vim.split(text, "\n"))
+                                ctx.preview:highlight({ ft = "diff" })
                             end
-                        )
-                    end,
-                    sort = function(a, b)
-                        if a.score ~= b.score then return a.score > b.score end
-                        return a.sort_idx < b.sort_idx
-                    end,
-                    format = function(item)
-                        local ret = {}
-                        ret[#ret + 1] = { string.format("#%d ", item.number), "SnacksPickerLabel" }
-                        ret[#ret + 1] = { item.title }
-                        ret[#ret + 1] = { string.format(" (%s)", item.author), "SnacksPickerDir" }
-                        if item.isDraft then
-                            ret[#ret + 1] = { " [draft]", "SnacksPickerComment" }
-                        end
-                        if item.reviewDecision == "APPROVED" then
-                            ret[#ret + 1] = { " [approved]", "SnacksPickerSpecial" }
-                        elseif item.reviewDecision == "CHANGES_REQUESTED" then
-                            ret[#ret + 1] = { " [changes requested]", "SnacksPickerLabel" }
-                        end
-                        return ret
-                    end,
-                    on_show = function()
-                        vim.cmd.stopinsert()
-                    end,
-                    confirm = function(picker, item)
-                        if not item then return end
-                        picker:close()
-                        item.toplevel = git_toplevel()
-                        review.set_current_pr(item)
-                        setup_gdiffsplit_override()
-                        local branch_result = vim.system({ "git", "rev-parse", "--abbrev-ref", "HEAD" }, { text = true }):wait()
-                        if branch_result.code == 0 and branch_result.stdout then
-                            review.set_previous_branch(vim.trim(branch_result.stdout))
-                        end
-                        vim.system({ "gh", "api", "user", "--jq", ".login" }, { text = true }, function(u)
-                            vim.schedule(function()
-                                if u.code == 0 and u.stdout then
-                                    local user = vim.trim(u.stdout)
-                                    review.set_current_user(user)
-                                    vim.g.comment_overlay_actor = user
-                                end
-                            end)
                         end)
-                        notify_loading(item.number)
-                        local function after_checkout()
-                            local base = item.baseRefName
-                            local fetch_result = vim.system(
-                                { "git", "fetch", "origin", base .. ":" .. "refs/remotes/origin/" .. base },
-                                { text = true }
-                            ):wait()
-                            if fetch_result.code ~= 0 then
-                                vim.notify("git fetch base branch failed: " .. (fetch_result.stderr or ""), vim.log.levels.WARN)
+                    end)
+                end,
+                sort = function(a, b)
+                    if a.score ~= b.score then
+                        return a.score > b.score
+                    end
+                    return a.sort_idx < b.sort_idx
+                end,
+                format = function(item)
+                    local ret = {}
+                    ret[#ret + 1] = { string.format("#%d ", item.number), "SnacksPickerLabel" }
+                    ret[#ret + 1] = { item.title }
+                    ret[#ret + 1] = { string.format(" (%s)", item.author), "SnacksPickerDir" }
+                    if item.isDraft then
+                        ret[#ret + 1] = { " [draft]", "SnacksPickerComment" }
+                    end
+                    if item.reviewDecision == "APPROVED" then
+                        ret[#ret + 1] = { " [approved]", "SnacksPickerSpecial" }
+                    elseif item.reviewDecision == "CHANGES_REQUESTED" then
+                        ret[#ret + 1] = { " [changes requested]", "SnacksPickerLabel" }
+                    end
+                    return ret
+                end,
+                on_show = function()
+                    vim.cmd.stopinsert()
+                end,
+                confirm = function(picker, item)
+                    if not item then
+                        return
+                    end
+                    picker:close()
+                    item.toplevel = git_toplevel()
+                    review.set_current_pr(item)
+                    setup_gdiffsplit_override()
+                    local branch_result = vim.system({ "git", "rev-parse", "--abbrev-ref", "HEAD" }, { text = true })
+                        :wait()
+                    if branch_result.code == 0 and branch_result.stdout then
+                        review.set_previous_branch(vim.trim(branch_result.stdout))
+                    end
+                    vim.system({ "gh", "api", "user", "--jq", ".login" }, { text = true }, function(u)
+                        vim.schedule(function()
+                            if u.code == 0 and u.stdout then
+                                local user = vim.trim(u.stdout)
+                                review.set_current_user(user)
+                                vim.g.comment_overlay_actor = user
                             end
-                            vim.cmd("checktime")
-                            fetch_and_display_comments(item)
-                            pick_pr_files({ open_first = true })
+                        end)
+                    end)
+                    notify_loading(item.number)
+                    local function after_checkout()
+                        local base = item.baseRefName
+                        local fetch_result = vim.system(
+                            { "git", "fetch", "origin", base .. ":" .. "refs/remotes/origin/" .. base },
+                            { text = true }
+                        ):wait()
+                        if fetch_result.code ~= 0 then
+                            vim.notify(
+                                "git fetch base branch failed: " .. (fetch_result.stderr or ""),
+                                vim.log.levels.WARN
+                            )
                         end
-                        local pr_num = tostring(item.number)
-                        local ref = "pr-" .. pr_num
-                        local prev = review.get_previous_branch()
-                        if prev then
-                            vim.system({ "git", "checkout", prev }, { text = true }):wait()
-                        end
-                        vim.system({ "git", "branch", "-D", ref }, { text = true }):wait()
-                        vim.system(
-                            { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:" .. ref },
-                            { text = true },
-                            function(f)
-                                vim.schedule(function()
-                                    if f.code ~= 0 then
-                                        dismiss_loading()
-                                        vim.notify("PR checkout failed: " .. (f.stderr or ""), vim.log.levels.ERROR)
-                                        return
-                                    end
-                                    vim.system({ "git", "checkout", ref }, { text = true }, function(co)
-                                        vim.schedule(function()
-                                            if co.code ~= 0 then
-                                                dismiss_loading()
-                                                vim.notify("git checkout failed: " .. (co.stderr or ""), vim.log.levels.ERROR)
-                                                return
-                                            end
-                                            after_checkout()
-                                        end)
+                        vim.cmd("checktime")
+                        fetch_and_display_comments(item)
+                        pick_pr_files({ open_first = true })
+                    end
+                    local pr_num = tostring(item.number)
+                    local ref = "pr-" .. pr_num
+                    local prev = review.get_previous_branch()
+                    if prev then
+                        vim.system({ "git", "checkout", prev }, { text = true }):wait()
+                    end
+                    vim.system({ "git", "branch", "-D", ref }, { text = true }):wait()
+                    vim.system(
+                        { "git", "fetch", "origin", "pull/" .. pr_num .. "/head:" .. ref },
+                        { text = true },
+                        function(f)
+                            vim.schedule(function()
+                                if f.code ~= 0 then
+                                    dismiss_loading()
+                                    vim.notify("PR checkout failed: " .. (f.stderr or ""), vim.log.levels.ERROR)
+                                    return
+                                end
+                                vim.system({ "git", "checkout", ref }, { text = true }, function(co)
+                                    vim.schedule(function()
+                                        if co.code ~= 0 then
+                                            dismiss_loading()
+                                            vim.notify(
+                                                "git checkout failed: " .. (co.stderr or ""),
+                                                vim.log.levels.ERROR
+                                            )
+                                            return
+                                        end
+                                        after_checkout()
                                     end)
                                 end)
-                            end
-                        )
-                    end,
-                })
-            end)
-        end
-    )
+                            end)
+                        end
+                    )
+                end,
+            })
+        end)
+    end)
 end
 
 local function diff_current_file()
@@ -375,7 +402,7 @@ local function open_pr_diff_buffer()
     vim.api.nvim_buf_set_name(buf, string.format("pr-%d.diff", pr.number))
     vim.bo[buf].filetype = "diff"
     vim.bo[buf].modifiable = false
-    pcall(vim.cmd, "only")
+    require("sodium.utils").close_non_agentic_windows()
     vim.api.nvim_set_current_buf(buf)
 end
 
@@ -405,7 +432,9 @@ end
 local function restore_branch_prompt(callback)
     local branch = review.get_previous_branch()
     if not branch then
-        if callback then callback() end
+        if callback then
+            callback()
+        end
         return
     end
     vim.ui.select({ "yes", "no" }, { prompt = "Restore branch " .. branch .. "?" }, function(choice)
@@ -418,11 +447,15 @@ local function restore_branch_prompt(callback)
                         vim.cmd("checktime")
                         vim.notify("Restored branch " .. branch)
                     end
-                    if callback then callback() end
+                    if callback then
+                        callback()
+                    end
                 end)
             end)
         else
-            if callback then callback() end
+            if callback then
+                callback()
+            end
         end
     end)
 end
@@ -481,7 +514,9 @@ local function submit_review()
         prompt = "Review type:",
         snacks = { layout = { preview = false } },
     }, function(choice)
-        if not choice then return end
+        if not choice then
+            return
+        end
         local event = event_map[choice]
         vim.ui.input({ prompt = "Review body (optional): " }, function(body)
             local api_comments = {}
@@ -498,25 +533,28 @@ local function submit_review()
                 payload.comments = api_comments
             end
             local payload_json = vim.json.encode(payload)
-            vim.system(
-                { "gh", "api", "repos/{owner}/{repo}/pulls/" .. tostring(pr.number) .. "/reviews",
-                  "-X", "POST", "--input", "-" },
-                { text = true, stdin = payload_json },
-                function(r)
-                    vim.schedule(function()
-                        if r.code ~= 0 then
-                            vim.notify("Review submit failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
-                            return
-                        end
-                        vim.notify("Review submitted: " .. choice)
-                        if path then
-                            os.remove(path)
-                            pcall(vim.cmd, "CommentRefresh")
-                        end
-                        restore_branch_prompt()
-                    end)
-                end
-            )
+            vim.system({
+                "gh",
+                "api",
+                "repos/{owner}/{repo}/pulls/" .. tostring(pr.number) .. "/reviews",
+                "-X",
+                "POST",
+                "--input",
+                "-",
+            }, { text = true, stdin = payload_json }, function(r)
+                vim.schedule(function()
+                    if r.code ~= 0 then
+                        vim.notify("Review submit failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                        return
+                    end
+                    vim.notify("Review submitted: " .. choice)
+                    if path then
+                        os.remove(path)
+                        pcall(vim.cmd, "CommentRefresh")
+                    end
+                    restore_branch_prompt()
+                end)
+            end)
         end)
     end)
 end

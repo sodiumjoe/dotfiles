@@ -80,6 +80,18 @@ function M.editor_window()
     end
 end
 
+function M.close_non_agentic_windows()
+    local current = vim.api.nvim_get_current_win()
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if w ~= current then
+            local ft = vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) })
+            if not ft:match("^Agentic") then
+                pcall(vim.api.nvim_win_close, w, true)
+            end
+        end
+    end
+end
+
 function M.is_fugitive_buffer(bufnr)
     bufnr = bufnr or 0
     return vim.api.nvim_buf_get_name(bufnr):match("^fugitive://") ~= nil
