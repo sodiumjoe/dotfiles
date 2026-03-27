@@ -367,14 +367,6 @@ EOF
   ssh "$host" "gh config set http_unix_socket ''" 2>/dev/null
 }
 
-_sync_project_to_remote() {
-  local host="$1" slug="$2"
-  local proj_dir="$HOME/stripe/work/projects/${slug}"
-  [ -d "$proj_dir" ] || return 0
-  ssh "$host" "mkdir -p ~/stripe/work/projects/${slug}" 2>/dev/null
-  rsync -az "$proj_dir/" "$host:~/stripe/work/projects/${slug}/"
-}
-
 fetch_remotes() {
   local list=$(\
     pay remote list --raw \
