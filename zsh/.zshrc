@@ -283,16 +283,51 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
 
-_sync_work_to_remote() {
-  local host="$1"
-  ssh "$host" "mkdir -p ~/stripe/work/{projects,personal-marketplace/work}" 2>/dev/null
-  rsync -az "$HOME/stripe/work/projects/" "$host:~/stripe/work/projects/"
-  rsync -az --delete "$HOME/stripe/work/personal-marketplace/work/" "$host:~/stripe/work/personal-marketplace/work/"
+_project_for_devbox() {
+  local remote_name="$1"
+  local f
+  for f in "$HOME/stripe/work/projects"/*/project.md; do
+    [ -f "$f" ] || continue
+    if sed -n '/^---$/,/^---$/p' "$f" | grep -q "devboxes:.*${remote_name}"; then
+      local dir="${f%/project.md}"
+      echo "${dir##*/}"
+      return 0
+    fi
+  done
+  return 1
 }
 
-_sync_work_from_remote() {
-  local host="$1"
-  rsync -az "$host:~/stripe/work/projects/" "$HOME/stripe/work/projects/"
+_pick_project() {
+  local slugs=()
+  local f
+  for f in "$HOME/stripe/work/projects"/*/project.md; do
+    [ -f "$f" ] || continue
+    local status=$(sed -n 's/^status: *//p' "$f")
+    if [ "$status" = "active" ] || [ "$status" = "evergreen" ]; then
+      local dir="${f%/project.md}"
+      slugs+=("${dir##*/}")
+    fi
+  done
+  if [ ${#slugs[@]} -eq 0 ]; then
+    echo "no active projects" >&2
+    return 1
+  fi
+  printf '%s\n' "${slugs[@]}" | fzf --prompt="project> "
+}
+
+_associate_devbox() {
+  local remote_name="$1" slug="$2"
+  local pf="$HOME/stripe/work/projects/${slug}/project.md"
+  [ -f "$pf" ] || return 1
+  if grep -q "^devboxes:" "$pf"; then
+    sed -i '' "s/^devboxes: \[/devboxes: [${remote_name}, /" "$pf"
+  else
+    awk -v name="$remote_name" '
+      /^---$/ { count++ }
+      count == 2 && /^---$/ { print "devboxes: [" name "]" }
+      { print }
+    ' "$pf" > "${pf}.tmp" && mv "${pf}.tmp" "$pf"
+  fi
 }
 
 _copy_gh_auth_to_remote() {
