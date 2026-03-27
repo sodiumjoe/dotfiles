@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+NVIM_ADDR="${NVIM_SOCKET_PATH:-$NVIM}"
+[[ -z "$NVIM_ADDR" ]] && exit 0
+
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+    echo "Usage: nvim-diff <file_a> <file_b>" >&2
+    echo "       nvim-diff <file> <ref>" >&2
+    echo "       nvim-diff <file> <ref_a> <ref_b>" >&2
+    exit 1
+fi
+
+escape_lua_string() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\'/\\\'}"
+    printf '%s' "$s"
+}
+
+resolve_path() {
+    local dir
+    dir="$(cd "$(dirname "$1")" 2>/dev/null && pwd)"
+    [[ -z "$dir" ]] && dir="$(dirname "$1")"
+    printf '%s/%s' "$dir" "$(basename "$1")"
+}
+
+if [[ $# -eq 3 ]]; then
+    file="$(resolve_path "$1")"
+    lua="require('sodium.diff').open({ mode = 'refs', file = '$(escape_lua_string "$file")', left_ref = '$(escape_lua_string "$2")', right_ref = '$(escape_lua_string "$3")' }) return 0"
+elif [[ $# -eq 2 ]]; then
+    if [[ -e "$2" ]]; then
+        left="$(resolve_path "$1")"
+        right="$(resolve_path "$2")"
+        lua="require('sodium.diff').open({ mode = 'files', left = '$(escape_lua_string "$left")', right = '$(escape_lua_string "$right")' }) return 0"
+    else
+        file="$(resolve_path "$1")"
+        lua="require('sodium.diff').open({ mode = 'refs', file = '$(escape_lua_string "$file")', left_ref = '$(escape_lua_string "$2")' }) return 0"
+    fi
+fi
+
+lua_escaped="${lua//\\/\\\\}"
+lua_escaped="${lua_escaped//\"/\\\"}"
+
+nvim --server "$NVIM_ADDR" --remote-expr "luaeval(\"(function() ${lua_escaped} end)()\")"
