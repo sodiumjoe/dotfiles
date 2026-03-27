@@ -397,24 +397,24 @@ fetch_remotes() {
 }
 
 remotes() {
-  remote=$(fzf < <(fetch_remotes))
-  if [ ! -z "$remote" ]; then
-    remote=$(echo "$remote" | cut -w -f 1 | cut -d ] -f 2)
+  local picked=$(fzf < <(fetch_remotes))
+  [ -z "$picked" ] && return 0
+  local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
+  local host=$(pay remote ssh "$remote_name" -- hostname)
 
-    local host=$(pay remote ssh $remote -- hostname)
+  local slug
+  slug=$(_devbox_ensure_project "$remote_name") || return 1
 
-    (_sync_work_to_remote "$host" &)
-    (_copy_gh_auth_to_remote "$host" &)
+  (_devbox_sync_push "$host" "$slug" &)
+  (_copy_gh_auth_to_remote "$host" &)
 
-    ssh -t "$host" "tmux a || tmux"
+  ssh -t "$host" "tmux a || tmux"
+  local exit_code=$?
 
-    local exit_code=$?
+  (_devbox_sync_pull "$host" "$slug" &)
 
-    (_sync_work_from_remote "$host" &)
-
-    if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
-      reset
-    fi
+  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
+    reset
   fi
 }
 
