@@ -302,8 +302,8 @@ _pick_project() {
   local f
   for f in "$HOME/stripe/work/projects"/*/project.md; do
     [ -f "$f" ] || continue
-    local status=$(sed -n 's/^status: *//p' "$f")
-    if [ "$status" = "active" ] || [ "$status" = "evergreen" ]; then
+    local proj_status=$(sed -n 's/^status: *//p' "$f")
+    if [ "$proj_status" = "active" ] || [ "$proj_status" = "evergreen" ]; then
       local dir="${f%/project.md}"
       slugs+=("${dir##*/}")
     fi
