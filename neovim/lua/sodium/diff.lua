@@ -40,7 +40,14 @@ function M.open(opts)
     if win then
         vim.api.nvim_set_current_win(win)
     end
-    pcall(vim.cmd, "only")
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if w ~= vim.api.nvim_get_current_win() then
+            local ft = vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) })
+            if not ft:match("^Agentic") then
+                pcall(vim.api.nvim_win_close, w, true)
+            end
+        end
+    end
 
     if opts.mode == "files" then
         vim.cmd.edit(opts.left)
