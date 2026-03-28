@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: review-enter pr <number>" >&2
+  echo "       review-enter branch [<base>]" >&2
+  exit 1
+}
+
+json_out() {
+  printf '{"mode":"%s","id":"%s","base_ref":"%s","head_ref":"%s","toplevel":"%s","stashed":%s,"previous_branch":"%s"}\n' \
+    "$mode" "$id" "$base_ref" "$head_ref" "$toplevel" "$stashed" "$previous_branch"
+}
+
+[[ $# -lt 1 ]] && usage
+
+mode="$1"
+shift
+toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || { echo '{"error":"not a git repository"}'; exit 1; }
+previous_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+stashed=false
+
+stash_if_dirty() {
+  if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    git stash push -m "review-enter auto-stash" || { echo '{"error":"git stash failed"}'; exit 1; }
+    stashed=true
+  fi
+}
+
+if [[ "$mode" == "pr" ]]; then
+  [[ $# -lt 1 ]] && usage
+  pr_number="$1"
+  id="$pr_number"
+
+  pr_json=$(gh pr view "$pr_number" --json baseRefName,headRefName 2>/dev/null) || {
+    echo '{"error":"gh pr view failed"}'
+    exit 1
+  }
+  base_ref=$(echo "$pr_json" | jq -r '.baseRefName')
+  head_ref_name=$(echo "$pr_json" | jq -r '.headRefName')
+  head_ref="pr-$pr_number"
+
+  stash_if_dirty
+
+  git branch -D "$head_ref" 2>/dev/null || true
+  git fetch origin "pull/$pr_number/head:$head_ref" || { echo '{"error":"PR fetch failed"}'; exit 1; }
+  git checkout "$head_ref" || { echo '{"error":"PR checkout failed"}'; exit 1; }
+  git fetch origin "$base_ref:refs/remotes/origin/$base_ref" 2>/dev/null || true
+
+  json_out
+
+elif [[ "$mode" == "branch" ]]; then
+  base_ref="${1:-}"
+  head_ref="HEAD"
+  id=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
+
+  if [[ -z "$base_ref" ]]; then
+    if remote_head=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null); then
+      base_ref="${remote_head#origin/}"
+    fi
+  fi
+
+  if [[ -z "$base_ref" ]]; then
+    root=$(git rev-parse --show-toplevel 2>/dev/null)
+    for ns in pay-server zoolander gocode; do
+      if [[ -d "$root/$ns" ]]; then
+        ref="green-$ns"
+        if git rev-parse --verify "origin/$ref" &>/dev/null || git rev-parse --verify "$ref" &>/dev/null; then
+          base_ref="$ref"
+          break
+        fi
+      fi
+    done
+  fi
+
+  if [[ -z "$base_ref" ]]; then
+    for candidate in main master; do
+      if git rev-parse --verify "$candidate" &>/dev/null || git rev-parse --verify "origin/$candidate" &>/dev/null; then
+        base_ref="$candidate"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$base_ref" ]]; then
+    echo '{"error":"could not detect base branch"}'
+    exit 1
+  fi
+
+  merge_base=$(git merge-base "$base_ref" HEAD 2>/dev/null || echo "$base_ref")
+  base_ref="$merge_base"
+
+  stash_if_dirty
+
+  json_out
+
+else
+  usage
+fi
