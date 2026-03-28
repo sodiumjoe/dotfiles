@@ -71,7 +71,8 @@
       "Bash(ls * | head *)",
       "Bash(ls * | tail *)",
       "Bash(env * | grep * | head *)",
-      "Bash(work *)"
+      "Bash(work *)",
+      "Skill(review:*)"
     ],
     "deny": [
       "Bash(git reset --hard*)",
