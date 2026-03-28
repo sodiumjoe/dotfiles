@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: review-submit <pr-number> <event> [<body>]" >&2
+  echo "  event: APPROVE | COMMENT | REQUEST_CHANGES" >&2
+  echo "  reads comments JSON array from stdin" >&2
+  exit 1
+fi
+
+pr_number="$1"
+event="$2"
+body="${3:-}"
+
+comments_json=$(cat)
+
+if [[ -z "$comments_json" || "$comments_json" == "[]" ]]; then
+  payload=$(jq -n --arg event "$event" --arg body "$body" '{event: $event, body: $body}')
+else
+  api_comments=$(echo "$comments_json" | jq '[.[] | {path: .file, line: (.line // .line_start), side: "RIGHT", body: .body}]')
+  payload=$(jq -n --arg event "$event" --arg body "$body" --argjson comments "$api_comments" '{event: $event, body: $body, comments: $comments}')
+fi
+
+echo "$payload" | gh api "repos/{owner}/{repo}/pulls/$pr_number/reviews" -X POST --input -
