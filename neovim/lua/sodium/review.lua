@@ -1,25 +1,59 @@
 local M = {}
 
 M._state = {
-    current_pr = nil,
+    session = nil,
+    stashed = false,
     reviewed = {},
     previous_branch = nil,
     current_user = nil,
 }
 
-function M.set_current_pr(pr)
-    M._state.current_pr = pr
-    if pr and not M._state.reviewed[pr.number] then
-        M._state.reviewed[pr.number] = {}
+function M.start_session(opts)
+    local session = {
+        id = tostring(opts.id),
+        mode = opts.mode,
+        base_ref = opts.base_ref,
+        head_ref = opts.head_ref,
+        toplevel = opts.toplevel,
+    }
+    M._state.session = session
+    if not M._state.reviewed[session.id] then
+        M._state.reviewed[session.id] = {}
     end
+    return session
+end
+
+function M.get_session()
+    return M._state.session
+end
+
+function M.set_stashed(val)
+    M._state.stashed = val
+end
+
+function M.is_stashed()
+    return M._state.stashed
+end
+
+function M.set_current_pr(pr)
+    local s = M.start_session({
+        id = pr.number,
+        mode = "pr",
+        base_ref = pr.baseRefName,
+        head_ref = pr.headRefName,
+        toplevel = pr.toplevel,
+    })
+    s.number = tonumber(s.id)
+    s.baseRefName = s.base_ref
+    s.headRefName = s.head_ref
 end
 
 function M.get_current_pr()
-    return M._state.current_pr
+    return M._state.session
 end
 
 function M.reset()
-    M._state = { current_pr = nil, reviewed = {}, previous_branch = nil, current_user = nil }
+    M._state = { session = nil, stashed = false, reviewed = {}, previous_branch = nil, current_user = nil }
 end
 
 function M.set_previous_branch(branch)
@@ -39,15 +73,19 @@ function M.get_current_user()
 end
 
 function M.is_reviewed(filepath)
-    local pr = M._state.current_pr
-    if not pr then return false end
-    return M._state.reviewed[pr.number][filepath] == true
+    local session = M._state.session
+    if not session then
+        return false
+    end
+    return M._state.reviewed[session.id][filepath] == true
 end
 
 function M.toggle_reviewed(filepath)
-    local pr = M._state.current_pr
-    if not pr then return end
-    local tbl = M._state.reviewed[pr.number]
+    local session = M._state.session
+    if not session then
+        return
+    end
+    local tbl = M._state.reviewed[session.id]
     if tbl[filepath] then
         tbl[filepath] = nil
     else
@@ -56,9 +94,13 @@ function M.toggle_reviewed(filepath)
 end
 
 function M.parse_pr_list(json_str)
-    if not json_str then return {} end
+    if not json_str then
+        return {}
+    end
     local ok, prs = pcall(vim.json.decode, json_str)
-    if not ok or type(prs) ~= "table" then return {} end
+    if not ok or type(prs) ~= "table" then
+        return {}
+    end
     local items = {}
     for _, pr in ipairs(prs) do
         items[#items + 1] = {
@@ -86,7 +128,9 @@ function M.parse_changed_files(stdout)
 end
 
 function M.parse_file_diffs(diff_text)
-    if not diff_text or diff_text == "" then return {}, {} end
+    if not diff_text or diff_text == "" then
+        return {}, {}
+    end
     local diffs = {}
     local files = {}
     local current_file = nil
@@ -112,9 +156,13 @@ function M.parse_file_diffs(diff_text)
 end
 
 function M.parse_gh_comments(json_str)
-    if not json_str then return {}, {} end
+    if not json_str then
+        return {}, {}
+    end
     local ok, comments = pcall(vim.json.decode, json_str)
-    if not ok or type(comments) ~= "table" then return {}, {} end
+    if not ok or type(comments) ~= "table" then
+        return {}, {}
+    end
 
     local by_id = {}
     local reply_map = {}
@@ -176,7 +224,9 @@ end
 function M.write_comments_json(path, data)
     local json = vim.json.encode(data)
     local f = io.open(path, "w")
-    if not f then return false end
+    if not f then
+        return false
+    end
     f:write(json)
     f:close()
     return true
@@ -184,16 +234,22 @@ end
 
 function M.read_comments_json(path)
     local f = io.open(path, "r")
-    if not f then return nil end
+    if not f then
+        return nil
+    end
     local content = f:read("*a")
     f:close()
     local ok2, data = pcall(vim.json.decode, content)
-    if not ok2 then return nil end
+    if not ok2 then
+        return nil
+    end
     return data
 end
 
 function M.filter_local_comments(data, current_user)
-    if not data or not data.comments or not current_user then return {} end
+    if not data or not data.comments or not current_user then
+        return {}
+    end
     local result = {}
     for id, comment in pairs(data.comments) do
         local author = comment.actor or comment.author
