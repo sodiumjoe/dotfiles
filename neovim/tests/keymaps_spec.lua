@@ -86,45 +86,19 @@ describe("keymaps", function()
             it("declares leader-a= in agentic spec", function()
                 assert.is_true(spec_has_key(agentic, "<leader>a="))
             end)
+
+            it("declares leader-pr in agentic spec", function()
+                assert.is_true(spec_has_key(agentic, "<leader>pr"))
+            end)
+
+            it("declares leader-pf in agentic spec", function()
+                assert.is_true(spec_has_key(agentic, "<leader>pf"))
+            end)
+
+            it("declares leader-pn in agentic spec", function()
+                assert.is_true(spec_has_key(agentic, "<leader>pn"))
+            end)
         end
-
-        local git = require("sodium.plugins.git")
-
-        it("declares leader-pr in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>pr"))
-        end)
-
-        it("declares leader-pf in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>pf"))
-        end)
-
-        it("declares leader-pd in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>pd"))
-        end)
-
-        it("declares leader-pD in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>pD"))
-        end)
-
-        it("declares leader-px in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>px"))
-        end)
-
-        it("declares leader-pn in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>pn"))
-        end)
-
-        it("declares leader-pa in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>pa"))
-        end)
-
-        it("declares leader-pc in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>pc"))
-        end)
-
-        it("declares leader-ps in git spec", function()
-            assert.is_true(spec_has_key(git, "<leader>ps"))
-        end)
 
         local markdown = require("sodium.plugins.markdown")
 

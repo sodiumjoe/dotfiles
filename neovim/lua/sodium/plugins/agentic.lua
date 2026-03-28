@@ -460,6 +460,112 @@ local function send_annotations_to_agentic()
     end)
 end
 
+local function pick_pr_for_review()
+    local review = require("sodium.review")
+    vim.system({
+        "gh",
+        "pr",
+        "list",
+        "--assignee",
+        "@me",
+        "--json",
+        "number,title,author,headRefName,baseRefName,reviewDecision,isDraft",
+        "--limit",
+        "30",
+    }, { text = true }, function(result)
+        vim.schedule(function()
+            if result.code ~= 0 then
+                vim.notify("gh pr list failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+                return
+            end
+            local items = review.parse_pr_list(result.stdout)
+            if #items == 0 then
+                vim.notify("No open PRs", vim.log.levels.INFO)
+                return
+            end
+
+            for i, item in ipairs(items) do
+                item.sort_idx = i
+            end
+
+            local diff_cache = {}
+
+            Snacks.picker({
+                title = "Pull Requests",
+                items = items,
+                preview = function(ctx)
+                    local item = ctx.item
+                    if not item then
+                        return
+                    end
+                    local cached = diff_cache[item.number]
+                    if cached then
+                        ctx.preview:set_lines(vim.split(cached, "\n"))
+                        ctx.preview:highlight({ ft = "diff" })
+                        return
+                    end
+                    ctx.preview:set_lines({ "Loading diff..." })
+                    vim.system({ "gh", "pr", "diff", tostring(item.number) }, { text = true }, function(r)
+                        vim.schedule(function()
+                            local text = r.code == 0 and r.stdout or ("Error: " .. (r.stderr or ""))
+                            diff_cache[item.number] = text
+                            local current = ctx.picker:current()
+                            if current and current.number == item.number then
+                                ctx.preview:set_lines(vim.split(text, "\n"))
+                                ctx.preview:highlight({ ft = "diff" })
+                            end
+                        end)
+                    end)
+                end,
+                sort = function(a, b)
+                    if a.score ~= b.score then
+                        return a.score > b.score
+                    end
+                    return a.sort_idx < b.sort_idx
+                end,
+                format = function(item)
+                    local ret = {}
+                    ret[#ret + 1] = { string.format("#%d ", item.number), "SnacksPickerLabel" }
+                    ret[#ret + 1] = { item.title }
+                    ret[#ret + 1] = { string.format(" (%s)", item.author), "SnacksPickerDir" }
+                    if item.isDraft then
+                        ret[#ret + 1] = { " [draft]", "SnacksPickerComment" }
+                    end
+                    if item.reviewDecision == "APPROVED" then
+                        ret[#ret + 1] = { " [approved]", "SnacksPickerSpecial" }
+                    elseif item.reviewDecision == "CHANGES_REQUESTED" then
+                        ret[#ret + 1] = { " [changes requested]", "SnacksPickerLabel" }
+                    end
+                    return ret
+                end,
+                on_show = function()
+                    vim.cmd.stopinsert()
+                end,
+                confirm = function(picker, item)
+                    if not item then
+                        return
+                    end
+                    picker:close()
+                    local SessionRegistry = require("agentic.session_registry")
+                    SessionRegistry.get_session_for_tab_page(nil, function(session)
+                        local input_buf = session.widget.buf_nrs.input
+                        vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "/review " .. tostring(item.number) })
+                        session.widget:show()
+                        local function try_submit()
+                            if session.session_id then
+                                session.widget:_submit_input()
+                            else
+                                vim.defer_fn(try_submit, 200)
+                            end
+                        end
+                        try_submit()
+                    end)
+                end,
+            })
+        end)
+    end)
+end
+
 return {
     "carlos-algms/agentic.nvim",
     cond = function()
@@ -619,6 +725,52 @@ return {
             send_annotations_to_agentic,
             mode = { "n" },
             desc = "Inject annotations into Agentic",
+        },
+        {
+            "<leader>pr",
+            pick_pr_for_review,
+            mode = { "n" },
+            desc = "Pick PR and start review session",
+        },
+        {
+            "<leader>pf",
+            function()
+                local s = require("sodium.review").get_session()
+                if not s then
+                    vim.notify("No review session active", vim.log.levels.WARN)
+                    return
+                end
+                local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-picker"
+                vim.system({ script, s.base_ref, s.head_ref }, { text = true })
+            end,
+            mode = { "n" },
+            desc = "Review file picker",
+        },
+        {
+            "<leader>pn",
+            function()
+                local review = require("sodium.review")
+                local utils = require("sodium.utils")
+                local s = review.get_session()
+                if not s then
+                    vim.notify("No review session active", vim.log.levels.WARN)
+                    return
+                end
+                local root = s.toplevel or ""
+                local filepath = vim.api.nvim_buf_get_name(0)
+                if root ~= "" and filepath:sub(1, #root + 1) == root .. "/" then
+                    filepath = filepath:sub(#root + 2)
+                end
+                review.toggle_reviewed(filepath)
+                local is_reviewed = review.is_reviewed(filepath)
+                utils.close_non_agentic_windows()
+                local marker = is_reviewed and "reviewed" or "unreviewed"
+                vim.notify(filepath .. " marked " .. marker)
+                local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-picker"
+                vim.system({ script, s.base_ref, s.head_ref }, { text = true })
+            end,
+            mode = { "n" },
+            desc = "Mark reviewed and reopen file picker",
         },
     },
 }
