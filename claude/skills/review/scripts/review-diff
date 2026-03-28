@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Usage: review-diff <base-ref> [<file>]" >&2
+  exit 1
+fi
+
+base_ref="$1"
+
+if [[ $# -eq 2 ]]; then
+  git diff "$base_ref..HEAD" -- "$2"
+else
+  git diff "$base_ref..HEAD"
+fi

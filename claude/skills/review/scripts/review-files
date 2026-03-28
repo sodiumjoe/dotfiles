@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: review-files <base-ref>" >&2
+  exit 1
+fi
+
+git diff --name-only "$1..HEAD"
