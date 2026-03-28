@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: review-commits <base-ref>" >&2
+  exit 1
+fi
+
+base_ref="$1"
+
+commits=$(git log --reverse --format='%H %s' "$base_ref..HEAD" 2>/dev/null)
+
+if [[ -z "$commits" ]]; then
+  echo '{"error":"no commits found"}'
+  exit 0
+fi
+
+while IFS= read -r line; do
+  sha="${line%% *}"
+  subject="${line#* }"
+  subject_escaped=$(printf '%s' "$subject" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  git diff-tree --no-commit-id --name-only -r "$sha" | while IFS= read -r file; do
+    file_escaped=$(printf '%s' "$file" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{"commit":"%s","subject":"%s","file":"%s"}\n' "$sha" "$subject_escaped" "$file_escaped"
+  done
+done <<< "$commits"
