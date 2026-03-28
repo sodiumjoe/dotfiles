@@ -8,9 +8,15 @@ describe("sodium.review", function()
     describe("parse_pr_list", function()
         it("parses valid JSON", function()
             local json = vim.json.encode({
-                { number = 1, title = "Fix bug", author = { login = "bob" },
-                  headRefName = "fix-bug", baseRefName = "main",
-                  reviewDecision = "", isDraft = false },
+                {
+                    number = 1,
+                    title = "Fix bug",
+                    author = { login = "bob" },
+                    headRefName = "fix-bug",
+                    baseRefName = "main",
+                    reviewDecision = "",
+                    isDraft = false,
+                },
             })
             local items = review.parse_pr_list(json)
             assert.are.equal(1, #items)
@@ -101,7 +107,8 @@ describe("sodium.review", function()
         end)
 
         it("handles new file", function()
-            local diff = "diff --git a/new.lua b/new.lua\nnew file mode 100644\n--- /dev/null\n+++ b/new.lua\n@@ -0,0 +1 @@\n+content"
+            local diff =
+                "diff --git a/new.lua b/new.lua\nnew file mode 100644\n--- /dev/null\n+++ b/new.lua\n@@ -0,0 +1 @@\n+content"
             local diffs, files = review.parse_file_diffs(diff)
             assert.are.equal(1, #files)
             assert.are.equal("new.lua", files[1])
@@ -198,11 +205,85 @@ describe("sodium.review", function()
         end)
     end)
 
+    describe("session state", function()
+        it("starts and retrieves session", function()
+            local s = review.start_session({
+                id = "pr-42",
+                mode = "pr",
+                base_ref = "main",
+                head_ref = "pr-42",
+                toplevel = "/repo",
+            })
+            assert.are.equal("pr-42", s.id)
+            assert.are.equal("pr", s.mode)
+            assert.are.equal("main", s.base_ref)
+            local got = review.get_session()
+            assert.are.equal("pr-42", got.id)
+        end)
+
+        it("tracks reviewed files per session", function()
+            review.start_session({
+                id = "branch-foo",
+                mode = "branch",
+                base_ref = "main",
+                head_ref = "HEAD",
+                toplevel = "/repo",
+            })
+            assert.is_false(review.is_reviewed("foo.lua"))
+            review.toggle_reviewed("foo.lua")
+            assert.is_true(review.is_reviewed("foo.lua"))
+        end)
+
+        it("isolates state between sessions", function()
+            review.start_session({ id = "a", mode = "branch", base_ref = "main", head_ref = "HEAD", toplevel = "/repo" })
+            review.toggle_reviewed("x.lua")
+            review.start_session({ id = "b", mode = "branch", base_ref = "main", head_ref = "HEAD", toplevel = "/repo" })
+            assert.is_false(review.is_reviewed("x.lua"))
+        end)
+
+        it("preserves state when switching back", function()
+            review.start_session({ id = "a", mode = "branch", base_ref = "main", head_ref = "HEAD", toplevel = "/repo" })
+            review.toggle_reviewed("x.lua")
+            review.start_session({ id = "b", mode = "branch", base_ref = "main", head_ref = "HEAD", toplevel = "/repo" })
+            review.start_session({ id = "a", mode = "branch", base_ref = "main", head_ref = "HEAD", toplevel = "/repo" })
+            assert.is_true(review.is_reviewed("x.lua"))
+        end)
+
+        it("reset clears session", function()
+            review.start_session({ id = "x", mode = "pr", base_ref = "main", head_ref = "pr-1", toplevel = "/repo" })
+            review.reset()
+            assert.is_nil(review.get_session())
+        end)
+    end)
+
+    describe("stashed state", function()
+        it("defaults to false", function()
+            assert.is_false(review.is_stashed())
+        end)
+
+        it("tracks stash state", function()
+            review.set_stashed(true)
+            assert.is_true(review.is_stashed())
+        end)
+
+        it("reset clears stash state", function()
+            review.set_stashed(true)
+            review.reset()
+            assert.is_false(review.is_stashed())
+        end)
+    end)
+
     describe("parse_gh_comments", function()
         it("parses basic comments", function()
             local json = vim.json.encode({
-                { id = 100, path = "foo.lua", line = 10, body = "looks good",
-                  user = { login = "alice" }, created_at = "2026-01-01T00:00:00Z" },
+                {
+                    id = 100,
+                    path = "foo.lua",
+                    line = 10,
+                    body = "looks good",
+                    user = { login = "alice" },
+                    created_at = "2026-01-01T00:00:00Z",
+                },
             })
             local by_id, files = review.parse_gh_comments(json)
             assert.is_not_nil(by_id["100"])
@@ -216,11 +297,23 @@ describe("sodium.review", function()
 
         it("groups replies under parent", function()
             local json = vim.json.encode({
-                { id = 100, path = "foo.lua", line = 10, body = "nit",
-                  user = { login = "alice" }, created_at = "2026-01-01T00:00:00Z" },
-                { id = 101, path = "foo.lua", line = 10, body = "fixed",
-                  user = { login = "bob" }, created_at = "2026-01-01T01:00:00Z",
-                  in_reply_to_id = 100 },
+                {
+                    id = 100,
+                    path = "foo.lua",
+                    line = 10,
+                    body = "nit",
+                    user = { login = "alice" },
+                    created_at = "2026-01-01T00:00:00Z",
+                },
+                {
+                    id = 101,
+                    path = "foo.lua",
+                    line = 10,
+                    body = "fixed",
+                    user = { login = "bob" },
+                    created_at = "2026-01-01T01:00:00Z",
+                    in_reply_to_id = 100,
+                },
             })
             local by_id, _ = review.parse_gh_comments(json)
             assert.are.equal("comment", by_id["100"].kind)
@@ -232,8 +325,14 @@ describe("sodium.review", function()
 
         it("skips comments with nil line (outdated)", function()
             local json = vim.json.encode({
-                { id = 200, path = "bar.lua", line = vim.NIL, body = "outdated",
-                  user = { login = "alice" }, created_at = "2026-01-01T00:00:00Z" },
+                {
+                    id = 200,
+                    path = "bar.lua",
+                    line = vim.NIL,
+                    body = "outdated",
+                    user = { login = "alice" },
+                    created_at = "2026-01-01T00:00:00Z",
+                },
             })
             local by_id, files = review.parse_gh_comments(json)
             assert.is_nil(by_id["200"])
