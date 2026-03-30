@@ -1,10 +1,13 @@
 #!/bin/bash
 
 TITLE="$1"
+ZWS=$'\xe2\x80\x8b'
 
 case "$TITLE" in
-  *🔔*)
-    CLEAN=$(echo "$TITLE" | sed 's/🔔 //')
-    osascript -e "display notification \"Claude is waiting for input\" with title \"Claude Code\" subtitle \"$CLEAN\""
+  *"$ZWS"*)
+    CLEAN="${TITLE//$ZWS/}"
+    LABEL="${CLEAN#󰌗 }"
+    MSG="Claude is waiting for input"
+    osascript -e "display notification \"${MSG//\"/\\\"}\" with title \"Claude Code\" subtitle \"${LABEL//\"/\\\"}\""
     ;;
 esac
