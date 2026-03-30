@@ -9,6 +9,10 @@ PANE_SLUG=$(echo "$PANE" | tr -d '%')
 PID_FILE="/tmp/claude-notify-${PANE_SLUG}.pid"
 DELAY=60
 
+if [ -f /pay/conf/box-type ]; then
+  tmux set -gu @notify_bell 2>/dev/null
+fi
+
 if [ -f "$PID_FILE" ]; then
   kill "$(cat "$PID_FILE")" 2>/dev/null
   rm -f "$PID_FILE"
@@ -36,10 +40,7 @@ WINDOW=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null)
   fi
 
   if [ -f /pay/conf/box-type ]; then
-    PANE_TTY=$(tmux display-message -p -t "$PANE" '#{pane_tty}' 2>/dev/null)
-    if [ -n "$PANE_TTY" ]; then
-      printf '\ePtmux;\e\e]9;%s\e\e\\\e\\' "$MSG" > "$PANE_TTY"
-    fi
+    tmux set -g @notify_bell 1
   else
     osascript -e "display notification \"$MSG\" with title \"Claude Code\""
   fi

@@ -1,0 +1,10 @@
+#!/bin/bash
+
+TITLE="$1"
+
+case "$TITLE" in
+  *🔔*)
+    CLEAN=$(echo "$TITLE" | sed 's/🔔 //')
+    osascript -e "display notification \"Claude is waiting for input\" with title \"Claude Code\" subtitle \"$CLEAN\""
+    ;;
+esac
