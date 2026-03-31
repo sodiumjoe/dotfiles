@@ -105,27 +105,6 @@ Do not manually call `work check-off` or `work append-log` separately. Always us
   - What was found or discovered
 - Update the plan file as work progresses
 
-## Stripe Monorepo (Mint)
-
-Stripe's monorepo ("Mint") unifies pay-server, zoolander, and gocode under a single git repository. On a devbox it lives at `/pay/src/`; on a laptop at `~/stripe/mint/`. Each former repo is a "namespace" (i.e. a top-level directory: `pay-server/`, `zoolander/`, `gocode/`).
-
-### Green branches (replacing master-passing-tests)
-
-Do not use `master-passing-tests` — it has been deprecated. Use `green` branches as the base for new feature branches. These point to recent master commits where CI passed.
-
-- In mint, use the namespaced variant matching your working namespace: `green-pay-server`, `green-zoolander`, `green-gocode`.
-- In a legacy threepo, use `green-<repo>` or just `green`.
-- Or skip the decision: `git fetch origin master && git checkout -b my-feature $(pay find-dev-branch-head)`.
-
-Do not target green branches in PRs — they are read-only references for branching, not merge targets.
-
-### Workflow constraints
-
-- Changes are limited to a single namespace per branch (while online merge replication is active).
-- Migrate branches from threepos with `pay stack migrate`.
-- Enable/disable mint on laptop: `pay mint --enable` / `pay mint --disable`.
-- New devbox: `pay remote new --repo=mint`.
-
 ## Daily Note
 
 - The daily note is at `~/stripe/work/YYYY-MM-DD.md` (today's date)
