@@ -3,10 +3,27 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const SKILLS_DIR =
-  process.env.WORK_SKILLS_DIR || path.join(__dirname, "..", "skills");
+  process.env.WORK_SKILLS_DIR || path.join(__dirname, "..", "..", "skills");
+
+const CONFIG_PATH =
+  process.env.WORK_UPSTREAM_CONFIG ||
+  path.join(__dirname, "upstream-config.json");
+
+function loadUpstreamConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+  } catch {
+    return { upstreams: {} };
+  }
+}
+
+function expandHome(p) {
+  return p.replace(/^~(?=$|\/)/, process.env.HOME);
+}
 
 function checkUpstream(skillsDir = SKILLS_DIR) {
   if (!fs.existsSync(skillsDir)) return [];
+  const config = loadUpstreamConfig();
   const results = [];
   const dirs = fs
     .readdirSync(skillsDir, { withFileTypes: true })
@@ -27,41 +44,26 @@ function checkUpstream(skillsDir = SKILLS_DIR) {
     const storedHash = hashMatch[1].trim();
     const upstreamSkill = skillMatch[1].trim();
     const forkedVersion = versionMatch ? versionMatch[1].trim() : null;
-    const [pluginName, registry] = plugin.split("@");
-    const cacheBase = path.join(
-      process.env.HOME,
-      ".claude",
-      "plugins",
-      "cache",
-      registry || "",
-      pluginName,
-    );
-    if (!fs.existsSync(cacheBase)) {
+    const upstreamBase = config.upstreams[plugin];
+    if (!upstreamBase) {
       results.push({
         skill: dir.name,
-        status: "no-cache",
-        message: `upstream cache not found at ${cacheBase}`,
+        status: "no-upstream-config",
+        message: `no upstream configured for plugin "${plugin}"`,
       });
       continue;
     }
-    const versions = fs
-      .readdirSync(cacheBase, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort((a, b) => {
-        const pa = a.split(".").map(Number);
-        const pb = b.split(".").map(Number);
-        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-          const diff = (pa[i] || 0) - (pb[i] || 0);
-          if (diff !== 0) return diff;
-        }
-        return 0;
+    const upstreamDir = expandHome(upstreamBase);
+    if (!fs.existsSync(upstreamDir)) {
+      results.push({
+        skill: dir.name,
+        status: "no-cache",
+        message: `upstream path not found at ${upstreamDir}`,
       });
-    if (versions.length === 0) continue;
-    const latestVersion = versions[versions.length - 1];
+      continue;
+    }
     const upstreamFile = path.join(
-      cacheBase,
-      latestVersion,
+      upstreamDir,
       "skills",
       upstreamSkill,
       "SKILL.md",
@@ -86,7 +88,6 @@ function checkUpstream(skillsDir = SKILLS_DIR) {
         storedHash,
         currentHash,
         forkedVersion,
-        latestVersion,
         upstreamFile,
         localFile: skillFile,
       });
