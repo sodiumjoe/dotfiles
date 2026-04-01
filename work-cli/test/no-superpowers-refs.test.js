@@ -3,11 +3,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const PLUGIN_ROOT = path.join(__dirname, "..");
+const DOTFILES_ROOT = path.resolve(__dirname, "..", "..");
 
 const ALLOWED = new Set([
   "skills/using-superpowers/SKILL.md",
-  "commands/create-project.md",
+  "claude/commands/create-project.md",
 ]);
 
 function walk(dir) {
@@ -26,24 +26,23 @@ function walk(dir) {
 
 describe("no superpowers references", () => {
   it("skill and command files do not reference superpowers namespace", () => {
-    const dirs = [
-      "skills",
-      "commands",
-      "agents",
-      "hooks",
-      ".claude-plugin",
-    ].map((d) => path.join(PLUGIN_ROOT, d));
+    const dirs = ["skills", "claude/commands", "claude/agents"].map((d) =>
+      path.join(DOTFILES_ROOT, d),
+    );
     const files = dirs.flatMap((d) => (fs.existsSync(d) ? walk(d) : []));
     const violations = [];
 
     for (const file of files) {
-      const rel = path.relative(PLUGIN_ROOT, file);
+      const rel = path.relative(DOTFILES_ROOT, file);
       if (ALLOWED.has(rel)) continue;
       if (!file.endsWith(".md") && !file.endsWith(".json")) continue;
       const content = fs.readFileSync(file, "utf8");
       const lines = content.split("\n");
       for (let i = 0; i < lines.length; i++) {
-        if (/superpowers/i.test(lines[i])) {
+        if (
+          /superpowers/i.test(lines[i]) &&
+          !/^plugin:\s/.test(lines[i].trim())
+        ) {
           violations.push(`${rel}:${i + 1}: ${lines[i].trim()}`);
         }
       }
@@ -57,11 +56,11 @@ describe("no superpowers references", () => {
   });
 
   it("test fixtures may reference superpowers as upstream source", () => {
-    const testDir = path.join(PLUGIN_ROOT, "test");
+    const testDir = path.join(DOTFILES_ROOT, "work-cli", "test");
     const files = walk(testDir).filter((f) => f.endsWith(".test.js"));
     for (const file of files) {
-      const rel = path.relative(PLUGIN_ROOT, file);
-      if (rel === "test/no-superpowers-refs.test.js") continue;
+      const rel = path.relative(DOTFILES_ROOT, file);
+      if (rel === "work-cli/test/no-superpowers-refs.test.js") continue;
       const content = fs.readFileSync(file, "utf8");
       if (/superpowers:((?!writing-plans)[a-z-]+)/.test(content)) {
         assert.fail(

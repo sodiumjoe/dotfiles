@@ -5,8 +5,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const COMMANDS_DIR = path.join(__dirname, "..", "commands");
-const SKILLS_DIR = path.join(__dirname, "..", "skills");
+const DOTFILES_ROOT = path.resolve(__dirname, "..", "..");
+const COMMANDS_DIR = path.join(DOTFILES_ROOT, "claude", "commands");
+const SKILLS_DIR = path.join(DOTFILES_ROOT, "skills");
 const PLUGIN_CACHE = path.join(
   os.homedir(),
   ".claude",
