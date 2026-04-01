@@ -1,7 +1,7 @@
 ---
 name: dispatching-parallel-agents
 description: Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies
-plugin: work
+plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: dispatching-parallel-agents
 content_hash: c628917689ccc12ce9991615db6824d44c4fe71f8427cd959560aebe6a1a6476

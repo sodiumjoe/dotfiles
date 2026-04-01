@@ -1,7 +1,7 @@
 ---
 name: systematic-debugging
 description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
-plugin: work
+plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: systematic-debugging
 content_hash: 4999cb851360485eca5074e727bbdd62ef20549c5d5b01216fcbf5831badb473

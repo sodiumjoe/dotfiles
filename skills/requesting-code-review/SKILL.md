@@ -1,7 +1,7 @@
 ---
 name: requesting-code-review
 description: Use when completing tasks, implementing major features, or before merging to verify work meets requirements
-plugin: work
+plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: requesting-code-review
 content_hash: 2da31af22a58938ab78f3ee6d5b4687fcca062b923b646459eb52ba72117ef97

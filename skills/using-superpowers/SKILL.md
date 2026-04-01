@@ -1,7 +1,7 @@
 ---
 name: using-superpowers
 description: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions
-plugin: work
+plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: using-superpowers
 content_hash: 07d73726944e38fac59b9c90d876e0f714e395308b357973ae77b1321fc75067
