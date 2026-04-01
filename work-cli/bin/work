@@ -1,0 +1,629 @@
+#!/usr/bin/env node
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const LIB = path.join(__dirname, '..', 'lib');
+const { ensure, logSyncEntries, inject, injectReviews } = require(path.join(LIB, 'daily.js'));
+const { fetchReviews, fetchReviewsAsync } = require(path.join(LIB, 'reviews.js'));
+const { notePath, todayStr, VAULT_ROOT, PROJECT_DIR, projectDir, projectFile } = require(path.join(LIB, 'paths.js'));
+const { scanOpenItems, formatScanTSV, syncCheck, listTasks, setTaskState } = require(path.join(LIB, 'scan.js'));
+const { createProject, resolveProject, parseChangelog, completeProjects, archiveProject, archivePlans, extractFindings, listProjects, syncPlans, closeTasks, closeProject, closePlan } = require(path.join(LIB, 'project.js'));
+const { writeWeeklySummary, isoWeek } = require(path.join(LIB, 'summary.js'));
+const { enqueue, dequeue } = require(path.join(LIB, 'queue.js'));
+const { parse, serialize, appendToSection, extractSection, getTitle, parseFrontmatter } = require(path.join(LIB, 'markdown.js'));
+const { closeTask, appendLog } = require(path.join(LIB, 'changelog.js'));
+const { promote } = require(path.join(LIB, 'promote.js'));
+const { checkUpstream } = require(path.join(LIB, 'upstream.js'));
+
+const args = process.argv.slice(2);
+const cmd = args[0];
+
+function parseOpts(args) {
+  const opts = {};
+  const positional = [];
+  for (const a of args) {
+    if (a.startsWith('--')) {
+      const [key, ...rest] = a.slice(2).split('=');
+      opts[key] = rest.length > 0 ? rest.join('=') : true;
+    } else {
+      positional.push(a);
+    }
+  }
+  return { opts, positional };
+}
+
+function getDate(opts) {
+  return opts.date || todayStr();
+}
+
+async function doGather(dateStr, quiet) {
+  const log = quiet ? () => {} : console.log.bind(console);
+  const q = { quiet };
+  const errors = [];
+  log('--- ensure ---');
+  try { ensure(dateStr, q); } catch (e) { console.error('FAIL: ensure'); errors.push(`ensure: ${e.message}`); }
+  log('--- reviews (async) ---');
+  const reviewsPromise = fetchReviewsAsync();
+  log('--- promote ---');
+  try { promote(dateStr, q); } catch (e) { console.error('FAIL: promote'); errors.push(`promote: ${e.message}`); }
+  log('--- sync-plans ---');
+  try { syncPlans(q); } catch (e) { console.error('FAIL: sync-plans'); errors.push(`sync-plans: ${e.message}`); }
+  log('--- scan ---');
+  let scanResults = [];
+  try {
+    scanResults = scanOpenItems();
+    const tsv = formatScanTSV(scanResults);
+    if (tsv) log(tsv);
+  } catch (e) { console.error('FAIL: scan'); errors.push(`scan: ${e.message}`); }
+  log('--- inject ---');
+  try { inject(dateStr, scanResults, q); } catch (e) { console.error('FAIL: inject'); errors.push(`inject: ${e.message}`); }
+  log('--- inject reviews ---');
+  try {
+    const { reviews, error } = await reviewsPromise;
+    if (error) errors.push(`reviews: ${error}`);
+    injectReviews(dateStr, reviews, q);
+  } catch (e) { console.error('FAIL: reviews'); errors.push(`reviews: ${e.message}`); }
+  if (errors.length) process.exitCode = 1;
+  return errors;
+}
+
+function syslog(level, msg) {
+  console.log(`${new Date().toISOString()} ${level.padEnd(5)} ${msg}`);
+}
+
+function doErrorDebug(dateStr, errors) {
+  const { execFileSync } = require('node:child_process');
+  const workProjectPath = projectFile('work');
+  if (fs.existsSync(workProjectPath)) {
+    const content = fs.readFileSync(workProjectPath, 'utf-8');
+    if (/^- \[[ /]\] Fix tick error:/m.test(content)) return;
+  }
+  const projectRoot = path.join(__dirname, '..', '..');
+  const prompt = `The work tick command encountered errors on ${dateStr}:
+
+${errors.map(e => `- ${e}`).join('\n')}
+
+The tick source code is at work/bin/work.
+
+Investigate the root cause by reading the relevant source files. Then:
+1. Create a plan file at ${projectDir('work')}/${dateStr}-tick-error.md with this frontmatter:
+   ---
+   status: active
+   project: "[[projects/work/project]]"
+   ---
+2. Add a task to the work project file at ${workProjectPath}. Use the Edit tool to append a line to the ## Tasks section:
+   - [ ] Fix tick error: <one-line summary> — [[${dateStr}-tick-error]]`;
+
+  try {
+    const claudeCmd = process.env.WORK_CLAUDE_CMD || 'claude';
+    execFileSync(claudeCmd, ['-p', '--allowedTools', 'Read', 'Glob', 'Grep', 'Write', 'Edit'], {
+      input: prompt,
+      cwd: projectRoot,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      timeout: 120000,
+    });
+  } catch (e) {
+    syslog('ERROR', `tick: doErrorDebug failed: ${e.message}`);
+  }
+}
+
+function doWrap(dateStr) {
+  const { execFileSync } = require('node:child_process');
+
+  ensure(dateStr);
+
+  console.log('=== sync --apply ===');
+  const entries = syncCheck(dateStr);
+  if (entries.length > 0) {
+    logSyncEntries(dateStr, entries, false);
+  }
+
+  console.log('=== claude summary ===');
+  const np = notePath(dateStr);
+  const prompt = `Read the daily note at ${np}.
+
+For each wikilinked project or plan referenced in the Log and Tasks sections, read that file to understand what the work items actually are. Projects are in ${PROJECT_DIR} (each project is a subdirectory containing project.md and its plans).
+
+Then write a comprehensive summary into the ## Summary section of the daily note (replace existing content if the section exists, or append it at the end).
+
+The summary should cover:
+- What was accomplished today, with enough detail to be useful in retrospect
+- What moved forward but isn't finished
+- What's still open / blocked
+- Any patterns worth noting (e.g., most of the day on one project, context-switching)
+
+Write in a dry, factual tone. No enthusiasm. No filler. Complete sentences.
+Use the Edit tool to write the summary into the daily note.`;
+
+  try {
+    const claudeCmd = process.env.WORK_CLAUDE_CMD || 'claude';
+    execFileSync(claudeCmd, ['-p', '--allowedTools', 'Read', 'Edit'], {
+      input: prompt,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      timeout: 120000,
+    });
+  } catch (e) {
+    console.error('claude summary failed:', e.message);
+  }
+
+  console.log('=== complete projects ===');
+  completeProjects();
+}
+
+const commands = {
+  ensure() {
+    const { opts } = parseOpts(args.slice(1));
+    ensure(getDate(opts));
+  },
+
+  promote() {
+    const { opts } = parseOpts(args.slice(1));
+    promote(getDate(opts));
+  },
+
+  sync() {
+    const { opts } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    const entries = syncCheck(dateStr);
+    if (opts.apply) {
+      logSyncEntries(dateStr, entries, false);
+    } else {
+      for (const e of entries) {
+        console.log(`${e.filename}\t${e.title}\t${e.itemText}\t${e.sourceType}`);
+      }
+    }
+  },
+
+  'list-projects'() {
+    const results = listProjects();
+    for (const r of results) {
+      process.stdout.write(`${r.slug}\t${r.title}\t${r.status}\n`);
+    }
+  },
+
+  inject() {
+    const { opts } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    const results = scanOpenItems();
+    inject(dateStr, results);
+  },
+
+  'sync-plans'() {
+    const results = syncPlans();
+    if (results.length === 0) console.log('nothing to link');
+  },
+
+  async gather() {
+    const { opts } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    const errors = await doGather(dateStr, false);
+
+    console.log('=== sync-check ===');
+    try {
+      const entries = syncCheck(dateStr);
+      for (const e of entries) {
+        console.log(`${e.filename}\t${e.title}\t${e.itemText}\t${e.sourceType}`);
+      }
+    } catch (e) { console.error('FAIL: sync-check'); errors.push(`sync-check: ${e.message}`); }
+
+    if (errors.length) process.exit(1);
+  },
+
+  summary() {
+    const { opts } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    const dailyNote = notePath(dateStr);
+    if (!fs.existsSync(dailyNote)) {
+      throw new Error('no daily note found');
+    }
+    const content = fs.readFileSync(dailyNote, 'utf-8');
+    const logLines = extractSection(content, 'Log');
+    const completed = logLines.filter(l => /^- \[x\]/.test(l));
+    const results = scanOpenItems();
+
+    console.log('### Completed');
+    if (completed.length === 0) {
+      console.log('(none)');
+    } else {
+      for (const e of completed) console.log(e);
+    }
+    console.log('');
+    console.log('### Open');
+    if (results.length === 0) {
+      console.log('(none)');
+    } else {
+      for (const r of results) {
+        const prefix = r.state === '/' ? '[/] ' : '';
+        const proj = r.projectSlug ? ` (${r.projectSlug})` : '';
+        console.log(`- ${prefix}${r.itemText}${proj}`);
+      }
+    }
+  },
+
+  'create-project'() {
+    const { positional } = parseOpts(args.slice(1));
+    if (positional.length < 2) {
+      throw new Error('usage: work create-project <slug> <title>');
+    }
+    createProject(positional[0], positional[1]);
+  },
+
+  'archive-project'() {
+    const { positional } = parseOpts(args.slice(1));
+    if (positional.length < 1) {
+      throw new Error('usage: work archive-project <slug>');
+    }
+    archiveProject(positional[0]);
+  },
+
+  'resolve-project'() {
+    const { positional } = parseOpts(args.slice(1));
+    if (positional.length < 1) {
+      throw new Error('usage: work resolve-project <plan-file>');
+    }
+    resolveProject(positional[0]);
+  },
+
+  'close-tasks'() {
+    const { opts, positional } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    if (positional.length < 1) {
+      throw new Error('usage: work close-tasks <file> [--skip=<line1,line2,...>]');
+    }
+    const skipLines = opts.skip ? opts.skip.split(',').map(Number) : [];
+    const result = closeTasks(positional[0], skipLines, dateStr);
+    process.stdout.write(`${result.completed}\t${result.cancelled}\n`);
+  },
+
+  'close-project'() {
+    const { opts, positional } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    if (positional.length < 2) {
+      throw new Error('usage: work close-project <slug> <summary>');
+    }
+    closeProject(positional[0], positional[1], dateStr);
+  },
+
+  'close-plan'() {
+    const { positional } = parseOpts(args.slice(1));
+    if (positional.length < 1) {
+      throw new Error('usage: work close-plan <plan-file>');
+    }
+    closePlan(positional[0]);
+  },
+
+  'check-off'() {
+    const { opts, positional } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    if (positional.length < 2) {
+      throw new Error('usage: work check-off <file> <description>');
+    }
+    closeTask(positional[0], positional[1], dateStr);
+  },
+
+  'append-log'() {
+    const { opts, positional } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    if (positional.length < 1) {
+      throw new Error('usage: work append-log <description>');
+    }
+    appendLog(dateStr, positional[0], opts['source-type'], opts['source-slug'], opts['source-title']);
+  },
+
+  'list-tasks'() {
+    const { positional } = parseOpts(args.slice(1));
+    const results = listTasks(positional[0]);
+    for (const r of results) {
+      process.stdout.write(`${r.file}\t${r.line}\t${r.state}\t${r.title}\t${r.description}\n`);
+    }
+  },
+
+  'set-task-state'() {
+    const { opts, positional } = parseOpts(args.slice(1));
+    if (positional.length < 3) {
+      throw new Error('usage: work set-task-state <file> <line> <state>');
+    }
+    const dateStr = getDate(opts);
+    setTaskState(positional[0], parseInt(positional[1], 10), positional[2], dateStr);
+  },
+
+  'append-task'() {
+    const { positional } = parseOpts(args.slice(1));
+    if (positional.length < 2) {
+      throw new Error('usage: work append-task <file> <description>');
+    }
+    const filePath = positional[0];
+    const description = positional[1];
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const doc = parse(content);
+    appendToSection(doc, 'Tasks', [`- [ ] ${description}`]);
+    fs.writeFileSync(filePath, serialize(doc), 'utf-8');
+  },
+
+  complete() {
+    const { opts, positional } = parseOpts(args.slice(1));
+    const dateStr = getDate(opts);
+    if (positional.length < 2) {
+      throw new Error('usage: work complete <file> <description>');
+    }
+    const filePath = positional[0];
+    const description = positional[1];
+
+    // Check off the item in the source file
+    closeTask(filePath, description, dateStr);
+
+    // Determine source metadata from file path
+    let sourceType, sourceSlug, sourceTitle;
+    const content = fs.readFileSync(filePath, 'utf-8');
+    sourceTitle = getTitle(content);
+
+    sourceType = 'project';
+    sourceSlug = path.basename(path.dirname(filePath));
+
+    // Append to daily log
+    appendLog(dateStr, description, sourceType, sourceSlug, sourceTitle);
+  },
+
+  'parse-changelog'() {
+    const { positional } = parseOpts(args.slice(1));
+    if (positional.length < 2) {
+      throw new Error('usage: work parse-changelog <file> <pattern>');
+    }
+    parseChangelog(positional[0], positional[1]);
+  },
+
+  async tick() {
+    const { opts } = parseOpts(args.slice(1));
+    const quiet = !opts.verbose;
+    const log = quiet ? () => {} : console.log.bind(console);
+    const dateStr = getDate(opts);
+    const errors = [];
+
+    log('=== gather ===');
+    errors.push(...await doGather(dateStr, quiet));
+
+    log('=== sync --apply ===');
+    try {
+      const entries = syncCheck(dateStr);
+      if (entries.length > 0) {
+        logSyncEntries(dateStr, entries, false, { quiet });
+      } else {
+        log('nothing to sync');
+      }
+    } catch (e) {
+      console.error('FAIL: sync');
+      errors.push(`sync: ${e.message}`);
+    }
+
+    log('=== archive queue ===');
+    try {
+      const approved = dequeue(dateStr, 'Archive');
+      for (const item of approved) {
+        if (item.key.startsWith('projects/')) {
+          const slug = item.key.replace(/^projects\//, '');
+          archiveProject(slug);
+          log(`archived project: ${slug}`);
+        } else {
+          log(`unknown archive key: ${item.key}`);
+        }
+      }
+      if (approved.length === 0) log('nothing to archive');
+    } catch (e) {
+      console.error('FAIL: archive dequeue');
+      errors.push(`archive-dequeue: ${e.message}`);
+    }
+
+    log('=== archive plans ===');
+    try {
+      const archivedPlans = archivePlans({ quiet });
+      if (archivedPlans.length > 0) {
+        log(`archived ${archivedPlans.length} plan(s)`);
+        log('=== extract findings ===');
+        try {
+          extractFindings(archivedPlans, dateStr, { quiet });
+        } catch (e) {
+          console.error('FAIL: extract findings');
+          errors.push(`extract-findings: ${e.message}`);
+        }
+      } else {
+        log('no plans to archive');
+      }
+    } catch (e) {
+      console.error('FAIL: archive plans');
+      errors.push(`archive-plans: ${e.message}`);
+    }
+
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const { year, week } = isoWeek(new Date(y, m - 1, d));
+    const weekLabel = `${year}-W${String(week).padStart(2, '0')}`;
+    const weeklyPath = path.join(VAULT_ROOT, 'weekly', `${weekLabel}.md`);
+    if (!fs.existsSync(weeklyPath)) {
+      log('=== propose archivable ===');
+      try {
+        const projEntries = fs.existsSync(PROJECT_DIR)
+          ? fs.readdirSync(PROJECT_DIR, { withFileTypes: true }).filter(e => e.isDirectory() && !e.name.startsWith('_') && !e.name.startsWith('-'))
+          : [];
+        const items = [];
+        for (const entry of projEntries) {
+          const slug = entry.name;
+          const pf = projectFile(slug);
+          if (!fs.existsSync(pf)) continue;
+          const content = fs.readFileSync(pf, 'utf-8');
+          const fm = parseFrontmatter(content);
+          if (fm.status !== 'completed') continue;
+          const title = getTitle(content) || slug;
+          const completedAt = fm.completed_at || 'unknown';
+          items.push({ key: `projects/${slug}`, label: `[[projects/${slug}/project|${title}]] — completed ${completedAt}` });
+        }
+        if (items.length > 0) {
+          const count = enqueue(dateStr, 'Archive', items);
+          log(`proposed ${count || 0} item(s) for archive`);
+        } else {
+          log('nothing to propose');
+        }
+      } catch (e) {
+        console.error('FAIL: archive propose');
+        errors.push(`archive-propose: ${e.message}`);
+      }
+
+      log('=== weekly summary ===');
+      try {
+        const summaryPath = writeWeeklySummary(dateStr);
+        if (summaryPath) {
+          log(`wrote weekly summary: ${summaryPath}`);
+        } else {
+          log('no entries for weekly summary');
+        }
+      } catch (e) {
+        console.error('FAIL: weekly summary');
+        errors.push(`weekly-summary: ${e.message}`);
+      }
+    }
+
+    function formatDateStr(dt) {
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    }
+    for (let i = 1; i <= 7; i++) {
+      const prev = new Date(y, m - 1, d - i);
+      const prevDate = formatDateStr(prev);
+      const prevNp = notePath(prevDate);
+      if (!fs.existsSync(prevNp)) continue;
+      const prevNote = fs.readFileSync(prevNp, 'utf-8');
+      if (/^## Summary/m.test(prevNote)) break;
+      log(`=== wrap ${prevDate} ===`);
+      doWrap(prevDate);
+    }
+
+    log('=== upstream drift ===');
+    try {
+      const upstreamResults = checkUpstream();
+      const drifted = upstreamResults.filter(r => r.status === 'drifted');
+      if (drifted.length > 0) {
+        const names = drifted.map(r => r.skill).join(', ');
+        log(`drift detected: ${names}`);
+        const workProjectPath = projectFile('work');
+        if (fs.existsSync(workProjectPath)) {
+          const content = fs.readFileSync(workProjectPath, 'utf-8');
+          if (!/^- \[[ /]\] Review upstream skill drift/m.test(content)) {
+            const doc = parse(content);
+            appendToSection(doc, 'Tasks', [`- [ ] Review upstream skill drift: ${names} — run \`work check-upstream --diff\``]);
+            fs.writeFileSync(workProjectPath, serialize(doc), 'utf-8');
+            log('added task to work project');
+          } else {
+            log('drift task already exists, skipping');
+          }
+        }
+      } else {
+        log('all skills up to date');
+      }
+    } catch (e) {
+      console.error('FAIL: upstream drift check');
+      errors.push(`upstream-drift: ${e.message}`);
+    }
+
+    if (opts['simulate-error']) {
+      errors.push('simulate: synthetic error for testing');
+    }
+
+    if (errors.length > 0) {
+      process.exitCode = 1;
+      for (const e of errors) syslog('ERROR', `tick: ${e}`);
+      doErrorDebug(dateStr, errors);
+    } else {
+      syslog('INFO', 'tick ok');
+    }
+  },
+
+  wrap() {
+    const { opts } = parseOpts(args.slice(1));
+    doWrap(getDate(opts));
+  },
+
+  paths() {
+    const { positional } = parseOpts(args.slice(1));
+    const key = positional[0];
+    const map = { vault: VAULT_ROOT, projects: PROJECT_DIR };
+    if (!key || !map[key]) {
+      for (const [k, v] of Object.entries(map)) console.log(`${k}\t${v}`);
+    } else {
+      process.stdout.write(map[key]);
+    }
+  },
+
+  'check-upstream'() {
+    const { opts } = parseOpts(args.slice(1));
+    const results = checkUpstream();
+    let drifted = 0;
+    for (const r of results) {
+      if (r.status === 'drifted') {
+        console.log(`${r.skill}: DRIFT DETECTED (forked: ${r.storedHash.slice(0, 8)}… current: ${r.currentHash.slice(0, 8)}…)`);
+        if (r.forkedVersion && r.forkedVersion !== r.latestVersion) {
+          console.log(`  version changed: ${r.forkedVersion} → ${r.latestVersion}`);
+        }
+        if (opts.diff) {
+          const { execFileSync } = require('node:child_process');
+          try {
+            execFileSync('diff', ['-u', r.localFile, r.upstreamFile], { stdio: 'inherit' });
+          } catch (_) {}
+        }
+        drifted++;
+      } else if (r.status === 'no-cache' || r.status === 'no-upstream') {
+        console.log(`${r.skill}: ${r.message}`);
+      } else {
+        console.log(`${r.skill}: up to date`);
+      }
+    }
+    if (drifted > 0) process.exitCode = 1;
+  },
+
+  help() {
+    console.log(`work - daily workflow CLI
+
+Usage: work <command> [options]
+
+Commands:
+  ensure                       Create today's daily note if missing
+  promote                      Move checked-off tasks to changelog
+  sync [--apply]               Find unlogged changelog completions
+  list-projects                List active/evergreen projects (TSV)
+  inject                       Rebuild daily note tasks view from scan
+  sync-plans                   Link orphaned plans to projects
+  gather                       Run ensure + promote + sync + scan + inject
+  tick                         Maintenance: gather + sync + conditional wrap
+  wrap                         End-of-day: sync + Claude summary + complete projects
+  summary                      Show completed and open items
+  list-tasks [file]            List open/in-progress tasks (TSV)
+  set-task-state <f> <ln> <s>  Set task checkbox state (open|in-progress|done)
+  complete <file> <desc>       Check off task and log to daily note
+  create-project <slug> <title> Create a new project file
+  archive-project <slug>       Archive project and associated plans
+  close-tasks <file> [--skip=L] Bulk-close open tasks (done or cancelled)
+  close-project <slug> <summary> Complete project with summary
+  close-plan <plan-file>         Mark plan as done with findings flag
+  resolve-project <plan-file>  Find project file from plan frontmatter
+  paths [vault|projects]         Print configured paths
+  parse-changelog <file> <pat> Extract matching changelog lines (TSV)
+  check-upstream               Check forked skills for upstream changes
+  help                         Show this help
+
+Options:
+  --date=YYYY-MM-DD            Override date (defaults to today)`);
+  },
+};
+
+if (!cmd || !commands[cmd]) {
+  if (cmd && cmd !== 'help') console.error(`unknown command: ${cmd}\n`);
+  commands.help();
+  process.exit(cmd ? 1 : 0);
+}
+
+try {
+  const result = commands[cmd]();
+  if (result && typeof result.then === 'function') {
+    result.catch(e => { console.error(e.message); process.exit(1); });
+  }
+} catch (e) {
+  console.error(e.message);
+  process.exit(1);
+}
