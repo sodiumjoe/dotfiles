@@ -11,22 +11,21 @@ function requireFresh(mod) {
 }
 
 describe("checkUpstream", () => {
-  let tmpDir, savedHome;
+  let tmpDir, savedConfig;
   const LIB = path.join(__dirname, "..", "lib");
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "upstream-test-"));
-    savedHome = process.env.HOME;
+    savedConfig = process.env.WORK_UPSTREAM_CONFIG;
   });
 
   afterEach(() => {
-    process.env.HOME = savedHome;
+    if (savedConfig === undefined) delete process.env.WORK_UPSTREAM_CONFIG;
+    else process.env.WORK_UPSTREAM_CONFIG = savedConfig;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   function setupFakeEnv(skills, upstreamSkills) {
-    const homeDir = path.join(tmpDir, "home");
-    process.env.HOME = homeDir;
     const skillsDir = path.join(tmpDir, "skills");
     fs.mkdirSync(skillsDir, { recursive: true });
     for (const [name, content] of Object.entries(skills)) {
@@ -34,23 +33,25 @@ describe("checkUpstream", () => {
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "SKILL.md"), content);
     }
+    const upstreamDir = path.join(tmpDir, "upstream");
     if (upstreamSkills) {
-      const cacheDir = path.join(
-        homeDir,
-        ".claude",
-        "plugins",
-        "cache",
-        "stripe-internal-marketplace",
-        "superpowers",
-        "1.0.1",
-        "skills",
-      );
+      const upstreamSkillsDir = path.join(upstreamDir, "skills");
       for (const [name, content] of Object.entries(upstreamSkills)) {
-        const dir = path.join(cacheDir, name);
+        const dir = path.join(upstreamSkillsDir, name);
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(path.join(dir, "SKILL.md"), content);
       }
     }
+    const configPath = path.join(tmpDir, "upstream-config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        upstreams: {
+          "superpowers@stripe-internal-marketplace": upstreamDir,
+        },
+      }),
+    );
+    process.env.WORK_UPSTREAM_CONFIG = configPath;
     return skillsDir;
   }
 
@@ -94,18 +95,33 @@ describe("checkUpstream", () => {
     assert.ok(results[0].localFile.endsWith("SKILL.md"));
   });
 
-  it("handles missing cache gracefully", () => {
+  it("handles missing upstream path gracefully", () => {
     const upstream = "---\nname: baz\n---\n# baz";
-    const skillsDir = setupFakeEnv(
-      { baz: makeFrontmatter("baz", upstream) },
-      null,
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(path.join(skillsDir, "baz"), { recursive: true });
+    fs.writeFileSync(
+      path.join(skillsDir, "baz", "SKILL.md"),
+      makeFrontmatter("baz", upstream),
     );
+    const configPath = path.join(tmpDir, "upstream-config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        upstreams: {
+          "superpowers@stripe-internal-marketplace": path.join(
+            tmpDir,
+            "nonexistent-upstream",
+          ),
+        },
+      }),
+    );
+    process.env.WORK_UPSTREAM_CONFIG = configPath;
     const { checkUpstream } = requireFresh(path.join(LIB, "upstream.js"));
     const results = checkUpstream(skillsDir);
     assert.equal(results.length, 1);
     assert.equal(results[0].skill, "baz");
     assert.equal(results[0].status, "no-cache");
-    assert.ok(results[0].message.includes("upstream cache not found"));
+    assert.ok(results[0].message.includes("upstream path not found"));
   });
 
   it("skips skills without tracking frontmatter", () => {
@@ -124,7 +140,7 @@ describe("checkUpstream", () => {
     assert.equal(results.length, 0);
   });
 
-  it("reports no-upstream when skill missing from cache", () => {
+  it("reports no-upstream when skill missing from upstream repo", () => {
     const upstream = "---\nname: missing\n---\n# missing";
     const skillsDir = setupFakeEnv(
       { missing: makeFrontmatter("missing", upstream) },
@@ -137,37 +153,22 @@ describe("checkUpstream", () => {
     assert.equal(results[0].status, "no-upstream");
   });
 
-  it("picks latest version by semver, not lexicographic order", () => {
-    const upstream = "---\nname: ver\n---\n# ver";
-    const homeDir = path.join(tmpDir, "home");
-    process.env.HOME = homeDir;
+  it("reports no-upstream-config for unknown plugin", () => {
     const skillsDir = path.join(tmpDir, "skills");
-    fs.mkdirSync(path.join(skillsDir, "ver"), { recursive: true });
+    fs.mkdirSync(path.join(skillsDir, "unknown"), { recursive: true });
     fs.writeFileSync(
-      path.join(skillsDir, "ver", "SKILL.md"),
-      makeFrontmatter("ver", upstream),
+      path.join(skillsDir, "unknown", "SKILL.md"),
+      "---\nname: unknown\nplugin: other-plugin@other-registry\nskill: unknown\ncontent_hash: abc123\n---\n\n# unknown",
     );
-    const cacheBase = path.join(
-      homeDir,
-      ".claude",
-      "plugins",
-      "cache",
-      "stripe-internal-marketplace",
-      "superpowers",
-    );
-    for (const v of ["1.0.1", "1.0.9", "1.0.10", "1.0.2"]) {
-      const dir = path.join(cacheBase, v, "skills", "ver");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, "SKILL.md"),
-        v === "1.0.10" ? "---\nname: ver\n---\n# ver CHANGED" : upstream,
-      );
-    }
+    const configPath = path.join(tmpDir, "upstream-config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ upstreams: {} }));
+    process.env.WORK_UPSTREAM_CONFIG = configPath;
     const { checkUpstream } = requireFresh(path.join(LIB, "upstream.js"));
     const results = checkUpstream(skillsDir);
     assert.equal(results.length, 1);
-    assert.equal(results[0].status, "drifted");
-    assert.equal(results[0].latestVersion, "1.0.10");
+    assert.equal(results[0].skill, "unknown");
+    assert.equal(results[0].status, "no-upstream-config");
+    assert.ok(results[0].message.includes("no upstream configured"));
   });
 
   it("handles multiple skills with mixed statuses", () => {
@@ -192,7 +193,7 @@ describe("checkUpstream", () => {
 });
 
 describe("tick upstream drift integration", { concurrency: 1 }, () => {
-  let tmpDir, origVault, origXdg;
+  let tmpDir, origVault, origXdg, origConfig;
   const workBin = path.join(__dirname, "..", "bin", "work");
   const { execFileSync } = require("node:child_process");
 
@@ -206,6 +207,7 @@ describe("tick upstream drift integration", { concurrency: 1 }, () => {
     );
     origVault = process.env.WORK_VAULT;
     origXdg = process.env.XDG_CONFIG_HOME;
+    origConfig = process.env.WORK_UPSTREAM_CONFIG;
   }
 
   function teardown() {
@@ -214,6 +216,8 @@ describe("tick upstream drift integration", { concurrency: 1 }, () => {
     else process.env.WORK_VAULT = origVault;
     if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = origXdg;
+    if (origConfig === undefined) delete process.env.WORK_UPSTREAM_CONFIG;
+    else process.env.WORK_UPSTREAM_CONFIG = origConfig;
   }
 
   function runTick(extraEnv = {}) {
@@ -261,7 +265,6 @@ describe("tick upstream drift integration", { concurrency: 1 }, () => {
       projectPath(),
       "---\nstatus: evergreen\n---\n\n# Work\n\n## Tasks\n\n## Changelog\n",
     );
-    const fakeHome = path.join(tmpDir, "home");
     const skillsDir = path.join(tmpDir, "fakeskills");
     const upstreamContent =
       "---\nname: test-skill\n---\n# test-skill v2 changed";
@@ -275,21 +278,25 @@ describe("tick upstream drift integration", { concurrency: 1 }, () => {
       path.join(skillsDir, "test-skill", "SKILL.md"),
       `---\nname: test-skill\nplugin: superpowers@stripe-internal-marketplace\nversion: 1.0.1\nskill: test-skill\ncontent_hash: ${storedHash}\n---\n\n# test-skill`,
     );
-    const cacheDir = path.join(
-      fakeHome,
-      ".claude",
-      "plugins",
-      "cache",
-      "stripe-internal-marketplace",
-      "superpowers",
-      "1.0.1",
-      "skills",
-      "test-skill",
+    const upstreamDir = path.join(tmpDir, "fake-upstream");
+    fs.mkdirSync(path.join(upstreamDir, "skills", "test-skill"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(upstreamDir, "skills", "test-skill", "SKILL.md"),
+      upstreamContent,
     );
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, "SKILL.md"), upstreamContent);
+    const configPath = path.join(tmpDir, "upstream-config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        upstreams: {
+          "superpowers@stripe-internal-marketplace": upstreamDir,
+        },
+      }),
+    );
     const output = runTick({
-      HOME: fakeHome,
+      WORK_UPSTREAM_CONFIG: configPath,
       WORK_SKILLS_DIR: skillsDir,
     });
     assert.ok(
