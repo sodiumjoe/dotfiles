@@ -65,7 +65,10 @@ elif [[ "$mode" == "branch" ]]; then
     for ns in pay-server zoolander gocode; do
       if [[ -d "$root/$ns" ]]; then
         ref="green-$ns"
-        if git rev-parse --verify "origin/$ref" &>/dev/null || git rev-parse --verify "$ref" &>/dev/null; then
+        if git rev-parse --verify "origin/$ref" &>/dev/null; then
+          base_ref="origin/$ref"
+          break
+        elif git rev-parse --verify "$ref" &>/dev/null; then
           base_ref="$ref"
           break
         fi
@@ -75,8 +78,11 @@ elif [[ "$mode" == "branch" ]]; then
 
   if [[ -z "$base_ref" ]]; then
     for candidate in main master; do
-      if git rev-parse --verify "$candidate" &>/dev/null || git rev-parse --verify "origin/$candidate" &>/dev/null; then
+      if git rev-parse --verify "$candidate" &>/dev/null; then
         base_ref="$candidate"
+        break
+      elif git rev-parse --verify "origin/$candidate" &>/dev/null; then
+        base_ref="origin/$candidate"
         break
       fi
     done
