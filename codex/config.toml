@@ -1,0 +1,7 @@
+model = "o3"
+sandbox = "workspace-write"
+
+[approval]
+auto_approve = ["read_file", "list_directory", "grep", "glob", "shell:ls*", "shell:cat*", "shell:head*", "shell:tail*", "shell:grep*", "shell:rg*", "shell:find*", "shell:fd*", "shell:git log*", "shell:git diff*", "shell:git status*", "shell:git show*", "shell:git branch*", "shell:work *"]
+suggest = ["shell:curl*", "shell:git push*", "shell:git pull*", "shell:git merge*", "shell:git rebase*", "shell:git checkout*"]
+deny = ["shell:git reset --hard*", "shell:git clean -f*", "shell:rm -rf /*", "shell:sudo*"]

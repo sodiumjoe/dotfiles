@@ -2,6 +2,16 @@
 
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
+generate_instructions() {
+  echo "Generating CLAUDE.md..."
+  cat shared/base-instructions.md shared/work-tracking.md shared/neovim.md claude-overlay.md > claude/CLAUDE.md
+  echo "Generating AGENTS.md..."
+  mkdir -p codex
+  cat shared/base-instructions.md shared/work-tracking.md shared/neovim.md codex-overlay.md > codex/AGENTS.md
+}
+
+generate_instructions
+
 # symlink dotfiles
 
 files=(\
@@ -61,16 +71,31 @@ for hook in ~/.dotfiles/claude/hooks/*; do
   ln -sf "$hook" ~/.claude/hooks/$(basename "$hook")
 done
 
-mkdir -p ~/.claude/skills
-for skill in ~/.dotfiles/claude/skills/*/; do
-  ln -sfn "$skill" ~/.claude/skills/$(basename "$skill")
+mkdir -p ~/.claude/skills ~/.codex/skills
+for skill in ~/.dotfiles/skills/*/; do
+  name=$(basename "$skill")
+  ln -sfn "$skill" ~/.claude/skills/$name
+  ln -sfn "$skill" ~/.codex/skills/$name
 done
+
+mkdir -p ~/.claude/agents ~/.claude/commands
+for agent in ~/.dotfiles/claude/agents/*; do
+  ln -sf "$agent" ~/.claude/agents/$(basename "$agent")
+done
+for cmd in ~/.dotfiles/claude/commands/*; do
+  ln -sf "$cmd" ~/.claude/commands/$(basename "$cmd")
+done
+
+mkdir -p ~/.codex
+ln -sf ~/.dotfiles/codex/config.toml ~/.codex/config.toml
+ln -sf ~/.dotfiles/codex/AGENTS.md ~/.codex/AGENTS.md
 
 # symlink scripts into ~/bin
 mkdir -p ~/bin
 for script in ~/.dotfiles/bin/*; do
   ln -sf "$script" ~/bin/$(basename "$script")
 done
+ln -sf ~/.dotfiles/work-cli/bin/work ~/bin/work
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then

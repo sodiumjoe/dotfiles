@@ -1,0 +1,5 @@
+{
+  "upstreams": {
+    "superpowers@stripe-internal-marketplace": "~/.claude/plugins/marketplaces/stripe-internal-marketplace/plugins/superpowers"
+  }
+}

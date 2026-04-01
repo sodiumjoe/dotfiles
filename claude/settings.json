@@ -131,11 +131,21 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/session-project.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {
-    "obsidian@obsidian-skills": true,
-    "work@personal": true
+    "obsidian@obsidian-skills": true
   },
   "spinnerTipsEnabled": false,
   "spinnerVerbs": {

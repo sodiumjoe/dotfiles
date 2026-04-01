@@ -1,4 +1,4 @@
-local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/work"
+local work_bin = vim.env.HOME .. "/.dotfiles/work-cli/bin/work"
 local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
 local agentic_utils = require("sodium.agentic_utils")
 

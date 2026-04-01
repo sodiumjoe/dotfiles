@@ -103,7 +103,7 @@ return {
             {
                 "<leader>ww",
                 function()
-                    local work_bin = vim.env.HOME .. "/stripe/work/personal-marketplace/work/bin/work"
+                    local work_bin = vim.env.HOME .. "/.dotfiles/work-cli/bin/work"
                     local spin = require("sodium.spinner")
                     spin.start("work")
                     vim.fn.system({ work_bin, "ensure" })
