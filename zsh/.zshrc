@@ -332,9 +332,9 @@ _associate_devbox() {
 
 _devbox_sync_push() {
   local host="$1" slug="$2"
-  ssh "$host" "mkdir -p ~/stripe/work/{projects/${slug},personal-marketplace/work}" 2>/dev/null
+  ssh "$host" "mkdir -p ~/stripe/work/projects/${slug} ~/.dotfiles/work-cli" 2>/dev/null
   rsync -az --exclude='*.jsonl' "$HOME/stripe/work/projects/${slug}/" "$host:~/stripe/work/projects/${slug}/"
-  rsync -az --delete "$HOME/stripe/work/personal-marketplace/work/" "$host:~/stripe/work/personal-marketplace/work/"
+  rsync -az --delete "$HOME/.dotfiles/work-cli/" "$host:~/.dotfiles/work-cli/"
 }
 
 _devbox_sync_pull() {

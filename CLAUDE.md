@@ -71,11 +71,11 @@ Caveats:
 
 ## External Integrations
 
-### personal-marketplace
+### work-cli
 
-Repo: `~/stripe/work/personal-marketplace/`
+Location: `~/.dotfiles/work-cli/`
 
-Binary: `~/stripe/work/personal-marketplace/work/bin/work`
+Binary: `~/.dotfiles/work-cli/bin/work`
 
 Access: `~/bin/work` symlink, hardcoded full path in `neovim/lua/sodium/plugins/agentic.lua` (work_bin variable).
 
