@@ -234,7 +234,7 @@ local function dragWindowToSpace(win, direction, callback)
     end)
 end
 
-local function moveChromeToDesktops(callback)
+local function moveWindowsToDesktops(callback)
     local screenSpaces = hs.spaces.spacesForScreen(hs.screen.primaryScreen())
     local workSpace = screenSpaces[1]
     local personalSpace = screenSpaces[2]
@@ -246,30 +246,47 @@ local function moveChromeToDesktops(callback)
     end
 
     local activeSpace = hs.spaces.activeSpaceOnScreen(hs.screen.primaryScreen())
-    local app = hs.application.find("Google Chrome")
-    if not app then
-        if callback then
-            callback()
-        end
-        return
-    end
 
     -- Collect windows that need moving
     local toMove = {}
-    for _, win in ipairs(app:allWindows()) do
-        local title = win:title()
-        local sp = hs.spaces.windowSpaces(win:id())
-        local curSpace = sp and sp[1]
-        if not curSpace then
-            goto continue
-        end
 
-        if title:find("Joe %(stripe%.com%)") and curSpace ~= workSpace then
-            table.insert(toMove, { win = win, target = workSpace })
-        elseif not title:find("stripe%.com") and title:find("Google Chrome %- Joe") and curSpace ~= personalSpace then
-            table.insert(toMove, { win = win, target = personalSpace })
+    -- Chrome windows: match by profile name in title
+    local chrome = hs.application.find("Google Chrome")
+    if chrome then
+        for _, win in ipairs(chrome:allWindows()) do
+            local title = win:title()
+            local sp = hs.spaces.windowSpaces(win:id())
+            local curSpace = sp and sp[1]
+            if not curSpace then
+                goto continue_chrome
+            end
+
+            if title:find("Joe %(stripe%.com%)") and curSpace ~= workSpace then
+                table.insert(toMove, { win = win, target = workSpace })
+            elseif
+                not title:find("stripe%.com")
+                and title:find("Google Chrome %- Joe")
+                and curSpace ~= personalSpace
+            then
+                table.insert(toMove, { win = win, target = personalSpace })
+            end
+            ::continue_chrome::
         end
-        ::continue::
+    end
+
+    -- PWAs that should be on the personal space
+    local personalApps = { "Google Chat", "Messages" }
+    for _, appName in ipairs(personalApps) do
+        local app = hs.application.find(appName)
+        if app then
+            for _, win in ipairs(app:allWindows()) do
+                local sp = hs.spaces.windowSpaces(win:id())
+                local curSpace = sp and sp[1]
+                if curSpace and curSpace ~= personalSpace then
+                    table.insert(toMove, { win = win, target = personalSpace })
+                end
+            end
+        end
     end
 
     if #toMove == 0 then
@@ -389,7 +406,7 @@ local function layout()
         mic:setDefaultInputDevice()
     end
 
-    moveChromeToDesktops(layoutWindows)
+    moveWindowsToDesktops(layoutWindows)
 end
 
 local function mute_zoom_or_global()
