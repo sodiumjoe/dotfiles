@@ -208,7 +208,7 @@ end
 
 local function dragWindowToSpace(win, direction, callback)
     win:focus()
-    hs.timer.doAfter(0.3, function()
+    hs.timer.doAfter(0.15, function()
         local zoomRect = win:zoomButtonRect()
         if not zoomRect then
             if callback then
@@ -220,14 +220,14 @@ local function dragWindowToSpace(win, direction, callback)
         local origCursor = hs.mouse.absolutePosition()
 
         hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseDown, grabPoint):post()
-        hs.timer.doAfter(0.3, function()
+        hs.timer.doAfter(0.15, function()
             local key = direction == "right" and "l" or "h"
             hs.eventtap.keyStroke({ "ctrl", "cmd" }, key, 0)
-            hs.timer.doAfter(1.0, function()
+            hs.timer.doAfter(0.5, function()
                 hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseUp, grabPoint):post()
                 hs.mouse.absolutePosition(origCursor)
                 if callback then
-                    hs.timer.doAfter(0.3, callback)
+                    hs.timer.doAfter(0.15, callback)
                 end
             end)
         end)
@@ -293,10 +293,20 @@ local function moveChromeToDesktops(callback)
         end
 
         local entry = toMove[i]
-        local curSpace = hs.spaces.windowSpaces(entry.win:id())
-        local direction = (curSpace and curSpace[1] == workSpace) and "right" or "left"
-        dragWindowToSpace(entry.win, direction, function()
+        local winSpace = hs.spaces.windowSpaces(entry.win:id())
+        local winOnSpace = winSpace and winSpace[1]
+        if not winOnSpace then
             moveNext(i + 1)
+            return
+        end
+        local direction = (winOnSpace == workSpace) and "right" or "left"
+
+        -- Navigate to the window's space first so focus + drag works
+        hs.spaces.gotoSpace(winOnSpace)
+        hs.timer.doAfter(0.3, function()
+            dragWindowToSpace(entry.win, direction, function()
+                moveNext(i + 1)
+            end)
         end)
     end
 
