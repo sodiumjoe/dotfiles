@@ -591,6 +591,7 @@ return {
             provider = vim.fn.executable("claude") == 1 and "claude-acp" or "gemini-acp",
             acp_providers = {
                 ["claude-acp"] = {
+                    command = "claude-agent-acp",
                     env = {
                         NODE_NO_WARNINGS = "1",
                         IS_AI_TERMINAL = "1",
