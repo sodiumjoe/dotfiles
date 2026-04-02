@@ -6,5 +6,5 @@ auto_approve = ["read_file", "list_directory", "grep", "glob", "shell:ls*", "she
 suggest = ["shell:curl*", "shell:git push*", "shell:git pull*", "shell:git merge*", "shell:git rebase*", "shell:git checkout*"]
 deny = ["shell:git reset --hard*", "shell:git clean -f*", "shell:rm -rf /*", "shell:sudo*"]
 
-[projects."/Users/moon/stripe/work"]
+[projects."~/stripe/work"]
 trust_level = "trusted"
