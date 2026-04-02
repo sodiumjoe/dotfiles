@@ -1,3 +1,5 @@
+require("hs.ipc")
+
 hs.window.animationDuration = 0.01
 local log = hs.logger.new("window_focus", 5)
 -- log.log("logging enabled")
@@ -204,31 +206,115 @@ local function layoutApp(filter, screenIndex, position)
     end
 end
 
-local function layout()
+local function dragWindowToSpace(win, direction, callback)
+    win:focus()
+    hs.timer.doAfter(0.3, function()
+        local zoomRect = win:zoomButtonRect()
+        if not zoomRect then
+            if callback then
+                callback()
+            end
+            return
+        end
+        local grabPoint = hs.geometry.point(zoomRect.x + zoomRect.w + 5, zoomRect.y + zoomRect.h / 2)
+        local origCursor = hs.mouse.absolutePosition()
+
+        hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseDown, grabPoint):post()
+        hs.timer.doAfter(0.3, function()
+            local key = direction == "right" and "l" or "h"
+            hs.eventtap.keyStroke({ "ctrl", "cmd" }, key, 0)
+            hs.timer.doAfter(1.0, function()
+                hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseUp, grabPoint):post()
+                hs.mouse.absolutePosition(origCursor)
+                if callback then
+                    hs.timer.doAfter(0.3, callback)
+                end
+            end)
+        end)
+    end)
+end
+
+local function moveChromeToDesktops(callback)
+    local screenSpaces = hs.spaces.spacesForScreen(hs.screen.primaryScreen())
+    local workSpace = screenSpaces[1]
+    local personalSpace = screenSpaces[2]
+    if not workSpace or not personalSpace then
+        if callback then
+            callback()
+        end
+        return
+    end
+
+    local activeSpace = hs.spaces.activeSpaceOnScreen(hs.screen.primaryScreen())
+    local app = hs.application.find("Google Chrome")
+    if not app then
+        if callback then
+            callback()
+        end
+        return
+    end
+
+    -- Collect windows that need moving
+    local toMove = {}
+    for _, win in ipairs(app:allWindows()) do
+        local title = win:title()
+        local sp = hs.spaces.windowSpaces(win:id())
+        local curSpace = sp and sp[1]
+        if not curSpace then
+            goto continue
+        end
+
+        if title:find("Joe %(stripe%.com%)") and curSpace ~= workSpace then
+            table.insert(toMove, { win = win, target = workSpace })
+        elseif not title:find("stripe%.com") and title:find("Google Chrome %- Joe") and curSpace ~= personalSpace then
+            table.insert(toMove, { win = win, target = personalSpace })
+        end
+        ::continue::
+    end
+
+    if #toMove == 0 then
+        if callback then
+            callback()
+        end
+        return
+    end
+
+    -- Move windows one at a time via chained callbacks
+    local function moveNext(i)
+        if i > #toMove then
+            -- Return to original space
+            hs.timer.doAfter(0.3, function()
+                hs.spaces.gotoSpace(activeSpace)
+                if callback then
+                    hs.timer.doAfter(0.5, callback)
+                end
+            end)
+            return
+        end
+
+        local entry = toMove[i]
+        local curSpace = hs.spaces.windowSpaces(entry.win:id())
+        local direction = (curSpace and curSpace[1] == workSpace) and "right" or "left"
+        dragWindowToSpace(entry.win, direction, function()
+            moveNext(i + 1)
+        end)
+    end
+
+    moveNext(1)
+end
+
+local function layoutWindows()
     local screens = hs.screen.allScreens()
-
-    local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
-        or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
-    if speakers then
-        speakers:setDefaultOutputDevice()
-    end
-
-    local mic = hs.audiodevice.findInputByName("Yeti Nano") or hs.audiodevice.findInputByName("MacBook Pro Microphone")
-    if mic then
-        mic:setDefaultInputDevice()
-    end
 
     if #screens == 1 then
         for _, win in pairs(chatFilter:getWindows()) do
             win:maximize()
         end
-
         local filter = hs.window.filter.new()
-        local windows = filter:getWindows()
-        for _, win in pairs(windows) do
+        for _, win in pairs(filter:getWindows()) do
             maximize(win)
         end
-        return nil
+        return
     end
 
     resetScreenRotations()
@@ -256,12 +342,12 @@ local function layout()
         mainZoomWindow:sendToBack()
     end
 
-    -- active zoom meeting
+    local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
+        or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
+
     if zoomMeeting then
-        -- move chrome windows to the right
         layoutApp(chromeFilter, 2, positions.bottom)
         layoutApp(ghosttyFilter, 2, positions.bottom)
-
         if hs.grid.get(zoomMeeting) == positions.topZoom then
             layoutWin(zoomMeeting, 1, positions.bottomZoom)
             layoutWin(zoom, 1, positions.topZoom)
@@ -279,6 +365,21 @@ local function layout()
             speakers:setInputVolume(25)
         end
     end
+end
+
+local function layout()
+    local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
+        or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
+    if speakers then
+        speakers:setDefaultOutputDevice()
+    end
+
+    local mic = hs.audiodevice.findInputByName("Yeti Nano") or hs.audiodevice.findInputByName("MacBook Pro Microphone")
+    if mic then
+        mic:setDefaultInputDevice()
+    end
+
+    moveChromeToDesktops(layoutWindows)
 end
 
 local function mute_zoom_or_global()
