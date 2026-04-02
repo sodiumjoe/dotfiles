@@ -13,15 +13,43 @@ Dotfiles repo. Manages shell, neovim, tmux, git, and other tool configs via syml
 **Special cases:**
 - `init.lua` → `~/.config/nvim/init.lua`
 - `tmux/tmux.conf` → `~/.tmux.conf`
-- `claude/CLAUDE.md` → `~/.claude/CLAUDE.md`
 - `claude/settings.json` → `~/.claude/settings.json`
 - `claude/hooks/*` → `~/.claude/hooks/*`
-- `claude/skills/*/` → `~/.claude/skills/*/`
+- `claude/agents/*` → `~/.claude/agents/*`
+- `claude/commands/*` → `~/.claude/commands/*`
+- `skills/*/` → `~/.claude/skills/*/` AND `~/.codex/skills/*/`
+- `codex/config.toml` → `~/.codex/config.toml`
+- `work-cli/bin/work` → `~/bin/work`
 - `bin/*` → `~/bin/*`
+
+**Generated files** (by `bootstrap.sh`, not edited directly):
+- `claude/CLAUDE.md` → `~/.claude/CLAUDE.md` (from `shared/*.md` + `claude-overlay.md`)
+- `codex/AGENTS.md` → `~/.codex/AGENTS.md` (from `shared/*.md` + `codex-overlay.md`)
 
 **Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
 
 When adding new config: add the file or directory, then add it to the appropriate list in `bootstrap.sh` (`files` array for home dotfiles, `xdg_files` array for XDG configs, or a new `ln -s` for special cases).
+
+## Agent Instruction Architecture
+
+Both Claude Code and Codex CLI receive instructions generated from a shared base with agent-specific overlays:
+
+```
+shared/base-instructions.md  ─┐
+shared/work-tracking.md      ─┼─→ claude/CLAUDE.md  (+ claude-overlay.md)
+shared/neovim.md             ─┤
+                              └─→ codex/AGENTS.md   (+ codex-overlay.md)
+```
+
+`bootstrap.sh` runs the concatenation before creating symlinks. The generated files are gitignored — edit the source files in `shared/` or the overlay files, never the generated output.
+
+`shared/` contains agent-agnostic content: communication style, code conventions, work tracking, neovim context. The overlay files contain agent-specific tool references and skill invocation syntax.
+
+## Skills
+
+Skills live in `skills/` at the repo root and symlink to both `~/.claude/skills/` and `~/.codex/skills/`. Each skill is a directory containing `SKILL.md` (with optional supporting files and scripts).
+
+Skills forked from the Stripe internal marketplace (`superpowers` plugin) have upstream tracking metadata in their frontmatter (`plugin`, `version`, `content_hash`). Run `work check-upstream` to detect drift against the marketplace repo clone at `~/.claude/plugins/marketplaces/stripe-internal-marketplace/`.
 
 ## Neovim Architecture
 
@@ -88,15 +116,20 @@ Neovim keybindings:
 
 Work vault: `~/stripe/work/` (configured in `work/config.json`).
 
-### claude/
+### claude/ and codex/
 
-- `claude/CLAUDE.md` → `~/.claude/CLAUDE.md` (global agent instructions)
-- `claude/settings.json` → `~/.claude/settings.json` (global permissions, model config, plugins)
+- `claude/CLAUDE.md` — generated from `shared/*.md` + `claude-overlay.md` (do not edit directly)
+- `claude/settings.json` → `~/.claude/settings.json` (permissions, hooks, MCP servers)
+- `claude/agents/` — plan-reviewer, code-reviewer (Claude-only, no Codex equivalent)
+- `claude/commands/` — note, name, archive-plans, etc. (Claude-only)
+- `claude/hooks/` — notify-on-stop.sh, session-project.sh
+- `codex/AGENTS.md` — generated from `shared/*.md` + `codex-overlay.md` (do not edit directly)
+- `codex/config.toml` → `~/.codex/config.toml` (model, sandbox, MCP)
 - Project-specific overrides in `.claude/settings.local.json`
 
 ### devbox
 
-Shell prompt displays devbox context when in remote dev environment (referenced in `zsh/.p10k.zsh`). No other filesystem integration.
+Devbox initialization clones this repo and runs `bootstrap.sh`, which sets up everything: work-cli symlink, skills, agents, commands, hooks, generated instruction files. The `_devbox_sync_push` function in `zsh/.zshrc` rsyncs `work-cli/` and project files on connect; `_devbox_sync_pull` syncs project changes back on disconnect.
 
 ## Committing Changes
 
