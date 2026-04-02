@@ -568,10 +568,6 @@ end
 
 return {
     "carlos-algms/agentic.nvim",
-    cond = function()
-        local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
-        return vim.fn.executable(claude_path) == 1 or vim.fn.executable("gemini") == 1
-    end,
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
@@ -588,7 +584,7 @@ return {
             file_picker = {
                 enabled = false,
             },
-            provider = vim.fn.executable("claude") == 1 and "claude-acp" or "gemini-acp",
+            provider = "claude-acp",
             acp_providers = {
                 ["claude-acp"] = {
                     command = "claude-agent-acp",
@@ -603,6 +599,10 @@ return {
                 ["gemini-acp"] = {
                     command = "gemini",
                     args = { "--experimental-acp" },
+                    env = {},
+                },
+                ["codex-acp"] = {
+                    command = "codex-acp",
                     env = {},
                 },
             },
