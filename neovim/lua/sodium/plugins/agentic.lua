@@ -604,7 +604,7 @@ return {
                     env = {},
                 },
                 ["codex-acp"] = {
-                    command = vim.env.HOME .. "/.local/bin/codex-acp",
+                    command = "codex-acp",
                     env = {},
                 },
             },
