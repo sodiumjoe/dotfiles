@@ -490,18 +490,22 @@ local function profileForHost(host)
             end
         end
     end
-    return "Profile 1"
+    return nil
 end
 
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
     local profile = profileForHost(host)
-    hs.task
-        .new("/usr/bin/open", nil, {
-            "-na",
-            "Google Chrome",
-            "--args",
-            "--profile-directory=" .. profile,
-            fullURL,
-        })
-        :start()
+    if profile then
+        hs.task
+            .new("/usr/bin/open", nil, {
+                "-na",
+                "Google Chrome",
+                "--args",
+                "--profile-directory=" .. profile,
+                fullURL,
+            })
+            :start()
+    else
+        hs.task.new("/usr/bin/open", nil, { "-a", "Google Chrome", fullURL }):start()
+    end
 end
