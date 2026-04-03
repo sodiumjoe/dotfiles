@@ -402,6 +402,7 @@ remotes() {
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
+  tmux unnest 2>/dev/null
 
   (_devbox_sync_pull "$host" "$slug" &)
 
@@ -432,6 +433,7 @@ mremote() {
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
+  tmux unnest 2>/dev/null
 
   (_devbox_sync_pull "$host" "$slug" &)
 
@@ -456,6 +458,7 @@ remote() {
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
+  tmux unnest 2>/dev/null
 
   (_devbox_sync_pull "$host" "$slug" &)
 
@@ -537,6 +540,7 @@ dev() {
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
+  tmux unnest 2>/dev/null
 
   if [ -n "$proj_slug" ]; then
     (_devbox_sync_pull "$host" "$proj_slug" &)
