@@ -626,6 +626,35 @@ return {
             },
         })
 
+        -- Monkey-patch MessageWriter to dim thinking chunks with Comment highlight
+        local MessageWriter = require("agentic.ui.message_writer")
+        local NS_THINKING = vim.api.nvim_create_namespace("agentic_thinking")
+        local orig_write_chunk = MessageWriter.write_message_chunk
+
+        function MessageWriter:write_message_chunk(update)
+            local is_thinking = update.sessionUpdate == "agent_thought_chunk"
+            if is_thinking and self._last_message_type ~= "agent_thought_chunk" then
+                self._thinking_start = vim.api.nvim_buf_line_count(self.bufnr) - 1
+            end
+
+            orig_write_chunk(self, update)
+
+            if is_thinking and self._thinking_start then
+                local end_line = vim.api.nvim_buf_line_count(self.bufnr) - 1
+                for ln = self._thinking_start, end_line do
+                    local text = vim.api.nvim_buf_get_lines(self.bufnr, ln, ln + 1, false)[1]
+                    if text and #text > 0 then
+                        pcall(vim.api.nvim_buf_set_extmark, self.bufnr, NS_THINKING, ln, 0, {
+                            end_col = #text,
+                            hl_group = "Comment",
+                        })
+                    end
+                end
+            elseif not is_thinking then
+                self._thinking_start = nil
+            end
+        end
+
         utils.augroup("AgenticResize", { clear = true })("VimResized", {
             callback = resize_agentic_split,
         })
