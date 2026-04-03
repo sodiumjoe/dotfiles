@@ -50,7 +50,11 @@ return {
             enabled = true,
             top_down = false,
             style = function(buf, notif, ctx)
-                if (notif.title or "") ~= "" then
+                -- strip leading emoji/icon from title since snacks already shows notif.icon
+                local title = vim.trim(notif.title or "")
+                -- remove leading non-ASCII chars (emoji, nerd font icons) and trailing whitespace
+                title = title:gsub("^[^\32-\126]+%s*", "")
+                if title ~= "" then
                     -- fancy style: header with icon/title + separator, then message
                     vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "", "" })
                     vim.api.nvim_buf_set_lines(buf, 2, -1, false, vim.split(notif.msg, "\n"))
@@ -59,7 +63,7 @@ return {
                             { " " },
                             { notif.icon, ctx.hl.icon },
                             { " " },
-                            { notif.title, ctx.hl.title },
+                            { title, ctx.hl.title },
                         },
                         virt_text_win_col = 0,
                         priority = 10,
