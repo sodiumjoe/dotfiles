@@ -470,3 +470,38 @@ hs.hotkey.bind({ "ctrl", "shift" }, "k", focusUp)
 hs.hotkey.bind({}, "f20", mute_zoom_or_global)
 -- hs.hotkey.bind({"ctrl"}, 'o', focusUp)
 -- hs.hotkey.bind({"ctrl"}, '.', focusDown)
+
+-- URL routing: open links in the correct Chrome profile based on domain
+local workDomains = {
+    "stripe.com",
+    "corp.stripe.com",
+    "stripe.me",
+}
+
+local function domainMatches(host, pattern)
+    return host == pattern or host:sub(-(#pattern + 1)) == "." .. pattern
+end
+
+local function profileForHost(host)
+    if host then
+        for _, domain in ipairs(workDomains) do
+            if domainMatches(host, domain) then
+                return "Default"
+            end
+        end
+    end
+    return "Profile 1"
+end
+
+hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
+    local profile = profileForHost(host)
+    hs.task
+        .new("/usr/bin/open", nil, {
+            "-na",
+            "Google Chrome",
+            "--args",
+            "--profile-directory=" .. profile,
+            fullURL,
+        })
+        :start()
+end
