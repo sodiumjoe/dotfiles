@@ -223,7 +223,7 @@ local function dragWindowToSpace(win, direction, callback)
         hs.timer.doAfter(0.15, function()
             local key = direction == "right" and "l" or "h"
             hs.eventtap.keyStroke({ "ctrl", "cmd" }, key, 0)
-            hs.timer.doAfter(0.5, function()
+            hs.timer.doAfter(0.35, function()
                 hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseUp, grabPoint):post()
                 hs.mouse.absolutePosition(origCursor)
                 if callback then
@@ -320,7 +320,7 @@ local function moveWindowsToDesktops(callback)
 
         -- Navigate to the window's space first so focus + drag works
         hs.spaces.gotoSpace(winOnSpace)
-        hs.timer.doAfter(0.3, function()
+        hs.timer.doAfter(0.2, function()
             dragWindowToSpace(entry.win, direction, function()
                 moveNext(i + 1)
             end)
