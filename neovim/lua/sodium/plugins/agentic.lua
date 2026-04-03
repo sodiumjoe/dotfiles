@@ -584,8 +584,8 @@ return {
             file_picker = {
                 enabled = false,
             },
-            provider = "claude-acp",
-            -- provider = "codex-acp",
+            -- provider = "claude-acp",
+            provider = "codex-acp",
             -- provider = "gemini-acp",
             acp_providers = {
                 ["claude-acp"] = {
@@ -604,8 +604,7 @@ return {
                     env = {},
                 },
                 ["codex-acp"] = {
-                    command = "codex",
-                    args = { "app-server" },
+                    command = vim.env.HOME .. "/.local/bin/codex-acp",
                     env = {},
                 },
             },
