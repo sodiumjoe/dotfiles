@@ -584,8 +584,8 @@ return {
             file_picker = {
                 enabled = false,
             },
-            -- provider = "claude-acp",
-            provider = "codex-acp",
+            provider = "claude-acp",
+            -- provider = "codex-acp",
             -- provider = "gemini-acp",
             acp_providers = {
                 ["claude-acp"] = {
