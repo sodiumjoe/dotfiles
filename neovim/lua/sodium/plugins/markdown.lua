@@ -42,9 +42,9 @@ end
 vim.api.nvim_create_autocmd("FileType", {
     pattern = "markdown",
     callback = function(ev)
-        vim.keymap.set("n", "o", continue_list("o"), { buffer = ev.buf })
-        vim.keymap.set("n", "O", continue_list("O"), { buffer = ev.buf })
-        vim.keymap.set("i", "<CR>", cr_continue_list, { buffer = ev.buf })
+        vim.keymap.set("n", "o", continue_list("o"), { buf = ev.buf })
+        vim.keymap.set("n", "O", continue_list("O"), { buf = ev.buf })
+        vim.keymap.set("i", "<CR>", cr_continue_list, { buf = ev.buf })
     end,
 })
 
@@ -201,7 +201,7 @@ return {
                         follow_link_or(function()
                             vim.cmd("normal! gF")
                         end),
-                        { buffer = true }
+                        { buf = 0 }
                     )
                     vim.keymap.set(
                         "n",
@@ -212,12 +212,12 @@ return {
                                 vim.cmd("write")
                             end
                         end),
-                        { buffer = true }
+                        { buf = 0 }
                     )
                     vim.keymap.set("n", "<C-Space>", function()
                         vim.cmd("Obsidian toggle_checkbox")
                         vim.cmd("write")
-                    end, { buffer = true })
+                    end, { buf = 0 })
                 end,
             },
             checkbox = {
