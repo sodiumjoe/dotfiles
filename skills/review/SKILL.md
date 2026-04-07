@@ -1,7 +1,7 @@
 ---
 name: review
 description: Use when the user invokes /review to review a PR or branch changes. Reads all diffs, produces a granular summary, then the user navigates files via picker with comment overlay for feedback.
-allowed-tools: Bash(*/skills/review/scripts/* *), Bash(*/skills/neovim/scripts/nvim-open *), Bash(*/skills/neovim/scripts/nvim-diff *), Bash(*/skills/neovim/scripts/nvim-lua *)
+allowed-tools: Bash(*/skills/review/scripts/* *)
 ---
 
 # Review
@@ -34,19 +34,19 @@ The script outputs JSON: `{ mode, id, base_ref, head_ref, toplevel, stashed, pre
 After the script succeeds, initialize the neovim session state:
 
 ```
-$(dirname "${CLAUDE_SKILL_DIR}")/neovim/scripts/nvim-lua "local r = require('sodium.review') r.start_session({ id = '<id>', mode = '<mode>', base_ref = '<base_ref>', head_ref = '<head_ref>', toplevel = '<toplevel>' }) r.set_previous_branch('<previous_branch>') r.set_stashed(<stashed>) return 0"
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua "local r = require('sodium.review') r.start_session({ id = '<id>', mode = '<mode>', base_ref = '<base_ref>', head_ref = '<head_ref>', toplevel = '<toplevel>' }) r.set_previous_branch('<previous_branch>') r.set_stashed(<stashed>) return 0"
 ```
 
 For PR mode, also fetch the current GitHub user and set up the comment overlay actor:
 
 ```
-$(dirname "${CLAUDE_SKILL_DIR}")/neovim/scripts/nvim-lua "local user = vim.trim(vim.system({'gh', 'api', 'user', '--jq', '.login'}, {text=true}):wait().stdout or '') require('sodium.review').set_current_user(user) vim.g.comment_overlay_actor = user return 0"
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua "local user = vim.trim(vim.system({'gh', 'api', 'user', '--jq', '.login'}, {text=true}):wait().stdout or '') require('sodium.review').set_current_user(user) vim.g.comment_overlay_actor = user return 0"
 ```
 
 For PR mode, fetch and display existing PR comments:
 
 ```
-$(dirname "${CLAUDE_SKILL_DIR}")/neovim/scripts/nvim-lua "
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua "
 local review = require('sodium.review')
 local s = review.get_session()
 local r = vim.system({'gh', 'api', 'repos/{owner}/{repo}/pulls/' .. s.id .. '/comments', '--paginate'}, {text=true}):wait()
