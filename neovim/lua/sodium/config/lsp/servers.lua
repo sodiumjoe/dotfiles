@@ -21,7 +21,7 @@ vim.lsp.config("bazel", {
 vim.lsp.config("rust_analyzer", {
     cmd = { "rust-analyzer" },
     filetypes = { "rust" },
-    root_markers = { "Cargo.toml" },
+    root_markers = { "Cargo.toml", "rust-project.json", ".git" },
     settings = {
         ["rust-analyzer"] = {
             cargo = { features = "all" },
@@ -37,6 +37,8 @@ vim.lsp.config("sorbet", {
         "--lsp",
         "--enable-all-experimental-lsp-features",
     },
+    filetypes = { "ruby" },
+    root_markers = { "Gemfile", ".git" },
     init_options = {
         supportsOperationNotifications = true,
         supportsSorbetURIs = true,
@@ -46,9 +48,36 @@ vim.lsp.config("sorbet", {
 
 vim.lsp.config("eslint", {
     cmd = { "vscode-eslint-language-server", "--stdio" },
-    filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
-    root_markers = { ".eslintrc", ".eslintrc.js", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs" },
+    filetypes = {
+        "javascript",
+        "javascriptreact",
+        "typescript",
+        "typescriptreact",
+    },
+    root_markers = {
+        ".eslintrc",
+        ".eslintrc.js",
+        ".eslintrc.cjs",
+        ".eslintrc.yaml",
+        ".eslintrc.yml",
+        ".eslintrc.json",
+        "eslint.config.js",
+        "eslint.config.mjs",
+        "eslint.config.cjs",
+        "eslint.config.ts",
+        "eslint.config.mts",
+        "eslint.config.cts",
+    },
     cmd_env = { BROWSERSLIST_IGNORE_OLD_DATA = "1" },
+    settings = {
+        validate = "on",
+        rulesCustomizations = {},
+        run = "onType",
+        codeAction = {
+            disableRuleComment = { enable = true, location = "separateLine" },
+            showDocumentation = { enable = true },
+        },
+    },
     handlers = {
         ["textDocument/diagnostic"] = function(_, result, ctx)
             if result == nil or result.items == nil then
@@ -68,21 +97,30 @@ vim.lsp.config("eslint", {
 })
 
 vim.lsp.config("flow", {
-    cmd = { "flow", "lsp" },
+    cmd = { "npx", "--no-install", "flow", "lsp" },
     filetypes = { "javascript", "javascriptreact" },
     root_markers = { ".flowconfig" },
 })
 
 vim.lsp.config("tsgo", {
     cmd = { "tsgo", "--lsp", "--stdio" },
-    filetypes = { "typescript", "typescriptreact" },
-    root_markers = { "tsconfig.json" },
+    filetypes = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
+    root_markers = { "tsconfig.json", "jsconfig.json", "package.json", ".git" },
 })
 
 vim.lsp.config("lua_ls", {
     cmd = { "lua-language-server" },
     filetypes = { "lua" },
-    root_markers = { ".luarc.json", ".luarc.jsonc", ".stylua.toml", "stylua.toml" },
+    root_markers = {
+        ".luarc.json",
+        ".luarc.jsonc",
+        ".luacheckrc",
+        ".stylua.toml",
+        "stylua.toml",
+        "selene.toml",
+        "selene.yml",
+        ".git",
+    },
 })
 
 vim.lsp.config("efm", {
