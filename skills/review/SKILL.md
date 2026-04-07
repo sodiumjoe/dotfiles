@@ -135,14 +135,12 @@ Build the flags from session state:
 
 The script outputs a JSON array of local comments on stdout.
 
-**PR mode:** If there are local comments, show them to the user. Ask for review type: approve, comment, or request changes. Ask for an optional review body. Then submit:
+**PR mode:** Show any local comments to the user. Ask for review type: approve, comment, or request changes. Ask for an optional review body. Then submit:
 
 ```
 echo '<comments_json>' | ${CLAUDE_SKILL_DIR}/scripts/review-submit <pr_number> <EVENT> [<body>]
 ```
 
-Report success or failure.
+Pass `[]` for comments_json if there are no inline comments. Report success or failure.
 
-**Branch mode:** If there are local comments, read each one and act on it as an instruction. Each comment has `file`, `line`/`line_start`, and `body` fields. The body is the user's instruction — apply edits, note feedback, or take whatever action is described. Report what was done.
-
-If there are no comments in either mode, say "No comments collected. Review complete."
+**Branch mode:** If there are local comments, read each one and act on it as an instruction. Each comment has `file`, `line`/`line_start`, and `body` fields. The body is the user's instruction — apply edits, note feedback, or take whatever action is described. Report what was done. If there are no comments, say "No comments collected. Review complete."
