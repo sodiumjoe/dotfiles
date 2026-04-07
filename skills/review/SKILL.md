@@ -1,7 +1,7 @@
 ---
 name: review
 description: Use when the user invokes /review to review a PR or branch changes. Reads all diffs, produces a granular summary, then the user navigates files via picker with comment overlay for feedback.
-allowed-tools: Bash(*/skills/review/scripts/* *), Bash(*/skills/review/../neovim/scripts/nvim-open *), Bash(*/skills/review/../neovim/scripts/nvim-diff *), Bash(*/skills/review/../neovim/scripts/nvim-lua *)
+allowed-tools: Bash(*/skills/review/scripts/* *), Bash(*/skills/neovim/scripts/nvim-open *), Bash(*/skills/neovim/scripts/nvim-diff *), Bash(*/skills/neovim/scripts/nvim-lua *)
 ---
 
 # Review
