@@ -74,7 +74,7 @@ vim.lsp.config("flow", {
 })
 
 vim.lsp.config("tsgo", {
-    cmd = { "tsgo", "--lsp" },
+    cmd = { "tsgo", "--lsp", "--stdio" },
     filetypes = { "typescript", "typescriptreact" },
     root_markers = { "tsconfig.json" },
 })
