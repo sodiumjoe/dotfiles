@@ -51,16 +51,8 @@ function M.open(opts)
         local ft = filetype_from_path(opts.file)
 
         if opts.right_ref then
-            local left_lines, left_err = git_file_content(opts.left_ref, opts.file)
-            if not left_lines then
-                vim.notify(left_err, vim.log.levels.ERROR)
-                return
-            end
-            local right_lines, right_err = git_file_content(opts.right_ref, opts.file)
-            if not right_lines then
-                vim.notify(right_err, vim.log.levels.ERROR)
-                return
-            end
+            local left_lines = git_file_content(opts.left_ref, opts.file) or {}
+            local right_lines = git_file_content(opts.right_ref, opts.file) or {}
 
             local basename = vim.fn.fnamemodify(opts.file, ":t")
             local left_buf = scratch_buffer(basename .. " (" .. opts.left_ref .. ")", left_lines, ft)
