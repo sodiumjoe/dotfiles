@@ -48,22 +48,24 @@ local function get_column()
     return string.format("C%02d", vim.fn.virtcol("."))
 end
 
--- Poll vim.ui.progress_status() to drive spinner for LSP progress.
--- This replaces the old vim.lsp.handlers["$/progress"] monkey-patch.
-local progress_timer = vim.uv.new_timer()
-if progress_timer then
-    progress_timer:start(
-        0,
-        200,
-        vim.schedule_wrap(function()
-            local status = vim.ui.progress_status()
-            if status and status ~= "" then
-                spinner.start("lsp_progress")
-            else
-                spinner.stop("lsp_progress")
-            end
-        end)
-    )
+-- Poll vim.ui.progress_status() to drive spinner for LSP progress (0.12+).
+-- Replaces the old vim.lsp.handlers["$/progress"] monkey-patch.
+if vim.ui.progress_status then
+    local progress_timer = vim.uv.new_timer()
+    if progress_timer then
+        progress_timer:start(
+            0,
+            200,
+            vim.schedule_wrap(function()
+                local status = vim.ui.progress_status()
+                if status and status ~= "" then
+                    spinner.start("lsp_progress")
+                else
+                    spinner.stop("lsp_progress")
+                end
+            end)
+        )
+    end
 end
 
 local function diagnostics_component()
