@@ -57,17 +57,34 @@ if result.code ~= 0 then
   return 0
 end
 
--- Get full diff for preview
-local diff_result
-if is_pr then
-  diff_result = vim.system({ 'gh', 'pr', 'diff', pr_number }, { text = true }):wait()
-else
-  diff_result = vim.system({ 'git', 'diff', '--no-renames', base_ref .. '..' .. head_ref }, { text = true }):wait()
-end
+-- Diff cache: fetched async for PR mode, lazily per-file for branch mode
 local file_diffs = {}
-if diff_result.code == 0 then
-  file_diffs = review.parse_file_diffs(diff_result.stdout)
+local diff_loaded = false
+local diff_loading = false
+
+local function load_full_diff(cb)
+  if diff_loaded or diff_loading then return end
+  diff_loading = true
+  local cmd
+  if is_pr then
+    cmd = { 'gh', 'pr', 'diff', pr_number }
+  else
+    cmd = { 'git', 'diff', '--no-renames', base_ref .. '..' .. head_ref }
+  end
+  vim.system(cmd, { text = true }, function(r)
+    vim.schedule(function()
+      if r.code == 0 then
+        file_diffs = review.parse_file_diffs(r.stdout)
+      end
+      diff_loaded = true
+      diff_loading = false
+      if cb then cb() end
+    end)
+  end)
 end
+
+-- Start loading diffs immediately in background
+load_full_diff()
 
 local files = {}
 for line in (result.stdout or ''):gmatch('[^\\n]+') do
@@ -103,13 +120,29 @@ Snacks.picker({
   preview = function(ctx)
     local item = ctx.item
     if not item then return end
-    local d = file_diffs[item.rel]
-    if d then
-      ctx.preview:set_lines(vim.split(d, '\\n'))
+    local cached = file_diffs[item.rel]
+    if cached then
+      ctx.preview:set_lines(vim.split(cached, '\\n'))
       ctx.preview:highlight({ ft = 'diff' })
-    else
-      ctx.preview:set_lines({ 'No diff available' })
+      return
     end
+    if diff_loaded then
+      ctx.preview:set_lines({ 'No diff available' })
+      return
+    end
+    ctx.preview:set_lines({ 'Loading diff...' })
+    load_full_diff(function()
+      local current = ctx.picker:current()
+      if current and current.rel == item.rel then
+        local d = file_diffs[item.rel]
+        if d then
+          ctx.preview:set_lines(vim.split(d, '\\n'))
+          ctx.preview:highlight({ ft = 'diff' })
+        else
+          ctx.preview:set_lines({ 'No diff available' })
+        end
+      end
+    end)
   end,
   sort = function(a, b)
     if a.score ~= b.score then return a.score > b.score end
