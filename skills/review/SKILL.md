@@ -1,7 +1,7 @@
 ---
 name: review
 description: Use when the user invokes /review to review a PR or branch changes. Reads all diffs, produces a granular summary, then the user navigates files via picker with comment overlay for feedback.
-allowed-tools: Bash(${CLAUDE_SKILL_DIR}/scripts/* *)
+allowed-tools: Bash(**/skills/review/scripts/* *)
 ---
 
 # Review
