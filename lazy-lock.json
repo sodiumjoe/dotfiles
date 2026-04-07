@@ -1,5 +1,5 @@
 {
-  "agentic.nvim": { "branch": "main", "commit": "dcbb969167a9e24dc95fa7c213a28fbb1a600f13" },
+  "agentic.nvim": { "branch": "main", "commit": "d7e82c9c3e8bbbe8f81d451a704aa5a73eb9e5e2" },
   "blink.cmp": { "branch": "main", "commit": "4b18c32adef2898f95cdef6192cbd5796c1a332d" },
   "conflict-marker.vim": { "branch": "master", "commit": "62742b2ffe7a433988759c67b5c5a22eff74a14b" },
   "format-ts-errors.nvim": { "branch": "main", "commit": "4b7418d6689bc0fd3c1db0500c67133422522384" },
@@ -14,7 +14,6 @@
   "mini.move": { "branch": "main", "commit": "4d214202d71e0a4066b6288176bbe88f268f9777" },
   "mini.nvim": { "branch": "main", "commit": "a95dc67ecff78de138543a20c20f29f47111b122" },
   "nightfox.nvim": { "branch": "main", "commit": "ba47d4b4c5ec308718641ba7402c143836f35aa9" },
-  "none-ls.nvim": { "branch": "main", "commit": "f61f46ded0ca9edce7a09b674f8e162d10921426" },
   "nvim-colorizer.lua": { "branch": "master", "commit": "ae0d66307a5b431c7b633806eb27769334ac5f05" },
   "nvim-comment-overlay": { "branch": "main", "commit": "e77d124c683a2100e9eeffb0b1794095c241b004" },
   "nvim-lspconfig": { "branch": "master", "commit": "f386df19b145607a33885b6110ef5c04faae42cb" },
