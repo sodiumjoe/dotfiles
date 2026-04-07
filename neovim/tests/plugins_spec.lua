@@ -74,8 +74,6 @@ describe("plugin registry", function()
             "blink.cmp",
             "lspkind-nvim",
             "friendly-snippets",
-            "nvim-lspconfig",
-
             "lazydev.nvim",
             "vim-fugitive",
             "nvim-comment-overlay",
