@@ -5,7 +5,6 @@ local spinner = require("sodium.spinner")
 local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
 
-local lsp_attached = false
 local M = {}
 
 local function is_standard_filetype()
@@ -49,41 +48,22 @@ local function get_column()
     return string.format("C%02d", vim.fn.virtcol("."))
 end
 
-local original_progress_handler = vim.lsp.handlers["$/progress"]
-
----@diagnostic disable-next-line: duplicate-set-field
-vim.lsp.handlers["$/progress"] = function(err, msg, info)
-    if original_progress_handler then
-        original_progress_handler(err, msg, info)
-    end
-    local key = "lsp:" .. info.client_id .. ":" .. tostring(msg.token)
-    if msg.value.kind == "end" then
-        spinner.stop(key)
-    else
-        spinner.start(key)
-    end
-end
-
-local original_sorbet_handler = vim.lsp.handlers["sorbet/showOperation"]
-
----@diagnostic disable-next-line: duplicate-set-field
-vim.lsp.handlers["sorbet/showOperation"] = function(err, result, context)
-    if original_sorbet_handler then
-        original_sorbet_handler(err, result, context)
-    end
-
-    if err ~= nil then
-        error(err)
-        return
-    end
-    local message = {
-        token = result.operationName,
-        value = {
-            kind = result.status == "end" and "end" or "begin",
-            title = result.description,
-        },
-    }
-    vim.lsp.handlers["$/progress"](err, message, context)
+-- Poll vim.ui.progress_status() to drive spinner for LSP progress.
+-- This replaces the old vim.lsp.handlers["$/progress"] monkey-patch.
+local progress_timer = vim.uv.new_timer()
+if progress_timer then
+    progress_timer:start(
+        0,
+        200,
+        vim.schedule_wrap(function()
+            local status = vim.ui.progress_status()
+            if status and status ~= "" then
+                spinner.start("lsp_progress")
+            else
+                spinner.stop("lsp_progress")
+            end
+        end)
+    )
 end
 
 local function diagnostics_component()
@@ -189,14 +169,13 @@ local separator_before_status = separator_if(function()
     if spinner.active() then
         return true
     end
-    return lsp_attached and not utils.is_fugitive_buffer() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
+    return not utils.is_fugitive_buffer() and #vim.lsp.get_clients({ bufnr = 0 }) > 0
 end)
 
 local diagnostics = {
     diagnostics_component,
     cond = function()
         return not spinner.active()
-            and lsp_attached
             and is_standard_filetype()
             and not utils.is_fugitive_buffer()
             and #vim.lsp.get_clients({ bufnr = 0 }) > 0
@@ -403,10 +382,5 @@ lualine.setup({
         },
     },
 })
-
-function M.on_attach()
-    lsp_attached = true
-    lualine.refresh()
-end
 
 return M
