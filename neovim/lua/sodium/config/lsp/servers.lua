@@ -138,6 +138,7 @@ vim.lsp.config("efm", {
     },
     init_options = { documentFormatting = true },
     root_markers = { ".git" },
+    exit_timeout = 500,
 })
 
 -- LspAttach autocmd
