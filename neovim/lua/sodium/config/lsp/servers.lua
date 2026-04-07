@@ -4,7 +4,6 @@ local formatting = require("sodium.config.lsp.formatting")
 local function on_attach(client, bufnr)
     formatting.setup_format_on_save(client, bufnr)
     require("lspkind").init({})
-    require("sodium.statusline").on_attach()
 end
 
 -- Global capabilities (augmented with blink.cmp completions)
