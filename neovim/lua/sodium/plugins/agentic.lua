@@ -744,7 +744,9 @@ return {
                     return
                 end
                 local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-picker"
-                vim.system({ script, s.base_ref, s.head_ref }, { text = true })
+                local cmd = s.mode == "pr" and { script, "--pr", s.id, s.base_ref, s.head_ref }
+                    or { script, s.base_ref, s.head_ref }
+                vim.system(cmd, { text = true })
             end,
             mode = { "n" },
             desc = "Review file picker",
@@ -770,7 +772,9 @@ return {
                 local marker = is_reviewed and "reviewed" or "unreviewed"
                 vim.notify(filepath .. " marked " .. marker)
                 local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-picker"
-                vim.system({ script, s.base_ref, s.head_ref }, { text = true })
+                local cmd = s.mode == "pr" and { script, "--pr", s.id, s.base_ref, s.head_ref }
+                    or { script, s.base_ref, s.head_ref }
+                vim.system(cmd, { text = true })
             end,
             mode = { "n" },
             desc = "Mark reviewed and reopen file picker",
