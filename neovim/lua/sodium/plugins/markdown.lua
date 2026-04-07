@@ -67,6 +67,9 @@ return {
         "MeanderingProgrammer/render-markdown.nvim",
         dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" },
         opts = {
+            ignore = function(buf)
+                return vim.bo[buf].buftype ~= ""
+            end,
             nested = false,
             checkbox = {
                 left_pad = 3,
