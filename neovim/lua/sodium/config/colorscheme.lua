@@ -104,6 +104,7 @@ M.groups = {
     DiffChange = { fg = "bg1", bg = "git.changed" },
     DiffDelete = { fg = "bg1", bg = "git.removed" },
     DiffText = { fg = "bg1", bg = "palette.yellow" },
+    DiffTextAdd = { fg = "bg1", bg = "palette.green" },
 
     TreesitterContextLineNumber = { fg = "palette.fg0" },
 
@@ -127,6 +128,13 @@ M.groups = {
     SnacksNotifierIconError = { fg = "diag.error" },
     SnacksNotifierIconDebug = { fg = "palette.fg1" },
     SnacksNotifierIconTrace = { fg = "palette.fg1" },
+
+    PmenuBorder = { fg = "palette.fg2" },
+    SnippetTabstopActive = { bg = "palette.sel0" },
+
+    OkMsg = { fg = "palette.green" },
+    StderrMsg = { fg = "palette.red" },
+    StdoutMsg = { fg = "palette.fg1" },
 }
 
 return M
