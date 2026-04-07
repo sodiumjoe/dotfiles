@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
+usage() {
   echo "Usage: review-files <base-ref>" >&2
+  echo "       review-files --pr <number>" >&2
   exit 1
-fi
+}
 
-git diff --name-only "$1..HEAD"
+[[ $# -lt 1 ]] && usage
+
+if [[ "$1" == "--pr" ]]; then
+  [[ $# -lt 2 ]] && usage
+  gh pr diff "$2" --name-only
+else
+  git diff --no-renames --name-only "$1..HEAD"
+fi

@@ -63,15 +63,21 @@ return 0
 
 ## Phase 1 — Digest
 
-Read all diffs to build understanding.
+Read all diffs to build understanding. In **PR mode**, pass `--pr <id>` as the first arguments to use fast server-side diffs (critical for large monorepos where local `git diff` can take minutes).
 
 **Commit history** (for internal context):
 ```
+# PR mode:
+${CLAUDE_SKILL_DIR}/scripts/review-commits --pr <id>
+# Branch mode:
 ${CLAUDE_SKILL_DIR}/scripts/review-commits <base_ref>
 ```
 
 **Consolidated diff** (for the summary):
 ```
+# PR mode:
+${CLAUDE_SKILL_DIR}/scripts/review-diff --pr <id> <base_ref>
+# Branch mode:
 ${CLAUDE_SKILL_DIR}/scripts/review-diff <base_ref>
 ```
 
@@ -108,6 +114,9 @@ Then **wait for user input**. Do not open the picker automatically. The user dri
 
 If the user asks to open the picker programmatically:
 ```
+# PR mode:
+${CLAUDE_SKILL_DIR}/scripts/review-picker --pr <id> <base_ref> <head_ref>
+# Branch mode:
 ${CLAUDE_SKILL_DIR}/scripts/review-picker <base_ref> <head_ref>
 ```
 

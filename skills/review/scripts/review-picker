@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
+usage() {
   echo "Usage: review-picker <base-ref> <head-ref>" >&2
+  echo "       review-picker --pr <number> <base-ref> <head-ref>" >&2
   exit 1
+}
+
+[[ $# -lt 2 ]] && usage
+
+pr_number=""
+if [[ "$1" == "--pr" ]]; then
+  [[ $# -lt 4 ]] && usage
+  pr_number="$2"
+  shift 2
 fi
 
 base_ref="$1"
@@ -16,6 +26,7 @@ escape() { printf '%s' "$1" | sed "s/'/\\\\'/g"; }
 
 base_esc=$(escape "$base_ref")
 head_esc=$(escape "$head_ref")
+pr_esc=$(escape "$pr_number")
 
 "$nvim_lua" "
 local review = require('sodium.review')
@@ -30,15 +41,29 @@ end
 
 local base_ref = '$base_esc'
 local head_ref = '$head_esc'
+local pr_number = '$pr_esc'
 local toplevel = session.toplevel or ''
+local is_pr = pr_number ~= ''
 
-local result = vim.system({ 'git', 'diff', '--name-only', base_ref .. '..' .. head_ref }, { text = true }):wait()
+-- Get file list
+local result
+if is_pr then
+  result = vim.system({ 'gh', 'pr', 'diff', pr_number, '--name-only' }, { text = true }):wait()
+else
+  result = vim.system({ 'git', 'diff', '--no-renames', '--name-only', base_ref .. '..' .. head_ref }, { text = true }):wait()
+end
 if result.code ~= 0 then
-  vim.notify('git diff failed: ' .. (result.stderr or ''), vim.log.levels.ERROR)
+  vim.notify('diff failed: ' .. (result.stderr or ''), vim.log.levels.ERROR)
   return 0
 end
 
-local diff_result = vim.system({ 'git', 'diff', base_ref .. '..' .. head_ref }, { text = true }):wait()
+-- Get full diff for preview
+local diff_result
+if is_pr then
+  diff_result = vim.system({ 'gh', 'pr', 'diff', pr_number }, { text = true }):wait()
+else
+  diff_result = vim.system({ 'git', 'diff', '--no-renames', base_ref .. '..' .. head_ref }, { text = true }):wait()
+end
 local file_diffs = {}
 if diff_result.code == 0 then
   file_diffs = review.parse_file_diffs(diff_result.stdout)
