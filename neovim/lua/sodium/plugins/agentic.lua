@@ -779,5 +779,32 @@ return {
             mode = { "n" },
             desc = "Mark reviewed and reopen file picker",
         },
+        {
+            "<leader>pa",
+            function()
+                local s = require("sodium.review").get_session()
+                if not s then
+                    vim.notify("No review session active", vim.log.levels.WARN)
+                    return
+                end
+                if s.mode ~= "pr" then
+                    vim.notify("Not in PR mode", vim.log.levels.WARN)
+                    return
+                end
+                local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-approve"
+                vim.notify("Approving PR #" .. s.id .. "...")
+                vim.system({ script }, { text = true }, function(r)
+                    vim.schedule(function()
+                        if r.code == 0 then
+                            vim.notify("PR #" .. s.id .. " approved", vim.log.levels.INFO)
+                        else
+                            vim.notify("Approve failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                        end
+                    end)
+                end)
+            end,
+            mode = { "n" },
+            desc = "Approve PR and exit review",
+        },
     },
 }

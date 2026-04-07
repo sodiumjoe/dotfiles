@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Approve the current PR review and clean up: submit approval, restore branch, pop stash.
+# Called from neovim keybinding — reads session state via nvim-lua.
+set -euo pipefail
+
+nvim_lua="$(dirname "$0")/../../neovim/scripts/nvim-lua"
+[[ ! -x "$nvim_lua" ]] && { echo "nvim-lua not found" >&2; exit 1; }
+
+# Read session state from neovim
+state=$("$nvim_lua" "
+local r = require('sodium.review')
+local s = r.get_session()
+if not s then return 'ERROR:no session' end
+local parts = {
+  'id=' .. (s.id or ''),
+  'mode=' .. (s.mode or ''),
+  'toplevel=' .. (s.toplevel or ''),
+  'previous=' .. (r.get_previous_branch() or ''),
+  'stashed=' .. tostring(r.is_stashed()),
+  'user=' .. (r.get_current_user() or ''),
+}
+return table.concat(parts, '\n')
+")
+
+if [[ "$state" == *"ERROR:"* ]]; then
+  echo "${state#*ERROR:}" >&2
+  exit 1
+fi
+
+# Parse state
+id=""; mode=""; toplevel=""; previous=""; stashed="false"; user=""
+while IFS='=' read -r key val; do
+  case "$key" in
+    id) id="$val" ;;
+    mode) mode="$val" ;;
+    toplevel) toplevel="$val" ;;
+    previous) previous="$val" ;;
+    stashed) stashed="$val" ;;
+    user) user="$val" ;;
+  esac
+done <<< "$state"
+
+if [[ "$mode" != "pr" ]]; then
+  echo "Not in PR mode" >&2
+  exit 1
+fi
+
+scripts_dir="$(dirname "$0")"
+
+# Collect comments and clean up
+exit_args=("$toplevel")
+[[ -n "$previous" ]] && exit_args+=(--restore-branch "$previous")
+[[ "$stashed" == "true" ]] && exit_args+=(--pop-stash)
+[[ -n "$user" ]] && exit_args+=(--user "$user")
+
+comments=$("$scripts_dir/review-exit" "${exit_args[@]}")
+
+# Submit approval
+echo "$comments" | "$scripts_dir/review-submit" "$id" APPROVE ""
+
+echo "PR #$id approved"
