@@ -31,8 +31,6 @@ require("sodium.config.options")
 
 require("sodium.config.diagnostics")
 
-require("sodium.config.lsp.servers")
-
 require("lazy").setup({ import = "sodium.plugins" }, {
     lockfile = "~/.dotfiles/lazy-lock.json",
     dev = {
@@ -53,6 +51,7 @@ require("lazy").setup({ import = "sodium.plugins" }, {
     },
 })
 
+require("sodium.config.lsp.servers")
 require("sodium.config.autocmds")
 require("sodium.config.keymaps")
 
@@ -61,3 +60,8 @@ local in_stripe_repo = vim.fn.isdirectory("/pay/src") ~= 0 or vim.fn.isdirectory
 if in_stripe_repo then
     require("sodium.config.stripe")
 end
+
+-- Experimental TUI message/cmdline redesign (0.12)
+pcall(function()
+    require("vim._core.ui2").enable()
+end)

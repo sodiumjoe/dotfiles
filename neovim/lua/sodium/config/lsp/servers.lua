@@ -4,11 +4,13 @@ local formatting = require("sodium.config.lsp.formatting")
 local function on_attach(client, bufnr)
     formatting.setup_format_on_save(client, bufnr)
     require("lspkind").init({})
+    require("sodium.statusline").on_attach()
 end
 
--- Global capabilities (blink.cmp augments these when loaded)
+-- Global capabilities (augmented with blink.cmp completions)
+local blink = require("blink.cmp")
 vim.lsp.config("*", {
-    capabilities = vim.lsp.protocol.make_client_capabilities(),
+    capabilities = blink.get_lsp_capabilities(vim.lsp.protocol.make_client_capabilities()),
 })
 
 vim.lsp.config("bazel", {
@@ -18,14 +20,11 @@ vim.lsp.config("bazel", {
 })
 
 vim.lsp.config("rust_analyzer", {
-    cmd = { "rust-analyzer" },
     filetypes = { "rust" },
     root_markers = { "Cargo.toml" },
     settings = {
         ["rust-analyzer"] = {
-            cargo = {
-                features = "all",
-            },
+            cargo = { features = "all" },
         },
     },
 })
@@ -52,39 +51,22 @@ vim.lsp.config("eslint", {
             if result == nil or result.items == nil then
                 return
             end
-
             local idx = 1
             while idx <= #result.items do
-                local entry = result.items[idx]
-                if entry.code == "prettier/prettier" then
+                if result.items[idx].code == "prettier/prettier" then
                     table.remove(result.items, idx)
                 else
                     idx = idx + 1
                 end
             end
-
             vim.lsp.diagnostic.on_diagnostic(_, result, ctx)
         end,
     },
 })
 
-vim.lsp.config("flow", {
-    cmd = { "flow", "lsp" },
-    filetypes = { "javascript", "javascriptreact" },
-    root_markers = { ".flowconfig" },
-})
-
-vim.lsp.config("tsgo", {
-    cmd = { "tsgo", "--lsp" },
-    filetypes = { "typescript", "typescriptreact" },
-    root_markers = { "tsconfig.json" },
-})
-
-vim.lsp.config("lua_ls", {
-    cmd = { "lua-language-server" },
-    filetypes = { "lua" },
-    root_markers = { ".luarc.json", ".luarc.jsonc", ".luacheckrc", ".stylua.toml", "stylua.toml" },
-})
+vim.lsp.config("flow", {})
+vim.lsp.config("tsgo", {})
+vim.lsp.config("lua_ls", {})
 
 vim.lsp.config("efm", {
     cmd = { "efm-langserver" },
@@ -99,9 +81,7 @@ vim.lsp.config("efm", {
         "bzl",
         "ruby",
     },
-    init_options = {
-        documentFormatting = true,
-    },
+    init_options = { documentFormatting = true },
     root_markers = { ".git" },
 })
 
