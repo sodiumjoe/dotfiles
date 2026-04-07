@@ -34,19 +34,19 @@ The script outputs JSON: `{ mode, id, base_ref, head_ref, toplevel, stashed, pre
 After the script succeeds, initialize the neovim session state:
 
 ```
-${CLAUDE_SKILL_DIR}/../neovim/scripts/nvim-lua "local r = require('sodium.review') r.start_session({ id = '<id>', mode = '<mode>', base_ref = '<base_ref>', head_ref = '<head_ref>', toplevel = '<toplevel>' }) r.set_previous_branch('<previous_branch>') r.set_stashed(<stashed>) return 0"
+$(dirname "${CLAUDE_SKILL_DIR}")/neovim/scripts/nvim-lua "local r = require('sodium.review') r.start_session({ id = '<id>', mode = '<mode>', base_ref = '<base_ref>', head_ref = '<head_ref>', toplevel = '<toplevel>' }) r.set_previous_branch('<previous_branch>') r.set_stashed(<stashed>) return 0"
 ```
 
 For PR mode, also fetch the current GitHub user and set up the comment overlay actor:
 
 ```
-${CLAUDE_SKILL_DIR}/../neovim/scripts/nvim-lua "local user = vim.trim(vim.system({'gh', 'api', 'user', '--jq', '.login'}, {text=true}):wait().stdout or '') require('sodium.review').set_current_user(user) vim.g.comment_overlay_actor = user return 0"
+$(dirname "${CLAUDE_SKILL_DIR}")/neovim/scripts/nvim-lua "local user = vim.trim(vim.system({'gh', 'api', 'user', '--jq', '.login'}, {text=true}):wait().stdout or '') require('sodium.review').set_current_user(user) vim.g.comment_overlay_actor = user return 0"
 ```
 
 For PR mode, fetch and display existing PR comments:
 
 ```
-${CLAUDE_SKILL_DIR}/../neovim/scripts/nvim-lua "
+$(dirname "${CLAUDE_SKILL_DIR}")/neovim/scripts/nvim-lua "
 local review = require('sodium.review')
 local s = review.get_session()
 local r = vim.system({'gh', 'api', 'repos/{owner}/{repo}/pulls/' .. s.id .. '/comments', '--paginate'}, {text=true}):wait()
