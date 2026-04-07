@@ -567,7 +567,7 @@ local function pick_pr_for_review()
 end
 
 return {
-    "carlos-algms/agentic.nvim",
+    "sodiumjoe/agentic.nvim",
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
