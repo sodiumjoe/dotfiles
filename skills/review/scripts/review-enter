@@ -42,6 +42,10 @@ if [[ "$mode" == "pr" ]]; then
 
   stash_if_dirty
 
+  # Detach HEAD first so we can delete+recreate the branch
+  if [[ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" == "$head_ref" ]]; then
+    git checkout --detach HEAD 2>/dev/null || true
+  fi
   git branch -D "$head_ref" 2>/dev/null || true
   git fetch origin "pull/$pr_number/head:$head_ref" || { echo '{"error":"PR fetch failed"}'; exit 1; }
   git checkout "$head_ref" || { echo '{"error":"PR checkout failed"}'; exit 1; }
