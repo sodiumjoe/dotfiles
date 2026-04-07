@@ -59,7 +59,7 @@
       "Grep(*)",
       "Write(/tmp/*)",
       "Edit(/tmp/*)",
-      "Find(*)",
+      "Glob(*)",
       "mcp__sourcegraph__*",
       "mcp__toolshed__*",
       "mcp__toolshed_extras__*",
