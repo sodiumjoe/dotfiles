@@ -116,11 +116,11 @@ h.MatchParen = { fg = diag.warn, bold = true }
 h.ModeMsg = { fg = diag.warn, bold = true }
 h.MoreMsg = { fg = diag.info, bold = true }
 h.NonText = { fg = p.bg4 }
-h.Pmenu = { fg = p.fg1, bg = p.sel0 }
-h.PmenuSel = { bg = p.sel1 }
+h.Pmenu = { fg = p.fg1, bg = p.bg1 }
+h.PmenuSel = { bg = p.sel0 }
 h.PmenuSbar = { link = "Pmenu" }
 h.PmenuThumb = { bg = p.sel1 }
-h.PmenuBorder = { fg = p.fg2 }
+h.PmenuBorder = { fg = p.fg2, bg = p.bg1 }
 h.Question = { link = "MoreMsg" }
 h.QuickFixLine = { link = "CursorLine" }
 h.SignColumn = { fg = p.fg3 }
@@ -409,13 +409,14 @@ h.HopUnmatched = { fg = syn.comment }
 
 -- ── Plugin: Blink.cmp ────────────────────────────────────────────
 
+h.BlinkCmpMenu = { link = "Pmenu" }
+h.BlinkCmpMenuBorder = { link = "PmenuBorder" }
 h.BlinkCmpDoc = { fg = p.fg1, bg = p.bg0 }
-h.BlinkCmpDocBorder = { fg = p.sel0, bg = p.bg0 }
+h.BlinkCmpDocBorder = { fg = p.fg2, bg = p.bg0 }
 h.BlinkCmpLabel = { fg = p.fg1 }
 h.BlinkCmpLabelDeprecated = { fg = syn.dep, strikethrough = true }
 h.BlinkCmpLabelMatch = { fg = syn.func }
 h.BlinkCmpKindDefault = { fg = p.fg2 }
-h.BlinkCmpMenu = { link = "Comment" }
 h.BlinkCmpKindKeyword = { link = "Identifier" }
 h.BlinkCmpKindVariable = { link = "@variable" }
 h.BlinkCmpKindConstant = { link = "@constant" }
