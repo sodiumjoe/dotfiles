@@ -97,6 +97,7 @@ function inject(dateStr, scanResults, { quiet } = {}) {
   const grouped = groupByProject(scanResults);
   const lines = [];
   for (const [projectSlug, items] of grouped) {
+    if (lines.length > 0) lines.push("");
     let title = projectSlug;
     if (projectSlug === "_unassigned") {
       lines.push(`- **Unassigned**`);
