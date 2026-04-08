@@ -38,7 +38,7 @@ require("lazy").setup({ import = "sodium.plugins" }, {
     },
     install = {
         missing = true,
-        colorscheme = { "sodium" },
+        colorscheme = { "default" },
     },
     change_detection = {
         enabled = false,
