@@ -32,7 +32,12 @@ return {
     {
         "catgoose/nvim-colorizer.lua",
         event = "BufReadPre",
-        opts = {},
+        opts = {
+            user_default_options = {
+                names = false,
+                names_custom = require("sodium.config.colorscheme").palette,
+            },
+        },
     },
     {
         "onsails/lspkind-nvim",
