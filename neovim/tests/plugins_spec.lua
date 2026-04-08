@@ -61,6 +61,7 @@ describe("plugin registry", function()
             "nightfox.nvim",
             "lualine.nvim",
             "statuscol.nvim",
+            "nvim-colorizer.lua",
             "nvim-treesitter",
             "nvim-treesitter-context",
             "hop.nvim",
