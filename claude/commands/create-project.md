@@ -68,7 +68,7 @@ Once the design is approved:
    - `## Notes` — any investigation output from brainstorming
 4. Open the project file in neovim:
    ```bash
-   nvim-open --editor '~/stripe/work/projects/<slug>/project.md'
+   ~/.claude/skills/neovim/scripts/nvim-open --editor '~/stripe/work/projects/<slug>/project.md'
    ```
 
 ## Assess Scope

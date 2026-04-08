@@ -24,7 +24,7 @@ Plans are saved to the current project's directory in the Obsidian vault:
 3. Save to: `~/stripe/work/projects/<slug>/YYYY-MM-DD-<feature-name>.md`
 4. After writing, open the file in neovim:
    ```bash
-   nvim-open --editor '<absolute-path-to-plan-file>'
+   ~/.claude/skills/neovim/scripts/nvim-open --editor '<absolute-path-to-plan-file>'
    ```
 
 ## Plan Frontmatter
