@@ -30,11 +30,6 @@ return {
         end,
     },
     {
-        "catgoose/nvim-colorizer.lua",
-        event = "BufReadPre",
-        opts = {},
-    },
-    {
         "onsails/lspkind-nvim",
         lazy = true,
     },

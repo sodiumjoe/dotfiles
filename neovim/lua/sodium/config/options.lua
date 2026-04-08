@@ -42,5 +42,6 @@ g.splitkeep = "screen"
 o.winborder = "rounded"
 
 vim.cmd("syntax off")
+vim.hl.colors.enable(true)
 
 vim.g.loaded_perl_provider = 0
