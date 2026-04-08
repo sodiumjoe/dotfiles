@@ -791,20 +791,29 @@ return {
                     vim.notify("Not in PR mode", vim.log.levels.WARN)
                     return
                 end
-                local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-approve"
-                vim.notify("Approving PR #" .. s.id .. "...")
-                vim.system({ script }, { text = true }, function(r)
-                    vim.schedule(function()
-                        if r.code == 0 then
-                            vim.notify("PR #" .. s.id .. " approved", vim.log.levels.INFO)
-                        else
-                            vim.notify("Approve failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                vim.ui.select(
+                    { "APPROVE", "REQUEST_CHANGES", "COMMENT" },
+                    { prompt = "PR #" .. s.id .. " review:" },
+                    function(choice)
+                        if not choice then
+                            return
                         end
-                    end)
-                end)
+                        local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-approve"
+                        vim.notify("Submitting " .. choice:lower() .. " for PR #" .. s.id .. "...")
+                        vim.system({ script, choice }, { text = true }, function(r)
+                            vim.schedule(function()
+                                if r.code == 0 then
+                                    vim.notify("PR #" .. s.id .. " — " .. choice:lower(), vim.log.levels.INFO)
+                                else
+                                    vim.notify("Submit failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                                end
+                            end)
+                        end)
+                    end
+                )
             end,
             mode = { "n" },
-            desc = "Approve PR and exit review",
+            desc = "Submit PR review and exit",
         },
     },
 }

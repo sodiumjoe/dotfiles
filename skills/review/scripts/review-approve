@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Approve the current PR review and clean up: submit approval, restore branch, pop stash.
+# Submit a PR review and clean up: submit review, restore branch, pop stash.
+# Usage: review-approve [APPROVE|REQUEST_CHANGES|COMMENT]
 # Called from neovim keybinding — reads session state via nvim-lua.
 set -euo pipefail
+
+event="${1:-APPROVE}"
 
 nvim_lua="$(dirname "$0")/../../neovim/scripts/nvim-lua"
 [[ ! -x "$nvim_lua" ]] && { echo "nvim-lua not found" >&2; exit 1; }
@@ -55,7 +58,7 @@ exit_args=("$toplevel")
 
 comments=$("$scripts_dir/review-exit" "${exit_args[@]}")
 
-# Submit approval
-echo "$comments" | "$scripts_dir/review-submit" "$id" APPROVE ""
+# Submit review
+echo "$comments" | "$scripts_dir/review-submit" "$id" "$event" ""
 
-echo "PR #$id approved"
+echo "PR #$id — $event"
