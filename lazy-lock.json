@@ -1,5 +1,5 @@
 {
-  "agentic.nvim": { "branch": "main", "commit": "3baf9cc7899eccd78ba3356fa82e56d822f977aa" },
+  "agentic.nvim": { "branch": "main", "commit": "017655a4feba94834326a2e9931ac709bb1be29e" },
   "blink.cmp": { "branch": "main", "commit": "4b18c32adef2898f95cdef6192cbd5796c1a332d" },
   "conflict-marker.vim": { "branch": "master", "commit": "62742b2ffe7a433988759c67b5c5a22eff74a14b" },
   "format-ts-errors.nvim": { "branch": "main", "commit": "4b7418d6689bc0fd3c1db0500c67133422522384" },
