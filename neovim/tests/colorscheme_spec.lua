@@ -1,86 +1,168 @@
-local specs = require("sodium.plugins.colorscheme")
-for _, spec in ipairs(specs) do
-    if spec[1] and spec[1]:find("nightfox") and spec.config then
-        spec.config()
-        break
-    end
-end
+local colorscheme = require("sodium.config.colorscheme")
 
-describe("colorscheme augroups", function()
-    local has_augroup = function(name)
-        local ok2 = pcall(vim.api.nvim_get_autocmds, { group = name })
-        return ok2
-    end
-
-    describe("LineNr", function()
-        it("augroup is registered", function()
-            assert.is_true(has_augroup("LineNr"))
+describe("colorscheme", function()
+    describe("palette", function()
+        it("has all required base colors", function()
+            local required = {
+                "black",
+                "red",
+                "green",
+                "yellow",
+                "blue",
+                "magenta",
+                "cyan",
+                "white",
+                "orange",
+                "pink",
+                "comment",
+            }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.palette[name], "missing palette color: " .. name)
+                assert.matches(
+                    "^#%x%x%x%x%x%x$",
+                    colorscheme.palette[name],
+                    "invalid hex for " .. name .. ": " .. colorscheme.palette[name]
+                )
+            end
         end)
 
-        it("disables line numbers for help filetype", function()
-            if not has_augroup("LineNr") then return end
-            local buf = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_set_current_buf(buf)
-            vim.opt_local.number = true
-            vim.bo[buf].filetype = "help"
-            vim.cmd("doautocmd FileType")
-            assert.is_false(vim.opt_local.number:get())
-            vim.api.nvim_buf_delete(buf, { force = true })
-        end)
-
-        it("disables line numbers for dirvish filetype", function()
-            if not has_augroup("LineNr") then return end
-            local buf = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_set_current_buf(buf)
-            vim.opt_local.number = true
-            vim.bo[buf].filetype = "dirvish"
-            vim.cmd("doautocmd FileType")
-            assert.is_false(vim.opt_local.number:get())
-            vim.api.nvim_buf_delete(buf, { force = true })
-        end)
-
-        it("enables line numbers for recognized filetypes", function()
-            if not has_augroup("LineNr") then return end
-            local buf = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_set_current_buf(buf)
-            vim.api.nvim_buf_set_name(buf, "test.lua")
-            vim.cmd("doautocmd BufEnter")
-            assert.is_true(vim.opt_local.number:get())
-            vim.api.nvim_buf_delete(buf, { force = true })
-        end)
-
-        it("disables line numbers for unrecognized buffers", function()
-            if not has_augroup("LineNr") then return end
-            local buf = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_set_current_buf(buf)
-            vim.opt_local.number = true
-            vim.cmd("doautocmd BufEnter")
-            assert.is_false(vim.opt_local.number:get())
-            vim.api.nvim_buf_delete(buf, { force = true })
+        it("has all required shade colors", function()
+            local required = { "bg0", "bg1", "bg2", "bg3", "bg4", "fg0", "fg1", "fg2", "fg3", "sel0", "sel1" }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.palette[name], "missing palette shade: " .. name)
+            end
         end)
     end)
 
-    describe("CurrentBufferCursorline", function()
-        it("augroup is registered", function()
-            assert.is_true(has_augroup("CurrentBufferCursorline"))
+    describe("spec", function()
+        it("has syntax semantics", function()
+            local required = { "keyword", "func", "string", "comment", "const", "type", "variable", "operator" }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.spec.syntax[name], "missing syntax spec: " .. name)
+            end
         end)
 
-        it("enables cursorline in active window", function()
-            if not has_augroup("CurrentBufferCursorline") then return end
-            vim.cmd("doautocmd WinEnter")
-            assert.is_true(vim.opt_local.cursorline:get())
+        it("has diagnostic semantics", function()
+            local required = { "error", "warn", "info", "hint", "ok" }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.spec.diag[name], "missing diag spec: " .. name)
+            end
         end)
 
-        it("disables cursorline when leaving window", function()
-            if not has_augroup("CurrentBufferCursorline") then return end
-            vim.cmd.vsplit()
-            vim.cmd.wincmd("w")
-            vim.cmd("doautocmd WinLeave")
-            assert.is_false(vim.opt_local.cursorline:get())
-            vim.cmd.wincmd("p")
-            vim.cmd("doautocmd WinEnter")
-            assert.is_true(vim.opt_local.cursorline:get())
-            vim.cmd.only()
+        it("has git semantics", function()
+            local required = { "add", "removed", "changed" }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.spec.git[name], "missing git spec: " .. name)
+            end
+        end)
+    end)
+
+    describe("highlights", function()
+        it("defines core editor groups", function()
+            local required = {
+                "Normal",
+                "NormalFloat",
+                "Visual",
+                "Search",
+                "CursorLine",
+                "StatusLine",
+                "Pmenu",
+                "FloatBorder",
+                "LineNr",
+            }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.highlights[name], "missing highlight: " .. name)
+            end
+        end)
+
+        it("defines vim syntax groups", function()
+            local required = {
+                "Comment",
+                "String",
+                "Function",
+                "Keyword",
+                "Type",
+                "Identifier",
+                "Constant",
+                "Operator",
+                "PreProc",
+            }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.highlights[name], "missing highlight: " .. name)
+            end
+        end)
+
+        it("defines treesitter groups", function()
+            local required = {
+                "@variable",
+                "@function",
+                "@keyword",
+                "@string",
+                "@type",
+                "@comment",
+                "@property",
+                "@constructor",
+            }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.highlights[name], "missing highlight: " .. name)
+            end
+        end)
+
+        it("defines diagnostic groups", function()
+            local required = {
+                "DiagnosticError",
+                "DiagnosticWarn",
+                "DiagnosticInfo",
+                "DiagnosticHint",
+                "DiagnosticUnderlineError",
+                "DiagnosticUnderlineWarn",
+            }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.highlights[name], "missing highlight: " .. name)
+            end
+        end)
+
+        it("defines custom statusline groups", function()
+            local required = {
+                "StatusLineActiveItem",
+                "StatusLineError",
+                "StatusLineWarning",
+                "StatusLineSeparator",
+            }
+            for _, name in ipairs(required) do
+                assert.is_not_nil(colorscheme.highlights[name], "missing highlight: " .. name)
+            end
+        end)
+
+        it("all non-link highlights reference valid hex colors", function()
+            for name, opts in pairs(colorscheme.highlights) do
+                if not opts.link then
+                    for _, key in ipairs({ "fg", "bg", "sp" }) do
+                        if opts[key] then
+                            assert.matches(
+                                "^#%x%x%x%x%x%x$",
+                                opts[key],
+                                name .. "." .. key .. " is not a valid hex color: " .. tostring(opts[key])
+                            )
+                        end
+                    end
+                end
+            end
+        end)
+    end)
+
+    describe("apply", function()
+        it("sets Normal highlight", function()
+            colorscheme.apply()
+            local normal = vim.api.nvim_get_hl(0, { name = "Normal" })
+            assert.is_not_nil(normal.fg)
+            assert.is_not_nil(normal.bg)
+        end)
+
+        it("sets terminal colors", function()
+            colorscheme.apply()
+            assert.is_not_nil(vim.g.terminal_color_0)
+            assert.is_not_nil(vim.g.terminal_color_15)
         end)
     end)
 end)
