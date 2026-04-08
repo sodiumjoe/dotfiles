@@ -61,5 +61,6 @@ if in_stripe_repo then
     require("sodium.config.stripe")
 end
 
--- ui2 disabled: noisy file-open messages in 0.12.1, revisit in future patch
--- pcall(function() require("vim._core.ui2").enable() end)
+pcall(function()
+    require("vim._core.ui2").enable()
+end)
