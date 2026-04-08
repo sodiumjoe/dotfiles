@@ -12,7 +12,7 @@ o.splitbelow = true
 o.splitright = true
 o.joinspaces = false
 o.clipboard = [[unnamedplus]]
-o.shortmess = [[aoOtI]]
+o.shortmess = [[aoOtIF]]
 o.completeopt = [[menu,menuone,noselect,preview]]
 o.modeline = false
 
