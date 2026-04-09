@@ -90,6 +90,8 @@ Produce a granular summary for the user:
 
 The summary should be detailed enough that the user could decide which files to prioritize or skip without opening them.
 
+**Gate — summary completeness:** Before transitioning to Phase 2, verify that every changed file from the diff appears in the summary. If any file is missing, add it before proceeding. Do not move on until summary file count == changed files count.
+
 ## Phase 2 — Navigate
 
 After presenting the summary, show the user the available keymaps:
