@@ -109,8 +109,6 @@ Investigate the root cause by reading the relevant source files. Then:
 }
 
 function doWrap(dateStr) {
-  const { execFileSync } = require('node:child_process');
-
   ensure(dateStr);
 
   console.log('=== sync --apply ===');
@@ -119,36 +117,17 @@ function doWrap(dateStr) {
     logSyncEntries(dateStr, entries, false);
   }
 
-  console.log('=== claude summary ===');
-  const np = notePath(dateStr);
-  const prompt = `Read the daily note at ${np}.
-
-For each wikilinked project or plan referenced in the Log and Tasks sections, read that file to understand what the work items actually are. Projects are in ${PROJECT_DIR} (each project is a subdirectory containing project.md and its plans).
-
-Then write a comprehensive summary into the ## Summary section of the daily note (replace existing content if the section exists, or append it at the end).
-
-The summary should cover:
-- What was accomplished today, with enough detail to be useful in retrospect
-- What moved forward but isn't finished
-- What's still open / blocked
-- Any patterns worth noting (e.g., most of the day on one project, context-switching)
-
-Write in a dry, factual tone. No enthusiasm. No filler. Complete sentences.
-Use the Edit tool to write the summary into the daily note.`;
-
-  try {
-    const claudeCmd = process.env.WORK_CLAUDE_CMD || 'claude';
-    execFileSync(claudeCmd, ['-p', '--allowedTools', 'Read', 'Edit'], {
-      input: prompt,
-      stdio: ['pipe', 'inherit', 'inherit'],
-      timeout: 120000,
-    });
-  } catch (e) {
-    console.error('claude summary failed:', e.message);
-  }
-
   console.log('=== complete projects ===');
   completeProjects();
+
+  // Stamp the daily note so tick's backfill loop knows this day was wrapped
+  const np = notePath(dateStr);
+  if (fs.existsSync(np)) {
+    const content = fs.readFileSync(np, 'utf-8');
+    if (!/^## Summary/m.test(content)) {
+      fs.appendFileSync(np, '\n## Summary\n');
+    }
+  }
 }
 
 const commands = {
