@@ -108,6 +108,9 @@ After presenting the summary, show the user the available keymaps:
 > - `<leader>cd` — delete comment
 > - `<leader>ce` — edit comment
 >
+> **Submit (PR mode):**
+> - `<leader>pa` — submit review (approve / request changes / comment) and exit
+>
 > Ask me anything about the changes. Say **done** when finished.
 
 Then **wait for user input**. Do not open the picker automatically. The user drives navigation; the agent answers questions as asked.

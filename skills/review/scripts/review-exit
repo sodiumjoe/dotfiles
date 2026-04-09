@@ -46,7 +46,7 @@ if [[ -x "$nvim_lua" ]]; then
 fi
 
 if [[ -n "$restore_branch" ]]; then
-  git checkout "$restore_branch" 2>/dev/null || true
+  git checkout "$restore_branch" >/dev/null 2>/dev/null || true
 fi
 
 if [[ "$pop_stash" == "true" ]]; then
