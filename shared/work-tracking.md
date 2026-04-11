@@ -13,8 +13,10 @@
 When completing a task, use the `work complete` command:
 
 ```bash
-work complete <file> <description>
+work complete <full-path-to-project-or-plan-file> "<description>"
 ```
+
+The first argument must be the **full path** to the project or plan markdown file (not a slug or project name).
 
 This single command:
 
