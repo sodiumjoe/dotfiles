@@ -6,6 +6,8 @@ M._state = {
     reviewed = {},
     previous_branch = nil,
     current_user = nil,
+    files = {},
+    file_diffs = {},
 }
 
 function M.start_session(opts)
@@ -53,7 +55,15 @@ function M.get_current_pr()
 end
 
 function M.reset()
-    M._state = { session = nil, stashed = false, reviewed = {}, previous_branch = nil, current_user = nil }
+    M._state = {
+        session = nil,
+        stashed = false,
+        reviewed = {},
+        previous_branch = nil,
+        current_user = nil,
+        files = {},
+        file_diffs = {},
+    }
 end
 
 function M.set_previous_branch(branch)
@@ -70,6 +80,22 @@ end
 
 function M.get_current_user()
     return M._state.current_user
+end
+
+function M.set_files(items)
+    M._state.files = items or {}
+end
+
+function M.get_files()
+    return M._state.files
+end
+
+function M.set_file_diffs(diffs)
+    M._state.file_diffs = diffs or {}
+end
+
+function M.get_file_diffs()
+    return M._state.file_diffs
 end
 
 function M.is_reviewed(filepath)

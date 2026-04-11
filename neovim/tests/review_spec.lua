@@ -402,4 +402,44 @@ describe("sodium.review", function()
             assert.are.same({}, review.filter_local_comments(data, nil))
         end)
     end)
+
+    describe("file caching", function()
+        it("stores and retrieves files", function()
+            local items = {
+                { text = "foo.lua", file = "/repo/foo.lua", rel = "foo.lua", exists = true },
+                { text = "bar.lua", file = "/repo/bar.lua", rel = "bar.lua", exists = false },
+            }
+            review.set_files(items)
+            assert.are.equal(2, #review.get_files())
+            assert.are.equal("foo.lua", review.get_files()[1].rel)
+        end)
+
+        it("defaults to empty", function()
+            assert.are.same({}, review.get_files())
+        end)
+
+        it("reset clears files", function()
+            review.set_files({ { text = "x", file = "/x", rel = "x", exists = true } })
+            review.reset()
+            assert.are.same({}, review.get_files())
+        end)
+    end)
+
+    describe("file diff caching", function()
+        it("stores and retrieves diffs", function()
+            local diffs = { ["foo.lua"] = "diff --git a/foo.lua b/foo.lua\n+added" }
+            review.set_file_diffs(diffs)
+            assert.is_truthy(review.get_file_diffs()["foo.lua"]:find("+added"))
+        end)
+
+        it("defaults to empty", function()
+            assert.are.same({}, review.get_file_diffs())
+        end)
+
+        it("reset clears diffs", function()
+            review.set_file_diffs({ ["a.lua"] = "diff" })
+            review.reset()
+            assert.are.same({}, review.get_file_diffs())
+        end)
+    end)
 end)
