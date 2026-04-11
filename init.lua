@@ -51,6 +51,8 @@ require("lazy").setup({ import = "sodium.plugins" }, {
     },
 })
 
+vim.cmd("syntax off")
+
 require("sodium.config.lsp.servers")
 require("sodium.config.autocmds")
 require("sodium.config.keymaps")

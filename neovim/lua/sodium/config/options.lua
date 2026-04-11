@@ -41,6 +41,4 @@ g.fillchars = [[vert:│,eob:⌁]]
 g.splitkeep = "screen"
 o.winborder = "rounded"
 
-vim.cmd("syntax off")
-
 vim.g.loaded_perl_provider = 0
