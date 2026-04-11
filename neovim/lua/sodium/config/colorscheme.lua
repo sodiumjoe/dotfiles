@@ -360,12 +360,19 @@ h.DiagnosticSignInfo = { link = "DiagnosticFloatingInfo" }
 h.DiagnosticSignHint = { link = "DiagnosticFloatingHint" }
 
 -- ── Diff ─────────────────────────────────────────────────────────
+-- Default (non-diff-mode): solid backgrounds for diff markup in fugitive buffers etc.
+-- These get overridden by the DiffMode autocmd when &diff is true.
 
 h.DiffAdd = { fg = p.bg1, bg = git.add }
 h.DiffChange = { fg = p.bg1, bg = git.changed }
 h.DiffDelete = { fg = p.bg1, bg = git.removed }
 h.DiffText = { fg = p.bg1, bg = p.yellow }
 h.DiffTextAdd = { fg = p.bg1, bg = p.green }
+
+-- Gutter signs for diff mode (colored bar, like signify)
+h.DiffSignAdd = { fg = git.add }
+h.DiffSignChange = { fg = git.changed }
+h.DiffSignDelete = { fg = git.removed }
 
 -- ── Treesitter Context ───────────────────────────────────────────
 

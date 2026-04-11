@@ -10,6 +10,27 @@ return {
         "luukvbaal/statuscol.nvim",
         config = function()
             local builtin = require("statuscol.builtin")
+
+            -- Diff gutter: show colored │ for diff lines (like signify does for git changes)
+            local function diff_sign(args)
+                if not vim.wo[args.win].diff then
+                    return " "
+                end
+                local hl = vim.fn.diff_hlID(args.lnum, 1)
+                if hl == 0 then
+                    return " "
+                end
+                local name = vim.fn.synIDattr(hl, "name")
+                if name == "DiffAdd" then
+                    return "%#DiffSignAdd#│%*"
+                elseif name == "DiffChange" or name == "DiffText" then
+                    return "%#DiffSignChange#│%*"
+                elseif name == "DiffDelete" then
+                    return "%#DiffSignDelete#│%*"
+                end
+                return " "
+            end
+
             require("statuscol").setup({
                 segments = {
                     {
@@ -22,6 +43,19 @@ return {
                             name = { "Signify.*" },
                             fillchar = "│",
                             colwidth = 1,
+                        },
+                        condition = {
+                            function(args)
+                                return not vim.wo[args.win].diff
+                            end,
+                        },
+                    },
+                    {
+                        text = { diff_sign },
+                        condition = {
+                            function(args)
+                                return vim.wo[args.win].diff
+                            end,
                         },
                     },
                     { text = { " " } },
