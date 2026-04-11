@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Submit a PR review and clean up: submit review, restore branch, pop stash.
+# Submit a PR review and clean up.
 # Usage: review-approve [APPROVE|REQUEST_CHANGES|COMMENT]
 # Called from neovim keybinding — reads session state via nvim-lua.
 set -euo pipefail
 
 event="${1:-APPROVE}"
 
-nvim_lua="$(dirname "$0")/../../neovim/scripts/nvim-lua"
+nvim_lua="$(dirname "$0")/nvim-lua"
 [[ ! -x "$nvim_lua" ]] && { echo "nvim-lua not found" >&2; exit 1; }
 
 # Read session state from neovim
@@ -50,15 +50,24 @@ fi
 
 scripts_dir="$(dirname "$0")"
 
-# Collect comments and clean up
-exit_args=("$toplevel")
-[[ -n "$previous" ]] && exit_args+=(--restore-branch "$previous")
-[[ "$stashed" == "true" ]] && exit_args+=(--pop-stash)
-[[ -n "$user" ]] && exit_args+=(--user "$user")
+# Extract local comments from .nvim-comments.json BEFORE cleanup
+comments="[]"
+comments_file="$toplevel/.nvim-comments.json"
+if [[ -f "$comments_file" && -n "$user" ]]; then
+  comments=$(jq --arg user "$user" '
+    [.comments | to_entries[]
+     | select(.value.actor == $user or .value.author == $user)
+     | select(.key | test("^[0-9]+$") | not)
+     | .value]
+  ' "$comments_file" 2>/dev/null || echo "[]")
+fi
 
-comments=$("$scripts_dir/review-exit" "${exit_args[@]}")
-
-# Submit review
+# Submit review FIRST (while still on PR branch, gh context intact)
 echo "$comments" | "$scripts_dir/review-submit" "$id" "$event" ""
+
+# THEN clean up
+"$scripts_dir/review-exit" "$toplevel" \
+  ${previous:+--restore-branch "$previous"} \
+  $([[ "$stashed" == "true" ]] && echo "--pop-stash")
 
 echo "PR #$id — $event"

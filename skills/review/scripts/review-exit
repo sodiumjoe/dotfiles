@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: review-exit <toplevel> [--restore-branch <branch>] [--pop-stash] [--user <login>]" >&2
+  echo "Usage: review-exit <toplevel> [--restore-branch <branch>] [--pop-stash]" >&2
   exit 1
 fi
 
@@ -11,44 +11,31 @@ shift
 
 restore_branch=""
 pop_stash=false
-user=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --restore-branch) restore_branch="$2"; shift 2 ;;
     --pop-stash) pop_stash=true; shift ;;
-    --user) user="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 
-comments_file="$toplevel/.nvim-comments.json"
+# Clean up cached review data
+rm -rf "$toplevel/.review"
+rm -f "$toplevel/.nvim-comments.json"
 
-if [[ -f "$comments_file" ]]; then
-  if [[ -n "$user" ]]; then
-    jq --arg user "$user" '
-      [.comments | to_entries[]
-       | select(.value.actor == $user or .value.author == $user)
-       | select(.key | test("^[0-9]+$") | not)
-       | .value]
-    ' "$comments_file" 2>/dev/null || echo "[]"
-  else
-    echo "[]"
-  fi
-  rm -f "$comments_file"
-else
-  echo "[]"
-fi
-
-nvim_lua="$(dirname "$0")/../../neovim/scripts/nvim-lua"
+# Reset neovim session state
+nvim_lua="$(dirname "$0")/nvim-lua"
 if [[ -x "$nvim_lua" ]]; then
   "$nvim_lua" "pcall(vim.cmd, 'CommentRefresh') require('sodium.review').reset() return 0" 2>/dev/null || true
 fi
 
+# Restore previous branch
 if [[ -n "$restore_branch" ]]; then
   git checkout "$restore_branch" >/dev/null 2>/dev/null || true
 fi
 
+# Pop stash if we auto-stashed on enter
 if [[ "$pop_stash" == "true" ]]; then
   git stash pop 2>/dev/null || echo '{"warning":"stash pop failed"}' >&2
 fi
