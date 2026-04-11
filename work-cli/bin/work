@@ -324,9 +324,16 @@ const commands = {
     const { opts, positional } = parseOpts(args.slice(1));
     const dateStr = getDate(opts);
     if (positional.length < 2) {
-      throw new Error('usage: work complete <file> <description>');
+      throw new Error('usage: work complete <file-or-slug> <description>');
     }
-    const filePath = positional[0];
+    // Accept either a full file path or a project slug
+    let filePath = positional[0];
+    if (!filePath.includes('/') && !filePath.endsWith('.md')) {
+      filePath = projectFile(filePath);
+    }
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`file not found: ${positional[0]}`);
+    }
     const description = positional[1];
 
     // Check off the item in the source file
@@ -574,7 +581,7 @@ Commands:
   summary                      Show completed and open items
   list-tasks [file]            List open/in-progress tasks (TSV)
   set-task-state <f> <ln> <s>  Set task checkbox state (open|in-progress|done)
-  complete <file> <desc>       Check off task and log to daily note
+  complete <file|slug> <desc>   Check off task and log to daily note
   create-project <slug> <title> Create a new project file
   archive-project <slug>       Archive project and associated plans
   close-tasks <file> [--skip=L] Bulk-close open tasks (done or cancelled)

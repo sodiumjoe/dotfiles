@@ -13,10 +13,10 @@
 When completing a task, use the `work complete` command:
 
 ```bash
-work complete <full-path-to-project-or-plan-file> "<description>"
+work complete <slug-or-file> "<description>"
 ```
 
-The first argument must be the **full path** to the project or plan markdown file (not a slug or project name).
+The first argument can be a **project slug** (e.g. `dotfiles`) or a full file path. Slugs resolve to `~/stripe/work/projects/<slug>/project.md`.
 
 This single command:
 
@@ -24,9 +24,10 @@ This single command:
 - Adds it to today's daily note log with proper metadata
 - Handles project/plan context automatically
 
-Example:
+Examples:
 
 ```bash
+work complete dotfiles "Fix shell config"
 work complete ~/stripe/work/projects/dotfiles/project.md "Fix shell config"
 ```
 
