@@ -18,16 +18,22 @@ local function filetype_from_path(path)
     return match
 end
 
-local function git_file_content(ref, filepath)
-    local toplevel = vim.fn.systemlist({ "git", "rev-parse", "--show-toplevel" })[1]
-    if vim.v.shell_error ~= 0 or not toplevel then
-        return nil, "not a git repository"
+local function git_file_content(ref, filepath, toplevel)
+    if not toplevel then
+        toplevel = vim.fn.systemlist({ "git", "rev-parse", "--show-toplevel" })[1]
+        if vim.v.shell_error ~= 0 or not toplevel then
+            return nil, "not a git repository"
+        end
     end
-    local relpath = vim.fn.fnamemodify(filepath, ":.")
-    if vim.startswith(filepath, "/") and toplevel then
+    local relpath
+    if vim.startswith(filepath, toplevel .. "/") then
         relpath = filepath:sub(#toplevel + 2)
+    elseif vim.startswith(filepath, "/") then
+        relpath = filepath:sub(#toplevel + 2)
+    else
+        relpath = filepath
     end
-    local lines = vim.fn.systemlist({ "git", "show", ref .. ":" .. relpath })
+    local lines = vim.fn.systemlist({ "git", "-C", toplevel, "show", ref .. ":" .. relpath })
     if vim.v.shell_error ~= 0 then
         return nil, "git show failed for " .. ref .. ":" .. relpath
     end
@@ -48,11 +54,12 @@ function M.open(opts)
         vim.cmd("vsplit " .. vim.fn.fnameescape(opts.right))
         vim.cmd("diffthis")
     elseif opts.mode == "refs" then
+        local toplevel = opts.toplevel
         local ft = filetype_from_path(opts.file)
 
         if opts.right_ref then
-            local left_lines = git_file_content(opts.left_ref, opts.file) or {}
-            local right_lines = git_file_content(opts.right_ref, opts.file) or {}
+            local left_lines = git_file_content(opts.left_ref, opts.file, toplevel) or {}
+            local right_lines = git_file_content(opts.right_ref, opts.file, toplevel) or {}
 
             local basename = vim.fn.fnamemodify(opts.file, ":t")
             local left_buf = scratch_buffer(basename .. " (" .. opts.left_ref .. ")", left_lines, ft)
@@ -64,7 +71,7 @@ function M.open(opts)
             vim.api.nvim_win_set_buf(0, right_buf)
             vim.cmd("diffthis")
         else
-            local left_lines, left_err = git_file_content(opts.left_ref, opts.file)
+            local left_lines, left_err = git_file_content(opts.left_ref, opts.file, toplevel)
             if not left_lines then
                 vim.notify(left_err, vim.log.levels.ERROR)
                 return
@@ -83,5 +90,6 @@ end
 
 M._scratch_buffer = scratch_buffer
 M._filetype_from_path = filetype_from_path
+M._git_file_content = git_file_content
 
 return M
