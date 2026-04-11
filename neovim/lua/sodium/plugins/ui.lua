@@ -16,9 +16,13 @@ return {
                 if not vim.wo[args.win].diff then
                     return " "
                 end
-                -- Filler lines (deletions on other side) show as DiffDelete
-                if vim.fn.diff_filler(args.lnum) > 0 then
+                -- Filler lines (virtual lines for deletions) have negative virtnum
+                if args.virtnum < 0 then
                     return "%#DiffSignDelete#│%*"
+                end
+                -- Skip other virtual lines (wraps)
+                if args.virtnum > 0 then
+                    return " "
                 end
                 local hl = vim.fn.diff_hlID(args.lnum, 1)
                 if hl == 0 then
