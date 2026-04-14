@@ -67,8 +67,16 @@ return {
         "MeanderingProgrammer/render-markdown.nvim",
         dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" },
         opts = {
+            file_types = { "markdown", "AgenticChat" },
             ignore = function(buf)
-                return vim.bo[buf].buftype ~= ""
+                local bt = vim.bo[buf].buftype
+                if bt == "" then
+                    return false
+                end
+                if vim.bo[buf].filetype == "AgenticChat" then
+                    return false
+                end
+                return true
             end,
             nested = false,
             checkbox = {
