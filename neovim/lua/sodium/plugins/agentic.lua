@@ -610,12 +610,15 @@ return {
             },
             windows = {
                 height = 0.5,
+                width = 0.4,
+                stack_width_ratio = 0.3,
                 position = "bottom",
                 code = diagnostics.window_opts,
                 files = diagnostics.window_opts,
                 input = diagnostics.window_opts,
                 todos = diagnostics.window_opts,
                 chat = diagnostics.window_opts,
+                diagnostics = diagnostics.window_opts,
             },
             headers = {
                 chat = noop,
