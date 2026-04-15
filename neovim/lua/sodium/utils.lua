@@ -74,7 +74,7 @@ M.spinner_frames = {
 function M.editor_window()
     for _, w in ipairs(vim.api.nvim_list_wins()) do
         local ft = vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) })
-        if not ft:match("^Agentic") then
+        if not ft:match("^Agentic") and not vim.wo[w].winfixbuf then
             return w
         end
     end
@@ -85,7 +85,7 @@ function M.close_non_agentic_windows()
     for _, w in ipairs(vim.api.nvim_list_wins()) do
         if w ~= current then
             local ft = vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) })
-            if not ft:match("^Agentic") then
+            if not ft:match("^Agentic") and not vim.wo[w].winfixbuf then
                 pcall(vim.api.nvim_win_close, w, true)
             end
         end
