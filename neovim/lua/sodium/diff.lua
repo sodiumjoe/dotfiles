@@ -61,9 +61,12 @@ function M.open(opts)
             local left_lines = git_file_content(opts.left_ref, opts.file, toplevel) or {}
             local right_lines = git_file_content(opts.right_ref, opts.file, toplevel) or {}
 
-            local basename = vim.fn.fnamemodify(opts.file, ":t")
-            local left_buf = scratch_buffer(basename .. " (" .. opts.left_ref .. ")", left_lines, ft)
-            local right_buf = scratch_buffer(basename .. " (" .. opts.right_ref .. ")", right_lines, ft)
+            local display = opts.file
+            if toplevel and vim.startswith(opts.file, toplevel .. "/") then
+                display = opts.file:sub(#toplevel + 2)
+            end
+            local left_buf = scratch_buffer(display .. " (" .. opts.left_ref .. ")", left_lines, ft)
+            local right_buf = scratch_buffer(display .. " (" .. opts.right_ref .. ")", right_lines, ft)
 
             vim.api.nvim_win_set_buf(0, left_buf)
             vim.cmd("diffthis")
@@ -77,8 +80,11 @@ function M.open(opts)
                 return
             end
 
-            local basename = vim.fn.fnamemodify(opts.file, ":t")
-            local left_buf = scratch_buffer(basename .. " (" .. opts.left_ref .. ")", left_lines, ft)
+            local display = opts.file
+            if toplevel and vim.startswith(opts.file, toplevel .. "/") then
+                display = opts.file:sub(#toplevel + 2)
+            end
+            local left_buf = scratch_buffer(display .. " (" .. opts.left_ref .. ")", left_lines, ft)
 
             vim.api.nvim_win_set_buf(0, left_buf)
             vim.cmd("diffthis")

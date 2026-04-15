@@ -63,7 +63,7 @@ if [[ -f "$comments_file" && -n "$user" ]]; then
 fi
 
 # Submit review FIRST (while still on PR branch, gh context intact)
-echo "$comments" | "$scripts_dir/review-submit" "$id" "$event" ""
+echo "$comments" | "$scripts_dir/review-submit" "$id" "$event" "" "$toplevel"
 
 # THEN clean up
 "$scripts_dir/review-exit" "$toplevel" \

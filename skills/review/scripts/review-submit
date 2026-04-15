@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: review-submit <pr-number> <event> [<body>]" >&2
+  echo "Usage: review-submit <pr-number> <event> [<body>] [<toplevel>]" >&2
   echo "  event: APPROVE | COMMENT | REQUEST_CHANGES" >&2
   echo "  reads comments JSON array from stdin" >&2
   exit 1
@@ -11,14 +11,39 @@ fi
 pr_number="$1"
 event="$2"
 body="${3:-}"
+toplevel="${4:-}"
 
 comments_json=$(cat)
 
 if [[ -z "$comments_json" || "$comments_json" == "[]" ]]; then
-  payload=$(jq -n --arg event "$event" --arg body "$body" '{event: $event, body: $body}')
+  if [[ -n "$body" ]]; then
+    payload=$(jq -n --arg event "$event" --arg body "$body" '{event: $event, body: $body}')
+  else
+    payload=$(jq -n --arg event "$event" '{event: $event}')
+  fi
 else
-  api_comments=$(echo "$comments_json" | jq '[.[] | {path: .file, line: (.line // .line_start), side: "RIGHT", body: .body}]')
-  payload=$(jq -n --arg event "$event" --arg body "$body" --argjson comments "$api_comments" '{event: $event, body: $body, comments: $comments}')
+  files_list=""
+  if [[ -n "$toplevel" && -f "$toplevel/.review/files" ]]; then
+    files_list=$(cat "$toplevel/.review/files")
+  fi
+
+  api_comments=$(echo "$comments_json" | jq --arg files "$files_list" '[
+    .[] | (.file | gsub(" \\(.*\\)$"; "")) as $raw |
+    ($raw | split("/") | last) as $basename |
+    ($files | split("\n") | map(select(. != "")) | map(select(endswith("/" + $basename) or . == $basename)) | first // $raw) as $resolved |
+    {path: $resolved, line: (.line // .line_end // .line_start), side: "RIGHT", body: .body}
+    | select(.line != null)
+  ]')
+
+  if [[ -n "$body" ]]; then
+    payload=$(jq -n --arg event "$event" --arg body "$body" --argjson comments "$api_comments" '{event: $event, body: $body, comments: $comments}')
+  else
+    payload=$(jq -n --arg event "$event" --argjson comments "$api_comments" '{event: $event, comments: $comments}')
+  fi
 fi
 
-echo "$payload" | gh api "repos/{owner}/{repo}/pulls/$pr_number/reviews" -X POST --input -
+if ! result=$(echo "$payload" | gh api "repos/{owner}/{repo}/pulls/$pr_number/reviews" -X POST --input - 2>&1); then
+  echo "Submit failed: $result" >&2
+  echo "Payload: $(echo "$payload" | jq -c .)" >&2
+  exit 1
+fi
