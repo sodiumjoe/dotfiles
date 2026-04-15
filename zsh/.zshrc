@@ -283,18 +283,18 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
 
-_project_for_devbox() {
+_projects_for_devbox() {
   local remote_name="$1"
-  local f
+  local found=0 f
   for f in "$HOME/stripe/work/projects"/*/project.md; do
     [ -f "$f" ] || continue
     if sed -n '/^---$/,/^---$/p' "$f" | grep -q "devboxes:.*${remote_name}"; then
       local dir="${f%/project.md}"
       echo "${dir##*/}"
-      return 0
+      found=1
     fi
   done
-  return 1
+  return $(( !found ))
 }
 
 _pick_project() {
@@ -331,27 +331,38 @@ _associate_devbox() {
 }
 
 _devbox_sync_push() {
-  local host="$1" slug="$2"
-  ssh "$host" "mkdir -p ~/stripe/work/projects/${slug} ~/.dotfiles/work-cli" 2>/dev/null
-  rsync -az --exclude='*.jsonl' "$HOME/stripe/work/projects/${slug}/" "$host:~/stripe/work/projects/${slug}/"
+  local host="$1"; shift
+  local slug dirs=""
+  for slug in "$@"; do
+    dirs+=" ~/stripe/work/projects/${slug}"
+  done
+  ssh "$host" "mkdir -p ${dirs} ~/.dotfiles/work-cli" 2>/dev/null
+  for slug in "$@"; do
+    rsync -az --exclude='*.jsonl' "$HOME/stripe/work/projects/${slug}/" "$host:~/stripe/work/projects/${slug}/"
+  done
   rsync -az --delete "$HOME/.dotfiles/work-cli/" "$host:~/.dotfiles/work-cli/"
 }
 
 _devbox_sync_pull() {
-  local host="$1" slug="$2"
-  rsync -az --exclude='*.jsonl' "$host:~/stripe/work/projects/${slug}/" "$HOME/stripe/work/projects/${slug}/"
+  local host="$1"; shift
+  local slug
+  for slug in "$@"; do
+    rsync -az --exclude='*.jsonl' "$host:~/stripe/work/projects/${slug}/" "$HOME/stripe/work/projects/${slug}/"
+  done
 }
 
-_devbox_ensure_project() {
+_devbox_ensure_projects() {
   local remote_name="$1"
-  local slug
-  slug=$(_project_for_devbox "$remote_name")
-  if [ -z "$slug" ]; then
+  local slugs
+  slugs=$(_projects_for_devbox "$remote_name")
+  if [ -z "$slugs" ]; then
+    local slug
     slug=$(_pick_project)
     [ -z "$slug" ] && return 1
     _associate_devbox "$remote_name" "$slug"
+    slugs="$slug"
   fi
-  echo "$slug"
+  echo "$slugs"
 }
 
 _copy_gh_auth_to_remote() {
@@ -394,17 +405,18 @@ remotes() {
   local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
   local host=$(pay remote ssh "$remote_name" -- hostname)
 
-  local slug
-  slug=$(_devbox_ensure_project "$remote_name") || return 1
+  local slugs
+  slugs=$(_devbox_ensure_projects "$remote_name") || return 1
+  local -a slug_arr=( ${(f)slugs} )
 
-  (_devbox_sync_push "$host" "$slug" &)
+  (_devbox_sync_push "$host" "${slug_arr[@]}" &)
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  (_devbox_sync_pull "$host" "$slug" &)
+  (_devbox_sync_pull "$host" "${slug_arr[@]}" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -425,17 +437,18 @@ remote() {
   pay remote new "$remote_name" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
 
   local host=$(pay remote ssh "$remote_name" -- hostname)
-  local slug
-  slug=$(_devbox_ensure_project "$remote_name") || return 1
+  local slugs
+  slugs=$(_devbox_ensure_projects "$remote_name") || return 1
+  local -a slug_arr=( ${(f)slugs} )
 
-  (_devbox_sync_push "$host" "$slug" &)
+  (_devbox_sync_push "$host" "${slug_arr[@]}" &)
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  (_devbox_sync_pull "$host" "$slug" &)
+  (_devbox_sync_pull "$host" "${slug_arr[@]}" &)
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -505,11 +518,15 @@ dev() {
   local host=$(pay remote ssh "$remote_name" -- hostname)
 
   if [ -n "$proj_slug" ]; then
-    local existing=$(_project_for_devbox "$remote_name")
-    if [ -z "$existing" ]; then
+    local existing=$(_projects_for_devbox "$remote_name")
+    if ! echo "$existing" | grep -qx "$proj_slug"; then
       _associate_devbox "$remote_name" "$proj_slug"
     fi
-    (_devbox_sync_push "$host" "$proj_slug" &)
+  fi
+  local slugs=$(_projects_for_devbox "$remote_name")
+  local -a slug_arr=( ${(f)slugs} )
+  if [ ${#slug_arr[@]} -gt 0 ]; then
+    (_devbox_sync_push "$host" "${slug_arr[@]}" &)
   fi
   (_copy_gh_auth_to_remote "$host" &)
 
@@ -517,8 +534,8 @@ dev() {
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  if [ -n "$proj_slug" ]; then
-    (_devbox_sync_pull "$host" "$proj_slug" &)
+  if [ ${#slug_arr[@]} -gt 0 ]; then
+    (_devbox_sync_pull "$host" "${slug_arr[@]}" &)
   fi
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
