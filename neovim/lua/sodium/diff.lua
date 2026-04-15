@@ -76,7 +76,7 @@ function M.open(opts)
         else
             local left_lines, left_err = git_file_content(opts.left_ref, opts.file, toplevel)
             if not left_lines then
-                vim.notify(left_err, vim.log.levels.ERROR)
+                vim.notify(left_err or "unknown error", vim.log.levels.ERROR)
                 return
             end
 
