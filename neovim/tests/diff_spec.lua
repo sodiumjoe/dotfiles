@@ -38,6 +38,37 @@ describe("sodium.diff", function()
         end)
     end)
 
+    describe("_display_path", function()
+        it("strips toplevel prefix from absolute path", function()
+            assert.are.equal(
+                "pay-server/src/foo.ts",
+                diff._display_path("/home/user/mint/pay-server/src/foo.ts", "/home/user/mint")
+            )
+        end)
+
+        it("preserves nested directory structure", function()
+            assert.are.equal(
+                "pay-server/stripethirdparty/src/entries/AlgoliaSearch/AlgoliaSearch.ts",
+                diff._display_path(
+                    "/repo/pay-server/stripethirdparty/src/entries/AlgoliaSearch/AlgoliaSearch.ts",
+                    "/repo"
+                )
+            )
+        end)
+
+        it("returns file as-is when toplevel is nil", function()
+            assert.are.equal("/abs/path/foo.ts", diff._display_path("/abs/path/foo.ts", nil))
+        end)
+
+        it("returns file as-is when not under toplevel", function()
+            assert.are.equal("/other/repo/foo.ts", diff._display_path("/other/repo/foo.ts", "/home/user/mint"))
+        end)
+
+        it("returns relative path as-is", function()
+            assert.are.equal("src/foo.ts", diff._display_path("src/foo.ts", "/repo"))
+        end)
+    end)
+
     describe("open - files mode", function()
         it("opens two buffers in diff mode", function()
             local left = vim.fn.tempname() .. ".lua"

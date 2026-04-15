@@ -13,6 +13,13 @@ local function scratch_buffer(name, lines, filetype)
     return buf
 end
 
+local function display_path(file, toplevel)
+    if toplevel and vim.startswith(file, toplevel .. "/") then
+        return file:sub(#toplevel + 2)
+    end
+    return file
+end
+
 local function filetype_from_path(path)
     local match = vim.filetype.match({ filename = path })
     return match
@@ -61,10 +68,7 @@ function M.open(opts)
             local left_lines = git_file_content(opts.left_ref, opts.file, toplevel) or {}
             local right_lines = git_file_content(opts.right_ref, opts.file, toplevel) or {}
 
-            local display = opts.file
-            if toplevel and vim.startswith(opts.file, toplevel .. "/") then
-                display = opts.file:sub(#toplevel + 2)
-            end
+            local display = display_path(opts.file, toplevel)
             local left_buf = scratch_buffer(display .. " (" .. opts.left_ref .. ")", left_lines, ft)
             local right_buf = scratch_buffer(display .. " (" .. opts.right_ref .. ")", right_lines, ft)
 
@@ -80,10 +84,7 @@ function M.open(opts)
                 return
             end
 
-            local display = opts.file
-            if toplevel and vim.startswith(opts.file, toplevel .. "/") then
-                display = opts.file:sub(#toplevel + 2)
-            end
+            local display = display_path(opts.file, toplevel)
             local left_buf = scratch_buffer(display .. " (" .. opts.left_ref .. ")", left_lines, ft)
 
             vim.api.nvim_win_set_buf(0, left_buf)
@@ -97,5 +98,6 @@ end
 M._scratch_buffer = scratch_buffer
 M._filetype_from_path = filetype_from_path
 M._git_file_content = git_file_content
+M._display_path = display_path
 
 return M
