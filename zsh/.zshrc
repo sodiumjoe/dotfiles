@@ -284,17 +284,7 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 ## stripe
 
 _projects_for_devbox() {
-  local remote_name="$1"
-  local found=0 f
-  for f in "$HOME/stripe/work/projects"/*/project.md; do
-    [ -f "$f" ] || continue
-    if sed -n '/^---$/,/^---$/p' "$f" | grep -q "devboxes:.*${remote_name}"; then
-      local dir="${f%/project.md}"
-      echo "${dir##*/}"
-      found=1
-    fi
-  done
-  return $(( !found ))
+  work devbox list "$1"
 }
 
 _pick_project() {
@@ -316,18 +306,7 @@ _pick_project() {
 }
 
 _associate_devbox() {
-  local remote_name="$1" slug="$2"
-  local pf="$HOME/stripe/work/projects/${slug}/project.md"
-  [ -f "$pf" ] || return 1
-  if grep -q "^devboxes:" "$pf"; then
-    sed -i '' "s/^devboxes: \[/devboxes: [${remote_name}, /" "$pf"
-  else
-    awk -v name="$remote_name" '
-      /^---$/ { count++ }
-      count == 2 && /^---$/ { print "devboxes: [" name "]" }
-      { print }
-    ' "$pf" > "${pf}.tmp" && mv "${pf}.tmp" "$pf"
-  fi
+  work devbox link "$2" "$1"
 }
 
 _devbox_sync_push() {
