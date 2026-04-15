@@ -56,3 +56,7 @@ Use headers, sub-headers, and tables for navigation and scannability. Within sec
 - Do not write comments in code by default
 - Only add comments when explicitly requested
 - Do not add trailing new lines to the end of files
+
+## Branch naming
+
+Git branch prefix is `moon/`. Do not use `$(whoami)` or shell username — the devbox system user (`owner`) differs from the git identity (`moon`).
