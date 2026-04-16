@@ -32,7 +32,7 @@ WINDOW=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null)
     exit 0
   fi
 
-  LABEL="${WINDOW:-$PROJECT}"
+  LABEL="${PROJECT:-${remote_name:-$WINDOW}}"
   if [ -n "$LABEL" ]; then
     MSG="Claude is waiting for input ($LABEL)"
   else
