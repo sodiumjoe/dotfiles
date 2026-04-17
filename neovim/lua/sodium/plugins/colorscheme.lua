@@ -21,7 +21,12 @@ return {
             line_nr_autocmd({ "BufNewFile", "BufRead", "BufEnter" }, {
                 pattern = "*",
                 callback = function()
-                    if vim.filetype.match({ buf = 0 }) == nil then
+                    local bo_ft = vim.bo.filetype
+                    if bo_ft and bo_ft:match("^Agentic") then
+                        return
+                    end
+                    local ft = vim.filetype.match({ buf = 0 })
+                    if ft == nil then
                         vim.opt_local.number = false
                     else
                         vim.opt_local.number = true
