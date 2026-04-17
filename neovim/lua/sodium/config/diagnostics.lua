@@ -5,6 +5,8 @@ local M = {}
 M.window_opts = {
     win_opts = {
         foldcolumn = "1",
+        number = false,
+        relativenumber = false,
     },
 }
 
