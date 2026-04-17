@@ -18,8 +18,13 @@ if [ -f "$PID_FILE" ]; then
   rm -f "$PID_FILE"
 fi
 
-PROJECT="${CLAUDE_PROJECT:-}"
-WINDOW=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null)
+LABEL="${CLAUDE_PROJECT:-$remote_name}"
+if [ -z "$LABEL" ]; then
+  LABEL=$(tmux show-environment remote_name 2>/dev/null | grep -v '^-' | cut -d= -f2-)
+fi
+if [ -z "$LABEL" ]; then
+  LABEL=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null)
+fi
 
 (
   sleep "$DELAY"
@@ -31,8 +36,6 @@ WINDOW=$(tmux display-message -p -t "$PANE" '#{window_name}' 2>/dev/null)
     rm -f "$PID_FILE"
     exit 0
   fi
-
-  LABEL="${PROJECT:-${remote_name:-$WINDOW}}"
   if [ -n "$LABEL" ]; then
     MSG="Claude is waiting for input ($LABEL)"
   else
