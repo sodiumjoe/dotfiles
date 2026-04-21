@@ -606,7 +606,13 @@ local function pick_pr_for_review()
                     local SessionRegistry = require("agentic.session_registry")
                     SessionRegistry.get_session_for_tab_page(nil, function(session)
                         local input_buf = session.widget.buf_nrs.input
-                        vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "/review " .. tostring(item.number) })
+                        vim.api.nvim_buf_set_lines(
+                            input_buf,
+                            0,
+                            -1,
+                            false,
+                            { "/neovim-review " .. tostring(item.number) }
+                        )
                         session.widget:show()
                         local function try_submit()
                             if session.session_id then
@@ -625,6 +631,7 @@ end
 
 return {
     "carlos-algms/agentic.nvim",
+    dir = vim.fn.expand("~/home/agentic.nvim"),
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
@@ -641,6 +648,7 @@ return {
             file_picker = {
                 enabled = false,
             },
+            border_style = "boxed",
             provider = "claude-acp",
             -- provider = "codex-acp",
             -- provider = "gemini-acp",
@@ -968,7 +976,7 @@ return {
                         if not choice then
                             return
                         end
-                        local script = vim.env.HOME .. "/.claude/skills/review/scripts/review-approve"
+                        local script = vim.env.HOME .. "/.claude/skills/neovim-review/scripts/review-approve"
                         vim.notify("Submitting " .. choice:lower() .. " for PR #" .. s.id .. "...")
                         vim.system({ script, choice }, { text = true }, function(r)
                             vim.schedule(function()
