@@ -23,149 +23,149 @@ hs.window.highlight.start()
 local gap = 22
 
 local function resetScreenRotations()
-	local middle = hs.screen.find("8D4ABB98-899E-4A68-8C45-171987AD4460")
-		or hs.screen.find("54E424F3-7B0B-450B-B9C7-7231969D83CB")
-	local rotated = false
-	if middle:rotate() ~= 90 then
-		middle:rotate(90)
-		rotated = true
-	end
-	local right = hs.screen.find("C9663195-14A9-4530-814C-4C63B2214E99")
-		or hs.screen.find("6427002F-49C0-4754-BF96-A480C3EC8512")
-	if right:rotate() ~= 270 then
-		right:rotate(270)
-		rotated = true
-	end
-	if rotated then
-		hs.timer.usleep(100)
-	end
+    local middle = hs.screen.find("8D4ABB98-899E-4A68-8C45-171987AD4460")
+        or hs.screen.find("54E424F3-7B0B-450B-B9C7-7231969D83CB")
+    local rotated = false
+    if middle:rotate() ~= 90 then
+        middle:rotate(90)
+        rotated = true
+    end
+    local right = hs.screen.find("C9663195-14A9-4530-814C-4C63B2214E99")
+        or hs.screen.find("6427002F-49C0-4754-BF96-A480C3EC8512")
+    if right:rotate() ~= 270 then
+        right:rotate(270)
+        rotated = true
+    end
+    if rotated then
+        hs.timer.usleep(100)
+    end
 end
 
 local positions = {
-	left = { x = 0, y = 0, w = 12, h = 24 },
-	right = { x = 12, y = 0, w = 12, h = 24 },
-	top = { x = 0, y = 0, w = 24, h = 8 },
-	topLeft = { x = 0, y = 0, w = 12, h = 8 },
-	topRight = { x = 12, y = 0, w = 12, h = 8 },
-	bottom = { x = 0, y = 8, w = 24, h = 16 },
-	bottomLeft = { x = 0, y = 12, w = 12, h = 12 },
-	bottomRight = { x = 12, y = 12, w = 12, h = 12 },
-	maximized = { x = 0, y = 0, w = 24, h = 24 },
-	topZoom = { x = 1, y = 8, w = 22, h = 8 },
-	bottomZoom = { x = 1, y = 16, w = 22, h = 8 },
+    left = { x = 0, y = 0, w = 12, h = 24 },
+    right = { x = 12, y = 0, w = 12, h = 24 },
+    top = { x = 0, y = 0, w = 24, h = 8 },
+    topLeft = { x = 0, y = 0, w = 12, h = 8 },
+    topRight = { x = 12, y = 0, w = 12, h = 8 },
+    bottom = { x = 0, y = 8, w = 24, h = 16 },
+    bottomLeft = { x = 0, y = 12, w = 12, h = 12 },
+    bottomRight = { x = 12, y = 12, w = 12, h = 12 },
+    maximized = { x = 0, y = 0, w = 24, h = 24 },
+    topZoom = { x = 1, y = 8, w = 22, h = 8 },
+    bottomZoom = { x = 1, y = 16, w = 22, h = 8 },
 }
 
 local function resetGrid()
-	hs.grid.setMargins({ gap, gap })
-	for _, screen in pairs(hs.screen.allScreens()) do
-		hs.grid.setGrid("24x24", screen)
-	end
+    hs.grid.setMargins({ gap, gap })
+    for _, screen in pairs(hs.screen.allScreens()) do
+        hs.grid.setGrid("24x24", screen)
+    end
 end
 
 resetGrid()
 
 local function isLaptopScreen(win)
-	return win:screen() == hs.screen.primaryScreen()
+    return win:screen() == hs.screen.primaryScreen()
 end
 
 local function isWorkstation()
-	return #hs.screen.allScreens() > 1
+    return #hs.screen.allScreens() > 1
 end
 
 local function moveToSlot(slot, win)
-	win = win or hs.window.frontmostWindow()
-	local screens = hs.screen.allScreens()
-	if slot == 1 then
-		local screen = screens[1]
-		return hs.grid.set(win, positions.left, screen)
-	elseif slot == 2 then
-		local screen = screens[1]
-		return hs.grid.set(win, positions.right, screen)
-	elseif #screens < 2 then
-		return
-	elseif slot == 3 then
-		local screen = screens[2]
-		return hs.grid.set(win, positions.left, screen)
-	elseif slot == 4 then
-		local screen = screens[2]
-		return hs.grid.set(win, positions.right, screen)
-	end
+    win = win or hs.window.frontmostWindow()
+    local screens = hs.screen.allScreens()
+    if slot == 1 then
+        local screen = screens[1]
+        return hs.grid.set(win, positions.left, screen)
+    elseif slot == 2 then
+        local screen = screens[1]
+        return hs.grid.set(win, positions.right, screen)
+    elseif #screens < 2 then
+        return
+    elseif slot == 3 then
+        local screen = screens[2]
+        return hs.grid.set(win, positions.left, screen)
+    elseif slot == 4 then
+        local screen = screens[2]
+        return hs.grid.set(win, positions.right, screen)
+    end
 end
 
 local function focusLeft()
-	local focusedWindow = hs.window.frontmostWindow()
-	local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-	focusedWindow:focusWindowWest(windows, true, true)
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    focusedWindow:focusWindowWest(windows, true, true)
 end
 
 local function focusRight()
-	local focusedWindow = hs.window.frontmostWindow()
-	local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-	focusedWindow:focusWindowEast(windows, true, true)
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    focusedWindow:focusWindowEast(windows, true, true)
 end
 
 local function focusUp()
-	local focusedWindow = hs.window.frontmostWindow()
-	local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-	focusedWindow:focusWindowNorth(windows, true)
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    focusedWindow:focusWindowNorth(windows, true)
 end
 
 local function focusDown()
-	local focusedWindow = hs.window.frontmostWindow()
-	local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-	focusedWindow:focusWindowSouth(windows, true)
+    local focusedWindow = hs.window.frontmostWindow()
+    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
+    focusedWindow:focusWindowSouth(windows, true)
 end
 
 local function pushLeft()
-	local win = hs.window.frontmostWindow()
-	local screen = win:screen()
+    local win = hs.window.frontmostWindow()
+    local screen = win:screen()
 
-	if hs.grid.get(win) ~= positions.left and not isWorkstation() then
-		return hs.grid.set(win, positions.left)
-	end
+    if hs.grid.get(win) ~= positions.left and not isWorkstation() then
+        return hs.grid.set(win, positions.left)
+    end
 
-	local screenToWest = screen:toWest()
+    local screenToWest = screen:toWest()
 
-	local position = (isWorkstation() and positions.bottom) or positions.right
-	if screenToWest then
-		hs.grid.set(win, position, screenToWest)
-		if isWorkstation() and isLaptopScreen(win) then
-			win:maximize()
-		end
-		return
-	end
+    local position = (isWorkstation() and positions.bottom) or positions.right
+    if screenToWest then
+        hs.grid.set(win, position, screenToWest)
+        if isWorkstation() and isLaptopScreen(win) then
+            win:maximize()
+        end
+        return
+    end
 end
 
 local function pushRight()
-	local win = hs.window.frontmostWindow()
-	local screen = win:screen()
+    local win = hs.window.frontmostWindow()
+    local screen = win:screen()
 
-	if hs.grid.get(win) ~= positions.right and not isWorkstation() then
-		return hs.grid.set(win, positions.right)
-	end
+    if hs.grid.get(win) ~= positions.right and not isWorkstation() then
+        return hs.grid.set(win, positions.right)
+    end
 
-	local screenToEast = screen:toEast()
+    local screenToEast = screen:toEast()
 
-	local position = isWorkstation() and positions.bottom or positions.left
+    local position = isWorkstation() and positions.bottom or positions.left
 
-	if screenToEast then
-		return hs.grid.set(win, position, screenToEast)
-	end
+    if screenToEast then
+        return hs.grid.set(win, position, screenToEast)
+    end
 end
 
 local function pushTop()
-	local win = hs.window.frontmostWindow()
-	hs.grid.set(win, positions.top)
+    local win = hs.window.frontmostWindow()
+    hs.grid.set(win, positions.top)
 end
 
 local function pushBottom()
-	local win = hs.window.frontmostWindow()
-	hs.grid.set(win, positions.bottom)
+    local win = hs.window.frontmostWindow()
+    hs.grid.set(win, positions.bottom)
 end
 
 local function pushTopLeft()
-	local win = hs.window.frontmostWindow()
-	hs.grid.set(win, positions.topLeft)
+    local win = hs.window.frontmostWindow()
+    hs.grid.set(win, positions.topLeft)
 end
 
 -- local function pushTopRight()
@@ -174,8 +174,8 @@ end
 -- end
 
 local function pushBottomLeft()
-	local win = hs.window.frontmostWindow()
-	hs.grid.set(win, positions.bottomLeft)
+    local win = hs.window.frontmostWindow()
+    hs.grid.set(win, positions.bottomLeft)
 end
 
 -- local function pushBottomRight()
@@ -184,262 +184,262 @@ end
 -- end
 
 local function maximize(win)
-	win = win or hs.window.frontmostWindow()
-	if isLaptopScreen(win) then
-		win:maximize()
-	else
-		hs.grid.set(win, positions.maximized)
-	end
+    win = win or hs.window.frontmostWindow()
+    if isLaptopScreen(win) then
+        win:maximize()
+    else
+        hs.grid.set(win, positions.maximized)
+    end
 end
 
 local function layoutWin(win, screenIndex, position)
-	for screen, screenPos in pairs(hs.screen.screenPositions()) do
-		if screenPos.x == screenIndex then
-			hs.grid.set(win, position, screen)
-		end
-	end
+    for screen, screenPos in pairs(hs.screen.screenPositions()) do
+        if screenPos.x == screenIndex then
+            hs.grid.set(win, position, screen)
+        end
+    end
 end
 
 local function layoutApp(filter, screenIndex, position)
-	for _, win in pairs(filter:getWindows()) do
-		layoutWin(win, screenIndex, position)
-	end
+    for _, win in pairs(filter:getWindows()) do
+        layoutWin(win, screenIndex, position)
+    end
 end
 
 local function dragWindowToSpace(win, direction, callback)
-	win:focus()
-	hs.timer.doAfter(0.15, function()
-		local zoomRect = win:zoomButtonRect()
-		if not zoomRect then
-			if callback then
-				callback()
-			end
-			return
-		end
-		local grabPoint = hs.geometry.point(zoomRect.x + zoomRect.w + 5, zoomRect.y + zoomRect.h / 2)
-		local origCursor = hs.mouse.absolutePosition()
+    win:focus()
+    hs.timer.doAfter(0.15, function()
+        local zoomRect = win:zoomButtonRect()
+        if not zoomRect then
+            if callback then
+                callback()
+            end
+            return
+        end
+        local grabPoint = hs.geometry.point(zoomRect.x + zoomRect.w + 5, zoomRect.y + zoomRect.h / 2)
+        local origCursor = hs.mouse.absolutePosition()
 
-		hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseDown, grabPoint):post()
-		hs.timer.doAfter(0.15, function()
-			local key = direction == "right" and "l" or "h"
-			hs.eventtap.keyStroke({ "ctrl", "cmd" }, key, 0)
-			hs.timer.doAfter(0.35, function()
-				hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseUp, grabPoint):post()
-				hs.mouse.absolutePosition(origCursor)
-				if callback then
-					hs.timer.doAfter(0.15, callback)
-				end
-			end)
-		end)
-	end)
+        hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseDown, grabPoint):post()
+        hs.timer.doAfter(0.15, function()
+            local key = direction == "right" and "l" or "h"
+            hs.eventtap.keyStroke({ "ctrl", "cmd" }, key, 0)
+            hs.timer.doAfter(0.35, function()
+                hs.eventtap.event.newMouseEvent(hs.eventtap.event.types.leftMouseUp, grabPoint):post()
+                hs.mouse.absolutePosition(origCursor)
+                if callback then
+                    hs.timer.doAfter(0.15, callback)
+                end
+            end)
+        end)
+    end)
 end
 
 local function moveWindowsToDesktops(callback)
-	local screenSpaces = hs.spaces.spacesForScreen(hs.screen.primaryScreen())
-	local workSpace = screenSpaces[1]
-	local personalSpace = screenSpaces[2]
-	if not workSpace or not personalSpace then
-		if callback then
-			callback()
-		end
-		return
-	end
+    local screenSpaces = hs.spaces.spacesForScreen(hs.screen.primaryScreen())
+    local workSpace = screenSpaces[1]
+    local personalSpace = screenSpaces[2]
+    if not workSpace or not personalSpace then
+        if callback then
+            callback()
+        end
+        return
+    end
 
-	local activeSpace = hs.spaces.activeSpaceOnScreen(hs.screen.primaryScreen())
+    local activeSpace = hs.spaces.activeSpaceOnScreen(hs.screen.primaryScreen())
 
-	-- Collect windows that need moving
-	local toMove = {}
+    -- Collect windows that need moving
+    local toMove = {}
 
-	-- Chrome windows: match by profile name in title
-	local chrome = hs.application.find("Google Chrome")
-	if chrome and type(chrome) ~= "boolean" then
-		for _, win in ipairs(chrome:allWindows() or {}) do
-			local title = win:title()
-			local sp = hs.spaces.windowSpaces(win:id())
-			local curSpace = sp and sp[1]
-			if not curSpace then
-				goto continue_chrome
-			end
+    -- Chrome windows: match by profile name in title
+    local chrome = hs.application.find("Google Chrome")
+    if chrome and type(chrome) ~= "boolean" then
+        for _, win in ipairs(chrome:allWindows() or {}) do
+            local title = win:title()
+            local sp = hs.spaces.windowSpaces(win:id())
+            local curSpace = sp and sp[1]
+            if not curSpace then
+                goto continue_chrome
+            end
 
-			if title:find("Joe %(stripe%.com%)") and curSpace ~= workSpace then
-				table.insert(toMove, { win = win, target = workSpace })
-			elseif
-				not title:find("stripe%.com")
-				and title:find("Google Chrome %- Joe")
-				and curSpace ~= personalSpace
-			then
-				table.insert(toMove, { win = win, target = personalSpace })
-			end
-			::continue_chrome::
-		end
-	end
+            if title:find("Joe %(stripe%.com%)") and curSpace ~= workSpace then
+                table.insert(toMove, { win = win, target = workSpace })
+            elseif
+                not title:find("stripe%.com")
+                and title:find("Google Chrome %- Joe")
+                and curSpace ~= personalSpace
+            then
+                table.insert(toMove, { win = win, target = personalSpace })
+            end
+            ::continue_chrome::
+        end
+    end
 
-	-- PWAs that should be on the personal space
-	local personalApps = { "Google Chat", "Messages" }
-	for _, appName in ipairs(personalApps) do
-		local app = hs.application.find(appName)
-		if app and type(app) == "userdata" and app.allWindows then
-			for _, win in ipairs(app:allWindows() or {}) do
-				local sp = hs.spaces.windowSpaces(win:id())
-				local curSpace = sp and sp[1]
-				if curSpace and curSpace ~= personalSpace then
-					table.insert(toMove, { win = win, target = personalSpace })
-				end
-			end
-		end
-	end
+    -- PWAs that should be on the personal space
+    local personalApps = { "Google Chat", "Messages" }
+    for _, appName in ipairs(personalApps) do
+        local app = hs.application.find(appName)
+        if app and type(app) == "userdata" and app.allWindows then
+            for _, win in ipairs(app:allWindows() or {}) do
+                local sp = hs.spaces.windowSpaces(win:id())
+                local curSpace = sp and sp[1]
+                if curSpace and curSpace ~= personalSpace then
+                    table.insert(toMove, { win = win, target = personalSpace })
+                end
+            end
+        end
+    end
 
-	if #toMove == 0 then
-		if callback then
-			callback()
-		end
-		return
-	end
+    if #toMove == 0 then
+        if callback then
+            callback()
+        end
+        return
+    end
 
-	-- Move windows one at a time via chained callbacks
-	local function moveNext(i)
-		if i > #toMove then
-			-- Return to original space
-			hs.timer.doAfter(0.3, function()
-				hs.spaces.gotoSpace(activeSpace)
-				if callback then
-					hs.timer.doAfter(0.5, callback)
-				end
-			end)
-			return
-		end
+    -- Move windows one at a time via chained callbacks
+    local function moveNext(i)
+        if i > #toMove then
+            -- Return to original space
+            hs.timer.doAfter(0.3, function()
+                hs.spaces.gotoSpace(activeSpace)
+                if callback then
+                    hs.timer.doAfter(0.5, callback)
+                end
+            end)
+            return
+        end
 
-		local entry = toMove[i]
-		local winSpace = hs.spaces.windowSpaces(entry.win:id())
-		local winOnSpace = winSpace and winSpace[1]
-		if not winOnSpace then
-			moveNext(i + 1)
-			return
-		end
-		local direction = (winOnSpace == workSpace) and "right" or "left"
+        local entry = toMove[i]
+        local winSpace = hs.spaces.windowSpaces(entry.win:id())
+        local winOnSpace = winSpace and winSpace[1]
+        if not winOnSpace then
+            moveNext(i + 1)
+            return
+        end
+        local direction = (winOnSpace == workSpace) and "right" or "left"
 
-		-- Navigate to the window's space first so focus + drag works
-		hs.spaces.gotoSpace(winOnSpace)
-		hs.timer.doAfter(0.2, function()
-			dragWindowToSpace(entry.win, direction, function()
-				moveNext(i + 1)
-			end)
-		end)
-	end
+        -- Navigate to the window's space first so focus + drag works
+        hs.spaces.gotoSpace(winOnSpace)
+        hs.timer.doAfter(0.2, function()
+            dragWindowToSpace(entry.win, direction, function()
+                moveNext(i + 1)
+            end)
+        end)
+    end
 
-	moveNext(1)
+    moveNext(1)
 end
 
 local function layoutWindows()
-	local screens = hs.screen.allScreens()
+    local screens = hs.screen.allScreens()
 
-	if #screens == 1 then
-		for _, win in pairs(chatFilter:getWindows()) do
-			win:maximize()
-		end
-		local filter = hs.window.filter.new()
-		for _, win in pairs(filter:getWindows()) do
-			maximize(win)
-		end
-		return
-	end
+    if #screens == 1 then
+        for _, win in pairs(chatFilter:getWindows()) do
+            win:maximize()
+        end
+        local filter = hs.window.filter.new()
+        for _, win in pairs(filter:getWindows()) do
+            maximize(win)
+        end
+        return
+    end
 
-	resetScreenRotations()
-	resetGrid()
+    resetScreenRotations()
+    resetGrid()
 
-	layoutApp(chatFilter, 2, positions.bottom)
-	layoutApp(ghosttyFilter, 2, positions.bottom)
-	layoutApp(calendarFilter, 2, positions.top)
+    layoutApp(chatFilter, 2, positions.bottom)
+    layoutApp(ghosttyFilter, 2, positions.bottom)
+    layoutApp(calendarFilter, 2, positions.top)
 
-	local slack = slackFilter:getWindows()[1]
-	if slack then
-		layoutWin(slack, 0, positions.maximized)
-		slack:maximize()
-	end
+    local slack = slackFilter:getWindows()[1]
+    if slack then
+        layoutWin(slack, 0, positions.maximized)
+        slack:maximize()
+    end
 
-	local zoomMeetings = zoomMeetingFilter:getWindows()
-	local zoomNonMeetingWindows = zoomNonMeetingFilter:getWindows()
-	local mainZoomWindow = zoomNonMeetingWindows[1]
-	local zoom = zoomMeetings[2]
-	local zoomMeeting = zoomMeetings[1]
+    local zoomMeetings = zoomMeetingFilter:getWindows()
+    local zoomNonMeetingWindows = zoomNonMeetingFilter:getWindows()
+    local mainZoomWindow = zoomNonMeetingWindows[1]
+    local zoom = zoomMeetings[2]
+    local zoomMeeting = zoomMeetings[1]
 
-	if mainZoomWindow then
-		hs.grid.set(mainZoomWindow, positions.maximized, hs.screen.primaryScreen())
-		mainZoomWindow:maximize()
-		mainZoomWindow:sendToBack()
-	end
+    if mainZoomWindow then
+        hs.grid.set(mainZoomWindow, positions.maximized, hs.screen.primaryScreen())
+        mainZoomWindow:maximize()
+        mainZoomWindow:sendToBack()
+    end
 
-	local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
-		or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
+    local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
+        or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
 
-	if zoomMeeting then
-		layoutApp(chromeFilter, 2, positions.bottom)
-		layoutApp(ghosttyFilter, 2, positions.bottom)
-		if hs.grid.get(zoomMeeting) == positions.topZoom then
-			layoutWin(zoomMeeting, 1, positions.bottomZoom)
-			layoutWin(zoom, 1, positions.topZoom)
-		else
-			layoutWin(zoomMeeting, 1, positions.topZoom)
-			layoutWin(zoom, 1, positions.bottomZoom)
-		end
-		zoom:focus()
-		if speakers then
-			speakers:setInputVolume(90)
-		end
-	else
-		layoutApp(chromeFilter, 1, positions.bottom)
-		if speakers then
-			speakers:setInputVolume(25)
-		end
-	end
+    if zoomMeeting then
+        layoutApp(chromeFilter, 2, positions.bottom)
+        layoutApp(ghosttyFilter, 2, positions.bottom)
+        if hs.grid.get(zoomMeeting) == positions.topZoom then
+            layoutWin(zoomMeeting, 1, positions.bottomZoom)
+            layoutWin(zoom, 1, positions.topZoom)
+        else
+            layoutWin(zoomMeeting, 1, positions.topZoom)
+            layoutWin(zoom, 1, positions.bottomZoom)
+        end
+        zoom:focus()
+        if speakers then
+            speakers:setInputVolume(90)
+        end
+    else
+        layoutApp(chromeFilter, 1, positions.bottom)
+        if speakers then
+            speakers:setInputVolume(25)
+        end
+    end
 end
 
 local function layout()
-	local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
-		or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
-	if speakers then
-		speakers:setDefaultOutputDevice()
-	end
+    local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
+        or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
+    if speakers then
+        speakers:setDefaultOutputDevice()
+    end
 
-	local mic = hs.audiodevice.findInputByName("Yeti Nano") or hs.audiodevice.findInputByName("MacBook Pro Microphone")
-	if mic then
-		mic:setDefaultInputDevice()
-	end
+    local mic = hs.audiodevice.findInputByName("Yeti Nano") or hs.audiodevice.findInputByName("MacBook Pro Microphone")
+    if mic then
+        mic:setDefaultInputDevice()
+    end
 
-	moveWindowsToDesktops(layoutWindows)
+    moveWindowsToDesktops(layoutWindows)
 end
 
 local function mute_zoom_or_global()
-	local ok, err = pcall(function()
-		local zoomWindows = zoomFilter:getWindows()
-		if #zoomWindows > 1 then
-			local app = zoomWindows[1]:application()
-			if app then
-				hs.eventtap.keyStroke({ "cmd", "shift" }, "a", nil, app)
-			end
-		else
-			local ytApp = hs.application.find("YouTube Music", true)
-			if ytApp then
-				ytApp:unhide()
-				ytApp:activate()
-				hs.timer.doAfter(0.2, function()
-					hs.eventtap.keyStroke({}, ";")
-					hs.timer.doAfter(0.2, function()
-						ytApp:hide()
-					end)
-				end)
-			else
-				hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
-			end
-		end
-	end)
-	if not ok then
-		log.e("mute_zoom_or_global error: " .. tostring(err))
-	end
+    local ok, err = pcall(function()
+        local zoomWindows = zoomFilter:getWindows()
+        if #zoomWindows > 1 then
+            local app = zoomWindows[1]:application()
+            if app then
+                hs.eventtap.keyStroke({ "cmd", "shift" }, "a", nil, app)
+            end
+        else
+            local ytApp = hs.application.find("YouTube Music", true)
+            if ytApp then
+                ytApp:unhide()
+                ytApp:activate()
+                hs.timer.doAfter(0.2, function()
+                    hs.eventtap.keyStroke({}, ";")
+                    hs.timer.doAfter(0.2, function()
+                        ytApp:hide()
+                    end)
+                end)
+            else
+                hs.eventtap.event.newSystemKeyEvent("PLAY", true):post()
+            end
+        end
+    end)
+    if not ok then
+        log.e("mute_zoom_or_global error: " .. tostring(err))
+    end
 end
 
 local function reload()
-	hs.reload()
+    hs.reload()
 end
 
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "k", maximize)
@@ -451,16 +451,16 @@ hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "m", pushBottomLeft)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, ".", pushBottom)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "j", layout)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "1", function()
-	moveToSlot(1)
+    moveToSlot(1)
 end)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "2", function()
-	moveToSlot(2)
+    moveToSlot(2)
 end)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "3", function()
-	moveToSlot(3)
+    moveToSlot(3)
 end)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "4", function()
-	moveToSlot(4)
+    moveToSlot(4)
 end)
 hs.hotkey.bind({ "cmd", "ctrl", "shift" }, "r", reload)
 hs.hotkey.bind({ "ctrl", "shift" }, "h", focusLeft)
@@ -473,39 +473,33 @@ hs.hotkey.bind({}, "f20", mute_zoom_or_global)
 
 -- URL routing: open links in the correct Chrome profile based on domain
 local workDomains = {
-	"stripe.com",
-	"corp.stripe.com",
-	"stripe.me",
+    "stripe.com",
+    "corp.stripe.com",
+    "stripe.me",
 }
 
 local function domainMatches(host, pattern)
-	return host == pattern or host:sub(-(#pattern + 1)) == "." .. pattern
+    return host == pattern or host:sub(-(#pattern + 1)) == "." .. pattern
 end
 
 local function profileForHost(host)
-	if host then
-		for _, domain in ipairs(workDomains) do
-			if domainMatches(host, domain) then
-				return "Default"
-			end
-		end
-	end
-	return nil
+    if host then
+        for _, domain in ipairs(workDomains) do
+            if domainMatches(host, domain) then
+                return "Default"
+            end
+        end
+    end
+    return nil
 end
 
+local chromeBin = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
 hs.urlevent.httpCallback = function(scheme, host, params, fullURL)
-	local profile = profileForHost(host)
-	if profile then
-		hs.task
-			.new("/usr/bin/open", nil, {
-				"-na",
-				"Google Chrome",
-				"--args",
-				"--profile-directory=" .. profile,
-				fullURL,
-			})
-			:start()
-	else
-		hs.task.new("/usr/bin/open", nil, { "-a", "Google Chrome", fullURL }):start()
-	end
+    local profile = profileForHost(host)
+    if profile then
+        hs.task.new(chromeBin, nil, { "--profile-directory=" .. profile, fullURL }):start()
+    else
+        hs.urlevent.openURLWithBundle(fullURL, "com.google.Chrome")
+    end
 end
