@@ -24,9 +24,11 @@ Before executing a plan, gather all permissions requirements and request them in
 
 After creating a new plan or project file, open it in neovim using `nvim-open` from the neovim skill.
 
-## Neovim RPC Commands
+## Neovim Integration
 
-When running inside neovim (i.e., `$NVIM` or `$NVIM_SOCKET_PATH` is set), use `nvim-open`, `nvim-diff`, and `nvim-lua` from the neovim skill to interact with the running editor. The neovim skill provides the resolved paths to these scripts.
+When the user asks to "open", "show", "view", or "go to" a file, invoke the `neovim` skill (via the Skill tool) and use `nvim-open` to open it in their running editor. This applies any time `$NVIM` or `$NVIM_SOCKET_PATH` is set. Do not just print the path — open it.
+
+Similarly, use `nvim-diff` for diff/compare requests and `nvim-lua` for arbitrary neovim commands. The neovim skill provides the resolved paths to these scripts.
 
 ## External Integrations
 
