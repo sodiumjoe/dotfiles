@@ -72,7 +72,7 @@
       "Bash(ls * | tail *)",
       "Bash(env * | grep * | head *)",
       "Bash(work *)",
-      "Skill(review:*)"
+      "Skill(neovim-review:*)"
     ],
     "deny": [
       "Bash(git reset --hard*)",
@@ -145,7 +145,8 @@
     ]
   },
   "enabledPlugins": {
-    "obsidian@obsidian-skills": true
+    "obsidian@obsidian-skills": true,
+    "js-infra-internal@stripe-internal-marketplace": true
   },
   "spinnerTipsEnabled": false,
   "spinnerVerbs": {
