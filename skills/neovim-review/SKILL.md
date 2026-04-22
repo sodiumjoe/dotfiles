@@ -86,7 +86,7 @@ After presenting the summary, show the user the available keymaps:
 > **Submit (PR mode):**
 > - `<leader>pa` — submit review (approve / request changes / comment) and exit
 >
-> Ask me anything about the changes. Say **done** when finished.
+> Ask me anything about the changes. Use `<leader>pa` when ready to submit, or say **done** to finish.
 
 Then **wait for user input**. Do not open the picker automatically. The user drives navigation; the agent answers questions as asked.
 
@@ -94,9 +94,26 @@ The picker reads from neovim session state (cached in memory during Phase 0). It
 
 ## Phase 3 — Exit
 
-When the user says they're done (e.g., "done", "finish", "submit"):
+Triggered when the user says "done", "finish", "submit", or after the user uses `<leader>pa`.
 
-**PR mode:** The user can either use `<leader>pa` (which handles everything: comment extraction, submission, and cleanup) or tell the agent to submit. If the agent handles it:
+### Detecting `<leader>pa` completion
+
+After the user presses `<leader>pa`, the `review-approve` script handles everything: comment extraction, PR submission, branch restore, and stash pop. The neovim review session is reset. When the agent detects this (the user says "done" or indicates they submitted), check whether the session still exists:
+
+```
+${CLAUDE_SKILL_DIR}/scripts/nvim-lua "
+local ok, r = pcall(require, 'sodium.review')
+if not ok then return 'no_session' end
+local s = r.get_session()
+return s and 'active' or 'no_session'
+"
+```
+
+If the result is `no_session`, the `<leader>pa` keybinding already handled everything. Report "Review complete." and stop. Do not re-submit or re-run cleanup.
+
+### PR mode (manual submission)
+
+If the session is still active (the user said "done" without using `<leader>pa`):
 
 1. Extract local comments from `.nvim-comments.json`:
 ```
@@ -126,4 +143,6 @@ Build the flags from the Phase 0 JSON:
 - If `previous_branch` is set: add `--restore-branch <branch>`
 - If `stashed` is true: add `--pop-stash`
 
-**Branch mode:** Run `review-exit` to clean up. If there are local comments (extracted as above, omitting `--user`), read each one and act on it as an instruction. Each comment has `file`, `line`/`line_start`, and `body` fields. The body is the user's instruction — apply edits, note feedback, or take whatever action is described. Report what was done. If there are no comments, say "No comments collected. Review complete."
+### Branch mode
+
+Run `review-exit` to clean up. If there are local comments (extracted as above, omitting `--user`), read each one and act on it as an instruction. Each comment has `file`, `line`/`line_start`, and `body` fields. The body is the user's instruction — apply edits, note feedback, or take whatever action is described. Report what was done. If there are no comments, say "No comments collected. Review complete."
