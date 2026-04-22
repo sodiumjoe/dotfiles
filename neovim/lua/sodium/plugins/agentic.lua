@@ -631,7 +631,7 @@ end
 
 return {
     "carlos-algms/agentic.nvim",
-    dir = vim.fn.expand("~/home/agentic.nvim"),
+    -- dir = vim.fn.expand("~/home/agentic.nvim"),
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
