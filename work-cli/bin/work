@@ -508,6 +508,37 @@ const commands = {
       errors.push(`upstream-drift: ${e.message}`);
     }
 
+    if (!fs.existsSync(weeklyPath)) {
+      log('=== upgrade check ===');
+      try {
+        const { checkUpgrades } = require(path.join(LIB, 'upgrades.js'));
+        const upgrades = checkUpgrades({ dotfilesRoot: path.join(__dirname, '..', '..') });
+        if (upgrades.hasActionableItems) {
+          const dotfilesProject = projectFile('dotfiles');
+          if (fs.existsSync(dotfilesProject)) {
+            const content = fs.readFileSync(dotfilesProject, 'utf-8');
+            const parts = [];
+            if (upgrades.brew.count > 0) parts.push(`${upgrades.brew.count} brew`);
+            if (upgrades.npm.count > 0) parts.push(`${upgrades.npm.count} npm`);
+            if (upgrades.nvimPlugins.stale) parts.push(`nvim plugins (${upgrades.nvimPlugins.daysSinceUpdate}d)`);
+            if (parts.length > 0 && !/^- \[[ /]\] Upgrades available/m.test(content)) {
+              const doc = parse(content);
+              appendToSection(doc, 'Tasks', [`- [ ] Upgrades available (${parts.join(', ')}) — run \`upgrade\``]);
+              fs.writeFileSync(dotfilesProject, serialize(doc), 'utf-8');
+              log(`added upgrade task: ${parts.join(', ')}`);
+            } else {
+              log('upgrade task already exists, skipping');
+            }
+          }
+        } else {
+          log('no upgrades to report');
+        }
+      } catch (e) {
+        console.error('FAIL: upgrade check');
+        errors.push(`upgrade-check: ${e.message}`);
+      }
+    }
+
     if (opts['simulate-error']) {
       errors.push('simulate: synthetic error for testing');
     }
@@ -534,6 +565,42 @@ const commands = {
       for (const [k, v] of Object.entries(map)) console.log(`${k}\t${v}`);
     } else {
       process.stdout.write(map[key]);
+    }
+  },
+
+  'check-upgrades'() {
+    const { checkUpgrades } = require(path.join(LIB, 'upgrades.js'));
+    const results = checkUpgrades({ dotfilesRoot: path.join(__dirname, '..', '..') });
+
+    if (results.brew.count > 0) {
+      console.log(`Brew outdated (${results.brew.count}):`);
+      for (const pkg of results.brew.formulae) {
+        console.log(`  ${pkg.name}: ${pkg.current} → ${pkg.latest}`);
+      }
+    } else {
+      console.log('Brew: all up to date');
+    }
+    if (results.brew.error) console.log(`  (error: ${results.brew.error})`);
+
+    console.log('');
+    if (results.npm.count > 0) {
+      console.log(`npm outdated (${results.npm.count}):`);
+      for (const pkg of results.npm.packages) {
+        console.log(`  ${pkg.name}: ${pkg.current} → ${pkg.latest}`);
+      }
+    } else {
+      console.log('npm (devbox-tracked): all up to date');
+    }
+    if (results.npm.error) console.log(`  (error: ${results.npm.error})`);
+
+    console.log('');
+    const np = results.nvimPlugins;
+    const label = np.stale ? ' (STALE)' : '';
+    console.log(`Nvim plugins: last updated ${np.daysSinceUpdate} days ago${label}`);
+    if (np.error) console.log(`  (error: ${np.error})`);
+
+    if (!results.hasActionableItems) {
+      console.log('\nAll up to date.');
     }
   },
 
@@ -626,6 +693,7 @@ Commands:
   devbox link <slug> <remote>   Associate a devbox with a project
   devbox unlink <slug> <remote> Remove devbox association
   devbox list [remote]         List devbox associations (TSV)
+  check-upgrades               Show outdated brew packages and stale nvim plugins
   check-upstream               Check forked skills for upstream changes
   help                         Show this help
 

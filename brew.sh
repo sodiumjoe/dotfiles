@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# DEPRECATED: Use Brewfile instead. Run `brew bundle` to install from Brewfile.
+# This script is kept for historical reference only.
 
 # Ask for the administrator password upfront.
 sudo -v
