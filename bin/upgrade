@@ -10,16 +10,9 @@ declare -A DEVBOX_PINS=(
   [efm-langserver]=EFM_VERSION
 )
 
-# npm packages shared between global install and devbox node-bin
-DEVBOX_NPM_PACKAGES=(
-  typescript
-  typescript-language-server
-  vscode-langservers-extracted
-  @vtsls/language-server
-  @agentclientprotocol/claude-agent-acp
-  @typescript/native-preview
-  tree-sitter-cli
-)
+# Single source of truth: work-cli/lib/devbox-npm-packages.txt
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+mapfile -t DEVBOX_NPM_PACKAGES < "${SCRIPT_DIR}/../work-cli/lib/devbox-npm-packages.txt"
 
 usage() {
   cat <<EOF
@@ -64,6 +57,8 @@ if [[ ${#FORMULAE[@]} -gt 0 ]]; then
 elif [[ -z "$MODE" ]]; then
   MODE="interactive"
 fi
+
+# --- Helpers ---
 
 get_brew_outdated() {
   HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --json=v2 2>/dev/null
@@ -120,6 +115,19 @@ update_devbox_pin() {
   echo "  devbox: ${var_name} ${current_pin} → ${new_pin}"
 }
 
+commit_devbox_if_changed() {
+  if [[ ! -f "$DEVBOX_INIT" ]]; then
+    return
+  fi
+  pushd "$(dirname "$DEVBOX_INIT")" > /dev/null
+  if ! git diff --quiet .devbox-init 2>/dev/null; then
+    git add .devbox-init
+    git commit -m "upgrade devbox tool versions"
+    echo "committed .devbox-init"
+  fi
+  popd > /dev/null
+}
+
 do_brew_upgrade() {
   local formula="$1"
   echo "upgrading: $formula"
@@ -148,101 +156,14 @@ do_npm_update() {
   echo "  done"
 }
 
-get_npm_outdated() {
-  # npm outdated exits non-zero when packages are outdated
-  local raw
-  raw=$(npm outdated -g --json 2>/dev/null || true)
-  echo "$raw" | python3 -c "
-import json, sys
-tracked = set(sys.argv[1:])
-d = json.load(sys.stdin) if sys.stdin.read else {}
-" 2>/dev/null || echo "{}"
-}
-
-show_npm_outdated() {
-  local raw
-  raw=$(npm outdated -g --json 2>/dev/null || true)
-  if [[ -z "$raw" || "$raw" == "{}" ]]; then
-    echo "npm (devbox-tracked): all up to date"
-    return
-  fi
-
-  local tracked
-  tracked=$(printf '%s\n' "${DEVBOX_NPM_PACKAGES[@]}")
-  local lines
-  lines=$(echo "$raw" | python3 -c "
-import json, sys
-tracked = set(line.strip() for line in sys.stdin.readline() if line.strip()) if False else set()
-" 2>/dev/null || true)
-
-  # Simpler approach: filter with python
-  lines=$(echo "$raw" | python3 -c "
-import json, sys
-tracked = [$(printf '"%s",' "${DEVBOX_NPM_PACKAGES[@]}")]
-d = json.load(sys.stdin)
-found = []
-for name, info in d.items():
-    if name in tracked:
-        found.append(f\"  {name}: {info['current']} → {info['latest']}\")
-if found:
-    print(f'npm outdated ({len(found)}):')
-    print('\n'.join(found))
-else:
-    print('npm (devbox-tracked): all up to date')
-")
-  echo "$lines"
-}
-
-show_outdated() {
-  local json
-  json=$(get_brew_outdated)
-
-  local formulae
-  formulae=$(echo "$json" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-for f in d.get('formulae', []):
-    current = ', '.join(f.get('installed_versions', []))
-    latest = f.get('current_version', '?')
-    print(f\"{f['name']}\t{current} → {latest}\")
-")
-
-  if [[ -n "$formulae" ]]; then
-    local count
-    count=$(echo "$formulae" | wc -l | tr -d ' ')
-    echo "Brew outdated ($count):"
-    echo "$formulae" | column -t -s $'\t' | sed 's/^/  /'
-  else
-    echo "Brew: all up to date"
-  fi
-
-  echo ""
-  show_npm_outdated
-
-  echo ""
-
-  # Nvim plugin staleness
-  local last_commit
-  last_commit=$(git -C "$DOTFILES" log -1 --format=%ct lazy-lock.json 2>/dev/null || echo 0)
-  local now
-  now=$(date +%s)
-  local days_since=$(( (now - last_commit) / 86400 ))
-  if [[ $days_since -gt 14 ]]; then
-    echo "Nvim plugins: last updated ${days_since} days ago (stale)"
-  else
-    echo "Nvim plugins: last updated ${days_since} days ago"
-  fi
-}
-
 # --- Main ---
+
+if $DRY_RUN; then
+  exec work check-upgrades
+fi
 
 case "$MODE" in
   interactive)
-    if $DRY_RUN; then
-      show_outdated
-      exit 0
-    fi
-
     json=$(get_brew_outdated)
 
     lines=$(echo "$json" | python3 -c "
@@ -283,7 +204,6 @@ for name, info in d.items():
       exit 0
     fi
 
-    devbox_changed=false
     npm_to_update=()
 
     while IFS= read -r item; do
@@ -294,9 +214,6 @@ for name, info in d.items():
         npm_to_update+=("$pkg")
       else
         do_brew_upgrade "$item"
-        if [[ -v "DEVBOX_PINS[$item]" ]]; then
-          devbox_changed=true
-        fi
       fi
     done <<< "$selected"
 
@@ -305,69 +222,25 @@ for name, info in d.items():
       npm install -g "${npm_to_update[@]}" 2>&1 | grep -E "^(added|updated|changed)" || true
     fi
 
-    if $devbox_changed && [[ -f "$DEVBOX_INIT" ]]; then
-      pushd "$(dirname "$DEVBOX_INIT")" > /dev/null
-      if ! git diff --quiet .devbox-init 2>/dev/null; then
-        git add .devbox-init
-        git commit -m "upgrade devbox tool versions"
-        echo "committed .devbox-init"
-      fi
-      popd > /dev/null
-    fi
+    commit_devbox_if_changed
     ;;
 
   specific)
-    if $DRY_RUN; then
-      for formula in "${FORMULAE[@]}"; do
-        echo "$formula: $(get_brew_version "$formula") → $(brew info --json=v2 "$formula" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['formulae'][0]['versions']['stable'])" 2>/dev/null || echo '?')"
-      done
-      exit 0
-    fi
-
-    devbox_changed=false
     for formula in "${FORMULAE[@]}"; do
       do_brew_upgrade "$formula"
-      if [[ -v "DEVBOX_PINS[$formula]" ]]; then
-        devbox_changed=true
-      fi
     done
-
-    if $devbox_changed && [[ -f "$DEVBOX_INIT" ]]; then
-      pushd "$(dirname "$DEVBOX_INIT")" > /dev/null
-      if ! git diff --quiet .devbox-init 2>/dev/null; then
-        git add .devbox-init
-        git commit -m "upgrade devbox tool versions"
-        echo "committed .devbox-init"
-      fi
-      popd > /dev/null
-    fi
+    commit_devbox_if_changed
     ;;
 
   npm)
-    if $DRY_RUN; then
-      show_npm_outdated
-      exit 0
-    fi
     do_npm_update
     ;;
 
   nvim)
-    if $DRY_RUN; then
-      last_commit=$(git -C "$DOTFILES" log -1 --format=%ct lazy-lock.json 2>/dev/null || echo 0)
-      now=$(date +%s)
-      days_since=$(( (now - last_commit) / 86400 ))
-      echo "Nvim plugins: last updated ${days_since} days ago"
-      exit 0
-    fi
     do_nvim_update
     ;;
 
   all)
-    if $DRY_RUN; then
-      show_outdated
-      exit 0
-    fi
-
     echo "=== brew upgrade ==="
     brew update
     outdated=$(HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --quiet 2>/dev/null || true)
@@ -379,15 +252,7 @@ for name, info in d.items():
       echo "all up to date"
     fi
 
-    if [[ -f "$DEVBOX_INIT" ]]; then
-      pushd "$(dirname "$DEVBOX_INIT")" > /dev/null
-      if ! git diff --quiet .devbox-init 2>/dev/null; then
-        git add .devbox-init
-        git commit -m "upgrade devbox tool versions"
-        echo "committed .devbox-init"
-      fi
-      popd > /dev/null
-    fi
+    commit_devbox_if_changed
 
     echo ""
     echo "=== npm packages ==="

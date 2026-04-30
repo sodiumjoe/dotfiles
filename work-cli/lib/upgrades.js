@@ -1,18 +1,13 @@
 const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const PLUGIN_STALE_DAYS = 14;
 
-// npm packages installed globally that also exist in devbox node-bin
-const DEVBOX_NPM_PACKAGES = [
-  "typescript",
-  "typescript-language-server",
-  "vscode-langservers-extracted",
-  "@vtsls/language-server",
-  "@agentclientprotocol/claude-agent-acp",
-  "@typescript/native-preview",
-  "tree-sitter-cli",
-];
+const DEVBOX_NPM_PACKAGES = fs
+  .readFileSync(path.join(__dirname, "devbox-npm-packages.txt"), "utf-8")
+  .split("\n")
+  .filter(Boolean);
 
 function checkBrewOutdated() {
   if (process.env.WORK_SKIP_UPGRADES) {

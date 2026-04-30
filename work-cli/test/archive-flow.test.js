@@ -69,6 +69,7 @@ describe("archive-flow", { concurrency: 1 }, () => {
         XDG_CONFIG_HOME: path.join(tmpDir, "config"),
         WORK_TEST_HOUR: "10",
         WORK_SKIP_REVIEWS: "1",
+        WORK_SKIP_UPGRADES: "1",
         CLAUDECODE: "",
         ...extraEnv,
       },
