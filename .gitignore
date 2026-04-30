@@ -11,6 +11,8 @@ zsh/.zsh_sessions
 karabiner/assets/*
 karabiner/automatic_backups/*
 karabiner/Icon*
+node-bin/node_modules
+node-bin/package-lock.json
 .claude
 claude/CLAUDE.md
 codex/AGENTS.md

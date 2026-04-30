@@ -1,14 +1,18 @@
 {
-  "name": "devbox-node-bins",
+  "name": "node-bin",
   "private": true,
-  "description": "Pinned npm packages for devbox node-bin. Updated by `upgrade --npm`.",
+  "description": "Pinned npm tool binaries. Used on both local and devbox. Updated by `upgrade --npm`.",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.25.3",
-    "@typescript/native-preview": "7.0.0-dev.20260211.1",
+    "@agentclientprotocol/claude-agent-acp": "0.24.2",
+    "@typescript/native-preview": "7.0.0-dev.20260331.1",
     "@vtsls/language-server": "0.3.0",
+    "defuddle-cli": "0.7.0",
+    "mcp-neovim-server": "0.5.5",
+    "prettier": "3.8.1",
     "tree-sitter-cli": "0.26.8",
-    "typescript": "6.0.3",
+    "typescript": "6.0.2",
     "typescript-language-server": "5.1.3",
-    "vscode-langservers-extracted": "4.10.0"
+    "vscode-langservers-extracted": "4.10.0",
+    "yarn": "1.22.19"
   }
 }

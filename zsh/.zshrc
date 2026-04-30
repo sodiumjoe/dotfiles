@@ -145,6 +145,7 @@ export PATH=${PATH}:~/stripe/go/bin
 export PATH=${PATH}:~/bin
 export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
+export PATH=${PATH}:~/.dotfiles/node-bin/node_modules/.bin
 export PATH=${PATH}:~/node-bin/node_modules/.bin
 export PATH=${HOMEBREW_PREFIX}/opt/python/libexec/bin:${PATH}
 export PATH=${HOMEBREW_PREFIX}/opt/curl/bin:${PATH}

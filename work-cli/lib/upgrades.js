@@ -1,19 +1,7 @@
 const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
 const path = require("node:path");
 
 const PLUGIN_STALE_DAYS = 14;
-
-const NODE_BIN_PKG = path.join(
-  __dirname,
-  "..",
-  "..",
-  "node-bin",
-  "package.json",
-);
-const DEVBOX_NPM_PACKAGES = Object.keys(
-  JSON.parse(fs.readFileSync(NODE_BIN_PKG, "utf-8")).dependencies,
-);
 
 function checkBrewOutdated() {
   if (process.env.WORK_SKIP_UPGRADES) {
@@ -68,10 +56,12 @@ function checkNpmOutdated() {
   if (process.env.WORK_SKIP_UPGRADES) {
     return { count: 0, packages: [] };
   }
+  const nodeBinDir = path.join(__dirname, "..", "..", "node-bin");
   try {
     let raw;
     try {
-      raw = execFileSync("npm", ["outdated", "-g", "--json"], {
+      raw = execFileSync("npm", ["outdated", "--json"], {
+        cwd: nodeBinDir,
         encoding: "utf-8",
         timeout: 30000,
       });
@@ -81,13 +71,11 @@ function checkNpmOutdated() {
       else return { count: 0, packages: [], error: e.message };
     }
     const data = JSON.parse(raw || "{}");
-    const packages = Object.entries(data)
-      .filter(([name]) => DEVBOX_NPM_PACKAGES.includes(name))
-      .map(([name, info]) => ({
-        name,
-        current: info.current,
-        latest: info.latest,
-      }));
+    const packages = Object.entries(data).map(([name, info]) => ({
+      name,
+      current: info.current,
+      latest: info.latest,
+    }));
     return { count: packages.length, packages };
   } catch (e) {
     return { count: 0, packages: [], error: e.message };
@@ -117,5 +105,4 @@ module.exports = {
   checkNvimPluginStaleness,
   checkUpgrades,
   PLUGIN_STALE_DAYS,
-  DEVBOX_NPM_PACKAGES,
 };
