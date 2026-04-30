@@ -10,9 +10,13 @@ declare -A DEVBOX_PINS=(
   [efm-langserver]=EFM_VERSION
 )
 
-# Single source of truth: work-cli/lib/devbox-npm-packages.txt
+# Single source of truth: node-bin/package.json
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-mapfile -t DEVBOX_NPM_PACKAGES < "${SCRIPT_DIR}/../work-cli/lib/devbox-npm-packages.txt"
+mapfile -t DEVBOX_NPM_PACKAGES < <(python3 -c "
+import json
+deps = json.load(open('${SCRIPT_DIR}/../node-bin/package.json')).get('dependencies', {})
+print('\n'.join(deps.keys()))
+")
 
 usage() {
   cat <<EOF
@@ -150,10 +154,33 @@ do_nvim_update() {
   fi
 }
 
+sync_node_bin_versions() {
+  local pkg_json="${DOTFILES}/node-bin/package.json"
+  npm list -g --depth=0 --json 2>/dev/null | python3 -c "
+import json, sys
+pkg = json.load(open('${pkg_json}'))
+installed = json.load(sys.stdin).get('dependencies', {})
+for name in list(pkg['dependencies']):
+    if name in installed:
+        pkg['dependencies'][name] = installed[name]['version']
+with open('${pkg_json}', 'w') as f:
+    json.dump(pkg, f, indent=2)
+    f.write('\n')
+" 2>/dev/null || true
+
+  if git -C "$DOTFILES" diff --quiet node-bin/package.json 2>/dev/null; then
+    echo "  no version changes in node-bin/package.json"
+  else
+    git -C "$DOTFILES" add node-bin/package.json
+    git -C "$DOTFILES" commit -m "upgrade node-bin package versions"
+    echo "  committed node-bin/package.json"
+  fi
+}
+
 do_npm_update() {
   echo "updating npm packages (devbox-tracked)..."
   npm install -g "${DEVBOX_NPM_PACKAGES[@]}" 2>&1 | grep -E "^(added|updated|changed)" || true
-  echo "  done"
+  sync_node_bin_versions
 }
 
 # --- Main ---
@@ -220,6 +247,7 @@ for name, info in d.items():
     if [[ ${#npm_to_update[@]} -gt 0 ]]; then
       echo "updating npm packages: ${npm_to_update[*]}"
       npm install -g "${npm_to_update[@]}" 2>&1 | grep -E "^(added|updated|changed)" || true
+      sync_node_bin_versions
     fi
 
     commit_devbox_if_changed

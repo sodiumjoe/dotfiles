@@ -1,0 +1,14 @@
+{
+  "name": "devbox-node-bins",
+  "private": true,
+  "description": "Pinned npm packages for devbox node-bin. Updated by `upgrade --npm`.",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.25.3",
+    "@typescript/native-preview": "7.0.0-dev.20260211.1",
+    "@vtsls/language-server": "0.3.0",
+    "tree-sitter-cli": "0.26.8",
+    "typescript": "6.0.3",
+    "typescript-language-server": "5.1.3",
+    "vscode-langservers-extracted": "4.10.0"
+  }
+}

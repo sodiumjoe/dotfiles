@@ -4,10 +4,16 @@ const path = require("node:path");
 
 const PLUGIN_STALE_DAYS = 14;
 
-const DEVBOX_NPM_PACKAGES = fs
-  .readFileSync(path.join(__dirname, "devbox-npm-packages.txt"), "utf-8")
-  .split("\n")
-  .filter(Boolean);
+const NODE_BIN_PKG = path.join(
+  __dirname,
+  "..",
+  "..",
+  "node-bin",
+  "package.json",
+);
+const DEVBOX_NPM_PACKAGES = Object.keys(
+  JSON.parse(fs.readFileSync(NODE_BIN_PKG, "utf-8")).dependencies,
+);
 
 function checkBrewOutdated() {
   if (process.env.WORK_SKIP_UPGRADES) {

@@ -1,7 +1,0 @@
-typescript
-typescript-language-server
-vscode-langservers-extracted
-@vtsls/language-server
-@agentclientprotocol/claude-agent-acp
-@typescript/native-preview
-tree-sitter-cli
