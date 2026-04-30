@@ -318,6 +318,43 @@ status: active
       assert.ok(content.includes("[[active-plan|Active Plan]]"));
     });
 
+    it("removes stale archive/ links from previous runs", () => {
+      writeProject(
+        "my-proj",
+        `---
+status: evergreen
+---
+
+# My Project
+
+## Plans
+- [[archive/old-plan|Old Archived Plan]]
+- [[archive/another-old|Another Old Plan]]
+- [[active-plan|Active Plan]]
+
+## Tasks
+
+## Changelog`,
+      );
+      writePlan(
+        "my-proj",
+        "active-plan.md",
+        `---
+status: active
+---
+
+# Active Plan`,
+      );
+
+      const { archivePlans } = requireFresh();
+      archivePlans({ quiet: true });
+
+      const content = readProject("my-proj");
+      assert.ok(!content.includes("[[archive/old-plan"));
+      assert.ok(!content.includes("[[archive/another-old"));
+      assert.ok(content.includes("[[active-plan|Active Plan]]"));
+    });
+
     it("removes archive/ prefixed links for the archived plan basename", () => {
       writeProject(
         "my-proj",

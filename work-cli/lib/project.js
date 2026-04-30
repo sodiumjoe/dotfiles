@@ -168,34 +168,38 @@ function archivePlans({ quiet } = {}) {
       const title = getTitle(planContent);
       toArchive.push({ file, basename, title });
     }
-    if (toArchive.length === 0) continue;
-    const archiveDir = path.join(VAULT_ROOT, "archive", "projects", slug);
-    fs.mkdirSync(archiveDir, { recursive: true });
-    for (const plan of toArchive) {
-      const src = path.join(dir, plan.file);
-      const dest = path.join(archiveDir, plan.file);
-      fs.renameSync(src, dest);
-      archived.push({
-        slug,
-        file: plan.file,
-        basename: plan.basename,
-        title: plan.title,
-        archivePath: dest,
-      });
-      if (!quiet) console.log(`archived plan: ${plan.basename} (${slug})`);
+    if (toArchive.length > 0) {
+      const archiveDir = path.join(VAULT_ROOT, "archive", "projects", slug);
+      fs.mkdirSync(archiveDir, { recursive: true });
+      for (const plan of toArchive) {
+        const src = path.join(dir, plan.file);
+        const dest = path.join(archiveDir, plan.file);
+        fs.renameSync(src, dest);
+        archived.push({
+          slug,
+          file: plan.file,
+          basename: plan.basename,
+          title: plan.title,
+          archivePath: dest,
+        });
+        if (!quiet) console.log(`archived plan: ${plan.basename} (${slug})`);
+      }
     }
     const doc = parse(fs.readFileSync(pf, "utf-8"));
     const plansSection = findSection(doc, "Plans");
     if (plansSection) {
       const basenames = new Set(toArchive.map((p) => p.basename));
+      const before = plansSection.lines.length;
       plansSection.lines = plansSection.lines.filter((line) => {
+        if (line.includes("[[archive/")) return false;
         for (const bn of basenames) {
-          if (line.includes(`[[${bn}`) || line.includes(`[[archive/${bn}`))
-            return false;
+          if (line.includes(`[[${bn}`)) return false;
         }
         return true;
       });
-      fs.writeFileSync(pf, serialize(doc), "utf-8");
+      if (plansSection.lines.length !== before) {
+        fs.writeFileSync(pf, serialize(doc), "utf-8");
+      }
     }
   }
   return archived;
