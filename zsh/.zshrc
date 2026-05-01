@@ -314,10 +314,11 @@ _devbox_sync() {
   local host="$1"
   ssh "$host" "mkdir -p ~/stripe/work" 2>/dev/null
   unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
-    -batch -prefer newer -fastcheck true \
+    -batch -prefer newer -fastcheck true -silent \
     -ignore 'Name .DS_Store' \
     -ignore 'Name *.jsonl' \
     -ignore 'Name .obsidian' \
+    -ignore 'Name node_modules' \
     -logfile /tmp/unison-sync-${host}.log
   rsync -az --delete "$HOME/.dotfiles/work-cli/" "$host:~/.dotfiles/work-cli/"
 }
@@ -326,11 +327,12 @@ _devbox_sync_loop() {
   local host="$1"
   _devbox_sync_loop_stop "$host"
   unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
-    -batch -prefer newer -fastcheck true \
+    -batch -prefer newer -fastcheck true -silent \
     -repeat 5 \
     -ignore 'Name .DS_Store' \
     -ignore 'Name *.jsonl' \
     -ignore 'Name .obsidian' \
+    -ignore 'Name node_modules' \
     -logfile /tmp/unison-sync-${host}.log \
     &>/dev/null &
   echo $! > /tmp/unison-sync-${host}.pid
