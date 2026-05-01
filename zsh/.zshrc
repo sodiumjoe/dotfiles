@@ -404,8 +404,6 @@ remotes() {
   local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
   local host=$(pay remote ssh "$remote_name" -- hostname)
 
-  _devbox_ensure_projects "$remote_name" > /dev/null || return 1
-
   _devbox_sync "$host"
   _devbox_sync_loop "$host"
   (_copy_gh_auth_to_remote "$host" &)
@@ -436,7 +434,6 @@ remote() {
   pay remote new "$remote_name" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
 
   local host=$(pay remote ssh "$remote_name" -- hostname)
-  _devbox_ensure_projects "$remote_name" > /dev/null || return 1
 
   _devbox_sync "$host"
   _devbox_sync_loop "$host"
