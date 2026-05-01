@@ -630,39 +630,6 @@ const commands = {
     if (drifted > 0) process.exitCode = 1;
   },
 
-  devbox() {
-    const { link, unlink, listAll } = require(path.join(LIB, 'devbox.js'));
-    const sub = args[1];
-    if (sub === 'link') {
-      const slug = args[2];
-      const remote = args[3];
-      if (!slug || !remote) { console.error('usage: work devbox link <slug> <remote>'); process.exit(1); }
-      const pf = projectFile(slug);
-      if (!fs.existsSync(pf)) { console.error(`project not found: ${slug}`); process.exit(1); }
-      link(pf, remote);
-    } else if (sub === 'unlink') {
-      const slug = args[2];
-      const remote = args[3];
-      if (!slug || !remote) { console.error('usage: work devbox unlink <slug> <remote>'); process.exit(1); }
-      const pf = projectFile(slug);
-      if (!fs.existsSync(pf)) { console.error(`project not found: ${slug}`); process.exit(1); }
-      unlink(pf, remote);
-    } else if (sub === 'list') {
-      const remote = args[2];
-      const all = listAll(PROJECT_DIR);
-      for (const { slug, remotes } of all) {
-        if (remote) {
-          if (remotes.includes(remote)) console.log(slug);
-        } else {
-          for (const r of remotes) console.log(`${slug}\t${r}`);
-        }
-      }
-    } else {
-      console.error('usage: work devbox <link|unlink|list>');
-      process.exit(1);
-    }
-  },
-
   help() {
     console.log(`work - daily workflow CLI
 
@@ -690,9 +657,6 @@ Commands:
   resolve-project <plan-file>  Find project file from plan frontmatter
   paths [vault|projects]         Print configured paths
   parse-changelog <file> <pat> Extract matching changelog lines (TSV)
-  devbox link <slug> <remote>   Associate a devbox with a project
-  devbox unlink <slug> <remote> Remove devbox association
-  devbox list [remote]         List devbox associations (TSV)
   check-upgrades               Show outdated brew packages and stale nvim plugins
   check-upstream               Check forked skills for upstream changes
   help                         Show this help

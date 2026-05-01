@@ -392,63 +392,6 @@ local function add_task()
     end)
 end
 
-local function link_devbox()
-    local bufname = vim.api.nvim_buf_get_name(0)
-    local slug = bufname:match(projects_dir .. "(.-)/")
-    if not slug then
-        vim.notify("Not in a project file", vim.log.levels.WARN)
-        return
-    end
-
-    vim.system(
-        { "bash", "-c", "pay remote list --raw | jq -r '.[] | [.name, .status, .emoji] | @tsv'" },
-        { text = true },
-        function(result)
-            vim.schedule(function()
-                if result.code ~= 0 then
-                    vim.notify("pay remote list failed", vim.log.levels.ERROR)
-                    return
-                end
-                local items = {}
-                for line in (result.stdout or ""):gmatch("[^\n]+") do
-                    local name, status, emoji = line:match("^(.-)\t(.-)\t(.-)$")
-                    if name then
-                        items[#items + 1] = { text = name, status = status, emoji = emoji }
-                    end
-                end
-
-                Snacks.picker({
-                    title = "Link devbox → " .. slug,
-                    items = items,
-                    format = function(item)
-                        return {
-                            { item.emoji .. " ", "SnacksPickerIcon" },
-                            { item.text },
-                            { " [" .. item.status .. "]", "SnacksPickerDir" },
-                        }
-                    end,
-                    confirm = function(picker, item)
-                        if not item then
-                            return
-                        end
-                        picker:close()
-                        vim.system({ work_bin, "devbox", "link", slug, item.text }, { text = true }, function(res)
-                            vim.schedule(function()
-                                if res.code == 0 then
-                                    vim.notify("Linked " .. item.text .. " → " .. slug)
-                                    vim.cmd.edit(bufname)
-                                else
-                                    vim.notify("link failed: " .. (res.stderr or ""), vim.log.levels.ERROR)
-                                end
-                            end)
-                        end)
-                    end,
-                })
-            end)
-        end
-    )
-end
-
 local function send_annotations_to_agentic()
     local store = require("comment-overlay.store")
     store.reload_if_changed()
@@ -772,12 +715,6 @@ return {
             add_task,
             mode = { "n" },
             desc = "Add task to project",
-        },
-        {
-            "<leader>aL",
-            link_devbox,
-            mode = { "n" },
-            desc = "Link devbox to current project",
         },
         {
             "<leader>st",
