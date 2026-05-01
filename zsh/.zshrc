@@ -284,31 +284,6 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 ## stripe
 
-_projects_for_devbox() {
-  work devbox list "$1"
-}
-
-_pick_project() {
-  local slugs=()
-  local f
-  for f in "$HOME/stripe/work/projects"/*/project.md; do
-    [ -f "$f" ] || continue
-    local proj_status=$(sed -n 's/^status: *//p' "$f")
-    if [ "$proj_status" = "active" ] || [ "$proj_status" = "evergreen" ]; then
-      local dir="${f%/project.md}"
-      slugs+=("${dir##*/}")
-    fi
-  done
-  if [ ${#slugs[@]} -eq 0 ]; then
-    echo "no active projects" >&2
-    return 1
-  fi
-  printf '%s\n' "${slugs[@]}" | fzf --prompt="project> "
-}
-
-_associate_devbox() {
-  work devbox link "$2" "$1"
-}
 
 _devbox_sync() {
   local host="$1"
@@ -350,19 +325,6 @@ _devbox_sync_loop_stop() {
   fi
 }
 
-_devbox_ensure_projects() {
-  local remote_name="$1"
-  local slugs
-  slugs=$(_projects_for_devbox "$remote_name")
-  if [ -z "$slugs" ]; then
-    local slug
-    slug=$(_pick_project)
-    [ -z "$slug" ] && return 1
-    _associate_devbox "$remote_name" "$slug"
-    slugs="$slug"
-  fi
-  echo "$slugs"
-}
 
 _copy_gh_auth_to_remote() {
   local host="$1"
@@ -456,84 +418,7 @@ remote_url() {
   osc52copy $(pay remote url $remote_name "$@")
 }
 
-dev() {
-  local tasks=()
-  while IFS=$'\t' read -r sts desc proj_slug; do
-    case "$sts" in
-      " ") local indicator="[ ]" ;;
-      "/") local indicator="[/]" ;;
-      *) continue ;;
-    esac
-    tasks+=("${indicator} ${desc}	${proj_slug}")
-  done < <(work queue)
 
-  if [ ${#tasks[@]} -eq 0 ]; then
-    echo "no open queue items" >&2; return 1
-  fi
-
-  local selected=$(printf '%s\n' "${tasks[@]}" | cut -f1 | fzf --prompt="task> ")
-  [ -z "$selected" ] && return 0
-
-  local proj_slug=""
-  for t in "${tasks[@]}"; do
-    local display=$(echo "$t" | cut -f1)
-    if [ "$display" = "$selected" ]; then
-      proj_slug=$(echo "$t" | cut -f2)
-      break
-    fi
-  done
-
-  local task_desc=$(echo "$selected" | sed 's/^\[.\] //')
-
-  if [[ "$selected" == "[ ]"* ]]; then
-    work mark "$task_desc" '[/]'
-  fi
-
-  local remotes_list=$(fetch_remotes)
-  local picked=$(printf '%s\n%s\n' "$remotes_list" "[create new]" | fzf --prompt="devbox> ")
-  [ -z "$picked" ] && return 0
-
-  local remote_name
-  if [ "$picked" = "[create new]" ]; then
-    printf "devbox name: "; read devbox_name
-    printf "repo (pay-server/mint) [pay-server]: "; read repo_choice
-    repo_choice="${repo_choice:-pay-server}"
-    local branch="$(whoami)/$devbox_name"
-    if [ "$repo_choice" = "mint" ]; then
-      pay remote new "$devbox_name" --repo "mint:$branch" \
-        --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
-    else
-      pay remote new "$devbox_name" --repo "pay-server:$branch" \
-        --skip-confirm --no-open-code --notify-on-ready || return
-    fi
-    remote_name="$devbox_name"
-  else
-    remote_name=$(echo "$picked" | awk '{print $1}' | cut -d] -f2)
-  fi
-
-  local host=$(pay remote ssh "$remote_name" -- hostname)
-
-  if [ -n "$proj_slug" ]; then
-    local existing=$(_projects_for_devbox "$remote_name")
-    if ! echo "$existing" | grep -qx "$proj_slug"; then
-      _associate_devbox "$remote_name" "$proj_slug"
-    fi
-  fi
-  _devbox_sync "$host"
-  _devbox_sync_loop "$host"
-  (_copy_gh_auth_to_remote "$host" &)
-
-  ssh -t "$host" "tmux a || tmux"
-  local exit_code=$?
-  tmux unnest 2>/dev/null
-
-  _devbox_sync_loop_stop "$host"
-  _devbox_sync "$host"
-
-  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
-    reset
-  fi
-}
 
 if [ -d ~/stripe ]; then
   export GOPATH="${HOME}/stripe/go"
