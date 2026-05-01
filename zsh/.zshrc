@@ -310,25 +310,42 @@ _associate_devbox() {
   work devbox link "$2" "$1"
 }
 
-_devbox_sync_push() {
-  local host="$1"; shift
-  local slug dirs=""
-  for slug in "$@"; do
-    dirs+=" ~/stripe/work/projects/${slug}"
-  done
-  ssh "$host" "mkdir -p ${dirs} ~/.dotfiles/work-cli" 2>/dev/null
-  for slug in "$@"; do
-    rsync -az --exclude='*.jsonl' "$HOME/stripe/work/projects/${slug}/" "$host:~/stripe/work/projects/${slug}/"
-  done
+_devbox_sync() {
+  local host="$1"
+  ssh "$host" "mkdir -p ~/stripe/work" 2>/dev/null
+  unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
+    -batch -prefer newer -fastcheck true \
+    -ignore 'Name .DS_Store' \
+    -ignore 'Name *.jsonl' \
+    -ignore 'Name .obsidian' \
+    -logfile /tmp/unison-sync-${host}.log
   rsync -az --delete "$HOME/.dotfiles/work-cli/" "$host:~/.dotfiles/work-cli/"
 }
 
-_devbox_sync_pull() {
-  local host="$1"; shift
-  local slug
-  for slug in "$@"; do
-    rsync -az --exclude='*.jsonl' "$host:~/stripe/work/projects/${slug}/" "$HOME/stripe/work/projects/${slug}/"
-  done
+_devbox_sync_loop() {
+  local host="$1"
+  _devbox_sync_loop_stop "$host"
+  unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
+    -batch -prefer newer -fastcheck true \
+    -repeat 5 \
+    -ignore 'Name .DS_Store' \
+    -ignore 'Name *.jsonl' \
+    -ignore 'Name .obsidian' \
+    -logfile /tmp/unison-sync-${host}.log \
+    &>/dev/null &
+  echo $! > /tmp/unison-sync-${host}.pid
+}
+
+_devbox_sync_loop_stop() {
+  local host="$1"
+  local pidfile="/tmp/unison-sync-${host}.pid"
+  if [[ -f "$pidfile" ]]; then
+    local pid=$(cat "$pidfile")
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null
+    fi
+    rm -f "$pidfile"
+  fi
 }
 
 _devbox_ensure_projects() {
@@ -385,18 +402,18 @@ remotes() {
   local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
   local host=$(pay remote ssh "$remote_name" -- hostname)
 
-  local slugs
-  slugs=$(_devbox_ensure_projects "$remote_name") || return 1
-  local -a slug_arr=( ${(f)slugs} )
+  _devbox_ensure_projects "$remote_name" > /dev/null || return 1
 
-  (_devbox_sync_push "$host" "${slug_arr[@]}" &)
+  _devbox_sync "$host"
+  _devbox_sync_loop "$host"
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  (_devbox_sync_pull "$host" "${slug_arr[@]}" &)
+  _devbox_sync_loop_stop "$host"
+  _devbox_sync "$host"
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -417,18 +434,18 @@ remote() {
   pay remote new "$remote_name" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
 
   local host=$(pay remote ssh "$remote_name" -- hostname)
-  local slugs
-  slugs=$(_devbox_ensure_projects "$remote_name") || return 1
-  local -a slug_arr=( ${(f)slugs} )
+  _devbox_ensure_projects "$remote_name" > /dev/null || return 1
 
-  (_devbox_sync_push "$host" "${slug_arr[@]}" &)
+  _devbox_sync "$host"
+  _devbox_sync_loop "$host"
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  (_devbox_sync_pull "$host" "${slug_arr[@]}" &)
+  _devbox_sync_loop_stop "$host"
+  _devbox_sync "$host"
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -503,20 +520,16 @@ dev() {
       _associate_devbox "$remote_name" "$proj_slug"
     fi
   fi
-  local slugs=$(_projects_for_devbox "$remote_name")
-  local -a slug_arr=( ${(f)slugs} )
-  if [ ${#slug_arr[@]} -gt 0 ]; then
-    (_devbox_sync_push "$host" "${slug_arr[@]}" &)
-  fi
+  _devbox_sync "$host"
+  _devbox_sync_loop "$host"
   (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  if [ ${#slug_arr[@]} -gt 0 ]; then
-    (_devbox_sync_pull "$host" "${slug_arr[@]}" &)
-  fi
+  _devbox_sync_loop_stop "$host"
+  _devbox_sync "$host"
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset

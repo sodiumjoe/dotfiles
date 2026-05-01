@@ -129,7 +129,7 @@ Work vault: `~/stripe/work/` (configured in `work/config.json`).
 
 ### devbox
 
-Devbox initialization clones this repo and runs `bootstrap.sh`, which sets up everything: work-cli symlink, skills, agents, commands, hooks, generated instruction files. The `_devbox_sync_push` function in `zsh/.zshrc` rsyncs `work-cli/` and project files on connect; `_devbox_sync_pull` syncs project changes back on disconnect.
+Devbox initialization clones this repo and runs `bootstrap.sh`, which sets up everything: work-cli symlink, skills, agents, commands, hooks, generated instruction files. The `_devbox_sync` function in `zsh/.zshrc` syncs `~/stripe/work/` bidirectionally via Unison on connect and disconnect; `_devbox_sync_loop` maintains a persistent 5-second polling loop during active SSH sessions. `work-cli/` is still rsynced separately.
 
 ## Committing Changes
 
