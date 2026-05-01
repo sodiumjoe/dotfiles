@@ -8,6 +8,7 @@ declare -A DEVBOX_PINS=(
   [neovim]=NVIM_VERSION
   [lua-language-server]=LUA_LS_VERSION
   [efm-langserver]=EFM_VERSION
+  [unison]=UNISON_VERSION
 )
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
