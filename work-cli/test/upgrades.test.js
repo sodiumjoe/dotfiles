@@ -11,108 +11,66 @@ function requireFresh(mod) {
   return require(mod);
 }
 
-describe("checkNvimPluginStaleness", () => {
-  let tmpDir;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "upgrades-test-"));
+describe("formatUpgradeLines", () => {
+  it("formats brew and npm items as checkboxes", () => {
+    const { formatUpgradeLines } = requireFresh(path.join(LIB, "upgrades.js"));
+    const lines = formatUpgradeLines({
+      brew: {
+        count: 2,
+        formulae: [
+          { name: "neovim", current: "0.11.0", latest: "0.12.0" },
+          { name: "ripgrep", current: "14.1.0", latest: "14.2.0" },
+        ],
+      },
+      npm: {
+        count: 1,
+        packages: [
+          { name: "@anthropic-ai/sdk", current: "1.2.0", latest: "1.3.0" },
+        ],
+      },
+    });
+    assert.deepEqual(lines, [
+      "- [ ] neovim 0.11.0 → 0.12.0",
+      "- [ ] ripgrep 14.1.0 → 14.2.0",
+      "- [ ] [npm] @anthropic-ai/sdk 1.2.0 → 1.3.0",
+    ]);
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    delete process.env.WORK_SKIP_UPGRADES;
+  it("returns empty array when nothing outdated", () => {
+    const { formatUpgradeLines } = requireFresh(path.join(LIB, "upgrades.js"));
+    const lines = formatUpgradeLines({
+      brew: { count: 0, formulae: [] },
+      npm: { count: 0, packages: [] },
+    });
+    assert.deepEqual(lines, []);
+  });
+});
+
+describe("parseUpgradeLine", () => {
+  it("parses checked brew line", () => {
+    const { parseUpgradeLine } = requireFresh(path.join(LIB, "upgrades.js"));
+    const result = parseUpgradeLine("- [x] neovim 0.11.0 → 0.12.0");
+    assert.deepEqual(result, { type: "brew", name: "neovim" });
   });
 
-  it("reports stale when lockfile commit is old", () => {
-    const { execFileSync } = require("node:child_process");
-    execFileSync("git", ["init"], { cwd: tmpDir });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=test",
-        "-c",
-        "user.email=test@test.com",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "init",
-      ],
-      { cwd: tmpDir },
+  it("parses checked npm line", () => {
+    const { parseUpgradeLine } = requireFresh(path.join(LIB, "upgrades.js"));
+    const result = parseUpgradeLine(
+      "- [x] [npm] @anthropic-ai/sdk 1.2.0 → 1.3.0",
     );
-    fs.writeFileSync(path.join(tmpDir, "lazy-lock.json"), "{}");
-    execFileSync("git", ["add", "lazy-lock.json"], { cwd: tmpDir });
-    // Commit with a date 20 days ago (set both author and committer date)
-    const oldDate = new Date(Date.now() - 20 * 86400 * 1000).toISOString();
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=test",
-        "-c",
-        "user.email=test@test.com",
-        "commit",
-        "-m",
-        "add lockfile",
-        `--date=${oldDate}`,
-      ],
-      { cwd: tmpDir, env: { ...process.env, GIT_COMMITTER_DATE: oldDate } },
-    );
-
-    const { checkNvimPluginStaleness } = requireFresh(
-      path.join(LIB, "upgrades.js"),
-    );
-    const result = checkNvimPluginStaleness(tmpDir);
-    assert.equal(result.stale, true);
-    assert.ok(result.daysSinceUpdate >= 19);
+    assert.deepEqual(result, { type: "npm", name: "@anthropic-ai/sdk" });
   });
 
-  it("reports not stale when lockfile commit is recent", () => {
-    const { execFileSync } = require("node:child_process");
-    execFileSync("git", ["init"], { cwd: tmpDir });
-    fs.writeFileSync(path.join(tmpDir, "lazy-lock.json"), "{}");
-    execFileSync("git", ["add", "lazy-lock.json"], { cwd: tmpDir });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=test",
-        "-c",
-        "user.email=test@test.com",
-        "commit",
-        "-m",
-        "add lockfile",
-      ],
-      { cwd: tmpDir },
-    );
-
-    const { checkNvimPluginStaleness } = requireFresh(
-      path.join(LIB, "upgrades.js"),
-    );
-    const result = checkNvimPluginStaleness(tmpDir);
-    assert.equal(result.stale, false);
-    assert.ok(result.daysSinceUpdate <= 1);
+  it("returns null for unchecked line", () => {
+    const { parseUpgradeLine } = requireFresh(path.join(LIB, "upgrades.js"));
+    const result = parseUpgradeLine("- [ ] neovim 0.11.0 → 0.12.0");
+    assert.equal(result, null);
   });
 
-  it("returns graceful result when git fails", () => {
-    const { checkNvimPluginStaleness } = requireFresh(
-      path.join(LIB, "upgrades.js"),
-    );
-    const result = checkNvimPluginStaleness("/nonexistent/path");
-    assert.equal(result.stale, false);
-    assert.equal(result.daysSinceUpdate, 0);
-    assert.ok(result.error);
-  });
-
-  it("returns no-op when WORK_SKIP_UPGRADES is set", () => {
-    process.env.WORK_SKIP_UPGRADES = "1";
-    const { checkNvimPluginStaleness } = requireFresh(
-      path.join(LIB, "upgrades.js"),
-    );
-    const result = checkNvimPluginStaleness(tmpDir);
-    assert.equal(result.stale, false);
-    assert.equal(result.daysSinceUpdate, 0);
-    assert.equal(result.error, undefined);
+  it("returns null for non-upgrade line", () => {
+    const { parseUpgradeLine } = requireFresh(path.join(LIB, "upgrades.js"));
+    const result = parseUpgradeLine("- [ ] some other task");
+    assert.equal(result, null);
   });
 });
 
@@ -127,11 +85,29 @@ describe("checkUpgrades", () => {
     const result = checkUpgrades();
     assert.equal(result.hasActionableItems, false);
     assert.equal(result.brew.count, 0);
-    assert.equal(result.nvimPlugins.stale, false);
+    assert.equal(result.npm.count, 0);
   });
 });
 
-describe("tick upgrade check integration", { concurrency: 1 }, () => {
+describe("DEVBOX_GITHUB mapping", () => {
+  it("has entries for all devbox-pinned tools", () => {
+    const { DEVBOX_GITHUB } = requireFresh(path.join(LIB, "upgrades.js"));
+    assert.ok(DEVBOX_GITHUB["neovim"]);
+    assert.ok(DEVBOX_GITHUB["lua-language-server"]);
+    assert.ok(DEVBOX_GITHUB["efm-langserver"]);
+    assert.ok(DEVBOX_GITHUB["unison"]);
+  });
+
+  it("each entry has repo and tagPrefix", () => {
+    const { DEVBOX_GITHUB } = requireFresh(path.join(LIB, "upgrades.js"));
+    for (const [, val] of Object.entries(DEVBOX_GITHUB)) {
+      assert.ok(typeof val.repo === "string");
+      assert.ok(typeof val.tagPrefix === "string");
+    }
+  });
+});
+
+describe("tick upgrade integration", { concurrency: 1 }, () => {
   let tmpDir, origVault, origXdg;
   const workBin = path.join(__dirname, "..", "bin", "work");
   const { execFileSync } = require("node:child_process");
@@ -151,6 +127,10 @@ describe("tick upgrade check integration", { concurrency: 1 }, () => {
       path.join(tmpDir, "projects", "work", "project.md"),
       "---\nstatus: evergreen\n---\n\n# Work\n\n## Tasks\n\n## Changelog\n",
     );
+    fs.writeFileSync(
+      path.join(tmpDir, "projects", "dotfiles", "project.md"),
+      "---\nstatus: evergreen\n---\n\n# Dotfiles\n\n## Tasks\n\n## Changelog\n",
+    );
     origVault = process.env.WORK_VAULT;
     origXdg = process.env.XDG_CONFIG_HOME;
   }
@@ -165,7 +145,7 @@ describe("tick upgrade check integration", { concurrency: 1 }, () => {
 
   function runTick(extraEnv = {}) {
     const today = new Date().toISOString().slice(0, 10);
-    const dailyNote = `---\nid: "${today}"\ntags: [daily-notes]\n---\n\n## Reviews\n\n## Tasks\n\n## Log\n`;
+    const dailyNote = `---\nid: "${today}"\ntags: [daily-notes]\n---\n\n## Reviews\n\n## Tasks\n\n## Log\n\n## Archive\n`;
     fs.writeFileSync(path.join(tmpDir, `${today}.md`), dailyNote);
     return execFileSync("node", [workBin, "tick", "--verbose"], {
       env: {
@@ -183,35 +163,14 @@ describe("tick upgrade check integration", { concurrency: 1 }, () => {
     });
   }
 
-  function dotfilesProjectPath() {
-    return path.join(tmpDir, "projects", "dotfiles", "project.md");
-  }
-
   beforeEach(setup);
   afterEach(teardown);
 
-  it("tick logs 'no upgrades' when WORK_SKIP_UPGRADES is set", () => {
-    fs.writeFileSync(
-      dotfilesProjectPath(),
-      "---\nstatus: evergreen\n---\n\n# Dotfiles\n\n## Tasks\n\n## Changelog\n",
-    );
+  it("tick logs upgrade section when WORK_SKIP_UPGRADES is set", () => {
     const output = runTick({ WORK_SKIP_UPGRADES: "1" });
     assert.ok(
-      output.includes("no upgrades") || output.includes("upgrade check"),
-      `expected upgrade check log in: ${output}`,
+      output.includes("upgrades") || output.includes("no upgrades"),
+      `expected upgrade log in: ${output}`,
     );
-    const content = fs.readFileSync(dotfilesProjectPath(), "utf-8");
-    assert.ok(!content.includes("Upgrades available"));
-  });
-
-  it("tick does not duplicate upgrade task if one exists", () => {
-    fs.writeFileSync(
-      dotfilesProjectPath(),
-      "---\nstatus: evergreen\n---\n\n# Dotfiles\n\n## Tasks\n- [ ] Upgrades available (5 brew) — run `upgrade`\n\n## Changelog\n",
-    );
-    const output = runTick({ WORK_SKIP_UPGRADES: "" });
-    const content = fs.readFileSync(dotfilesProjectPath(), "utf-8");
-    const matches = content.match(/Upgrades available/g);
-    assert.equal(matches.length, 1, "should not duplicate upgrade task");
   });
 });

@@ -11,7 +11,8 @@ const { scanOpenItems, formatScanTSV, syncCheck, listTasks, setTaskState } = req
 const { createProject, resolveProject, parseChangelog, completeProjects, archiveProject, archivePlans, extractFindings, listProjects, syncPlans, closeTasks, closeProject, closePlan } = require(path.join(LIB, 'project.js'));
 const { writeWeeklySummary, isoWeek } = require(path.join(LIB, 'summary.js'));
 const { enqueue, dequeue } = require(path.join(LIB, 'queue.js'));
-const { parse, serialize, appendToSection, extractSection, getTitle, parseFrontmatter } = require(path.join(LIB, 'markdown.js'));
+const { execFileSync } = require('node:child_process');
+const { parse, serialize, appendToSection, insertSectionBefore, extractSection, getTitle, parseFrontmatter } = require(path.join(LIB, 'markdown.js'));
 const { closeTask, appendLog } = require(path.join(LIB, 'changelog.js'));
 const { promote } = require(path.join(LIB, 'promote.js'));
 const { checkUpstream } = require(path.join(LIB, 'upstream.js'));
@@ -508,35 +509,94 @@ const commands = {
       errors.push(`upstream-drift: ${e.message}`);
     }
 
-    if (!fs.existsSync(weeklyPath)) {
-      log('=== upgrade check ===');
-      try {
-        const { checkUpgrades } = require(path.join(LIB, 'upgrades.js'));
-        const upgrades = checkUpgrades({ dotfilesRoot: path.join(__dirname, '..', '..') });
-        if (upgrades.hasActionableItems) {
-          const dotfilesProject = projectFile('dotfiles');
-          if (fs.existsSync(dotfilesProject)) {
-            const content = fs.readFileSync(dotfilesProject, 'utf-8');
-            const parts = [];
-            if (upgrades.brew.count > 0) parts.push(`${upgrades.brew.count} brew`);
-            if (upgrades.npm.count > 0) parts.push(`${upgrades.npm.count} npm`);
-            if (upgrades.nvimPlugins.stale) parts.push(`nvim plugins (${upgrades.nvimPlugins.daysSinceUpdate}d)`);
-            if (parts.length > 0 && !/^- \[[ /]\] Upgrades available/m.test(content)) {
-              const doc = parse(content);
-              appendToSection(doc, 'Tasks', [`- [ ] Upgrades available (${parts.join(', ')}) — run \`upgrade\``]);
-              fs.writeFileSync(dotfilesProject, serialize(doc), 'utf-8');
-              log(`added upgrade task: ${parts.join(', ')}`);
+    log('=== upgrades ===');
+    try {
+      const { checkUpgrades, formatUpgradeLines, parseUpgradeLine } = require(path.join(LIB, 'upgrades.js'));
+      const np = notePath(dateStr);
+
+      // Process checked upgrades in today's daily note
+      if (fs.existsSync(np)) {
+        const content = fs.readFileSync(np, 'utf-8');
+        const doc = parse(content);
+        const section = doc.sections.find(s => s.name === 'Upgrades');
+        if (section) {
+          const checked = [];
+          const remaining = [];
+          for (const line of section.lines) {
+            const parsed = parseUpgradeLine(line);
+            if (parsed) {
+              checked.push(parsed);
             } else {
-              log('upgrade task already exists, skipping');
+              remaining.push(line);
+            }
+          }
+          if (checked.length > 0) {
+            for (const item of checked) {
+              if (item.type === 'brew') {
+                log(`upgrading: ${item.name}`);
+                try {
+                  execFileSync(path.join(__dirname, '..', '..', 'bin', 'upgrade'), [item.name], {
+                    encoding: 'utf-8',
+                    timeout: 120000,
+                    stdio: 'pipe',
+                  });
+                } catch (e) {
+                  log(`  warning: upgrade ${item.name} failed: ${e.message}`);
+                  remaining.push(`- [ ] ${item.name} (failed)`);
+                }
+              } else if (item.type === 'npm') {
+                log(`upgrading npm: ${item.name}`);
+                try {
+                  const nodeBinDir = path.join(__dirname, '..', '..', 'node-bin');
+                  execFileSync('npm', ['install', `${item.name}@latest`], {
+                    cwd: nodeBinDir,
+                    encoding: 'utf-8',
+                    timeout: 60000,
+                    stdio: 'pipe',
+                  });
+                } catch (e) {
+                  log(`  warning: npm upgrade ${item.name} failed: ${e.message}`);
+                  remaining.push(`- [ ] [npm] ${item.name} (failed)`);
+                }
+              }
+            }
+            // Remove section if empty, otherwise update
+            const trimmed = remaining.filter(l => l.trim() !== '');
+            if (trimmed.length === 0) {
+              doc.sections = doc.sections.filter(s => s.name !== 'Upgrades');
+            } else {
+              section.lines = trimmed;
+            }
+            fs.writeFileSync(np, serialize(doc), 'utf-8');
+            log(`processed ${checked.length} upgrade(s)`);
+          }
+        }
+      }
+
+      // Weekly: detect available upgrades and write to daily note
+      if (!fs.existsSync(weeklyPath)) {
+        const upgrades = checkUpgrades();
+        if (upgrades.hasActionableItems) {
+          const lines = formatUpgradeLines(upgrades);
+          if (lines.length > 0 && fs.existsSync(np)) {
+            const content = fs.readFileSync(np, 'utf-8');
+            const doc = parse(content);
+            const existing = doc.sections.find(s => s.name === 'Upgrades');
+            if (!existing) {
+              insertSectionBefore(doc, 'Log', 'Upgrades', lines);
+              fs.writeFileSync(np, serialize(doc), 'utf-8');
+              log(`wrote ${lines.length} upgrade(s) to daily note`);
+            } else {
+              log('upgrades section already exists');
             }
           }
         } else {
-          log('no upgrades to report');
+          log('no upgrades available');
         }
-      } catch (e) {
-        console.error('FAIL: upgrade check');
-        errors.push(`upgrade-check: ${e.message}`);
       }
+    } catch (e) {
+      console.error('FAIL: upgrades');
+      errors.push(`upgrades: ${e.message}`);
     }
 
     if (opts['simulate-error']) {

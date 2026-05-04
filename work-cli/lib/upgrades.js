@@ -1,7 +1,12 @@
 const { execFileSync } = require("node:child_process");
 const path = require("node:path");
 
-const PLUGIN_STALE_DAYS = 14;
+const DEVBOX_GITHUB = {
+  neovim: { repo: "neovim/neovim", tagPrefix: "v" },
+  "lua-language-server": { repo: "LuaLS/lua-language-server", tagPrefix: "" },
+  "efm-langserver": { repo: "mattn/efm-langserver", tagPrefix: "v" },
+  unison: { repo: "bcpierce00/unison", tagPrefix: "v" },
+};
 
 function checkBrewOutdated() {
   if (process.env.WORK_SKIP_UPGRADES) {
@@ -25,33 +30,6 @@ function checkBrewOutdated() {
   }
 }
 
-function checkNvimPluginStaleness(dotfilesRoot) {
-  if (process.env.WORK_SKIP_UPGRADES) {
-    return { stale: false, daysSinceUpdate: 0 };
-  }
-  const cwd =
-    dotfilesRoot ||
-    process.env.DOTFILES_ROOT ||
-    path.join(process.env.HOME, ".dotfiles");
-  try {
-    const ts = execFileSync(
-      "git",
-      ["log", "-1", "--format=%ct", "lazy-lock.json"],
-      {
-        cwd,
-        encoding: "utf-8",
-        timeout: 5000,
-      },
-    ).trim();
-    const epochSec = parseInt(ts, 10);
-    const nowSec = Math.floor(Date.now() / 1000);
-    const daysSinceUpdate = Math.floor((nowSec - epochSec) / 86400);
-    return { stale: daysSinceUpdate > PLUGIN_STALE_DAYS, daysSinceUpdate };
-  } catch (e) {
-    return { stale: false, daysSinceUpdate: 0, error: e.message };
-  }
-}
-
 function checkNpmOutdated() {
   if (process.env.WORK_SKIP_UPGRADES) {
     return { count: 0, packages: [] };
@@ -66,7 +44,6 @@ function checkNpmOutdated() {
         timeout: 30000,
       });
     } catch (e) {
-      // npm outdated exits non-zero when packages are outdated
       if (e.stdout) raw = e.stdout;
       else return { count: 0, packages: [], error: e.message };
     }
@@ -82,27 +59,82 @@ function checkNpmOutdated() {
   }
 }
 
+function checkGithubRelease(repo, tag) {
+  try {
+    execFileSync(
+      "gh",
+      ["release", "view", tag, "--repo", repo, "--json", "tagName"],
+      {
+        encoding: "utf-8",
+        timeout: 10000,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function filterDevboxAvailability(formulae) {
+  return formulae.filter((f) => {
+    const gh = DEVBOX_GITHUB[f.name];
+    if (!gh) return true;
+    const tag = `${gh.tagPrefix}${f.latest}`;
+    return checkGithubRelease(gh.repo, tag);
+  });
+}
+
 function checkUpgrades(opts = {}) {
   if (process.env.WORK_SKIP_UPGRADES) {
     return {
       brew: { count: 0, formulae: [] },
       npm: { count: 0, packages: [] },
-      nvimPlugins: { stale: false, daysSinceUpdate: 0 },
       hasActionableItems: false,
     };
   }
   const brew = checkBrewOutdated();
   const npm = checkNpmOutdated();
-  const nvimPlugins = checkNvimPluginStaleness(opts.dotfilesRoot);
-  const hasActionableItems =
-    brew.count > 0 || npm.count > 0 || nvimPlugins.stale;
-  return { brew, npm, nvimPlugins, hasActionableItems };
+
+  if (opts.checkDevboxAvailability !== false) {
+    brew.formulae = filterDevboxAvailability(brew.formulae);
+    brew.count = brew.formulae.length;
+  }
+
+  const hasActionableItems = brew.count > 0 || npm.count > 0;
+  return { brew, npm, hasActionableItems };
+}
+
+function formatUpgradeLines(upgrades) {
+  const lines = [];
+  for (const f of upgrades.brew.formulae) {
+    lines.push(`- [ ] ${f.name} ${f.current} → ${f.latest}`);
+  }
+  for (const p of upgrades.npm.packages) {
+    lines.push(`- [ ] [npm] ${p.name} ${p.current} → ${p.latest}`);
+  }
+  return lines;
+}
+
+function parseUpgradeLine(line) {
+  const npmMatch = line.match(/^- \[x\] \[npm\] (.+?) .+ → .+$/);
+  if (npmMatch) {
+    return { type: "npm", name: npmMatch[1] };
+  }
+  const brewMatch = line.match(/^- \[x\] (.+?) .+ → .+$/);
+  if (brewMatch) {
+    return { type: "brew", name: brewMatch[1] };
+  }
+  return null;
 }
 
 module.exports = {
   checkBrewOutdated,
   checkNpmOutdated,
-  checkNvimPluginStaleness,
+  checkGithubRelease,
+  filterDevboxAvailability,
   checkUpgrades,
-  PLUGIN_STALE_DAYS,
+  formatUpgradeLines,
+  parseUpgradeLine,
+  DEVBOX_GITHUB,
 };

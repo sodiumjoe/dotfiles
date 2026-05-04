@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Upgrade specific brew formulae and sync devbox version pins.
+# Called by work tick when the user checks items in the daily note's ## Upgrades section.
+
 DEVBOX_INIT="${DEVBOX_INIT_PATH:-$HOME/stripe/devbox/.devbox-init}"
-DOTFILES="${DOTFILES_ROOT:-$HOME/.dotfiles}"
 
 declare -A DEVBOX_PINS=(
   [neovim]=NVIM_VERSION
@@ -11,57 +13,15 @@ declare -A DEVBOX_PINS=(
   [unison]=UNISON_VERSION
 )
 
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-
 usage() {
-  cat <<EOF
-Usage: upgrade [options] [formula ...]
-
-Modes:
-  upgrade                    Interactive: fzf multi-select from outdated packages
-  upgrade <formula> [...]    Upgrade specific brew formulae + sync devbox pins
-  upgrade --npm              Update global npm packages (devbox-tracked)
-  upgrade --nvim             Update nvim plugins (Lazy update) + commit lockfile
-  upgrade --all              Upgrade everything (brew + npm + nvim + devbox pins)
-  upgrade --dry-run          Show what's outdated without doing anything
-
-Options:
-  --npm        Update npm packages only
-  --nvim       Update neovim plugins only
-  --all        Upgrade all brew + npm + nvim plugins
-  --dry-run    Show outdated packages without upgrading
-  -h, --help   Show this help
-EOF
+  echo "Usage: upgrade <formula> [formula ...]"
+  echo "Upgrades brew formulae and syncs devbox version pins."
 }
 
-# Parse arguments
-MODE=""
-DRY_RUN=false
-FORMULAE=()
-
-for arg in "$@"; do
-  case "$arg" in
-    --npm) MODE="npm" ;;
-    --nvim) MODE="nvim" ;;
-    --all) MODE="all" ;;
-    --dry-run) DRY_RUN=true ;;
-    -h|--help) usage; exit 0 ;;
-    -*) echo "Unknown option: $arg"; usage; exit 1 ;;
-    *) FORMULAE+=("$arg") ;;
-  esac
-done
-
-if [[ ${#FORMULAE[@]} -gt 0 ]]; then
-  MODE="specific"
-elif [[ -z "$MODE" ]]; then
-  MODE="interactive"
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
 fi
-
-# --- Helpers ---
-
-get_brew_outdated() {
-  HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --json=v2 2>/dev/null
-}
 
 get_brew_version() {
   local formula="$1"
@@ -98,7 +58,6 @@ update_devbox_pin() {
     return
   fi
 
-  # Preserve v-prefix convention
   local new_pin="$new_version"
   if [[ "$current_pin" == v* ]]; then
     new_pin="v${new_version#v}"
@@ -127,152 +86,12 @@ commit_devbox_if_changed() {
   popd > /dev/null
 }
 
-do_brew_upgrade() {
-  local formula="$1"
+for formula in "$@"; do
   echo "upgrading: $formula"
-  local output
   output=$(brew upgrade "$formula" 2>&1) || true
   echo "$output" | tail -3
-  local new_version
   new_version=$(get_brew_version "$formula")
   update_devbox_pin "$formula" "$new_version"
-}
+done
 
-do_nvim_update() {
-  echo "updating nvim plugins..."
-  nvim --headless "+Lazy! update" +qa 2>&1 || true
-
-  if git -C "$DOTFILES" diff --quiet lazy-lock.json 2>/dev/null; then
-    echo "  no plugin changes"
-  else
-    git -C "$DOTFILES" add lazy-lock.json
-    git -C "$DOTFILES" commit -m "upgrade nvim plugins"
-    echo "  committed lazy-lock.json"
-  fi
-}
-
-do_npm_update() {
-  local node_bin_dir="${DOTFILES}/node-bin"
-  echo "updating npm packages in ${node_bin_dir}..."
-  pushd "$node_bin_dir" > /dev/null
-  npm update 2>&1 | grep -v "^$" | tail -5
-  popd > /dev/null
-
-  if git -C "$DOTFILES" diff --quiet node-bin/ 2>/dev/null; then
-    echo "  no changes"
-  else
-    git -C "$DOTFILES" add node-bin/package.json node-bin/package-lock.json
-    git -C "$DOTFILES" commit -m "upgrade node-bin packages"
-    echo "  committed node-bin updates"
-  fi
-}
-
-# --- Main ---
-
-if $DRY_RUN; then
-  exec work check-upgrades
-fi
-
-case "$MODE" in
-  interactive)
-    json=$(get_brew_outdated)
-
-    lines=$(echo "$json" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-for f in d.get('formulae', []):
-    current = ', '.join(f.get('installed_versions', []))
-    latest = f.get('current_version', '?')
-    print(f\"{f['name']}\t{current} → {latest}\")
-")
-
-    # Add npm packages as selectable items
-    npm_outdated=$(cd "${DOTFILES}/node-bin" && npm outdated --json 2>/dev/null || true)
-    if [[ -n "$npm_outdated" && "$npm_outdated" != "{}" ]]; then
-      npm_lines=$(echo "$npm_outdated" | python3 -c "
-import json, sys
-d = json.load(sys.stdin)
-for name, info in d.items():
-    print(f\"[npm] {name}\t{info['current']} → {info['latest']}\")
-")
-      if [[ -n "$npm_lines" ]]; then
-        lines="${lines}"$'\n'"${npm_lines}"
-      fi
-    fi
-
-    # Add nvim plugins as an option
-    last_commit=$(git -C "$DOTFILES" log -1 --format=%ct lazy-lock.json 2>/dev/null || echo 0)
-    now=$(date +%s)
-    days_since=$(( (now - last_commit) / 86400 ))
-    lines="${lines}"$'\n'"[nvim-plugins]	last updated ${days_since} days ago"
-
-    selected=$(echo "$lines" | fzf --multi --header="Select packages to upgrade (TAB to multi-select)" | cut -f1)
-
-    if [[ -z "$selected" ]]; then
-      echo "Nothing selected."
-      exit 0
-    fi
-
-    npm_to_update=()
-
-    while IFS= read -r item; do
-      if [[ "$item" == "[nvim-plugins]" ]]; then
-        do_nvim_update
-      elif [[ "$item" == "[npm] "* ]]; then
-        pkg="${item#\[npm\] }"
-        npm_to_update+=("$pkg")
-      else
-        do_brew_upgrade "$item"
-      fi
-    done <<< "$selected"
-
-    if [[ ${#npm_to_update[@]} -gt 0 ]]; then
-      echo "updating npm packages: ${npm_to_update[*]}"
-      pushd "${DOTFILES}/node-bin" > /dev/null
-      npm install "${npm_to_update[@]}@latest" 2>&1 | grep -v "^$" | tail -5
-      popd > /dev/null
-      git -C "$DOTFILES" add node-bin/package.json node-bin/package-lock.json
-      git -C "$DOTFILES" commit -m "upgrade node-bin packages" 2>/dev/null || true
-    fi
-
-    commit_devbox_if_changed
-    ;;
-
-  specific)
-    for formula in "${FORMULAE[@]}"; do
-      do_brew_upgrade "$formula"
-    done
-    commit_devbox_if_changed
-    ;;
-
-  npm)
-    do_npm_update
-    ;;
-
-  nvim)
-    do_nvim_update
-    ;;
-
-  all)
-    echo "=== brew upgrade ==="
-    brew update
-    outdated=$(HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --quiet 2>/dev/null || true)
-    if [[ -n "$outdated" ]]; then
-      while IFS= read -r formula; do
-        do_brew_upgrade "$formula"
-      done <<< "$outdated"
-    else
-      echo "all up to date"
-    fi
-
-    commit_devbox_if_changed
-
-    echo ""
-    echo "=== npm packages ==="
-    do_npm_update
-
-    echo ""
-    echo "=== nvim plugins ==="
-    do_nvim_update
-    ;;
-esac
+commit_devbox_if_changed
