@@ -130,7 +130,9 @@ commit_devbox_if_changed() {
 do_brew_upgrade() {
   local formula="$1"
   echo "upgrading: $formula"
-  brew upgrade "$formula" 2>&1 | tail -3
+  local output
+  output=$(brew upgrade "$formula" 2>&1) || true
+  echo "$output" | tail -3
   local new_version
   new_version=$(get_brew_version "$formula")
   update_devbox_pin "$formula" "$new_version"
