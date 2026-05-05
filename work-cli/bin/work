@@ -425,7 +425,8 @@ const commands = {
     const { year, week } = isoWeek(new Date(y, m - 1, d));
     const weekLabel = `${year}-W${String(week).padStart(2, '0')}`;
     const weeklyPath = path.join(VAULT_ROOT, 'weekly', `${weekLabel}.md`);
-    if (!fs.existsSync(weeklyPath)) {
+    const isNewWeek = !fs.existsSync(weeklyPath);
+    if (isNewWeek) {
       log('=== propose archivable ===');
       try {
         const projEntries = fs.existsSync(PROJECT_DIR)
@@ -525,12 +526,13 @@ const commands = {
           for (const line of section.lines) {
             const parsed = parseUpgradeLine(line);
             if (parsed) {
-              checked.push(parsed);
+              checked.push({ ...parsed, original: line });
             } else {
               remaining.push(line);
             }
           }
           if (checked.length > 0) {
+            let processed = 0;
             for (const item of checked) {
               if (item.type === 'brew') {
                 log(`upgrading: ${item.name}`);
@@ -540,9 +542,10 @@ const commands = {
                     timeout: 120000,
                     stdio: 'pipe',
                   });
+                  processed++;
                 } catch (e) {
                   log(`  warning: upgrade ${item.name} failed: ${e.message}`);
-                  remaining.push(`- [ ] ${item.name} (failed)`);
+                  remaining.push(item.original.replace('- [x]', '- [ ]'));
                 }
               } else if (item.type === 'npm') {
                 log(`upgrading npm: ${item.name}`);
@@ -554,13 +557,13 @@ const commands = {
                     timeout: 60000,
                     stdio: 'pipe',
                   });
+                  processed++;
                 } catch (e) {
                   log(`  warning: npm upgrade ${item.name} failed: ${e.message}`);
-                  remaining.push(`- [ ] [npm] ${item.name} (failed)`);
+                  remaining.push(item.original.replace('- [x]', '- [ ]'));
                 }
               }
             }
-            // Remove section if empty, otherwise update
             const trimmed = remaining.filter(l => l.trim() !== '');
             if (trimmed.length === 0) {
               doc.sections = doc.sections.filter(s => s.name !== 'Upgrades');
@@ -568,13 +571,13 @@ const commands = {
               section.lines = trimmed;
             }
             fs.writeFileSync(np, serialize(doc), 'utf-8');
-            log(`processed ${checked.length} upgrade(s)`);
+            log(`processed ${processed}/${checked.length} upgrade(s)`);
           }
         }
       }
 
       // Weekly: detect available upgrades and write to daily note
-      if (!fs.existsSync(weeklyPath)) {
+      if (isNewWeek) {
         const upgrades = checkUpgrades();
         if (upgrades.hasActionableItems) {
           const lines = formatUpgradeLines(upgrades);
@@ -630,7 +633,7 @@ const commands = {
 
   'check-upgrades'() {
     const { checkUpgrades } = require(path.join(LIB, 'upgrades.js'));
-    const results = checkUpgrades({ dotfilesRoot: path.join(__dirname, '..', '..') });
+    const results = checkUpgrades();
 
     if (results.brew.count > 0) {
       console.log(`Brew outdated (${results.brew.count}):`);
@@ -649,15 +652,9 @@ const commands = {
         console.log(`  ${pkg.name}: ${pkg.current} → ${pkg.latest}`);
       }
     } else {
-      console.log('npm (devbox-tracked): all up to date');
+      console.log('npm: all up to date');
     }
     if (results.npm.error) console.log(`  (error: ${results.npm.error})`);
-
-    console.log('');
-    const np = results.nvimPlugins;
-    const label = np.stale ? ' (STALE)' : '';
-    console.log(`Nvim plugins: last updated ${np.daysSinceUpdate} days ago${label}`);
-    if (np.error) console.log(`  (error: ${np.error})`);
 
     if (!results.hasActionableItems) {
       console.log('\nAll up to date.');
