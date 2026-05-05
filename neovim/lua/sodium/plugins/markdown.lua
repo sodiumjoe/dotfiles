@@ -275,6 +275,7 @@ return {
                             vim.cmd("Obsidian toggle_checkbox")
                         end
                         vim.cmd("write")
+                        vim.cmd("normal! gv")
                     end, { buf = 0 })
                 end,
             },
