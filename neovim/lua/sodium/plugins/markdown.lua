@@ -263,6 +263,19 @@ return {
                         vim.cmd("Obsidian toggle_checkbox")
                         vim.cmd("write")
                     end, { buf = 0 })
+                    vim.keymap.set("v", "<C-Space>", function()
+                        local start_line = vim.fn.line("v")
+                        local end_line = vim.fn.line(".")
+                        if start_line > end_line then
+                            start_line, end_line = end_line, start_line
+                        end
+                        vim.cmd("normal! " .. vim.api.nvim_replace_termcodes("<Esc>", true, false, true))
+                        for lnum = start_line, end_line do
+                            vim.api.nvim_win_set_cursor(0, { lnum, 0 })
+                            vim.cmd("Obsidian toggle_checkbox")
+                        end
+                        vim.cmd("write")
+                    end, { buf = 0 })
                 end,
             },
             checkbox = {
