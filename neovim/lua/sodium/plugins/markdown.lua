@@ -83,31 +83,14 @@ return {
                     if vim.bo[ctx.buf].filetype ~= "AgenticChat" then
                         return
                     end
-                    local ok, tool_ns = pcall(vim.api.nvim_get_namespaces)
-                    if not ok then
+                    local ns = vim.api.nvim_get_namespaces()["agentic_diff_highlights"]
+                    if not ns then
                         return
                     end
-                    local ns_id = tool_ns["agentic_tool_blocks"]
-                    if not ns_id then
-                        return
-                    end
-                    local rm_ns = vim.api.nvim_get_namespaces()["render-markdown.nvim"]
-                    if not rm_ns then
-                        return
-                    end
-                    local blocks = vim.api.nvim_buf_get_extmarks(ctx.buf, ns_id, 0, -1, { details = true })
-                    for _, block in ipairs(blocks) do
-                        local start_row = block[2]
-                        local end_row = (block[4] and block[4].end_row) or start_row
-                        local marks = vim.api.nvim_buf_get_extmarks(
-                            ctx.buf,
-                            rm_ns,
-                            { start_row, 0 },
-                            { end_row, -1 },
-                            {}
-                        )
-                        for _, mark in ipairs(marks) do
-                            vim.api.nvim_buf_del_extmark(ctx.buf, rm_ns, mark[1])
+                    local marks = vim.api.nvim_buf_get_extmarks(ctx.buf, ns, 0, -1, { details = true })
+                    for _, mark in ipairs(marks) do
+                        if mark[4] and mark[4].hl_group == "Comment" then
+                            vim.api.nvim_buf_del_extmark(ctx.buf, ns, mark[1])
                         end
                     end
                 end,
