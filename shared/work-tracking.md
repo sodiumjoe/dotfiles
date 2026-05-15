@@ -39,6 +39,8 @@ Do not manually call `work check-off` or `work append-log` separately. Always us
 - Format changelog entries as completed tasks: `- [x] Description of work done ✅ YYYY-MM-DD`
   - The `✅ YYYY-MM-DD` suffix is required Obsidian Tasks done-date metadata
   - This allows the daily note to query completed work from all plans and projects
+- `work complete` appends a changelog entry to the project file and a log entry to the daily note. Do not write a manual changelog entry for the same completion — it produces duplicates in the daily note query.
+- Manual changelog entries (plain `- YYYY-MM-DD: description` without task syntax) are fine for recording incremental progress that isn't a discrete completion event.
 - Maintain notes in the plan file documenting:
   - What was investigated or implemented
   - What was found or discovered
@@ -48,5 +50,5 @@ Do not manually call `work check-off` or `work append-log` separately. Always us
 
 - The daily note is at `~/stripe/work/YYYY-MM-DD.md` (today's date)
 - Use `/start-day` to initialize, `/log` to record completions, `/next` for what to work on, `/note` for freeform entries, `/end-day` to wrap up
-- When completing work outside of `/log`, still update both the daily note log and the project/plan changelog
+- When completing work outside of `/log`, use `work complete` to update both the daily note log and the project/plan changelog in one step
 - Do not overwrite existing daily note content. Append or edit specific sections.
