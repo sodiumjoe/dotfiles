@@ -83,14 +83,33 @@ return {
                     if vim.bo[ctx.buf].filetype ~= "AgenticChat" then
                         return
                     end
-                    local ns = vim.api.nvim_get_namespaces()["agentic_diff_highlights"]
-                    if not ns then
-                        return
+                    local all_ns = vim.api.nvim_get_namespaces()
+                    local tool_ns = all_ns["agentic_tool_blocks"]
+                    local rm_ns = all_ns["render-markdown.nvim"]
+                    if tool_ns and rm_ns then
+                        local blocks = vim.api.nvim_buf_get_extmarks(ctx.buf, tool_ns, 0, -1, { details = true })
+                        for _, block in ipairs(blocks) do
+                            local start_row = block[2]
+                            local end_row = (block[4] and block[4].end_row) or start_row
+                            local marks = vim.api.nvim_buf_get_extmarks(
+                                ctx.buf,
+                                rm_ns,
+                                { start_row, 0 },
+                                { end_row, -1 },
+                                {}
+                            )
+                            for _, mark in ipairs(marks) do
+                                vim.api.nvim_buf_del_extmark(ctx.buf, rm_ns, mark[1])
+                            end
+                        end
                     end
-                    local marks = vim.api.nvim_buf_get_extmarks(ctx.buf, ns, 0, -1, { details = true })
-                    for _, mark in ipairs(marks) do
-                        if mark[4] and mark[4].hl_group == "Comment" then
-                            vim.api.nvim_buf_del_extmark(ctx.buf, ns, mark[1])
+                    local diff_ns = all_ns["agentic_diff_highlights"]
+                    if diff_ns then
+                        local marks = vim.api.nvim_buf_get_extmarks(ctx.buf, diff_ns, 0, -1, { details = true })
+                        for _, mark in ipairs(marks) do
+                            if mark[4] and mark[4].hl_group == "Comment" then
+                                vim.api.nvim_buf_del_extmark(ctx.buf, diff_ns, mark[1])
+                            end
                         end
                     end
                 end,
