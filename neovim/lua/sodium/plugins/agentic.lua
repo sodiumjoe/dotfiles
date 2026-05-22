@@ -509,6 +509,10 @@ local function pick_pr_for_review()
                         vim.schedule(function()
                             local text = r.code == 0 and r.stdout or ("Error: " .. (r.stderr or ""))
                             diff_cache[item.number] = text
+                            local preview_win = ctx.preview and ctx.preview.win
+                            if not (preview_win and preview_win.valid and preview_win:valid()) then
+                                return
+                            end
                             local current = ctx.picker:current()
                             if current and current.number == item.number then
                                 ctx.preview:set_lines(vim.split(text, "\n"))
