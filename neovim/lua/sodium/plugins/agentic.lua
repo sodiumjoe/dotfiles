@@ -579,6 +579,7 @@ return {
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
         local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
+        local codex_path = vim.fn.resolve(vim.fn.exepath("codex"))
 
         local function noop()
             return ""
@@ -592,8 +593,8 @@ return {
                 enabled = false,
             },
             border_style = "boxed",
-            provider = "claude-acp",
-            -- provider = "codex-acp",
+            -- provider = "claude-acp",
+            provider = "codex-acp",
             -- provider = "gemini-acp",
             acp_providers = {
                 ["claude-acp"] = {
@@ -613,7 +614,9 @@ return {
                 },
                 ["codex-acp"] = {
                     command = "codex-acp",
-                    env = {},
+                    env = {
+                        CODEX_PATH = codex_path ~= "" and codex_path or nil,
+                    },
                 },
             },
             windows = {
