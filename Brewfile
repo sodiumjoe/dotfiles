@@ -45,6 +45,7 @@ brew "yarn"
 # Dev tools
 brew "buildifier"
 brew "buildozer"
+brew "codex-acp"
 brew "direnv"
 brew "gh"
 brew "mergiraf"
