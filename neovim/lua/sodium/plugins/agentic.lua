@@ -620,6 +620,7 @@ return {
                     command = "codex-acp",
                     env = {
                         CODEX_PATH = codex_path ~= "" and codex_path or nil,
+                        NVIM = vim.v.servername,
                     },
                 },
             },
