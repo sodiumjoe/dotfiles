@@ -2,12 +2,13 @@
 
 TITLE="$1"
 ZWS=$'\xe2\x80\x8b'
+APP_NAME="${NOTIFY_AGENT_NAME:-Agent}"
 
 case "$TITLE" in
   *"$ZWS"*)
     CLEAN="${TITLE//$ZWS/}"
     LABEL="${CLEAN#󰌗 }"
-    MSG="Claude is waiting for input"
-    osascript -e "display notification \"${MSG//\"/\\\"}\" with title \"Claude Code\" subtitle \"${LABEL//\"/\\\"}\""
+    MSG="$APP_NAME is waiting for input"
+    osascript -e "display notification \"${MSG//\"/\\\"}\" with title \"${APP_NAME//\"/\\\"}\" subtitle \"${LABEL//\"/\\\"}\""
     ;;
 esac

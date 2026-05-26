@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pass=0
+fail=0
+errors=()
+
+assert_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    ((++pass))
+  else
+    ((++fail))
+    errors+=("FAIL: $label\n  expected to contain: '$needle'\n  in: '$haystack'")
+  fi
+}
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+NOTIFY="$ROOT/claude/hooks/notify-on-stop.sh"
+BELL="$ROOT/bin/tmux-notify-bell"
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+mkdir -p "$tmpdir/bin"
+export OSASCRIPT_LOG="$tmpdir/osascript.log"
+
+cat > "$tmpdir/bin/osascript" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$OSASCRIPT_LOG"
+EOF
+
+cat > "$tmpdir/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+cat > "$tmpdir/bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--show-toplevel" ]]; then
+  printf '/tmp/dotfiles\n'
+  exit 0
+fi
+exit 1
+EOF
+
+cat > "$tmpdir/bin/tmux" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  display-message)
+    case "${5:-}" in
+      '#{window_active}'|'#{pane_active}')
+        printf '0\n'
+        exit 0
+        ;;
+    esac
+    ;;
+  show-environment)
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+
+chmod +x "$tmpdir/bin/osascript" "$tmpdir/bin/sleep" "$tmpdir/bin/git" "$tmpdir/bin/tmux"
+
+run_notify() {
+  rm -f "$OSASCRIPT_LOG" /tmp/claude-notify-42.pid
+  export PATH="$tmpdir/bin:$PATH"
+  export TMUX_PANE="%42"
+  if [[ $# -gt 0 ]]; then
+    export NOTIFY_AGENT_NAME="$1"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  "$NOTIFY"
+  for _ in {1..100}; do
+    if [[ -f "$OSASCRIPT_LOG" ]]; then
+      break
+    fi
+    /bin/sleep 0.01
+  done
+  cat "$OSASCRIPT_LOG"
+}
+
+run_bell() {
+  rm -f "$OSASCRIPT_LOG"
+  export PATH="$tmpdir/bin:$PATH"
+  if [[ $# -gt 0 ]]; then
+    export NOTIFY_AGENT_NAME="$1"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  "$BELL" "$(printf '\u200b󰌗 [test]devbox')"
+  cat "$OSASCRIPT_LOG"
+}
+
+out=$(run_notify)
+assert_contains "notify default message is generic" 'Agent is waiting for input (dotfiles)' "$out"
+assert_contains "notify default title is generic" 'with title "Agent"' "$out"
+
+out=$(run_notify "Codex")
+assert_contains "notify override message uses agent name" 'Codex is waiting for input (dotfiles)' "$out"
+assert_contains "notify override title uses agent name" 'with title "Codex"' "$out"
+
+out=$(run_bell)
+assert_contains "bell default message is generic" 'Agent is waiting for input' "$out"
+assert_contains "bell default title is generic" 'with title "Agent"' "$out"
+assert_contains "bell keeps subtitle" 'subtitle "[test]devbox"' "$out"
+
+out=$(run_bell "Codex")
+assert_contains "bell override message uses agent name" 'Codex is waiting for input' "$out"
+assert_contains "bell override title uses agent name" 'with title "Codex"' "$out"
+
+echo ""
+echo "agent-notify tests: $pass passed, $fail failed"
+if [[ $fail -gt 0 ]]; then
+  echo ""
+  for e in "${errors[@]}"; do
+    echo -e "$e"
+  done
+  exit 1
+fi

@@ -1,10 +1,28 @@
 model = "gpt-5.4"
 sandbox = "workspace-write"
 
+[features]
+hooks = true
+
+[hooks]
+Stop = [{ hooks = [{ type = "command", command = "$HOME/.claude/hooks/notify-on-stop.sh", timeout = 5 }] }]
+
+[hooks.state."/Users/moon/.codex/config.toml:stop:0:0"]
+trusted_hash = "sha256:f83e14f1d97c42b51a9f500ff546c1bfe8be50917f14fbe901f4c5bc2f0e08e3"
+
+[hooks.state."/Users/moon/.dotfiles/codex/config.toml:stop:0:0"]
+trusted_hash = "sha256:f83e14f1d97c42b51a9f500ff546c1bfe8be50917f14fbe901f4c5bc2f0e08e3"
+
 [approval]
 auto_approve = ["read_file", "list_directory", "grep", "glob", "shell:ls*", "shell:cat*", "shell:head*", "shell:tail*", "shell:grep*", "shell:rg*", "shell:find*", "shell:fd*", "shell:git log*", "shell:git diff*", "shell:git status*", "shell:git show*", "shell:git branch*", "shell:work *"]
 suggest = ["shell:curl*", "shell:git push*", "shell:git pull*", "shell:git merge*", "shell:git rebase*", "shell:git checkout*"]
 deny = ["shell:git reset --hard*", "shell:git clean -f*", "shell:rm -rf /*", "shell:sudo*"]
 
 [projects."~/stripe/work"]
+trust_level = "trusted"
+
+[projects."/Users/moon/.dotfiles"]
+trust_level = "trusted"
+
+[projects."/Users/moon/stripe/mint"]
 trust_level = "trusted"

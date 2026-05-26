@@ -8,6 +8,7 @@ fi
 PANE_SLUG=$(echo "$PANE" | tr -d '%')
 PID_FILE="/tmp/claude-notify-${PANE_SLUG}.pid"
 DELAY=60
+APP_NAME="${NOTIFY_AGENT_NAME:-Agent}"
 
 if [ -f /pay/conf/box-type ]; then
   tmux set -gu @notify_bell 2>/dev/null
@@ -37,15 +38,15 @@ fi
     exit 0
   fi
   if [ -n "$LABEL" ]; then
-    MSG="Claude is waiting for input ($LABEL)"
+    MSG="$APP_NAME is waiting for input ($LABEL)"
   else
-    MSG="Claude is waiting for input"
+    MSG="$APP_NAME is waiting for input"
   fi
 
   if [ -f /pay/conf/box-type ]; then
     tmux set -g @notify_bell 1
   else
-    osascript -e "display notification \"$MSG\" with title \"Claude Code\""
+    osascript -e "display notification \"$MSG\" with title \"$APP_NAME\""
   fi
 
   rm -f "$PID_FILE"
