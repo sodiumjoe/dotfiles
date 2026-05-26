@@ -19,13 +19,20 @@ describe("agentic codex provider", function()
         return opts
     end
 
-    it("uses the PATH codex adapter and resolved codex executable", function()
+    it("uses the full-access wrapper with the resolved codex executable", function()
         local opts = load_agentic_setup()
         local provider = opts.acp_providers["codex-acp"]
 
         assert.are.equal("codex-acp", opts.provider)
         assert.are.equal("codex-acp", provider.command)
-        assert.are.equal(vim.fn.resolve(vim.fn.exepath("codex")), provider.env.CODEX_PATH)
+        assert.are.equal(
+            vim.fn.fnamemodify("bin/codex-full-access", ":p"),
+            provider.env.CODEX_PATH
+        )
+        assert.are.equal(
+            vim.fn.resolve(vim.fn.exepath("codex")),
+            provider.env.CODEX_REAL_PATH
+        )
     end)
 
     it("forwards the current neovim server to codex", function()
@@ -33,5 +40,31 @@ describe("agentic codex provider", function()
         local provider = opts.acp_providers["codex-acp"]
 
         assert.are.equal(vim.v.servername, provider.env.NVIM)
+    end)
+
+    it("starts codex sessions in full-access mode", function()
+        local opts = load_agentic_setup()
+        local provider = opts.acp_providers["codex-acp"]
+
+        assert.are.equal("agent-full-access", provider.default_mode)
+        assert.are.equal("agent-full-access", provider.env.INITIAL_AGENT_MODE)
+    end)
+
+    it("tolerates tool calls with vim.NIL content", function()
+        load_agentic_setup()
+        local ACPClient = require("agentic.acp.acp_client")
+
+        local ok, message = pcall(function()
+            return ACPClient.__build_tool_call_message(ACPClient, {
+                toolCallId = "tool-1",
+                kind = "execute",
+                status = "pending",
+                content = vim.NIL,
+            })
+        end)
+
+        assert.is_true(ok)
+        assert.are.equal("tool-1", message.tool_call_id)
+        assert.is_nil(message.body)
     end)
 end)

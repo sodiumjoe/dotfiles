@@ -583,11 +583,43 @@ return {
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
         local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
-        local codex_path = vim.fn.resolve(vim.fn.exepath("codex"))
+        local codex_binary = vim.fn.resolve(vim.fn.exepath("codex"))
+        local this_file = debug.getinfo(1, "S").source:sub(2)
+        local repo_root = vim.fn.fnamemodify(this_file, ":p:h:h:h:h:h")
+        local codex_path = repo_root .. "/bin/codex-full-access"
+
+        local function patch_agentic_acp_client()
+            local ok, ACPClient = pcall(require, "agentic.acp.acp_client")
+            if not ok or ACPClient._sodium_null_field_patch then
+                return
+            end
+
+            local build_tool_call_message = ACPClient.__build_tool_call_message
+            ACPClient.__build_tool_call_message = function(self, update)
+                local normalized = vim.tbl_extend("force", {}, update)
+                if type(update.content) ~= "table" then
+                    normalized.content = nil
+                end
+                if type(update.rawInput) ~= "table" then
+                    normalized.rawInput = nil
+                end
+                if type(update.locations) ~= "table" then
+                    normalized.locations = nil
+                end
+                if type(update.title) ~= "string" then
+                    normalized.title = nil
+                end
+
+                return build_tool_call_message(self, normalized)
+            end
+            ACPClient._sodium_null_field_patch = true
+        end
 
         local function noop()
             return ""
         end
+
+        patch_agentic_acp_client()
 
         require("agentic").setup({
             image_paste = {
@@ -618,8 +650,12 @@ return {
                 },
                 ["codex-acp"] = {
                     command = "codex-acp",
+                    default_mode = "agent-full-access",
                     env = {
-                        CODEX_PATH = codex_path ~= "" and codex_path or nil,
+                        CODEX_PATH = codex_path,
+                        CODEX_REAL_PATH = codex_binary ~= "" and codex_binary
+                            or nil,
+                        INITIAL_AGENT_MODE = "agent-full-access",
                         NVIM = vim.v.servername,
                     },
                 },
