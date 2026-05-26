@@ -7,10 +7,11 @@ return {
         config = function()
             vim.api.nvim_create_autocmd("FileType", {
                 callback = function(args)
-                    if vim.bo[args.buf].buftype ~= "" then
+                    local ft = vim.bo[args.buf].filetype
+                    if vim.bo[args.buf].buftype ~= "" and ft ~= "AgenticChat" then
                         return
                     end
-                    local lang = vim.treesitter.language.get_lang(vim.bo[args.buf].filetype)
+                    local lang = vim.treesitter.language.get_lang(ft)
                     if lang and pcall(vim.treesitter.language.inspect, lang) then
                         vim.treesitter.start(args.buf)
                     end
