@@ -4,6 +4,38 @@ local agentic_utils = require("sodium.agentic_utils")
 
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
 
+local function current_path_reference()
+    local word = vim.fn.expand("<cWORD>")
+    if word == "" then
+        return
+    end
+
+    word = word:gsub("^[`(<%[]+", "")
+    word = word:gsub("[`>%)%],.;]+$", "")
+
+    local path, line = word:match("^(.+):(%d+)$")
+    if not path or not line then
+        return
+    end
+
+    local absolute = vim.fn.fnamemodify(path, ":p")
+    if not vim.uv.fs_stat(absolute) then
+        return
+    end
+
+    return absolute, tonumber(line)
+end
+
+local function open_path_reference()
+    local path, line = current_path_reference()
+    if not path or not line then
+        return false
+    end
+
+    vim.cmd("edit +" .. line .. " " .. vim.fn.fnameescape(path))
+    return true
+end
+
 local function resize_agentic_split()
     local target = math.floor(vim.o.lines * 0.5)
     for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -683,6 +715,25 @@ return {
 
         utils.augroup("AgenticResize", { clear = true })("VimResized", {
             callback = resize_agentic_split,
+        })
+
+        utils.augroup("AgenticChatLinks", { clear = true })("FileType", {
+            pattern = "AgenticChat",
+            callback = function(ev)
+                vim.keymap.set("n", "gf", function()
+                    if open_path_reference() then
+                        return
+                    end
+                    vim.cmd.normal({ args = { "gF" }, bang = true })
+                end, { buffer = ev.buf, silent = true })
+
+                vim.keymap.set("n", "<CR>", function()
+                    if open_path_reference() then
+                        return
+                    end
+                    vim.cmd.normal({ args = { "+" }, bang = true })
+                end, { buffer = ev.buf, silent = true })
+            end,
         })
     end,
     keys = {
