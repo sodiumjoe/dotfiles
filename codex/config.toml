@@ -26,3 +26,12 @@ trust_level = "trusted"
 
 [projects."/Users/moon/stripe/mint"]
 trust_level = "trusted"
+
+[marketplaces.stripe-internal-marketplace]
+last_updated = "2026-05-28T17:49:49Z"
+source_type = "git"
+source = "http://codex-marketplace--northwest.corp.stripe.com.certproxy.localhost:7891/codex-marketplace.git"
+
+[mcp_servers.toolshed_slack]
+command = "pay"
+args = ["toolshed", "serve", "slack"]
