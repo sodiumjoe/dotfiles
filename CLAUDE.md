@@ -2,9 +2,9 @@
 
 Dotfiles repo. Manages shell, neovim, tmux, git, and other tool configs via symlinks. Install with `./bootstrap.sh`.
 
-## Agentic Chat File References
+## File References
 
-When responding in agentic.nvim chat, refer to local files as plain repo-relative `path:line` strings, e.g. `frontend/tsdep/src/commands/move-type.ts:362`. Do not use markdown file links for local file references. If a readable label helps, use `MovePlanningContext - frontend/tsdep/src/commands/move-type.ts:362`.
+When referring to local files, use plain repo-relative `path:line` references, e.g. `frontend/tsdep/src/commands/move-type.ts:362`. Do not use markdown file links for local file references. If a readable label helps, use `MovePlanningContext - frontend/tsdep/src/commands/move-type.ts:362`.
 
 ## Symlink Strategy
 

@@ -60,3 +60,7 @@ Use headers, sub-headers, and tables for navigation and scannability. Within sec
 ## Branch naming
 
 Git branch prefix is `moon/`. Do not use `$(whoami)` or shell username — the devbox system user (`owner`) differs from the git identity (`moon`).
+
+## File References
+
+When referring to local files, use plain repo-relative `path:line` references, e.g. `frontend/tsdep/src/commands/move-type.ts:362`. Do not use markdown file links for local file references. If a readable label helps, use `MovePlanningContext - frontend/tsdep/src/commands/move-type.ts:362`.

@@ -68,8 +68,8 @@ describe("agentic codex provider", function()
         assert.is_nil(message.body)
     end)
 
-    it("documents plain path:line file references for agent chat", function()
-        local text = table.concat(vim.fn.readfile("CLAUDE.md"), "\n"):lower()
+    it("documents plain path:line file references in shared instructions", function()
+        local text = table.concat(vim.fn.readfile("shared/base-instructions.md"), "\n"):lower()
 
         assert.truthy(text:find("path:line", 1, true))
         assert.truthy(text:find("do not use markdown file links", 1, true))
