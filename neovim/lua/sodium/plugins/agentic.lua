@@ -755,8 +755,6 @@ return {
         local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
         local codex_binary = vim.fn.resolve(vim.fn.exepath("codex"))
         local this_file = debug.getinfo(1, "S").source:sub(2)
-        local repo_root = vim.fn.fnamemodify(this_file, ":p:h:h:h:h:h")
-        local codex_path = repo_root .. "/bin/codex-full-access"
 
         local function patch_agentic_acp_client()
             local ok, ACPClient = pcall(require, "agentic.acp.acp_client")
@@ -833,9 +831,7 @@ return {
                     command = "codex-acp",
                     default_mode = "agent-full-access",
                     env = {
-                        CODEX_PATH = codex_path,
-                        CODEX_REAL_PATH = codex_binary ~= "" and codex_binary
-                            or nil,
+                        CODEX_PATH = codex_binary ~= "" and codex_binary or nil,
                         INITIAL_AGENT_MODE = "agent-full-access",
                         NVIM = vim.v.servername,
                     },

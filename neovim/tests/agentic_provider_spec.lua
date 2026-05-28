@@ -38,20 +38,17 @@ describe("agentic codex provider", function()
         pcall(vim.fn.delete, tool_call_log)
     end)
 
-    it("uses the full-access wrapper with the resolved codex executable", function()
+    it("passes the resolved codex executable directly to codex-acp", function()
         local opts = load_agentic_setup()
         local provider = opts.acp_providers["codex-acp"]
 
         assert.are.equal("codex-acp", opts.provider)
         assert.are.equal("codex-acp", provider.command)
         assert.are.equal(
-            vim.fn.fnamemodify("bin/codex-full-access", ":p"),
+            vim.fn.resolve(vim.fn.exepath("codex")),
             provider.env.CODEX_PATH
         )
-        assert.are.equal(
-            vim.fn.resolve(vim.fn.exepath("codex")),
-            provider.env.CODEX_REAL_PATH
-        )
+        assert.is_nil(provider.env.CODEX_REAL_PATH)
     end)
 
     it("forwards the current neovim server to codex", function()
