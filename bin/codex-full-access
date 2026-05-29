@@ -1,3 +1,0 @@
-#!/bin/sh
-: "${CODEX_REAL_PATH:?CODEX_REAL_PATH is required}"
-exec "$CODEX_REAL_PATH" -a never -s danger-full-access "$@"

@@ -754,7 +754,6 @@ return {
         local diagnostics = require("sodium.config.diagnostics")
         local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
         local codex_binary = vim.fn.resolve(vim.fn.exepath("codex"))
-        local this_file = debug.getinfo(1, "S").source:sub(2)
 
         local function patch_agentic_acp_client()
             local ok, ACPClient = pcall(require, "agentic.acp.acp_client")
