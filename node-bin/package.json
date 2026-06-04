@@ -3,16 +3,16 @@
   "private": true,
   "description": "Pinned npm tool binaries. Used on both local and devbox. Updated by `upgrade --npm`.",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "^0.30.0",
+    "@agentclientprotocol/claude-agent-acp": "^0.40.0",
     "@agentclientprotocol/codex-acp": "^0.0.44",
-    "@typescript/native-preview": "7.0.0-dev.20260331.1",
+    "@typescript/native-preview": "^7.0.0-dev.20260603.1",
     "@vtsls/language-server": "0.3.0",
     "defuddle-cli": "0.7.0",
     "mcp-neovim-server": "0.5.5",
     "prettier": "^3.8.3",
-    "tree-sitter-cli": "0.26.8",
+    "tree-sitter-cli": "^0.26.9",
     "typescript": "^6.0.3",
-    "typescript-language-server": "5.1.3",
+    "typescript-language-server": "^5.3.0",
     "vscode-langservers-extracted": "4.10.0",
     "yarn": "^1.22.22"
   }
