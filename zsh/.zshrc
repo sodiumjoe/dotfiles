@@ -291,7 +291,6 @@ _devbox_sync() {
     -ignore 'Name .obsidian' \
     -ignore 'Name node_modules' \
     -logfile /tmp/unison-sync-${host}.log
-  rsync -az --delete "$HOME/.dotfiles/work-cli/" "$host:~/.dotfiles/work-cli/"
 }
 
 _devbox_sync_loop() {
