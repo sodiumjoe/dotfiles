@@ -200,10 +200,11 @@ ZSH_AUTOSUGGEST_USE_ASYNC=1
 ZSH_AUTOSUGGEST_MANUAL_REBIND=1
 ZSH_AUTOSUGGEST_HISTORY_IGNORE="man *"
 
+source "${ZDOTDIR:-${HOME}/.config/zsh}/named_dirs.zsh"
+
 # dir aliases
 [ -d ~/.dotfiles ] && hash -d dots=~/.dotfiles
-[ -d ~/stripe/mint/pay-server/manage/frontend ] && hash -d dashboard=~/stripe/mint/pay-server/manage/frontend
-[ -d ~/stripe/mint/pay-server ] && hash -d pay=~/stripe/mint/pay-server
+_sodium_define_stripe_named_dirs /pay/src/pay-server "$HOME/stripe/mint/pay-server"
 hash -d config=~/.config
 
 # aliases
