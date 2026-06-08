@@ -321,19 +321,6 @@ _devbox_sync_loop_stop() {
 }
 
 
-_copy_gh_auth_to_remote() {
-  local host="$1"
-  local token=$(gh auth token -h git.corp.stripe.com 2>/dev/null)
-  [ -z "$token" ] && return 0
-  ssh "$host" "mkdir -p \$HOME/.config/gh && cat > \$HOME/.config/gh/hosts.yml" <<EOF
-git.corp.stripe.com:
-    git_protocol: ssh
-    user: $(whoami)
-    oauth_token: $token
-EOF
-  ssh "$host" "gh config set http_unix_socket ''" 2>/dev/null
-}
-
 fetch_remotes() {
   local list=$(\
     pay remote list --raw \
@@ -363,7 +350,6 @@ remotes() {
 
   _devbox_sync "$host"
   _devbox_sync_loop "$host"
-  (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
@@ -394,7 +380,6 @@ remote() {
 
   _devbox_sync "$host"
   _devbox_sync_loop "$host"
-  (_copy_gh_auth_to_remote "$host" &)
 
   ssh -t "$host" "tmux a || tmux"
   local exit_code=$?
