@@ -39,6 +39,23 @@ local function cr_continue_list()
     vim.api.nvim_win_set_cursor(0, { row + 1, #prefix })
 end
 
+local function work_failure_message(result)
+    local msg = "work tick failed (exit " .. result.code .. ")"
+    local stderr = vim.trim(result.stderr or "")
+    if stderr ~= "" then
+        return msg .. "\n" .. stderr
+    end
+
+    local stdout = vim.trim(result.stdout or "")
+    if stdout == "" then
+        return msg
+    end
+
+    local lines = vim.split(stdout, "\n", { plain = true, trimempty = true })
+    local first = math.max(#lines - 4, 1)
+    return msg .. "\n" .. table.concat(vim.list_slice(lines, first, #lines), "\n")
+end
+
 vim.api.nvim_create_autocmd("FileType", {
     pattern = "markdown",
     callback = function(ev)
@@ -160,7 +177,7 @@ return {
                             spin.stop("work")
                             vim.cmd("checktime")
                             if r.code ~= 0 then
-                                vim.notify("work tick failed (exit " .. r.code .. ")", vim.log.levels.WARN)
+                                vim.notify(work_failure_message(r), vim.log.levels.WARN)
                             end
                         end)
                     end)
@@ -290,3 +307,4 @@ return {
         },
     },
 }
+
