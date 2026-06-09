@@ -650,6 +650,73 @@ status: active
     });
   });
 
+  describe("listInvalidProjectDirs", () => {
+    beforeEach(setup);
+    afterEach(teardown);
+
+    it("reports top-level directories missing project.md", () => {
+      writeProject(
+        "valid",
+        `---
+status: active
+---
+
+# Valid
+
+## Tasks`,
+      );
+      fs.mkdirSync(path.join(tmpDir, "projects", "junk"));
+
+      const { listInvalidProjectDirs } = requireFresh();
+      const results = listInvalidProjectDirs();
+
+      assert.deepEqual(results, [
+        {
+          name: "junk",
+          path: path.join(tmpDir, "projects", "junk"),
+          reason: "missing project.md",
+        },
+      ]);
+    });
+
+    it("ignores top-level markdown files", () => {
+      fs.writeFileSync(path.join(tmpDir, "projects", "legacy.md"), "# Legacy");
+
+      const { listInvalidProjectDirs } = requireFresh();
+      const results = listInvalidProjectDirs();
+
+      assert.deepEqual(results, []);
+    });
+
+    it("reports dashed directory names when project.md is missing", () => {
+      fs.mkdirSync(path.join(tmpDir, "projects", "-pay-src-pay-server"));
+
+      const { listInvalidProjectDirs } = requireFresh();
+      const results = listInvalidProjectDirs();
+
+      assert.deepEqual(results, [
+        {
+          name: "-pay-src-pay-server",
+          path: path.join(tmpDir, "projects", "-pay-src-pay-server"),
+          reason: "missing project.md",
+        },
+      ]);
+    });
+
+    it("returns sorted results", () => {
+      fs.mkdirSync(path.join(tmpDir, "projects", "zeta"));
+      fs.mkdirSync(path.join(tmpDir, "projects", "alpha"));
+
+      const { listInvalidProjectDirs } = requireFresh();
+      const results = listInvalidProjectDirs();
+
+      assert.deepEqual(
+        results.map((entry) => entry.name),
+        ["alpha", "zeta"],
+      );
+    });
+  });
+
   describe("closeTasks", () => {
     beforeEach(setup);
     afterEach(teardown);

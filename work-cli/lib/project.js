@@ -295,6 +295,20 @@ function listProjects() {
   return results;
 }
 
+function listInvalidProjectDirs() {
+  if (!fs.existsSync(PROJECT_DIR)) return [];
+  const entries = fs.readdirSync(PROJECT_DIR, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .filter((entry) => !fs.existsSync(projectFile(entry.name)))
+    .map((entry) => ({
+      name: entry.name,
+      path: path.join(PROJECT_DIR, entry.name),
+      reason: "missing project.md",
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function resolveProjectSlug(projectField) {
   const stripped = projectField.replace(/^\[\[/, "").replace(/\]\]$/, "");
   return stripped.replace(/^projects\//, "").replace(/\/project$/, "");
@@ -446,6 +460,7 @@ module.exports = {
   archivePlans,
   extractFindings,
   listProjects,
+  listInvalidProjectDirs,
   syncPlans,
   closeTasks,
   closeProject,
