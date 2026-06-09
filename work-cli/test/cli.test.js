@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 
 describe("cli", { concurrency: 1 }, () => {
   let tmpDir;
@@ -56,6 +56,27 @@ describe("cli", { concurrency: 1 }, () => {
       encoding: "utf-8",
       timeout: 10000,
     });
+  }
+
+  function runWorkResult(...args) {
+    const result = spawnSync("node", [workBin, ...args], {
+      env: {
+        ...process.env,
+        WORK_VAULT: tmpDir,
+        XDG_CONFIG_HOME: path.join(tmpDir, "config"),
+        WORK_TEST_HOUR: "10",
+        WORK_SKIP_REVIEWS: "1",
+        WORK_SKIP_UPGRADES: "1",
+        CLAUDECODE: "",
+      },
+      encoding: "utf-8",
+      timeout: 10000,
+    });
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
   }
 
   function writeProject(slug, content) {
@@ -254,6 +275,58 @@ status: completed
     it("outputs nothing for empty projects dir", () => {
       const output = runWork("list-projects");
       assert.equal(output.trim(), "");
+    });
+  });
+
+  describe("work validate-projects", () => {
+    beforeEach(setup);
+    afterEach(teardown);
+
+    it("prints invalid directories as TSV", () => {
+      writeProject(
+        "valid",
+        `---
+status: active
+---
+
+# Valid
+
+## Tasks`,
+      );
+      fs.mkdirSync(path.join(tmpDir, "projects", "junk"));
+
+      const output = runWork("validate-projects");
+
+      assert.equal(output.trim(), "junk\tmissing project.md");
+    });
+
+    it("exits non-zero in strict mode when invalid directories exist", () => {
+      fs.mkdirSync(path.join(tmpDir, "projects", "junk"));
+
+      const result = runWorkResult("validate-projects", "--strict");
+
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout.trim(), "junk\tmissing project.md");
+      assert.equal(result.stderr, "");
+    });
+
+    it("exits zero and prints nothing in strict mode when clean", () => {
+      writeProject(
+        "valid",
+        `---
+status: active
+---
+
+# Valid
+
+## Tasks`,
+      );
+
+      const result = runWorkResult("validate-projects", "--strict");
+
+      assert.equal(result.status, 0);
+      assert.equal(result.stdout.trim(), "");
+      assert.equal(result.stderr, "");
     });
   });
 

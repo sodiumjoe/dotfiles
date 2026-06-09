@@ -282,44 +282,7 @@ export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 ## stripe
 
 
-_devbox_sync() {
-  local host="$1"
-  ssh "$host" "mkdir -p ~/stripe/work" 2>/dev/null
-  unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
-    -batch -prefer newer -fastcheck true -silent \
-    -ignore 'Name .DS_Store' \
-    -ignore 'Name *.jsonl' \
-    -ignore 'Name .obsidian' \
-    -ignore 'Name node_modules' \
-    -logfile /tmp/unison-sync-${host}.log
-}
-
-_devbox_sync_loop() {
-  local host="$1"
-  _devbox_sync_loop_stop "$host"
-  unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
-    -batch -prefer newer -fastcheck true -silent \
-    -repeat 5 \
-    -ignore 'Name .DS_Store' \
-    -ignore 'Name *.jsonl' \
-    -ignore 'Name .obsidian' \
-    -ignore 'Name node_modules' \
-    -logfile /tmp/unison-sync-${host}.log \
-    &>/dev/null &
-  echo $! > /tmp/unison-sync-${host}.pid
-}
-
-_devbox_sync_loop_stop() {
-  local host="$1"
-  local pidfile="/tmp/unison-sync-${host}.pid"
-  if [[ -f "$pidfile" ]]; then
-    local pid=$(cat "$pidfile")
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null
-    fi
-    rm -f "$pidfile"
-  fi
-}
+source "${ZDOTDIR:-${HOME}/.config/zsh}/work_sync.zsh"
 
 
 fetch_remotes() {
