@@ -66,6 +66,13 @@ describe("agentic codex provider", function()
         assert.are.equal("agent-full-access", provider.env.INITIAL_AGENT_MODE)
     end)
 
+    it("forces codex-acp to use the litellm model provider", function()
+        local opts = load_agentic_setup()
+        local provider = opts.acp_providers["codex-acp"]
+
+        assert.are.equal("litellm", provider.env.MODEL_PROVIDER)
+    end)
+
     it("tolerates tool calls with vim.NIL content", function()
         load_agentic_setup()
         local ACPClient = require("agentic.acp.acp_client")

@@ -832,6 +832,7 @@ return {
                     env = {
                         CODEX_PATH = codex_binary ~= "" and codex_binary or nil,
                         INITIAL_AGENT_MODE = "agent-full-access",
+                        MODEL_PROVIDER = "litellm",
                         NVIM = vim.v.servername,
                     },
                 },
