@@ -15,6 +15,16 @@ assert_contains() {
   fi
 }
 
+assert_less_than() {
+  local label="$1" expected="$2" actual="$3"
+  if (( actual < expected )); then
+    ((++pass))
+  else
+    ((++fail))
+    errors+=("FAIL: $label\n  expected: <$expected\n  actual:   $actual")
+  fi
+}
+
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NOTIFY="$ROOT/claude/hooks/notify-on-stop.sh"
 BELL="$ROOT/bin/tmux-notify-bell"
@@ -31,6 +41,9 @@ EOF
 
 cat > "$tmpdir/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${1:-}" == "60" && "${NOTIFY_TEST_SLOW_SLEEP:-}" == "1" ]]; then
+  /bin/sleep 2
+fi
 exit 0
 EOF
 
@@ -79,7 +92,39 @@ run_notify() {
     fi
     /bin/sleep 0.01
   done
-  cat "$OSASCRIPT_LOG"
+  if [[ -f "$OSASCRIPT_LOG" ]]; then
+    cat "$OSASCRIPT_LOG"
+  fi
+}
+
+run_notify_captured() {
+  local captured elapsed log
+  rm -f "$OSASCRIPT_LOG" /tmp/claude-notify-42.pid
+  export PATH="$tmpdir/bin:$PATH"
+  export TMUX_PANE="%42"
+  if [[ $# -gt 0 ]]; then
+    export NOTIFY_AGENT_NAME="$1"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  export NOTIFY_TEST_SLOW_SLEEP=1
+  SECONDS=0
+  captured=$("$NOTIFY")
+  elapsed=$SECONDS
+  unset NOTIFY_TEST_SLOW_SLEEP
+  for _ in {1..300}; do
+    if [[ -f "$OSASCRIPT_LOG" ]]; then
+      break
+    fi
+    /bin/sleep 0.01
+  done
+  if [[ -f "$OSASCRIPT_LOG" ]]; then
+    log=$(cat "$OSASCRIPT_LOG")
+  else
+    log=""
+  fi
+  printf '%s\n' "$log"
+  printf 'ELAPSED=%s\n' "$elapsed"
 }
 
 run_bell() {
@@ -91,7 +136,9 @@ run_bell() {
     unset NOTIFY_AGENT_NAME
   fi
   "$BELL" "$(printf '\u200b󰌗 [test]devbox')"
-  cat "$OSASCRIPT_LOG"
+  if [[ -f "$OSASCRIPT_LOG" ]]; then
+    cat "$OSASCRIPT_LOG"
+  fi
 }
 
 out=$(run_notify)
@@ -101,6 +148,12 @@ assert_contains "notify default title is generic" 'with title "Agent"' "$out"
 out=$(run_notify "Codex")
 assert_contains "notify override message uses agent name" 'Codex is waiting for input (dotfiles)' "$out"
 assert_contains "notify override title uses agent name" 'with title "Codex"' "$out"
+
+timed=$(run_notify_captured "Codex")
+elapsed=$(printf '%s\n' "$timed" | awk -F= '/^ELAPSED=/{print $2}')
+out=$(printf '%s\n' "$timed" | awk 'BEGIN { seen = 0 } /^ELAPSED=/{ seen = 1; next } { if (!seen) print }')
+assert_contains "notify captured run eventually produces notification" 'Codex is waiting for input (dotfiles)' "$out"
+assert_less_than "notify returns before delayed child exits when output is captured" 2 "$elapsed"
 
 out=$(run_bell)
 assert_contains "bell default message is generic" 'Agent is waiting for input' "$out"

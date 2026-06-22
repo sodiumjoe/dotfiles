@@ -50,7 +50,7 @@ fi
   fi
 
   rm -f "$PID_FILE"
-) &
+) >/dev/null 2>&1 < /dev/null &
 echo $! > "$PID_FILE"
 
 exit 0
