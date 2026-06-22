@@ -16,3 +16,4 @@ node-bin/package-lock.json
 .claude
 claude/CLAUDE.md
 codex/AGENTS.md
+worktrees/
