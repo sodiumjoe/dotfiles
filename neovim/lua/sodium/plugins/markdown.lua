@@ -239,7 +239,6 @@ return {
                 { name = "work", path = "~/stripe/work" },
             } or {},
             completion = {
-                blink = true,
                 min_chars = 2,
             },
             callbacks = {
@@ -307,4 +306,3 @@ return {
         },
     },
 }
-

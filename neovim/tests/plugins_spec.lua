@@ -1,6 +1,18 @@
 describe("plugin registry", function()
     local function collect_plugin_names(specs, names)
         names = names or {}
+
+        local function record_plugin(name, spec)
+            if name then
+                names[name] = spec
+            end
+            if spec and spec.dependencies then
+                for _, dep in ipairs(spec.dependencies) do
+                    collect_plugin_names(dep, names)
+                end
+            end
+        end
+
         if type(specs) == "string" then
             local name = specs:match("[^/]+$")
             if name then
@@ -13,14 +25,11 @@ describe("plugin registry", function()
         end
         if specs[1] and type(specs[1]) == "string" then
             local name = specs[1]:match("[^/]+$")
-            if name then
-                names[name] = specs
-            end
-            if specs.dependencies then
-                for _, dep in ipairs(specs.dependencies) do
-                    collect_plugin_names(dep, names)
-                end
-            end
+            record_plugin(name, specs)
+            return names
+        end
+        if specs.name and specs.dir then
+            record_plugin(specs.name, specs)
             return names
         end
         for _, spec in ipairs(specs) do
@@ -58,7 +67,7 @@ describe("plugin registry", function()
     describe("expected plugins declared", function()
         local expected = {
             "snacks.nvim",
-            "nightfox.nvim",
+            "sodium-colorscheme",
             "lualine.nvim",
             "statuscol.nvim",
             "nvim-colorizer.lua",
@@ -87,6 +96,17 @@ describe("plugin registry", function()
                 assert.is_not_nil(all_plugins[name], name .. " not found in specs")
             end)
         end
+    end)
+
+    describe("plugin options", function()
+        it("obsidian.nvim does not set deprecated blink completion config", function()
+            local spec = all_plugins["obsidian.nvim"]
+            assert.is_table(spec)
+            assert.is_table(spec.opts)
+            assert.is_table(spec.opts.completion)
+            assert.is_nil(spec.opts.completion.blink)
+            assert.are.equal(2, spec.opts.completion.min_chars)
+        end)
     end)
 
     describe("disabled plugins", function()
