@@ -206,9 +206,9 @@ ZSH_AUTOSUGGEST_HISTORY_IGNORE="man *"
 source "${ZDOTDIR:-${HOME}/.config/zsh}/named_dirs.zsh"
 
 # dir aliases
-[ -d ~/.dotfiles ] && hash -d dots=~/.dotfiles
+_sodium_define_home_named_dir dots .dotfiles
 _sodium_define_stripe_named_dirs /pay/src/pay-server "$HOME/stripe/mint/pay-server"
-hash -d config=~/.config
+_sodium_define_home_named_dir config .config
 
 # aliases
 
