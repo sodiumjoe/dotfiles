@@ -14,4 +14,6 @@ ZDOTDIR=${XDG_CONFIG_HOME}/zsh
 if [ -x "$HOME/stripe/.cargo/env" ]; then
   . "$HOME/stripe/.cargo/env"
 fi
-skip_global_compinit=1
+if [ "$(uname -s)" != "Linux" ]; then
+  skip_global_compinit=1
+fi

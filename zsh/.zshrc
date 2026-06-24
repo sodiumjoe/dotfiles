@@ -111,6 +111,9 @@ if [[ ! ${ZIM_HOME}/init.zsh -nt ${ZDOTDIR:-${HOME}}/.zimrc ]]; then
   source ${ZIM_HOME}/zimfw.zsh init -q
 fi
 
+if (( ${+_comps} )); then
+  unset _comps
+fi
 source ${ZIM_HOME}/init.zsh
 
 # ------------------------------

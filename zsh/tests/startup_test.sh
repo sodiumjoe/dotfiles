@@ -44,6 +44,37 @@ assert_not_contains() {
   fi
 }
 
+run_zshenv() {
+  local os_name="$1"
+  local script="$2"
+  local home="$tmpdir/home-$os_name"
+  local bin="$home/bin"
+  local output_file="$tmpdir/output-$os_name"
+  local error_file="$tmpdir/error-$os_name"
+
+  mkdir -p "$home/.config" "$home/.stripe/shellinit" "$bin"
+  ln -s "$repo_root/zshenv" "$home/.zshenv"
+
+  cat >"$bin/uname" <<EOF
+#!/bin/sh
+if [ "\$1" = "-s" ]; then
+  printf '%s\n' "$os_name"
+else
+  /usr/bin/uname "\$@"
+fi
+EOF
+  chmod +x "$bin/uname"
+
+  set +e
+  HOME="$home" PATH="$bin:$PATH" zsh <<EOF >"$output_file" 2>"$error_file"
+$script
+EOF
+  capture_status=$?
+  set -e
+  capture_output="$(cat "$output_file")"
+  capture_error="$(cat "$error_file")"
+}
+
 run_startup() {
   local term="$1"
   local home="$tmpdir/home-$term"
@@ -71,6 +102,24 @@ echo "=== Test: TERM=dumb startup tolerates later bash completion hooks ==="
 run_startup dumb
 assert_eq "TERM=dumb startup exits zero" "0" "$capture_status"
 assert_not_contains "TERM=dumb startup avoids compdef error" "command not found: compdef" "$capture_error"
+
+echo ""
+echo "=== Test: Linux zshenv preserves global compinit for bash completion wrappers ==="
+run_zshenv Linux '
+print -r -- "skip:${skip_global_compinit:-}"
+if [[ -z "${skip_global_compinit:-}" ]]; then
+  autoload -Uz compinit
+  compinit -C -d "${ZDOTDIR:-${HOME}}/.zcompdump-test"
+fi
+autoload -Uz bashcompinit
+bashcompinit
+_fake_completion_fn() { :; }
+complete -F _fake_completion_fn fake
+complete -p fake >/dev/null 2>&1
+'
+assert_eq "Linux zshenv leaves global compinit enabled" "skip:" "$capture_output"
+assert_eq "Linux completion registration exits zero" "0" "$capture_status"
+assert_not_contains "Linux completion registration avoids compdef error" "command not found: compdef" "$capture_error"
 
 echo ""
 echo "Results: $pass passed, $fail failed"
