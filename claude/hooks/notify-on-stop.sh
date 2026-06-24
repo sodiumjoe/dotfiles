@@ -9,8 +9,9 @@ PANE_SLUG=$(echo "$PANE" | tr -d '%')
 PID_FILE="/tmp/claude-notify-${PANE_SLUG}.pid"
 DELAY=60
 APP_NAME="${NOTIFY_AGENT_NAME:-Agent}"
+BOX_TYPE_FILE="${BOX_TYPE_FILE:-/pay/conf/box-type}"
 
-if [ -f /pay/conf/box-type ]; then
+if [ -f "$BOX_TYPE_FILE" ]; then
   tmux set -gu @notify_bell 2>/dev/null
 fi
 
@@ -30,27 +31,30 @@ fi
 (
   sleep "$DELAY"
 
-  WINDOW_ACTIVE=$(tmux display-message -p -t "$PANE" '#{window_active}' 2>/dev/null)
-  PANE_ACTIVE=$(tmux display-message -p -t "$PANE" '#{pane_active}' 2>/dev/null)
+  if [ ! -f "$BOX_TYPE_FILE" ]; then
+    WINDOW_ACTIVE=$(tmux display-message -p -t "$PANE" '#{window_active}' 2>/dev/null)
+    PANE_ACTIVE=$(tmux display-message -p -t "$PANE" '#{pane_active}' 2>/dev/null)
 
-  if [ "$WINDOW_ACTIVE" = "1" ] && [ "$PANE_ACTIVE" = "1" ]; then
-    rm -f "$PID_FILE"
-    exit 0
+    if [ "$WINDOW_ACTIVE" = "1" ] && [ "$PANE_ACTIVE" = "1" ]; then
+      rm -f "$PID_FILE"
+      exit 0
+    fi
   fi
+
   if [ -n "$LABEL" ]; then
     MSG="$APP_NAME is waiting for input ($LABEL)"
   else
     MSG="$APP_NAME is waiting for input"
   fi
 
-  if [ -f /pay/conf/box-type ]; then
+  if [ -f "$BOX_TYPE_FILE" ]; then
     tmux set -g @notify_bell 1
   else
     osascript -e "display notification \"$MSG\" with title \"$APP_NAME\""
   fi
 
   rm -f "$PID_FILE"
-) &
+) </dev/null >/dev/null 2>&1 &
 echo $! > "$PID_FILE"
 
 exit 0

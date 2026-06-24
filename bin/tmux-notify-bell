@@ -1,11 +1,25 @@
 #!/bin/bash
 
-TITLE="$1"
+if [ "$#" -ge 2 ]; then
+  PANE="$1"
+  TITLE="$2"
+else
+  PANE=""
+  TITLE="$1"
+fi
+
 ZWS=$'\xe2\x80\x8b'
 APP_NAME="${NOTIFY_AGENT_NAME:-Agent}"
 
 case "$TITLE" in
   *"$ZWS"*)
+    if [ -n "$PANE" ]; then
+      WINDOW_ACTIVE=$(tmux display-message -p -t "$PANE" '#{window_active}' 2>/dev/null)
+      PANE_ACTIVE=$(tmux display-message -p -t "$PANE" '#{pane_active}' 2>/dev/null)
+      if [ "$WINDOW_ACTIVE" = "1" ] && [ "$PANE_ACTIVE" = "1" ]; then
+        exit 0
+      fi
+    fi
     CLEAN="${TITLE//$ZWS/}"
     LABEL="${CLEAN#󰌗 }"
     MSG="$APP_NAME is waiting for input"
