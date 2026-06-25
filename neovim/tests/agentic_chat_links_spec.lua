@@ -1,6 +1,7 @@
 describe("agentic chat path:line links", function()
     local spec = require("sodium.plugins.agentic")
     local target_name = "agentic-chat-link-target.txt"
+    local home_target = vim.fn.expand("~/agentic-chat-link-target.txt")
 
     local function setup_agentic_config()
         package.loaded.agentic = {
@@ -23,6 +24,7 @@ describe("agentic chat path:line links", function()
 
     after_each(function()
         pcall(vim.fn.delete, target_name)
+        pcall(vim.fn.delete, home_target)
     end)
 
     it("adds a buffer-local gf callback for AgenticChat that opens path:line references", function()
@@ -46,6 +48,35 @@ describe("agentic chat path:line links", function()
         gf_map.callback()
 
         assert.are.equal(vim.fn.fnamemodify(target_name, ":p"), vim.api.nvim_buf_get_name(0))
+        assert.are.equal(2, vim.api.nvim_win_get_cursor(0)[1])
+    end)
+
+    it("opens Agentic smart-path references with #Lx-Ly anchors", function()
+        setup_agentic_config()
+
+        vim.fn.writefile({ "one", "two", "three" }, home_target)
+
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_set_current_buf(buf)
+        vim.bo[buf].buftype = "nofile"
+        vim.bo[buf].filetype = "AgenticChat"
+
+        local smart_path = vim.fn.fnamemodify(home_target, ":~")
+        local line = "```markdown " .. smart_path .. "#L2-L3"
+        local path_col = assert(line:find(smart_path, 1, true))
+
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+        vim.api.nvim_win_set_cursor(0, { 1, path_col })
+
+        local gf_map = find_buffer_map(buf, "gf")
+        assert.is_not_nil(gf_map)
+        assert.is_truthy(gf_map.callback)
+
+        assert.has_no.errors(function()
+            gf_map.callback()
+        end)
+
+        assert.are.equal(home_target, vim.api.nvim_buf_get_name(0))
         assert.are.equal(2, vim.api.nvim_win_get_cursor(0)[1])
     end)
 end)

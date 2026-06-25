@@ -151,7 +151,13 @@ local function current_path_reference()
     word = word:gsub("^[`(<%[]+", "")
     word = word:gsub("[`>%)%],.;]+$", "")
 
-    local path, line = word:match("^(.+):(%d+)$")
+    local path, line = word:match("^(.+)#L(%d+)%-L%d+$")
+    if not path or not line then
+        path, line = word:match("^(.+)#L(%d+)$")
+    end
+    if not path or not line then
+        path, line = word:match("^(.+):(%d+)$")
+    end
     if not path or not line then
         return
     end
