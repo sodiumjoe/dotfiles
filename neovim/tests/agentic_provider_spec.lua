@@ -1,13 +1,15 @@
 describe("agentic codex provider", function()
     local tool_call_log = vim.fn.stdpath("state") .. "/agentic-codex-tool-call.log"
 
-    local function load_agentic_setup()
+    local function load_agentic_setup(opts)
+        opts = opts or {}
         package.loaded["sodium.plugins.agentic"] = nil
         package.loaded.agentic = {
             setup = function(opts)
                 _G.__agentic_setup_opts = opts
             end,
         }
+        package.loaded["agentic.session_restore"] = opts.session_restore
 
         local ok, spec = pcall(require, "sodium.plugins.agentic")
         assert.is_true(ok)
@@ -22,19 +24,31 @@ describe("agentic codex provider", function()
         return opts
     end
 
+    local function session_ids(sessions)
+        local ids = {}
+        for i, session in ipairs(sessions or {}) do
+            ids[i] = session.sessionId
+        end
+        return ids
+    end
+
     before_each(function()
         package.loaded["agentic.acp.acp_client"] = nil
+        package.loaded["agentic.session_restore"] = nil
         package.loaded["sodium.plugins.agentic"] = nil
         package.loaded.agentic = nil
         _G.__agentic_setup_opts = nil
+        _G.__agentic_listed_sessions = nil
         pcall(vim.fn.delete, tool_call_log)
     end)
 
     after_each(function()
         package.loaded["agentic.acp.acp_client"] = nil
+        package.loaded["agentic.session_restore"] = nil
         package.loaded["sodium.plugins.agentic"] = nil
         package.loaded.agentic = nil
         _G.__agentic_setup_opts = nil
+        _G.__agentic_listed_sessions = nil
         pcall(vim.fn.delete, tool_call_log)
     end)
 
@@ -148,6 +162,54 @@ describe("agentic codex provider", function()
         assert.truthy(text:find("\"event\":\"tool_call_render_error\"", 1, true))
         assert.truthy(text:find("bad argument #1 to 'ipairs' (table expected, got userdata)", 1, true))
         assert.truthy(text:find("\"toolCallId\":\"tool-3\"", 1, true))
+    end)
+
+    it("sorts restore sessions newest-first with malformed timestamps last", function()
+        local SessionRestore = {
+            show_picker = function(current_session)
+                current_session.agent:when_ready(function()
+                    current_session.agent:list_sessions(vim.fn.getcwd(), function(result)
+                        _G.__agentic_listed_sessions = result.sessions
+                    end)
+                end)
+            end,
+        }
+
+        load_agentic_setup({ session_restore = SessionRestore })
+
+        SessionRestore.show_picker({
+            agent = {
+                when_ready = function(_, callback)
+                    callback()
+                end,
+                list_sessions = function(_, _, callback)
+                    callback({
+                        sessions = {
+                            {
+                                sessionId = "older",
+                                updatedAt = "2026-03-20T14:30:00Z",
+                            },
+                            {
+                                sessionId = "invalid",
+                                updatedAt = "not-a-date",
+                            },
+                            {
+                                sessionId = "newest",
+                                updatedAt = "2026-03-21T09:15:00Z",
+                            },
+                            {
+                                sessionId = "missing",
+                            },
+                        },
+                    }, nil)
+                end,
+            },
+        })
+
+        assert.are.same(
+            { "newest", "older", "invalid", "missing" },
+            session_ids(_G.__agentic_listed_sessions)
+        )
     end)
 
     it("documents plain path:line file references in shared instructions", function()
