@@ -1,5 +1,6 @@
-model = "gpt-5.4"
+model = "gpt-5.5"
 sandbox = "workspace-write"
+model_reasoning_effort = "high"
 
 [features]
 hooks = true
@@ -35,3 +36,11 @@ source = "http://codex-marketplace--northwest.corp.stripe.com.certproxy.localhos
 [mcp_servers.toolshed_slack]
 command = "pay"
 args = ["toolshed", "serve", "slack"]
+
+[mcp_servers.google_drive]
+command = "pay"
+args = ["toolshed", "serve", "google_drive"]
+
+[mcp_servers.toolshed_google_drive_append_to_google_drive_doc_commen--_008829]
+command = "/Users/moon/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh"
+args = ["google_drive.append_to_google_drive_doc.comment_on_google_drive_doc.create_google_drive_doc.create_google_drive_doc_tab.format_google_drive_doc.get_google_drive_doc_revision.get_google_drive_doc_tab_contents.get_google_drive_file.get_google_drive_file_comments.get_google_drive_file_name.list_google_drive_doc_revisions.list_google_drive_doc_tabs.reply_to_google_drive_comment.search_google_drive.update_google_drive_doc"]
