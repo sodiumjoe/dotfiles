@@ -110,12 +110,13 @@
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": ["toolshed"],
   "hooks": {
-    "Stop": [
+    "Notification": [
       {
+        "matcher": "idle_prompt",
         "hooks": [
           {
             "type": "command",
-            "command": "$HOME/.claude/hooks/notify-on-stop.sh",
+            "command": "$HOME/.claude/hooks/notify-on-idle.sh",
             "timeout": 5
           }
         ]

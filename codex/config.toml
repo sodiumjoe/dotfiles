@@ -5,14 +5,10 @@ model_reasoning_effort = "high"
 [features]
 hooks = true
 
-[hooks]
-Stop = [{ hooks = [{ type = "command", command = "$HOME/.claude/hooks/notify-on-stop.sh", timeout = 5 }] }]
-
-[hooks.state."/Users/moon/.codex/config.toml:stop:0:0"]
-trusted_hash = "sha256:f83e14f1d97c42b51a9f500ff546c1bfe8be50917f14fbe901f4c5bc2f0e08e3"
-
-[hooks.state."/Users/moon/.dotfiles/codex/config.toml:stop:0:0"]
-trusted_hash = "sha256:f83e14f1d97c42b51a9f500ff546c1bfe8be50917f14fbe901f4c5bc2f0e08e3"
+[tui]
+notifications = ["agent-turn-complete", "approval-requested", "plan-mode-prompt"]
+notification_method = "osc9"
+notification_condition = "unfocused"
 
 [approval]
 auto_approve = ["read_file", "list_directory", "grep", "glob", "shell:ls*", "shell:cat*", "shell:head*", "shell:tail*", "shell:grep*", "shell:rg*", "shell:find*", "shell:fd*", "shell:git log*", "shell:git diff*", "shell:git status*", "shell:git show*", "shell:git branch*", "shell:work *"]
