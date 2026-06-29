@@ -16,6 +16,7 @@ window-padding-y = 30
 window-padding-balance = true
 macos-titlebar-style = hidden
 mouse-hide-while-typing = true
+desktop-notifications = true
 
 command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
 initial-command = "/opt/homebrew/bin/tmux attach || /opt/homebrew/bin/tmux"
