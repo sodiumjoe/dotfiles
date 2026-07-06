@@ -4,10 +4,24 @@ mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 generate_instructions() {
   echo "Generating CLAUDE.md..."
-  cat shared/base-instructions.md shared/work-tracking.md shared/neovim.md claude-overlay.md > claude/CLAUDE.md
+  {
+    cat shared/base-instructions.md
+    printf '\n\n'
+    cat shared/work-tracking.md
+    printf '\n\n'
+    cat shared/neovim.md
+    printf '\n\n'
+    cat claude-overlay.md
+  } > claude/CLAUDE.md
   echo "Generating AGENTS.md..."
   mkdir -p codex
-  cat shared/base-instructions.md shared/work-tracking.md shared/neovim.md codex-overlay.md > codex/AGENTS.md
+  {
+    cat shared/base-instructions.md
+    printf '\n\n'
+    cat shared/work-tracking.md
+    printf '\n\n'
+    cat codex-overlay.md
+  } > codex/AGENTS.md
 }
 
 generate_instructions
