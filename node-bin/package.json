@@ -4,7 +4,7 @@
   "description": "Pinned npm tool binaries. Used on both local and devbox. Updated by `upgrade --npm`.",
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.49.0",
-    "@agentclientprotocol/codex-acp": "^0.0.46",
+    "@agentclientprotocol/codex-acp": "1.1.0",
     "@typescript/native-preview": "^7.0.0-dev.20260622.1",
     "@vtsls/language-server": "0.3.0",
     "defuddle-cli": "0.7.0",
