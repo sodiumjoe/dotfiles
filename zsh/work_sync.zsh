@@ -22,6 +22,25 @@ find "$projects_dir" -mindepth 1 -maxdepth 1 -type d ! -exec test -f "{}/project
   ssh "$host" "$remote_cmd"
 }
 
+_devbox_branch() {
+  local remote_name="$1"
+  print -r -- "${SODIUM_REMOTE_BRANCH_PREFIX:-moon}/$remote_name"
+}
+
+_devbox_remote_home() {
+  local host="$1"
+  ssh "$host" 'printf "%s\n" "$HOME"'
+}
+
+_devbox_remote_work_uri() {
+  local host="$1"
+  local remote_home
+
+  remote_home="$(_devbox_remote_home "$host")" || return
+  [[ -n "$remote_home" ]] || return 1
+  print -r -- "ssh://${host}/${remote_home}/stripe/work/"
+}
+
 _devbox_sync_preflight() {
   local host="$1"
   local local_projects_dir="$HOME/stripe/work/projects"
@@ -54,9 +73,12 @@ _devbox_sync_preflight() {
 
 _devbox_sync() {
   local host="$1"
+  local remote_work_uri
+
   _devbox_sync_preflight "$host" || return
-  ssh "$host" "mkdir -p ~/stripe/work" 2>/dev/null
-  unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
+  remote_work_uri="$(_devbox_remote_work_uri "$host")" || return
+  ssh "$host" 'mkdir -p "$HOME/stripe/work"' 2>/dev/null
+  unison ~/stripe/work/ "$remote_work_uri" \
     -batch -prefer newer -fastcheck true -silent \
     -ignore 'Name .DS_Store' \
     -ignore 'Name *.jsonl' \
@@ -67,9 +89,12 @@ _devbox_sync() {
 
 _devbox_sync_loop() {
   local host="$1"
+  local remote_work_uri
+
   _devbox_sync_loop_stop "$host"
   _devbox_sync_preflight "$host" || return
-  unison ~/stripe/work/ ssh://${host}//home/owner/stripe/work/ \
+  remote_work_uri="$(_devbox_remote_work_uri "$host")" || return
+  unison ~/stripe/work/ "$remote_work_uri" \
     -batch -prefer newer -fastcheck true -silent \
     -repeat 5 \
     -ignore 'Name .DS_Store' \

@@ -2,7 +2,7 @@
   name = Joe Moon
   email = joe@xoxomoon.com
 
-[includeIf "gitdir:/Users/moon/stripe/"]
+[includeIf "gitdir:~/stripe/"]
   path = ~/stripe/.gitconfig
 [includeIf "gitdir:/pay/src/"]
   path = ~/.stripe.gitconfig

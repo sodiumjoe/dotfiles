@@ -18,10 +18,10 @@ deny = ["shell:git reset --hard*", "shell:git clean -f*", "shell:rm -rf /*", "sh
 [projects."~/stripe/work"]
 trust_level = "trusted"
 
-[projects."/Users/moon/.dotfiles"]
+[projects."~/.dotfiles"]
 trust_level = "trusted"
 
-[projects."/Users/moon/stripe/mint"]
+[projects."~/stripe/mint"]
 trust_level = "trusted"
 
 [marketplaces.stripe-internal-marketplace]
@@ -38,5 +38,5 @@ command = "pay"
 args = ["toolshed", "serve", "google_drive"]
 
 [mcp_servers.toolshed_google_drive_append_to_google_drive_doc_commen--_008829]
-command = "/Users/moon/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh"
-args = ["google_drive.append_to_google_drive_doc.comment_on_google_drive_doc.create_google_drive_doc.create_google_drive_doc_tab.format_google_drive_doc.get_google_drive_doc_revision.get_google_drive_doc_tab_contents.get_google_drive_file.get_google_drive_file_comments.get_google_drive_file_name.list_google_drive_doc_revisions.list_google_drive_doc_tabs.reply_to_google_drive_comment.search_google_drive.update_google_drive_doc"]
+command = "sh"
+args = ["-lc", "exec \"$HOME/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh\" \"$@\"", "toolshed_stdio_shim", "google_drive.append_to_google_drive_doc.comment_on_google_drive_doc.create_google_drive_doc.create_google_drive_doc_tab.format_google_drive_doc.get_google_drive_doc_revision.get_google_drive_doc_tab_contents.get_google_drive_file.get_google_drive_file_comments.get_google_drive_file_name.list_google_drive_doc_revisions.list_google_drive_doc_tabs.reply_to_google_drive_comment.search_google_drive.update_google_drive_doc"]

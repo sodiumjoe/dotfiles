@@ -339,7 +339,7 @@ godev() {
 
 remote() {
   local remote_name="$1"
-  local branch="$(whoami)/$remote_name"
+  local branch="$(_devbox_branch "$remote_name")"
 
   pay remote new "$remote_name" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
 

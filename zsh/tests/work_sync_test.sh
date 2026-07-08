@@ -11,6 +11,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 capture_status=0
 capture_output=""
+unison_args=()
 
 assert_eq() {
   local desc="$1"
@@ -56,11 +57,25 @@ run_capture() {
 ssh() {
   local host="$1"
   shift
+  local command="$*"
+
   case "$host" in
     remote-dirty)
       print -r -- "remote-junk"
       ;;
     remote-clean|remote-missing)
+      return 0
+      ;;
+    remote-moon-home)
+      if [[ "$command" == *'printf "%s\n" "$HOME"'* ]]; then
+        print -r -- "/home/moon"
+      fi
+      return 0
+      ;;
+    remote-owner-home)
+      if [[ "$command" == *'printf "%s\n" "$HOME"'* ]]; then
+        print -r -- "/home/owner"
+      fi
       return 0
       ;;
     *)
@@ -69,6 +84,29 @@ ssh() {
       ;;
   esac
 }
+
+unison() {
+  unison_args=("$@")
+}
+
+echo "=== Test: remote branch prefix is stable across shell users ==="
+assert_eq "remote branch uses git identity prefix" "moon/devbox-a" "$(_devbox_branch devbox-a)"
+SODIUM_REMOTE_BRANCH_PREFIX=custom
+assert_eq \
+  "remote branch prefix can be overridden" \
+  "custom/devbox-a" \
+  "$(_devbox_branch devbox-a)"
+unset SODIUM_REMOTE_BRANCH_PREFIX
+
+echo "=== Test: remote work URI follows remote HOME ==="
+assert_eq \
+  "moon remote home produces moon work URI" \
+  "ssh://remote-moon-home//home/moon/stripe/work/" \
+  "$(_devbox_remote_work_uri remote-moon-home)"
+assert_eq \
+  "owner remote home produces owner work URI" \
+  "ssh://remote-owner-home//home/owner/stripe/work/" \
+  "$(_devbox_remote_work_uri remote-owner-home)"
 
 echo "=== Test: invalid top-level project directories ==="
 local_home="$tmpdir/home-local"
@@ -100,6 +138,14 @@ echo "=== Test: clean local and remote inventories allow sync ==="
 run_capture _devbox_sync_preflight remote-missing
 assert_eq "clean preflight exits zero" "0" "$capture_status"
 assert_eq "clean preflight is quiet" "" "$capture_output"
+
+echo "=== Test: sync uses resolved remote work URI ==="
+run_capture _devbox_sync remote-moon-home
+assert_eq "sync exits zero with moon remote home" "0" "$capture_status"
+assert_eq \
+  "sync passes moon remote home to unison" \
+  "ssh://remote-moon-home//home/moon/stripe/work/" \
+  "${unison_args[2]}"
 
 echo ""
 echo "Results: $pass passed, $fail failed"
