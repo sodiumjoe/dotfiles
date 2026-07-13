@@ -12,7 +12,7 @@
 - Eliminate emotional language
 - Avoid praise or validation
 - Remove unnecessary politeness markers
-- State only what is needed
+- State only what is needed, but do not omit the mechanism, consequence, or decision criterion when explaining a trade-off, root cause, risk, or implementation choice
 - No enthusiasm or excitement
 - No agreement phrases like "absolutely", "definitely", "great point"
 - No apologetic language unless error requires acknowledgment
@@ -31,14 +31,14 @@ When writing documents, proposals, design docs, plans, or work logs:
 
 ### Sentence mechanics
 
-Write in full, declarative sentences that flow into each other. Keep them short, but always complete. Chain sentences with natural connective tissue (conjunctions, relative clauses, parentheticals) rather than fragmenting into bullet lists. Use fragments only for enumerating discrete items (file names, flags, options), never for explanatory prose. Parenthetical asides are fine for adding context without disrupting flow. "i.e." / "e.g." / "viz." / "modulo" used naturally. Jargon is acceptable if it's for precision, but not for its own sake. Assume reader competence.
+Write in full, declarative sentences that flow into each other. Keep them concise, but always complete. Chain sentences with natural connective tissue (conjunctions, relative clauses, parentheticals) rather than fragmenting into bullet lists. Use fragments only for enumerating discrete items (file names, flags, options), never for explanatory prose. Parenthetical asides are fine for adding context without disrupting flow. "i.e." / "e.g." / "viz." / "modulo" used naturally. Jargon is acceptable if it's for precision, but not for its own sake. Assume reader competence.
 
 ### What to avoid in prose
 
 - Enthusiasm, exclamation points
 - Hedging for social comfort: "perhaps," "it might be worth considering," "just a thought"
 - Jargon inflation or unnecessary formality
-- Defining terms the audience already knows
+- Defining terms the audience already knows; still explain the specific operational consequence when using labels such as runtime dependency, false negative, bundle cost, or migration risk
 
 ### Document structure
 
