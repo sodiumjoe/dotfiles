@@ -91,6 +91,19 @@ function parseChangelog(filePath, pattern, { quiet } = {}) {
   }
 }
 
+function hasActiveSiblingPlans(slug) {
+  const dir = projectDir(slug);
+  if (!fs.existsSync(dir)) return false;
+  const files = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".md") && f !== "project.md");
+  return files.some((file) => {
+    const planContent = fs.readFileSync(path.join(dir, file), "utf-8");
+    const planFm = parseFrontmatter(planContent);
+    return planFm.status === "active";
+  });
+}
+
 function completeProjects({ quiet } = {}) {
   if (!fs.existsSync(PROJECT_DIR)) return [];
   const entries = fs.readdirSync(PROJECT_DIR, { withFileTypes: true });
@@ -109,6 +122,7 @@ function completeProjects({ quiet } = {}) {
     const tasks = extractSection(content, "Tasks");
     const openTasks = tasks.filter((l) => /^- \[[ /]\]/.test(l));
     if (openTasks.length > 0) continue;
+    if (hasActiveSiblingPlans(slug)) continue;
     const changelog = extractSection(content, "Changelog");
     const openChangelog = changelog.filter((l) => /^- \[ \]/.test(l));
     const done = changelog.filter((l) => /^- \[x\]/.test(l));

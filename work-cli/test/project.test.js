@@ -300,6 +300,42 @@ status: active
       assert.ok(result.includes("status: active"));
     });
 
+    it("blocks completion when a sibling plan is active", () => {
+      writeProject(
+        "with-active-plan",
+        `---
+status: active
+---
+
+# With Active Plan
+
+## Changelog
+- [x] Done ✅ 2026-03-01
+
+## Notes`,
+      );
+      writePlanInProject(
+        "with-active-plan",
+        "active-plan.md",
+        `---
+status: active
+project: "[[projects/with-active-plan/project]]"
+---
+
+# Active Plan
+
+## Tasks
+- [ ] Not done yet`,
+      );
+
+      const { completeProjects } = requireFresh();
+      const completed = completeProjects({ quiet: true });
+      assert.equal(completed.length, 0);
+
+      const result = fs.readFileSync(projectPath("with-active-plan"), "utf-8");
+      assert.ok(result.includes("status: active"));
+    });
+
     it("does not duplicate completed_at on re-run", () => {
       writeProject(
         "no-dup",
