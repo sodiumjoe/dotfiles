@@ -41,10 +41,16 @@ fi
     fi
   fi
 
-  if [ -n "$LABEL" ]; then
-    MSG="$APP_NAME is waiting for input ($LABEL)"
+  if [ -f "$BOX_TYPE_FILE" ]; then
+    ORIGIN="${remote_name:-devbox}"
   else
-    MSG="$APP_NAME is waiting for input"
+    ORIGIN="local"
+  fi
+
+  if [ -n "$LABEL" ]; then
+    MSG="$APP_NAME is waiting for input on $ORIGIN ($LABEL)"
+  else
+    MSG="$APP_NAME is waiting for input on $ORIGIN"
   fi
 
   if [ -f "$BOX_TYPE_FILE" ]; then

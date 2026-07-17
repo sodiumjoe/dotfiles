@@ -16,10 +16,16 @@ if [ -z "$LABEL" ]; then
   LABEL=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null)
 fi
 
-if [ -n "$LABEL" ]; then
-  MSG="$APP_NAME is waiting for input ($LABEL)"
+if [ -n "$PANE" ] && [ -f "$BOX_TYPE_FILE" ]; then
+  ORIGIN="${remote_name:-devbox}"
 else
-  MSG="$APP_NAME is waiting for input"
+  ORIGIN="local"
+fi
+
+if [ -n "$LABEL" ]; then
+  MSG="$APP_NAME is waiting for input on $ORIGIN ($LABEL)"
+else
+  MSG="$APP_NAME is waiting for input on $ORIGIN"
 fi
 
 if [ -n "$PANE" ] && [ ! -f "$BOX_TYPE_FILE" ]; then

@@ -38,7 +38,8 @@ assert_empty() {
 }
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-NOTIFY="$ROOT/claude/hooks/notify-on-stop.sh"
+STOP_NOTIFY="$ROOT/claude/hooks/notify-on-stop.sh"
+IDLE_NOTIFY="$ROOT/claude/hooks/notify-on-idle.sh"
 BELL="$ROOT/bin/tmux-notify-bell"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
@@ -146,13 +147,24 @@ run_notify() {
   else
     unset NOTIFY_AGENT_NAME
   fi
-  "$NOTIFY"
+  "$STOP_NOTIFY"
   for _ in {1..100}; do
     if [[ -f "$OSASCRIPT_LOG" ]]; then
       break
     fi
     /bin/sleep 0.01
   done
+  read_log "$OSASCRIPT_LOG"
+}
+
+run_idle_notify() {
+  reset_test_env
+  if [[ $# -gt 0 ]]; then
+    export NOTIFY_AGENT_NAME="$1"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  "$IDLE_NOTIFY"
   read_log "$OSASCRIPT_LOG"
 }
 
@@ -167,7 +179,7 @@ run_notify_devbox() {
   else
     unset NOTIFY_AGENT_NAME
   fi
-  "$NOTIFY"
+  "$STOP_NOTIFY"
   for _ in {1..100}; do
     if [[ -f "$TMUX_NOTIFY_FILE" ]]; then
       break
@@ -207,7 +219,7 @@ assert_notify_closes_promptly() {
   local output
   reset_test_env
   set_lingering_sleep
-  export NOTIFY
+  export NOTIFY="$STOP_NOTIFY"
   if output=$(node <<'EOF'
 const { spawn } = require('child_process');
 
@@ -243,24 +255,32 @@ EOF
 }
 
 out=$(run_notify)
-assert_contains "notify default message is generic" 'Agent is waiting for input (dotfiles)' "$out"
+assert_contains "notify default message includes local origin" 'Agent is waiting for input on local (dotfiles)' "$out"
 assert_contains "notify default title is generic" 'with title "Agent"' "$out"
 
 out=$(run_notify "Codex")
-assert_contains "notify override message uses agent name" 'Codex is waiting for input (dotfiles)' "$out"
+assert_contains "notify override message includes local origin" 'Codex is waiting for input on local (dotfiles)' "$out"
 assert_contains "notify override title uses agent name" 'with title "Codex"' "$out"
+
+out=$(run_idle_notify)
+assert_contains "idle notify default message includes local origin" 'Claude is waiting for input on local (dotfiles)' "$out"
+assert_eq "idle notify default osascript args include title" '- Claude is waiting for input on local (dotfiles) Claude' "$out"
+
+out=$(run_idle_notify "Agent")
+assert_contains "idle notify override message includes local origin" 'Agent is waiting for input on local (dotfiles)' "$out"
+assert_eq "idle notify override osascript args include title" '- Agent is waiting for input on local (dotfiles) Agent' "$out"
 
 run_notify_devbox
 assert_eq "devbox notify flips bell even when remote pane reports active" "1" "$(read_log "$TMUX_NOTIFY_FILE")"
 assert_empty "devbox notify does not invoke local osascript" "$(read_log "$OSASCRIPT_LOG")"
 
 out=$(run_bell)
-assert_contains "bell default message is generic" 'Agent is waiting for input' "$out"
+assert_contains "bell default message includes devbox origin" 'Agent is waiting for input on [test]devbox' "$out"
 assert_contains "bell default title is generic" 'with title "Agent"' "$out"
 assert_contains "bell keeps subtitle" 'subtitle "[test]devbox"' "$out"
 
 out=$(run_bell "Codex")
-assert_contains "bell override message uses agent name" 'Codex is waiting for input' "$out"
+assert_contains "bell override message includes devbox origin" 'Codex is waiting for input on [test]devbox' "$out"
 assert_contains "bell override title uses agent name" 'with title "Codex"' "$out"
 
 TMUX_WINDOW_ACTIVE=1
@@ -271,7 +291,7 @@ assert_empty "bell suppresses active pane notifications" "$out"
 TMUX_WINDOW_ACTIVE=0
 TMUX_PANE_ACTIVE=0
 out=$(run_bell_with_pane "%42" "$(printf '\u200b󰌗 [test]devbox')" "Codex")
-assert_contains "bell notifies inactive panes" 'Codex is waiting for input' "$out"
+assert_contains "bell notifies inactive panes with origin" 'Codex is waiting for input on [test]devbox' "$out"
 assert_contains "bell includes subtitle for inactive pane" 'subtitle "[test]devbox"' "$out"
 
 assert_notify_closes_promptly

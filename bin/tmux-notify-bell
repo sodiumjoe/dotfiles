@@ -22,7 +22,11 @@ case "$TITLE" in
     fi
     CLEAN="${TITLE//$ZWS/}"
     LABEL="${CLEAN#󰌗 }"
-    MSG="$APP_NAME is waiting for input"
+    if [ -n "$LABEL" ]; then
+      MSG="$APP_NAME is waiting for input on $LABEL"
+    else
+      MSG="$APP_NAME is waiting for input on devbox"
+    fi
     osascript -e "display notification \"${MSG//\"/\\\"}\" with title \"${APP_NAME//\"/\\\"}\" subtitle \"${LABEL//\"/\\\"}\""
     ;;
 esac
