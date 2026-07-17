@@ -974,6 +974,20 @@ return {
             return ""
         end
 
+        local function notify_agent_response_complete()
+            local notify = vim.fn.expand("$HOME/.claude/hooks/notify-on-idle.sh")
+            if vim.fn.executable(notify) ~= 1 then
+                return
+            end
+
+            vim.fn.jobstart({ notify }, {
+                detach = true,
+                env = {
+                    NOTIFY_AGENT_NAME = "Agent",
+                },
+            })
+        end
+
         patch_agentic_acp_client()
         patch_agentic_session_restore()
 
@@ -1033,6 +1047,9 @@ return {
                 code = noop,
                 files = noop,
                 todos = noop,
+            },
+            hooks = {
+                on_response_complete = notify_agent_response_complete,
             },
         })
 

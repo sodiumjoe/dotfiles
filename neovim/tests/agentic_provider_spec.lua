@@ -87,6 +87,42 @@ describe("agentic codex provider", function()
         assert.are.equal("litellm", provider.env.MODEL_PROVIDER)
     end)
 
+    it("runs the agent notification hook when a response completes", function()
+        local original_jobstart = vim.fn.jobstart
+        local captured_cmd
+        local captured_opts
+
+        vim.fn.jobstart = function(cmd, opts)
+            captured_cmd = cmd
+            captured_opts = opts
+            return 1
+        end
+
+        local ok, err = pcall(function()
+            local opts = load_agentic_setup()
+            assert.is_function(opts.hooks.on_response_complete)
+
+            opts.hooks.on_response_complete({
+                session_id = "session-1",
+                tab_page_id = 1,
+                success = true,
+            })
+        end)
+
+        vim.fn.jobstart = original_jobstart
+
+        if not ok then
+            error(err)
+        end
+
+        assert.are.same(
+            { vim.fn.expand("$HOME/.claude/hooks/notify-on-idle.sh") },
+            captured_cmd
+        )
+        assert.are.same({ NOTIFY_AGENT_NAME = "Agent" }, captured_opts.env)
+        assert.is_true(captured_opts.detach)
+    end)
+
     it("tolerates tool calls with vim.NIL content", function()
         load_agentic_setup()
         local ACPClient = require("agentic.acp.acp_client")
