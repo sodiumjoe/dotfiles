@@ -4,7 +4,7 @@ description: Use when implementing any feature or bugfix, before writing impleme
 plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: test-driven-development
-content_hash: 7dee67b4af6bdccc7a914ca34533184d64592d0f5b23aeae631538168db14994
+content_hash: b5b4717b8b761cce15a6cfe9022e33fd959e0894c0c39d72c9cb49c23486c10e
 ---
 
 # Test-Driven Development (TDD)
@@ -360,7 +360,7 @@ Never fix bugs without a test.
 
 ## Testing Anti-Patterns
 
-When adding mocks or test utilities, read @testing-anti-patterns.md to avoid common pitfalls:
+When adding mocks or test utilities, read [testing-anti-patterns.md](testing-anti-patterns.md) to avoid common pitfalls:
 - Testing mock behavior instead of real behavior
 - Adding test-only methods to production classes
 - Mocking without understanding dependencies

@@ -4,7 +4,7 @@ description: Use when receiving code review feedback, before implementing sugges
 plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: receiving-code-review
-content_hash: c9382e92b8f32363566068ecfed19d3b2651eaf40d3942b24840f839dedfc406
+content_hash: 647036bbdab7bf2317e14e079595e984c9030f64295e2b4c0fb57dbeb48f25dd
 ---
 
 # Code Review Reception
@@ -31,7 +31,7 @@ WHEN receiving code review feedback:
 ## Forbidden Responses
 
 **NEVER:**
-- "You're absolutely right!" (explicit CLAUDE.md violation)
+- "You're absolutely right!" (explicit instruction-file violation)
 - "Great point!" / "Excellent feedback!" (performative)
 - "Let me implement that now" (before verification)
 
@@ -130,7 +130,7 @@ Push back when:
 - Reference working tests/code
 - Involve your human partner if architectural
 
-**Signal if uncomfortable pushing back out loud:** "Strange things are afoot at the Circle K"
+**If you're uncomfortable pushing back out loud:** Name that tension, then tell your partner about the issue you've seen. They'll appreciate your honesty.
 
 ## Acknowledging Correct Feedback
 

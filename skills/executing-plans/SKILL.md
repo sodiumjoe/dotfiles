@@ -1,32 +1,31 @@
 ---
 name: executing-plans
-description: Use when you have a written implementation plan to execute with review checkpoints
+description: Use when you have a written implementation plan to execute in a separate session with review checkpoints
 plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: executing-plans
-content_hash: d099fa42fd7518f4dafa9f2d51c1c08fce970490d57682b6acd3e7a57bb55b52
+content_hash: b357c2a2e5bf24adf237b5d4a83cacd828f07b886d0873ad91546aa3c99905c9
 ---
 
 # Executing Plans
 
 ## Overview
 
-Load plan, review critically, execute tasks in batches, report for review between batches.
+Load plan, review critically, execute all tasks, report when complete.
 
-**Core principle:** Batch execution with checkpoints for review.
+**Announce at start:** "I'm using the executing-plans skill to implement this plan."
 
-**Announce at start:** "I'm using the work:executing-plans skill to implement this plan."
+**Note:** Tell your human partner that this workflow works much better with access to subagents. The quality of its work will be significantly higher if run on a platform with subagent support (Claude Code, Codex CLI, Codex App, Copilot CLI, and Gemini CLI all qualify; see the per-platform tool references in the skill-loading skill). If subagents are available, use subagent-driven-development instead of this skill.
 
 ## The Process
 
 ### Step 1: Load and Review Plan
-1. Read plan file (path provided by user or derived from project context)
-2. Review critically — identify any questions or concerns
-3. If concerns: raise them before starting
-4. If no concerns: create TodoWrite and proceed
+1. Read plan file
+2. Review critically - identify any questions or concerns about the plan
+3. If concerns: Raise them with your human partner before starting
+4. If no concerns: Create todos for the plan items and proceed
 
-### Step 2: Execute Batch
-**Default: first 3 tasks**
+### Step 2: Execute Tasks
 
 For each task:
 1. Mark as in_progress
@@ -34,41 +33,47 @@ For each task:
 3. Run verifications as specified
 4. Mark as completed
 
-### Step 3: Report
-When batch complete:
-- Show what was implemented
-- Show verification output
-- Say: "Ready for feedback."
+### Step 3: Complete Development
 
-### Step 4: Continue
-Based on feedback:
-- Apply changes if needed
-- Execute next batch
-- Repeat until complete
-
-### Step 5: Complete
 After all tasks complete and verified:
-1. Set `status: completed` in the plan's frontmatter
-2. Log completion to the project changelog:
+1. Set `status: done` in the plan frontmatter.
+2. Record completion through the work CLI:
    ```bash
-   work complete <project-file> "<plan-title>"
+   work complete <project-slug-or-file> "<plan title>"
    ```
-3. Use work:finishing-a-development-branch to complete the work
+3. Announce: "I'm using the finishing-a-development-branch skill to complete this work."
+4. **REQUIRED SUB-SKILL:** Use finishing-a-development-branch.
+5. Follow that skill to verify tests, present options, execute choice
 
-## When to Stop
+## When to Stop and Ask for Help
 
 **STOP executing immediately when:**
 - Hit a blocker (missing dependency, test fails, instruction unclear)
-- Plan has critical gaps
+- Plan has critical gaps preventing starting
 - You don't understand an instruction
 - Verification fails repeatedly
 
 **Ask for clarification rather than guessing.**
 
+## When to Revisit Earlier Steps
+
+**Return to Review (Step 1) when:**
+- Partner updates the plan based on your feedback
+- Fundamental approach needs rethinking
+
+**Don't force through blockers** - stop and ask.
+
 ## Remember
 - Review plan critically first
 - Follow plan steps exactly
 - Don't skip verifications
-- Between batches: report and wait
+- Reference skills when plan says to
 - Stop when blocked, don't guess
 - Never start implementation on main/master branch without explicit user consent
+
+## Integration
+
+**Required workflow skills:**
+- **using-git-worktrees** - Ensures isolated workspace (creates one or verifies existing)
+- **writing-plans** - Creates the plan this skill executes
+- **finishing-a-development-branch** - Complete development after all tasks

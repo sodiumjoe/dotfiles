@@ -4,7 +4,7 @@ description: Use when encountering any bug, test failure, or unexpected behavior
 plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: systematic-debugging
-content_hash: 4999cb851360485eca5074e727bbdd62ef20549c5d5b01216fcbf5831badb473
+content_hash: 3b20719eca4f0461cb51a195221320d775dcf03b6859271066a03a5132a6ce7a
 ---
 
 # Systematic Debugging
@@ -180,7 +180,7 @@ You MUST complete each phase before proceeding to the next.
    - Automated test if possible
    - One-off test script if no framework
    - MUST have before fixing
-   - Use the `work:test-driven-development` skill for writing proper failing tests
+   - Use the `test-driven-development` skill for writing proper failing tests
 
 2. **Implement Single Fix**
    - Address the root cause identified
@@ -241,7 +241,7 @@ If you catch yourself thinking:
 - "Is that not happening?" - You assumed without verifying
 - "Will it show us...?" - You should have added evidence gathering
 - "Stop guessing" - You're proposing fixes without understanding
-- "Ultrathink this" - Question fundamentals, not just symptoms
+- "Ultra-think this" - Question fundamentals, not just symptoms
 - "We're stuck?" (frustrated) - Your approach isn't working
 
 **When you see these:** STOP. Return to Phase 1.
@@ -288,8 +288,8 @@ These techniques are part of systematic debugging and available in this director
 - **`condition-based-waiting.md`** - Replace arbitrary timeouts with condition polling
 
 **Related skills:**
-- **work:test-driven-development** - For creating failing test case (Phase 4, Step 1)
-- **work:verification-before-completion** - Verify fix worked before claiming success
+- **test-driven-development** - For creating failing test case (Phase 4, Step 1)
+- **verification-before-completion** - Verify fix worked before claiming success
 
 ## Real-World Impact
 
