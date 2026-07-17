@@ -1087,7 +1087,7 @@ return {
         {
             "<leader>an",
             function()
-                require("agentic").new_session()
+                require("agentic").new_session_with_provider()
             end,
             mode = { "n" },
             desc = "New Agentic Chat session",

@@ -58,6 +58,30 @@ describe("keymaps", function()
             return false
         end
 
+        local function find_spec_key(specs, lhs)
+            if type(specs) ~= "table" then
+                return nil
+            end
+            if specs[1] and type(specs[1]) == "string" then
+                if specs.keys then
+                    for _, key in ipairs(specs.keys) do
+                        local key_lhs = type(key) == "table" and key[1] or key
+                        if key_lhs == lhs then
+                            return key
+                        end
+                    end
+                end
+                return nil
+            end
+            for _, spec in ipairs(specs) do
+                local key = find_spec_key(spec, lhs)
+                if key then
+                    return key
+                end
+            end
+            return nil
+        end
+
         local pickers = require("sodium.plugins.pickers")
         local editing = require("sodium.plugins.editing")
 
@@ -85,6 +109,29 @@ describe("keymaps", function()
         if ok then
             it("declares leader-a= in agentic spec", function()
                 assert.is_true(spec_has_key(agentic, "<leader>a="))
+            end)
+
+            it("maps leader-an to the provider picker", function()
+                local key = find_spec_key(agentic, "<leader>an")
+                assert.is_not_nil(key)
+                assert.is_function(key[2])
+
+                local original_agentic = package.loaded.agentic
+                local called = false
+                package.loaded.agentic = {
+                    new_session_with_provider = function()
+                        called = true
+                    end,
+                }
+
+                local ok2, err = pcall(key[2])
+                package.loaded.agentic = original_agentic
+
+                if not ok2 then
+                    error(err)
+                end
+
+                assert.is_true(called)
             end)
 
             it("declares leader-pr in agentic spec", function()
