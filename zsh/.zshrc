@@ -313,12 +313,12 @@ remotes() {
   local picked=$(fzf < <(fetch_remotes))
   [ -z "$picked" ] && return 0
   local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
-  local host=$(pay remote ssh "$remote_name" -- hostname)
+  local host=$(_devbox_host_for_remote "$remote_name")
 
   _devbox_sync "$host"
   _devbox_sync_loop "$host"
 
-  ssh -t "$host" "tmux a || tmux"
+  _devbox_attach_tmux "$host"
   local exit_code=$?
   tmux unnest 2>/dev/null
 
@@ -343,12 +343,12 @@ remote() {
 
   pay remote new "$remote_name" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
 
-  local host=$(pay remote ssh "$remote_name" -- hostname)
+  local host=$(_devbox_host_for_remote "$remote_name")
 
   _devbox_sync "$host"
   _devbox_sync_loop "$host"
 
-  ssh -t "$host" "tmux a || tmux"
+  _devbox_attach_tmux "$host"
   local exit_code=$?
   tmux unnest 2>/dev/null
 

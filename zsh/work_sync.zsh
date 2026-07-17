@@ -27,6 +27,16 @@ _devbox_branch() {
   print -r -- "${SODIUM_REMOTE_BRANCH_PREFIX:-moon}/$remote_name"
 }
 
+_devbox_host_for_remote() {
+  local remote_name="$1"
+  pay remote list --raw | jq -er --arg name "$remote_name" '.[] | select(.name == $name) | .host'
+}
+
+_devbox_attach_tmux() {
+  local host="$1"
+  ssh -t "$host" "/usr/bin/tmux a || /usr/bin/tmux"
+}
+
 _devbox_remote_home() {
   local host="$1"
   ssh "$host" 'printf "%s\n" "$HOME"'
@@ -103,7 +113,7 @@ _devbox_sync_loop() {
     -ignore 'Name node_modules' \
     -logfile /tmp/unison-sync-${host}.log \
     &>/dev/null &
-  echo $! > /tmp/unison-sync-${host}.pid
+  echo $! >| /tmp/unison-sync-${host}.pid
 }
 
 _devbox_sync_loop_stop() {
