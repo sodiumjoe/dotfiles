@@ -309,8 +309,33 @@ local function get_agentic_mode()
     return ""
 end
 
+local function get_agentic_context()
+    if vim.bo.filetype ~= "AgenticChat" then
+        return ""
+    end
+    local ok, session_registry = pcall(require, "agentic.session_registry")
+    if not ok then
+        return ""
+    end
+    local tab_page_id = vim.api.nvim_get_current_tabpage()
+    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
+    if not session_manager or not session_manager.session_state then
+        return ""
+    end
+    local used = session_manager.session_state:get_context_used()
+    local size = session_manager.session_state:get_context_size()
+    if not used or not size then
+        return ""
+    end
+    return used .. "/" .. size
+end
+
 local separator_before_agentic_status = separator_if(function()
     return vim.bo.filetype == "AgenticChat"
+end)
+
+local separator_before_agentic_context = separator_if(function()
+    return vim.bo.filetype == "AgenticChat" and get_agentic_context() ~= ""
 end)
 
 local separator_before_agentic_mode = separator_if(function()
@@ -345,6 +370,13 @@ lualine.setup({
                             return vim.bo.filetype == "AgenticChat"
                         end,
                     },
+                    separator_before_agentic_context,
+                    {
+                        get_agentic_context,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
                     separator_before_agentic_mode,
                     {
                         get_agentic_mode,
@@ -366,6 +398,13 @@ lualine.setup({
                     separator_before_agentic_status,
                     {
                         get_agentic_status,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
+                    separator_before_agentic_context,
+                    {
+                        get_agentic_context,
                         cond = function()
                             return vim.bo.filetype == "AgenticChat"
                         end,
