@@ -107,9 +107,7 @@ end
 local function fallback_tool_call_message(update, normalized)
     local source = type(update) == "table" and update or {}
     local message = {
-        tool_call_id = normalized.toolCallId
-            or type(source.toolCallId) == "string" and source.toolCallId
-            or nil,
+        tool_call_id = normalized.toolCallId or type(source.toolCallId) == "string" and source.toolCallId or nil,
     }
 
     if normalized.kind then
@@ -205,10 +203,7 @@ local function days_from_civil(year, month, day)
     local year_of_era = year - era * 400
     local month_prime = month + (month > 2 and -3 or 9)
     local day_of_year = math.floor((153 * month_prime + 2) / 5) + day - 1
-    local day_of_era = year_of_era * 365
-        + math.floor(year_of_era / 4)
-        - math.floor(year_of_era / 100)
-        + day_of_year
+    local day_of_era = year_of_era * 365 + math.floor(year_of_era / 4) - math.floor(year_of_era / 100) + day_of_year
 
     return era * 146097 + day_of_era - 719468
 end
@@ -218,9 +213,8 @@ local function session_updated_at_sort_key(updated_at)
         return nil
     end
 
-    local year, month, day, hour, min, sec, remainder = updated_at:match(
-        "^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)(.*)$"
-    )
+    local year, month, day, hour, min, sec, remainder =
+        updated_at:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)(.*)$")
     if not year then
         return nil
     end
@@ -237,9 +231,7 @@ local function session_updated_at_sort_key(updated_at)
         if remainder == "Z" or remainder == "z" then
             zone = remainder
         elseif remainder ~= "" then
-            local sign, zone_hour, zone_min = remainder:match(
-                "^([%+%-])(%d%d):?(%d%d)$"
-            )
+            local sign, zone_hour, zone_min = remainder:match("^([%+%-])(%d%d):?(%d%d)$")
             if not sign then
                 return nil
             end
@@ -936,21 +928,14 @@ return {
                 agent.list_sessions = function(self, cwd, callback)
                     local function wrapped_callback(result, err)
                         if type(result) == "table" and type(result.sessions) == "table" then
-                            result.sessions = sort_sessions_reverse_chrono(
-                                result.sessions
-                            )
+                            result.sessions = sort_sessions_reverse_chrono(result.sessions)
                         end
 
                         agent.list_sessions = original_list_sessions
                         return callback(result, err)
                     end
 
-                    local ok2, result_or_err = pcall(
-                        original_list_sessions,
-                        self,
-                        cwd,
-                        wrapped_callback
-                    )
+                    local ok2, result_or_err = pcall(original_list_sessions, self, cwd, wrapped_callback)
                     if not ok2 then
                         agent.list_sessions = original_list_sessions
                         error(result_or_err)
@@ -1080,7 +1065,13 @@ return {
         {
             "<leader>ac",
             function()
-                require("agentic").toggle()
+                local SessionRegistry = require("agentic.session_registry")
+                local tab_page_id = vim.api.nvim_get_current_tabpage()
+                if SessionRegistry.sessions[tab_page_id] then
+                    require("agentic").toggle()
+                else
+                    require("agentic").new_session_with_provider()
+                end
             end,
             mode = { "n" },
             desc = "Toggle Agentic Chat",
