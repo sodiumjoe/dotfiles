@@ -1021,40 +1021,12 @@ return {
                 return
             end
 
-            local show_picker = SessionRestore.show_picker
-            SessionRestore.show_picker = function(current_session)
-                local agent = current_session and current_session.agent
-                local original_list_sessions = agent and agent.list_sessions
-                if type(original_list_sessions) ~= "function" then
-                    return show_picker(current_session)
-                end
-
-                agent.list_sessions = function(self, cwd, callback)
-                    local function wrapped_callback(result, err)
-                        if type(result) == "table" and type(result.sessions) == "table" then
-                            result.sessions = sort_sessions_reverse_chrono(result.sessions)
-                        end
-
-                        agent.list_sessions = original_list_sessions
-                        return callback(result, err)
-                    end
-
-                    local ok2, result_or_err = pcall(original_list_sessions, self, cwd, wrapped_callback)
-                    if not ok2 then
-                        agent.list_sessions = original_list_sessions
-                        error(result_or_err)
-                    end
-
-                    return result_or_err
-                end
-
-                local ok2, result_or_err = pcall(show_picker, current_session)
-                if not ok2 then
-                    agent.list_sessions = original_list_sessions
-                    error(result_or_err)
-                end
-
-                return result_or_err
+            local ChatHistory = require("agentic.ui.chat_history")
+            local original_list_sessions = ChatHistory.list_sessions
+            ChatHistory.list_sessions = function(callback)
+                return original_list_sessions(function(sessions)
+                    callback(sort_sessions_reverse_chrono(sessions))
+                end)
             end
             SessionRestore._sodium_reverse_chrono_patch = true
         end
