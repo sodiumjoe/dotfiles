@@ -305,7 +305,7 @@ local function start_project_session(proj)
     local AgentInstance = require("agentic.acp.agent_instance")
     local SessionRegistry = require("agentic.session_registry")
 
-    local provider = Config.provider or "claude-acp"
+    local provider = Config.provider or "claude-agent-acp"
     local instance = AgentInstance._instances[provider]
     if instance then
         SessionRegistry.destroy_session()
@@ -783,19 +783,42 @@ local function new_session_with_provider(opts)
         return a < b
     end)
 
-    vim.ui.select(installed, {
-        prompt = "Select provider:",
-        format_item = function(name)
-            if name == default then
-                return name .. " (default)"
+    local items = {}
+    for i, name in ipairs(installed) do
+        local provider_config = Config.acp_providers[name]
+        items[i] = {
+            text = name,
+            provider_name = name,
+            sort_idx = i,
+            command = provider_config and provider_config.command or "",
+        }
+    end
+
+    Snacks.picker({
+        title = "Provider",
+        items = items,
+        preview = false,
+        sort = function(a, b)
+            if a.score ~= b.score then
+                return a.score > b.score
             end
-            return name
+            return a.sort_idx < b.sort_idx
         end,
-    }, function(selected)
-        if selected then
-            start_with(selected)
-        end
-    end)
+        format = function(item)
+            local ret = { { item.provider_name } }
+            if item.provider_name == default then
+                ret[#ret + 1] = { " (default)", "SnacksPickerDir" }
+            end
+            return ret
+        end,
+        confirm = function(picker, item)
+            if not item then
+                return
+            end
+            picker:close()
+            start_with(item.provider_name)
+        end,
+    })
 end
 
 local function pick_pr_for_review()
@@ -1038,11 +1061,10 @@ return {
                 enabled = false,
             },
             border_style = "boxed",
-            -- provider = "claude-acp",
             provider = "codex-acp",
-            -- provider = "gemini-acp",
             acp_providers = {
-                ["claude-acp"] = {
+                ["claude-acp"] = false,
+                ["claude-agent-acp"] = {
                     command = "claude-agent-acp",
                     env = {
                         NODE_NO_WARNINGS = "1",
