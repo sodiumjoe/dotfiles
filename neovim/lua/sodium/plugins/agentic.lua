@@ -744,6 +744,60 @@ local function send_annotations_to_agentic()
     end)
 end
 
+local function new_session_with_provider(opts)
+    local Config = require("agentic.config")
+    local ACPHealth = require("agentic.acp.acp_health")
+
+    local installed = {}
+    for _, name in ipairs(ACPHealth.get_default_provider_names()) do
+        local provider_config = Config.acp_providers[name]
+        if provider_config and ACPHealth.is_command_available(provider_config.command) then
+            installed[#installed + 1] = name
+        end
+    end
+
+    if #installed == 0 then
+        vim.notify("No ACP providers installed", vim.log.levels.ERROR)
+        return
+    end
+
+    local function start_with(provider_name)
+        local merged = vim.tbl_deep_extend("force", opts or {}, { provider = provider_name })
+        require("agentic").new_session(merged)
+    end
+
+    if #installed == 1 then
+        start_with(installed[1])
+        return
+    end
+
+    -- Sort: current/default provider first
+    local default = Config.provider
+    table.sort(installed, function(a, b)
+        if a == default then
+            return true
+        end
+        if b == default then
+            return false
+        end
+        return a < b
+    end)
+
+    vim.ui.select(installed, {
+        prompt = "Select provider:",
+        format_item = function(name)
+            if name == default then
+                return name .. " (default)"
+            end
+            return name
+        end,
+    }, function(selected)
+        if selected then
+            start_with(selected)
+        end
+    end)
+end
+
 local function pick_pr_for_review()
     local review = require("sodium.review")
     vim.system({
@@ -1070,7 +1124,7 @@ return {
                 if SessionRegistry.sessions[tab_page_id] then
                     require("agentic").toggle()
                 else
-                    require("agentic").new_session_with_provider()
+                    new_session_with_provider()
                 end
             end,
             mode = { "n" },
@@ -1094,9 +1148,7 @@ return {
         },
         {
             "<leader>an",
-            function()
-                require("agentic").new_session_with_provider()
-            end,
+            new_session_with_provider,
             mode = { "n" },
             desc = "New Agentic Chat session",
         },
