@@ -1082,6 +1082,9 @@ return {
                     Snacks.picker({
                         title = "Select session to restore",
                         items = items,
+                        win = {
+                            preview = { wo = { number = false, relativenumber = false } },
+                        },
                         preview = function(ctx)
                             local item = ctx.item
                             if not item or not item.session_id then
