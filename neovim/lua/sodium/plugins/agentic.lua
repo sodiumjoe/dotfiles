@@ -5,6 +5,25 @@ local agentic_tool_call_log = vim.fn.stdpath("state") .. "/agentic-codex-tool-ca
 
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
 
+local picker_layout_no_preview = {
+    reverse = true,
+    layout = {
+        box = "vertical",
+        backdrop = false,
+        width = 0.9,
+        height = 0.9,
+        border = "none",
+        { win = "list", title = " Results ", title_pos = "center", border = "rounded" },
+        {
+            win = "input",
+            height = 1,
+            border = "rounded",
+            title = "{title} {live} {flags}",
+            title_pos = "center",
+        },
+    },
+}
+
 local function serialize_tool_call_value(value, seen)
     if value == vim.NIL then
         return "vim.NIL"
@@ -540,7 +559,7 @@ local function pick_task_state()
                     title = "Select Project",
                     items = items,
                     preview = false,
-                    layout = "select",
+                    layout = picker_layout_no_preview,
                     format = function(item)
                         local ret = { { item.text } }
                         if item.status == "evergreen" then
@@ -632,12 +651,12 @@ local function add_task()
                 title = "Select Project",
                 items = projects,
                 preview = false,
-                layout = "select",
+                layout = picker_layout_no_preview,
                 format = function(item)
                     return { { item.title } }
                 end,
                 on_show = function()
-                    vim.cmd.startinsert()
+                    vim.cmd.stopinsert()
                 end,
                 confirm = function(picker, item)
                     if not item then
@@ -802,7 +821,10 @@ local function new_session_with_provider(opts)
         title = "Provider",
         items = items,
         preview = false,
-        layout = "select",
+        layout = picker_layout_no_preview,
+        on_show = function()
+            vim.cmd.stopinsert()
+        end,
         sort = function(a, b)
             if a.score ~= b.score then
                 return a.score > b.score
