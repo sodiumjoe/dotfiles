@@ -539,6 +539,8 @@ local function pick_task_state()
                 Snacks.picker({
                     title = "Select Project",
                     items = items,
+                    preview = false,
+                    layout = "select",
                     format = function(item)
                         local ret = { { item.text } }
                         if item.status == "evergreen" then
@@ -629,6 +631,8 @@ local function add_task()
             Snacks.picker({
                 title = "Select Project",
                 items = projects,
+                preview = false,
+                layout = "select",
                 format = function(item)
                     return { { item.title } }
                 end,
@@ -798,6 +802,7 @@ local function new_session_with_provider(opts)
         title = "Provider",
         items = items,
         preview = false,
+        layout = "select",
         sort = function(a, b)
             if a.score ~= b.score then
                 return a.score > b.score
