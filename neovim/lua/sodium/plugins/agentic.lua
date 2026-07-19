@@ -1077,11 +1077,55 @@ return {
                         }
                     end
 
+                    local preview_cache = {}
+
                     Snacks.picker({
                         title = "Select session to restore",
                         items = items,
-                        preview = false,
-                        layout = picker_layout_no_preview,
+                        preview = function(ctx)
+                            local item = ctx.item
+                            if not item or not item.session_id then
+                                return
+                            end
+                            if preview_cache[item.session_id] then
+                                ctx.preview:set_lines(preview_cache[item.session_id])
+                                ctx.preview:highlight({ ft = "markdown" })
+                                return
+                            end
+                            ctx.preview:set_lines({ "Loading..." })
+                            ChatHistory.load(item.session_id, function(history, err)
+                                if err or not history then
+                                    local msg = { "Failed to load session" }
+                                    preview_cache[item.session_id] = msg
+                                    ctx.preview:set_lines(msg)
+                                    return
+                                end
+                                local lines = {}
+                                for _, msg in ipairs(history.messages) do
+                                    if msg.type == "user" then
+                                        lines[#lines + 1] = "## You"
+                                        lines[#lines + 1] = ""
+                                        for line in (msg.text or ""):gmatch("[^\n]*") do
+                                            lines[#lines + 1] = line
+                                        end
+                                        lines[#lines + 1] = ""
+                                    elseif msg.type == "agent" then
+                                        lines[#lines + 1] = "## Agent"
+                                        lines[#lines + 1] = ""
+                                        for line in (msg.text or ""):gmatch("[^\n]*") do
+                                            lines[#lines + 1] = line
+                                        end
+                                        lines[#lines + 1] = ""
+                                    elseif msg.type == "tool_call" then
+                                        lines[#lines + 1] =
+                                            string.format("  [tool: %s] %s", msg.kind or "?", msg.argument or "")
+                                    end
+                                end
+                                preview_cache[item.session_id] = lines
+                                ctx.preview:set_lines(lines)
+                                ctx.preview:highlight({ ft = "markdown" })
+                            end)
+                        end,
                         on_show = function()
                             vim.cmd.stopinsert()
                         end,
