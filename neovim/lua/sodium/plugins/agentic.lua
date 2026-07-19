@@ -376,7 +376,14 @@ local function pick_project()
                     end
                     return a.sort_idx < b.sort_idx
                 end,
-                preview = "file",
+                preview = function(ctx)
+                    local item = ctx.item
+                    if not item or not item.file then
+                        return
+                    end
+                    local lines = vim.fn.readfile(item.file)
+                    ctx.preview:set_lines(lines)
+                end,
                 format = function(item)
                     local ret = { { item.text } }
                     if item.status == "evergreen" then
@@ -435,7 +442,14 @@ local function show_task_picker(items, show_project)
             end
             return a.sort_idx < b.sort_idx
         end,
-        preview = "file",
+        preview = function(ctx)
+            local item = ctx.item
+            if not item or not item.file then
+                return
+            end
+            local lines = vim.fn.readfile(item.file)
+            ctx.preview:set_lines(lines)
+        end,
         format = function(item)
             local ret = {
                 {
