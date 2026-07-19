@@ -1036,10 +1036,89 @@ return {
             end
 
             local ChatHistory = require("agentic.ui.chat_history")
-            local original_list_sessions = ChatHistory.list_sessions
-            ChatHistory.list_sessions = function(callback)
-                return original_list_sessions(function(sessions)
-                    callback(sort_sessions_reverse_chrono(sessions))
+            local SessionRegistry = require("agentic.session_registry")
+
+            local function do_restore(session_id, tab_page_id, has_conflict)
+                ChatHistory.load(session_id, function(history, err)
+                    if err or not history then
+                        vim.notify("Failed to load session: " .. (err or "unknown error"), vim.log.levels.WARN)
+                        return
+                    end
+                    SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
+                        if has_conflict then
+                            if session.session_id then
+                                session.agent:cancel_session(session.session_id)
+                                session.widget:clear()
+                            end
+                        end
+                        session:restore_from_history(history, { reuse_session = not has_conflict })
+                        session.widget:show()
+                    end)
+                end)
+            end
+
+            SessionRestore.show_picker = function(tab_page_id, current_session)
+                ChatHistory.list_sessions(function(sessions)
+                    if #sessions == 0 then
+                        vim.notify("No saved sessions found", vim.log.levels.INFO)
+                        return
+                    end
+
+                    sessions = sort_sessions_reverse_chrono(sessions)
+
+                    local items = {}
+                    for i, s in ipairs(sessions) do
+                        local date = os.date("%Y-%m-%d %H:%M", s.timestamp or 0)
+                        local title = s.title or "(no title)"
+                        items[i] = {
+                            text = string.format("%s - %s", date, title),
+                            session_id = s.session_id,
+                            sort_idx = i,
+                        }
+                    end
+
+                    Snacks.picker({
+                        title = "Select session to restore",
+                        items = items,
+                        preview = false,
+                        layout = picker_layout_no_preview,
+                        on_show = function()
+                            vim.cmd.stopinsert()
+                        end,
+                        sort = function(a, b)
+                            if a.score ~= b.score then
+                                return a.score > b.score
+                            end
+                            return a.sort_idx < b.sort_idx
+                        end,
+                        format = function(item)
+                            return { { item.text } }
+                        end,
+                        confirm = function(picker, item)
+                            if not item then
+                                return
+                            end
+                            picker:close()
+                            local has_conflict = current_session ~= nil
+                                and current_session.session_id ~= nil
+                                and current_session.chat_history ~= nil
+                                and #current_session.chat_history.messages > 0
+                            if has_conflict then
+                                vim.ui.select({
+                                    "Cancel",
+                                    "Clear current session and restore",
+                                }, {
+                                    prompt = "Current session has messages. What would you like to do?",
+                                }, function(choice)
+                                    if choice == "Clear current session and restore" then
+                                        do_restore(item.session_id, tab_page_id, true)
+                                    end
+                                end)
+                            else
+                                do_restore(item.session_id, tab_page_id, false)
+                            end
+                        end,
+                    })
                 end)
             end
             SessionRestore._sodium_reverse_chrono_patch = true
