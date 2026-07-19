@@ -781,7 +781,7 @@ local function send_annotations_to_agentic()
     end)
 end
 
-local function new_session_with_provider(opts)
+local function new_session_with_provider(opts, on_start)
     local Config = require("agentic.config")
     local ACPHealth = require("agentic.acp.acp_health")
 
@@ -801,6 +801,9 @@ local function new_session_with_provider(opts)
     local function start_with(provider_name)
         local merged = vim.tbl_deep_extend("force", opts or {}, { provider = provider_name })
         require("agentic").new_session(merged)
+        if on_start then
+            on_start()
+        end
     end
 
     if #installed == 1 then
@@ -1294,7 +1297,15 @@ return {
         {
             "<leader>aa",
             function()
-                require("agentic").add_selection_or_file_to_context()
+                local SessionRegistry = require("agentic.session_registry")
+                local tab_page_id = vim.api.nvim_get_current_tabpage()
+                if SessionRegistry.sessions[tab_page_id] then
+                    require("agentic").add_selection_or_file_to_context()
+                else
+                    new_session_with_provider(nil, function()
+                        require("agentic").add_selection_or_file_to_context()
+                    end)
+                end
             end,
             mode = { "n", "v" },
             desc = "Add file or selection to Agentic to Context",
