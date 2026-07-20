@@ -15,4 +15,14 @@ node-bin/node_modules
 node-bin/package-lock.json
 .claude
 claude/CLAUDE.md
+claude/backups/
+claude/cache/
+claude/debug/
+claude/history.jsonl
+claude/mcp-needs-auth-cache.json
+claude/plugins/
+claude/projects/
+claude/sessions/
+claude/shell-snapshots/
+claude/todos/
 codex/AGENTS.md
