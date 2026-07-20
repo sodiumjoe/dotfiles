@@ -163,6 +163,7 @@ return {
         version = "*",
         lazy = true,
         ft = "markdown",
+        cond = vim.fn.isdirectory(vim.fn.expand("~/stripe/work")) == 1,
         keys = {
             {
                 "<leader>ww",
