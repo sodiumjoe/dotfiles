@@ -3,9 +3,9 @@
   "private": true,
   "description": "Pinned npm tool binaries. Used on both local and devbox. Updated by `upgrade --npm`.",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "^0.59.0",
-    "@agentclientprotocol/codex-acp": "^1.1.2",
-    "@typescript/native-preview": "^7.0.0-dev.20260622.1",
+    "@agentclientprotocol/claude-agent-acp": "^0.60.0",
+    "@agentclientprotocol/codex-acp": "^1.1.4",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "@vtsls/language-server": "0.3.0",
     "defuddle-cli": "0.7.0",
     "mcp-neovim-server": "0.5.5",
