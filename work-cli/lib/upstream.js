@@ -21,6 +21,24 @@ function expandHome(p) {
   return p.replace(/^~(?=$|\/)/, process.env.HOME);
 }
 
+function hashFile(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+function parseSupportHashes(frontmatter) {
+  const support = [];
+  const lines = frontmatter.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== "support_hashes:") continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const match = lines[j].match(/^  ([^:]+):\s*([a-f0-9]{64})$/);
+      if (!match) break;
+      support.push({ relativePath: match[1], storedHash: match[2] });
+    }
+  }
+  return support;
+}
+
 function checkUpstream(skillsDir = SKILLS_DIR) {
   if (!fs.existsSync(skillsDir)) return [];
   const config = loadUpstreamConfig();
@@ -76,20 +94,62 @@ function checkUpstream(skillsDir = SKILLS_DIR) {
       });
       continue;
     }
-    const upstreamContent = fs.readFileSync(upstreamFile, "utf-8");
-    const currentHash = crypto
-      .createHash("sha256")
-      .update(upstreamContent)
-      .digest("hex");
+    const currentHash = hashFile(upstreamFile);
+    const driftedFiles = [];
     if (currentHash !== storedHash) {
+      driftedFiles.push({
+        relativePath: "SKILL.md",
+        storedHash,
+        currentHash,
+        upstreamFile,
+        localFile: skillFile,
+      });
+    }
+    let missingSupportFile = false;
+    for (const support of parseSupportHashes(fm)) {
+      const localSupportFile = path.join(
+        skillsDir,
+        dir.name,
+        support.relativePath,
+      );
+      const upstreamSupportFile = path.join(
+        upstreamDir,
+        "skills",
+        upstreamSkill,
+        support.relativePath,
+      );
+      if (!fs.existsSync(upstreamSupportFile)) {
+        results.push({
+          skill: dir.name,
+          status: "no-upstream",
+          message: `upstream support file not found at ${upstreamSupportFile}`,
+        });
+        missingSupportFile = true;
+        break;
+      }
+      const supportCurrentHash = hashFile(upstreamSupportFile);
+      if (supportCurrentHash !== support.storedHash) {
+        driftedFiles.push({
+          relativePath: support.relativePath,
+          storedHash: support.storedHash,
+          currentHash: supportCurrentHash,
+          upstreamFile: upstreamSupportFile,
+          localFile: localSupportFile,
+        });
+      }
+    }
+    if (missingSupportFile) continue;
+    if (driftedFiles.length > 0) {
+      const first = driftedFiles[0];
       results.push({
         skill: dir.name,
         status: "drifted",
-        storedHash,
-        currentHash,
+        storedHash: first.storedHash,
+        currentHash: first.currentHash,
         forkedVersion,
-        upstreamFile,
-        localFile: skillFile,
+        upstreamFile: first.upstreamFile,
+        localFile: first.localFile,
+        driftedFiles,
       });
     } else {
       results.push({ skill: dir.name, status: "up-to-date" });
@@ -98,4 +158,4 @@ function checkUpstream(skillsDir = SKILLS_DIR) {
   return results;
 }
 
-module.exports = { checkUpstream };
+module.exports = { checkUpstream, parseSupportHashes };

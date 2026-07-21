@@ -30,6 +30,20 @@ function stripFrontmatter(content) {
   return content.trim();
 }
 
+function supportHashes(frontmatter) {
+  const hashes = [];
+  const lines = frontmatter.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== "support_hashes:") continue;
+    for (let j = i + 1; j < lines.length; j++) {
+      const match = lines[j].match(/^  ([^:]+):\s*([a-f0-9]{64})$/);
+      if (!match) break;
+      hashes.push({ file: match[1], hash: match[2] });
+    }
+  }
+  return hashes;
+}
+
 describe("commands", () => {
   const commandFiles = fs
     .readdirSync(COMMANDS_DIR)
@@ -129,6 +143,75 @@ describe("forked skills", () => {
             `run \`work check-upstream --diff\` to review`,
         );
       });
+
+      it("support_hashes match installed plugin files", () => {
+        const support = supportHashes(fm);
+        if (support.length === 0) return;
+        const plugin = pluginMatch[1].trim();
+        const [pluginName] = plugin.split("@");
+        const pluginDir = path.join(PLUGIN_CACHE, pluginName);
+        if (!fs.existsSync(pluginDir)) return;
+        const versions = fs.readdirSync(pluginDir).sort();
+        if (versions.length === 0) return;
+        for (const item of support) {
+          const localPath = path.join(SKILLS_DIR, dir.name, item.file);
+          assert.ok(
+            fs.existsSync(localPath),
+            `${dir.name} tracks missing support file ${item.file}`,
+          );
+          const upstreamPath = path.join(
+            pluginDir,
+            versions[versions.length - 1],
+            "skills",
+            skillMatch[1].trim(),
+            item.file,
+          );
+          assert.ok(
+            fs.existsSync(upstreamPath),
+            `upstream support file missing: ${item.file}`,
+          );
+          const hash = crypto
+            .createHash("sha256")
+            .update(fs.readFileSync(upstreamPath, "utf-8"))
+            .digest("hex");
+          assert.equal(
+            hash,
+            item.hash,
+            `upstream ${plugin}:${skillMatch[1].trim()}/${item.file} has changed — ` +
+              `run \`work check-upstream --diff\` to review`,
+          );
+        }
+      });
     });
   }
+});
+
+describe("local skill fork invariants", () => {
+  it("executing-plans records plan completion through work complete", () => {
+    const skillPath = path.join(SKILLS_DIR, "executing-plans", "SKILL.md");
+    const content = fs.readFileSync(skillPath, "utf-8");
+
+    assert.match(content, /Set `status: done` in the plan frontmatter/);
+    assert.match(content, /work complete <project-slug-or-file> "<plan title>"/);
+  });
+
+  it("using-superpowers tracks referenced support files", () => {
+    const skillPath = path.join(SKILLS_DIR, "using-superpowers", "SKILL.md");
+    const content = fs.readFileSync(skillPath, "utf-8");
+    const fm = content.match(/^---\n([\s\S]*?)\n---/)[1];
+    const tracked = new Set(supportHashes(fm).map((item) => item.file));
+    const references = Array.from(
+      content.matchAll(/`(references\/[^`]+)`/g),
+      (match) => match[1],
+    );
+
+    assert.ok(references.length > 0);
+    for (const file of references) {
+      assert.ok(
+        fs.existsSync(path.join(SKILLS_DIR, "using-superpowers", file)),
+        `using-superpowers references missing local file ${file}`,
+      );
+      assert.ok(tracked.has(file), `${file} is missing from support_hashes`);
+    }
+  });
 });

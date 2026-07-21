@@ -95,6 +95,41 @@ describe("checkUpstream", () => {
     assert.ok(results[0].localFile.endsWith("SKILL.md"));
   });
 
+  it("detects drifted support files", () => {
+    const upstream = "---\nname: support\n---\n# support";
+    const originalSupport = "# reference v1";
+    const newSupport = "# reference v2";
+    const skillsDir = setupFakeEnv(
+      {
+        support: `---\nname: support\ndescription: test skill\nplugin: superpowers@stripe-internal-marketplace\nversion: 1.0.1\nskill: support\ncontent_hash: ${hash(upstream)}\nsupport_hashes:\n  references/foo.md: ${hash(originalSupport)}\n---\n\n# support`,
+      },
+      { support: upstream },
+    );
+    fs.mkdirSync(path.join(skillsDir, "support", "references"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(skillsDir, "support", "references", "foo.md"),
+      originalSupport,
+    );
+    const upstreamDir = path.join(tmpDir, "upstream", "skills", "support");
+    fs.mkdirSync(path.join(upstreamDir, "references"), { recursive: true });
+    fs.writeFileSync(
+      path.join(upstreamDir, "references", "foo.md"),
+      newSupport,
+    );
+
+    const { checkUpstream } = requireFresh(path.join(LIB, "upstream.js"));
+    const results = checkUpstream(skillsDir);
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0].skill, "support");
+    assert.equal(results[0].status, "drifted");
+    assert.equal(results[0].storedHash, hash(originalSupport));
+    assert.equal(results[0].currentHash, hash(newSupport));
+    assert.equal(results[0].driftedFiles[0].relativePath, "references/foo.md");
+  });
+
   it("handles missing upstream path gracefully", () => {
     const upstream = "---\nname: baz\n---\n# baz";
     const skillsDir = path.join(tmpDir, "skills");

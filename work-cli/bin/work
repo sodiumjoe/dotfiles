@@ -682,9 +682,12 @@ const commands = {
         }
         if (opts.diff) {
           const { execFileSync } = require('node:child_process');
-          try {
-            execFileSync('diff', ['-u', r.localFile, r.upstreamFile], { stdio: 'inherit' });
-          } catch (_) {}
+          const files = r.driftedFiles || [{ localFile: r.localFile, upstreamFile: r.upstreamFile }];
+          for (const file of files) {
+            try {
+              execFileSync('diff', ['-u', file.localFile, file.upstreamFile], { stdio: 'inherit' });
+            } catch (_) {}
+          }
         }
         drifted++;
       } else if (r.status === 'no-cache' || r.status === 'no-upstream') {

@@ -53,8 +53,6 @@ shared/neovim.md             ─┤
 
 Skills live in `skills/` at the repo root and symlink to both `~/.claude/skills/` and `~/.codex/skills/`. Each skill is a directory containing `SKILL.md` (with optional supporting files and scripts).
 
-Skills forked from the Stripe internal marketplace (`superpowers` plugin) have upstream tracking metadata in their frontmatter (`plugin`, `version`, `content_hash`). Run `work check-upstream` to detect drift against the marketplace repo clone at `~/.claude/plugins/marketplaces/stripe-internal-marketplace/`.
-
 ## Neovim Architecture
 
 Entry point: `init.lua` (repo root). Bootstraps lazy.nvim with interleaved loading:

@@ -4,7 +4,7 @@ description: Use when executing implementation plans with independent tasks in t
 plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: subagent-driven-development
-content_hash: d6b0873771ea957f36ad43faaa936301b83b1788b3ee790b1ce39bf389bce386
+content_hash: 41ab239a6ad1c487cd839fdac972a8c9cf0f5e90efa59a63f963767864f0df4c
 ---
 
 # Subagent-Driven Development

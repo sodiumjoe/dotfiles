@@ -4,7 +4,7 @@ description: Use when creating new skills, editing existing skills, or verifying
 plugin: superpowers@stripe-internal-marketplace
 version: 1.0.1
 skill: writing-skills
-content_hash: f01f666a4426ce800d40649704104c252e6607c196656e5ce6a28e9f51650f3a
+content_hash: 6b8d08fe863318be8480ae8428e169640309fa9208df84bb0510012764454146
 ---
 
 # Writing Skills
@@ -13,7 +13,7 @@ content_hash: f01f666a4426ce800d40649704104c252e6607c196656e5ce6a28e9f51650f3a
 
 **Writing skills IS Test-Driven Development applied to process documentation.**
 
-**Personal skills live in your runtime's skills directory** — see the runtime reference files in the skill-loading skill for the path on your runtime. Codex, Copilot CLI, and Gemini CLI all also recognize `~/.agents/skills/` as a cross-runtime alias.
+**Personal skills live in your runtime's skills directory**
 
 You write test cases (pressure scenarios with subagents), watch them fail (baseline behavior), write the skill (documentation), watch tests pass (agents comply), and refactor (close loopholes).
 
