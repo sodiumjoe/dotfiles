@@ -108,7 +108,9 @@
   },
   "model": "opus[1m]",
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": ["toolshed"],
+  "enabledMcpjsonServers": [
+    "toolshed"
+  ],
   "hooks": {
     "Notification": [
       {
@@ -147,12 +149,16 @@
   },
   "enabledPlugins": {
     "obsidian@obsidian-skills": true,
-    "js-infra-internal@stripe-internal-marketplace": true
+    "js-infra-internal@stripe-internal-marketplace": true,
+    "orbit@stripe-internal-marketplace": true,
+    "run@stripe-internal-marketplace": true
   },
   "spinnerTipsEnabled": false,
   "spinnerVerbs": {
     "mode": "replace",
-    "verbs": ["Working"]
+    "verbs": [
+      "Working"
+    ]
   },
   "effortLevel": "high"
 }

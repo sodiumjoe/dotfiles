@@ -25,13 +25,18 @@ trust_level = "trusted"
 trust_level = "trusted"
 
 [marketplaces.stripe-internal-marketplace]
-last_updated = "2026-05-28T17:49:49Z"
+last_updated = "2026-07-20T16:56:23Z"
+last_revision = "9ca8c3dda3ba88b4bfbc9e7930bbeda2730ef6e1"
 source_type = "git"
 source = "http://codex-marketplace--northwest.corp.stripe.com.certproxy.localhost:7891/codex-marketplace.git"
 
 [mcp_servers.toolshed_slack]
 command = "pay"
 args = ["toolshed", "serve", "slack"]
+
+[mcp_servers.toolshed_hubble]
+command = "pay"
+args = ["toolshed", "serve", "hubble"]
 
 [mcp_servers.google_drive]
 command = "pay"
@@ -40,3 +45,21 @@ args = ["toolshed", "serve", "google_drive"]
 [mcp_servers.toolshed_google_drive_append_to_google_drive_doc_commen--_008829]
 command = "sh"
 args = ["-lc", "exec \"$HOME/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh\" \"$@\"", "toolshed_stdio_shim", "google_drive.append_to_google_drive_doc.comment_on_google_drive_doc.create_google_drive_doc.create_google_drive_doc_tab.format_google_drive_doc.get_google_drive_doc_revision.get_google_drive_doc_tab_contents.get_google_drive_file.get_google_drive_file_comments.get_google_drive_file_name.list_google_drive_doc_revisions.list_google_drive_doc_tabs.reply_to_google_drive_comment.search_google_drive.update_google_drive_doc"]
+
+[plugins."orbit@stripe-internal-marketplace"]
+enabled = true
+
+[plugins."auto-onrun@stripe-internal-marketplace"]
+enabled = false
+
+[plugins."run@stripe-internal-marketplace"]
+enabled = true
+
+[plugins."run@stripe-internal-marketplace".mcp_servers.toolshed-extras.tools.search_slack_messages]
+approval_mode = "approve"
+
+[plugins."run@stripe-internal-marketplace".mcp_servers.toolshed-extras.tools.read_slack_channel_history]
+approval_mode = "approve"
+
+[plugins."run@stripe-internal-marketplace".mcp_servers.toolshed-extras.tools.read_slack_message_thread]
+approval_mode = "approve"
