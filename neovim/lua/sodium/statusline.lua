@@ -264,16 +264,20 @@ function M.get_agentic_title()
     return ""
 end
 
+local function get_agentic_session_manager()
+    local ok, session_registry = pcall(require, "agentic.session_registry")
+    if not ok then
+        return nil
+    end
+    local tab_page_id = vim.api.nvim_get_current_tabpage()
+    return session_registry.get_session_for_tab_page(tab_page_id)
+end
+
 local function get_agentic_status()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
     end
-    local ok, session_registry = pcall(require, "agentic.session_registry")
-    if not ok then
-        return ""
-    end
-    local tab_page_id = vim.api.nvim_get_current_tabpage()
-    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
+    local session_manager = get_agentic_session_manager()
     if not session_manager then
         return ""
     end
@@ -290,13 +294,7 @@ local function get_agentic_mode()
         return ""
     end
 
-    local ok, session_registry = pcall(require, "agentic.session_registry")
-    if not ok then
-        return ""
-    end
-
-    local tab_page_id = vim.api.nvim_get_current_tabpage()
-    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
+    local session_manager = get_agentic_session_manager()
     if not session_manager or not session_manager.agent_modes or not session_manager.agent_modes.current_mode_id then
         return ""
     end
@@ -309,16 +307,11 @@ local function get_agentic_mode()
     return ""
 end
 
-local function get_agentic_context()
+function M.get_agentic_context()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
     end
-    local ok, session_registry = pcall(require, "agentic.session_registry")
-    if not ok then
-        return ""
-    end
-    local tab_page_id = vim.api.nvim_get_current_tabpage()
-    local session_manager = session_registry.get_session_for_tab_page(tab_page_id)
+    local session_manager = get_agentic_session_manager()
     if not session_manager or not session_manager.session_state then
         return ""
     end
@@ -330,17 +323,60 @@ local function get_agentic_context()
     return used .. "/" .. size
 end
 
+function M.get_agentic_model()
+    if vim.bo.filetype ~= "AgenticChat" then
+        return ""
+    end
+    local session_manager = get_agentic_session_manager()
+    if not session_manager or not session_manager.session_state then
+        return ""
+    end
+    local model = session_manager.session_state:get_model_name()
+    if not model then
+        return ""
+    end
+    return model
+end
+
 local separator_before_agentic_status = separator_if(function()
     return vim.bo.filetype == "AgenticChat"
 end)
 
 local separator_before_agentic_context = separator_if(function()
-    return vim.bo.filetype == "AgenticChat" and get_agentic_context() ~= ""
+    return vim.bo.filetype == "AgenticChat" and M.get_agentic_context() ~= ""
+end)
+
+local separator_before_agentic_model = separator_if(function()
+    return vim.bo.filetype == "AgenticChat" and M.get_agentic_model() ~= ""
 end)
 
 local separator_before_agentic_mode = separator_if(function()
     return vim.bo.filetype == "AgenticChat" and get_agentic_mode() ~= ""
 end)
+
+local agentic_lualine_x = {
+    separator_before_agentic_context,
+    {
+        M.get_agentic_context,
+        cond = function()
+            return vim.bo.filetype == "AgenticChat"
+        end,
+    },
+    separator_before_agentic_status,
+    {
+        get_agentic_status,
+        cond = function()
+            return vim.bo.filetype == "AgenticChat"
+        end,
+    },
+    separator_before_agentic_mode,
+    {
+        get_agentic_mode,
+        cond = function()
+            return vim.bo.filetype == "AgenticChat"
+        end,
+    },
+}
 
 lualine.setup({
     options = {
@@ -359,64 +395,32 @@ lualine.setup({
                         M.get_agentic_title,
                         color = "StatusLineActiveItem",
                     },
+                    {
+                        M.get_agentic_model,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
                 },
                 lualine_b = {},
                 lualine_c = {},
-                lualine_x = {
-                    separator_before_agentic_status,
-                    {
-                        get_agentic_status,
-                        cond = function()
-                            return vim.bo.filetype == "AgenticChat"
-                        end,
-                    },
-                    separator_before_agentic_context,
-                    {
-                        get_agentic_context,
-                        cond = function()
-                            return vim.bo.filetype == "AgenticChat"
-                        end,
-                    },
-                    separator_before_agentic_mode,
-                    {
-                        get_agentic_mode,
-                        cond = function()
-                            return vim.bo.filetype == "AgenticChat"
-                        end,
-                    },
-                },
+                lualine_x = agentic_lualine_x,
                 lualine_y = {},
                 lualine_z = {},
             },
             inactive_sections = {
                 lualine_a = {
                     M.get_agentic_title,
+                    {
+                        M.get_agentic_model,
+                        cond = function()
+                            return vim.bo.filetype == "AgenticChat"
+                        end,
+                    },
                 },
                 lualine_b = {},
                 lualine_c = {},
-                lualine_x = {
-                    separator_before_agentic_status,
-                    {
-                        get_agentic_status,
-                        cond = function()
-                            return vim.bo.filetype == "AgenticChat"
-                        end,
-                    },
-                    separator_before_agentic_context,
-                    {
-                        get_agentic_context,
-                        cond = function()
-                            return vim.bo.filetype == "AgenticChat"
-                        end,
-                    },
-                    separator_before_agentic_mode,
-                    {
-                        get_agentic_mode,
-                        cond = function()
-                            return vim.bo.filetype == "AgenticChat"
-                        end,
-                    },
-                },
+                lualine_x = agentic_lualine_x,
                 lualine_y = {},
                 lualine_z = {},
             },
