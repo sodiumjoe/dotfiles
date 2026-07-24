@@ -1,0 +1,153 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls*)",
+      "Bash(cat*)",
+      "Bash(head*)",
+      "Bash(tail*)",
+      "Bash(grep*)",
+      "Bash(rg*)",
+      "Bash(find*)",
+      "Bash(fd*)",
+      "Bash(fzf*)",
+      "Bash(awk*)",
+      "Bash(sed*)",
+      "Bash(cut*)",
+      "Bash(sort*)",
+      "Bash(uniq*)",
+      "Bash(tr*)",
+      "Bash(jq*)",
+      "Bash(wc*)",
+      "Bash(cd*)",
+      "Bash(pwd*)",
+      "Bash(tree*)",
+      "Bash(stat*)",
+      "Bash(file*)",
+      "Bash(which*)",
+      "Bash(whereis*)",
+      "Bash(type*)",
+      "Bash(date*)",
+      "Bash(basename*)",
+      "Bash(dirname*)",
+      "Bash(realpath*)",
+      "Bash(readlink*)",
+      "Bash(diff*)",
+      "Bash(comm*)",
+      "Bash(cmp*)",
+      "Bash(git add * && git commit -m *)",
+      "Bash(git add*)",
+      "Bash(git branch -a*)",
+      "Bash(git branch -l*)",
+      "Bash(git branch -r*)",
+      "Bash(git commit*)",
+      "Bash(git config --get*)",
+      "Bash(git describe*)",
+      "Bash(git diff*)",
+      "Bash(git fetch*)",
+      "Bash(git log*)",
+      "Bash(git ls-files*)",
+      "Bash(git ls-tree*)",
+      "Bash(git remote -v*)",
+      "Bash(git rev-parse*)",
+      "Bash(git show*)",
+      "Bash(git stash list*)",
+      "Bash(git status*)",
+      "Bash(git symbolic-ref*)",
+      "Bash(git tag -l*)",
+      "Read(*)",
+      "Grep(*)",
+      "Write(/tmp/*)",
+      "Edit(/tmp/*)",
+      "Glob(*)",
+      "Bash(nvim-edit:*)",
+      "Bash(find * | head *)",
+      "Bash(find * | tail *)",
+      "Bash(find * | sort *)",
+      "Bash(find * | wc *)",
+      "Bash(ls * | head *)",
+      "Bash(ls * | tail *)",
+      "Bash(env * | grep * | head *)",
+      "Skill(neovim-review:*)"
+    ],
+    "deny": [
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git branch -D*)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~*)",
+      "Bash(rm -rf .*)",
+      "Bash(sudo*)",
+      "Bash(su *)",
+      "Bash(eval*)",
+      "Bash(exec*)",
+      "Bash(source*)",
+      "Bash(. *)"
+    ],
+    "ask": [
+      "Bash(curl*)",
+      "Bash(wget*)",
+      "Bash(ssh*)",
+      "Bash(scp*)",
+      "Bash(chmod*)",
+      "Bash(chown*)",
+      "Bash(docker*)",
+      "Bash(kubectl*)",
+      "Bash(git push*)",
+      "Bash(git pull*)",
+      "Bash(git merge*)",
+      "Bash(git rebase*)",
+      "Bash(git branch -d*)",
+      "Bash(git checkout*)",
+      "Bash(git switch*)"
+    ]
+  },
+  "model": "opus",
+  "enableAllProjectMcpServers": true,
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/notify-on-idle.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude-format-edit"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/session-project.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "spinnerTipsEnabled": false,
+  "spinnerVerbs": {
+    "mode": "replace",
+    "verbs": [
+      "Working"
+    ]
+  },
+  "effortLevel": "high",
+  "enabledPlugins": {
+    "obsidian@obsidian-skills": true
+  }
+}
