@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Show drift between live mutable configs and what the source files
+# would generate. Helps you decide what to promote back to base/overlay.
+#
+# Usage: dotfiles-diff [--quiet]
+#   --quiet: exit 0 if no drift, exit 1 if drifted (for scripting)
+
+cd "$(dirname "$0")/.."
+
+quiet=false
+if [ "${1:-}" = "--quiet" ]; then
+  quiet=true
+fi
+
+if [ -z "${DOTFILES_ENV:-}" ]; then
+  if [ -f ~/.dotfiles-env ]; then
+    . ~/.dotfiles-env
+  else
+    echo "dotfiles-diff: DOTFILES_ENV not set"
+    exit 1
+  fi
+fi
+
+drifted=false
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Generate fresh configs to temp dir, then diff against live files
+
+# --- Claude settings ---
+
+if [ -f claude/settings.json ] && command -v jq &>/dev/null; then
+  # Replay the same jq merge from dotfiles-generate
+  case "$DOTFILES_ENV" in
+    work|devbox) overlay="claude/settings.work.json" ;;
+    home)        overlay="claude/settings.home.json" ;;
+    *)           overlay="" ;;
+  esac
+
+  if [ -n "$overlay" ] && [ -f "$overlay" ]; then
+    jq -s '
+      .[0] as $base | .[1] as $overlay |
+      ($base * $overlay) |
+      .permissions.allow = ($base.permissions.allow + ($overlay.permissions.allow // [])) |
+      .permissions.deny = (($base.permissions.deny // []) + ($overlay.permissions.deny // [])) |
+      .permissions.ask = (($base.permissions.ask // []) + ($overlay.permissions.ask // [])) |
+      .enabledMcpjsonServers = (($base.enabledMcpjsonServers // []) + ($overlay.enabledMcpjsonServers // [])) |
+      .enabledPlugins = (($base.enabledPlugins // {}) * ($overlay.enabledPlugins // {}))
+    ' claude/settings.base.json "$overlay" > "$tmpdir/settings.json"
+
+    if ! diff -q \
+      <(jq --sort-keys . "$tmpdir/settings.json") \
+      <(jq --sort-keys . claude/settings.json) &>/dev/null; then
+      drifted=true
+      if [ "$quiet" = false ]; then
+        echo "=== claude/settings.json has drifted from sources ==="
+        diff --color=auto -u \
+          --label "sources would generate" \
+          --label "live settings.json" \
+          <(jq --sort-keys . "$tmpdir/settings.json") \
+          <(jq --sort-keys . claude/settings.json) \
+          | head -50 || true
+        echo ""
+        echo "Promote changes to claude/settings.base.json or claude/settings.${overlay#claude/settings.}"
+        echo "Then run: dotfiles-generate --reset"
+        echo ""
+      fi
+    fi
+  fi
+fi
+
+if [ "$drifted" = true ]; then
+  [ "$quiet" = true ] && exit 1
+else
+  [ "$quiet" = false ] && echo "No drift detected."
+fi
