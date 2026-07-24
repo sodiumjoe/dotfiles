@@ -17,22 +17,60 @@ When referring to local files, use plain repo-relative `path:line` references, e
 **Special cases:**
 - `init.lua` → `~/.config/nvim/init.lua`
 - `tmux/tmux.conf` → `~/.tmux.conf`
-- `claude/settings.json` → `~/.claude/settings.json`
+- `claude/settings.json` → `~/.claude/settings.json` (generated, see below)
 - `claude/hooks/*` → `~/.claude/hooks/*`
 - `claude/agents/*` → `~/.claude/agents/*`
 - `claude/commands/*` → `~/.claude/commands/*`
-- `skills/*/` → `~/.claude/skills/*/` AND `~/.codex/skills/*/`
-- `codex/config.toml` → `~/.codex/config.toml`
-- `work-cli/bin/work` → `~/bin/work`
+- `skills/*/` → `~/.claude/skills/*/` (and `~/.codex/skills/*/` on `work`/`devbox`)
+- `codex/config.toml` → `~/.codex/config.toml` (`work`/`devbox` only)
+- `work-cli/bin/work` → `~/bin/work` (`work`/`devbox` only)
 - `bin/*` → `~/bin/*`
 
-**Generated files** (by `bootstrap.sh`, not edited directly):
+**Generated files** (by `bin/dotfiles-generate`, not edited directly):
 - `claude/CLAUDE.md` → `~/.claude/CLAUDE.md` (from `shared/*.md` + `claude-overlay.md`)
 - `codex/AGENTS.md` → `~/.codex/AGENTS.md` (from `shared/*.md` + `codex-overlay.md`)
+- `claude/settings.json` → `~/.claude/settings.json` (from `claude/settings.base.json` + `claude/settings.$DOTFILES_ENV.json`)
+- `Brewfile` (from `Brewfile.base` + `Brewfile.$DOTFILES_ENV`, macOS only)
 
 **Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
 
 When adding new config: add the file or directory, then add it to the appropriate list in `bootstrap.sh` (`files` array for home dotfiles, `xdg_files` array for XDG configs, or a new `ln -s` for special cases).
+
+## Environment Management
+
+The repo serves three environments via `DOTFILES_ENV`:
+
+| Value    | Machine      | OS    |
+|----------|--------------|-------|
+| `work`   | Work laptop  | macOS |
+| `devbox` | Work devbox  | Linux |
+| `home`   | Home laptop  | macOS |
+
+**Identity:** `~/.dotfiles-env` declares `DOTFILES_ENV`. Created by `bootstrap.sh` on first run (or set via env var for non-interactive use: `DOTFILES_ENV=devbox ./bootstrap.sh`). Exported by `zshenv`. Defaults to `home` if missing.
+
+**Generated configs (`bin/dotfiles-generate`):**
+
+Static files (always regenerated -- tools never modify them):
+- `Brewfile.base` + `Brewfile.$DOTFILES_ENV` -> `Brewfile` (macOS only, skipped on devbox)
+- `shared/*.md` + overlay -> `claude/CLAUDE.md`, `codex/AGENTS.md`
+
+Mutable files (generated once on first bootstrap, then hands-off -- tools modify them at runtime):
+- `claude/settings.base.json` + `claude/settings.work|home.json` -> `claude/settings.json` (via jq)
+- `codex/config.base.toml` -> `codex/config.toml`
+
+Use `dotfiles-generate --reset` to force-regenerate mutable files.
+
+**Post-merge hook:** `hooks/post-merge` regenerates static files after `git pull` when sources changed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Does not fire on `git pull --rebase`.
+
+**Config drift:** `bin/dotfiles-diff` shows what tools have changed in mutable configs vs. what the sources would generate. Promote changes back to the source files (base or overlay), then `dotfiles-generate --reset`.
+
+**Conditional symlinks:** codex config, codex skills, and work-cli are only symlinked when `DOTFILES_ENV` is `work` or `devbox`.
+
+**Runtime config:** `zsh/.zshrc` sources `zsh/work.zsh` or `zsh/home.zsh` based on `$DOTFILES_ENV`. Neovim reads `$DOTFILES_ENV` for ACP provider selection (`codex-acp` at work, `claude-agent-acp` at home).
+
+**Package sync:**
+- Vim plugins: `lazy-lock.json` (commit after `:Lazy update`, restore with `:Lazy restore`)
+- Homebrew: `brew-sync` (installs missing packages via `brew bundle --no-upgrade`; intentional upgrades via `bin/upgrade`)
 
 ## Agent Instruction Architecture
 
