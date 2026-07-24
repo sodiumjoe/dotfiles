@@ -1135,7 +1135,8 @@ return {
                 enabled = false,
             },
             border_style = "boxed",
-            provider = "codex-acp",
+            provider = (vim.env.DOTFILES_ENV == "work" or vim.env.DOTFILES_ENV == "devbox") and "codex-acp"
+                or "claude-agent-acp",
             acp_providers = {
                 ["claude-acp"] = false,
                 ["claude-agent-acp"] = {
