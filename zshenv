@@ -3,6 +3,10 @@
 export XDG_CONFIG_HOME=${HOME}/.config
 ZDOTDIR=${XDG_CONFIG_HOME}/zsh
 
+# Environment identity (work, devbox, or home)
+[ -f ~/.dotfiles-env ] && . ~/.dotfiles-env
+export DOTFILES_ENV="${DOTFILES_ENV:-home}"
+
 # Start configuration added by Zim install {{{
 #
 # User configuration sourced by all invocations of the shell
