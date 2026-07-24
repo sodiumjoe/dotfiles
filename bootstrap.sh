@@ -2,31 +2,37 @@
 
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
-generate_instructions() {
-  echo "Generating CLAUDE.md..."
-  {
-    cat shared/base-instructions.md
-    printf '\n\n'
-    cat shared/work-tracking.md
-    printf '\n\n'
-    cat shared/neovim.md
-    printf '\n\n'
-    cat claude-overlay.md
-  } > claude/CLAUDE.md
-  echo "Generating AGENTS.md..."
-  mkdir -p codex
-  {
-    cat shared/base-instructions.md
-    printf '\n\n'
-    cat shared/work-tracking.md
-    printf '\n\n'
-    cat codex-overlay.md
-  } > codex/AGENTS.md
-}
+# --- Environment detection ---
 
-generate_instructions
+if [ -n "${DOTFILES_ENV:-}" ]; then
+  # Accept from environment (for non-interactive use, e.g. devbox init)
+  echo "Using DOTFILES_ENV=$DOTFILES_ENV from environment"
+elif [ -f ~/.dotfiles-env ]; then
+  . ~/.dotfiles-env
+else
+  printf "No ~/.dotfiles-env found. Select environment:\n"
+  printf "  1) work\n"
+  printf "  2) devbox\n"
+  printf "  3) home\n"
+  printf "Choice: "
+  read choice
+  case "$choice" in
+    1) DOTFILES_ENV=work ;;
+    2) DOTFILES_ENV=devbox ;;
+    3) DOTFILES_ENV=home ;;
+    *) echo "Invalid choice"; exit 1 ;;
+  esac
+  echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
+  echo "Wrote ~/.dotfiles-env (DOTFILES_ENV=$DOTFILES_ENV)"
+fi
 
-# symlink dotfiles
+export DOTFILES_ENV
+
+# --- Generate configs ---
+
+bin/dotfiles-generate
+
+# --- Symlink dotfiles ---
 
 files=(\
   "curlrc"\
@@ -85,11 +91,10 @@ for hook in ~/.dotfiles/claude/hooks/*; do
   ln -sf "$hook" ~/.claude/hooks/$(basename "$hook")
 done
 
-mkdir -p ~/.claude/skills ~/.codex/skills
+mkdir -p ~/.claude/skills
 for skill in ~/.dotfiles/skills/*/; do
   name=$(basename "$skill")
   ln -sfn "$skill" ~/.claude/skills/$name
-  ln -sfn "$skill" ~/.codex/skills/$name
 done
 
 mkdir -p ~/.claude/agents ~/.claude/commands
@@ -100,20 +105,41 @@ for cmd in ~/.dotfiles/claude/commands/*; do
   ln -sf "$cmd" ~/.claude/commands/$(basename "$cmd")
 done
 
-mkdir -p ~/.codex
-ln -sf ~/.dotfiles/codex/config.toml ~/.codex/config.toml
-ln -sf ~/.dotfiles/codex/AGENTS.md ~/.codex/AGENTS.md
+# --- Work + devbox symlinks (Codex, work-cli) ---
 
-# symlink scripts into ~/bin
+if [ "$DOTFILES_ENV" = "work" ] || [ "$DOTFILES_ENV" = "devbox" ]; then
+  mkdir -p ~/.codex ~/.codex/skills
+  ln -sf ~/.dotfiles/codex/config.toml ~/.codex/config.toml
+  ln -sf ~/.dotfiles/codex/AGENTS.md ~/.codex/AGENTS.md
+
+  for skill in ~/.dotfiles/skills/*/; do
+    name=$(basename "$skill")
+    ln -sfn "$skill" ~/.codex/skills/$name
+  done
+
+  mkdir -p ~/bin
+  ln -sf ~/.dotfiles/work-cli/bin/work ~/bin/work
+fi
+
+# --- Universal bin symlinks ---
+
 mkdir -p ~/bin
 for script in ~/.dotfiles/bin/*; do
   ln -sf "$script" ~/bin/$(basename "$script")
 done
-ln -sf ~/.dotfiles/work-cli/bin/work ~/bin/work
+
+# --- Neovim ---
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
 if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
   echo "init.lua symlink already exists, skipping"
 else
   ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
+fi
+
+# --- Git hooks ---
+
+if [ -d .git ]; then
+  mkdir -p .git/hooks
+  ln -sf ../../hooks/post-merge .git/hooks/post-merge
 fi
