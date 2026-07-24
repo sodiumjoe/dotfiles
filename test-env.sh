@@ -80,7 +80,7 @@ done
 # Restore the user's actual config
 echo ""
 echo "Restoring configs for current environment..."
-bin/dotfiles-generate 2>/dev/null
+bin/dotfiles-generate --reset 2>/dev/null
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

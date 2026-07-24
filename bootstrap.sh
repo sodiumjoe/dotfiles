@@ -6,7 +6,8 @@ mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 if [ -n "${DOTFILES_ENV:-}" ]; then
   # Accept from environment (for non-interactive use, e.g. devbox init)
-  echo "Using DOTFILES_ENV=$DOTFILES_ENV from environment"
+  echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
+  echo "Using DOTFILES_ENV=$DOTFILES_ENV from environment (wrote ~/.dotfiles-env)"
 elif [ -f ~/.dotfiles-env ]; then
   . ~/.dotfiles-env
 else
