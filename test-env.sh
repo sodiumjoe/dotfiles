@@ -22,7 +22,7 @@ check() {
 
 for env in work devbox home; do
   echo "=== $env ==="
-  rm -f Brewfile claude/settings.json codex/config.toml codex/AGENTS.md
+  rm -f Brewfile claude/settings.json claude/CLAUDE.md codex/config.toml codex/AGENTS.md
   DOTFILES_ENV=$env bin/dotfiles-generate --reset 2>/dev/null
 
   # --- claude/settings.json ---
@@ -80,6 +80,7 @@ done
 # Restore the user's actual config
 echo ""
 echo "Restoring configs for current environment..."
+unset DOTFILES_ENV
 bin/dotfiles-generate --reset 2>/dev/null
 
 echo "$pass passed, $fail failed"

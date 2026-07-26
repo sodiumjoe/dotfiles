@@ -85,21 +85,13 @@ generate_claude_settings() {
   fi
 
   echo "Generating claude/settings.json (base + ${overlay})..."
-  # Merge contract:
+  # Merge contract: see claude/settings-merge.jq
   #   Scalar/object keys: overlay wins ($base * $overlay)
   #   Array keys below: concatenated (base + overlay)
   #   Object keys below: merged (base * overlay, overlay adds keys)
-  # If you add a NEW array-valued key to settings, add it here or
+  # If you add a NEW array-valued key to settings, add it to the .jq file or
   # the overlay will silently replace instead of append.
-  jq -s '
-    .[0] as $base | .[1] as $overlay |
-    ($base * $overlay) |
-    .permissions.allow = ($base.permissions.allow + ($overlay.permissions.allow // [])) |
-    .permissions.deny = (($base.permissions.deny // []) + ($overlay.permissions.deny // [])) |
-    .permissions.ask = (($base.permissions.ask // []) + ($overlay.permissions.ask // [])) |
-    .enabledMcpjsonServers = (($base.enabledMcpjsonServers // []) + ($overlay.enabledMcpjsonServers // [])) |
-    .enabledPlugins = (($base.enabledPlugins // {}) * ($overlay.enabledPlugins // {}))
-  ' claude/settings.base.json "$overlay" > claude/settings.json
+  jq -s -f claude/settings-merge.jq claude/settings.base.json "$overlay" > claude/settings.json
 }
 
 if [ "$reset" = true ] || [ ! -f claude/settings.json ]; then

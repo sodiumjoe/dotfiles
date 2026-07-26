@@ -40,15 +40,7 @@ if [ -f claude/settings.json ] && command -v jq &>/dev/null; then
   esac
 
   if [ -n "$overlay" ] && [ -f "$overlay" ]; then
-    jq -s '
-      .[0] as $base | .[1] as $overlay |
-      ($base * $overlay) |
-      .permissions.allow = ($base.permissions.allow + ($overlay.permissions.allow // [])) |
-      .permissions.deny = (($base.permissions.deny // []) + ($overlay.permissions.deny // [])) |
-      .permissions.ask = (($base.permissions.ask // []) + ($overlay.permissions.ask // [])) |
-      .enabledMcpjsonServers = (($base.enabledMcpjsonServers // []) + ($overlay.enabledMcpjsonServers // [])) |
-      .enabledPlugins = (($base.enabledPlugins // {}) * ($overlay.enabledPlugins // {}))
-    ' claude/settings.base.json "$overlay" > "$tmpdir/settings.json"
+    jq -s -f claude/settings-merge.jq claude/settings.base.json "$overlay" > "$tmpdir/settings.json"
 
     if ! diff -q \
       <(jq --sort-keys . "$tmpdir/settings.json") \
@@ -71,8 +63,32 @@ if [ -f claude/settings.json ] && command -v jq &>/dev/null; then
   fi
 fi
 
-if [ "$drifted" = true ]; then
-  [ "$quiet" = true ] && exit 1
-else
-  [ "$quiet" = false ] && echo "No drift detected."
+# --- Codex config ---
+
+if [ -f codex/config.toml ] && [ -f codex/config.base.toml ]; then
+  if ! diff -q codex/config.base.toml codex/config.toml &>/dev/null; then
+    drifted=true
+    if [ "$quiet" = false ]; then
+      echo "=== codex/config.toml has drifted from codex/config.base.toml ==="
+      diff --color=auto -u \
+        --label "config.base.toml" \
+        --label "live config.toml" \
+        codex/config.base.toml codex/config.toml \
+        | head -50 || true
+      echo ""
+      echo "Promote changes to codex/config.base.toml, then run: dotfiles-generate --reset"
+      echo ""
+    fi
+  fi
 fi
+
+if [ "$drifted" = true ]; then
+  if [ "$quiet" = true ]; then
+    exit 1
+  fi
+else
+  if [ "$quiet" = false ]; then
+    echo "No drift detected."
+  fi
+fi
+exit 0

@@ -82,7 +82,9 @@ for file in ${xdg_files[@]}; do
   fi
 done
 
-ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
+if [ ! -L ~/.tmux.conf ]; then
+  ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
+fi
 
 ln -sf ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
 ln -sf ~/.dotfiles/claude/settings.json ~/.claude/settings.json
