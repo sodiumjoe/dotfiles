@@ -68,7 +68,12 @@ echo "Resetting modified tracked files..."
 git checkout -- claude/settings.json codex/config.toml Brewfile 2>/dev/null || true
 
 echo "Pulling..."
-git pull origin master
+if ! git pull origin master; then
+  echo ""
+  echo "git pull failed (likely a merge conflict)."
+  echo "Resolve conflicts, then run: ./bootstrap.sh"
+  exit 1
+fi
 
 echo "Running bootstrap..."
 ./bootstrap.sh
@@ -81,10 +86,10 @@ if [ "$backed_up" = true ]; then
   echo "To check for runtime changes worth promoting:"
   echo ""
   if [ -f "$backup_dir/claude_settings.json" ]; then
-    echo "  diff <(jq --sort-keys . $backup_dir/claude_settings.json) <(jq --sort-keys . claude/settings.json)"
+    echo "  diff <(jq --sort-keys . \"$backup_dir/claude_settings.json\") <(jq --sort-keys . claude/settings.json)"
   fi
   if [ -f "$backup_dir/codex_config.toml" ]; then
-    echo "  diff $backup_dir/codex_config.toml codex/config.toml"
+    echo "  diff \"$backup_dir/codex_config.toml\" codex/config.toml"
   fi
   echo ""
   echo "Promote anything important into the source files (settings.base.json,"

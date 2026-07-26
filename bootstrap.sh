@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+shopt -s nullglob
+
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 # --- Environment detection ---

@@ -23,7 +23,7 @@ Post-install:
 
 **Root files** -> `~/.<file>`: `curlrc`, `cvimrc`, `gitconfig`, `ignore`, `inputrc`, `zshenv`
 
-**XDG directories** -> `~/.config/<dir>`: `alacritty`, `ghostty`, `hammerspoon`, `karabiner`, `rg`, `tmux`, `vivid`, `work`, `zsh`
+**XDG directories** -> `~/.config/<dir>`: `alacritty`, `efm-langserver`, `ghostty`, `hammerspoon`, `karabiner`, `rg`, `tmux`, `vivid`, `work`, `zsh`
 
 **Special cases:**
 - `init.lua` -> `~/.config/nvim/init.lua`
@@ -102,14 +102,16 @@ Both Claude Code and Codex CLI receive instructions generated from a shared base
 
 ```
 shared/base-instructions.md  --+
-shared/work-tracking.md      --+--> claude/CLAUDE.md  (+ claude-overlay.md)
-shared/neovim.md             --+
+shared/work-tracking.md      --+--> claude/CLAUDE.md  (+ shared/neovim.md + claude-overlay.md)
+                               |
                                 `--> codex/AGENTS.md   (+ codex-overlay.md)
 ```
 
+`shared/neovim.md` is included only in `claude/CLAUDE.md` (not AGENTS.md). AGENTS.md is generated only for `work` and `devbox` environments.
+
 `dotfiles-generate` concatenates these on every run. The generated files are gitignored -- edit the source files in `shared/` or the overlay files, never the generated output.
 
-`shared/` contains agent-agnostic content: communication style, code conventions, work tracking, neovim context. The overlay files contain agent-specific tool references and skill invocation syntax.
+`shared/` contains agent-agnostic content: communication style, code conventions, work tracking. The overlay files contain agent-specific tool references and skill invocation syntax.
 
 ## Skills
 
@@ -132,7 +134,7 @@ Neovim keybindings: `<leader>ap` (pick task), `<leader>aP` (create project), `<l
 - `claude/settings-merge.jq` -- jq filter for merging base + overlay settings
 - `claude/agents/` -- plan-reviewer, code-reviewer (Claude-only)
 - `claude/commands/` -- note, name, archive-plans, etc. (Claude-only)
-- `claude/hooks/` -- notify-on-idle.sh, session-project.sh
+- `claude/hooks/` -- notify-on-idle.sh, notify-on-stop.sh, repro-stop-hook.sh, session-project.sh
 - `codex/AGENTS.md` -- generated (do not edit directly)
 - `codex/config.toml` -> `~/.codex/config.toml` (model, sandbox, MCP)
 - Project-specific overrides in `.claude/settings.local.json`

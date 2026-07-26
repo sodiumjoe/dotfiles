@@ -26,6 +26,11 @@ if [ -z "${DOTFILES_ENV:-}" ]; then
   fi
 fi
 
+case "$DOTFILES_ENV" in
+  work|devbox|home) ;;
+  *) echo "dotfiles-generate: invalid DOTFILES_ENV '$DOTFILES_ENV' (expected work, devbox, or home)"; exit 1 ;;
+esac
+
 # --- Static: Agent instructions (always regenerated) ---
 
 echo "Generating CLAUDE.md..."
