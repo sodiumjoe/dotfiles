@@ -10,10 +10,10 @@ cd .dotfiles
 ./bootstrap.sh
 ```
 
-`bootstrap.sh` prompts for the environment on first run (or accept `DOTFILES_ENV` from the environment for non-interactive use, e.g. `DOTFILES_ENV=devbox ./bootstrap.sh`). It writes `~/.dotfiles-env`, generates configs, and creates symlinks.
+`bootstrap.sh` prompts for the environment on first run, or takes it as a flag for non-interactive use (`./bootstrap.sh --env=devbox`). It writes `~/.dotfiles-env`, generates configs, creates symlinks, and installs the pinned npm tools in `node-bin/`.
 
 Post-install:
-- `./brew.sh` to install Homebrew packages (or `brew-sync` for incremental installs)
+- `brew-sync` to install Homebrew packages (`brew.sh` is deprecated)
 - `./macos` to apply macOS defaults
 - FileVault, caps-lock-to-ctrl, generate SSH keys, [rustup](https://www.rustup.rs/)
 
@@ -39,6 +39,8 @@ Post-install:
 
 **Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
 
+**`~/.claude` may be the repo directory.** On some machines `~/.claude` is itself a symlink to `~/.dotfiles/claude`, so every destination above collapses onto its own source. `ln -sf` in that situation silently replaces the file with a self-referential symlink and destroys the contents, which is why `bootstrap.sh` routes all of these through a `link` helper that compares `readlink -f` on both sides and skips when they match. Do not replace those calls with bare `ln -sf`.
+
 When adding new config: add the file or directory, then add it to the appropriate list in `bootstrap.sh` (`files` array for home dotfiles, `xdg_files` array for XDG configs, or a new `ln -s` for special cases).
 
 ## Environment Management
@@ -51,25 +53,37 @@ The repo serves three environments via `DOTFILES_ENV`:
 | `devbox` | Work devbox  | Linux |
 | `home`   | Home laptop  | macOS |
 
-**Identity:** `~/.dotfiles-env` declares `DOTFILES_ENV`. Created by `bootstrap.sh` on first run (or set via env var for non-interactive use: `DOTFILES_ENV=devbox ./bootstrap.sh`). Exported by `zshenv`. Defaults to `home` if missing.
+**Identity:** `~/.dotfiles-env` declares `DOTFILES_ENV`. Created by `bootstrap.sh` on first run, or non-interactively via `./bootstrap.sh --env=devbox`. Exported by `zshenv`, defaulting to `home` if the file is missing.
+
+Bootstrap deliberately ignores the ambient `$DOTFILES_ENV`, since `zshenv` always exports it. Trusting the variable would make the prompt unreachable and would silently re-commit a stale value whenever you delete `~/.dotfiles-env` in order to re-select.
+
+**To switch environments:** `./bootstrap.sh --env=<name>` followed by `dotfiles-generate --reset`, then restart your shell. The `--reset` is what rewrites the mutable configs; bootstrap alone leaves an existing `settings.json` in place.
 
 ### Config Generation
 
-`bin/dotfiles-generate` produces config files from base + environment overlays. It distinguishes two categories:
+`bin/dotfiles-generate` produces config files from base + environment overlays. All per-environment decisions live in one table at the top of the script (which settings overlay, which Brewfile overlay, whether codex applies); nothing further down branches on `DOTFILES_ENV`.
 
 Static files (always regenerated -- tools never modify them):
-- `Brewfile.base` + `Brewfile.$DOTFILES_ENV` -> `Brewfile` (macOS only, skipped on devbox)
+- `Brewfile.base` + `Brewfile.$DOTFILES_ENV` -> `Brewfile` (skipped on devbox, which declares no Brewfile, and on Linux, which has no Homebrew -- separate conditions)
 - `shared/*.md` + overlay -> `claude/CLAUDE.md`, `codex/AGENTS.md`
 
 Mutable files (generated once on first bootstrap, then hands-off -- tools modify them at runtime):
 - `claude/settings.base.json` + `claude/settings.work|home.json` -> `claude/settings.json` (merged via `claude/settings-merge.jq`)
 - `codex/config.base.toml` -> `codex/config.toml`
 
-Use `dotfiles-generate --reset` to force-regenerate mutable files.
+`settings-merge.jq` is a generic recursive merge: objects merge key-by-key, arrays concatenate (base first), scalars take the overlay's value. Adding a new array-valued key to the settings needs no change to the filter. Note that arrays concatenating means an overlay can only add hooks and permissions, never remove one the base declares.
+
+Use `dotfiles-generate --reset` to force-regenerate mutable files, and `--out DIR` to generate into a scratch directory without touching the working tree.
+
+Generation fails loudly rather than degrading: a missing `jq` or a missing overlay aborts, because writing base-only settings would silently drop every work permission, MCP server, and plugin.
 
 ### Config Drift
 
-`bin/dotfiles-diff` shows what tools have changed in mutable configs (settings.json, config.toml) vs. what the source files would generate. The workflow for promoting runtime changes back to source:
+`bin/dotfiles-diff` shows what tools have changed in mutable configs (settings.json, config.toml) vs. what the source files would generate. It works by running `dotfiles-generate --out` into a temp directory and diffing against the live files, so drift detection stays consistent with generation by construction. Exit codes are `0` no drift, `1` drift, `2` could not check.
+
+Codex rewrites `last_updated` and `last_revision` in its marketplace block on every refresh; those keys are stripped from both sides before diffing, and should never be committed to `config.base.toml`.
+
+The workflow for promoting runtime changes back to source:
 
 1. Run `dotfiles-diff` to see what changed
 2. Edit the appropriate source file (base or overlay)
@@ -77,7 +91,7 @@ Use `dotfiles-generate --reset` to force-regenerate mutable files.
 
 ### Post-merge Hook
 
-`hooks/post-merge` regenerates static files after `git pull` when sources changed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Does not fire on `git pull --rebase` (uses `ORIG_HEAD`, which rebase doesn't set).
+`hooks/post-merge` regenerates static files after `git pull` when sources changed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Git does not run `post-merge` for rebases at all, so `git pull --rebase` skips it; run `dotfiles-generate` by hand after one.
 
 ### Conditional Symlinks
 
@@ -89,12 +103,19 @@ Codex config, codex skills, and work-cli are only symlinked when `DOTFILES_ENV` 
 
 ### Package Sync
 
+Three lockfiles, one rule: commit them, so every environment resolves to the same versions.
+
 - Vim plugins: `lazy-lock.json` (commit after `:Lazy update`, restore with `:Lazy restore`)
+- npm tools: `node-bin/package-lock.json` (installed by `bootstrap.sh` via `npm ci`, updated by `upgrade --npm`)
 - Homebrew: `brew-sync` (installs missing packages via `brew bundle --no-upgrade`; intentional upgrades via `bin/upgrade`)
+
+`node-bin/` holds pinned npm tool binaries -- ACP providers, language servers, formatters. It is the right home for anything that has to exist on both macOS and Linux, because the Brewfile is skipped entirely on devbox. Both ACP providers (`claude-agent-acp`, `codex-acp`) live here for exactly that reason; do not add them to a Brewfile, where work and devbox would end up on different implementations.
+
+`zsh/.zshrc` prepends `node-bin/node_modules/.bin` to `PATH` *after* `nodenv init`, which prepends its own shims. Appending instead would let stray `npm install -g` copies shadow the pinned versions.
 
 ### Testing
 
-`test-env.sh` generates configs for all three environments and validates key properties (work-only permissions aren't in home, stripe plugins aren't in home, Brewfile contents match environment, etc.). Run from the repo root; it restores the current environment's configs when done.
+`test-env.sh` generates configs for all three environments and validates key properties (work-only permissions aren't in home, stripe plugins aren't in home, base hooks survive the overlay merge, Brewfile contents match environment, invalid environments are rejected). It generates into a temp directory via `dotfiles-generate --out` and never touches the working tree -- an earlier version deleted the live `claude/settings.json`, which is the file a running Claude Code process reads and rewrites.
 
 ## Agent Instruction Architecture
 
