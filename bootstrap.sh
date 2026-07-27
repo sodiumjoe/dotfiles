@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 shopt -s nullglob
 
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 # --- Environment detection ---
+#
+# Precedence: --env flag, then ~/.dotfiles-env, then interactive prompt.
+#
+# The ambient $DOTFILES_ENV is deliberately NOT consulted: zshenv exports it
+# unconditionally (defaulting to home), so trusting it would make the prompt
+# unreachable and would silently re-commit a stale value whenever ~/.dotfiles-env
+# is deleted in order to re-select. Non-interactive callers pass --env.
 
-if [ -n "${DOTFILES_ENV:-}" ]; then
-  # Accept from environment (for non-interactive use, e.g. devbox init)
-  echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
-  echo "Using DOTFILES_ENV=$DOTFILES_ENV from environment (wrote ~/.dotfiles-env)"
+selected_env=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env) selected_env="${2:-}"; shift 2 ;;
+    --env=*) selected_env="${1#--env=}"; shift ;;
+    *) echo "bootstrap.sh: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+
+if [ -n "$selected_env" ]; then
+  DOTFILES_ENV="$selected_env"
 elif [ -f ~/.dotfiles-env ]; then
   . ~/.dotfiles-env
 else
@@ -23,17 +39,37 @@ else
     1) DOTFILES_ENV=work ;;
     2) DOTFILES_ENV=devbox ;;
     3) DOTFILES_ENV=home ;;
-    *) echo "Invalid choice"; exit 1 ;;
+    *) echo "Invalid choice" >&2; exit 1 ;;
   esac
-  echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
-  echo "Wrote ~/.dotfiles-env (DOTFILES_ENV=$DOTFILES_ENV)"
 fi
+
+case "$DOTFILES_ENV" in
+  work|devbox|home) ;;
+  *) echo "bootstrap.sh: invalid environment '$DOTFILES_ENV' (expected work, devbox, or home)" >&2; exit 1 ;;
+esac
+
+echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
+echo "Using DOTFILES_ENV=$DOTFILES_ENV (wrote ~/.dotfiles-env)"
 
 export DOTFILES_ENV
 
 # --- Generate configs ---
 
 bin/dotfiles-generate
+
+# --- Symlink helper ---
+#
+# ~/.claude may itself be a symlink into this repo, in which case source and
+# destination resolve to the same file and `ln -sf` would silently replace it
+# with a self-referential symlink (ELOOP), destroying the contents.
+
+link() {
+  local src="$1" dest="$2"
+  if [ "$(readlink -f "$src" 2>/dev/null)" = "$(readlink -f "$dest" 2>/dev/null)" ]; then
+    return 0
+  fi
+  ln -sfn "$src" "$dest"
+}
 
 # --- Symlink dotfiles ---
 
@@ -88,50 +124,62 @@ if [ ! -L ~/.tmux.conf ]; then
   ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
 fi
 
-ln -sf ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
-ln -sf ~/.dotfiles/claude/settings.json ~/.claude/settings.json
+mkdir -p ~/.claude
+link ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
+link ~/.dotfiles/claude/settings.json ~/.claude/settings.json
 
 mkdir -p ~/.claude/hooks
 for hook in ~/.dotfiles/claude/hooks/*; do
-  ln -sf "$hook" ~/.claude/hooks/$(basename "$hook")
+  link "$hook" ~/.claude/hooks/$(basename "$hook")
 done
 
 mkdir -p ~/.claude/skills
 for skill in ~/.dotfiles/skills/*/; do
-  name=$(basename "$skill")
-  ln -sfn "$skill" ~/.claude/skills/$name
+  link "$skill" ~/.claude/skills/$(basename "$skill")
 done
 
 mkdir -p ~/.claude/agents ~/.claude/commands
 for agent in ~/.dotfiles/claude/agents/*; do
-  ln -sf "$agent" ~/.claude/agents/$(basename "$agent")
+  link "$agent" ~/.claude/agents/$(basename "$agent")
 done
 for cmd in ~/.dotfiles/claude/commands/*; do
-  ln -sf "$cmd" ~/.claude/commands/$(basename "$cmd")
+  link "$cmd" ~/.claude/commands/$(basename "$cmd")
 done
 
 # --- Work + devbox symlinks (Codex, work-cli) ---
 
 if [ "$DOTFILES_ENV" = "work" ] || [ "$DOTFILES_ENV" = "devbox" ]; then
   mkdir -p ~/.codex ~/.codex/skills
-  ln -sf ~/.dotfiles/codex/config.toml ~/.codex/config.toml
-  ln -sf ~/.dotfiles/codex/AGENTS.md ~/.codex/AGENTS.md
+  link ~/.dotfiles/codex/config.toml ~/.codex/config.toml
+  link ~/.dotfiles/codex/AGENTS.md ~/.codex/AGENTS.md
 
   for skill in ~/.dotfiles/skills/*/; do
-    name=$(basename "$skill")
-    ln -sfn "$skill" ~/.codex/skills/$name
+    link "$skill" ~/.codex/skills/$(basename "$skill")
   done
 
   mkdir -p ~/bin
-  ln -sf ~/.dotfiles/work-cli/bin/work ~/bin/work
+  link ~/.dotfiles/work-cli/bin/work ~/bin/work
 fi
 
 # --- Universal bin symlinks ---
 
 mkdir -p ~/bin
 for script in ~/.dotfiles/bin/*; do
-  ln -sf "$script" ~/bin/$(basename "$script")
+  link "$script" ~/bin/$(basename "$script")
 done
+
+# --- Pinned npm tool binaries (ACP providers, language servers, formatters) ---
+
+if command -v npm &>/dev/null; then
+  echo "Installing node-bin packages..."
+  if [ -f node-bin/package-lock.json ]; then
+    npm ci --prefix node-bin
+  else
+    npm install --prefix node-bin
+  fi
+else
+  echo "npm not found, skipping node-bin (ACP providers will be unavailable)" >&2
+fi
 
 # --- Neovim ---
 

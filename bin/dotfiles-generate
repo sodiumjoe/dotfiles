@@ -2,38 +2,64 @@
 set -euo pipefail
 
 # Regenerate config files from base + environment overlays.
-# Called by bootstrap.sh and the post-merge git hook.
+# Called by bootstrap.sh, bin/dotfiles-diff, and the post-merge git hook.
 #
 # Static files (CLAUDE.md, AGENTS.md, Brewfile) are always regenerated.
 # Mutable files (settings.json, config.toml) are only generated if they
 # don't exist, since tools modify them at runtime. Use --reset to force.
 #
+# Usage: dotfiles-generate [--reset] [--out DIR]
+#   --reset    regenerate mutable files even if they already exist
+#   --out DIR  write generated files under DIR instead of the repo root
+#
 # Requires DOTFILES_ENV to be set (or ~/.dotfiles-env to exist).
 
-cd "$(dirname "$0")/.."  # cd to dotfiles root
+cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
 
 reset=false
-if [ "${1:-}" = "--reset" ]; then
-  reset=true
-fi
+out=.
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --reset) reset=true; shift ;;
+    --out)
+      out="${2:-}"
+      [ -n "$out" ] || { echo "dotfiles-generate: --out requires a directory" >&2; exit 2; }
+      shift 2
+      ;;
+    *) echo "dotfiles-generate: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
 
 if [ -z "${DOTFILES_ENV:-}" ]; then
   if [ -f ~/.dotfiles-env ]; then
     . ~/.dotfiles-env
   else
-    echo "dotfiles-generate: DOTFILES_ENV not set and ~/.dotfiles-env not found"
-    exit 1
+    echo "dotfiles-generate: DOTFILES_ENV not set and ~/.dotfiles-env not found" >&2
+    exit 2
   fi
 fi
 
+# Environment profile. Every env-specific decision is declared here, so the
+# rest of the script never branches on DOTFILES_ENV directly.
+#   settings_overlay  suffix of claude/settings.<x>.json
+#   brew_overlay      suffix of Brewfile.<x>, or empty for "no Brewfile"
+#   codex             whether to generate AGENTS.md and config.toml
 case "$DOTFILES_ENV" in
-  work|devbox|home) ;;
-  *) echo "dotfiles-generate: invalid DOTFILES_ENV '$DOTFILES_ENV' (expected work, devbox, or home)"; exit 1 ;;
+  work)   settings_overlay=work; brew_overlay=work; codex=true ;;
+  devbox) settings_overlay=work; brew_overlay=;     codex=true ;;
+  home)   settings_overlay=home; brew_overlay=home; codex=false ;;
+  *)
+    echo "dotfiles-generate: invalid DOTFILES_ENV '$DOTFILES_ENV' (expected work, devbox, or home)" >&2
+    exit 2
+    ;;
 esac
+
+mkdir -p "$out/claude" "$out/codex"
 
 # --- Static: Agent instructions (always regenerated) ---
 
-echo "Generating CLAUDE.md..."
+echo "Generating claude/CLAUDE.md..."
 {
   cat shared/base-instructions.md
   printf '\n\n'
@@ -42,64 +68,54 @@ echo "Generating CLAUDE.md..."
   cat shared/neovim.md
   printf '\n\n'
   cat claude-overlay.md
-} > claude/CLAUDE.md
+} > "$out/claude/CLAUDE.md"
 
-if [ "$DOTFILES_ENV" = "work" ] || [ "$DOTFILES_ENV" = "devbox" ]; then
-  echo "Generating AGENTS.md..."
-  mkdir -p codex
+if [ "$codex" = true ]; then
+  echo "Generating codex/AGENTS.md..."
   {
     cat shared/base-instructions.md
     printf '\n\n'
     cat shared/work-tracking.md
     printf '\n\n'
     cat codex-overlay.md
-  } > codex/AGENTS.md
+  } > "$out/codex/AGENTS.md"
 fi
 
-# --- Static: Brewfile (always regenerated, macOS only) ---
+# --- Static: Brewfile (always regenerated) ---
+# Skipped when the environment declares no Brewfile (devbox) or the platform
+# has no Homebrew (Linux). These are separate conditions, not redundant ones.
 
-if [ "$(uname -s)" = "Darwin" ] && [ "$DOTFILES_ENV" != "devbox" ]; then
-  echo "Generating Brewfile (base + ${DOTFILES_ENV})..."
-  cat Brewfile.base > Brewfile
-  if [ -f "Brewfile.${DOTFILES_ENV}" ]; then
-    printf '\n' >> Brewfile
-    cat "Brewfile.${DOTFILES_ENV}" >> Brewfile
+if [ -n "$brew_overlay" ] && [ "$(uname -s)" = "Darwin" ]; then
+  echo "Generating Brewfile (base + ${brew_overlay})..."
+  cat Brewfile.base > "$out/Brewfile"
+  if [ -f "Brewfile.${brew_overlay}" ]; then
+    printf '\n' >> "$out/Brewfile"
+    cat "Brewfile.${brew_overlay}" >> "$out/Brewfile"
   fi
 fi
 
 # --- Mutable: Claude settings (generate once, skip if exists) ---
 
 generate_claude_settings() {
-  # work and devbox share the same settings overlay (work)
-  case "$DOTFILES_ENV" in
-    work|devbox) local overlay="claude/settings.work.json" ;;
-    home)        local overlay="claude/settings.home.json" ;;
-    *)           local overlay="" ;;
-  esac
+  local overlay="claude/settings.${settings_overlay}.json"
 
-  if [ -z "$overlay" ] || [ ! -f "$overlay" ]; then
-    echo "Warning: settings overlay not found, using base only"
-    cp claude/settings.base.json claude/settings.json
-    return
+  if [ ! -f "$overlay" ]; then
+    echo "dotfiles-generate: settings overlay $overlay not found" >&2
+    exit 1
   fi
 
   if ! command -v jq &>/dev/null; then
-    echo "Warning: jq not found, using base settings only (install jq and re-run)"
-    cp claude/settings.base.json claude/settings.json
-    return
+    # Writing base-only settings would silently drop every overlay permission,
+    # MCP server, and plugin. A missing config is safer than a wrong one.
+    echo "dotfiles-generate: jq not found — cannot merge settings (brew install jq)" >&2
+    exit 1
   fi
 
   echo "Generating claude/settings.json (base + ${overlay})..."
-  # Merge contract: see claude/settings-merge.jq
-  #   Scalar/object keys: overlay wins ($base * $overlay)
-  #   Array keys below: concatenated (base + overlay)
-  #   Object keys below: merged (base * overlay, overlay adds keys)
-  # If you add a NEW array-valued key to settings, add it to the .jq file or
-  # the overlay will silently replace instead of append.
-  jq -s -f claude/settings-merge.jq claude/settings.base.json "$overlay" > claude/settings.json
+  jq -s -f claude/settings-merge.jq claude/settings.base.json "$overlay" > "$out/claude/settings.json"
 }
 
-if [ "$reset" = true ] || [ ! -f claude/settings.json ]; then
+if [ "$reset" = true ] || [ ! -f "$out/claude/settings.json" ]; then
   generate_claude_settings
 else
   echo "Skipping claude/settings.json (exists, use --reset to regenerate)"
@@ -108,21 +124,18 @@ fi
 # --- Mutable: Codex config (generate once, skip if exists) ---
 
 generate_codex_config() {
-  if [ "$DOTFILES_ENV" != "work" ] && [ "$DOTFILES_ENV" != "devbox" ]; then
-    return
-  fi
-
-  mkdir -p codex
-  # codex/config.toml doesn't need merging — it's entirely work-specific
-  # so we just copy it as-is
+  # codex/config.toml needs no merging — it's entirely work-specific,
+  # so we just copy it as-is.
   echo "Generating codex/config.toml..."
-  cp codex/config.base.toml codex/config.toml
+  cp codex/config.base.toml "$out/codex/config.toml"
 }
 
-if [ "$reset" = true ] || [ ! -f codex/config.toml ]; then
-  generate_codex_config
-else
-  echo "Skipping codex/config.toml (exists, use --reset to regenerate)"
+if [ "$codex" = true ]; then
+  if [ "$reset" = true ] || [ ! -f "$out/codex/config.toml" ]; then
+    generate_codex_config
+  else
+    echo "Skipping codex/config.toml (exists, use --reset to regenerate)"
+  fi
 fi
 
 echo "Config generation complete (DOTFILES_ENV=${DOTFILES_ENV})."

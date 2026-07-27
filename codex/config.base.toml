@@ -25,8 +25,6 @@ trust_level = "trusted"
 trust_level = "trusted"
 
 [marketplaces.stripe-internal-marketplace]
-last_updated = "2026-07-20T16:56:23Z"
-last_revision = "9ca8c3dda3ba88b4bfbc9e7930bbeda2730ef6e1"
 source_type = "git"
 source = "http://codex-marketplace--northwest.corp.stripe.com.certproxy.localhost:7891/codex-marketplace.git"
 

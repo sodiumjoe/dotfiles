@@ -102,6 +102,7 @@
     ]
   },
   "model": "opus",
+  "tui": "fullscreen",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "Notification": [

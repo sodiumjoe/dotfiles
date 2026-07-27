@@ -3,17 +3,19 @@
 # Only touches files that tools don't modify at runtime
 # (CLAUDE.md, AGENTS.md, Brewfile). Mutable files like
 # settings.json and config.toml are left alone.
+#
+# Git does not run post-merge for rebases, so `git pull --rebase` skips this
+# entirely; run `dotfiles-generate` by hand after one.
 
 cd "$(git rev-parse --show-toplevel)"
 
-# Only regenerate if source files for static configs changed
-changed=$(git diff-tree -r --name-only ORIG_HEAD HEAD)
+changed=$(git diff-tree -r --name-only ORIG_HEAD HEAD 2>/dev/null || true)
 
 needs_regen=false
 for pattern in \
   "Brewfile.base" "Brewfile.work" "Brewfile.home" \
   "shared/" "claude-overlay.md" "codex-overlay.md"; do
-  if echo "$changed" | grep -q "$pattern"; then
+  if printf '%s\n' "$changed" | grep -qF "$pattern"; then
     needs_regen=true
     break
   fi
@@ -24,8 +26,16 @@ if [ "$needs_regen" = true ]; then
   bin/dotfiles-generate
 fi
 
-# Check for drift in mutable configs (settings.json, config.toml)
-if ! bin/dotfiles-diff --quiet 2>/dev/null; then
-  echo ""
-  echo "⚠ Mutable config drift detected — run 'dotfiles-diff' to review"
-fi
+# Check for drift in mutable configs (settings.json, config.toml).
+# Exit 1 means drift; exit 2 means the check could not run.
+bin/dotfiles-diff --quiet
+case $? in
+  1)
+    echo ""
+    echo "Mutable config drift detected — run 'dotfiles-diff' to review"
+    ;;
+  2)
+    echo ""
+    echo "Could not check config drift — run 'dotfiles-diff' for details"
+    ;;
+esac

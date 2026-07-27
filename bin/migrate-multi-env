@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
 
 if [ ! -d .git ]; then
-  echo "Not in the dotfiles repo"
+  echo "Not in the dotfiles repo" >&2
   exit 1
 fi
 
 git fetch origin
 
-if git diff --quiet origin/master -- bin/dotfiles-generate 2>/dev/null; then
-  echo "origin/master doesn't have dotfiles-generate yet. Push the multi-env commits first."
+# Test for presence, not for difference: `git diff --quiet` also succeeds when
+# the local and remote copies are identical, which would reject re-running this
+# after a partially completed migration.
+if ! git cat-file -e origin/master:bin/dotfiles-generate 2>/dev/null; then
+  echo "origin/master doesn't have dotfiles-generate yet. Push the multi-env commits first." >&2
   exit 1
 fi
 
@@ -65,7 +68,12 @@ export DOTFILES_ENV
 echo "Wrote ~/.dotfiles-env (DOTFILES_ENV=$DOTFILES_ENV)"
 
 echo "Resetting modified tracked files..."
-git checkout -- claude/settings.json codex/config.toml Brewfile 2>/dev/null || true
+# One pathspec at a time: `git checkout -- a b` restores nothing at all if any
+# of the paths is untracked, which silently leaves the tree dirty and makes the
+# pull below fail.
+for f in claude/settings.json codex/config.toml Brewfile; do
+  git checkout -- "$f" 2>/dev/null || true
+done
 
 echo "Pulling..."
 if ! git pull origin master; then
