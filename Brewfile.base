@@ -1,4 +1,5 @@
 # Core tools
+brew "bash"
 brew "coreutils"
 brew "curl"
 brew "git", link: false

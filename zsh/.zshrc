@@ -144,8 +144,6 @@ source ${ZIM_HOME}/init.zsh
 export PATH=${PATH}:~/bin
 export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
-export PATH=${PATH}:~/.dotfiles/node-bin/node_modules/.bin
-export PATH=${PATH}:~/node-bin/node_modules/.bin
 export PATH=${HOMEBREW_PREFIX}/opt/python/libexec/bin:${PATH}
 export PATH=${HOMEBREW_PREFIX}/opt/curl/bin:${PATH}
 export PATH=${PATH}:/usr/local/bin
@@ -251,6 +249,10 @@ bindkey '^n' autosuggest-accept
 export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
 eval "$(nodenv init -)"
+
+# Must come after `nodenv init`, which prepends its shims. Appending here would
+# let globally installed copies shadow the versions pinned in node-bin.
+export PATH=~/.dotfiles/node-bin/node_modules/.bin:~/node-bin/node_modules/.bin:${PATH}
 
 # To customize prompt, run `p10k configure` or edit ~/.config/zsh/.p10k.zsh.
 [[ ! -f ~/.config/zsh/.p10k.zsh ]] || source ~/.config/zsh/.p10k.zsh

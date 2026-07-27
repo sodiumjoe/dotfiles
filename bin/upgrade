@@ -4,6 +4,36 @@ set -euo pipefail
 # Upgrade specific brew formulae and sync devbox version pins.
 # Called by work tick when the user checks items in the daily note's ## Upgrades section.
 
+usage() {
+  echo "Usage: upgrade <formula> [formula ...]"
+  echo "       upgrade --npm"
+  echo "Upgrades brew formulae and syncs devbox version pins."
+  echo "--npm updates node-bin packages within their declared ranges and"
+  echo "refreshes the committed lockfile."
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
+fi
+
+# Handled before the associative array below, which needs bash 4+. On stock
+# macOS `/usr/bin/env bash` is 3.2, so anything past that point is unreachable
+# unless a newer bash is installed.
+if [[ "$1" == "--npm" ]]; then
+  cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
+  npm update --prefix node-bin
+  npm install --prefix node-bin
+  if ! git diff --quiet -- node-bin/package-lock.json; then
+    git add node-bin/package-lock.json
+    git commit -m "upgrade node-bin packages"
+    echo "committed node-bin/package-lock.json"
+  else
+    echo "node-bin already up to date"
+  fi
+  exit 0
+fi
+
 DEVBOX_INIT="${DEVBOX_INIT_PATH:-$HOME/stripe/devbox/.devbox-init}"
 
 declare -A DEVBOX_PINS=(
@@ -12,16 +42,6 @@ declare -A DEVBOX_PINS=(
   [efm-langserver]=EFM_VERSION
   [unison]=UNISON_VERSION
 )
-
-usage() {
-  echo "Usage: upgrade <formula> [formula ...]"
-  echo "Upgrades brew formulae and syncs devbox version pins."
-}
-
-if [[ $# -eq 0 ]]; then
-  usage
-  exit 1
-fi
 
 get_brew_version() {
   local formula="$1"
