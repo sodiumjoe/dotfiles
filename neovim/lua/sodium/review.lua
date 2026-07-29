@@ -1,5 +1,15 @@
 local M = {}
 
+local function git(toplevel, args)
+    local cmd = { "git", "-C", toplevel }
+    vim.list_extend(cmd, args)
+    local result = vim.system(cmd, { text = true }):wait()
+    if result.code ~= 0 then
+        return nil, vim.trim(result.stderr or "")
+    end
+    return vim.trim(result.stdout or "")
+end
+
 M._state = {
     session = nil,
     stashed = false,
@@ -187,6 +197,53 @@ function M.build_file_items(toplevel, changed, untracked)
         add(rel, true)
     end
     return items
+end
+
+function M.detect_base(toplevel)
+    local origin_head = git(toplevel, { "rev-parse", "--abbrev-ref", "origin/HEAD" })
+    if origin_head then
+        origin_head = origin_head:gsub("^origin/", "")
+    end
+    local namespaces = {}
+    for _, namespace in ipairs({ "pay-server", "zoolander", "gocode" }) do
+        if vim.fn.isdirectory(toplevel .. "/" .. namespace) == 1 then
+            namespaces[#namespaces + 1] = namespace
+        end
+    end
+    for _, candidate in ipairs(M.base_candidates(origin_head, namespaces)) do
+        if git(toplevel, { "rev-parse", "--verify", "--quiet", candidate .. "^{commit}" }) then
+            return candidate
+        end
+    end
+    return nil
+end
+
+function M.start_self_review(base, toplevel)
+    toplevel = toplevel or git(vim.fn.getcwd(), { "rev-parse", "--show-toplevel" })
+    if not toplevel then
+        vim.notify("Not a git repository", vim.log.levels.ERROR)
+        return false
+    end
+    base = base or M.detect_base(toplevel)
+    if not base then
+        vim.notify("Could not detect base ref; pass one explicitly (:Review <ref>)", vim.log.levels.ERROR)
+        return false
+    end
+    local merge_base = git(toplevel, { "merge-base", base, "HEAD" }) or base
+    local diff = git(toplevel, { "diff", "--no-renames", merge_base }) or ""
+    local names = git(toplevel, { "diff", "--no-renames", "--name-only", merge_base }) or ""
+    local untracked = git(toplevel, { "ls-files", "--others", "--exclude-standard" }) or ""
+
+    M.start_session({
+        id = base,
+        mode = "self",
+        base_ref = merge_base,
+        head_ref = nil,
+        toplevel = toplevel,
+    })
+    M.set_file_diffs(M.parse_file_diffs(diff))
+    M.set_files(M.build_file_items(toplevel, M.parse_changed_files(names), M.parse_changed_files(untracked)))
+    return true
 end
 
 function M.parse_file_diffs(diff_text)
