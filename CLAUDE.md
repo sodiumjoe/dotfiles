@@ -118,6 +118,11 @@ Neovim keybindings:
 
 Work vault: `~/stripe/work/` (configured in `work/config.json`).
 
+Code review workflow:
+- `work review enter-pr <n>` — check out PR n for review and write session state under `.review/`
+- `work review submit <EVENT> [body]` — submit a PR review and exit the session
+- `work review exit` — restore the previous branch/stash and remove review session state
+
 ### claude/ and codex/
 
 - `claude/CLAUDE.md` — generated from `shared/*.md` + `claude-overlay.md` (do not edit directly)

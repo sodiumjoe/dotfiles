@@ -183,6 +183,17 @@ const commands = {
     if (results.length === 0) console.log('nothing to link');
   },
 
+  review() {
+    const cr = require(path.join(LIB, 'code-review.js'));
+    const sub = args[1];
+    let out;
+    if (sub === 'enter-pr' && args[2]) out = cr.enterPr(args[2]);
+    else if (sub === 'submit' && args[2]) out = cr.submit(args[2], args[3] || '');
+    else if (sub === 'exit') out = cr.exitSession();
+    else throw new Error('usage: work review <enter-pr <n> | submit <EVENT> [body] | exit>');
+    console.log(JSON.stringify(out));
+  },
+
   async gather() {
     const { opts } = parseOpts(args.slice(1));
     const dateStr = getDate(opts);
@@ -729,6 +740,9 @@ Commands:
   parse-changelog <file> <pat> Extract matching changelog lines (TSV)
   check-upgrades               Show outdated brew packages and stale nvim plugins
   check-upstream               Check forked skills for upstream changes
+  review enter-pr <n>          Check out PR n for review (session in .review/)
+  review submit <EVENT> [body] Submit PR review (APPROVE|REQUEST_CHANGES|COMMENT) and exit
+  review exit                  Restore branch/stash and tear down review session
   help                         Show this help
 
 Options:
