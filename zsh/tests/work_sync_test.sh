@@ -109,7 +109,11 @@ pay() {
   printf '%s\n' "$@" > "$tmpdir/pay_args"
 
   if [[ "$1" == "remote" && "$2" == "list" && "$3" == "--raw" ]]; then
-    print -r -- '[{"name":"other","host":"other-host"},{"name":"cycle-breaker-3","host":"remote-host"}]'
+    print -r -- '[{"name":"other","host":"other-host","status":"ec2stopped"},{"name":"cycle-breaker-3","host":"remote-host","status":"running"},{"name":"stopped-devbox","host":"stopped-host","status":"ec2stopped"}]'
+    return 0
+  fi
+
+  if [[ "$1" == "remote" && "$2" == "start" && "$3" == "stopped-devbox" ]]; then
     return 0
   fi
 
@@ -142,6 +146,22 @@ assert_eq "remote host lookup exits zero" "0" "$capture_status"
 assert_eq "remote host lookup returns hostname" "remote-host" "$capture_output"
 assert_eq \
   "remote host lookup reads raw remote list" \
+  $'remote\nlist\n--raw' \
+  "$(cat "$tmpdir/pay_args")"
+
+echo "=== Test: stopped remote starts before connection ==="
+run_capture _devbox_start_if_needed stopped-devbox
+assert_eq "stopped remote start exits zero" "0" "$capture_status"
+assert_eq \
+  "stopped remote invokes pay remote start" \
+  $'remote\nstart\nstopped-devbox' \
+  "$(cat "$tmpdir/pay_args")"
+
+echo "=== Test: running remote does not start ==="
+run_capture _devbox_start_if_needed cycle-breaker-3
+assert_eq "running remote check exits zero" "0" "$capture_status"
+assert_eq \
+  "running remote only reads raw remote list" \
   $'remote\nlist\n--raw' \
   "$(cat "$tmpdir/pay_args")"
 

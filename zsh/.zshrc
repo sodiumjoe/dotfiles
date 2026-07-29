@@ -313,6 +313,9 @@ remotes() {
   local picked=$(fzf < <(fetch_remotes))
   [ -z "$picked" ] && return 0
   local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
+
+  _devbox_start_if_needed "$remote_name" || return
+
   local host=$(_devbox_host_for_remote "$remote_name")
 
   _devbox_sync "$host"

@@ -32,6 +32,21 @@ _devbox_host_for_remote() {
   pay remote list --raw | jq -er --arg name "$remote_name" '.[] | select(.name == $name) | .host'
 }
 
+_devbox_status_for_remote() {
+  local remote_name="$1"
+  pay remote list --raw | jq -er --arg name "$remote_name" '.[] | select(.name == $name) | .status'
+}
+
+_devbox_start_if_needed() {
+  local remote_name="$1"
+  local remote_status
+
+  remote_status="$(_devbox_status_for_remote "$remote_name")" || return
+  [[ "$remote_status" == "running" ]] && return 0
+
+  pay remote start "$remote_name"
+}
+
 _devbox_attach_tmux() {
   local host="$1"
   ssh -t "$host" "/usr/bin/tmux a || /usr/bin/tmux"
