@@ -1,8 +1,19 @@
 local review = require("sodium.review")
+local review_ui = require("sodium.review_ui")
 
 describe("sodium.review", function()
     before_each(function()
         review.reset()
+    end)
+
+    after_each(function()
+        pcall(vim.cmd, "diffoff!")
+        pcall(vim.cmd, "silent! only!")
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):match("/review%-spec%-") then
+                pcall(vim.api.nvim_buf_delete, buf, { force = true })
+            end
+        end
     end)
 
     describe("parse_pr_list", function()
@@ -72,6 +83,241 @@ describe("sodium.review", function()
         end)
     end)
 
+    describe("base_candidates", function()
+        it("prefers origin/HEAD, then green branches, then main/master", function()
+            local c = review.base_candidates("master", { "pay-server" })
+            assert.are.same(
+                {
+                    "master",
+                    "origin/green-pay-server",
+                    "green-pay-server",
+                    "main",
+                    "origin/main",
+                    "master",
+                    "origin/master",
+                },
+                c
+            )
+        end)
+
+        it("omits origin/HEAD when nil", function()
+            local c = review.base_candidates(nil, {})
+            assert.are.same({ "main", "origin/main", "master", "origin/master" }, c)
+        end)
+    end)
+
+    describe("build_file_items", function()
+        it("builds items for changed and untracked files", function()
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir, "p")
+            vim.fn.writefile({ "x" }, dir .. "/a.txt")
+            local items = review.build_file_items(dir, { "a.txt", "gone.txt" }, { "new.txt" })
+            assert.are.equal(3, #items)
+            assert.is_true(items[1].exists)
+            assert.is_false(items[2].exists)
+            assert.is_true(items[3].untracked)
+            assert.are.equal(dir .. "/a.txt", items[1].file)
+            assert.are.equal(3, items[3].sort_idx)
+            vim.fn.delete(dir, "rf")
+        end)
+    end)
+
+    describe("start_self_review", function()
+        local function sh(cwd, args)
+            local r = vim.system(args, { cwd = cwd, text = true }):wait()
+            assert.are.equal(0, r.code, (r.stderr or "") .. " for " .. table.concat(args, " "))
+            return vim.trim(r.stdout or "")
+        end
+
+        it("builds a session from committed, uncommitted, and untracked changes", function()
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir, "p")
+            sh(dir, { "git", "init", "-b", "main" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "root" })
+            vim.fn.writefile({ "one" }, dir .. "/committed.txt")
+            sh(dir, { "git", "add", "committed.txt" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add committed" })
+            vim.fn.writefile({ "one", "two" }, dir .. "/committed.txt")
+            vim.fn.writefile({ "new" }, dir .. "/untracked.txt")
+
+            review.reset()
+            local ok = review.start_self_review("HEAD~1", dir)
+            assert.is_true(ok)
+            local s = review.get_session()
+            assert.are.equal("self", s.mode)
+            local rels = vim.tbl_map(function(i) return i.rel end, review.get_files())
+            assert.are.same({ "committed.txt", "untracked.txt" }, rels)
+            assert.is_truthy(review.get_file_diffs()["committed.txt"])
+            review.reset()
+            vim.fn.delete(dir, "rf")
+        end)
+    end)
+
+    describe("load", function()
+        local function write(path, lines)
+            vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+            vim.fn.writefile(lines, path)
+        end
+
+        local function make_fixture()
+            local dir = vim.fn.tempname() .. "/review-spec-load"
+            vim.fn.mkdir(dir .. "/.review", "p")
+            vim.fn.mkdir(dir .. "/src", "p")
+            write(dir .. "/src/a.lua", { "a" })
+            write(dir .. "/src/b.lua", { "b" })
+            write(dir .. "/.review/session.json", {
+                vim.json.encode({
+                    mode = "pr",
+                    id = "7",
+                    base_ref = "base-sha",
+                    head_ref = "pr-7",
+                    toplevel = dir,
+                    previous_branch = "main",
+                    stash_ref = "stash-sha",
+                    user = "moon",
+                    reviewed = { "src/a.lua" },
+                }),
+            })
+            write(dir .. "/.review/diff", {
+                "diff --git a/src/a.lua b/src/a.lua",
+                "@@ -1 +1 @@",
+                "-old",
+                "+a",
+                "diff --git a/src/b.lua b/src/b.lua",
+                "@@ -1 +1 @@",
+                "-old",
+                "+b",
+            })
+            write(dir .. "/.review/files", { "src/a.lua", "src/b.lua" })
+            write(dir .. "/.review/pr-comments.json", {
+                vim.json.encode({
+                    {
+                        id = 101,
+                        path = "src/a.lua",
+                        line = 3,
+                        body = "root",
+                        user = { login = "alice" },
+                        created_at = "2026-01-01T00:00:00Z",
+                    },
+                    {
+                        id = 102,
+                        path = "src/a.lua",
+                        line = 3,
+                        body = "reply",
+                        user = { login = "bob" },
+                        created_at = "2026-01-01T00:01:00Z",
+                        in_reply_to_id = 101,
+                    },
+                }),
+            })
+            return dir
+        end
+
+        it("loads session state from .review files", function()
+            local dir = make_fixture()
+
+            assert.is_true(review.load(dir))
+
+            local session = review.get_session()
+            assert.are.equal("pr", session.mode)
+            assert.are.equal("7", session.id)
+            assert.are.equal("base-sha", session.base_ref)
+            assert.are.equal("pr-7", session.head_ref)
+            assert.are.equal(dir, session.toplevel)
+            assert.are.equal("main", review.get_previous_branch())
+            assert.are.equal("moon", review.get_current_user())
+            assert.are.equal("moon", vim.g.comment_overlay_actor)
+            assert.is_true(review.is_reviewed("src/a.lua"))
+            assert.is_false(review.is_reviewed("src/b.lua"))
+
+            local files = review.get_files()
+            assert.are.equal(2, #files)
+            assert.are.equal("src/a.lua", files[1].rel)
+            assert.are.equal(dir .. "/src/a.lua", files[1].file)
+            assert.is_true(files[1].exists)
+            assert.are.equal("src/b.lua", files[2].rel)
+            assert.is_truthy(review.get_file_diffs()["src/a.lua"])
+            assert.is_truthy(review.get_file_diffs()["src/b.lua"])
+
+            local comments = review.read_comments_json(dir .. "/.nvim-comments.json")
+            assert.is_not_nil(comments)
+            assert.are.equal("alice: root", comments.comments["101"].body)
+            assert.are.equal("bob: reply", comments.comments["102"].body)
+            assert.are.equal("102", comments.comments["101"].reply_ids[1])
+            assert.are.equal("101", comments.files["src/a.lua"][1])
+
+            vim.fn.delete(dir, "rf")
+        end)
+
+        it("writes reviewed toggles back to session.json for PR sessions", function()
+            local dir = make_fixture()
+            assert.is_true(review.load(dir))
+
+            review.toggle_reviewed("src/b.lua")
+            local updated = review.read_comments_json(dir .. "/.review/session.json")
+            assert.is_true(vim.tbl_contains(updated.reviewed, "src/a.lua"))
+            assert.is_true(vim.tbl_contains(updated.reviewed, "src/b.lua"))
+
+            review.toggle_reviewed("src/a.lua")
+            updated = review.read_comments_json(dir .. "/.review/session.json")
+            assert.is_false(vim.tbl_contains(updated.reviewed, "src/a.lua"))
+            assert.is_true(vim.tbl_contains(updated.reviewed, "src/b.lua"))
+
+            vim.fn.delete(dir, "rf")
+        end)
+    end)
+
+    describe("open_diff_for_item", function()
+        local function sh(cwd, args)
+            local r = vim.system(args, { cwd = cwd, text = true }):wait()
+            assert.are.equal(0, r.code, (r.stderr or "") .. " for " .. table.concat(args, " "))
+            return vim.trim(r.stdout or "")
+        end
+
+        it("opens tracked files as editable working files against base", function()
+            local dir = vim.fn.tempname() .. "/review-spec-tracked"
+            vim.fn.mkdir(dir, "p")
+            sh(dir, { "git", "init", "-b", "main" })
+            vim.fn.writefile({ "one" }, dir .. "/tracked.txt")
+            sh(dir, { "git", "add", "tracked.txt" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "root" })
+            vim.fn.writefile({ "one", "two" }, dir .. "/tracked.txt")
+            review.start_self_review("HEAD", dir)
+            local item = review.get_files()[1]
+
+            review_ui.open_diff_for_item(review.get_session(), item)
+
+            local wins = vim.api.nvim_list_wins()
+            assert.are.equal(2, #wins)
+            assert.is_true(vim.wo[wins[1]].diff)
+            assert.is_true(vim.wo[wins[2]].diff)
+            assert.are.equal(
+                vim.uv.fs_realpath(dir .. "/tracked.txt"),
+                vim.uv.fs_realpath(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(wins[2])))
+            )
+            vim.fn.delete(dir, "rf")
+        end)
+
+        it("opens untracked files directly", function()
+            local dir = vim.fn.tempname() .. "/review-spec-untracked"
+            vim.fn.mkdir(dir, "p")
+            vim.fn.writefile({ "new" }, dir .. "/new.txt")
+            local session = { base_ref = "HEAD", toplevel = dir }
+            local item = review.build_file_items(dir, {}, { "new.txt" })[1]
+
+            review_ui.open_diff_for_item(session, item)
+
+            local wins = vim.api.nvim_list_wins()
+            assert.are.equal(1, #wins)
+            assert.is_false(vim.wo[wins[1]].diff)
+            assert.are.equal(
+                vim.uv.fs_realpath(dir .. "/new.txt"),
+                vim.uv.fs_realpath(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(wins[1])))
+            )
+            vim.fn.delete(dir, "rf")
+        end)
+    end)
+
     describe("parse_file_diffs", function()
         it("splits multi-file diff", function()
             local diff = table.concat({
@@ -129,8 +375,18 @@ describe("sodium.review", function()
     end)
 
     describe("reviewed state", function()
+        local function start_pr(id)
+            review.start_session({
+                id = tostring(id),
+                mode = "pr",
+                base_ref = "main",
+                head_ref = "pr-" .. tostring(id),
+                toplevel = "/repo",
+            })
+        end
+
         it("tracks reviewed files per PR", function()
-            review.set_current_pr({ number = 42 })
+            start_pr(42)
             assert.is_false(review.is_reviewed("foo.lua"))
             review.toggle_reviewed("foo.lua")
             assert.is_true(review.is_reviewed("foo.lua"))
@@ -139,17 +395,17 @@ describe("sodium.review", function()
         end)
 
         it("isolates state between PRs", function()
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             review.toggle_reviewed("a.lua")
-            review.set_current_pr({ number = 2 })
+            start_pr(2)
             assert.is_false(review.is_reviewed("a.lua"))
         end)
 
         it("preserves state when switching back", function()
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             review.toggle_reviewed("a.lua")
-            review.set_current_pr({ number = 2 })
-            review.set_current_pr({ number = 1 })
+            start_pr(2)
+            start_pr(1)
             assert.is_true(review.is_reviewed("a.lua"))
         end)
 
@@ -159,15 +415,15 @@ describe("sodium.review", function()
 
         it("toggle is no-op with no current PR", function()
             review.toggle_reviewed("foo.lua")
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             assert.is_false(review.is_reviewed("foo.lua"))
         end)
 
         it("reset clears everything", function()
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             review.toggle_reviewed("a.lua")
             review.reset()
-            assert.is_nil(review.get_current_pr())
+            assert.is_nil(review.get_session())
         end)
     end)
 
@@ -256,23 +512,6 @@ describe("sodium.review", function()
         end)
     end)
 
-    describe("stashed state", function()
-        it("defaults to false", function()
-            assert.is_false(review.is_stashed())
-        end)
-
-        it("tracks stash state", function()
-            review.set_stashed(true)
-            assert.is_true(review.is_stashed())
-        end)
-
-        it("reset clears stash state", function()
-            review.set_stashed(true)
-            review.reset()
-            assert.is_false(review.is_stashed())
-        end)
-    end)
-
     describe("parse_gh_comments", function()
         it("parses basic comments", function()
             local json = vim.json.encode({
@@ -355,51 +594,6 @@ describe("sodium.review", function()
             local by_id, files = review.parse_gh_comments("[]")
             assert.are.same({}, by_id)
             assert.are.same({}, files)
-        end)
-    end)
-
-    describe("filter_local_comments", function()
-        it("returns comments by current user with non-numeric IDs", function()
-            local data = {
-                comments = {
-                    ["abc-123"] = { actor = "alice", file = "foo.lua", line = 1, body = "local comment" },
-                    ["456"] = { actor = "alice", file = "bar.lua", line = 2, body = "github comment" },
-                    ["def-789"] = { actor = "bob", file = "baz.lua", line = 3, body = "someone else" },
-                },
-            }
-            local result = review.filter_local_comments(data, "alice")
-            assert.are.equal(1, #result)
-            assert.are.equal("local comment", result[1].body)
-        end)
-
-        it("matches author field from nvim-comment-overlay", function()
-            local data = {
-                comments = {
-                    ["20260313_a1b2"] = { author = "alice", file = "foo.lua", line_start = 5, body = "overlay comment" },
-                },
-            }
-            local result = review.filter_local_comments(data, "alice")
-            assert.are.equal(1, #result)
-            assert.are.equal("overlay comment", result[1].body)
-        end)
-
-        it("returns empty when no local comments", function()
-            local data = {
-                comments = {
-                    ["100"] = { actor = "alice", file = "foo.lua", line = 1, body = "from github" },
-                },
-            }
-            local result = review.filter_local_comments(data, "alice")
-            assert.are.equal(0, #result)
-        end)
-
-        it("returns empty for nil data", function()
-            assert.are.same({}, review.filter_local_comments(nil, "alice"))
-        end)
-
-        it("returns empty for nil user", function()
-            local data = { comments = { ["abc"] = { actor = "alice" } } }
-            assert.are.same({}, review.filter_local_comments(data, nil))
         end)
     end)
 

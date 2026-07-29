@@ -32,6 +32,19 @@ describe("keymaps", function()
             assert.is_not_nil(m)
             assert.is_truthy(m.rhs:find("expand"))
         end)
+
+        it("maps review keymaps in core config", function()
+            assert.is_not_nil(find_nmap(" pf"))
+            assert.is_not_nil(find_nmap(" pn"))
+            assert.is_not_nil(find_nmap(" pa"))
+            assert.is_not_nil(find_nmap(" px"))
+            assert.is_not_nil(find_nmap(" ps"))
+            assert.is_not_nil(find_nmap(" p?"))
+        end)
+
+        it("registers the Review command", function()
+            assert.is_truthy(vim.api.nvim_get_commands({})["Review"])
+        end)
     end)
 
     describe("plugin keymaps (declared in specs)", function()
@@ -117,20 +130,50 @@ describe("keymaps", function()
                 assert.is_function(key[2])
 
                 local original_agentic = package.loaded.agentic
+                local original_config = package.loaded["agentic.config"]
+                local original_health = package.loaded["agentic.acp.acp_health"]
+                local original_snacks = _G.Snacks
                 local called = false
+                local picker_opts
                 package.loaded.agentic = {
-                    new_session_with_provider = function()
+                    new_session = function(opts)
+                        assert.are.equal("codex-acp", opts.provider)
                         called = true
+                    end,
+                }
+                package.loaded["agentic.config"] = {
+                    provider = "codex-acp",
+                    acp_providers = {
+                        ["codex-acp"] = { command = "codex-acp" },
+                        ["gemini-acp"] = { command = "gemini-acp" },
+                    },
+                }
+                package.loaded["agentic.acp.acp_health"] = {
+                    get_default_provider_names = function()
+                        return { "gemini-acp", "codex-acp" }
+                    end,
+                    is_command_available = function()
+                        return true
+                    end,
+                }
+                _G.Snacks = {
+                    picker = function(opts)
+                        picker_opts = opts
+                        opts.confirm({ close = function() end }, opts.items[1])
                     end,
                 }
 
                 local ok2, err = pcall(key[2])
                 package.loaded.agentic = original_agentic
+                package.loaded["agentic.config"] = original_config
+                package.loaded["agentic.acp.acp_health"] = original_health
+                _G.Snacks = original_snacks
 
                 if not ok2 then
                     error(err)
                 end
 
+                assert.is_table(picker_opts)
                 assert.is_true(called)
             end)
 
@@ -138,12 +181,10 @@ describe("keymaps", function()
                 assert.is_true(spec_has_key(agentic, "<leader>pr"))
             end)
 
-            it("declares leader-pf in agentic spec", function()
-                assert.is_true(spec_has_key(agentic, "<leader>pf"))
-            end)
-
-            it("declares leader-pn in agentic spec", function()
-                assert.is_true(spec_has_key(agentic, "<leader>pn"))
+            it("does not declare review file keymaps in agentic spec", function()
+                assert.is_false(spec_has_key(agentic, "<leader>pf"))
+                assert.is_false(spec_has_key(agentic, "<leader>pn"))
+                assert.is_false(spec_has_key(agentic, "<leader>pa"))
             end)
         end
 

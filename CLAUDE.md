@@ -81,9 +81,9 @@ Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run single fil
 
 Test files live in `neovim/tests/`. `minimal_init.lua` bootstraps the subprocess with all lazy plugin paths on rtp.
 
-**Unit tests**: `markdown_spec`, `agentic_functions_spec`, `utils_spec`, `statusline_spec` — pure function tests for extracted modules.
+**Unit tests**: `markdown_spec`, `agentic_functions_spec`, `utils_spec`, `statusline_spec`, `review_spec` — pure function tests for extracted modules.
 
-**Behavioral tests**: `cursor_restore_spec`, `quickfix_spec`, `markdown_behavior_spec`, `colorscheme_spec` — test autocmds and buffer-local keymaps.
+**Behavioral tests**: `cursor_restore_spec`, `quickfix_spec`, `markdown_behavior_spec`, `colorscheme_spec`, `review_spec` — test autocmds, buffer-local keymaps, and review session behavior.
 
 **Registry tests**: `keymaps_spec` (core + plugin keymap declarations), `plugins_spec` (all expected plugins declared in specs).
 
@@ -117,6 +117,13 @@ Neovim keybindings:
 - `<leader>at` — add task to project
 
 Work vault: `~/stripe/work/` (configured in `work/config.json`).
+
+Code review workflow:
+- `work review enter-pr <n>` — check out PR n for review and write session state under `.review/`
+- `work review submit <EVENT> [body]` — submit a PR review and exit the session
+- `work review exit` — restore the previous branch/stash and remove review session state
+
+PR review recovery state lives in `.review/session.json`, which is written before checkout or stash mutation. `work review exit` is session-driven and idempotent; rerun it to recover branch/stash state after an interrupted review.
 
 ### claude/ and codex/
 

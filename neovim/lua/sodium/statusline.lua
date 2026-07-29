@@ -118,37 +118,38 @@ end
 
 local separator = separator_if(is_standard_filetype)
 
+local function review_session()
+    local ok, review = pcall(require, "sodium.review")
+    if not ok then
+        return nil
+    end
+    return review.get_session()
+end
+
 local separator_after_lsp_or_review = separator_if(function()
     if not is_standard_filetype() then
         return false
     end
-    local ok, review = pcall(require, "sodium.review")
-    if ok and review.get_current_pr() then
+    local session = review_session()
+    if session and session.mode == "pr" then
         return false
     end
     return true
 end)
 
 local function pr_review_component()
-    local ok, review = pcall(require, "sodium.review")
-    if not ok then
+    local session = review_session()
+    if not session or session.mode ~= "pr" then
         return ""
     end
-    local pr = review.get_current_pr()
-    if not pr then
-        return ""
-    end
-    return "PR #" .. pr.number
+    return "PR #" .. session.id
 end
 
 local pr_review = {
     pr_review_component,
     cond = function()
-        local ok, review = pcall(require, "sodium.review")
-        if not ok then
-            return false
-        end
-        return is_standard_filetype() and review.get_current_pr() ~= nil
+        local session = review_session()
+        return is_standard_filetype() and session ~= nil and session.mode == "pr"
     end,
     color = "StatusLineActiveItem",
     padding = 1,

@@ -151,6 +151,89 @@ describe("sodium.statusline", function()
         end)
     end)
 
+    describe("review session metadata", function()
+        local original_ft
+        local original_lualine
+
+        local function load_with_lualine_stub()
+            package.loaded["sodium.statusline"] = nil
+            original_lualine = package.loaded.lualine
+
+            local captured_config
+            package.loaded.lualine = {
+                setup = function(config)
+                    captured_config = config
+                end,
+            }
+
+            local ok, loaded = pcall(require, "sodium.statusline")
+            package.loaded.lualine = original_lualine
+
+            if not ok then
+                error(loaded)
+            end
+
+            return loaded, captured_config
+        end
+
+        local function render_right(config)
+            local rendered = {}
+            for _, component in ipairs(config.sections.lualine_x) do
+                if type(component) == "table" and type(component[1]) == "function" then
+                    if not component.cond or component.cond() then
+                        local value = component[1]()
+                        if value ~= "│" and value ~= "" then
+                            table.insert(rendered, value)
+                        end
+                    end
+                end
+            end
+            return rendered
+        end
+
+        before_each(function()
+            original_ft = vim.bo.filetype
+            vim.bo.filetype = "lua"
+            require("sodium.review").reset()
+        end)
+
+        after_each(function()
+            vim.bo.filetype = original_ft
+            require("sodium.review").reset()
+            package.loaded["sodium.statusline"] = nil
+            package.loaded.lualine = original_lualine
+            statusline = require("sodium.statusline")
+        end)
+
+        it("renders PR sessions from the review session API", function()
+            require("sodium.review").start_session({
+                mode = "pr",
+                id = "42",
+                base_ref = "base",
+                head_ref = "pr-42",
+                toplevel = "/repo",
+            })
+
+            local _, captured_config = load_with_lualine_stub()
+
+            assert.is_true(vim.tbl_contains(render_right(captured_config), "PR #42"))
+        end)
+
+        it("does not render a PR segment for self-review sessions", function()
+            require("sodium.review").start_session({
+                mode = "self",
+                id = "main",
+                base_ref = "base",
+                head_ref = nil,
+                toplevel = "/repo",
+            })
+
+            local _, captured_config = load_with_lualine_stub()
+
+            assert.is_false(vim.tbl_contains(render_right(captured_config), "PR #main"))
+        end)
+    end)
+
     describe("agentic lualine setup", function()
         local original_ft
         local original_lualine

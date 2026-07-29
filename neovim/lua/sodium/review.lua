@@ -1,8 +1,27 @@
 local M = {}
 
+local function git(toplevel, args)
+    local cmd = { "git", "-C", toplevel }
+    vim.list_extend(cmd, args)
+    local result = vim.system(cmd, { text = true }):wait()
+    if result.code ~= 0 then
+        return nil, vim.trim(result.stderr or "")
+    end
+    return vim.trim(result.stdout or "")
+end
+
+local function read_file(path)
+    local f = io.open(path, "r")
+    if not f then
+        return nil
+    end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
 M._state = {
     session = nil,
-    stashed = false,
     reviewed = {},
     previous_branch = nil,
     current_user = nil,
@@ -29,35 +48,9 @@ function M.get_session()
     return M._state.session
 end
 
-function M.set_stashed(val)
-    M._state.stashed = val
-end
-
-function M.is_stashed()
-    return M._state.stashed
-end
-
-function M.set_current_pr(pr)
-    local s = M.start_session({
-        id = pr.number,
-        mode = "pr",
-        base_ref = pr.baseRefName,
-        head_ref = pr.headRefName,
-        toplevel = pr.toplevel,
-    })
-    s.number = tonumber(s.id)
-    s.baseRefName = s.base_ref
-    s.headRefName = s.head_ref
-end
-
-function M.get_current_pr()
-    return M._state.session
-end
-
 function M.reset()
     M._state = {
         session = nil,
-        stashed = false,
         reviewed = {},
         previous_branch = nil,
         current_user = nil,
@@ -117,6 +110,15 @@ function M.toggle_reviewed(filepath)
     else
         tbl[filepath] = true
     end
+    if session.mode == "pr" and session.toplevel then
+        local path = session.toplevel .. "/.review/session.json"
+        local data = M.read_comments_json(path)
+        if data then
+            data.reviewed = vim.tbl_keys(M._state.reviewed[session.id])
+            table.sort(data.reviewed)
+            M.write_comments_json(path, data)
+        end
+    end
 end
 
 function M.parse_pr_list(json_str)
@@ -151,6 +153,133 @@ function M.parse_changed_files(stdout)
         end
     end
     return files
+end
+
+function M.base_candidates(origin_head, namespaces)
+    local candidates = {}
+    if origin_head and origin_head ~= "" then
+        candidates[#candidates + 1] = origin_head
+    end
+    for _, namespace in ipairs(namespaces or {}) do
+        candidates[#candidates + 1] = "origin/green-" .. namespace
+        candidates[#candidates + 1] = "green-" .. namespace
+    end
+    vim.list_extend(candidates, { "main", "origin/main", "master", "origin/master" })
+    return candidates
+end
+
+function M.build_file_items(toplevel, changed, untracked)
+    local items = {}
+    local function add(rel, is_untracked)
+        local abs = toplevel .. "/" .. rel
+        items[#items + 1] = {
+            text = rel,
+            file = abs,
+            rel = rel,
+            sort_idx = #items + 1,
+            exists = vim.fn.filereadable(abs) == 1,
+            untracked = is_untracked or false,
+            reviewed = false,
+        }
+    end
+    for _, rel in ipairs(changed or {}) do
+        add(rel, false)
+    end
+    for _, rel in ipairs(untracked or {}) do
+        add(rel, true)
+    end
+    return items
+end
+
+function M.detect_base(toplevel)
+    local origin_head = git(toplevel, { "rev-parse", "--abbrev-ref", "origin/HEAD" })
+    if origin_head then
+        origin_head = origin_head:gsub("^origin/", "")
+    end
+    local namespaces = {}
+    for _, namespace in ipairs({ "pay-server", "zoolander", "gocode" }) do
+        if vim.fn.isdirectory(toplevel .. "/" .. namespace) == 1 then
+            namespaces[#namespaces + 1] = namespace
+        end
+    end
+    for _, candidate in ipairs(M.base_candidates(origin_head, namespaces)) do
+        if git(toplevel, { "rev-parse", "--verify", "--quiet", candidate .. "^{commit}" }) then
+            return candidate
+        end
+    end
+    return nil
+end
+
+function M.start_self_review(base, toplevel)
+    toplevel = toplevel or git(vim.fn.getcwd(), { "rev-parse", "--show-toplevel" })
+    if not toplevel then
+        vim.notify("Not a git repository", vim.log.levels.ERROR)
+        return false
+    end
+    base = base or M.detect_base(toplevel)
+    if not base then
+        vim.notify("Could not detect base ref; pass one explicitly (:Review <ref>)", vim.log.levels.ERROR)
+        return false
+    end
+    local merge_base = git(toplevel, { "merge-base", base, "HEAD" }) or base
+    local diff = git(toplevel, { "diff", "--no-renames", merge_base }) or ""
+    local names = git(toplevel, { "diff", "--no-renames", "--name-only", merge_base }) or ""
+    local untracked = git(toplevel, { "ls-files", "--others", "--exclude-standard" }) or ""
+
+    M.start_session({
+        id = base,
+        mode = "self",
+        base_ref = merge_base,
+        head_ref = nil,
+        toplevel = toplevel,
+    })
+    M.set_file_diffs(M.parse_file_diffs(diff))
+    M.set_files(M.build_file_items(toplevel, M.parse_changed_files(names), M.parse_changed_files(untracked)))
+    return true
+end
+
+function M.load(toplevel)
+    if not toplevel then
+        local lines = vim.fn.systemlist({ "git", "rev-parse", "--show-toplevel" })
+        if vim.v.shell_error ~= 0 then
+            return false
+        end
+        toplevel = lines[1]
+    end
+    if not toplevel or toplevel == "" then
+        return false
+    end
+
+    local dir = toplevel .. "/.review"
+    local session = M.read_comments_json(dir .. "/session.json")
+    if not session then
+        return false
+    end
+
+    M.start_session(session)
+    for _, rel in ipairs(session.reviewed or {}) do
+        M._state.reviewed[tostring(session.id)][rel] = true
+    end
+    M.set_previous_branch(session.previous_branch)
+    M.set_current_user(session.user)
+    vim.g.comment_overlay_actor = session.user
+
+    local diffs = M.parse_file_diffs(read_file(dir .. "/diff") or "")
+    M.set_file_diffs(diffs)
+    M.set_files(M.build_file_items(toplevel, M.parse_changed_files(read_file(dir .. "/files") or ""), {}))
+
+    local raw_comments = read_file(dir .. "/pr-comments.json")
+    if raw_comments and raw_comments ~= "" then
+        local by_id, files = M.parse_gh_comments(raw_comments)
+        if next(by_id) then
+            M.write_comments_json(toplevel .. "/.nvim-comments.json", M.build_comments_v2(by_id, files))
+            pcall(vim.cmd, "CommentRefresh")
+        end
+    end
+    pcall(function()
+        require("sodium.review_ui").show_help()
+    end)
+    return true
 end
 
 function M.parse_file_diffs(diff_text)
@@ -270,20 +399,6 @@ function M.read_comments_json(path)
         return nil
     end
     return data
-end
-
-function M.filter_local_comments(data, current_user)
-    if not data or not data.comments or not current_user then
-        return {}
-    end
-    local result = {}
-    for id, comment in pairs(data.comments) do
-        local author = comment.actor or comment.author
-        if author == current_user and not tonumber(id) then
-            result[#result + 1] = comment
-        end
-    end
-    return result
 end
 
 return M
