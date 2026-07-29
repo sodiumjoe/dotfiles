@@ -153,6 +153,120 @@ describe("sodium.review", function()
         end)
     end)
 
+    describe("load", function()
+        local function write(path, lines)
+            vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+            vim.fn.writefile(lines, path)
+        end
+
+        local function make_fixture()
+            local dir = vim.fn.tempname() .. "/review-spec-load"
+            vim.fn.mkdir(dir .. "/.review", "p")
+            vim.fn.mkdir(dir .. "/src", "p")
+            write(dir .. "/src/a.lua", { "a" })
+            write(dir .. "/src/b.lua", { "b" })
+            write(dir .. "/.review/session.json", {
+                vim.json.encode({
+                    mode = "pr",
+                    id = "7",
+                    base_ref = "base-sha",
+                    head_ref = "pr-7",
+                    toplevel = dir,
+                    previous_branch = "main",
+                    stash_ref = "stash-sha",
+                    user = "moon",
+                    reviewed = { "src/a.lua" },
+                }),
+            })
+            write(dir .. "/.review/diff", {
+                "diff --git a/src/a.lua b/src/a.lua",
+                "@@ -1 +1 @@",
+                "-old",
+                "+a",
+                "diff --git a/src/b.lua b/src/b.lua",
+                "@@ -1 +1 @@",
+                "-old",
+                "+b",
+            })
+            write(dir .. "/.review/files", { "src/a.lua", "src/b.lua" })
+            write(dir .. "/.review/pr-comments.json", {
+                vim.json.encode({
+                    {
+                        id = 101,
+                        path = "src/a.lua",
+                        line = 3,
+                        body = "root",
+                        user = { login = "alice" },
+                        created_at = "2026-01-01T00:00:00Z",
+                    },
+                    {
+                        id = 102,
+                        path = "src/a.lua",
+                        line = 3,
+                        body = "reply",
+                        user = { login = "bob" },
+                        created_at = "2026-01-01T00:01:00Z",
+                        in_reply_to_id = 101,
+                    },
+                }),
+            })
+            return dir
+        end
+
+        it("loads session state from .review files", function()
+            local dir = make_fixture()
+
+            assert.is_true(review.load(dir))
+
+            local session = review.get_session()
+            assert.are.equal("pr", session.mode)
+            assert.are.equal("7", session.id)
+            assert.are.equal("base-sha", session.base_ref)
+            assert.are.equal("pr-7", session.head_ref)
+            assert.are.equal(dir, session.toplevel)
+            assert.are.equal("main", review.get_previous_branch())
+            assert.are.equal("moon", review.get_current_user())
+            assert.are.equal("moon", vim.g.comment_overlay_actor)
+            assert.is_true(review.is_reviewed("src/a.lua"))
+            assert.is_false(review.is_reviewed("src/b.lua"))
+
+            local files = review.get_files()
+            assert.are.equal(2, #files)
+            assert.are.equal("src/a.lua", files[1].rel)
+            assert.are.equal(dir .. "/src/a.lua", files[1].file)
+            assert.is_true(files[1].exists)
+            assert.are.equal("src/b.lua", files[2].rel)
+            assert.is_truthy(review.get_file_diffs()["src/a.lua"])
+            assert.is_truthy(review.get_file_diffs()["src/b.lua"])
+
+            local comments = review.read_comments_json(dir .. "/.nvim-comments.json")
+            assert.is_not_nil(comments)
+            assert.are.equal("alice: root", comments.comments["101"].body)
+            assert.are.equal("bob: reply", comments.comments["102"].body)
+            assert.are.equal("102", comments.comments["101"].reply_ids[1])
+            assert.are.equal("101", comments.files["src/a.lua"][1])
+
+            vim.fn.delete(dir, "rf")
+        end)
+
+        it("writes reviewed toggles back to session.json for PR sessions", function()
+            local dir = make_fixture()
+            assert.is_true(review.load(dir))
+
+            review.toggle_reviewed("src/b.lua")
+            local updated = review.read_comments_json(dir .. "/.review/session.json")
+            assert.is_true(vim.tbl_contains(updated.reviewed, "src/a.lua"))
+            assert.is_true(vim.tbl_contains(updated.reviewed, "src/b.lua"))
+
+            review.toggle_reviewed("src/a.lua")
+            updated = review.read_comments_json(dir .. "/.review/session.json")
+            assert.is_false(vim.tbl_contains(updated.reviewed, "src/a.lua"))
+            assert.is_true(vim.tbl_contains(updated.reviewed, "src/b.lua"))
+
+            vim.fn.delete(dir, "rf")
+        end)
+    end)
+
     describe("open_diff_for_item", function()
         local function sh(cwd, args)
             local r = vim.system(args, { cwd = cwd, text = true }):wait()

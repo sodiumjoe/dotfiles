@@ -10,6 +10,16 @@ local function git(toplevel, args)
     return vim.trim(result.stdout or "")
 end
 
+local function read_file(path)
+    local f = io.open(path, "r")
+    if not f then
+        return nil
+    end
+    local content = f:read("*a")
+    f:close()
+    return content
+end
+
 M._state = {
     session = nil,
     stashed = false,
@@ -127,6 +137,15 @@ function M.toggle_reviewed(filepath)
     else
         tbl[filepath] = true
     end
+    if session.mode == "pr" and session.toplevel then
+        local path = session.toplevel .. "/.review/session.json"
+        local data = M.read_comments_json(path)
+        if data then
+            data.reviewed = vim.tbl_keys(M._state.reviewed[session.id])
+            table.sort(data.reviewed)
+            M.write_comments_json(path, data)
+        end
+    end
 end
 
 function M.parse_pr_list(json_str)
@@ -243,6 +262,50 @@ function M.start_self_review(base, toplevel)
     })
     M.set_file_diffs(M.parse_file_diffs(diff))
     M.set_files(M.build_file_items(toplevel, M.parse_changed_files(names), M.parse_changed_files(untracked)))
+    return true
+end
+
+function M.load(toplevel)
+    if not toplevel then
+        local lines = vim.fn.systemlist({ "git", "rev-parse", "--show-toplevel" })
+        if vim.v.shell_error ~= 0 then
+            return false
+        end
+        toplevel = lines[1]
+    end
+    if not toplevel or toplevel == "" then
+        return false
+    end
+
+    local dir = toplevel .. "/.review"
+    local session = M.read_comments_json(dir .. "/session.json")
+    if not session then
+        return false
+    end
+
+    M.start_session(session)
+    for _, rel in ipairs(session.reviewed or {}) do
+        M._state.reviewed[tostring(session.id)][rel] = true
+    end
+    M.set_previous_branch(session.previous_branch)
+    M.set_current_user(session.user)
+    vim.g.comment_overlay_actor = session.user
+
+    local diffs = M.parse_file_diffs(read_file(dir .. "/diff") or "")
+    M.set_file_diffs(diffs)
+    M.set_files(M.build_file_items(toplevel, M.parse_changed_files(read_file(dir .. "/files") or ""), {}))
+
+    local raw_comments = read_file(dir .. "/pr-comments.json")
+    if raw_comments and raw_comments ~= "" then
+        local by_id, files = M.parse_gh_comments(raw_comments)
+        if next(by_id) then
+            M.write_comments_json(toplevel .. "/.nvim-comments.json", M.build_comments_v2(by_id, files))
+            pcall(vim.cmd, "CommentRefresh")
+        end
+    end
+    pcall(function()
+        require("sodium.review_ui").show_help()
+    end)
     return true
 end
 
