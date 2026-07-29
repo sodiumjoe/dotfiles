@@ -375,8 +375,18 @@ describe("sodium.review", function()
     end)
 
     describe("reviewed state", function()
+        local function start_pr(id)
+            review.start_session({
+                id = tostring(id),
+                mode = "pr",
+                base_ref = "main",
+                head_ref = "pr-" .. tostring(id),
+                toplevel = "/repo",
+            })
+        end
+
         it("tracks reviewed files per PR", function()
-            review.set_current_pr({ number = 42 })
+            start_pr(42)
             assert.is_false(review.is_reviewed("foo.lua"))
             review.toggle_reviewed("foo.lua")
             assert.is_true(review.is_reviewed("foo.lua"))
@@ -385,17 +395,17 @@ describe("sodium.review", function()
         end)
 
         it("isolates state between PRs", function()
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             review.toggle_reviewed("a.lua")
-            review.set_current_pr({ number = 2 })
+            start_pr(2)
             assert.is_false(review.is_reviewed("a.lua"))
         end)
 
         it("preserves state when switching back", function()
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             review.toggle_reviewed("a.lua")
-            review.set_current_pr({ number = 2 })
-            review.set_current_pr({ number = 1 })
+            start_pr(2)
+            start_pr(1)
             assert.is_true(review.is_reviewed("a.lua"))
         end)
 
@@ -405,15 +415,15 @@ describe("sodium.review", function()
 
         it("toggle is no-op with no current PR", function()
             review.toggle_reviewed("foo.lua")
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             assert.is_false(review.is_reviewed("foo.lua"))
         end)
 
         it("reset clears everything", function()
-            review.set_current_pr({ number = 1 })
+            start_pr(1)
             review.toggle_reviewed("a.lua")
             review.reset()
-            assert.is_nil(review.get_current_pr())
+            assert.is_nil(review.get_session())
         end)
     end)
 
@@ -502,23 +512,6 @@ describe("sodium.review", function()
         end)
     end)
 
-    describe("stashed state", function()
-        it("defaults to false", function()
-            assert.is_false(review.is_stashed())
-        end)
-
-        it("tracks stash state", function()
-            review.set_stashed(true)
-            assert.is_true(review.is_stashed())
-        end)
-
-        it("reset clears stash state", function()
-            review.set_stashed(true)
-            review.reset()
-            assert.is_false(review.is_stashed())
-        end)
-    end)
-
     describe("parse_gh_comments", function()
         it("parses basic comments", function()
             local json = vim.json.encode({
@@ -601,51 +594,6 @@ describe("sodium.review", function()
             local by_id, files = review.parse_gh_comments("[]")
             assert.are.same({}, by_id)
             assert.are.same({}, files)
-        end)
-    end)
-
-    describe("filter_local_comments", function()
-        it("returns comments by current user with non-numeric IDs", function()
-            local data = {
-                comments = {
-                    ["abc-123"] = { actor = "alice", file = "foo.lua", line = 1, body = "local comment" },
-                    ["456"] = { actor = "alice", file = "bar.lua", line = 2, body = "github comment" },
-                    ["def-789"] = { actor = "bob", file = "baz.lua", line = 3, body = "someone else" },
-                },
-            }
-            local result = review.filter_local_comments(data, "alice")
-            assert.are.equal(1, #result)
-            assert.are.equal("local comment", result[1].body)
-        end)
-
-        it("matches author field from nvim-comment-overlay", function()
-            local data = {
-                comments = {
-                    ["20260313_a1b2"] = { author = "alice", file = "foo.lua", line_start = 5, body = "overlay comment" },
-                },
-            }
-            local result = review.filter_local_comments(data, "alice")
-            assert.are.equal(1, #result)
-            assert.are.equal("overlay comment", result[1].body)
-        end)
-
-        it("returns empty when no local comments", function()
-            local data = {
-                comments = {
-                    ["100"] = { actor = "alice", file = "foo.lua", line = 1, body = "from github" },
-                },
-            }
-            local result = review.filter_local_comments(data, "alice")
-            assert.are.equal(0, #result)
-        end)
-
-        it("returns empty for nil data", function()
-            assert.are.same({}, review.filter_local_comments(nil, "alice"))
-        end)
-
-        it("returns empty for nil user", function()
-            local data = { comments = { ["abc"] = { actor = "alice" } } }
-            assert.are.same({}, review.filter_local_comments(data, nil))
         end)
     end)
 

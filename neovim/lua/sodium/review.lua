@@ -22,7 +22,6 @@ end
 
 M._state = {
     session = nil,
-    stashed = false,
     reviewed = {},
     previous_branch = nil,
     current_user = nil,
@@ -49,35 +48,9 @@ function M.get_session()
     return M._state.session
 end
 
-function M.set_stashed(val)
-    M._state.stashed = val
-end
-
-function M.is_stashed()
-    return M._state.stashed
-end
-
-function M.set_current_pr(pr)
-    local s = M.start_session({
-        id = pr.number,
-        mode = "pr",
-        base_ref = pr.baseRefName,
-        head_ref = pr.headRefName,
-        toplevel = pr.toplevel,
-    })
-    s.number = tonumber(s.id)
-    s.baseRefName = s.base_ref
-    s.headRefName = s.head_ref
-end
-
-function M.get_current_pr()
-    return M._state.session
-end
-
 function M.reset()
     M._state = {
         session = nil,
-        stashed = false,
         reviewed = {},
         previous_branch = nil,
         current_user = nil,
@@ -426,20 +399,6 @@ function M.read_comments_json(path)
         return nil
     end
     return data
-end
-
-function M.filter_local_comments(data, current_user)
-    if not data or not data.comments or not current_user then
-        return {}
-    end
-    local result = {}
-    for id, comment in pairs(data.comments) do
-        local author = comment.actor or comment.author
-        if author == current_user and not tonumber(id) then
-            result[#result + 1] = comment
-        end
-    end
-    return result
 end
 
 return M
