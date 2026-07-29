@@ -1038,138 +1038,41 @@ return {
                 return
             end
 
-            local ChatHistory = require("agentic.ui.chat_history")
-            local SessionRegistry = require("agentic.session_registry")
+            local show_picker = SessionRestore.show_picker
+            SessionRestore.show_picker = function(...)
+                local args = { ... }
+                local current_session = args[2] or args[1]
+                local agent = current_session and current_session.agent
+                local original_list_sessions = agent and agent.list_sessions
+                if type(original_list_sessions) ~= "function" then
+                    return show_picker(...)
+                end
 
-            local function do_restore(session_id, tab_page_id, has_conflict)
-                ChatHistory.load(session_id, function(history, err)
-                    if err or not history then
-                        vim.notify("Failed to load session: " .. (err or "unknown error"), vim.log.levels.WARN)
-                        return
-                    end
-                    SessionRegistry.get_session_for_tab_page(tab_page_id, function(session)
-                        if has_conflict then
-                            if session.session_id then
-                                session.agent:cancel_session(session.session_id)
-                                session.widget:clear()
-                            end
+                agent.list_sessions = function(self, cwd, callback)
+                    local function wrapped_callback(result, err)
+                        agent.list_sessions = original_list_sessions
+                        if type(result) == "table" and type(result.sessions) == "table" then
+                            result.sessions = sort_sessions_reverse_chrono(result.sessions)
                         end
-                        session:restore_from_history(history, { reuse_session = not has_conflict })
-                        session.widget:show()
-                    end)
-                end)
-            end
-
-            SessionRestore.show_picker = function(tab_page_id, current_session)
-                ChatHistory.list_sessions(function(sessions)
-                    if #sessions == 0 then
-                        vim.notify("No saved sessions found", vim.log.levels.INFO)
-                        return
+                        return callback(result, err)
                     end
 
-                    sessions = sort_sessions_reverse_chrono(sessions)
-
-                    local items = {}
-                    for i, s in ipairs(sessions) do
-                        local date = os.date("%Y-%m-%d %H:%M", s.timestamp or 0)
-                        local title = s.title or "(no title)"
-                        items[i] = {
-                            text = string.format("%s - %s", date, title),
-                            session_id = s.session_id,
-                            sort_idx = i,
-                        }
+                    local ok2, result_or_err = pcall(original_list_sessions, self, cwd, wrapped_callback)
+                    if not ok2 then
+                        agent.list_sessions = original_list_sessions
+                        error(result_or_err)
                     end
 
-                    local preview_cache = {}
+                    return result_or_err
+                end
 
-                    Snacks.picker({
-                        title = "Select session to restore",
-                        items = items,
-                        win = {
-                            preview = { wo = { number = false, relativenumber = false } },
-                        },
-                        preview = function(ctx)
-                            local item = ctx.item
-                            if not item or not item.session_id then
-                                return
-                            end
-                            if preview_cache[item.session_id] then
-                                ctx.preview:set_lines(preview_cache[item.session_id])
-                                ctx.preview:highlight({ ft = "markdown" })
-                                return
-                            end
-                            ctx.preview:set_lines({ "Loading..." })
-                            ChatHistory.load(item.session_id, function(history, err)
-                                if err or not history then
-                                    local msg = { "Failed to load session" }
-                                    preview_cache[item.session_id] = msg
-                                    ctx.preview:set_lines(msg)
-                                    return
-                                end
-                                local lines = {}
-                                for _, msg in ipairs(history.messages) do
-                                    if msg.type == "user" then
-                                        lines[#lines + 1] = "## You"
-                                        lines[#lines + 1] = ""
-                                        for line in (msg.text or ""):gmatch("[^\n]*") do
-                                            lines[#lines + 1] = line
-                                        end
-                                        lines[#lines + 1] = ""
-                                    elseif msg.type == "agent" then
-                                        lines[#lines + 1] = "## Agent"
-                                        lines[#lines + 1] = ""
-                                        for line in (msg.text or ""):gmatch("[^\n]*") do
-                                            lines[#lines + 1] = line
-                                        end
-                                        lines[#lines + 1] = ""
-                                    elseif msg.type == "tool_call" then
-                                        lines[#lines + 1] =
-                                            string.format("  [tool: %s] %s", msg.kind or "?", msg.argument or "")
-                                    end
-                                end
-                                preview_cache[item.session_id] = lines
-                                ctx.preview:set_lines(lines)
-                                ctx.preview:highlight({ ft = "markdown" })
-                            end)
-                        end,
-                        on_show = function()
-                            vim.cmd.stopinsert()
-                        end,
-                        sort = function(a, b)
-                            if a.score ~= b.score then
-                                return a.score > b.score
-                            end
-                            return a.sort_idx < b.sort_idx
-                        end,
-                        format = function(item)
-                            return { { item.text } }
-                        end,
-                        confirm = function(picker, item)
-                            if not item then
-                                return
-                            end
-                            picker:close()
-                            local has_conflict = current_session ~= nil
-                                and current_session.session_id ~= nil
-                                and current_session.chat_history ~= nil
-                                and #current_session.chat_history.messages > 0
-                            if has_conflict then
-                                vim.ui.select({
-                                    "Cancel",
-                                    "Clear current session and restore",
-                                }, {
-                                    prompt = "Current session has messages. What would you like to do?",
-                                }, function(choice)
-                                    if choice == "Clear current session and restore" then
-                                        do_restore(item.session_id, tab_page_id, true)
-                                    end
-                                end)
-                            else
-                                do_restore(item.session_id, tab_page_id, false)
-                            end
-                        end,
-                    })
-                end)
+                local ok2, result_or_err = pcall(show_picker, ...)
+                if not ok2 then
+                    agent.list_sessions = original_list_sessions
+                    error(result_or_err)
+                end
+
+                return result_or_err
             end
             SessionRestore._sodium_reverse_chrono_patch = true
         end

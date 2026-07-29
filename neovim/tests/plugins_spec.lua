@@ -11,6 +11,9 @@ describe("plugin registry", function()
         if type(specs) ~= "table" then
             return names
         end
+        if specs.name then
+            names[specs.name] = specs
+        end
         if specs[1] and type(specs[1]) == "string" then
             local name = specs[1]:match("[^/]+$")
             if name then
@@ -58,7 +61,7 @@ describe("plugin registry", function()
     describe("expected plugins declared", function()
         local expected = {
             "snacks.nvim",
-            "nightfox.nvim",
+            "sodium-colorscheme",
             "lualine.nvim",
             "statuscol.nvim",
             "nvim-colorizer.lua",
