@@ -1,5 +1,15 @@
 local M = {}
 
+local function git(toplevel, args)
+    local cmd = { "git", "-C", toplevel }
+    vim.list_extend(cmd, args)
+    local result = vim.system(cmd, { text = true }):wait()
+    if result.code ~= 0 then
+        return nil, vim.trim(result.stderr or "")
+    end
+    return vim.trim(result.stdout or "")
+end
+
 function M.open_file_picker()
     local review = require("sodium.review")
     local utils = require("sodium.utils")
@@ -179,6 +189,66 @@ function M.submit()
     end)
 end
 
+function M.pick_base_and_review()
+    local review = require("sodium.review")
+    local toplevel = git(vim.fn.getcwd(), { "rev-parse", "--show-toplevel" })
+    if not toplevel then
+        vim.notify("Not a git repository", vim.log.levels.ERROR)
+        return
+    end
+    local base = review.detect_base(toplevel)
+    if not base then
+        vim.notify("Could not detect base ref", vim.log.levels.ERROR)
+        return
+    end
+    local merge_base = git(toplevel, { "merge-base", base, "HEAD" }) or base
+    local log = git(toplevel, { "log", "--format=%h %s", merge_base .. "..HEAD" }) or ""
+    local items = {
+        {
+            text = "all changes since " .. base .. " (default)",
+            ref = merge_base,
+            sort_idx = 1,
+        },
+    }
+    for line in log:gmatch("[^\n]+") do
+        local sha = line:match("^(%S+)")
+        if sha then
+            items[#items + 1] = {
+                text = line .. " - from here (inclusive)",
+                ref = sha .. "^",
+                sort_idx = #items + 1,
+            }
+        end
+    end
+
+    Snacks.picker({
+        title = "Review Base",
+        items = items,
+        preview = false,
+        on_show = function()
+            vim.cmd.stopinsert()
+        end,
+        sort = function(a, b)
+            if a.score ~= b.score then
+                return a.score > b.score
+            end
+            return a.sort_idx < b.sort_idx
+        end,
+        format = function(item)
+            return { { item.text } }
+        end,
+        confirm = function(picker, item)
+            if not item then
+                return
+            end
+            picker:close()
+            if review.start_self_review(item.ref, toplevel) then
+                M.open_file_picker()
+            end
+        end,
+    })
+end
+
 function M.setup()
     vim.api.nvim_create_user_command("Review", function(opts)
         local base = opts.args ~= "" and opts.args or nil
@@ -195,6 +265,12 @@ function M.setup()
         { noremap = true, silent = true, desc = "Mark reviewed and reopen file picker" }
     )
     vim.keymap.set("n", "<leader>pa", M.submit, { noremap = true, silent = true, desc = "Submit PR review and exit" })
+    vim.keymap.set(
+        "n",
+        "<leader>ps",
+        M.pick_base_and_review,
+        { noremap = true, silent = true, desc = "Pick self-review base" }
+    )
 end
 
 return M
