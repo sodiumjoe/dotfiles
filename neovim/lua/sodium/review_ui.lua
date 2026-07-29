@@ -2,7 +2,6 @@ local M = {}
 
 function M.open_file_picker()
     local review = require("sodium.review")
-    local diff_mod = require("sodium.diff")
     local utils = require("sodium.utils")
 
     local session = review.get_session()
@@ -74,13 +73,7 @@ function M.open_file_picker()
             end
             picker:close()
             vim.schedule(function()
-                diff_mod.open({
-                    mode = "refs",
-                    file = item.file,
-                    left_ref = session.base_ref,
-                    right_ref = session.head_ref,
-                    toplevel = session.toplevel,
-                })
+                M.open_diff_for_item(session, item)
             end)
         end,
         actions = {
@@ -113,6 +106,27 @@ function M.open_file_picker()
                 end)
             end,
         },
+    })
+end
+
+function M.open_diff_for_item(session, item)
+    if not item then
+        return
+    end
+    if not item.exists then
+        vim.notify(item.rel .. " not available locally", vim.log.levels.WARN)
+        return
+    end
+    if item.untracked then
+        vim.cmd.edit(item.file)
+        vim.notify(item.rel .. " is untracked (no base to diff)", vim.log.levels.INFO)
+        return
+    end
+    require("sodium.diff").open({
+        mode = "refs",
+        file = item.file,
+        left_ref = session.base_ref,
+        toplevel = session.toplevel,
     })
 end
 

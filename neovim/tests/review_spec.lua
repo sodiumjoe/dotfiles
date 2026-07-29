@@ -1,8 +1,19 @@
 local review = require("sodium.review")
+local review_ui = require("sodium.review_ui")
 
 describe("sodium.review", function()
     before_each(function()
         review.reset()
+    end)
+
+    after_each(function()
+        pcall(vim.cmd, "diffoff!")
+        pcall(vim.cmd, "silent! only!")
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf):match("/review%-spec%-") then
+                pcall(vim.api.nvim_buf_delete, buf, { force = true })
+            end
+        end
     end)
 
     describe("parse_pr_list", function()
@@ -138,6 +149,57 @@ describe("sodium.review", function()
             assert.are.same({ "committed.txt", "untracked.txt" }, rels)
             assert.is_truthy(review.get_file_diffs()["committed.txt"])
             review.reset()
+            vim.fn.delete(dir, "rf")
+        end)
+    end)
+
+    describe("open_diff_for_item", function()
+        local function sh(cwd, args)
+            local r = vim.system(args, { cwd = cwd, text = true }):wait()
+            assert.are.equal(0, r.code, (r.stderr or "") .. " for " .. table.concat(args, " "))
+            return vim.trim(r.stdout or "")
+        end
+
+        it("opens tracked files as editable working files against base", function()
+            local dir = vim.fn.tempname() .. "/review-spec-tracked"
+            vim.fn.mkdir(dir, "p")
+            sh(dir, { "git", "init", "-b", "main" })
+            vim.fn.writefile({ "one" }, dir .. "/tracked.txt")
+            sh(dir, { "git", "add", "tracked.txt" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "root" })
+            vim.fn.writefile({ "one", "two" }, dir .. "/tracked.txt")
+            review.start_self_review("HEAD", dir)
+            local item = review.get_files()[1]
+
+            review_ui.open_diff_for_item(review.get_session(), item)
+
+            local wins = vim.api.nvim_list_wins()
+            assert.are.equal(2, #wins)
+            assert.is_true(vim.wo[wins[1]].diff)
+            assert.is_true(vim.wo[wins[2]].diff)
+            assert.are.equal(
+                vim.uv.fs_realpath(dir .. "/tracked.txt"),
+                vim.uv.fs_realpath(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(wins[2])))
+            )
+            vim.fn.delete(dir, "rf")
+        end)
+
+        it("opens untracked files directly", function()
+            local dir = vim.fn.tempname() .. "/review-spec-untracked"
+            vim.fn.mkdir(dir, "p")
+            vim.fn.writefile({ "new" }, dir .. "/new.txt")
+            local session = { base_ref = "HEAD", toplevel = dir }
+            local item = review.build_file_items(dir, {}, { "new.txt" })[1]
+
+            review_ui.open_diff_for_item(session, item)
+
+            local wins = vim.api.nvim_list_wins()
+            assert.are.equal(1, #wins)
+            assert.is_false(vim.wo[wins[1]].diff)
+            assert.are.equal(
+                vim.uv.fs_realpath(dir .. "/new.txt"),
+                vim.uv.fs_realpath(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(wins[1])))
+            )
             vim.fn.delete(dir, "rf")
         end)
     end)
