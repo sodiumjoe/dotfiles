@@ -59,6 +59,9 @@ elif [[ "$1" == "pr" && "$2" == "view" && "$3" == "7" && "$4" == "--json" && "$5
   printf 'abc123 pr change\\n'
 elif [[ "$1" == "api" && "$2" == "repos/{owner}/{repo}/pulls/7/comments" ]]; then
   printf '[]\\n'
+elif [[ "$1" == "api" && "$2" == "repos/{owner}/{repo}/pulls/7/reviews" ]]; then
+  cat > "${tmpDir}/review-payload.json"
+  printf '{}\\n'
 else
   printf 'unexpected gh args: %s\\n' "$*" >&2
   exit 99
@@ -96,6 +99,13 @@ fi`,
     fs.writeFileSync(
       path.join(repoDir, ".review", "session.json"),
       JSON.stringify(session, null, 2),
+    );
+  }
+
+  function writeComments(comments) {
+    fs.writeFileSync(
+      path.join(repoDir, ".nvim-comments.json"),
+      JSON.stringify({ comments }, null, 2),
     );
   }
 
@@ -174,5 +184,110 @@ fi`,
     assert.equal(git(["branch", "--show-current"]), "main");
     assert.equal(fs.readFileSync(path.join(repoDir, "file.txt"), "utf-8"), "dirty local\n");
     assert.ok(!fs.existsSync(path.join(repoDir, ".review")));
+  });
+
+  it("maps only local pending comments to deterministic PR paths", () => {
+    writeComments({
+      "tmp-a": {
+        actor: "moon",
+        file: path.join(repoDir, "src/a/file.txt") + " (abc123)",
+        line: 12,
+        body: "absolute",
+      },
+      "tmp-b": {
+        author: "moon",
+        file: "src/b/file.txt (base)",
+        line_end: 7,
+        body: "relative",
+      },
+      "tmp-c": {
+        actor: "moon",
+        file: "src/c/file.txt",
+        line_start: 4,
+        body: "same basename",
+      },
+      "tmp-d": {
+        actor: "other",
+        file: "ignored.txt",
+        line: 1,
+        body: "other actor",
+      },
+      123: {
+        actor: "moon",
+        file: "existing.txt",
+        line: 2,
+        body: "github comment",
+      },
+      "tmp-e": {
+        actor: "moon",
+        file: "missing-line.txt",
+        body: "missing line",
+      },
+    });
+
+    const { localComments } = require("../lib/code-review.js");
+    assert.deepEqual(localComments(repoDir, "moon"), [
+      { path: "src/a/file.txt", line: 12, side: "RIGHT", body: "absolute" },
+      { path: "src/b/file.txt", line: 7, side: "RIGHT", body: "relative" },
+      { path: "src/c/file.txt", line: 4, side: "RIGHT", body: "same basename" },
+    ]);
+  });
+
+  it("returns no local comments when the comments file is missing", () => {
+    const { localComments } = require("../lib/code-review.js");
+    assert.deepEqual(localComments(repoDir, "moon"), []);
+  });
+
+  it("submits a PR review with local comments and exits the session", () => {
+    const { enterPr, submit } = require("../lib/code-review.js");
+    enterPr(7, repoDir);
+    writeComments({
+      "tmp-a": {
+        actor: "moon",
+        file: "file.txt (abc123)",
+        line: 1,
+        body: "review note",
+      },
+    });
+
+    assert.deepEqual(submit("REQUEST_CHANGES", "needs work", repoDir), {
+      status: "submitted",
+      pr: "7",
+      event: "REQUEST_CHANGES",
+    });
+
+    const payload = JSON.parse(fs.readFileSync(path.join(tmpDir, "review-payload.json"), "utf-8"));
+    assert.deepEqual(payload, {
+      event: "REQUEST_CHANGES",
+      body: "needs work",
+      comments: [{ path: "file.txt", line: 1, side: "RIGHT", body: "review note" }],
+    });
+    assert.equal(git(["branch", "--show-current"]), "main");
+    assert.ok(!fs.existsSync(path.join(repoDir, ".review")));
+    assert.ok(!fs.existsSync(path.join(repoDir, ".nvim-comments.json")));
+  });
+
+  it("omits the review body when submitting with an empty body", () => {
+    writeSession({
+      mode: "pr",
+      id: "7",
+      previous_branch: "main",
+      stash_ref: null,
+      user: "moon",
+    });
+
+    const { submit } = require("../lib/code-review.js");
+    assert.deepEqual(submit("APPROVE", "", repoDir), {
+      status: "submitted",
+      pr: "7",
+      event: "APPROVE",
+    });
+
+    const payload = JSON.parse(fs.readFileSync(path.join(tmpDir, "review-payload.json"), "utf-8"));
+    assert.deepEqual(payload, {
+      event: "APPROVE",
+      comments: [],
+    });
+    assert.ok(!("body" in payload));
   });
 });

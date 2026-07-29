@@ -157,13 +157,51 @@ function enterPr(pr, cwd = process.cwd()) {
   return { mode, id, base_ref, head_ref, toplevel };
 }
 
+function localComments(toplevel, user) {
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(path.join(toplevel, ".nvim-comments.json"), "utf-8"));
+  } catch {
+    return [];
+  }
+
+  return Object.entries(data.comments || {})
+    .filter(([id, comment]) => (comment.actor === user || comment.author === user) && !/^\d+$/.test(id))
+    .map(([, comment]) => {
+      let file = (comment.file || "").replace(/ \([^)]*\)$/, "");
+      if (file.startsWith(toplevel + "/")) file = file.slice(toplevel.length + 1);
+      const line = comment.line ?? comment.line_end ?? comment.line_start;
+      return { path: file, line, side: "RIGHT", body: comment.body };
+    })
+    .filter((comment) => comment.line != null);
+}
+
+function submit(event, body = "", cwd = process.cwd()) {
+  const toplevel = toplevelOf(cwd);
+  const session = readSession(toplevel);
+  if (!session) throw new Error("no review session");
+  if (session.mode !== "pr") throw new Error("not a PR session");
+
+  const payload = { event, comments: localComments(toplevel, session.user) };
+  if (body) payload.body = body;
+  gh(
+    toplevel,
+    ["api", `repos/{owner}/{repo}/pulls/${session.id}/reviews`, "-X", "POST", "--input", "-"],
+    JSON.stringify(payload),
+  );
+  exitSession(cwd);
+  return { status: "submitted", pr: session.id, event };
+}
+
 module.exports = {
   enterPr,
   exitSession,
   gh,
   git,
+  localComments,
   readSession,
   sessionPath,
+  submit,
   toplevelOf,
   tryGit,
   writeSession,
