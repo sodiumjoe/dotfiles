@@ -153,6 +153,42 @@ function M.parse_changed_files(stdout)
     return files
 end
 
+function M.base_candidates(origin_head, namespaces)
+    local candidates = {}
+    if origin_head and origin_head ~= "" then
+        candidates[#candidates + 1] = origin_head
+    end
+    for _, namespace in ipairs(namespaces or {}) do
+        candidates[#candidates + 1] = "origin/green-" .. namespace
+        candidates[#candidates + 1] = "green-" .. namespace
+    end
+    vim.list_extend(candidates, { "main", "origin/main", "master", "origin/master" })
+    return candidates
+end
+
+function M.build_file_items(toplevel, changed, untracked)
+    local items = {}
+    local function add(rel, is_untracked)
+        local abs = toplevel .. "/" .. rel
+        items[#items + 1] = {
+            text = rel,
+            file = abs,
+            rel = rel,
+            sort_idx = #items + 1,
+            exists = vim.fn.filereadable(abs) == 1,
+            untracked = is_untracked or false,
+            reviewed = false,
+        }
+    end
+    for _, rel in ipairs(changed or {}) do
+        add(rel, false)
+    end
+    for _, rel in ipairs(untracked or {}) do
+        add(rel, true)
+    end
+    return items
+end
+
 function M.parse_file_diffs(diff_text)
     if not diff_text or diff_text == "" then
         return {}, {}

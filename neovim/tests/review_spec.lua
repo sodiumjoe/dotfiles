@@ -72,6 +72,45 @@ describe("sodium.review", function()
         end)
     end)
 
+    describe("base_candidates", function()
+        it("prefers origin/HEAD, then green branches, then main/master", function()
+            local c = review.base_candidates("master", { "pay-server" })
+            assert.are.same(
+                {
+                    "master",
+                    "origin/green-pay-server",
+                    "green-pay-server",
+                    "main",
+                    "origin/main",
+                    "master",
+                    "origin/master",
+                },
+                c
+            )
+        end)
+
+        it("omits origin/HEAD when nil", function()
+            local c = review.base_candidates(nil, {})
+            assert.are.same({ "main", "origin/main", "master", "origin/master" }, c)
+        end)
+    end)
+
+    describe("build_file_items", function()
+        it("builds items for changed and untracked files", function()
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir, "p")
+            vim.fn.writefile({ "x" }, dir .. "/a.txt")
+            local items = review.build_file_items(dir, { "a.txt", "gone.txt" }, { "new.txt" })
+            assert.are.equal(3, #items)
+            assert.is_true(items[1].exists)
+            assert.is_false(items[2].exists)
+            assert.is_true(items[3].untracked)
+            assert.are.equal(dir .. "/a.txt", items[1].file)
+            assert.are.equal(3, items[3].sort_idx)
+            vim.fn.delete(dir, "rf")
+        end)
+    end)
+
     describe("parse_file_diffs", function()
         it("splits multi-file diff", function()
             local diff = table.concat({
