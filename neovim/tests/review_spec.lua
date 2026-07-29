@@ -84,17 +84,17 @@ describe("sodium.review", function()
     end)
 
     describe("base_candidates", function()
-        it("prefers origin/HEAD, then green branches, then main/master", function()
-            local c = review.base_candidates("master", { "pay-server" })
+        it("prefers origin/HEAD as a remote-tracking ref, then green branches, then main/master", function()
+            local c = review.base_candidates("origin/master", { "pay-server" })
             assert.are.same(
                 {
-                    "master",
+                    "origin/master",
                     "origin/green-pay-server",
                     "green-pay-server",
-                    "main",
                     "origin/main",
-                    "master",
+                    "main",
                     "origin/master",
+                    "master",
                 },
                 c
             )
@@ -102,7 +102,44 @@ describe("sodium.review", function()
 
         it("omits origin/HEAD when nil", function()
             local c = review.base_candidates(nil, {})
-            assert.are.same({ "main", "origin/main", "master", "origin/master" }, c)
+            assert.are.same({ "origin/main", "main", "origin/master", "master" }, c)
+        end)
+    end)
+
+    describe("detect_base", function()
+        local function sh(cwd, args)
+            local r = vim.system(args, { cwd = cwd, text = true }):wait()
+            assert.are.equal(0, r.code, (r.stderr or "") .. " for " .. table.concat(args, " "))
+            return vim.trim(r.stdout or "")
+        end
+
+        it("prefers origin/HEAD over a stale local branch", function()
+            local root = vim.fn.tempname() .. "/review-spec-detect-base"
+            local remote = root .. "/remote.git"
+            local seed = root .. "/seed"
+            local repo = root .. "/repo"
+            vim.fn.mkdir(root, "p")
+            sh(root, { "git", "init", "--bare", remote })
+            sh(root, { "git", "clone", remote, seed })
+            sh(seed, { "git", "checkout", "-b", "master" })
+            vim.fn.writefile({ "root" }, seed .. "/file.txt")
+            sh(seed, { "git", "add", "file.txt" })
+            sh(seed, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "root" })
+            sh(seed, { "git", "push", "-u", "origin", "master" })
+            sh(remote, { "git", "symbolic-ref", "HEAD", "refs/heads/master" })
+            sh(root, { "git", "clone", remote, repo })
+            vim.fn.writefile({ "root", "upstream" }, seed .. "/file.txt")
+            sh(seed, { "git", "commit", "-am", "upstream" })
+            sh(seed, { "git", "push" })
+            sh(repo, { "git", "fetch", "origin" })
+            sh(repo, { "git", "checkout", "-b", "feature" })
+            vim.fn.writefile({ "root", "upstream", "feature" }, repo .. "/file.txt")
+            sh(repo, { "git", "add", "file.txt" })
+            sh(repo, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "feature" })
+
+            assert.are.equal("origin/master", review.detect_base(repo))
+
+            vim.fn.delete(root, "rf")
         end)
     end)
 
@@ -149,6 +186,35 @@ describe("sodium.review", function()
             assert.are.same({ "committed.txt", "untracked.txt" }, rels)
             assert.is_truthy(review.get_file_diffs()["committed.txt"])
             review.reset()
+            vim.fn.delete(dir, "rf")
+        end)
+
+        it("does not start when the selected base is not related to HEAD", function()
+            local dir = vim.fn.tempname()
+            vim.fn.mkdir(dir, "p")
+            sh(dir, { "git", "init", "-b", "main" })
+            vim.fn.writefile({ "main" }, dir .. "/file.txt")
+            sh(dir, { "git", "add", "file.txt" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "main" })
+            sh(dir, { "git", "checkout", "--orphan", "unrelated" })
+            vim.fn.delete(dir .. "/file.txt")
+            vim.fn.writefile({ "unrelated" }, dir .. "/other.txt")
+            sh(dir, { "git", "add", "-A" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "unrelated" })
+            sh(dir, { "git", "checkout", "main" })
+
+            review.reset()
+            local notify = vim.notify
+            local message = nil
+            vim.notify = function(msg)
+                message = msg
+            end
+            local ok = review.start_self_review("unrelated", dir)
+            vim.notify = notify
+            assert.is_false(ok)
+            assert.are.equal("Could not find merge-base for unrelated", message)
+            assert.is_nil(review.get_session())
+
             vim.fn.delete(dir, "rf")
         end)
     end)

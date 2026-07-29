@@ -128,7 +128,8 @@ function enterPr(pr, cwd = process.cwd()) {
   git(toplevel, ["checkout", headRef]);
   tryGit(toplevel, ["fetch", "origin", baseRefName]);
 
-  session.base_ref = tryGit(toplevel, ["merge-base", `origin/${baseRefName}`, headRef]) || `origin/${baseRefName}`;
+  session.base_ref = tryGit(toplevel, ["merge-base", `origin/${baseRefName}`, headRef]);
+  if (!session.base_ref) throw new Error(`could not find merge-base for origin/${baseRefName} and ${headRef}`);
   writeSession(toplevel, session);
 
   const rdir = reviewDir(toplevel);

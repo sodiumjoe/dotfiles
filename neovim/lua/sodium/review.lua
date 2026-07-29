@@ -164,7 +164,7 @@ function M.base_candidates(origin_head, namespaces)
         candidates[#candidates + 1] = "origin/green-" .. namespace
         candidates[#candidates + 1] = "green-" .. namespace
     end
-    vim.list_extend(candidates, { "main", "origin/main", "master", "origin/master" })
+    vim.list_extend(candidates, { "origin/main", "main", "origin/master", "master" })
     return candidates
 end
 
@@ -193,9 +193,6 @@ end
 
 function M.detect_base(toplevel)
     local origin_head = git(toplevel, { "rev-parse", "--abbrev-ref", "origin/HEAD" })
-    if origin_head then
-        origin_head = origin_head:gsub("^origin/", "")
-    end
     local namespaces = {}
     for _, namespace in ipairs({ "pay-server", "zoolander", "gocode" }) do
         if vim.fn.isdirectory(toplevel .. "/" .. namespace) == 1 then
@@ -221,7 +218,11 @@ function M.start_self_review(base, toplevel)
         vim.notify("Could not detect base ref; pass one explicitly (:Review <ref>)", vim.log.levels.ERROR)
         return false
     end
-    local merge_base = git(toplevel, { "merge-base", base, "HEAD" }) or base
+    local merge_base = git(toplevel, { "merge-base", base, "HEAD" })
+    if not merge_base then
+        vim.notify("Could not find merge-base for " .. base, vim.log.levels.ERROR)
+        return false
+    end
     local diff = git(toplevel, { "diff", "--no-renames", merge_base }) or ""
     local names = git(toplevel, { "diff", "--no-renames", "--name-only", merge_base }) or ""
     local untracked = git(toplevel, { "ls-files", "--others", "--exclude-standard" }) or ""

@@ -229,7 +229,11 @@ function M.pick_base_and_review()
         vim.notify("Could not detect base ref", vim.log.levels.ERROR)
         return
     end
-    local merge_base = git(toplevel, { "merge-base", base, "HEAD" }) or base
+    local merge_base = git(toplevel, { "merge-base", base, "HEAD" })
+    if not merge_base then
+        vim.notify("Could not find merge-base for " .. base, vim.log.levels.ERROR)
+        return
+    end
     local log = git(toplevel, { "log", "--format=%h %s", merge_base .. "..HEAD" }) or ""
     local items = {
         {

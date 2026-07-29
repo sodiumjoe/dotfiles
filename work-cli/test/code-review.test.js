@@ -186,6 +186,21 @@ fi`,
     assert.ok(!fs.existsSync(path.join(repoDir, ".review")));
   });
 
+  it("fails PR entry rather than using a non-ancestor base", () => {
+    git(["checkout", "--orphan", "unrelated"]);
+    fs.rmSync(path.join(repoDir, "file.txt"), { force: true });
+    fs.writeFileSync(path.join(repoDir, "other.txt"), "unrelated\n");
+    git(["add", "-A"]);
+    git(["commit", "-m", "unrelated"]);
+    git(["push", "--force", "origin", "HEAD:refs/pull/7/head"]);
+    git(["checkout", "main"]);
+
+    const { enterPr, readSession } = require("../lib/code-review.js");
+    assert.throws(() => enterPr(7, repoDir), /could not find merge-base/);
+    assert.equal(git(["branch", "--show-current"]), "pr-7");
+    assert.ok(readSession(repoDir));
+  });
+
   it("maps only local pending comments to deterministic PR paths", () => {
     writeComments({
       "tmp-a": {
