@@ -1,4 +1,5 @@
 local M = {}
+local work_bin = vim.env.HOME .. "/bin/work"
 
 local function git(toplevel, args)
     local cmd = { "git", "-C", toplevel }
@@ -175,16 +176,43 @@ function M.submit()
         if not choice then
             return
         end
-        local script = vim.env.HOME .. "/.claude/skills/neovim-review/scripts/review-approve"
-        vim.notify("Submitting " .. choice:lower() .. " for PR #" .. session.id .. "...")
-        vim.system({ script, choice }, { text = true }, function(result)
-            vim.schedule(function()
-                if result.code == 0 then
-                    vim.notify("PR #" .. session.id .. " - " .. choice:lower(), vim.log.levels.INFO)
-                else
-                    vim.notify("Submit failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
-                end
+        vim.ui.input({ prompt = "Review body (optional): " }, function(body)
+            if body == nil then
+                return
+            end
+            vim.notify("Submitting " .. choice:lower() .. " for PR #" .. session.id .. "...")
+            vim.system({ work_bin, "review", "submit", choice, body or "" }, { text = true, cwd = session.toplevel }, function(result)
+                vim.schedule(function()
+                    if result.code == 0 then
+                        vim.notify("PR #" .. session.id .. " - " .. choice:lower(), vim.log.levels.INFO)
+                    else
+                        vim.notify("Submit failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+                    end
+                end)
             end)
+        end)
+    end)
+end
+
+function M.exit()
+    local review = require("sodium.review")
+    local session = review.get_session()
+    if not session then
+        vim.notify("No review session active", vim.log.levels.WARN)
+        return
+    end
+    if session.mode ~= "pr" then
+        review.reset()
+        vim.notify("Self-review ended", vim.log.levels.INFO)
+        return
+    end
+    vim.system({ work_bin, "review", "exit" }, { text = true, cwd = session.toplevel }, function(result)
+        vim.schedule(function()
+            if result.code == 0 then
+                vim.notify("PR review ended", vim.log.levels.INFO)
+            else
+                vim.notify("Review exit failed: " .. (result.stderr or ""), vim.log.levels.ERROR)
+            end
         end)
     end)
 end
@@ -279,6 +307,7 @@ function M.setup()
         { noremap = true, silent = true, desc = "Mark reviewed and reopen file picker" }
     )
     vim.keymap.set("n", "<leader>pa", M.submit, { noremap = true, silent = true, desc = "Submit PR review and exit" })
+    vim.keymap.set("n", "<leader>px", M.exit, { noremap = true, silent = true, desc = "Exit review session" })
     vim.keymap.set(
         "n",
         "<leader>ps",

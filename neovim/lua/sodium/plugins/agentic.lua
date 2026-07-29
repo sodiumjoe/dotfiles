@@ -896,7 +896,7 @@ local function pick_pr_for_review()
             local diff_cache = {}
 
             Snacks.picker({
-                title = "Pull Requests",
+                title = "Pull Requests (<CR> agent, <C-s> session)",
                 items = items,
                 preview = function(ctx)
                     local item = ctx.item
@@ -950,6 +950,13 @@ local function pick_pr_for_review()
                 on_show = function()
                     vim.cmd.stopinsert()
                 end,
+                win = {
+                    input = {
+                        keys = {
+                            ["<C-s>"] = { "start_mechanical_review", mode = { "n", "i" } },
+                        },
+                    },
+                },
                 confirm = function(picker, item)
                     if not item then
                         return
@@ -976,6 +983,28 @@ local function pick_pr_for_review()
                         try_submit()
                     end)
                 end,
+                actions = {
+                    start_mechanical_review = function(picker)
+                        local item = picker:current()
+                        if not item then
+                            return
+                        end
+                        picker:close()
+                        vim.system(
+                            { vim.env.HOME .. "/bin/work", "review", "enter-pr", tostring(item.number) },
+                            { text = true },
+                            function(r)
+                                vim.schedule(function()
+                                    if r.code == 0 then
+                                        vim.notify("PR #" .. tostring(item.number) .. " session ready - <leader>pf", vim.log.levels.INFO)
+                                    else
+                                        vim.notify("PR review start failed: " .. (r.stderr or ""), vim.log.levels.ERROR)
+                                    end
+                                end)
+                            end
+                        )
+                    end,
+                },
             })
         end)
     end)

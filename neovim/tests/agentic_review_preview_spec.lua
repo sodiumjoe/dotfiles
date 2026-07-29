@@ -20,12 +20,15 @@ describe("agentic PR picker preview", function()
 
     local original_schedule
     local original_system
+    local original_notify
     local original_snacks
     local original_review
 
     local function setup_pr_picker()
         local picker_opts
         local diff_callback
+        local mechanical_callback
+        local system_calls = {}
 
         package.loaded["sodium.review"] = {
             parse_pr_list = function()
@@ -48,10 +51,13 @@ describe("agentic PR picker preview", function()
         }
 
         vim.system = function(cmd, _, callback)
+            system_calls[#system_calls + 1] = cmd
             if cmd[1] == "gh" and cmd[2] == "pr" and cmd[3] == "list" then
                 callback({ code = 0, stdout = "ignored", stderr = "" })
             elseif cmd[1] == "gh" and cmd[2] == "pr" and cmd[3] == "diff" then
                 diff_callback = callback
+            elseif cmd[1]:match("/bin/work$") and cmd[2] == "review" and cmd[3] == "enter-pr" then
+                mechanical_callback = callback
             else
                 error("unexpected vim.system command: " .. table.concat(cmd, " "))
             end
@@ -69,12 +75,16 @@ describe("agentic PR picker preview", function()
         return picker_opts, function()
             assert.is_function(diff_callback)
             return diff_callback
+        end, system_calls, function()
+            assert.is_function(mechanical_callback)
+            return mechanical_callback
         end
     end
 
     before_each(function()
         original_schedule = vim.schedule
         original_system = vim.system
+        original_notify = vim.notify
         original_snacks = _G.Snacks
         original_review = package.loaded["sodium.review"]
         vim.schedule = function(fn)
@@ -85,6 +95,7 @@ describe("agentic PR picker preview", function()
     after_each(function()
         vim.schedule = original_schedule
         vim.system = original_system
+        vim.notify = original_notify
         _G.Snacks = original_snacks
         package.loaded["sodium.review"] = original_review
     end)
@@ -167,5 +178,33 @@ describe("agentic PR picker preview", function()
         assert.are.equal(2, set_lines_calls)
         assert.are.equal(1, highlight_calls)
         assert.are.same({ "line 1", "line 2" }, last_lines)
+    end)
+
+    it("starts a mechanical PR review with C-s", function()
+        local picker_opts, _, system_calls, get_mechanical_callback = setup_pr_picker()
+        local closed = false
+        local notification
+        vim.notify = function(message, level)
+            notification = { message = message, level = level }
+        end
+
+        assert.is_truthy(picker_opts.title:find("<C%-s>"))
+        assert.are.same({ "start_mechanical_review", mode = { "n", "i" } }, picker_opts.win.input.keys["<C-s>"])
+
+        picker_opts.actions.start_mechanical_review({
+            current = function()
+                return picker_opts.items[1]
+            end,
+            close = function()
+                closed = true
+            end,
+        })
+
+        assert.is_true(closed)
+        assert.are.same({ vim.env.HOME .. "/bin/work", "review", "enter-pr", "7" }, system_calls[#system_calls])
+
+        get_mechanical_callback()({ code = 0, stdout = "", stderr = "" })
+        assert.are.equal("PR #7 session ready - <leader>pf", notification.message)
+        assert.are.equal(vim.log.levels.INFO, notification.level)
     end)
 end)
