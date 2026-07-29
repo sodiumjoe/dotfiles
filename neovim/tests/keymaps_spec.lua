@@ -32,6 +32,16 @@ describe("keymaps", function()
             assert.is_not_nil(m)
             assert.is_truthy(m.rhs:find("expand"))
         end)
+
+        it("maps review keymaps in core config", function()
+            assert.is_not_nil(find_nmap(" pf"))
+            assert.is_not_nil(find_nmap(" pn"))
+            assert.is_not_nil(find_nmap(" pa"))
+        end)
+
+        it("registers the Review command", function()
+            assert.is_truthy(vim.api.nvim_get_commands({})["Review"])
+        end)
     end)
 
     describe("plugin keymaps (declared in specs)", function()
@@ -168,12 +178,10 @@ describe("keymaps", function()
                 assert.is_true(spec_has_key(agentic, "<leader>pr"))
             end)
 
-            it("declares leader-pf in agentic spec", function()
-                assert.is_true(spec_has_key(agentic, "<leader>pf"))
-            end)
-
-            it("declares leader-pn in agentic spec", function()
-                assert.is_true(spec_has_key(agentic, "<leader>pn"))
+            it("does not declare review file keymaps in agentic spec", function()
+                assert.is_false(spec_has_key(agentic, "<leader>pf"))
+                assert.is_false(spec_has_key(agentic, "<leader>pn"))
+                assert.is_false(spec_has_key(agentic, "<leader>pa"))
             end)
         end
 

@@ -6,3 +6,5 @@ utils.map({
     { "n", [[<leader>cr]], [[:let @+ = expand("%:.")<cr>]] },
     { "n", [[<leader>cf]], [[:let @+ = expand("%:p")<cr>]] },
 })
+
+require("sodium.review_ui").setup()
