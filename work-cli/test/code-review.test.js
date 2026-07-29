@@ -10,10 +10,18 @@ const workBin = path.join(__dirname, "..", "bin", "work");
 describe("code review sessions", { concurrency: 1 }, () => {
   let tmpDir;
   let repoDir;
+  let originDir;
+  let origPath;
+  let origFailPrDiff;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "code-review-test-"));
     repoDir = path.join(tmpDir, "repo");
+    originDir = path.join(tmpDir, "origin.git");
+    execFileSync("git", ["init", "--bare", originDir], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     fs.mkdirSync(repoDir);
     git(["init", "-b", "main"]);
     git(["config", "user.email", "t@example.com"]);
@@ -21,10 +29,58 @@ describe("code review sessions", { concurrency: 1 }, () => {
     fs.writeFileSync(path.join(repoDir, "file.txt"), "base\n");
     git(["add", "file.txt"]);
     git(["commit", "-m", "initial"]);
+    git(["remote", "add", "origin", originDir]);
+    git(["push", "-u", "origin", "main"]);
+    git(["checkout", "-b", "feature"]);
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "pr change\n");
+    git(["commit", "-am", "pr change"]);
+    git(["push", "origin", "HEAD:refs/pull/7/head"]);
+    git(["checkout", "main"]);
+    git(["branch", "-D", "feature"]);
+    origPath = process.env.PATH;
+    origFailPrDiff = process.env.GH_FAIL_PR_DIFF;
+    const binDir = path.join(tmpDir, "bin");
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(
+      path.join(binDir, "gh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "${tmpDir}/gh.log"
+if [[ "$1" == "pr" && "$2" == "view" && "$3" == "7" && "$4" == "--json" && "$5" == "baseRefName" ]]; then
+  printf '{"baseRefName":"main"}\\n'
+elif [[ "$1" == "api" && "$2" == "user" ]]; then
+  printf 'moon\\n'
+elif [[ "$1" == "pr" && "$2" == "diff" && "$3" == "7" && "\${4:-}" == "--name-only" ]]; then
+  printf 'file.txt\\n'
+elif [[ "$1" == "pr" && "$2" == "diff" && "$3" == "7" ]]; then
+  if [[ "\${GH_FAIL_PR_DIFF:-}" == "1" ]]; then exit 1; fi
+  printf 'diff --git a/file.txt b/file.txt\\n'
+elif [[ "$1" == "pr" && "$2" == "view" && "$3" == "7" && "$4" == "--json" && "$5" == "commits" ]]; then
+  printf 'abc123 pr change\\n'
+elif [[ "$1" == "api" && "$2" == "repos/{owner}/{repo}/pulls/7/comments" ]]; then
+  printf '[]\\n'
+else
+  printf 'unexpected gh args: %s\\n' "$*" >&2
+  exit 99
+fi`,
+    );
+    fs.chmodSync(path.join(binDir, "gh"), 0o755);
+    process.env.PATH = `${binDir}${path.delimiter}${origPath}`;
+    delete process.env.GH_FAIL_PR_DIFF;
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (origPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = origPath;
+    }
+    if (origFailPrDiff === undefined) {
+      delete process.env.GH_FAIL_PR_DIFF;
+    } else {
+      process.env.GH_FAIL_PR_DIFF = origFailPrDiff;
+    }
   });
 
   function git(args) {
@@ -78,5 +134,45 @@ describe("code review sessions", { concurrency: 1 }, () => {
       encoding: "utf-8",
     });
     assert.deepEqual(JSON.parse(output), { status: "no_session" });
+  });
+
+  it("enters a PR review by writing a recoverable session and cached files", () => {
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "dirty local\n");
+    const base = git(["rev-parse", "main"]);
+
+    const { enterPr, readSession } = require("../lib/code-review.js");
+    const result = enterPr(7, repoDir);
+
+    assert.equal(result.mode, "pr");
+    assert.equal(result.id, "7");
+    assert.equal(result.base_ref, base);
+    assert.equal(result.head_ref, "pr-7");
+    assert.equal(git(["branch", "--show-current"]), "pr-7");
+
+    const session = readSession(repoDir);
+    assert.equal(session.previous_branch, "main");
+    assert.ok(session.stash_ref);
+    assert.equal(session.user, "moon");
+    assert.deepEqual(session.reviewed, []);
+
+    for (const file of ["diff", "files", "commits", "pr-comments.json"]) {
+      assert.ok(fs.existsSync(path.join(repoDir, ".review", file)), file);
+    }
+    assert.equal(fs.readFileSync(path.join(repoDir, ".review", "files"), "utf-8"), "file.txt\n");
+  });
+
+  it("leaves a recoverable session when PR cache writing fails", () => {
+    fs.writeFileSync(path.join(repoDir, "file.txt"), "dirty local\n");
+    process.env.GH_FAIL_PR_DIFF = "1";
+
+    const { enterPr, exitSession, readSession } = require("../lib/code-review.js");
+    assert.throws(() => enterPr(7, repoDir));
+    assert.ok(readSession(repoDir));
+    assert.equal(git(["branch", "--show-current"]), "pr-7");
+
+    assert.deepEqual(exitSession(repoDir), { status: "exited" });
+    assert.equal(git(["branch", "--show-current"]), "main");
+    assert.equal(fs.readFileSync(path.join(repoDir, "file.txt"), "utf-8"), "dirty local\n");
+    assert.ok(!fs.existsSync(path.join(repoDir, ".review")));
   });
 });

@@ -91,7 +91,74 @@ function exitSession(cwd = process.cwd()) {
   return { status: "exited" };
 }
 
+function enterPr(pr, cwd = process.cwd()) {
+  const toplevel = toplevelOf(cwd);
+  if (readSession(toplevel)) exitSession(cwd);
+
+  const prNumber = String(pr);
+  const { baseRefName } = JSON.parse(gh(toplevel, ["pr", "view", prNumber, "--json", "baseRefName"]));
+  const user = gh(toplevel, ["api", "user", "--jq", ".login"]).trim();
+  const headRef = `pr-${prNumber}`;
+  const previousBranch = git(toplevel, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const session = {
+    mode: "pr",
+    id: prNumber,
+    base_ref: "",
+    head_ref: headRef,
+    toplevel,
+    previous_branch: previousBranch,
+    stash_ref: null,
+    user,
+    reviewed: [],
+  };
+
+  writeSession(toplevel, session);
+
+  if (git(toplevel, ["status", "--porcelain"]) !== "") {
+    git(toplevel, ["stash", "push", "-m", `work review auto-stash (pr-${prNumber})`]);
+    session.stash_ref = git(toplevel, ["rev-parse", "stash@{0}"]);
+    writeSession(toplevel, session);
+  }
+
+  if (git(toplevel, ["rev-parse", "--abbrev-ref", "HEAD"]) === headRef) {
+    git(toplevel, ["checkout", "--detach", "HEAD"]);
+  }
+  tryGit(toplevel, ["branch", "-D", headRef]);
+  git(toplevel, ["fetch", "origin", `pull/${prNumber}/head:${headRef}`]);
+  git(toplevel, ["checkout", headRef]);
+  tryGit(toplevel, ["fetch", "origin", baseRefName]);
+
+  session.base_ref = tryGit(toplevel, ["merge-base", `origin/${baseRefName}`, headRef]) || `origin/${baseRefName}`;
+  writeSession(toplevel, session);
+
+  const rdir = reviewDir(toplevel);
+  fs.writeFileSync(path.join(rdir, "diff"), gh(toplevel, ["pr", "diff", prNumber]));
+  fs.writeFileSync(path.join(rdir, "files"), gh(toplevel, ["pr", "diff", prNumber, "--name-only"]));
+  fs.writeFileSync(
+    path.join(rdir, "commits"),
+    gh(toplevel, [
+      "pr",
+      "view",
+      prNumber,
+      "--json",
+      "commits",
+      "--jq",
+      '.commits[] | "\\(.oid) \\(.messageHeadline)"',
+    ]),
+  );
+  let comments = "[]";
+  try {
+    comments = gh(toplevel, ["api", `repos/{owner}/{repo}/pulls/${prNumber}/comments`, "--paginate"]);
+  } catch {}
+  fs.writeFileSync(path.join(rdir, "pr-comments.json"), comments);
+
+  nvimCall("require('sodium.review').load() return 0");
+  const { mode, id, base_ref, head_ref } = session;
+  return { mode, id, base_ref, head_ref, toplevel };
+}
+
 module.exports = {
+  enterPr,
   exitSession,
   gh,
   git,
