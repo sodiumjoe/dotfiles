@@ -38,6 +38,7 @@ describe("keymaps", function()
             assert.is_not_nil(find_nmap(" pn"))
             assert.is_not_nil(find_nmap(" pa"))
             assert.is_not_nil(find_nmap(" ps"))
+            assert.is_not_nil(find_nmap(" p?"))
         end)
 
         it("registers the Review command", function()

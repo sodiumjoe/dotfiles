@@ -249,10 +249,24 @@ function M.pick_base_and_review()
     })
 end
 
+function M.show_help()
+    vim.notify(table.concat({
+        "<leader>pf picker",
+        "<leader>pn mark reviewed and next",
+        "<Tab> toggle reviewed in picker",
+        "<C-o> open file without diff",
+        "<leader>ca/cn/cp/cl/cd/ce comments",
+        "<leader>ai send notes to agent",
+        "<leader>pa submit PR review",
+        "<leader>px abort review",
+    }, "\n"), vim.log.levels.INFO)
+end
+
 function M.setup()
     vim.api.nvim_create_user_command("Review", function(opts)
         local base = opts.args ~= "" and opts.args or nil
         if require("sodium.review").start_self_review(base) then
+            M.show_help()
             M.open_file_picker()
         end
     end, { nargs = "?" })
@@ -271,6 +285,7 @@ function M.setup()
         M.pick_base_and_review,
         { noremap = true, silent = true, desc = "Pick self-review base" }
     )
+    vim.keymap.set("n", "<leader>p?", M.show_help, { noremap = true, silent = true, desc = "Review keymap help" })
 end
 
 return M
