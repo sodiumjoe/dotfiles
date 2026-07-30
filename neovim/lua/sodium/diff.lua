@@ -42,6 +42,10 @@ local function git_file_content(ref, filepath, toplevel)
     end
     local lines = vim.fn.systemlist({ "git", "-C", toplevel, "show", ref .. ":" .. relpath })
     if vim.v.shell_error ~= 0 then
+        vim.fn.systemlist({ "git", "-C", toplevel, "rev-parse", "--verify", "--quiet", ref .. "^{commit}" })
+        if vim.v.shell_error == 0 then
+            return nil, "git show failed for " .. ref .. ":" .. relpath, "missing"
+        end
         return nil, "git show failed for " .. ref .. ":" .. relpath
     end
     return lines
@@ -78,10 +82,14 @@ function M.open(opts)
             vim.api.nvim_win_set_buf(0, right_buf)
             vim.cmd("diffthis")
         else
-            local left_lines, left_err = git_file_content(opts.left_ref, opts.file, toplevel)
+            local left_lines, left_err, left_status = git_file_content(opts.left_ref, opts.file, toplevel)
             if not left_lines then
-                vim.notify(left_err or "unknown error", vim.log.levels.ERROR)
-                return
+                if left_status == "missing" then
+                    left_lines = {}
+                else
+                    vim.notify(left_err or "unknown error", vim.log.levels.ERROR)
+                    return
+                end
             end
 
             local display = display_path(opts.file, toplevel)

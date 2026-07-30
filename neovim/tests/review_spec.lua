@@ -364,6 +364,31 @@ describe("sodium.review", function()
             vim.fn.delete(dir, "rf")
         end)
 
+        it("opens added files as editable working files against an empty base", function()
+            local dir = vim.fn.tempname() .. "/review-spec-added"
+            vim.fn.mkdir(dir, "p")
+            sh(dir, { "git", "init", "-b", "main" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "root" })
+            vim.fn.writefile({ "new" }, dir .. "/added.txt")
+            sh(dir, { "git", "add", "added.txt" })
+            sh(dir, { "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "add file" })
+            review.start_self_review("HEAD~1", dir)
+            local item = review.get_files()[1]
+
+            review_ui.open_diff_for_item(review.get_session(), item)
+
+            local wins = vim.api.nvim_list_wins()
+            assert.are.equal(2, #wins)
+            assert.is_true(vim.wo[wins[1]].diff)
+            assert.is_true(vim.wo[wins[2]].diff)
+            assert.are.same({ "" }, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(wins[1]), 0, -1, false))
+            assert.are.equal(
+                vim.uv.fs_realpath(dir .. "/added.txt"),
+                vim.uv.fs_realpath(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(wins[2])))
+            )
+            vim.fn.delete(dir, "rf")
+        end)
+
         it("opens untracked files directly", function()
             local dir = vim.fn.tempname() .. "/review-spec-untracked"
             vim.fn.mkdir(dir, "p")
