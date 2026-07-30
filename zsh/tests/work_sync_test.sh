@@ -211,6 +211,14 @@ assert_eq \
   "sync passes moon remote home to unison" \
   "ssh://remote-moon-home//home/moon/stripe/work/" \
   "${unison_args[2]}"
+sync_args="${(j: :)unison_args}"
+assert_contains "sync preserves conflict copies" "-copyonconflict" "$sync_args"
+if [[ " $sync_args " == *" -prefer newer "* ]]; then
+  sync_prefer_newer="present"
+else
+  sync_prefer_newer="absent"
+fi
+assert_eq "sync does not resolve conflicts by mtime" "absent" "$sync_prefer_newer"
 
 echo "=== Test: sync loop overwrites stale pidfile under noclobber ==="
 loop_host="loop-noclobber-$$"
@@ -224,6 +232,14 @@ run_capture _devbox_sync_loop "$loop_host"
 unsetopt noclobber
 assert_eq "sync loop exits zero with existing pidfile" "0" "$capture_status"
 assert_eq "sync loop replaces stale pidfile" "not-stale" "$(cat "$loop_pidfile" | sed 's/^[0-9][0-9]*$/not-stale/')"
+loop_args="${(j: :)unison_args}"
+assert_contains "sync loop preserves conflict copies" "-copyonconflict" "$loop_args"
+if [[ " $loop_args " == *" -prefer newer "* ]]; then
+  loop_prefer_newer="present"
+else
+  loop_prefer_newer="absent"
+fi
+assert_eq "sync loop does not resolve conflicts by mtime" "absent" "$loop_prefer_newer"
 rm -f "$loop_pidfile"
 
 echo ""

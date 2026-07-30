@@ -104,7 +104,7 @@ _devbox_sync() {
   remote_work_uri="$(_devbox_remote_work_uri "$host")" || return
   ssh "$host" 'mkdir -p "$HOME/stripe/work"' 2>/dev/null
   unison ~/stripe/work/ "$remote_work_uri" \
-    -batch -prefer newer -fastcheck true -silent \
+    -batch -copyonconflict -fastcheck true -silent \
     -ignore 'Name .DS_Store' \
     -ignore 'Name *.jsonl' \
     -ignore 'Name .obsidian' \
@@ -120,7 +120,7 @@ _devbox_sync_loop() {
   _devbox_sync_preflight "$host" || return
   remote_work_uri="$(_devbox_remote_work_uri "$host")" || return
   unison ~/stripe/work/ "$remote_work_uri" \
-    -batch -prefer newer -fastcheck true -silent \
+    -batch -copyonconflict -fastcheck true -silent \
     -repeat 5 \
     -ignore 'Name .DS_Store' \
     -ignore 'Name *.jsonl' \
