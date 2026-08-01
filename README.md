@@ -39,7 +39,7 @@ Post-install:
 
 **Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
 
-**`~/.claude` may be the repo directory.** On some machines `~/.claude` is itself a symlink to `~/.dotfiles/claude`, so every destination above collapses onto its own source. `ln -sf` in that situation silently replaces the file with a self-referential symlink and destroys the contents, which is why `bootstrap.sh` routes all of these through a `link` helper that compares `readlink -f` on both sides and skips when they match. Do not replace those calls with bare `ln -sf`.
+**`~/.claude` may be the repo directory.** On some machines `~/.claude` is itself a symlink to `~/.dotfiles/claude`, so every destination above collapses onto its own source. `ln -sf` in that situation silently replaces the file with a self-referential symlink and destroys the contents, which is why `bootstrap.sh` routes all of these through `bin/dotfiles-link`, which compares `readlink -f` on both sides and skips when they match (it also refuses to create a symlink to a nonexistent source). Do not replace those calls with bare `ln -sf`. The guard is covered by `test-env.sh`.
 
 When adding new config: add the file or directory, then add it to the appropriate list in `bootstrap.sh` (`files` array for home dotfiles, `xdg_files` array for XDG configs, or a new `ln -s` for special cases).
 

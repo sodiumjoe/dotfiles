@@ -23,11 +23,11 @@ fi
 if [[ "$1" == "--npm" ]]; then
   cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
   npm update --prefix node-bin
-  npm install --prefix node-bin
   if ! git diff --quiet -- node-bin/package-lock.json; then
-    git add node-bin/package-lock.json
-    git commit -m "upgrade node-bin packages"
-    echo "committed node-bin/package-lock.json"
+    # Pathspec-scoped commit: ignores the index, so anything else the user
+    # has staged is not swept into this commit.
+    git commit -m "upgrade node-bin packages" -- node-bin/package-lock.json node-bin/package.json
+    echo "committed node-bin lockfile"
   else
     echo "node-bin already up to date"
   fi
@@ -99,8 +99,7 @@ commit_devbox_if_changed() {
   fi
   pushd "$(dirname "$DEVBOX_INIT")" > /dev/null
   if ! git diff --quiet .devbox-init 2>/dev/null; then
-    git add .devbox-init
-    git commit -m "upgrade devbox tool versions"
+    git commit -m "upgrade devbox tool versions" -- .devbox-init
     echo "committed .devbox-init"
   fi
   popd > /dev/null

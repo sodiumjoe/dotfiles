@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Everything below is repo-root-relative. Safe to resolve via $0 because
+# bootstrap.sh, unlike bin/*, is never invoked through a symlink.
+cd "$(dirname "$0")"
+
 shopt -s nullglob
 
 mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
@@ -18,8 +22,15 @@ selected_env=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --env) selected_env="${2:-}"; shift 2 ;;
-    --env=*) selected_env="${1#--env=}"; shift ;;
+    --env)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "bootstrap.sh: --env requires a value" >&2; exit 2; }
+      selected_env="$2"; shift 2
+      ;;
+    --env=*)
+      selected_env="${1#--env=}"
+      [ -n "$selected_env" ] || { echo "bootstrap.sh: --env requires a value" >&2; exit 2; }
+      shift
+      ;;
     *) echo "bootstrap.sh: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
@@ -59,16 +70,11 @@ bin/dotfiles-generate
 
 # --- Symlink helper ---
 #
-# ~/.claude may itself be a symlink into this repo, in which case source and
-# destination resolve to the same file and `ln -sf` would silently replace it
-# with a self-referential symlink (ELOOP), destroying the contents.
+# Guards against ~/.claude being a symlink into this repo, where a bare
+# `ln -sf` would destroy the source file. See bin/dotfiles-link.
 
 link() {
-  local src="$1" dest="$2"
-  if [ "$(readlink -f "$src" 2>/dev/null)" = "$(readlink -f "$dest" 2>/dev/null)" ]; then
-    return 0
-  fi
-  ln -sfn "$src" "$dest"
+  bin/dotfiles-link "$@"
 }
 
 # --- Symlink dotfiles ---
@@ -168,19 +174,6 @@ for script in ~/.dotfiles/bin/*; do
   link "$script" ~/bin/$(basename "$script")
 done
 
-# --- Pinned npm tool binaries (ACP providers, language servers, formatters) ---
-
-if command -v npm &>/dev/null; then
-  echo "Installing node-bin packages..."
-  if [ -f node-bin/package-lock.json ]; then
-    npm ci --prefix node-bin
-  else
-    npm install --prefix node-bin
-  fi
-else
-  echo "npm not found, skipping node-bin (ACP providers will be unavailable)" >&2
-fi
-
 # --- Neovim ---
 
 mkdir -p ${XDG_CONFIG_HOME}/nvim
@@ -195,4 +188,20 @@ fi
 if [ -d .git ]; then
   mkdir -p .git/hooks
   ln -sf ../../hooks/post-merge .git/hooks/post-merge
+fi
+
+# --- Pinned npm tool binaries (ACP providers, language servers, formatters) ---
+#
+# Last on purpose: this is the only step that needs the network, and a registry
+# failure shouldn't abort the symlink and git-hook setup above.
+
+if command -v npm &>/dev/null; then
+  echo "Installing node-bin packages..."
+  if [ -f node-bin/package-lock.json ]; then
+    npm ci --prefix node-bin || echo "bootstrap.sh: npm ci failed — run 'npm ci --prefix node-bin' when the network is back" >&2
+  else
+    npm install --prefix node-bin || echo "bootstrap.sh: npm install failed — run 'npm install --prefix node-bin' when the network is back" >&2
+  fi
+else
+  echo "npm not found, skipping node-bin (ACP providers will be unavailable)" >&2
 fi

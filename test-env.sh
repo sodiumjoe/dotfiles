@@ -102,6 +102,35 @@ else
   check "invalid DOTFILES_ENV rejected" "ok"
 fi
 
+# --- Link helper ---
+#
+# The dangerous case: dest's parent is a symlink into the repo (as ~/.claude
+# is on some machines), so src and dest are the same file. A regression here
+# destroys real config files on the next bootstrap.
+
+echo "=== dotfiles-link ==="
+linkdir="$tmproot/link"
+mkdir -p "$linkdir/repo" "$linkdir/home"
+echo "content" > "$linkdir/repo/file"
+ln -s "$linkdir/repo" "$linkdir/home/dotdir"
+
+bin/dotfiles-link "$linkdir/repo/file" "$linkdir/home/dotdir/file"
+check "self-link skipped, content preserved" \
+  "$([ ! -L "$linkdir/repo/file" ] && [ "$(cat "$linkdir/repo/file")" = "content" ] && echo ok || echo destroyed)"
+
+bin/dotfiles-link "$linkdir/repo/file" "$linkdir/home/file2"
+check "distinct dest gets working symlink" \
+  "$([ -L "$linkdir/home/file2" ] && [ "$(cat "$linkdir/home/file2")" = "content" ] && echo ok || echo broken)"
+
+bin/dotfiles-link "$linkdir/repo/missing" "$linkdir/home/file3" 2>/dev/null
+check "missing source creates nothing" \
+  "$([ ! -e "$linkdir/home/file3" ] && [ ! -L "$linkdir/home/file3" ] && echo ok || echo "created dangling link")"
+
+echo "replaced" > "$linkdir/repo/other"
+bin/dotfiles-link "$linkdir/repo/other" "$linkdir/home/file2"
+check "existing symlink retargeted" \
+  "$([ "$(cat "$linkdir/home/file2")" = "replaced" ] && echo ok || echo stale)"
+
 echo ""
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
