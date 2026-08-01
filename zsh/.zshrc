@@ -252,7 +252,7 @@ eval "$(nodenv init -)"
 
 # Must come after `nodenv init`, which prepends its shims. Appending here would
 # let globally installed copies shadow the versions pinned in node-bin.
-export PATH=~/.dotfiles/node-bin/node_modules/.bin:~/node-bin/node_modules/.bin:${PATH}
+export PATH=~/.dotfiles/node-bin/node_modules/.bin:${PATH}
 
 # To customize prompt, run `p10k configure` or edit ~/.config/zsh/.p10k.zsh.
 [[ ! -f ~/.config/zsh/.p10k.zsh ]] || source ~/.config/zsh/.p10k.zsh
