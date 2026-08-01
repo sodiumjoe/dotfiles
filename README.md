@@ -59,6 +59,23 @@ Bootstrap deliberately ignores the ambient `$DOTFILES_ENV`, since `zshenv` alway
 
 **To switch environments:** `./bootstrap.sh --env=<name>` followed by `dotfiles-generate --reset`, then restart your shell. The `--reset` is what rewrites the mutable configs; bootstrap alone leaves an existing `settings.json` in place.
 
+### Migrating an existing machine
+
+A machine on pre-multi-env master has `claude/settings.json`, `codex/config.toml`, and `Brewfile` as tracked files, almost certainly with local runtime modifications. A plain `git pull` refuses to proceed over those (harmless, but stuck). The migration script handles backup, reset, pull, and re-bootstrap — but it lives in the very commits being pulled, so fetch it from origin first:
+
+```bash
+cd ~/.dotfiles
+echo "DOTFILES_ENV=work" > ~/.dotfiles-env   # or devbox — BEFORE pulling, see below
+git fetch origin
+git show origin/master:bin/migrate-multi-env > /tmp/migrate && bash /tmp/migrate
+```
+
+Write `~/.dotfiles-env` first because the new `zshenv` defaults `DOTFILES_ENV` to `home` when the file is missing: any shell opened between pull and bootstrap on a work machine would otherwise silently load home config (no Stripe shellinit, no work aliases). Run the script from a downloaded copy, not piped into bash — it may prompt, and a piped script's stdin is the script itself.
+
+After migration, the script prints diff commands comparing your backed-up configs against the generated ones. Actually run them: months of accumulated runtime permissions live in the old `settings.json`, and promoting them into `settings.base.json`/`settings.work.json` is a manual step.
+
+**Devbox provisioning must be updated**: the new bootstrap deliberately ignores an ambient `DOTFILES_ENV` variable, so `DOTFILES_ENV=devbox ./bootstrap.sh` (the old contract) now fails at the interactive prompt when non-interactive. Update `.devbox-init` to call `./bootstrap.sh --env=devbox`. Bootstrap also now hard-requires `jq` (it refuses to write settings without it rather than silently dropping every overlay) — confirm the devbox image provides it.
+
 ### Config Generation
 
 `bin/dotfiles-generate` produces config files from base + environment overlays. All per-environment decisions live in one table at the top of the script (which settings overlay, which Brewfile overlay, whether codex applies); nothing further down branches on `DOTFILES_ENV`.

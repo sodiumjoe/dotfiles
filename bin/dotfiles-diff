@@ -12,7 +12,9 @@ set -euo pipefail
 #   1  drift detected
 #   2  could not check (missing env, missing tool, generation failed)
 
-cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
+# Resolve the repo from this script's real location (readlink -f follows the
+# ~/bin symlink), so non-standard clone paths work. DOTFILES_DIR overrides.
+cd "${DOTFILES_DIR:-$(dirname "$(readlink -f "$0")")/..}"
 
 quiet=false
 if [ "${1:-}" = "--quiet" ]; then

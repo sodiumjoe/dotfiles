@@ -21,7 +21,7 @@ fi
 # macOS `/usr/bin/env bash` is 3.2, so anything past that point is unreachable
 # unless a newer bash is installed.
 if [[ "$1" == "--npm" ]]; then
-  cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
+  cd "${DOTFILES_DIR:-$(dirname "$(readlink -f "$0")")/..}"
   npm update --prefix node-bin
   if ! git diff --quiet -- node-bin/package-lock.json; then
     # Pathspec-scoped commit: ignores the index, so anything else the user

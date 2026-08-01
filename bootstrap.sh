@@ -40,6 +40,13 @@ if [ -n "$selected_env" ]; then
 elif [ -f ~/.dotfiles-env ]; then
   . ~/.dotfiles-env
 else
+  if [ ! -t 0 ]; then
+    echo "bootstrap.sh: no ~/.dotfiles-env and stdin is not a tty — pass --env=<work|devbox|home>" >&2
+    if [ -n "${DOTFILES_ENV:-}" ]; then
+      echo "bootstrap.sh: note: ambient DOTFILES_ENV='$DOTFILES_ENV' is deliberately ignored; use --env=$DOTFILES_ENV" >&2
+    fi
+    exit 2
+  fi
   printf "No ~/.dotfiles-env found. Select environment:\n"
   printf "  1) work\n"
   printf "  2) devbox\n"

@@ -14,7 +14,9 @@ set -euo pipefail
 #
 # Requires DOTFILES_ENV to be set (or ~/.dotfiles-env to exist).
 
-cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
+# Resolve the repo from this script's real location (readlink -f follows the
+# ~/bin symlink), so non-standard clone paths work. DOTFILES_DIR overrides.
+cd "${DOTFILES_DIR:-$(dirname "$(readlink -f "$0")")/..}"
 
 reset=false
 out=.

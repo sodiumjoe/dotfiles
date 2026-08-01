@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Unlike the other bin/ scripts, do NOT resolve the repo from $0: this script
+# is meant to be fetched from origin and run from a downloaded copy (it doesn't
+# exist locally on a pre-migration machine). See README "Migrating an existing
+# machine".
 cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
 
 if [ ! -d .git ]; then
@@ -26,7 +30,9 @@ backup_if_dirty() {
   if [ ! -f "$file" ]; then
     return
   fi
-  if ! git diff --quiet -- "$file" 2>/dev/null; then
+  # Diff against HEAD, not the index — staged-but-uncommitted changes must
+  # also be backed up and reset or the pull below fails.
+  if ! git diff --quiet HEAD -- "$file" 2>/dev/null; then
     mkdir -p "$backup_dir"
     cp "$file" "$backup_dir/$(echo "$file" | tr '/' '_')"
     backed_up=true
@@ -70,9 +76,9 @@ echo "Wrote ~/.dotfiles-env (DOTFILES_ENV=$DOTFILES_ENV)"
 echo "Resetting modified tracked files..."
 # One pathspec at a time: `git checkout -- a b` restores nothing at all if any
 # of the paths is untracked, which silently leaves the tree dirty and makes the
-# pull below fail.
+# pull below fail. HEAD (not the index) so staged changes are reset too.
 for f in claude/settings.json codex/config.toml Brewfile; do
-  git checkout -- "$f" 2>/dev/null || true
+  git checkout HEAD -- "$f" 2>/dev/null || true
 done
 
 echo "Pulling..."
