@@ -165,6 +165,13 @@ Work vault: `~/stripe/work/` (configured in `work/config.json`).
 
 Neovim keybindings: `<leader>ap` (pick task), `<leader>aP` (create project), `<leader>at` (add task).
 
+Code review workflow:
+- `work review enter-pr <n>` -- check out PR n for review and write session state under `.review/`
+- `work review submit <EVENT> [body]` -- submit a PR review and exit the session
+- `work review exit` -- restore the previous branch/stash and remove review session state
+
+PR review recovery state lives in `.review/session.json`, which is written before checkout or stash mutation. `work review exit` is session-driven and idempotent; rerun it to recover branch/stash state after an interrupted review.
+
 ### claude/ and codex/
 
 - `claude/CLAUDE.md` -- generated (do not edit directly)

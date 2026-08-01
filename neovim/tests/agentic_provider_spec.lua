@@ -53,7 +53,10 @@ describe("agentic codex provider", function()
     end)
 
     it("passes the resolved codex executable directly to codex-acp", function()
+        local saved_env = vim.env.DOTFILES_ENV
+        vim.env.DOTFILES_ENV = "work"
         local opts = load_agentic_setup()
+        vim.env.DOTFILES_ENV = saved_env
         local provider = opts.acp_providers["codex-acp"]
 
         assert.are.equal("codex-acp", opts.provider)
@@ -63,6 +66,19 @@ describe("agentic codex provider", function()
             provider.env.CODEX_PATH
         )
         assert.is_nil(provider.env.CODEX_REAL_PATH)
+    end)
+
+    it("selects claude-agent-acp outside work environments", function()
+        local saved_env = vim.env.DOTFILES_ENV
+        vim.env.DOTFILES_ENV = "home"
+        local opts = load_agentic_setup()
+        vim.env.DOTFILES_ENV = saved_env
+
+        assert.are.equal("claude-agent-acp", opts.provider)
+        assert.are.equal(
+            "claude-agent-acp",
+            opts.acp_providers["claude-agent-acp"].command
+        )
     end)
 
     it("forwards the current neovim server to codex", function()
