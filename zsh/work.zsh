@@ -13,23 +13,6 @@ _sodium_define_stripe_named_dirs /pay/src/pay-server "$HOME/stripe/mint/pay-serv
 alias gfm='git fetch origin green:green'
 alias grm='git rebase green'
 
-# ghpr: open GitHub/corp PR URL for current branch
-ghpr() {
-  local origin owner branch url
-
-  origin=$(git remote -v | grep origin | grep push | cut -d ':' -f 2 | cut -d '.' -f 1 | cut -d ' ' -f 1)
-  owner=$(echo "$origin" | cut -d '/' -f 1)
-  branch=$(git rev-parse --abbrev-ref HEAD)
-
-  if [[ "$owner" == "stripe-internal" ]]; then
-    url="https://git.corp.stripe.com/$origin/compare/$branch?expand=1"
-  else
-    url="https://github.com/$origin/pull/new/$branch"
-  fi
-
-  osc52copy $url
-}
-
 # Devbox and work sync
 source "${ZDOTDIR:-${HOME}/.config/zsh}/work_sync.zsh"
 

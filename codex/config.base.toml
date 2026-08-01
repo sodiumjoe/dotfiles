@@ -44,6 +44,10 @@ args = ["toolshed", "serve", "google_drive"]
 command = "sh"
 args = ["-lc", "exec \"$HOME/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh\" \"$@\"", "toolshed_stdio_shim", "google_drive.append_to_google_drive_doc.comment_on_google_drive_doc.create_google_drive_doc.create_google_drive_doc_tab.format_google_drive_doc.get_google_drive_doc_revision.get_google_drive_doc_tab_contents.get_google_drive_file.get_google_drive_file_comments.get_google_drive_file_name.list_google_drive_doc_revisions.list_google_drive_doc_tabs.reply_to_google_drive_comment.search_google_drive.update_google_drive_doc"]
 
+[mcp_servers.toolshed_observability_b6ffd4]
+command = "/Users/moon/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh"
+args = ["observability"]
+
 [plugins."orbit@stripe-internal-marketplace"]
 enabled = true
 
