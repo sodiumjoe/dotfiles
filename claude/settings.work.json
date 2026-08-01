@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pay js:run*)",
+      "Bash(work *)",
+      "mcp__sourcegraph__*",
+      "mcp__toolshed__*",
+      "mcp__toolshed_extras__*"
+    ]
+  },
+  "model": "opus[1m]",
+  "enabledMcpjsonServers": [
+    "toolshed"
+  ],
+  "enabledPlugins": {
+    "js-infra-internal@stripe-internal-marketplace": true,
+    "orbit@stripe-internal-marketplace": true,
+    "run@stripe-internal-marketplace": true
+  }
+}

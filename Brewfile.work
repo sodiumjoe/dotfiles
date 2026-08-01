@@ -1,0 +1,10 @@
+tap "stripe-internal/tap", "/opt/stripe/homebrew_taps/stripe-internal/tap"
+
+brew "awscli"
+brew "buildifier"
+brew "buildozer"
+brew "semgrep"
+brew "stripe-internal/tap/git-stripe"
+brew "thrift"
+brew "unison"
+brew "watchman"

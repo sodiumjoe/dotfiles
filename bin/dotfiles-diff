@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Show drift between live mutable configs and what the source files
+# would generate. Helps you decide what to promote back to base/overlay.
+#
+# Usage: dotfiles-diff [--quiet]
+#   --quiet: suppress output; exit status carries the answer
+#
+# Exit codes:
+#   0  no drift
+#   1  drift detected
+#   2  could not check (missing env, missing tool, generation failed)
+
+# Resolve the repo from this script's real location (readlink -f follows the
+# ~/bin symlink), so non-standard clone paths work. DOTFILES_DIR overrides.
+cd "${DOTFILES_DIR:-$(dirname "$(readlink -f "$0")")/..}"
+
+quiet=false
+if [ "${1:-}" = "--quiet" ]; then
+  quiet=true
+fi
+
+if [ -z "${DOTFILES_ENV:-}" ]; then
+  if [ -f ~/.dotfiles-env ]; then
+    . ~/.dotfiles-env
+  else
+    echo "dotfiles-diff: DOTFILES_ENV not set and ~/.dotfiles-env not found" >&2
+    exit 2
+  fi
+fi
+
+if ! command -v jq &>/dev/null; then
+  echo "dotfiles-diff: jq not found — cannot compare settings" >&2
+  exit 2
+fi
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Generate a pristine copy from source and diff the live files against it.
+# Reusing dotfiles-generate keeps drift detection consistent with generation
+# by construction, rather than by two copies of the same merge logic.
+if ! DOTFILES_ENV="$DOTFILES_ENV" bin/dotfiles-generate --reset --out "$tmpdir" >/dev/null; then
+  echo "dotfiles-diff: config generation failed" >&2
+  exit 2
+fi
+
+drifted=false
+
+report() {
+  local label="$1" expected="$2" live="$3"
+  drifted=true
+  if [ "$quiet" = false ]; then
+    echo "=== $label has drifted from sources ==="
+    diff --color=auto -u --label "sources would generate" --label "live $label" \
+      "$expected" "$live" | head -50 || true
+    echo ""
+  fi
+}
+
+# --- Claude settings ---
+
+if [ -f claude/settings.json ]; then
+  jq --sort-keys . "$tmpdir/claude/settings.json" > "$tmpdir/expected-settings.json"
+  if ! jq --sort-keys . claude/settings.json > "$tmpdir/live-settings.json" 2>/dev/null; then
+    echo "dotfiles-diff: claude/settings.json is not valid JSON" >&2
+    exit 2
+  fi
+  if ! diff -q "$tmpdir/expected-settings.json" "$tmpdir/live-settings.json" &>/dev/null; then
+    report "claude/settings.json" "$tmpdir/expected-settings.json" "$tmpdir/live-settings.json"
+    if [ "$quiet" = false ]; then
+      echo "Promote changes to claude/settings.base.json or claude/settings.${DOTFILES_ENV}.json"
+      echo "Then run: dotfiles-generate --reset"
+      echo ""
+    fi
+  fi
+fi
+
+# --- Codex config ---
+#
+# Codex rewrites marketplace bookkeeping (last_updated, last_revision) on every
+# refresh. Comparing those would report drift on essentially every run and train
+# you to ignore the warning, so they are stripped from both sides.
+
+strip_volatile_toml() {
+  grep -vE '^(last_updated|last_revision) = ' "$1"
+}
+
+if [ -f codex/config.toml ] && [ -f "$tmpdir/codex/config.toml" ]; then
+  strip_volatile_toml "$tmpdir/codex/config.toml" > "$tmpdir/expected-config.toml" || true
+  strip_volatile_toml codex/config.toml > "$tmpdir/live-config.toml" || true
+  if ! diff -q "$tmpdir/expected-config.toml" "$tmpdir/live-config.toml" &>/dev/null; then
+    report "codex/config.toml" "$tmpdir/expected-config.toml" "$tmpdir/live-config.toml"
+    if [ "$quiet" = false ]; then
+      echo "Promote changes to codex/config.base.toml, then run: dotfiles-generate --reset"
+      echo ""
+    fi
+  fi
+fi
+
+if [ "$drifted" = true ]; then
+  exit 1
+fi
+
+if [ "$quiet" = false ]; then
+  echo "No drift detected."
+fi
+exit 0

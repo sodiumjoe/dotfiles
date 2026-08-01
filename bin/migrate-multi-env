@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Unlike the other bin/ scripts, do NOT resolve the repo from $0: this script
+# is meant to be fetched from origin and run from a downloaded copy (it doesn't
+# exist locally on a pre-migration machine). See README "Migrating an existing
+# machine".
+cd "${DOTFILES_DIR:-$HOME/.dotfiles}"
+
+if [ ! -d .git ]; then
+  echo "Not in the dotfiles repo" >&2
+  exit 1
+fi
+
+git fetch origin
+
+# Test for presence, not for difference: `git diff --quiet` also succeeds when
+# the local and remote copies are identical, which would reject re-running this
+# after a partially completed migration.
+if ! git cat-file -e origin/master:bin/dotfiles-generate 2>/dev/null; then
+  echo "origin/master doesn't have dotfiles-generate yet. Push the multi-env commits first." >&2
+  exit 1
+fi
+
+backup_dir="$HOME/.dotfiles-migration-backup"
+backed_up=false
+
+backup_if_dirty() {
+  local file="$1"
+  if [ ! -f "$file" ]; then
+    return
+  fi
+  # Diff against HEAD, not the index — staged-but-uncommitted changes must
+  # also be backed up and reset or the pull below fails.
+  if ! git diff --quiet HEAD -- "$file" 2>/dev/null; then
+    mkdir -p "$backup_dir"
+    cp "$file" "$backup_dir/$(echo "$file" | tr '/' '_')"
+    backed_up=true
+    echo "  Backed up $file (has local changes)"
+  fi
+}
+
+echo "Backing up modified tracked files..."
+backup_if_dirty claude/settings.json
+backup_if_dirty codex/config.toml
+backup_if_dirty Brewfile
+
+if [ "$backed_up" = true ]; then
+  echo "  Backups in $backup_dir"
+else
+  echo "  No modified files to back up"
+fi
+
+if [ -f ~/.dotfiles-env ]; then
+  . ~/.dotfiles-env
+  echo "Found existing ~/.dotfiles-env: DOTFILES_ENV=$DOTFILES_ENV"
+else
+  printf "No ~/.dotfiles-env found. Select environment:\n"
+  printf "  1) work\n"
+  printf "  2) devbox\n"
+  printf "  3) home\n"
+  printf "Choice: "
+  read choice
+  case "$choice" in
+    1) DOTFILES_ENV=work ;;
+    2) DOTFILES_ENV=devbox ;;
+    3) DOTFILES_ENV=home ;;
+    *) echo "Invalid choice"; exit 1 ;;
+  esac
+fi
+
+echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
+export DOTFILES_ENV
+echo "Wrote ~/.dotfiles-env (DOTFILES_ENV=$DOTFILES_ENV)"
+
+echo "Resetting modified tracked files..."
+# One pathspec at a time: `git checkout -- a b` restores nothing at all if any
+# of the paths is untracked, which silently leaves the tree dirty and makes the
+# pull below fail. HEAD (not the index) so staged changes are reset too.
+for f in claude/settings.json codex/config.toml Brewfile; do
+  git checkout HEAD -- "$f" 2>/dev/null || true
+done
+
+echo "Pulling..."
+if ! git pull origin master; then
+  echo ""
+  echo "git pull failed (likely a merge conflict)."
+  echo "Resolve conflicts, then run: ./bootstrap.sh"
+  exit 1
+fi
+
+echo "Running bootstrap..."
+./bootstrap.sh
+
+echo ""
+echo "Migration complete."
+if [ "$backed_up" = true ]; then
+  echo ""
+  echo "Your old configs were backed up to $backup_dir."
+  echo "To check for runtime changes worth promoting:"
+  echo ""
+  if [ -f "$backup_dir/claude_settings.json" ]; then
+    echo "  diff <(jq --sort-keys . \"$backup_dir/claude_settings.json\") <(jq --sort-keys . claude/settings.json)"
+  fi
+  if [ -f "$backup_dir/codex_config.toml" ]; then
+    echo "  diff \"$backup_dir/codex_config.toml\" codex/config.toml"
+  fi
+  echo ""
+  echo "Promote anything important into the source files (settings.base.json,"
+  echo "settings.\$DOTFILES_ENV.json, config.base.toml), then: dotfiles-generate --reset"
+fi

@@ -54,15 +54,11 @@
       "Bash(git status*)",
       "Bash(git symbolic-ref*)",
       "Bash(git tag -l*)",
-      "Bash(pay js:run*)",
       "Read(*)",
       "Grep(*)",
       "Write(/tmp/*)",
       "Edit(/tmp/*)",
       "Glob(*)",
-      "mcp__sourcegraph__*",
-      "mcp__toolshed__*",
-      "mcp__toolshed_extras__*",
       "Bash(nvim-edit:*)",
       "Bash(find * | head *)",
       "Bash(find * | tail *)",
@@ -71,7 +67,6 @@
       "Bash(ls * | head *)",
       "Bash(ls * | tail *)",
       "Bash(env * | grep * | head *)",
-      "Bash(work *)",
       "Skill(neovim-review:*)"
     ],
     "deny": [
@@ -106,11 +101,9 @@
       "Bash(git switch*)"
     ]
   },
-  "model": "opus[1m]",
+  "model": "opus",
+  "tui": "fullscreen",
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "toolshed"
-  ],
   "hooks": {
     "Notification": [
       {
@@ -147,12 +140,6 @@
       }
     ]
   },
-  "enabledPlugins": {
-    "obsidian@obsidian-skills": true,
-    "js-infra-internal@stripe-internal-marketplace": true,
-    "orbit@stripe-internal-marketplace": true,
-    "run@stripe-internal-marketplace": true
-  },
   "spinnerTipsEnabled": false,
   "spinnerVerbs": {
     "mode": "replace",
@@ -160,5 +147,8 @@
       "Working"
     ]
   },
-  "effortLevel": "high"
+  "effortLevel": "high",
+  "enabledPlugins": {
+    "obsidian@obsidian-skills": true
+  }
 }

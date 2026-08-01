@@ -1,0 +1,22 @@
+#!/bin/sh
+# Create a symlink unless source and destination already resolve to the same
+# file. ~/.claude may itself be a symlink into this repo, in which case source
+# and destination collapse onto the same path and a bare `ln -sf` would
+# silently replace the file with a self-referential symlink (ELOOP),
+# destroying the contents. Used by bootstrap.sh; tested by test-env.sh.
+#
+# Usage: dotfiles-link <src> <dest>
+
+src="$1"
+dest="$2"
+
+if [ ! -e "$src" ]; then
+  echo "dotfiles-link: source $src does not exist, not linking" >&2
+  exit 0
+fi
+
+if [ "$(readlink -f "$src" 2>/dev/null)" = "$(readlink -f "$dest" 2>/dev/null)" ]; then
+  exit 0
+fi
+
+ln -sfn "$src" "$dest"

@@ -1,6 +1,5 @@
-tap "stripe-internal/tap", "/opt/stripe/homebrew_taps/stripe-internal/tap"
-
 # Core tools
+brew "bash"
 brew "coreutils"
 brew "curl"
 brew "git", link: false
@@ -43,19 +42,12 @@ brew "rbenv"
 brew "yarn"
 
 # Dev tools
-brew "buildifier"
-brew "buildozer"
-brew "codex-acp"
 brew "direnv"
 brew "gh"
 brew "mergiraf"
-brew "semgrep"
 brew "shellcheck"
-brew "thrift"
 brew "tmux"
-brew "unison"
 brew "vale"
-brew "watchman"
 
 # Libraries
 brew "gsl"
@@ -72,10 +64,6 @@ brew "postgresql@14"
 brew "spark"
 brew "tarsnap"
 brew "logrotate"
-
-# Stripe
-brew "stripe-internal/tap/git-stripe"
-brew "awscli"
 
 # Casks
 cask "bartender"

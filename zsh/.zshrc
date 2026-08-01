@@ -141,15 +141,9 @@ source ${ZIM_HOME}/init.zsh
 # bindkey -M vicmd 'j' history-substring-search-down
 # }}} End configuration added by Zim install
 
-export PATH=${PATH}:~/stripe/henson/bin
-export PATH=${PATH}:~/stripe/password-vault/bin
-export PATH=${PATH}:~/stripe/space-commander/bin
-export PATH=${PATH}:~/stripe/go/bin
 export PATH=${PATH}:~/bin
 export PATH=${PATH}:~/npm/bin
 export PATH=${PATH}:~/.cargo/bin
-export PATH=${PATH}:~/.dotfiles/node-bin/node_modules/.bin
-export PATH=${PATH}:~/node-bin/node_modules/.bin
 export PATH=${HOMEBREW_PREFIX}/opt/python/libexec/bin:${PATH}
 export PATH=${HOMEBREW_PREFIX}/opt/curl/bin:${PATH}
 export PATH=${PATH}:/usr/local/bin
@@ -159,9 +153,6 @@ export PATH=${PATH}:/sbin
 export PATH=${PATH}:/usr/bin
 export PATH=${PATH}:/usr/X11/bin
 export PATH=${PATH}:/usr/local/share/npm/bin
-export PATH=${PATH}:~/stripe/.cargo/bin
-export PATH=${PATH}:~/stripe/.cargo/env
-
 export EDITOR='nvim -U none'
 # open in editor
 autoload -z edit-command-line
@@ -207,7 +198,6 @@ source "${ZDOTDIR:-${HOME}/.config/zsh}/named_dirs.zsh"
 
 # dir aliases
 _sodium_define_home_named_dir dots .dotfiles
-_sodium_define_stripe_named_dirs /pay/src/pay-server "$HOME/stripe/mint/pay-server"
 _sodium_define_home_named_dir config .config
 
 # aliases
@@ -221,9 +211,6 @@ if [ -x "$(command -v eza)" ]; then
 else
   alias ll='ls -la'
 fi
-
-alias gfm='git fetch origin green:green'
-alias grm='git rebase green'
 
 # FZF
 
@@ -253,27 +240,6 @@ osc52copy() {
   printf '\033]52;c;%s\a' $encoded
 }
 
-ghpr() {
-  local origin owner branch url
-
-  origin=$(git remote -v | grep origin | grep push | cut -d ':' -f 2 | cut -d '.' -f 1 | cut -d ' ' -f 1)
-  # echo $origin
-
-  owner=$(echo "$origin" | cut -d '/' -f 1)
-  # echo $owner
-
-  branch=$(git rev-parse --abbrev-ref HEAD)
-  # echo $branch
-
-  if [[ "$owner" == "stripe-internal" ]]; then
-    url="https://git.corp.stripe.com/$origin/compare/$branch?expand=1"
-  else
-    url="https://github.com/$origin/pull/new/$branch"
-  fi
-
-  osc52copy $url
-}
-
 alias zz='z -c'      # restrict matches to subdirs of $PWD
 alias zf='z -I'      # use fzf to select in multiple matches
 
@@ -282,107 +248,14 @@ bindkey '^n' autosuggest-accept
 
 export RIPGREP_CONFIG_PATH=~/.config/rg/.ripgreprc
 
-## stripe
-
-
-source "${ZDOTDIR:-${HOME}/.config/zsh}/work_sync.zsh"
-
-
-fetch_remotes() {
-  local list=$(\
-    pay remote list --raw \
-    | jq -r '
-      sort_by(.last_accessed)
-      | reverse
-      | .[]
-      | . as {$name, $status, $last_accessed_human_readable, $emoji, $go_dev_url}
-      | (
-          [.current_working_copies // [] | .[] | select(.branch != "green")]
-          | sort_by(.commit_timestamp) | reverse | first // null
-        ) as $wc
-      | ($wc | if . then .branch else "" end) as $branch
-      | ["[" + $emoji + "]" + $name, "[\($status)]", $branch, $go_dev_url, $last_accessed_human_readable]
-      | @tsv
-    '\
-    | column -t \
-  )
-  print -r -- "$list"
-}
-
-remotes() {
-  local picked=$(fzf < <(fetch_remotes))
-  [ -z "$picked" ] && return 0
-  local remote_name=$(echo "$picked" | cut -w -f 1 | cut -d ] -f 2)
-
-  _devbox_start_if_needed "$remote_name" || return
-
-  local host=$(_devbox_host_for_remote "$remote_name")
-
-  _devbox_sync "$host"
-  _devbox_sync_loop "$host"
-
-  _devbox_attach_tmux "$host"
-  local exit_code=$?
-  tmux unnest 2>/dev/null
-
-  _devbox_sync_loop_stop "$host"
-  _devbox_sync "$host"
-
-  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
-    reset
-  fi
-}
-
-godev() {
-  remote=$(fzf < <(fetch_remotes))
-  if [ ! -z "$remote" ]; then
-    echo "$remote" | cut -w -f 3
-  fi
-}
-
-remote() {
-  local remote_name="$1"
-  local branch="$(_devbox_branch "$remote_name")"
-
-  pay remote new "$remote_name" --repo "mint:$branch" --workspace pay-server --skip-confirm --no-open-code --notify-on-ready || return
-
-  local host=$(_devbox_host_for_remote "$remote_name")
-
-  _devbox_sync "$host"
-  _devbox_sync_loop "$host"
-
-  _devbox_attach_tmux "$host"
-  local exit_code=$?
-  tmux unnest 2>/dev/null
-
-  _devbox_sync_loop_stop "$host"
-  _devbox_sync "$host"
-
-  if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
-    reset
-    echo "disconnected from $remote_name"
-  fi
-}
-
-remote_url() {
-  osc52copy $(pay remote url $remote_name "$@")
-}
-
-
-
-if [ -d ~/stripe ]; then
-  export GOPATH="${HOME}/stripe/go"
-  export CARGO_HOME="${HOME}/stripe/.cargo"
-  export RUSTUP_HOME=~/stripe/.rustup
-  export STRIPE_CLAUDE_DISABLE_SPINNER_VERBS=1
-fi
-
 eval "$(nodenv init -)"
+
+# Must come after `nodenv init`, which prepends its shims. Appending here would
+# let globally installed copies shadow the versions pinned in node-bin.
+export PATH=~/.dotfiles/node-bin/node_modules/.bin:~/node-bin/node_modules/.bin:${PATH}
 
 # To customize prompt, run `p10k configure` or edit ~/.config/zsh/.p10k.zsh.
 [[ ! -f ~/.config/zsh/.p10k.zsh ]] || source ~/.config/zsh/.p10k.zsh
-
-alias luamake=/Users/joe/home/lua-language-server/3rd/luamake/luamake
 
 # generated with https://github.com/sharkdp/vivid
 # https://github.com/sodiumjoe/dotfiles/blob/5ec47fc22911ace3e7090d13fe0ef0629e3719a3/vivid/themes/sodium.yml
@@ -393,25 +266,13 @@ if (( ! ${+functions[compdef]} )); then
   compinit -C -d "${ZDOTDIR:-${HOME}}/.zcompdump-${ZSH_VERSION}"
 fi
 autoload -Uz bashcompinit; bashcompinit
-# copied from .bash_profile
-### BEGIN STRIPE
-# All Stripe related shell configuration
-# is at ~/.stripe/shellinit/bash_profile and is
-# persistently managed by Chef. You shouldn't
-# remove this unless you don't want to load
-# Stripe specific shell configurations.
-#
-# Feel free to add your customizations in this
-# file (~/.bash_profile) after the Stripe config
-# is sourced.
-__STRIPE_SHELLINIT_ZSH_SKIP_COMPINIT=1
-if [[ -f ~/.stripe/shellinit/zshrc ]]; then
-  source ~/.stripe/shellinit/zshrc
-fi
-### END STRIPE
 
-# START - Managed by chef cookbook stripe_cpe_bin
-alias tc='/usr/local/stripe/bin/test_cookbook'
-alias cz='/usr/local/stripe/bin/chef-zero'
-alias cookit='tc && cz'
-# STOP - Managed by chef cookbook stripe_cpe_bin
+# Environment-specific config
+case "$DOTFILES_ENV" in
+  work|devbox)
+    source "${ZDOTDIR:-${HOME}/.config/zsh}/work.zsh"
+    ;;
+  home)
+    source "${ZDOTDIR:-${HOME}/.config/zsh}/home.zsh"
+    ;;
+esac
