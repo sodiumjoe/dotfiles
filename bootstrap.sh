@@ -209,6 +209,7 @@ if command -v npm &>/dev/null; then
   else
     npm install --prefix node-bin || echo "bootstrap.sh: npm install failed — run 'npm install --prefix node-bin' when the network is back" >&2
   fi
+  npm run sync-bins --prefix node-bin || echo "bootstrap.sh: node-bin bin sync failed — run 'npm run sync-bins --prefix node-bin' after npm install succeeds" >&2
 else
   echo "npm not found, skipping node-bin (ACP providers will be unavailable)" >&2
 fi

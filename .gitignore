@@ -12,6 +12,7 @@ karabiner/assets/*
 karabiner/automatic_backups/*
 karabiner/Icon*
 node-bin/node_modules
+node-bin/bin
 .claude
 claude/CLAUDE.md
 claude/.last-cleanup

@@ -2,6 +2,9 @@
   "name": "node-bin",
   "private": true,
   "description": "Pinned npm tool binaries. Used on both local and devbox. Updated by `upgrade --npm`.",
+  "scripts": {
+    "sync-bins": "node sync-direct-bins.mjs"
+  },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.60.0",
     "@agentclientprotocol/codex-acp": "^1.1.4",

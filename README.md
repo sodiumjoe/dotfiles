@@ -128,7 +128,7 @@ Three lockfiles, one rule: commit them, so every environment resolves to the sam
 
 `node-bin/` holds pinned npm tool binaries -- ACP providers, language servers, formatters. It is the right home for anything that has to exist on both macOS and Linux, because the Brewfile is skipped entirely on devbox. Both ACP providers (`claude-agent-acp`, `codex-acp`) live here for exactly that reason; do not add them to a Brewfile, where work and devbox would end up on different implementations.
 
-`zsh/.zshrc` prepends `node-bin/node_modules/.bin` to `PATH` *after* `nodenv init`, which prepends its own shims. Appending instead would let stray `npm install -g` copies shadow the pinned versions.
+`node-bin/bin` is generated from direct dependencies only by `npm run sync-bins --prefix node-bin`. Use that directory on `PATH`, not `node-bin/node_modules/.bin`, because npm exposes transitive dependency binaries there.
 
 ### Testing
 

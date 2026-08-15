@@ -76,22 +76,42 @@ EOF
 }
 
 run_startup() {
-  local term="$1"
-  local home="$tmpdir/home-$term"
-  local output_file="$tmpdir/output-$term"
-  local error_file="$tmpdir/error-$term"
+  local env_name="$1"
+  local term="$2"
+  local command="${3:-exit}"
+  local home="$tmpdir/home-$env_name-$term"
+  local bin="$home/bin"
+  local output_file="$tmpdir/output-$env_name-$term"
+  local error_file="$tmpdir/error-$env_name-$term"
 
-  mkdir -p "$home/.config" "$home/.stripe/shellinit"
+  rm -rf "$home"
+  mkdir -p "$home/.config" "$home/.stripe/shellinit" "$home/.dotfiles/node-bin/bin" "$home/.dotfiles/node-bin/node_modules/.bin" "$home/.nodenv/shims" "$bin"
   ln -s "$repo_root/zshenv" "$home/.zshenv"
   ln -s "$repo_root/zsh" "$home/.config/zsh"
+  printf 'DOTFILES_ENV=%s\n' "$env_name" >"$home/.dotfiles-env"
+
+  cat >"$bin/nodenv" <<'EOF'
+#!/bin/sh
+if [ "$1" = "init" ]; then
+  printf '%s\n' 'export PATH="$HOME/.nodenv/shims:${PATH}"'
+fi
+EOF
+  chmod +x "$bin/nodenv"
+  touch "$home/.dotfiles/node-bin/bin/codex-acp" "$home/.dotfiles/node-bin/node_modules/.bin/codex" "$home/.nodenv/shims/codex"
+  chmod +x "$home/.dotfiles/node-bin/bin/codex-acp" "$home/.dotfiles/node-bin/node_modules/.bin/codex" "$home/.nodenv/shims/codex"
 
   cat >"$home/.stripe/shellinit/zshrc" <<'EOF'
 _fake_completion_fn() { :; }
 complete -F _fake_completion_fn fake
+if [ -z "${__STRIPE_SHELLINIT_ZSH_SKIP_NODENV}" ]; then
+  if command -v nodenv >/dev/null 2>&1; then
+    eval "$(nodenv init -)"
+  fi
+fi
 EOF
 
   set +e
-  HOME="$home" TERM="$term" TTY=/dev/null zsh -ic exit >"$output_file" 2>"$error_file"
+  HOME="$home" PATH="$bin:$home/.dotfiles/node-bin/node_modules/.bin:$home/node-bin/node_modules/.bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM="$term" TTY=/dev/null zsh -ic "$command" >"$output_file" 2>"$error_file"
   capture_status=$?
   set -e
   capture_output="$(cat "$output_file")"
@@ -99,9 +119,26 @@ EOF
 }
 
 echo "=== Test: TERM=dumb startup tolerates later bash completion hooks ==="
-run_startup dumb
+run_startup work dumb
 assert_eq "TERM=dumb startup exits zero" "0" "$capture_status"
 assert_not_contains "TERM=dumb startup avoids compdef error" "command not found: compdef" "$capture_error"
+
+for env_name in work devbox home; do
+  echo ""
+  echo "=== Test: $env_name startup resolves codex from /usr/local/bin ==="
+  run_startup "$env_name" xterm 'command -v codex'
+  assert_eq "$env_name startup resolves codex from /usr/local/bin" "/usr/local/bin/codex" "$capture_output"
+
+  echo ""
+  echo "=== Test: $env_name startup exposes direct node-bin binaries ==="
+  run_startup "$env_name" xterm 'command -v codex-acp'
+  assert_eq "$env_name startup resolves codex-acp from node-bin/bin" "$tmpdir/home-$env_name-xterm/.dotfiles/node-bin/bin/codex-acp" "$capture_output"
+
+  echo ""
+  echo "=== Test: $env_name startup excludes node_modules bin directory ==="
+  run_startup "$env_name" xterm 'print -r -- ":$PATH:"'
+  assert_not_contains "$env_name startup excludes node_modules/.bin" "node_modules/.bin" "$capture_output"
+done
 
 echo ""
 echo "=== Test: Linux zshenv preserves global compinit for bash completion wrappers ==="
