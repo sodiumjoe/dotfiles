@@ -26,6 +26,16 @@ if [ "$needs_regen" = true ]; then
   bin/dotfiles-generate
 fi
 
+if printf '%s\n' "$changed" | grep -Eq '^(node-bin/package(-lock)?\.json|node-bin/sync-direct-bins\.mjs)$'; then
+  echo "node-bin changed, refreshing pinned npm tools..."
+  if [ -f node-bin/package-lock.json ]; then
+    npm ci --prefix node-bin || echo "post-merge: npm ci failed — run 'npm ci --prefix node-bin' when the network is back" >&2
+  else
+    npm install --prefix node-bin || echo "post-merge: npm install failed — run 'npm install --prefix node-bin' when the network is back" >&2
+  fi
+  npm run sync-bins --prefix node-bin || echo "post-merge: node-bin bin sync failed — run 'npm run sync-bins --prefix node-bin' after npm install succeeds" >&2
+fi
+
 # Check for drift in mutable configs (settings.json, config.toml).
 # Exit 1 means drift; exit 2 means the check could not run.
 bin/dotfiles-diff --quiet
