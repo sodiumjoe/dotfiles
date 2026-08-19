@@ -1,5 +1,7 @@
 require("hs.ipc")
 
+local windowRules = require("window_rules")
+
 hs.window.animationDuration = 0.01
 local log = hs.logger.new("window_focus", 5)
 -- log.log("logging enabled")
@@ -206,6 +208,12 @@ local function layoutApp(filter, screenIndex, position)
     end
 end
 
+local function layoutChrome(screenIndex, position)
+    windowRules.forEachManagedWindow(chromeFilter:getWindows(), function(win)
+        layoutWin(win, screenIndex, position)
+    end)
+end
+
 local function dragWindowToSpace(win, direction, callback)
     win:focus()
     hs.timer.doAfter(0.15, function()
@@ -253,12 +261,12 @@ local function moveWindowsToDesktops(callback)
     -- Chrome windows: match by profile name in title
     local chrome = hs.application.find("Google Chrome")
     if chrome and type(chrome) ~= "boolean" then
-        for _, win in ipairs(chrome:allWindows() or {}) do
+        windowRules.forEachManagedWindow(chrome:allWindows() or {}, function(win)
             local title = win:title()
             local sp = hs.spaces.windowSpaces(win:id())
             local curSpace = sp and sp[1]
             if not curSpace then
-                goto continue_chrome
+                return
             end
 
             if title:find("Joe %(stripe%.com%)") and curSpace ~= workSpace then
@@ -270,8 +278,7 @@ local function moveWindowsToDesktops(callback)
             then
                 table.insert(toMove, { win = win, target = personalSpace })
             end
-            ::continue_chrome::
-        end
+        end)
     end
 
     -- PWAs that should be on the personal space
@@ -338,9 +345,7 @@ local function layoutWindows()
             win:maximize()
         end
         local filter = hs.window.filter.new()
-        for _, win in pairs(filter:getWindows()) do
-            maximize(win)
-        end
+        windowRules.forEachManagedWindow(filter:getWindows(), maximize)
         return
     end
 
@@ -373,7 +378,7 @@ local function layoutWindows()
         or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
 
     if zoomMeeting then
-        layoutApp(chromeFilter, 2, positions.bottom)
+        layoutChrome(2, positions.bottom)
         layoutApp(ghosttyFilter, 2, positions.bottom)
         if hs.grid.get(zoomMeeting) == positions.topZoom then
             layoutWin(zoomMeeting, 1, positions.bottomZoom)
@@ -387,7 +392,7 @@ local function layoutWindows()
             speakers:setInputVolume(90)
         end
     else
-        layoutApp(chromeFilter, 1, positions.bottom)
+        layoutChrome(1, positions.bottom)
         if speakers then
             speakers:setInputVolume(25)
         end
