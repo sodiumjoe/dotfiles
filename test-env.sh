@@ -34,6 +34,7 @@ for env in work devbox home; do
   DOTFILES_ENV=$env bin/dotfiles-generate --reset --out "$out" >/dev/null
 
   settings="$out/claude/settings.json"
+  claude_instructions="$out/claude/CLAUDE.md"
 
   # --- claude/settings.json ---
   if ! jq empty "$settings" 2>/dev/null; then
@@ -49,6 +50,8 @@ for env in work devbox home; do
 
   # Base hooks must survive the overlay merge in every environment.
   check "base hooks preserved" "$([ "$hooks_intact" -eq 3 ] && echo ok || echo "got $hooks_intact")"
+  check "Claude instructions constrain Markdown tables" \
+    "$(grep -Fq 'Use Markdown tables only for compact data' "$claude_instructions" && echo ok || echo missing)"
 
   case "$env" in
     work|devbox)
@@ -85,6 +88,8 @@ for env in work devbox home; do
     work|devbox)
       check "AGENTS.md generated" "$([ -f "$out/codex/AGENTS.md" ] && echo ok || echo missing)"
       check "config.toml generated" "$([ -f "$out/codex/config.toml" ] && echo ok || echo missing)"
+      check "Codex instructions constrain Markdown tables" \
+        "$(grep -Fq 'Use Markdown tables only for compact data' "$out/codex/AGENTS.md" && echo ok || echo missing)"
       ;;
     home)
       check "no AGENTS.md on home" "$([ ! -f "$out/codex/AGENTS.md" ] && echo ok || echo exists)"

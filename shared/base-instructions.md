@@ -41,7 +41,7 @@ Write in full, declarative sentences that flow into each other. Keep them concis
 
 ### Document structure
 
-Use headers, sub-headers, and tables for navigation and scannability. Within sections, prefer flowing paragraphs over bullet lists when explaining reasoning or heuristics. Bullet lists are for enumerating discrete items (files, steps, options with costs), not for making arguments or stating rationale. Work logs and daily notes can use terse fragments. Emoji in document titles only, never in body text.
+Use headers and sub-headers for navigation. Use Markdown tables only for compact data; never put sentences or paragraphs in table cells, and keep table rows under 100 characters. Within sections, prefer flowing paragraphs over bullet lists when explaining reasoning or heuristics. Bullet lists are for enumerating discrete items (files, steps, options with costs), not for making arguments or stating rationale. Work logs and daily notes can use terse fragments. Emoji in document titles only, never in body text.
 
 ### Argumentation
 
