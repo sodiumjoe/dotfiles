@@ -24,25 +24,6 @@ hs.window.highlight.start()
 
 local gap = 22
 
-local function resetScreenRotations()
-    local middle = hs.screen.find("8D4ABB98-899E-4A68-8C45-171987AD4460")
-        or hs.screen.find("54E424F3-7B0B-450B-B9C7-7231969D83CB")
-    local rotated = false
-    if middle:rotate() ~= 90 then
-        middle:rotate(90)
-        rotated = true
-    end
-    local right = hs.screen.find("C9663195-14A9-4530-814C-4C63B2214E99")
-        or hs.screen.find("6427002F-49C0-4754-BF96-A480C3EC8512")
-    if right:rotate() ~= 270 then
-        right:rotate(270)
-        rotated = true
-    end
-    if rotated then
-        hs.timer.usleep(100)
-    end
-end
-
 local positions = {
     left = { x = 0, y = 0, w = 12, h = 24 },
     right = { x = 12, y = 0, w = 12, h = 24 },
@@ -349,7 +330,6 @@ local function layoutWindows()
         return
     end
 
-    resetScreenRotations()
     resetGrid()
 
     layoutApp(chatFilter, 2, positions.bottom)
