@@ -337,18 +337,40 @@ assert_contains \
 
 tmux_home="$tmpdir/tmux-home"
 tmux_socket="pending-config-$$"
+restricted_tmux_path='/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Ghostty.app/Contents/MacOS'
 mkdir -p "$tmux_home/.config/tmux"
 ln -s "$ROOT/tmux/active-session.conf" "$tmux_home/.config/tmux/active-session.conf"
 ln -s "$ROOT/tmux/inactive-session.conf" "$tmux_home/.config/tmux/inactive-session.conf"
-HOME="$tmux_home" SHELL=/bin/zsh SSH_CLIENT=1 \
+HOME="$tmux_home" PATH="$restricted_tmux_path" SHELL=/bin/zsh SSH_CLIENT=1 \
   "$REAL_TMUX" -L "$tmux_socket" -f "$TMUX_CONF" new-session -d -s validate
 remote_initial_visibility=$(HOME="$tmux_home" \
   "$REAL_TMUX" -L "$tmux_socket" show-option -gqv @session_visible)
+isolated_pane=$(HOME="$tmux_home" \
+  "$REAL_TMUX" -L "$tmux_socket" display-message -p '#{pane_id}')
+if HOME="$tmux_home" "$REAL_TMUX" -L "$tmux_socket" \
+  run-shell "$PENDING sync-remote '$isolated_pane'" >/dev/null 2>&1; then
+  restricted_path_status=0
+else
+  restricted_path_status=$?
+fi
+HOME="$tmux_home" "$REAL_TMUX" -L "$tmux_socket" \
+  source-file "$TMUX_CONF" >/dev/null 2>&1 || true
+isolated_server_path=$(HOME="$tmux_home" \
+  "$REAL_TMUX" -L "$tmux_socket" show-environment -g PATH)
+homebrew_path_count=$(awk -F'/opt/homebrew/bin' '{print NF - 1}' <<< "$isolated_server_path")
 HOME="$tmux_home" "$REAL_TMUX" -L "$tmux_socket" kill-server
 assert_eq \
   "a remote tmux server starts with nested visibility disabled" \
   "0" \
   "$remote_initial_visibility"
+assert_eq \
+  "tmux hooks can invoke the helper when the server PATH omits Homebrew" \
+  "0" \
+  "$restricted_path_status"
+assert_eq \
+  "reloading tmux configuration does not grow the server PATH" \
+  "1" \
+  "$homebrew_path_count"
 
 echo ""
 echo "tmux-pending tests: $pass passed, $fail failed"
