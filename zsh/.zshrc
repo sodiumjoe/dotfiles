@@ -185,6 +185,8 @@ _fix_cursor() {
 }
 precmd_functions+=(_fix_cursor)
 
+source "${ZDOTDIR:-${HOME}/.config/zsh}/tmux-pending.zsh"
+
 zle -N zle-keymap-select
 
 # Enter normal mode immediately

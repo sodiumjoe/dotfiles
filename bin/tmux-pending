@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+
+sync_session_pending() {
+  local session_id="$1" pending_windows
+  if [[ -z "$session_id" ]]; then
+    return
+  fi
+
+  pending_windows=$(tmux list-windows -t "$session_id" -F '#{@pending}' 2>/dev/null) || return
+  if printf '%s\n' "$pending_windows" | grep -qx '1'; then
+    tmux set-option -t "$session_id" @session_pending 1 2>/dev/null || true
+  else
+    tmux set-option -u -t "$session_id" @session_pending 2>/dev/null || true
+  fi
+}
+
+set_remote_pane_visibility() {
+  local pane="$1" window_active="$2" session_attached="$3" title="$4"
+  case "$title" in
+    *"󰌗 "*) ;;
+    *) return ;;
+  esac
+
+  if [[ "$window_active" == "1" && "$session_attached" != "0" ]]; then
+    tmux send-keys -t "$pane" C-a V 2>/dev/null || true
+  else
+    tmux send-keys -t "$pane" C-a H 2>/dev/null || true
+  fi
+}
+
+sync_remote_pane() {
+  local pane="$1" context window_active session_attached title
+  context=$(tmux display-message -p -t "$pane" \
+    '#{window_active}|#{session_attached}|#{pane_title}' 2>/dev/null) || return
+  IFS='|' read -r window_active session_attached title <<< "$context"
+  set_remote_pane_visibility "$pane" "$window_active" "$session_attached" "$title"
+}
+
+sync_remote_panes() {
+  local pane window_active session_attached title
+  while IFS='|' read -r pane window_active session_attached title; do
+    if [[ -n "$pane" ]]; then
+      set_remote_pane_visibility "$pane" "$window_active" "$session_attached" "$title"
+    fi
+  done < <(tmux list-panes -a \
+    -F '#{pane_id}|#{window_active}|#{session_attached}|#{pane_title}' 2>/dev/null)
+}
+
+case "${1:-mark}" in
+  mark)
+    PANE="${2:-${TMUX_PANE:-}}"
+    if [[ -z "$PANE" ]]; then
+      exit 0
+    fi
+    CONTEXT=$(tmux display-message -p -t "$PANE" \
+      '#{window_active}|#{session_attached}|#{@session_visible}|#{session_id}' 2>/dev/null) || exit 0
+    IFS='|' read -r WINDOW_ACTIVE SESSION_ATTACHED SESSION_VISIBLE SESSION_ID <<< "$CONTEXT"
+    SESSION_VISIBLE="${SESSION_VISIBLE:-1}"
+    if [[ "$WINDOW_ACTIVE" == "1" && "$SESSION_ATTACHED" != "0" && "$SESSION_VISIBLE" == "1" ]]; then
+      exit 0
+    fi
+    tmux set-option -w -t "$PANE" @pending 1 2>/dev/null || true
+    sync_session_pending "$SESSION_ID"
+    ;;
+  clear)
+    PANE="${2:-${TMUX_PANE:-}}"
+    if [[ -z "$PANE" ]]; then
+      exit 0
+    fi
+    CONTEXT=$(tmux display-message -p -t "$PANE" \
+      '#{window_active}|#{session_attached}|#{@session_visible}|#{session_id}' 2>/dev/null) || exit 0
+    IFS='|' read -r _ _ _ SESSION_ID <<< "$CONTEXT"
+    tmux set-option -wu -t "$PANE" @pending 2>/dev/null || true
+    sync_session_pending "$SESSION_ID"
+    ;;
+  codex-notify)
+    EVENT_TYPE=$(printf '%s' "${2:-}" | jq -r '.type // empty' 2>/dev/null) || exit 0
+    if [[ "$EVENT_TYPE" == "agent-turn-complete" ]]; then
+      "$0" mark "${TMUX_PANE:-}"
+    fi
+    ;;
+  sync-remote)
+    PANE="${2:-}"
+    if [[ -n "$PANE" ]]; then
+      sync_remote_pane "$PANE"
+    else
+      sync_remote_panes
+    fi
+    ;;
+esac

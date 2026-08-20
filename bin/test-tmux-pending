@@ -1,0 +1,361 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pass=0
+fail=0
+errors=()
+
+record_fail() {
+  ((++fail))
+  errors+=("$1")
+}
+
+assert_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected to contain: '$needle'\n  in: '$haystack'"
+  fi
+}
+
+assert_empty() {
+  local label="$1" actual="$2"
+  if [[ -z "$actual" ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected empty output\n  actual: '$actual'"
+  fi
+}
+
+assert_not_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected not to contain: '$needle'\n  in: '$haystack'"
+  fi
+}
+
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected: '$expected'\n  actual: '$actual'"
+  fi
+}
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+REAL_TMUX=$(command -v tmux)
+PENDING="$ROOT/bin/tmux-pending"
+PENDING_ZSH="$ROOT/zsh/tmux-pending.zsh"
+ZSHRC="$ROOT/zsh/.zshrc"
+CLAUDE_IDLE="$ROOT/claude/hooks/notify-on-idle.sh"
+CODEX_CONFIG="$ROOT/codex/config.base.toml"
+TITLE_NOTIFY="$ROOT/bin/tmux-notify-bell"
+TMUX_CONF="$ROOT/tmux/tmux.conf"
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+mkdir -p "$tmpdir/bin"
+export TMUX_LOG="$tmpdir/tmux.log"
+export PENDING_CALL_LOG="$tmpdir/pending-calls.log"
+export TMUX_CONTEXT='0|1||s1'
+export TMUX_PENDING_WINDOWS=''
+export TMUX_REMOTE_PANES=''
+
+cat > "$tmpdir/bin/tmux" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "display-message" ]]; then
+  printf '%s\n' "${TMUX_CONTEXT:?}"
+  exit 0
+fi
+if [[ "${1:-}" == "list-windows" ]]; then
+  printf '%s\n' "${TMUX_PENDING_WINDOWS:-}"
+  exit 0
+fi
+if [[ "${1:-}" == "list-panes" ]]; then
+  printf '%b' "${TMUX_REMOTE_PANES:-}"
+  exit 0
+fi
+printf '%s\n' "$*" >> "${TMUX_LOG:?}"
+EOF
+chmod +x "$tmpdir/bin/tmux"
+export PATH="$tmpdir/bin:$PATH"
+export TMUX_PANE='%42'
+
+cat > "$tmpdir/bin/tmux-pending" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${PENDING_CALL_LOG:?}"
+EOF
+chmod +x "$tmpdir/bin/tmux-pending"
+
+cat > "$tmpdir/bin/osascript" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+cat > "$tmpdir/bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--show-toplevel" ]]; then
+  printf '/tmp/dotfiles\n'
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$tmpdir/bin/osascript" "$tmpdir/bin/git"
+
+run_pending() {
+  local action="${1:-mark}"
+  : > "$TMUX_LOG"
+  if [[ -x "$PENDING" ]]; then
+    "$PENDING" "$action"
+  fi
+  cat "$TMUX_LOG"
+}
+
+out=$(run_pending)
+assert_contains \
+  "inactive tab is marked pending" \
+  "set-option -w -t %42 @pending 1" \
+  "$out"
+
+export TMUX_CONTEXT='1|1||s1'
+out=$(run_pending)
+assert_empty "focused tab is not marked pending" "$out"
+
+export TMUX_CONTEXT='1|1|0|s1'
+out=$(run_pending)
+assert_contains \
+  "selected remote tab is marked when its outer session is hidden" \
+  "set-option -w -t %42 @pending 1" \
+  "$out"
+
+out=$(run_pending clear)
+assert_contains \
+  "focusing a tab clears its pending state" \
+  "set-option -wu -t %42 @pending" \
+  "$out"
+
+: > "$PENDING_CALL_LOG"
+if [[ -f "$PENDING_ZSH" ]]; then
+  PENDING_ZSH="$PENDING_ZSH" zsh -f -c '
+    source "$PENDING_ZSH"
+    _tmux_pending_preexec
+    _tmux_pending_precmd
+  '
+fi
+assert_eq \
+  "a completed zsh command asks the helper to mark its tab" \
+  "mark %42" \
+  "$(cat "$PENDING_CALL_LOG")"
+
+: > "$PENDING_CALL_LOG"
+PENDING_ZSH="$PENDING_ZSH" zsh -f -c '
+  source "$PENDING_ZSH"
+  _tmux_pending_precmd
+'
+assert_empty \
+  "the initial zsh prompt does not count as command completion" \
+  "$(cat "$PENDING_CALL_LOG")"
+
+out=$(PENDING_ZSH="$PENDING_ZSH" zsh -f -c '
+  source "$PENDING_ZSH"
+  if [[ -n "${preexec_functions[(r)_tmux_pending_preexec]}" && -n "${precmd_functions[(r)_tmux_pending_precmd]}" ]]; then
+    print registered
+  fi
+')
+assert_eq \
+  "zsh installs both pending lifecycle hooks" \
+  "registered" \
+  "$out"
+
+assert_contains \
+  "the main zsh configuration loads pending lifecycle hooks" \
+  "source \"\${ZDOTDIR:-\${HOME}/.config/zsh}/tmux-pending.zsh\"" \
+  "$(cat "$ZSHRC")"
+
+: > "$PENDING_CALL_LOG"
+BOX_TYPE_FILE="$tmpdir/box-type" "$CLAUDE_IDLE"
+assert_eq \
+  "Claude idle events ask the helper to mark their tab" \
+  "mark %42" \
+  "$(cat "$PENDING_CALL_LOG")"
+
+export TMUX_CONTEXT='0|1||s1'
+: > "$TMUX_LOG"
+"$PENDING" codex-notify '{"type":"agent-turn-complete"}'
+assert_contains \
+  "Codex turn completion marks its tab" \
+  "set-option -w -t %42 @pending 1" \
+  "$(cat "$TMUX_LOG")"
+
+assert_contains \
+  "Codex routes completion callbacks to the pending helper" \
+  'notify = ["/usr/bin/env", "tmux-pending", "codex-notify"]' \
+  "$(cat "$CODEX_CONFIG")"
+
+export TMUX_PENDING_WINDOWS='1'
+: > "$TMUX_LOG"
+"$PENDING" mark
+assert_contains \
+  "a pending remote window sets its session aggregate" \
+  "set-option -t s1 @session_pending 1" \
+  "$(cat "$TMUX_LOG")"
+
+export TMUX_PENDING_WINDOWS=''
+: > "$TMUX_LOG"
+"$PENDING" clear
+assert_contains \
+  "clearing the last remote window clears its session aggregate" \
+  "set-option -u -t s1 @session_pending" \
+  "$(cat "$TMUX_LOG")"
+
+: > "$TMUX_LOG"
+"$TITLE_NOTIFY" '%42' "$(printf '\u2063')󰌗 [test]devbox"
+assert_contains \
+  "the parent maps the remote title token to outer pending state" \
+  "set-option -w -t %42 @remote_pending 1" \
+  "$(cat "$TMUX_LOG")"
+
+: > "$TMUX_LOG"
+"$TITLE_NOTIFY" '%42' '󰌗 [test]devbox'
+assert_contains \
+  "the parent clears outer pending state when the remote token disappears" \
+  "set-option -wu -t %42 @remote_pending" \
+  "$(cat "$TMUX_LOG")"
+
+export TMUX_CONTEXT='1|1|󰌗 [test]devbox'
+: > "$TMUX_LOG"
+"$PENDING" sync-remote '%42'
+assert_contains \
+  "a visible outer tab marks its remote tmux as visible" \
+  "send-keys -t %42 C-a V" \
+  "$(cat "$TMUX_LOG")"
+
+export TMUX_CONTEXT='0|1|󰌗 [test]devbox'
+: > "$TMUX_LOG"
+"$PENDING" sync-remote '%42'
+assert_contains \
+  "a hidden outer tab marks its remote tmux as hidden" \
+  "send-keys -t %42 C-a H" \
+  "$(cat "$TMUX_LOG")"
+
+export TMUX_REMOTE_PANES='%42|0|1|󰌗 one\n%43|1|1|󰌗 two\n'
+: > "$TMUX_LOG"
+"$PENDING" sync-remote
+out=$(cat "$TMUX_LOG")
+assert_contains \
+  "visibility sync hides remote tmux panes outside the focused outer tab" \
+  "send-keys -t %42 C-a H" \
+  "$out"
+assert_contains \
+  "visibility sync shows remote tmux panes inside the focused outer tab" \
+  "send-keys -t %43 C-a V" \
+  "$out"
+
+assert_contains \
+  "remote titles publish the session pending aggregate" \
+  '#{?@session_pending,' \
+  "$(cat "$TMUX_CONF")"
+
+assert_not_contains \
+  "changing the active tmux layer does not overwrite outer-tab visibility" \
+  'bind K set -g @session_visible' \
+  "$(cat "$TMUX_CONF")"
+
+assert_not_contains \
+  "returning to the parent tmux layer does not overwrite outer-tab visibility" \
+  'bind J set -g @session_visible' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "attaching a remote client starts with the session hidden" \
+  'set-hook -g client-attached "set -g @session_visible 0;' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "remote tmux exposes a binding for visible outer tabs" \
+  'bind V set -g @session_visible 1' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "remote tmux exposes a binding for hidden outer tabs" \
+  'bind H set -g @session_visible 0' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "selecting a tab clears its pending state" \
+  'set-hook -g after-select-window' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "selecting an outer tab synchronizes remote visibility" \
+  'after-select-window[1]' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "a newly detected remote pane synchronizes its visibility" \
+  'pane-title-changed[1]' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "switching tmux sessions clears the newly focused tab" \
+  'set-hook -g client-session-changed' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "attaching a local client clears the tab it focuses" \
+  'set-hook -g client-attached[0] "run-shell -b' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "attaching a local client synchronizes remote visibility" \
+  'client-attached[1]' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "detaching a local client hides its remote tmux panes" \
+  'set-hook -g client-detached' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "revealing a hidden remote session clears its selected tab" \
+  'bind V set -g @session_visible 1 \; run-shell -b' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "inactive tab status combines local and remote pending state" \
+  '#{||:#{@pending},#{@remote_pending}}' \
+  "$(cat "$TMUX_CONF")"
+
+assert_contains \
+  "generic tmux activity monitoring is disabled" \
+  'set -g monitor-activity off' \
+  "$(cat "$TMUX_CONF")"
+
+tmux_home="$tmpdir/tmux-home"
+tmux_socket="pending-config-$$"
+mkdir -p "$tmux_home/.config/tmux"
+ln -s "$ROOT/tmux/active-session.conf" "$tmux_home/.config/tmux/active-session.conf"
+ln -s "$ROOT/tmux/inactive-session.conf" "$tmux_home/.config/tmux/inactive-session.conf"
+HOME="$tmux_home" SHELL=/bin/zsh SSH_CLIENT=1 \
+  "$REAL_TMUX" -L "$tmux_socket" -f "$TMUX_CONF" new-session -d -s validate
+remote_initial_visibility=$(HOME="$tmux_home" \
+  "$REAL_TMUX" -L "$tmux_socket" show-option -gqv @session_visible)
+HOME="$tmux_home" "$REAL_TMUX" -L "$tmux_socket" kill-server
+assert_eq \
+  "a remote tmux server starts with nested visibility disabled" \
+  "0" \
+  "$remote_initial_visibility"
+
+echo ""
+echo "tmux-pending tests: $pass passed, $fail failed"
+if [[ $fail -gt 0 ]]; then
+  echo ""
+  for error in "${errors[@]}"; do
+    echo -e "$error"
+  done
+  exit 1
+fi

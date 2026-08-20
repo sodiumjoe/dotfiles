@@ -115,8 +115,12 @@ EOF
 }
 
 cleanup_notify_pid() {
+  local pid
   if [[ -f /tmp/claude-notify-42.pid ]]; then
-    kill "$(cat /tmp/claude-notify-42.pid)" 2>/dev/null || true
+    pid=$(cat /tmp/claude-notify-42.pid 2>/dev/null || true)
+    if [[ -n "$pid" ]]; then
+      kill "$pid" 2>/dev/null || true
+    fi
     rm -f /tmp/claude-notify-42.pid
   fi
 }
@@ -174,11 +178,7 @@ run_notify_devbox() {
   : > "$BOX_TYPE_FILE"
   export TMUX_WINDOW_ACTIVE=1
   export TMUX_PANE_ACTIVE=1
-  if [[ $# -gt 0 ]]; then
-    export NOTIFY_AGENT_NAME="$1"
-  else
-    unset NOTIFY_AGENT_NAME
-  fi
+  unset NOTIFY_AGENT_NAME
   "$STOP_NOTIFY"
   for _ in {1..100}; do
     if [[ -f "$TMUX_NOTIFY_FILE" ]]; then
@@ -220,7 +220,7 @@ assert_notify_closes_promptly() {
   reset_test_env
   set_lingering_sleep
   export NOTIFY="$STOP_NOTIFY"
-  if output=$(node <<'EOF'
+  if output=$(node 2>&1 <<'EOF'
 const { spawn } = require('child_process');
 
 const child = spawn(process.env.NOTIFY, [], {
@@ -247,7 +247,7 @@ setTimeout(() => {
   process.exit(1);
 }, 1500);
 EOF
-  2>&1); then
+  ); then
     ((++pass))
   else
     record_fail "FAIL: notify process closes promptly\n  output: '$output'"

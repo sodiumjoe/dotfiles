@@ -4,6 +4,10 @@ PANE="$TMUX_PANE"
 APP_NAME="${NOTIFY_AGENT_NAME:-Claude}"
 BOX_TYPE_FILE="${BOX_TYPE_FILE:-/pay/conf/box-type}"
 
+if [ -n "$PANE" ]; then
+  command tmux-pending mark "$PANE" 2>/dev/null || true
+fi
+
 if [ -n "$PANE" ] && [ -f "$BOX_TYPE_FILE" ]; then
   tmux set -gu @notify_bell 2>/dev/null
 fi
