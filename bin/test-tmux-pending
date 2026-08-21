@@ -60,15 +60,21 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 mkdir -p "$tmpdir/bin"
 export TMUX_LOG="$tmpdir/tmux.log"
+export SSH_LOG="$tmpdir/ssh.log"
 export PENDING_CALL_LOG="$tmpdir/pending-calls.log"
 export TMUX_CONTEXT='0|1||s1'
+export TMUX_VISIBILITY_CONTEXT='%42|s1'
 export TMUX_PENDING_WINDOWS=''
 export TMUX_REMOTE_PANES=''
 
 cat > "$tmpdir/bin/tmux" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "display-message" ]]; then
-  printf '%s\n' "${TMUX_CONTEXT:?}"
+  if [[ "$*" == *'#{pane_id}|#{session_id}'* ]]; then
+    printf '%s\n' "${TMUX_VISIBILITY_CONTEXT:?}"
+  else
+    printf '%s\n' "${TMUX_CONTEXT:?}"
+  fi
   exit 0
 fi
 if [[ "${1:-}" == "list-windows" ]]; then
@@ -84,6 +90,12 @@ EOF
 chmod +x "$tmpdir/bin/tmux"
 export PATH="$tmpdir/bin:$PATH"
 export TMUX_PANE='%42'
+
+cat > "$tmpdir/bin/ssh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "${SSH_LOG:?}"
+EOF
+chmod +x "$tmpdir/bin/ssh"
 
 cat > "$tmpdir/bin/tmux-pending" <<'EOF'
 #!/usr/bin/env bash
@@ -226,33 +238,82 @@ assert_contains \
   "set-option -wu -t %42 @remote_pending" \
   "$(cat "$TMUX_LOG")"
 
-export TMUX_CONTEXT='1|1|󰌗 [test]devbox'
+export TMUX_CONTEXT='1|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control'
+: > "$SSH_LOG"
 : > "$TMUX_LOG"
 "$PENDING" sync-remote '%42'
 assert_contains \
-  "a visible outer tab marks its remote tmux as visible" \
-  "send-keys -t %42 C-a V" \
+  "a visible outer tab updates remote tmux through SSH" \
+  "\$HOME/bin/tmux-pending set-visible 1" \
+  "$(cat "$SSH_LOG")"
+assert_contains \
+  "remote visibility updates require the existing control socket" \
+  "ProxyCommand=false" \
+  "$(cat "$SSH_LOG")"
+assert_empty \
+  "remote visibility updates do not inject terminal input" \
   "$(cat "$TMUX_LOG")"
 
-export TMUX_CONTEXT='0|1|󰌗 [test]devbox'
+export TMUX_CONTEXT='0|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control'
+: > "$SSH_LOG"
 : > "$TMUX_LOG"
 "$PENDING" sync-remote '%42'
 assert_contains \
-  "a hidden outer tab marks its remote tmux as hidden" \
-  "send-keys -t %42 C-a H" \
+  "a hidden outer tab updates remote tmux through SSH" \
+  "\$HOME/bin/tmux-pending set-visible 0" \
+  "$(cat "$SSH_LOG")"
+assert_empty \
+  "hidden visibility updates do not inject terminal input" \
   "$(cat "$TMUX_LOG")"
 
-export TMUX_REMOTE_PANES='%42|0|1|󰌗 one\n%43|1|1|󰌗 two\n'
+export TMUX_CONTEXT='0|1|󰌗 [test]devbox|remote-host|'
+: > "$SSH_LOG"
+"$PENDING" sync-remote '%42'
+assert_empty \
+  "visibility sync is a no-op without a control socket" \
+  "$(cat "$SSH_LOG")"
+
+export TMUX_REMOTE_PANES='%42|0|1|󰌗 one|remote-one|/tmp/control-one\n%43|1|1|󰌗 two|remote-two|/tmp/control-two\n'
+: > "$SSH_LOG"
 : > "$TMUX_LOG"
 "$PENDING" sync-remote
-out=$(cat "$TMUX_LOG")
+out=$(cat "$SSH_LOG")
 assert_contains \
   "visibility sync hides remote tmux panes outside the focused outer tab" \
-  "send-keys -t %42 C-a H" \
+  "\$HOME/bin/tmux-pending set-visible 0" \
   "$out"
 assert_contains \
   "visibility sync shows remote tmux panes inside the focused outer tab" \
-  "send-keys -t %43 C-a V" \
+  "\$HOME/bin/tmux-pending set-visible 1" \
+  "$out"
+assert_empty \
+  "bulk visibility sync does not inject terminal input" \
+  "$(cat "$TMUX_LOG")"
+
+export TMUX_VISIBILITY_CONTEXT='%42|s1'
+export TMUX_PENDING_WINDOWS=''
+: > "$TMUX_LOG"
+"$PENDING" set-visible 1
+out=$(cat "$TMUX_LOG")
+assert_contains \
+  "visible state is recorded on the remote tmux server" \
+  "set-option -g @session_visible 1" \
+  "$out"
+assert_contains \
+  "becoming visible clears pending state from the selected remote pane" \
+  "set-option -wu -t %42 @pending" \
+  "$out"
+
+: > "$TMUX_LOG"
+"$PENDING" set-visible 0
+out=$(cat "$TMUX_LOG")
+assert_contains \
+  "hidden state is recorded on the remote tmux server" \
+  "set-option -g @session_visible 0" \
+  "$out"
+assert_not_contains \
+  "becoming hidden preserves pending state" \
+  "@pending" \
   "$out"
 
 assert_contains \
@@ -275,14 +336,14 @@ assert_contains \
   'set-hook -g client-attached "set -g @session_visible 0;' \
   "$(cat "$TMUX_CONF")"
 
-assert_contains \
-  "remote tmux exposes a binding for visible outer tabs" \
-  'bind V set -g @session_visible 1' \
+assert_not_contains \
+  "remote visibility does not reserve a terminal key binding" \
+  'bind V set -g @session_visible' \
   "$(cat "$TMUX_CONF")"
 
-assert_contains \
-  "remote tmux exposes a binding for hidden outer tabs" \
-  'bind H set -g @session_visible 0' \
+assert_not_contains \
+  "remote hidden state does not reserve a terminal key binding" \
+  'bind H set -g @session_visible' \
   "$(cat "$TMUX_CONF")"
 
 assert_contains \
@@ -318,11 +379,6 @@ assert_contains \
 assert_contains \
   "detaching a local client hides its remote tmux panes" \
   'set-hook -g client-detached' \
-  "$(cat "$TMUX_CONF")"
-
-assert_contains \
-  "revealing a hidden remote session clears its selected tab" \
-  'bind V set -g @session_visible 1 \; run-shell -b' \
   "$(cat "$TMUX_CONF")"
 
 assert_contains \

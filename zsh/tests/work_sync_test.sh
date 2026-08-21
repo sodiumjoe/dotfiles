@@ -14,6 +14,7 @@ capture_output=""
 unison_args=()
 pay_args=()
 ssh_args=()
+tmux_args=()
 
 assert_eq() {
   local desc="$1"
@@ -60,18 +61,19 @@ ssh() {
   ssh_args=("$@")
   printf '%s\n' "$@" > "$tmpdir/ssh_args"
 
-  local host="$1"
-  if [[ "$host" == "-t" ]]; then
-    host="$2"
-    shift 2
-  else
-    shift
-  fi
+  local host=""
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" != -* && "$arg" != *=* ]]; then
+      host="$arg"
+      break
+    fi
+  done
   local command="$*"
 
   case "$host" in
     remote-tmux)
-      [[ "$command" == "/usr/bin/tmux a || /usr/bin/tmux" ]] && return 0
+      [[ "$command" == *"/usr/bin/tmux a || /usr/bin/tmux"* ]] && return 0
       print -u2 -- "unexpected tmux command: $command"
       return 1
       ;;
@@ -98,6 +100,11 @@ ssh() {
       return 1
       ;;
   esac
+}
+
+tmux() {
+  tmux_args=("$@")
+  printf '%s\n' "$@" >> "$tmpdir/tmux_args"
 }
 
 unison() {
@@ -166,12 +173,36 @@ assert_eq \
   "$(cat "$tmpdir/pay_args")"
 
 echo "=== Test: remote tmux attach uses system tmux ==="
+export TMUX_PANE='%42'
+export HOME="$tmpdir/home-attach"
+: > "$tmpdir/tmux_args"
 run_capture _devbox_attach_tmux remote-tmux
 assert_eq "remote tmux attach exits zero" "0" "$capture_status"
-assert_eq \
+attach_args="$(cat "$tmpdir/ssh_args")"
+assert_contains \
+  "remote tmux attach establishes an SSH control master" \
+  "ControlMaster=auto" \
+  "$attach_args"
+assert_contains \
+  "remote tmux attach persists the SSH control master briefly" \
+  "ControlPersist=60" \
+  "$attach_args"
+assert_contains \
+  "remote tmux attach uses a short host-specific control path" \
+  "ControlPath=$HOME/.ssh/devbox-control/%C" \
+  "$attach_args"
+assert_contains \
   "remote tmux attach bypasses user-local tmux" \
-  $'-t\nremote-tmux\n/usr/bin/tmux a || /usr/bin/tmux' \
-  "$(cat "$tmpdir/ssh_args")"
+  "/usr/bin/tmux a || /usr/bin/tmux" \
+  "$attach_args"
+assert_contains \
+  "remote tmux attach records its host on the local pane" \
+  "@remote_host" \
+  "$(cat "$tmpdir/tmux_args")"
+assert_contains \
+  "remote tmux attach records its control socket on the local pane" \
+  "@remote_control_path" \
+  "$(cat "$tmpdir/tmux_args")"
 
 echo "=== Test: invalid top-level project directories ==="
 local_home="$tmpdir/home-local"

@@ -49,7 +49,21 @@ _devbox_start_if_needed() {
 
 _devbox_attach_tmux() {
   local host="$1"
-  ssh -t "$host" "/usr/bin/tmux a || /usr/bin/tmux"
+  local control_dir="$HOME/.ssh/devbox-control"
+  local control_path="$control_dir/%C"
+
+  mkdir -p "$control_dir" || return
+  chmod 700 "$control_dir" || return
+  if [[ -n "${TMUX_PANE:-}" ]]; then
+    tmux set-option -p -t "$TMUX_PANE" @remote_host "$host" 2>/dev/null || true
+    tmux set-option -p -t "$TMUX_PANE" @remote_control_path "$control_path" 2>/dev/null || true
+  fi
+
+  ssh \
+    -o ControlMaster=auto \
+    -o ControlPersist=60 \
+    -o ControlPath="$control_path" \
+    -t "$host" "/usr/bin/tmux a || /usr/bin/tmux"
 }
 
 _devbox_remote_home() {

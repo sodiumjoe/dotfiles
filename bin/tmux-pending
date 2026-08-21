@@ -16,34 +16,66 @@ sync_session_pending() {
 
 set_remote_pane_visibility() {
   local pane="$1" window_active="$2" session_attached="$3" title="$4"
+  local remote_host="$5" control_path="$6" visible remote_command
   case "$title" in
     *"󰌗 "*) ;;
     *) return ;;
   esac
 
-  if [[ "$window_active" == "1" && "$session_attached" != "0" ]]; then
-    tmux send-keys -t "$pane" C-a V 2>/dev/null || true
-  else
-    tmux send-keys -t "$pane" C-a H 2>/dev/null || true
+  if [[ -z "$remote_host" || -z "$control_path" ]]; then
+    return
   fi
+
+  if [[ "$window_active" == "1" && "$session_attached" != "0" ]]; then
+    visible=1
+  else
+    visible=0
+  fi
+
+  remote_command="\$HOME/bin/tmux-pending set-visible $visible"
+  ssh -n -S "$control_path" \
+    -o ControlMaster=no \
+    -o ProxyCommand=false \
+    -o BatchMode=yes \
+    "$remote_host" "$remote_command" >/dev/null 2>&1 || true
 }
 
 sync_remote_pane() {
-  local pane="$1" context window_active session_attached title
+  local pane="$1" context window_active session_attached title remote_host control_path
   context=$(tmux display-message -p -t "$pane" \
-    '#{window_active}|#{session_attached}|#{pane_title}' 2>/dev/null) || return
-  IFS='|' read -r window_active session_attached title <<< "$context"
-  set_remote_pane_visibility "$pane" "$window_active" "$session_attached" "$title"
+    '#{window_active}|#{session_attached}|#{pane_title}|#{@remote_host}|#{@remote_control_path}' 2>/dev/null) || return
+  IFS='|' read -r window_active session_attached title remote_host control_path <<< "$context"
+  set_remote_pane_visibility \
+    "$pane" "$window_active" "$session_attached" "$title" "$remote_host" "$control_path"
 }
 
 sync_remote_panes() {
-  local pane window_active session_attached title
-  while IFS='|' read -r pane window_active session_attached title; do
+  local pane window_active session_attached title remote_host control_path
+  while IFS='|' read -r pane window_active session_attached title remote_host control_path; do
     if [[ -n "$pane" ]]; then
-      set_remote_pane_visibility "$pane" "$window_active" "$session_attached" "$title"
+      set_remote_pane_visibility \
+        "$pane" "$window_active" "$session_attached" "$title" "$remote_host" "$control_path"
     fi
   done < <(tmux list-panes -a \
-    -F '#{pane_id}|#{window_active}|#{session_attached}|#{pane_title}' 2>/dev/null)
+    -F '#{pane_id}|#{window_active}|#{session_attached}|#{pane_title}|#{@remote_host}|#{@remote_control_path}' 2>/dev/null)
+}
+
+set_session_visibility() {
+  local visible="$1" context pane session_id
+  case "$visible" in
+    0|1) ;;
+    *) return 2 ;;
+  esac
+
+  tmux set-option -g @session_visible "$visible" 2>/dev/null || return
+  if [[ "$visible" == "0" ]]; then
+    return
+  fi
+
+  context=$(tmux display-message -p '#{pane_id}|#{session_id}' 2>/dev/null) || return
+  IFS='|' read -r pane session_id <<< "$context"
+  tmux set-option -wu -t "$pane" @pending 2>/dev/null || true
+  sync_session_pending "$session_id"
 }
 
 case "${1:-mark}" in
@@ -86,5 +118,8 @@ case "${1:-mark}" in
     else
       sync_remote_panes
     fi
+    ;;
+  set-visible)
+    set_session_visibility "${2:-}"
     ;;
 esac
