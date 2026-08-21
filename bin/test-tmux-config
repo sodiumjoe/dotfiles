@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+TMUX_CONF="$ROOT/tmux/tmux.conf"
+REAL_TMUX=$(command -v tmux)
+tmpdir=$(mktemp -d)
+socket_path="$tmpdir/tmux.sock"
+
+cleanup() {
+  "$REAL_TMUX" -S "$socket_path" kill-server 2>/dev/null || true
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT
+
+mkdir -p "$tmpdir/pay-server" "$tmpdir/start"
+pay_server_path=$(cd "$tmpdir/pay-server" && pwd -P)
+awk '
+  /# create some default sessions/ { capture = 1; next }
+  /# create a default session with some default windows on local work machine/ { capture = 0 }
+  capture
+' "$TMUX_CONF" |
+  sed "s|/pay/src/pay-server|$pay_server_path|g" > "$tmpdir/remote-startup.conf"
+
+(
+  cd "$tmpdir/start"
+  env remote_name=test "$REAL_TMUX" -S "$socket_path" \
+    -f "$tmpdir/remote-startup.conf" new-session -d -s test-bootstrap
+)
+
+sessions=$("$REAL_TMUX" -S "$socket_path" \
+  list-sessions -F '|#{session_name}|')
+if [[ "$sessions" != '|󰌗 |' ]]; then
+  printf 'FAIL: expected one remote session, got:\n%s\n' "$sessions"
+  exit 1
+fi
+
+windows=$("$REAL_TMUX" -S "$socket_path" \
+  list-windows -t '󰌗 ' -F '#{window_id}' | wc -l | tr -d ' ')
+if [[ "$windows" != 2 ]]; then
+  printf 'FAIL: expected two remote windows, got %s\n' "$windows"
+  exit 1
+fi
+
+paths=$("$REAL_TMUX" -S "$socket_path" \
+  list-panes -s -t '󰌗 ' -F '#{pane_current_path}')
+expected_paths=$(printf '%s\n%s' "$pay_server_path" "$pay_server_path")
+if [[ "$paths" != "$expected_paths" ]]; then
+  printf 'FAIL: expected both windows in pay-server, got:\n%s\n' "$paths"
+  exit 1
+fi
+
+startup_hook=$("$REAL_TMUX" -S "$socket_path" \
+  show-hooks -g session-created)
+if [[ "$startup_hook" != session-created ]]; then
+  printf 'FAIL: expected the startup hook to remove itself, got:\n%s\n' "$startup_hook"
+  exit 1
+fi
+
+printf 'PASS: fresh devbox tmux layout has one session and two pay-server windows\n'
