@@ -50,10 +50,14 @@ _devbox_start_if_needed() {
 _devbox_attach_tmux() {
   local host="$1"
   local control_dir="$HOME/.ssh/devbox-control"
-  local control_path="$control_dir/%C"
+  local control_template="$control_dir/%C"
+  local control_path
 
   mkdir -p "$control_dir" || return
   chmod 700 "$control_dir" || return
+  control_path=$(ssh -G -o ControlPath="$control_template" "$host" 2>/dev/null |
+    awk '$1 == "controlpath" { print $2; exit }') || return
+  [[ -n "$control_path" ]] || return
   if [[ -n "${TMUX_PANE:-}" ]]; then
     tmux set-option -p -t "$TMUX_PANE" @remote_host "$host" 2>/dev/null || true
     tmux set-option -p -t "$TMUX_PANE" @remote_control_path "$control_path" 2>/dev/null || true

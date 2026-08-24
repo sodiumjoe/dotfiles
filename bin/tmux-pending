@@ -14,6 +14,24 @@ sync_session_pending() {
   fi
 }
 
+resolve_control_path() {
+  local pane="$1" remote_host="$2" control_path="$3" resolved_path
+  case "$control_path" in
+    *%*)
+      resolved_path=$(ssh -G -o ControlPath="$control_path" "$remote_host" 2>/dev/null |
+        awk '$1 == "controlpath" { print $2; exit }') || return
+      if [[ -z "$resolved_path" ]]; then
+        return 1
+      fi
+      tmux set-option -p -t "$pane" @remote_control_path "$resolved_path" 2>/dev/null || true
+      printf '%s\n' "$resolved_path"
+      ;;
+    *)
+      printf '%s\n' "$control_path"
+      ;;
+  esac
+}
+
 set_remote_pane_visibility() {
   local pane="$1" window_active="$2" session_attached="$3" title="$4"
   local remote_host="$5" control_path="$6" visible remote_command
@@ -23,6 +41,10 @@ set_remote_pane_visibility() {
   esac
 
   if [[ -z "$remote_host" || -z "$control_path" ]]; then
+    return
+  fi
+
+  if ! control_path=$(resolve_control_path "$pane" "$remote_host" "$control_path"); then
     return
   fi
 

@@ -61,6 +61,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 mkdir -p "$tmpdir/bin"
 export TMUX_LOG="$tmpdir/tmux.log"
 export SSH_LOG="$tmpdir/ssh.log"
+export SSH_RESOLVED_CONTROL_PATH='/tmp/devbox-control/resolved'
 export PENDING_CALL_LOG="$tmpdir/pending-calls.log"
 export TMUX_CONTEXT='0|1||s1'
 export TMUX_VISIBILITY_CONTEXT='%42|s1'
@@ -94,6 +95,9 @@ export TMUX_PANE='%42'
 cat > "$tmpdir/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >> "${SSH_LOG:?}"
+if [[ " $* " == *" -G "* ]]; then
+  printf 'controlpath %s\n' "${SSH_RESOLVED_CONTROL_PATH:?}"
+fi
 EOF
 chmod +x "$tmpdir/bin/ssh"
 
@@ -238,7 +242,7 @@ assert_contains \
   "set-option -wu -t %42 @remote_pending" \
   "$(cat "$TMUX_LOG")"
 
-export TMUX_CONTEXT='1|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control'
+export TMUX_CONTEXT='1|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control/%C'
 : > "$SSH_LOG"
 : > "$TMUX_LOG"
 "$PENDING" sync-remote '%42'
@@ -250,8 +254,17 @@ assert_contains \
   "remote visibility updates require the existing control socket" \
   "ProxyCommand=false" \
   "$(cat "$SSH_LOG")"
-assert_empty \
+assert_contains \
+  "remote visibility resolves the control path before disabling its proxy" \
+  "$SSH_RESOLVED_CONTROL_PATH" \
+  "$(cat "$SSH_LOG")"
+assert_contains \
+  "remote visibility migrates pane metadata to the resolved control path" \
+  "set-option -p -t %42 @remote_control_path $SSH_RESOLVED_CONTROL_PATH" \
+  "$(cat "$TMUX_LOG")"
+assert_not_contains \
   "remote visibility updates do not inject terminal input" \
+  "send-keys" \
   "$(cat "$TMUX_LOG")"
 
 export TMUX_CONTEXT='0|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control'
@@ -272,6 +285,16 @@ export TMUX_CONTEXT='0|1|󰌗 [test]devbox|remote-host|'
 assert_empty \
   "visibility sync is a no-op without a control socket" \
   "$(cat "$SSH_LOG")"
+
+export TMUX_CONTEXT='0|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control/%C'
+export SSH_RESOLVED_CONTROL_PATH=''
+: > "$SSH_LOG"
+"$PENDING" sync-remote '%42'
+assert_not_contains \
+  "visibility sync stops when control path resolution fails" \
+  "set-visible" \
+  "$(cat "$SSH_LOG")"
+export SSH_RESOLVED_CONTROL_PATH='/tmp/devbox-control/resolved'
 
 export TMUX_REMOTE_PANES='%42|0|1|󰌗 one|remote-one|/tmp/control-one\n%43|1|1|󰌗 two|remote-two|/tmp/control-two\n'
 : > "$SSH_LOG"

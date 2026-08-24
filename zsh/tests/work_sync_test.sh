@@ -60,6 +60,7 @@ run_capture() {
 ssh() {
   ssh_args=("$@")
   printf '%s\n' "$@" > "$tmpdir/ssh_args"
+  printf '%s\n' "$@" >> "$tmpdir/ssh_calls"
 
   local host=""
   local arg
@@ -70,6 +71,11 @@ ssh() {
     fi
   done
   local command="$*"
+
+  if [[ " $command " == *" -G "* ]]; then
+    print -r -- "controlpath $HOME/.ssh/devbox-control/resolved-control"
+    return 0
+  fi
 
   case "$host" in
     remote-tmux)
@@ -176,6 +182,7 @@ echo "=== Test: remote tmux attach uses system tmux ==="
 export TMUX_PANE='%42'
 export HOME="$tmpdir/home-attach"
 : > "$tmpdir/tmux_args"
+: > "$tmpdir/ssh_calls"
 run_capture _devbox_attach_tmux remote-tmux
 assert_eq "remote tmux attach exits zero" "0" "$capture_status"
 attach_args="$(cat "$tmpdir/ssh_args")"
@@ -188,8 +195,12 @@ assert_contains \
   "ControlPersist=60" \
   "$attach_args"
 assert_contains \
-  "remote tmux attach uses a short host-specific control path" \
-  "ControlPath=$HOME/.ssh/devbox-control/%C" \
+  "remote tmux attach resolves its control path before connecting" \
+  "-G" \
+  "$(cat "$tmpdir/ssh_calls")"
+assert_contains \
+  "remote tmux attach uses the resolved control path" \
+  "ControlPath=$HOME/.ssh/devbox-control/resolved-control" \
   "$attach_args"
 assert_contains \
   "remote tmux attach bypasses user-local tmux" \
@@ -202,6 +213,10 @@ assert_contains \
 assert_contains \
   "remote tmux attach records its control socket on the local pane" \
   "@remote_control_path" \
+  "$(cat "$tmpdir/tmux_args")"
+assert_contains \
+  "remote tmux attach records the resolved socket path" \
+  "$HOME/.ssh/devbox-control/resolved-control" \
   "$(cat "$tmpdir/tmux_args")"
 
 echo "=== Test: invalid top-level project directories ==="
