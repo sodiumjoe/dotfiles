@@ -11,6 +11,58 @@ local function git(toplevel, args)
     return vim.trim(result.stdout or "")
 end
 
+local function notify_agent_failure(err)
+    vim.notify("Agent review failed: " .. tostring(err), vim.log.levels.ERROR)
+end
+
+function M.send_agent_command(command)
+    local ok_registry, SessionRegistry = pcall(require, "agentic.session_registry")
+    if not ok_registry then
+        notify_agent_failure(SessionRegistry)
+        return false
+    end
+
+    local ok_start, start_err = pcall(function()
+        SessionRegistry.get_session_for_tab_page(nil, function(session)
+            local ok_prepare, prepare_err = pcall(function()
+                local input_buf = session.widget.buf_nrs.input
+                vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { command })
+                session.widget:show()
+
+                local attempts = 0
+                local function try_submit()
+                    if session.session_id then
+                        local ok_submit, submit_err = pcall(function()
+                            session.widget:_submit_input()
+                        end)
+                        if not ok_submit then
+                            notify_agent_failure(submit_err)
+                        end
+                        return
+                    end
+
+                    attempts = attempts + 1
+                    if attempts >= 50 then
+                        notify_agent_failure("session initialization timed out")
+                        return
+                    end
+                    vim.defer_fn(try_submit, 200)
+                end
+
+                try_submit()
+            end)
+            if not ok_prepare then
+                notify_agent_failure(prepare_err)
+            end
+        end)
+    end)
+    if not ok_start then
+        notify_agent_failure(start_err)
+        return false
+    end
+    return true
+end
+
 function M.open_file_picker()
     local review = require("sodium.review")
     local utils = require("sodium.utils")
