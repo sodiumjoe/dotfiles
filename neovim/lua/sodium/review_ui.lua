@@ -349,9 +349,12 @@ end
 function M.setup()
     vim.api.nvim_create_user_command("Review", function(opts)
         local base = opts.args ~= "" and opts.args or nil
-        if require("sodium.review").start_self_review(base) then
+        local review = require("sodium.review")
+        if review.start_self_review(base) then
+            local session = review.get_session()
             M.show_help()
             M.open_file_picker()
+            M.send_agent_command("/neovim-review self " .. session.base_ref)
         end
     end, { nargs = "?" })
 
