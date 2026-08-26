@@ -10,16 +10,19 @@ describe("sodium.review_ui agent integration", function()
     local function make_session(session_id, submit_error)
         local input = vim.api.nvim_create_buf(false, true)
         buffers[#buffers + 1] = input
-        local state = { shown = 0, submitted = 0 }
+        local state = { shown = 0, submitted = 0, submissions = {} }
         local session = {
             session_id = session_id,
             widget = {
                 buf_nrs = { input = input },
-                show = function()
+                show = function(_, options)
                     state.shown = state.shown + 1
+                    state.show_options = options
                 end,
                 _submit_input = function()
                     state.submitted = state.submitted + 1
+                    local lines = vim.api.nvim_buf_get_lines(input, 0, -1, false)
+                    state.submissions[#state.submissions + 1] = table.concat(lines, "\n")
                     if submit_error then
                         error(submit_error)
                     end
@@ -51,8 +54,8 @@ describe("sodium.review_ui agent integration", function()
     it("submits a command to an initialized agent session", function()
         local session, state, input = make_session("session-1")
         package.loaded["agentic.session_registry"] = {
-            get_session_for_tab_page = function(_, callback)
-                callback(session)
+            get_session_for_tab_page = function()
+                return session
             end,
         }
 
@@ -63,6 +66,19 @@ describe("sodium.review_ui agent integration", function()
         )
         assert.are.equal(1, state.shown)
         assert.are.equal(1, state.submitted)
+        assert.are.same({ "/neovim-review self abc123" }, state.submissions)
+    end)
+
+    it("shows the widget without focusing its prompt", function()
+        local session, state = make_session("session-1")
+        package.loaded["agentic.session_registry"] = {
+            get_session_for_tab_page = function()
+                return session
+            end,
+        }
+
+        assert.is_true(review_ui.send_agent_command("/neovim-review self abc123"))
+        assert.are.same({ focus_prompt = false }, state.show_options)
     end)
 
     it("reports synchronous session acquisition failures", function()
@@ -81,12 +97,28 @@ describe("sodium.review_ui agent integration", function()
         assert.are.equal(vim.log.levels.ERROR, notification.level)
     end)
 
+    it("reports unavailable agent sessions", function()
+        local notification
+        package.loaded["agentic.session_registry"] = {
+            get_session_for_tab_page = function()
+                return nil
+            end,
+        }
+        vim.notify = function(message, level)
+            notification = { message = message, level = level }
+        end
+
+        assert.is_false(review_ui.send_agent_command("/neovim-review self abc123"))
+        assert.is_truthy(notification.message:find("session", 1, true))
+        assert.are.equal(vim.log.levels.ERROR, notification.level)
+    end)
+
     it("waits for agent session initialization before submitting", function()
         local session, state = make_session(nil)
         local deferred
         package.loaded["agentic.session_registry"] = {
-            get_session_for_tab_page = function(_, callback)
-                callback(session)
+            get_session_for_tab_page = function()
+                return session
             end,
         }
         vim.defer_fn = function(callback)
@@ -105,8 +137,8 @@ describe("sodium.review_ui agent integration", function()
         local deferred = {}
         local notification
         package.loaded["agentic.session_registry"] = {
-            get_session_for_tab_page = function(_, callback)
-                callback(session)
+            get_session_for_tab_page = function()
+                return session
             end,
         }
         vim.defer_fn = function(callback)
@@ -128,8 +160,8 @@ describe("sodium.review_ui agent integration", function()
         local session = make_session("session-1", "submit failed")
         local notification
         package.loaded["agentic.session_registry"] = {
-            get_session_for_tab_page = function(_, callback)
-                callback(session)
+            get_session_for_tab_page = function()
+                return session
             end,
         }
         vim.notify = function(message, level)
@@ -139,6 +171,48 @@ describe("sodium.review_ui agent integration", function()
         assert.is_true(review_ui.send_agent_command("/neovim-review self abc123"))
         assert.is_truthy(notification.message:find("submit failed", 1, true))
         assert.are.equal(vim.log.levels.ERROR, notification.level)
+    end)
+
+    it("preserves the command while session initialization is delayed", function()
+        local session, state, input = make_session(nil)
+        local deferred
+        package.loaded["agentic.session_registry"] = {
+            get_session_for_tab_page = function()
+                return session
+            end,
+        }
+        vim.defer_fn = function(callback)
+            deferred = callback
+        end
+
+        assert.is_true(review_ui.send_agent_command("/neovim-review self abc123"))
+        vim.api.nvim_buf_set_lines(input, 0, -1, false, { "edited while waiting" })
+        session.session_id = "session-1"
+        deferred()
+
+        assert.are.same({ "/neovim-review self abc123" }, state.submissions)
+    end)
+
+    it("supersedes an older delayed command with a newer command", function()
+        local session, state = make_session(nil)
+        local deferred = {}
+        package.loaded["agentic.session_registry"] = {
+            get_session_for_tab_page = function()
+                return session
+            end,
+        }
+        vim.defer_fn = function(callback)
+            deferred[#deferred + 1] = callback
+        end
+
+        assert.is_true(review_ui.send_agent_command("/neovim-review self first"))
+        assert.is_true(review_ui.send_agent_command("/neovim-review self second"))
+        session.session_id = "session-1"
+        while deferred[1] do
+            table.remove(deferred, 1)()
+        end
+
+        assert.are.same({ "/neovim-review self second" }, state.submissions)
     end)
 end)
 

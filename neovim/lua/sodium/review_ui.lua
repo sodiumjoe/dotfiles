@@ -1,5 +1,6 @@
 local M = {}
 local work_bin = vim.env.HOME .. "/bin/work"
+local agent_command_generation = 0
 
 local function git(toplevel, args)
     local cmd = { "git", "-C", toplevel }
@@ -16,48 +17,67 @@ local function notify_agent_failure(err)
 end
 
 function M.send_agent_command(command)
+    agent_command_generation = agent_command_generation + 1
+    local generation = agent_command_generation
+
     local ok_registry, SessionRegistry = pcall(require, "agentic.session_registry")
     if not ok_registry then
         notify_agent_failure(SessionRegistry)
         return false
     end
 
-    local ok_start, start_err = pcall(function()
-        SessionRegistry.get_session_for_tab_page(nil, function(session)
-            local ok_prepare, prepare_err = pcall(function()
-                local input_buf = session.widget.buf_nrs.input
-                vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { command })
-                session.widget:show()
+    local ok_session, session = pcall(
+        SessionRegistry.get_session_for_tab_page,
+        nil
+    )
+    if not ok_session then
+        notify_agent_failure(session)
+        return false
+    end
+    if not session then
+        notify_agent_failure("agent session unavailable")
+        return false
+    end
 
-                local attempts = 0
-                local function try_submit()
-                    if session.session_id then
-                        local ok_submit, submit_err = pcall(function()
-                            session.widget:_submit_input()
-                        end)
-                        if not ok_submit then
-                            notify_agent_failure(submit_err)
-                        end
-                        return
-                    end
+    local ok_prepare, prepare_err = pcall(function()
+        local input_buf = session.widget.buf_nrs.input
+        vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { command })
+        session.widget:show({ focus_prompt = false })
 
-                    attempts = attempts + 1
-                    if attempts >= 50 then
-                        notify_agent_failure("session initialization timed out")
-                        return
-                    end
-                    vim.defer_fn(try_submit, 200)
-                end
-
-                try_submit()
-            end)
-            if not ok_prepare then
-                notify_agent_failure(prepare_err)
+        local attempts = 0
+        local function try_submit()
+            if generation ~= agent_command_generation then
+                return
             end
-        end)
+            if session.session_id then
+                local ok_submit, submit_err = pcall(function()
+                    vim.api.nvim_buf_set_lines(
+                        input_buf,
+                        0,
+                        -1,
+                        false,
+                        { command }
+                    )
+                    session.widget:_submit_input()
+                end)
+                if not ok_submit then
+                    notify_agent_failure(submit_err)
+                end
+                return
+            end
+
+            attempts = attempts + 1
+            if attempts >= 50 then
+                notify_agent_failure("session initialization timed out")
+                return
+            end
+            vim.defer_fn(try_submit, 200)
+        end
+
+        try_submit()
     end)
-    if not ok_start then
-        notify_agent_failure(start_err)
+    if not ok_prepare then
+        notify_agent_failure(prepare_err)
         return false
     end
     return true
