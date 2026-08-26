@@ -1,37 +1,70 @@
 ---
 name: neovim-review
-description: Use when the user invokes /review with a PR number. Checks out the PR, pre-digests the diff into a granular summary, then answers questions while the user reviews in neovim. Self-review (own branch) needs no skill — the user runs :Review in neovim.
+description: Use when the user invokes /neovim-review for a pull request or a local :Review session in Neovim.
 allowed-tools: Bash
 ---
 
-# PR Review
+# Neovim Review
 
-All mechanics (checkout, caching, session state, comment submission, cleanup)
-are owned by `work review` (run it from inside the repo). This skill does
-judgment work only: digest the change, answer questions.
+Provide judgment and explanation while the user reviews files in Neovim. Determine the mode from the invocation before inspecting changes.
 
-## Phase 0 — Enter
+## Quick reference
+
+| Invocation | Mechanics | Coverage source |
+| --- | --- | --- |
+| `/neovim-review <number>` | `work review enter-pr` | `.review/files` |
+| `/neovim-review self <base>` | Read-only Git inspection | Git diff plus untracked files |
+
+## Entry modes
+
+### Pull request
+
+For `/neovim-review <number>`, run:
 
     work review enter-pr <number>
 
-Outputs JSON `{ mode, id, base_ref, head_ref, toplevel }`. On `{"error": ...}`,
-report it and stop. A stale previous session is recovered automatically.
+The command returns `{ mode, id, base_ref, head_ref, toplevel }`. Report an `error` response and stop. Read `<toplevel>/.review/commits`, `<toplevel>/.review/diff`, and `<toplevel>/.review/files`.
 
-## Phase 1 — Digest
+### Self-review
 
-Read `<toplevel>/.review/commits` and `<toplevel>/.review/diff`. Produce a
-granular summary: group files by concern, 1-2 sentences per file, cross-file
-relationships, flag anything risky. Gate: every file in `.review/files` must
-appear in the summary.
+For `/neovim-review self <merge-base>`, do not run `work review`, check out a ref, or mutate Git state. Inspect with:
 
-## Phase 2 — Support
+    git rev-parse --show-toplevel
+    git rev-parse --verify '<merge-base>^{commit}'
+    git log --format='%h %s' <merge-base>..HEAD
+    git diff --no-renames <merge-base>
+    git diff --no-renames --name-only <merge-base>
+    git ls-files --others --exclude-standard
 
-Tell the user the session is ready (keymaps are shown in neovim; `<leader>p?`
-redisplays them). Then wait and answer questions about the changes.
+Read every untracked file because it has no Git diff. The tracked and untracked file lists together form the coverage manifest.
 
-Do not track submission or run cleanup — `<leader>pa` (submit) and
-`<leader>px` (abort) handle everything including session teardown. Only if
-the user explicitly asks in chat:
+Any other invocation is invalid. Report `Usage: /neovim-review <number> | /neovim-review self <merge-base>` and stop.
 
-- submit: `work review submit <APPROVE|REQUEST_CHANGES|COMMENT> ["body"]`
-- abort: `work review exit`
+## Analysis contract
+
+Return one complete overview organized by logical concern, not review order. For each concern, state its intent, behavior change, involved files, important implementation details, cross-file relationships, and suspected defects or regression risks. Identify missing or inadequate tests. Use `path:line` references where a specific line matters.
+
+Every file in the coverage manifest must appear under a concern. End with a separate `Issues` section ordered by severity. State `No issues identified` when appropriate. Then wait for questions; do not open files or mark them reviewed.
+
+Example shape:
+
+    ## Concern: Request validation
+    Intent: Reject malformed input before persistence.
+    Files: src/api.lua, tests/api_spec.lua
+    Risks: The new branch lacks coverage for empty values.
+
+    ## Issues
+    - Important — src/api.lua:42 accepts whitespace-only input.
+
+## Common mistakes
+
+- Running `work review` or changing Git state in self mode.
+- Omitting untracked files because they do not appear in `git diff`.
+- Narrating files individually instead of explaining logical concerns.
+
+## PR support
+
+Neovim owns normal submission and teardown through `<leader>pa` and `<leader>px`. Only when explicitly asked in chat, use:
+
+- `work review submit <APPROVE|REQUEST_CHANGES|COMMENT> ["body"]`
+- `work review exit`
