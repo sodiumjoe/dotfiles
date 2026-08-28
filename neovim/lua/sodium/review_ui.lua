@@ -373,7 +373,6 @@ function M.setup()
         if review.start_self_review(base) then
             local session = review.get_session()
             M.show_help()
-            M.open_file_picker()
             M.send_agent_command("/neovim-review self " .. session.base_ref)
         end
     end, { nargs = "?" })

@@ -259,7 +259,7 @@ describe(":Review agent overview", function()
         end
     end
 
-    it("submits the resolved merge-base after bare Review starts", function()
+    it("opens the agent without the picker after bare Review starts", function()
         local events = {}
         local seen = {}
         stub_success(events, seen)
@@ -268,10 +268,10 @@ describe(":Review agent overview", function()
 
         assert.is_nil(seen.requested_base)
         assert.are.equal("/neovim-review self resolved-merge-base", seen.command)
-        assert.are.same({ "help", "picker", "agent" }, events)
+        assert.are.same({ "help", "agent" }, events)
     end)
 
-    it("preserves explicit base selection while submitting the resolved merge-base", function()
+    it("opens the agent without the picker after explicit base selection", function()
         local events = {}
         local seen = {}
         stub_success(events, seen)
@@ -280,7 +280,7 @@ describe(":Review agent overview", function()
 
         assert.are.equal("HEAD~2", seen.requested_base)
         assert.are.equal("/neovim-review self resolved-merge-base", seen.command)
-        assert.are.same({ "help", "picker", "agent" }, events)
+        assert.are.same({ "help", "agent" }, events)
     end)
 
     it("does not open UI or submit when self-review initialization fails", function()
