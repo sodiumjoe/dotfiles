@@ -49,6 +49,9 @@ args = ["-lc", "exec \"$HOME/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh\"
 command = "/Users/moon/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh"
 args = ["observability"]
 
+[plugins."js-infra-internal@stripe-internal-marketplace"]
+enabled = true
+
 [plugins."orbit@stripe-internal-marketplace"]
 enabled = true
 

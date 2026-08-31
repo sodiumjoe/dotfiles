@@ -88,6 +88,8 @@ for env in work devbox home; do
     work|devbox)
       check "AGENTS.md generated" "$([ -f "$out/codex/AGENTS.md" ] && echo ok || echo missing)"
       check "config.toml generated" "$([ -f "$out/codex/config.toml" ] && echo ok || echo missing)"
+      check "js-infra-internal Codex plugin enabled" \
+        "$(python3 -c 'import sys, tomllib; print("ok" if tomllib.load(open(sys.argv[1], "rb")).get("plugins", {}).get("js-infra-internal@stripe-internal-marketplace", {}).get("enabled") is True else "missing")' "$out/codex/config.toml")"
       check "Codex instructions constrain Markdown tables" \
         "$(grep -Fq 'Use Markdown tables only for compact data' "$out/codex/AGENTS.md" && echo ok || echo missing)"
       ;;
