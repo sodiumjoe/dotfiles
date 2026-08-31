@@ -12,17 +12,6 @@ ZWS=$'\xe2\x80\x8b'
 PENDING_TOKEN=$'\xe2\x81\xa3'
 APP_NAME="${NOTIFY_AGENT_NAME:-Agent}"
 
-if [ -n "$PANE" ]; then
-  case "$TITLE" in
-    *"$PENDING_TOKEN"*)
-      tmux set-option -w -t "$PANE" @remote_pending 1 2>/dev/null || true
-      ;;
-    *)
-      tmux set-option -wu -t "$PANE" @remote_pending 2>/dev/null || true
-      ;;
-  esac
-fi
-
 case "$TITLE" in
   *"$ZWS"*)
     if [ -n "$PANE" ]; then

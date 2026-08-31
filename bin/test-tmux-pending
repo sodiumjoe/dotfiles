@@ -53,7 +53,6 @@ PENDING_ZSH="$ROOT/zsh/tmux-pending.zsh"
 ZSHRC="$ROOT/zsh/.zshrc"
 CLAUDE_IDLE="$ROOT/claude/hooks/notify-on-idle.sh"
 CODEX_CONFIG="$ROOT/codex/config.base.toml"
-TITLE_NOTIFY="$ROOT/bin/tmux-notify-bell"
 TMUX_CONF="$ROOT/tmux/tmux.conf"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
@@ -67,6 +66,7 @@ export TMUX_CONTEXT='0|1||s1'
 export TMUX_VISIBILITY_CONTEXT='%42|s1'
 export TMUX_PENDING_WINDOWS=''
 export TMUX_REMOTE_PANES=''
+PENDING_TOKEN=$(printf '\u2063')
 
 cat > "$tmpdir/bin/tmux" <<'EOF'
 #!/usr/bin/env bash
@@ -228,24 +228,14 @@ assert_contains \
   "set-option -u -t s1 @session_pending" \
   "$(cat "$TMUX_LOG")"
 
-: > "$TMUX_LOG"
-"$TITLE_NOTIFY" '%42' "$(printf '\u2063')󰌗 [test]devbox"
-assert_contains \
-  "the parent maps the remote title token to outer pending state" \
-  "set-option -w -t %42 @remote_pending 1" \
-  "$(cat "$TMUX_LOG")"
-
-: > "$TMUX_LOG"
-"$TITLE_NOTIFY" '%42' '󰌗 [test]devbox'
-assert_contains \
-  "the parent clears outer pending state when the remote token disappears" \
-  "set-option -wu -t %42 @remote_pending" \
-  "$(cat "$TMUX_LOG")"
-
 export TMUX_CONTEXT='1|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control/%C'
 : > "$SSH_LOG"
 : > "$TMUX_LOG"
 "$PENDING" sync-remote '%42'
+assert_contains \
+  "remote sync clears stale outer pending state from the current title" \
+  "set-option -wu -t %42 @remote_pending" \
+  "$(cat "$TMUX_LOG")"
 assert_contains \
   "a visible outer tab updates remote tmux through SSH" \
   "\$HOME/bin/tmux-pending set-visible 1" \
@@ -267,6 +257,22 @@ assert_not_contains \
   "send-keys" \
   "$(cat "$TMUX_LOG")"
 
+export TMUX_CONTEXT="0|1|${PENDING_TOKEN}󰌗 [test]devbox|remote-host|/tmp/devbox-control"
+: > "$TMUX_LOG"
+"$PENDING" sync-remote '%42'
+assert_contains \
+  "remote sync restores outer pending state from the current title" \
+  "set-option -w -t %42 @remote_pending 1" \
+  "$(cat "$TMUX_LOG")"
+
+export TMUX_CONTEXT='1|1|moon@local: ~pay|||'
+: > "$TMUX_LOG"
+"$PENDING" sync-remote '%42'
+assert_not_contains \
+  "remote sync does not mutate pending state for local panes" \
+  "@remote_pending" \
+  "$(cat "$TMUX_LOG")"
+
 export TMUX_CONTEXT='0|1|󰌗 [test]devbox|remote-host|/tmp/devbox-control'
 : > "$SSH_LOG"
 : > "$TMUX_LOG"
@@ -275,8 +281,9 @@ assert_contains \
   "a hidden outer tab updates remote tmux through SSH" \
   "\$HOME/bin/tmux-pending set-visible 0" \
   "$(cat "$SSH_LOG")"
-assert_empty \
+assert_not_contains \
   "hidden visibility updates do not inject terminal input" \
+  "send-keys" \
   "$(cat "$TMUX_LOG")"
 
 export TMUX_CONTEXT='0|1|󰌗 [test]devbox|remote-host|'
@@ -296,11 +303,15 @@ assert_not_contains \
   "$(cat "$SSH_LOG")"
 export SSH_RESOLVED_CONTROL_PATH='/tmp/devbox-control/resolved'
 
-export TMUX_REMOTE_PANES='%42|0|1|󰌗 one|remote-one|/tmp/control-one\n%43|1|1|󰌗 two|remote-two|/tmp/control-two\n'
+export TMUX_REMOTE_PANES="%42|0|1|${PENDING_TOKEN}󰌗 one|remote-one|/tmp/control-one\n%43|1|1|󰌗 two|remote-two|/tmp/control-two\n"
 : > "$SSH_LOG"
 : > "$TMUX_LOG"
 "$PENDING" sync-remote
 out=$(cat "$SSH_LOG")
+assert_contains \
+  "bulk remote sync reconciles outer pending state" \
+  "set-option -w -t %42 @remote_pending 1" \
+  "$(cat "$TMUX_LOG")"
 assert_contains \
   "visibility sync hides remote tmux panes outside the focused outer tab" \
   "\$HOME/bin/tmux-pending set-visible 0" \
@@ -309,8 +320,9 @@ assert_contains \
   "visibility sync shows remote tmux panes inside the focused outer tab" \
   "\$HOME/bin/tmux-pending set-visible 1" \
   "$out"
-assert_empty \
+assert_not_contains \
   "bulk visibility sync does not inject terminal input" \
+  "send-keys" \
   "$(cat "$TMUX_LOG")"
 
 export TMUX_VISIBILITY_CONTEXT='%42|s1'

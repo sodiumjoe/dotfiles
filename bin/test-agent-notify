@@ -37,6 +37,15 @@ assert_empty() {
   fi
 }
 
+assert_not_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected not to contain: '$needle'\n  in: '$haystack'"
+  fi
+}
+
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STOP_NOTIFY="$ROOT/claude/hooks/notify-on-stop.sh"
 IDLE_NOTIFY="$ROOT/claude/hooks/notify-on-idle.sh"
@@ -288,6 +297,7 @@ TMUX_PANE_ACTIVE=0
 out=$(run_bell_with_pane "%42" "$(printf '\u2063\u200b󰌗 [🥙]barrelbreaker2')")
 assert_contains "bell removes combined tmux title tokens from message" 'Agent is waiting for input on [🥙]barrelbreaker2' "$out"
 assert_contains "bell removes combined tmux title tokens from subtitle" 'subtitle "[🥙]barrelbreaker2"' "$out"
+assert_not_contains "notification delivery does not mutate persistent pending state" '@remote_pending' "$(read_log "$TMUX_LOG")"
 
 TMUX_WINDOW_ACTIVE=1
 TMUX_PANE_ACTIVE=1

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+PENDING_TOKEN=$'\xe2\x81\xa3'
+
 sync_session_pending() {
   local session_id="$1" pending_windows
   if [[ -z "$session_id" ]]; then
@@ -12,6 +14,21 @@ sync_session_pending() {
   else
     tmux set-option -u -t "$session_id" @session_pending 2>/dev/null || true
   fi
+}
+
+sync_remote_pending() {
+  local pane="$1" title="$2" remote_host="$3"
+  if [[ -z "$remote_host" && "$title" != *"󰌗 "* ]]; then
+    return
+  fi
+  case "$title" in
+    *"$PENDING_TOKEN"*)
+      tmux set-option -w -t "$pane" @remote_pending 1 2>/dev/null || true
+      ;;
+    *)
+      tmux set-option -wu -t "$pane" @remote_pending 2>/dev/null || true
+      ;;
+  esac
 }
 
 resolve_control_path() {
@@ -67,6 +84,7 @@ sync_remote_pane() {
   context=$(tmux display-message -p -t "$pane" \
     '#{window_active}|#{session_attached}|#{pane_title}|#{@remote_host}|#{@remote_control_path}' 2>/dev/null) || return
   IFS='|' read -r window_active session_attached title remote_host control_path <<< "$context"
+  sync_remote_pending "$pane" "$title" "$remote_host"
   set_remote_pane_visibility \
     "$pane" "$window_active" "$session_attached" "$title" "$remote_host" "$control_path"
 }
@@ -75,6 +93,7 @@ sync_remote_panes() {
   local pane window_active session_attached title remote_host control_path
   while IFS='|' read -r pane window_active session_attached title remote_host control_path; do
     if [[ -n "$pane" ]]; then
+      sync_remote_pending "$pane" "$title" "$remote_host"
       set_remote_pane_visibility \
         "$pane" "$window_active" "$session_attached" "$title" "$remote_host" "$control_path"
     fi
