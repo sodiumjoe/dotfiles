@@ -33,6 +33,7 @@ case "$TITLE" in
       fi
     fi
     CLEAN="${TITLE//$ZWS/}"
+    CLEAN="${CLEAN//$PENDING_TOKEN/}"
     LABEL="${CLEAN#󰌗 }"
     if [ -n "$LABEL" ]; then
       MSG="$APP_NAME is waiting for input on $LABEL"

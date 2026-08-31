@@ -283,6 +283,12 @@ out=$(run_bell "Codex")
 assert_contains "bell override message includes devbox origin" 'Codex is waiting for input on [test]devbox' "$out"
 assert_contains "bell override title uses agent name" 'with title "Codex"' "$out"
 
+TMUX_WINDOW_ACTIVE=0
+TMUX_PANE_ACTIVE=0
+out=$(run_bell_with_pane "%42" "$(printf '\u2063\u200b󰌗 [🥙]barrelbreaker2')")
+assert_contains "bell removes combined tmux title tokens from message" 'Agent is waiting for input on [🥙]barrelbreaker2' "$out"
+assert_contains "bell removes combined tmux title tokens from subtitle" 'subtitle "[🥙]barrelbreaker2"' "$out"
+
 TMUX_WINDOW_ACTIVE=1
 TMUX_PANE_ACTIVE=1
 out=$(run_bell_with_pane "%42" "$(printf '\u200b󰌗 [test]devbox')")
