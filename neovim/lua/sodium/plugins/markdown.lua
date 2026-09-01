@@ -34,8 +34,13 @@ local function cr_continue_list()
         vim.api.nvim_set_current_line("")
         return
     end
-    local row = vim.api.nvim_win_get_cursor(0)[1]
-    vim.api.nvim_buf_set_lines(0, row, row, false, { prefix })
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local row, col = cursor[1], cursor[2]
+    local suffix = line:sub(col + 1)
+    if suffix:sub(1, 1) == " " then
+        suffix = suffix:sub(2)
+    end
+    vim.api.nvim_buf_set_lines(0, row - 1, row, false, { line:sub(1, col), prefix .. suffix })
     vim.api.nvim_win_set_cursor(0, { row + 1, #prefix })
 end
 
