@@ -57,9 +57,6 @@ enabled = true
 [plugins."auto-onrun@stripe-internal-marketplace"]
 enabled = false
 
-[plugins."run@stripe-internal-marketplace"]
-enabled = true
-
 [plugins."run@stripe-internal-marketplace".mcp_servers.toolshed-extras.tools.search_slack_messages]
 approval_mode = "approve"
 
