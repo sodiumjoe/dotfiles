@@ -146,12 +146,6 @@ case "${1:-mark}" in
     tmux set-option -wu -t "$PANE" @pending 2>/dev/null || true
     sync_session_pending "$SESSION_ID"
     ;;
-  codex-notify)
-    EVENT_TYPE=$(printf '%s' "${2:-}" | jq -r '.type // empty' 2>/dev/null) || exit 0
-    if [[ "$EVENT_TYPE" == "agent-turn-complete" ]]; then
-      "$0" mark "${TMUX_PANE:-}"
-    fi
-    ;;
   sync-remote)
     PANE="${2:-}"
     if [[ -n "$PANE" ]]; then

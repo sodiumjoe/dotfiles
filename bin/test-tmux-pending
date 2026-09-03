@@ -199,17 +199,9 @@ assert_eq \
   "mark %42" \
   "$(cat "$PENDING_CALL_LOG")"
 
-export TMUX_CONTEXT='0|1||s1'
-: > "$TMUX_LOG"
-"$PENDING" codex-notify '{"type":"agent-turn-complete"}'
-assert_contains \
-  "Codex turn completion marks its tab" \
-  "set-option -w -t %42 @pending 1" \
-  "$(cat "$TMUX_LOG")"
-
-assert_contains \
-  "Codex routes completion callbacks to the pending helper" \
-  'notify = ["/usr/bin/env", "tmux-pending", "codex-notify"]' \
+assert_not_contains \
+  "Codex does not register an external completion callback" \
+  'notify =' \
   "$(cat "$CODEX_CONFIG")"
 
 export TMUX_PENDING_WINDOWS='1'

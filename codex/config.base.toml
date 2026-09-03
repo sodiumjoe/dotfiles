@@ -1,7 +1,6 @@
 model = "gpt-5.6-sol"
 sandbox = "workspace-write"
 model_reasoning_effort = "high"
-notify = ["/usr/bin/env", "tmux-pending", "codex-notify"]
 
 [features]
 hooks = true
