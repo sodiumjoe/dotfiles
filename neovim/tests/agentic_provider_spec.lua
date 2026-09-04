@@ -24,17 +24,10 @@ describe("agentic codex provider", function()
         return opts
     end
 
-    local function session_ids(sessions)
-        local ids = {}
-        for i, session in ipairs(sessions or {}) do
-            ids[i] = session.sessionId
-        end
-        return ids
-    end
-
     before_each(function()
         package.loaded["agentic.acp.acp_client"] = nil
         package.loaded["agentic.session_restore"] = nil
+        package.loaded["sodium.agentic_sessions"] = nil
         package.loaded["sodium.plugins.agentic"] = nil
         package.loaded.agentic = nil
         _G.__agentic_setup_opts = nil
@@ -45,6 +38,7 @@ describe("agentic codex provider", function()
     after_each(function()
         package.loaded["agentic.acp.acp_client"] = nil
         package.loaded["agentic.session_restore"] = nil
+        package.loaded["sodium.agentic_sessions"] = nil
         package.loaded["sodium.plugins.agentic"] = nil
         package.loaded.agentic = nil
         _G.__agentic_setup_opts = nil
@@ -216,52 +210,29 @@ describe("agentic codex provider", function()
         assert.truthy(text:find("\"toolCallId\":\"tool-3\"", 1, true))
     end)
 
-    it("sorts restore sessions newest-first with malformed timestamps last", function()
+    it("installs the dedicated picker with the upstream fallback", function()
+        local dedicated_session
+        local fallback_session
+        package.loaded["sodium.agentic_sessions"] = {
+            show_picker = function(session)
+                dedicated_session = session
+            end,
+        }
         local SessionRestore = {
-            show_picker = function(current_session)
-                current_session.agent:when_ready(function()
-                    current_session.agent:list_sessions(vim.fn.getcwd(), function(result)
-                        _G.__agentic_listed_sessions = result.sessions
-                    end)
-                end)
+            show_picker = function(session)
+                fallback_session = session or false
             end,
         }
 
         load_agentic_setup({ session_restore = SessionRestore })
 
-        SessionRestore.show_picker({
-            agent = {
-                when_ready = function(_, callback)
-                    callback()
-                end,
-                list_sessions = function(_, _, callback)
-                    callback({
-                        sessions = {
-                            {
-                                sessionId = "older",
-                                updatedAt = "2026-03-20T14:30:00Z",
-                            },
-                            {
-                                sessionId = "invalid",
-                                updatedAt = "not-a-date",
-                            },
-                            {
-                                sessionId = "newest",
-                                updatedAt = "2026-03-21T09:15:00Z",
-                            },
-                            {
-                                sessionId = "missing",
-                            },
-                        },
-                    }, nil)
-                end,
-            },
-        })
+        SessionRestore.show_picker(nil)
+        assert.is_false(fallback_session)
 
-        assert.are.same(
-            { "newest", "older", "invalid", "missing" },
-            session_ids(_G.__agentic_listed_sessions)
-        )
+        local session = { agent = { list_sessions = function() end } }
+        SessionRestore.show_picker(session)
+        assert.are.equal(session, dedicated_session)
+        assert.is_true(SessionRestore._sodium_session_picker_patch)
     end)
 
     it("documents plain path:line file references in shared instructions", function()

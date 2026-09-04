@@ -233,4 +233,80 @@ function M.preview_lines(item)
     return lines
 end
 
+local function with_conflict_check(current_session, on_restore)
+    local has_conflict = current_session.session_id ~= nil
+        and current_session.chat_history ~= nil
+        and #current_session.chat_history.messages > 0
+    if not has_conflict then
+        on_restore()
+        return
+    end
+
+    vim.ui.select({ "Cancel", "Clear current session and restore" }, {
+        prompt = "Current session has messages. What would you like to do?",
+        snacks = {
+            preview = "none",
+            layout = { preset = "select", preview = false },
+        },
+    }, function(choice)
+        if choice == "Clear current session and restore" then
+            on_restore()
+        end
+    end)
+end
+
+local function restore(current_session, item)
+    with_conflict_check(current_session, function()
+        current_session:load_acp_session(item.session_id, item.original_title, item.updated_at)
+        current_session.widget:show()
+    end)
+end
+
+function M.show_picker(current_session)
+    local cwd = vim.fn.getcwd()
+    current_session.agent:when_ready(function()
+        current_session.agent:list_sessions(cwd, function(result, err)
+            local Logger = require("agentic.utils.logger")
+            if err or not result then
+                Logger.notify(
+                    "Failed to list sessions: " .. (err and err.message or "unknown error"),
+                    vim.log.levels.WARN
+                )
+                return
+            end
+
+            local items = M.normalize_sessions(result.sessions)
+            if #items == 0 then
+                Logger.notify("No saved sessions found", vim.log.levels.INFO)
+                return
+            end
+
+            vim.schedule(function()
+                Snacks.picker({
+                    title = "Select session to restore",
+                    items = items,
+                    format = function(item)
+                        return {
+                            { item.updated_at, "SnacksPickerComment" },
+                            { "  " },
+                            { item.title },
+                        }
+                    end,
+                    preview = function(ctx)
+                        ctx.preview:reset()
+                        ctx.preview:set_lines(M.preview_lines(ctx.item))
+                    end,
+                    confirm = function(picker, item)
+                        if not item then
+                            return
+                        end
+                        picker:close()
+                        restore(current_session, item)
+                    end,
+                })
+            end)
+        end)
+    end)
+end
+
 return M

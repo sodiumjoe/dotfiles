@@ -111,4 +111,158 @@ describe("agentic session picker data", function()
         )
         assert.are.same({}, item.metadata)
     end)
+
+    it("renders metadata and restores only after confirmation", function()
+        local sessions = require("sodium.agentic_sessions")
+        local original_snacks = _G.Snacks
+        local picker_opts
+        local preview_lines
+        local restored
+        local show_count = 0
+        _G.Snacks = {
+            picker = function(opts)
+                picker_opts = opts
+            end,
+        }
+        local current_session = {
+            agent = {
+                when_ready = function(_, callback)
+                    callback()
+                end,
+                list_sessions = function(_, _, callback)
+                    callback({
+                        sessions = {
+                            {
+                                sessionId = "session-1",
+                                title = "resume me<environment_info>\n- Project root: /pay/src\n</environment_info>",
+                                updatedAt = "2026-09-04T01:02:03Z",
+                            },
+                        },
+                    }, nil)
+                end,
+            },
+            chat_history = { messages = {} },
+            load_acp_session = function(_, session_id, title, timestamp)
+                restored = { session_id, title, timestamp }
+            end,
+            widget = {
+                show = function()
+                    show_count = show_count + 1
+                end,
+            },
+        }
+
+        sessions.show_picker(current_session)
+        vim.wait(1000, function()
+            return picker_opts ~= nil
+        end)
+        picker_opts.preview({
+            item = picker_opts.items[1],
+            preview = {
+                reset = function() end,
+                set_lines = function(_, lines)
+                    preview_lines = lines
+                end,
+            },
+        })
+        assert.is_nil(restored)
+        assert.are.same("Project root: /pay/src", preview_lines[4])
+        picker_opts.confirm({ close = function() end }, picker_opts.items[1])
+
+        _G.Snacks = original_snacks
+        assert.are.same({
+            "session-1",
+            "resume me<environment_info>\n- Project root: /pay/src\n</environment_info>",
+            "2026-09-04 01:02",
+        }, restored)
+        assert.are.equal(1, show_count)
+    end)
+
+    it("retains the active-session conflict check", function()
+        local sessions = require("sodium.agentic_sessions")
+        local original_select = vim.ui.select
+        local original_snacks = _G.Snacks
+        local conflict_opts
+        local conflict_callback
+        local restored = false
+        vim.ui.select = function(_, opts, callback)
+            conflict_opts = opts
+            conflict_callback = callback
+        end
+        _G.Snacks = {
+            picker = function(opts)
+                opts.confirm({ close = function() end }, opts.items[1])
+            end,
+        }
+        local current_session = {
+            session_id = "active",
+            chat_history = { messages = { { type = "user", text = "work" } } },
+            agent = {
+                when_ready = function(_, callback)
+                    callback()
+                end,
+                list_sessions = function(_, _, callback)
+                    callback({ sessions = { { sessionId = "saved", title = "saved" } } }, nil)
+                end,
+            },
+            load_acp_session = function()
+                restored = true
+            end,
+            widget = { show = function() end },
+        }
+
+        sessions.show_picker(current_session)
+        vim.wait(1000, function()
+            return conflict_callback ~= nil
+        end)
+        assert.is_false(conflict_opts.snacks.layout.preview)
+        assert.is_false(restored)
+        conflict_callback("Clear current session and restore")
+
+        vim.ui.select = original_select
+        _G.Snacks = original_snacks
+        assert.is_true(restored)
+    end)
+
+    it("reports list failures and empty session lists", function()
+        local sessions = require("sodium.agentic_sessions")
+        local original_snacks = _G.Snacks
+        local original_logger = package.loaded["agentic.utils.logger"]
+        local notifications = {}
+        local picker_opened = false
+        package.loaded["agentic.utils.logger"] = {
+            notify = function(message, level)
+                notifications[#notifications + 1] = { message, level }
+            end,
+        }
+        _G.Snacks = {
+            picker = function()
+                picker_opened = true
+            end,
+        }
+
+        local function current_session(result, err)
+            return {
+                agent = {
+                    when_ready = function(_, callback)
+                        callback()
+                    end,
+                    list_sessions = function(_, _, callback)
+                        callback(result, err)
+                    end,
+                },
+            }
+        end
+
+        sessions.show_picker(current_session(nil, { message = "provider error" }))
+        sessions.show_picker(current_session({ sessions = {} }, nil))
+
+        package.loaded["agentic.utils.logger"] = original_logger
+        _G.Snacks = original_snacks
+        assert.is_false(picker_opened)
+        assert.are.same({
+            { "Failed to list sessions: provider error", vim.log.levels.WARN },
+            { "No saved sessions found", vim.log.levels.INFO },
+        }, notifications)
+    end)
 end)
