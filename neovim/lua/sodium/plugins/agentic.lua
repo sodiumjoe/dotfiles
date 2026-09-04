@@ -865,6 +865,14 @@ local function new_session_with_provider(opts, on_start)
     })
 end
 
+local function new_session_with_model()
+    require("sodium.agentic_models").pick(function(item)
+        local Config = require("agentic.config")
+        Config.acp_providers[item.provider].initial_model = item.model_id
+        require("agentic").new_session({ provider = item.provider })
+    end)
+end
+
 local function pick_pr_for_review()
     local review = require("sodium.review")
     vim.system({
@@ -1013,6 +1021,14 @@ end
 return {
     "carlos-algms/agentic.nvim",
     -- dir = vim.fn.expand("~/home/agentic.nvim"),
+    init = function()
+        vim.api.nvim_create_autocmd("VimEnter", {
+            once = true,
+            callback = function()
+                require("sodium.agentic_models").discover(function() end)
+            end,
+        })
+    end,
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
@@ -1221,7 +1237,7 @@ return {
                 if SessionRegistry.sessions[tab_page_id] then
                     require("agentic").toggle()
                 else
-                    new_session_with_provider()
+                    new_session_with_model()
                 end
             end,
             mode = { "n" },
@@ -1253,9 +1269,9 @@ return {
         },
         {
             "<leader>an",
-            new_session_with_provider,
+            new_session_with_model,
             mode = { "n" },
-            desc = "New Agentic Chat session",
+            desc = "New Agentic Chat session with model",
         },
         {
             "<leader>ar",
