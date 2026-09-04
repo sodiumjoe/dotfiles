@@ -121,7 +121,7 @@ function M.pick(on_select)
             items = models,
             layout = { preset = "select", preview = false },
             on_show = function()
-                vim.cmd.stopinsert()
+                vim.cmd.startinsert()
             end,
             format = function(item)
                 return {

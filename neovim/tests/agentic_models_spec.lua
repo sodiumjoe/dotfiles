@@ -140,6 +140,53 @@ describe("agentic model catalog", function()
         assert.is_false(picker_opts.layout.preview)
     end)
 
+    it("starts the picker in insert mode", function()
+        local model_catalog = require("sodium.agentic_models")
+        local original_discover = model_catalog.discover
+        local original_snacks = _G.Snacks
+        local original_cmd = vim.cmd
+        local picker_opts
+        local command
+
+        model_catalog.discover = function(callback)
+            callback({
+                {
+                    provider = "claude-agent-acp",
+                    model_id = "sonnet",
+                    name = "Sonnet",
+                    text = "Claude Sonnet",
+                },
+            }, {})
+        end
+        _G.Snacks = {
+            picker = function(opts)
+                picker_opts = opts
+            end,
+        }
+        vim.cmd = {
+            startinsert = function()
+                command = "startinsert"
+            end,
+            stopinsert = function()
+                command = "stopinsert"
+            end,
+        }
+
+        local ok, err = pcall(function()
+            model_catalog.pick(function() end)
+            picker_opts.on_show()
+        end)
+
+        model_catalog.discover = original_discover
+        _G.Snacks = original_snacks
+        vim.cmd = original_cmd
+        if not ok then
+            error(err)
+        end
+
+        assert.are.equal("startinsert", command)
+    end)
+
     it("reports total discovery failure without opening a picker", function()
         local model_catalog = require("sodium.agentic_models")
         local original_discover = model_catalog.discover
