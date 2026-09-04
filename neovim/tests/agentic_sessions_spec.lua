@@ -26,6 +26,7 @@ describe("agentic session picker data", function()
 
         assert.are.equal("use luna subagents to execute this plan", item.title)
         assert.are.equal("2026-09-04 01:02", item.updated_at)
+        assert.are.equal(item.updated_at .. " " .. item.title, item.text)
         assert.are.equal("/pay/src", item.metadata.project_root)
         assert.are.equal("moon/vite-hotspot-2", item.metadata.branch)
         assert.are.equal("Linux-6.8.0-1063-aws-aarch64", item.metadata.platform)
@@ -61,6 +62,7 @@ describe("agentic session picker data", function()
 
         assert.are.equal("plain session", item.title)
         assert.are.equal("unknown date", item.updated_at)
+        assert.are.equal(item.updated_at .. " " .. item.title, item.text)
         assert.are.same({
             "plain session",
             "",
@@ -71,12 +73,28 @@ describe("agentic session picker data", function()
 
     it("sorts valid timestamps newest-first and preserves fallback order", function()
         local sessions = require("sodium.agentic_sessions")
+        assert.is_nil(
+            sessions.normalize_session({
+                sessionId = "invalid-offset-hour",
+                title = "invalid offset hour",
+                updatedAt = "2026-03-21T09:15:00+24:00",
+            }).sort_key
+        )
+        assert.is_nil(
+            sessions.normalize_session({
+                sessionId = "invalid-offset-minute",
+                title = "invalid offset minute",
+                updatedAt = "2026-03-21T09:15:00+00:60",
+            }).sort_key
+        )
         local items = sessions.normalize_sessions({
             { sessionId = "older", title = "older", updatedAt = "2026-03-20T14:30:00Z" },
             { sessionId = "invalid", title = "invalid", updatedAt = "not-a-date" },
             { sessionId = "equal-first", title = "equal first", updatedAt = "2026-03-20T14:30:00Z" },
             { sessionId = "equal-second", title = "equal second", updatedAt = "2026-03-20T14:30:00Z" },
             { sessionId = "invalid-range", title = "invalid range", updatedAt = "2026-99-99T25:99:99Z" },
+            { sessionId = "invalid-offset-hour", title = "invalid offset hour", updatedAt = "2026-03-21T09:15:00+24:00" },
+            { sessionId = "invalid-offset-minute", title = "invalid offset minute", updatedAt = "2026-03-21T09:15:00+00:60" },
             { sessionId = "newest", title = "newest", updatedAt = "2026-03-21T09:15:00Z" },
             { sessionId = "missing", title = "missing" },
         })
@@ -89,6 +107,8 @@ describe("agentic session picker data", function()
                 "equal-second",
                 "invalid",
                 "invalid-range",
+                "invalid-offset-hour",
+                "invalid-offset-minute",
                 "missing",
             },
             vim.tbl_map(function(item)

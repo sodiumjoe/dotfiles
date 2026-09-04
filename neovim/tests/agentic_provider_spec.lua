@@ -212,27 +212,30 @@ describe("agentic codex provider", function()
 
     it("installs the dedicated picker with the upstream fallback", function()
         local dedicated_session
-        local fallback_session
+        local fallback_args
         package.loaded["sodium.agentic_sessions"] = {
             show_picker = function(session)
                 dedicated_session = session
             end,
         }
         local SessionRestore = {
-            show_picker = function(session)
-                fallback_session = session or false
+            show_picker = function(...)
+                fallback_args = { n = select("#", ...), ... }
             end,
         }
 
         load_agentic_setup({ session_restore = SessionRestore })
 
         SessionRestore.show_picker(nil)
-        assert.is_false(fallback_session)
+        assert.are.same({ n = 1, [1] = nil }, fallback_args)
 
         local session = { agent = { list_sessions = function() end } }
-        SessionRestore.show_picker(session)
+        SessionRestore.show_picker("legacy context", session)
         assert.are.equal(session, dedicated_session)
         assert.is_true(SessionRestore._sodium_session_picker_patch)
+
+        SessionRestore.show_picker("first", "second", "third")
+        assert.are.same({ n = 3, "first", "second", "third" }, fallback_args)
     end)
 
     it("documents plain path:line file references in shared instructions", function()

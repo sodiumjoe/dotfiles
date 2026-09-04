@@ -974,13 +974,16 @@ return {
             end
 
             local show_picker = SessionRestore.show_picker
-            SessionRestore.show_picker = function(current_session)
+            SessionRestore.show_picker = function(...)
+                local args = { ... }
+                local nargs = select("#", ...)
+                local current_session = args[2] or args[1]
                 if
                     not current_session
                     or not current_session.agent
                     or type(current_session.agent.list_sessions) ~= "function"
                 then
-                    return show_picker(current_session)
+                    return show_picker(unpack(args, 1, nargs))
                 end
                 return require("sodium.agentic_sessions").show_picker(current_session)
             end
