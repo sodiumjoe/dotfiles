@@ -76,168 +76,135 @@ describe("agentic model catalog", function()
         assert.are.equal(1, calls)
     end)
 
-    it("opens one picker and returns the selected provider and model", function()
+    it("opens before discovery completes and refreshes for provider results", function()
         local model_catalog = require("sodium.agentic_models")
-        local original_discover = model_catalog.discover
         local original_snacks = _G.Snacks
         local picker_opts
+        local refreshes = 0
+        local stdout
         local selected
 
-        model_catalog.discover = function(callback)
-            callback({
-                {
-                    provider = "claude-agent-acp",
-                    model_id = "sonnet",
-                    name = "Sonnet",
-                    text = "Claude Sonnet",
-                },
-                {
-                    provider = "codex-acp",
-                    model_id = "gpt-5.6-sol",
-                    name = "GPT-5.6 Sol",
-                    text = "Codex GPT-5.6 Sol",
-                },
-            }, {})
-        end
+        model_catalog.clear_cache()
         _G.Snacks = {
             picker = function(opts)
                 picker_opts = opts
-                opts.confirm({ close = function() end }, opts.items[2])
+                return {
+                    closed = false,
+                    refresh = function()
+                        refreshes = refreshes + 1
+                    end,
+                }
             end,
         }
 
-        local ok, err = pcall(function()
-            model_catalog.pick(function(item)
-                selected = item
-            end)
+        model_catalog.pick(function(item)
+            selected = item
+        end, function(_, opts)
+            stdout = opts.stdout
         end)
 
-        model_catalog.discover = original_discover
-        _G.Snacks = original_snacks
-        if not ok then
-            error(err)
-        end
+        assert.is_not_nil(picker_opts)
+        assert.are.equal("loading", picker_opts.finder()[1].status)
 
-        assert.are.equal("Agent model", picker_opts.title)
-        assert.are.equal(2, #picker_opts.items)
+        stdout(nil, [[{"provider":"codex-acp","models":[{"provider":"codex-acp","model_id":"gpt-5.6-sol","name":"GPT-5.6 Sol"}]}]] .. "\n")
+        vim.wait(1000, function()
+            return picker_opts.finder()[2].model_id == "gpt-5.6-sol"
+        end)
+
+        assert.is_true(refreshes >= 1)
+        assert.are.equal("gpt-5.6-sol", picker_opts.finder()[2].model_id)
+        picker_opts.confirm({ close = function() end }, picker_opts.finder()[2])
         assert.are.equal("codex-acp", selected.provider)
-        assert.are.equal("gpt-5.6-sol", selected.model_id)
+        _G.Snacks = original_snacks
+    end)
+
+    it("does not refresh a picker closed during discovery", function()
+        local model_catalog = require("sodium.agentic_models")
+        local original_snacks = _G.Snacks
+        local picker = { closed = false, refresh = function()
+            error("closed picker refreshed")
+        end }
+        local stdout
+
+        model_catalog.clear_cache()
+        _G.Snacks = { picker = function()
+            return picker
+        end }
+        model_catalog.pick(function() end, function(_, opts)
+            stdout = opts.stdout
+        end)
+        picker.closed = true
+        stdout(nil, [[{"provider":"codex-acp","models":[]}]] .. "\n")
+        vim.wait(50)
+
+        _G.Snacks = original_snacks
+    end)
+
+    it("does not confirm loading or error rows", function()
+        local model_catalog = require("sodium.agentic_models")
+        local original_snacks = _G.Snacks
+        local picker_opts
+        local selected = false
+
+        model_catalog.clear_cache()
+        _G.Snacks = { picker = function(opts)
+            picker_opts = opts
+            return { closed = false, refresh = function() end }
+        end }
+        model_catalog.pick(function()
+            selected = true
+        end, function() end)
+        picker_opts.confirm({ close = function() end }, picker_opts.finder()[1])
+
+        assert.is_false(selected)
+        _G.Snacks = original_snacks
     end)
 
     it("hides the preview through the picker layout", function()
         local model_catalog = require("sodium.agentic_models")
-        local original_discover = model_catalog.discover
         local original_snacks = _G.Snacks
         local picker_opts
 
-        model_catalog.discover = function(callback)
-            callback({
-                {
-                    provider = "claude-agent-acp",
-                    model_id = "sonnet",
-                    name = "Sonnet",
-                    text = "Claude Sonnet",
-                },
-            }, {})
-        end
+        model_catalog.clear_cache()
         _G.Snacks = {
             picker = function(opts)
                 picker_opts = opts
+                return { closed = false, refresh = function() end }
             end,
         }
 
-        local ok, err = pcall(function()
-            model_catalog.pick(function() end)
-        end)
-
-        model_catalog.discover = original_discover
-        _G.Snacks = original_snacks
-        if not ok then
-            error(err)
-        end
+        model_catalog.pick(function() end, function() end)
 
         assert.is_false(picker_opts.layout.preview)
+        _G.Snacks = original_snacks
     end)
 
     it("starts the picker in insert mode", function()
         local model_catalog = require("sodium.agentic_models")
-        local original_discover = model_catalog.discover
         local original_snacks = _G.Snacks
         local original_cmd = vim.cmd
         local picker_opts
         local command
 
-        model_catalog.discover = function(callback)
-            callback({
-                {
-                    provider = "claude-agent-acp",
-                    model_id = "sonnet",
-                    name = "Sonnet",
-                    text = "Claude Sonnet",
-                },
-            }, {})
-        end
+        model_catalog.clear_cache()
         _G.Snacks = {
             picker = function(opts)
                 picker_opts = opts
+                return { closed = false, refresh = function() end }
             end,
         }
         vim.cmd = {
             startinsert = function()
                 command = "startinsert"
             end,
-            stopinsert = function()
-                command = "stopinsert"
-            end,
         }
 
-        local ok, err = pcall(function()
-            model_catalog.pick(function() end)
-            picker_opts.on_show()
-        end)
-
-        model_catalog.discover = original_discover
-        _G.Snacks = original_snacks
-        vim.cmd = original_cmd
-        if not ok then
-            error(err)
-        end
+        model_catalog.pick(function() end, function() end)
+        picker_opts.on_show()
 
         assert.are.equal("startinsert", command)
-    end)
-
-    it("reports total discovery failure without opening a picker", function()
-        local model_catalog = require("sodium.agentic_models")
-        local original_discover = model_catalog.discover
-        local original_notify = vim.notify
-        local original_snacks = _G.Snacks
-        local notification
-        local picker_opened = false
-
-        model_catalog.discover = function(callback)
-            callback(nil, {
-                { provider = "Claude", message = "unavailable" },
-                { provider = "Codex", message = "unavailable" },
-            })
-        end
-        vim.notify = function(message, level)
-            notification = { message = message, level = level }
-        end
-        _G.Snacks = {
-            picker = function()
-                picker_opened = true
-            end,
-        }
-
-        model_catalog.pick(function() end)
-
-        model_catalog.discover = original_discover
-        vim.notify = original_notify
         _G.Snacks = original_snacks
-
-        assert.is_false(picker_opened)
-        assert.are.equal(vim.log.levels.ERROR, notification.level)
-        assert.are.equal("Claude: unavailable\nCodex: unavailable", notification.message)
+        vim.cmd = original_cmd
     end)
 
     it("turns missing provider output into error rows", function()
@@ -262,24 +229,4 @@ describe("agentic model catalog", function()
         assert.matches("helper failed", final_items[1].name)
     end)
 
-    it("reports a nonempty error when both catalogs are empty", function()
-        local model_catalog = require("sodium.agentic_models")
-        local original_discover = model_catalog.discover
-        local original_notify = vim.notify
-        local message
-
-        model_catalog.discover = function(callback)
-            callback({}, {})
-        end
-        vim.notify = function(value)
-            message = value
-        end
-
-        model_catalog.pick(function() end)
-
-        model_catalog.discover = original_discover
-        vim.notify = original_notify
-
-        assert.are.equal("No Claude or Codex models were discovered", message)
-    end)
 end)

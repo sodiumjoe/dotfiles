@@ -190,55 +190,43 @@ function M.discover(callback, system)
     end)
 end
 
-local function error_message(errors)
-    local messages = {}
-    for _, err in ipairs(errors or {}) do
-        if type(err) == "table" then
-            messages[#messages + 1] = string.format("%s: %s", err.provider or "provider", err.message or "failed")
-        else
-            messages[#messages + 1] = tostring(err)
-        end
-    end
-    return table.concat(messages, "\n")
-end
-
-function M.pick(on_select)
-    M.discover(function(models, errors)
-        if not models or #models == 0 then
-            local message = error_message(errors)
-            if message == "" then
-                message = "No Claude or Codex models were discovered"
+function M.pick(on_select, system)
+    local items = M.items()
+    local picker
+    picker = Snacks.picker({
+        title = "Agent model",
+        finder = function()
+            return items
+        end,
+        layout = { preset = "select", preview = false },
+        on_show = function()
+            vim.cmd.startinsert()
+        end,
+        format = function(item)
+            local label = provider_labels[item.provider] or item.provider
+            if item.status == "loading" then
+                return { { label, "SnacksPickerDir" }, { "  Loading…", "Comment" } }
             end
-            vim.notify(message, vim.log.levels.ERROR, { title = "Agent model discovery" })
-            return
-        end
+            if item.status == "error" then
+                return { { label, "SnacksPickerDir" }, { "  " .. item.name, "DiagnosticError" } }
+            end
+            return { { label, "SnacksPickerDir" }, { "  " .. item.name } }
+        end,
+        confirm = function(current_picker, item)
+            if not item or item.status then
+                return
+            end
+            current_picker:close()
+            on_select(item)
+        end,
+    })
 
-        if errors and #errors > 0 then
-            vim.notify(error_message(errors), vim.log.levels.WARN, { title = "Agent model discovery" })
+    M.discover(function(updated)
+        items = updated
+        if picker and not picker.closed then
+            picker:refresh()
         end
-
-        Snacks.picker({
-            title = "Agent model",
-            items = models,
-            layout = { preset = "select", preview = false },
-            on_show = function()
-                vim.cmd.startinsert()
-            end,
-            format = function(item)
-                return {
-                    { provider_labels[item.provider] or item.provider, "SnacksPickerDir" },
-                    { "  " .. item.name },
-                }
-            end,
-            confirm = function(picker, item)
-                if not item then
-                    return
-                end
-                picker:close()
-                on_select(item)
-            end,
-        })
-    end)
+    end, system)
 end
 
 return M
