@@ -114,29 +114,78 @@ test("discovers every page of Codex models", async () => {
   );
 });
 
-test("retains one provider catalog when the other provider fails", async () => {
+test("streams a provider before the other provider finishes", async () => {
   const catalog = await import("../agent-model-catalog.mjs");
-  const result = await catalog.buildCatalog({
-    discoverClaude: async () => {
-      throw new Error("Claude unavailable");
-    },
+  const writes = [];
+  let resolveClaude;
+  const running = catalog.streamCatalog({
+    discoverClaude: () =>
+      new Promise((resolve) => {
+        resolveClaude = resolve;
+      }),
     discoverCodex: async () => [
       {
         provider: "codex-acp",
         model_id: "gpt-5.6-sol",
-        name: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        description: "Codex",
+      },
+    ],
+    write: (value) => writes.push(value),
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(writes.length, 1);
+  assert.deepEqual(JSON.parse(writes[0]), {
+    provider: "codex-acp",
+    models: [
+      {
+        provider: "codex-acp",
+        model_id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         description: "Codex",
       },
     ],
   });
 
-  assert.deepEqual(
-    result.models.map((model) => model.model_id),
-    ["gpt-5.6-sol"],
-  );
-  assert.deepEqual(result.errors, [
-    { provider: "Claude", message: "Claude unavailable" },
+  resolveClaude([
+    {
+      provider: "claude-agent-acp",
+      model_id: "opus",
+      name: "Opus",
+      description: "Claude",
+    },
   ]);
+  await running;
+
+  assert.equal(writes.length, 2);
+  assert.equal(JSON.parse(writes[1]).provider, "claude-agent-acp");
+  assert.ok(writes.every((value) => value.endsWith("\n")));
+});
+
+test("streams one provider error without discarding successful models", async () => {
+  const catalog = await import("../agent-model-catalog.mjs");
+  const writes = [];
+
+  await catalog.streamCatalog({
+    discoverClaude: async () => {
+      throw new Error("Claude unavailable");
+    },
+    discoverCodex: async () => [],
+    write: (value) => writes.push(JSON.parse(value)),
+  });
+
+  assert.deepEqual(
+    writes.find((event) => event.provider === "claude-agent-acp"),
+    {
+      provider: "claude-agent-acp",
+      error: { provider: "Claude", message: "Claude unavailable" },
+    },
+  );
+  assert.deepEqual(
+    writes.find((event) => event.provider === "codex-acp"),
+    { provider: "codex-acp", models: [] },
+  );
 });
 
 test("requests Codex app-server methods over newline JSON-RPC", async () => {
@@ -252,33 +301,19 @@ test("rejects non-object Codex JSON-RPC output", async () => {
   rpc.close();
 });
 
-test("writes the combined catalog as JSON", async () => {
+test("main writes newline-delimited provider events", async () => {
   const catalog = await import("../agent-model-catalog.mjs");
-  let output;
+  const output = [];
   await catalog.main({
-    discoverClaude: async () => [
-      {
-        provider: "claude-agent-acp",
-        model_id: "opus",
-        name: "Opus",
-        description: "Claude",
-      },
-    ],
-    discoverCodex: async () => [
-      {
-        provider: "codex-acp",
-        model_id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        description: "Codex",
-      },
-    ],
-    write: (value) => {
-      output = value;
-    },
+    discoverClaude: async () => [],
+    discoverCodex: async () => [],
+    write: (value) => output.push(value),
   });
 
+  assert.equal(output.length, 2);
   assert.deepEqual(
-    JSON.parse(output).models.map((model) => model.model_id),
-    ["opus", "gpt-5.6-sol"],
+    output.map((value) => JSON.parse(value).provider).sort(),
+    ["claude-agent-acp", "codex-acp"],
   );
+  assert.ok(output.every((value) => value.endsWith("\n")));
 });

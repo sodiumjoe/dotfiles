@@ -56,32 +56,36 @@ export async function discoverCodexModels(request) {
   return normalizeCodexModels(models);
 }
 
-export async function buildCatalog({ discoverClaude, discoverCodex }) {
-  const providers = [
-    { name: "Claude", discover: discoverClaude },
-    { name: "Codex", discover: discoverCodex },
+function providerCatalogs(discoverClaude, discoverCodex) {
+  return [
+    {
+      id: "claude-agent-acp",
+      name: "Claude",
+      discover: discoverClaude,
+    },
+    { id: "codex-acp", name: "Codex", discover: discoverCodex },
   ];
-  const settled = await Promise.allSettled(
-    providers.map((provider) => provider.discover()),
+}
+
+function errorMessage(reason) {
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
+export async function streamCatalog({ discoverClaude, discoverCodex, write }) {
+  await Promise.all(
+    providerCatalogs(discoverClaude, discoverCodex).map(async (provider) => {
+      let event;
+      try {
+        event = { provider: provider.id, models: await provider.discover() };
+      } catch (reason) {
+        event = {
+          provider: provider.id,
+          error: { provider: provider.name, message: errorMessage(reason) },
+        };
+      }
+      write(`${JSON.stringify(event)}\n`);
+    }),
   );
-  const result = { models: [], errors: [] };
-
-  settled.forEach((value, index) => {
-    if (value.status === "fulfilled") {
-      result.models.push(...value.value);
-      return;
-    }
-
-    result.errors.push({
-      provider: providers[index].name,
-      message:
-        value.reason instanceof Error
-          ? value.reason.message
-          : String(value.reason),
-    });
-  });
-
-  return result;
 }
 
 export function createJsonRpcRequester(process, timeoutMs = 30000) {
@@ -207,8 +211,7 @@ export async function main({
   discoverCodex = discoverCodexProvider,
   write = (value) => process.stdout.write(value),
 } = {}) {
-  const catalog = await buildCatalog({ discoverClaude, discoverCodex });
-  write(JSON.stringify(catalog));
+  await streamCatalog({ discoverClaude, discoverCodex, write });
 }
 
 if (
