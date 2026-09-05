@@ -1,60 +1,79 @@
 describe("agentic model catalog", function()
-    it("normalizes Claude and Codex models", function()
-        local ok, model_catalog = pcall(require, "sodium.agentic_models")
-        assert.is_true(ok)
-
-        local models = model_catalog.parse(
-            [[{"models":[{"provider":"claude-agent-acp","model_id":"sonnet","name":"Sonnet","description":"Claude Sonnet"},{"provider":"codex-acp","model_id":"gpt-5.6-sol","name":"GPT-5.6 Sol","description":"Codex"}],"errors":[]}]]
+    it("normalizes a provider event", function()
+        local model_catalog = require("sodium.agentic_models")
+        local event = model_catalog.parse_event(
+            [[{"provider":"claude-agent-acp","models":[{"provider":"claude-agent-acp","model_id":"sonnet","name":"Sonnet","description":"Claude Sonnet"}]}]]
         )
 
         assert.are.same({
-            {
-                provider = "claude-agent-acp",
-                model_id = "sonnet",
-                name = "Sonnet",
-                description = "Claude Sonnet",
-                text = "Claude Sonnet",
+            provider = "claude-agent-acp",
+            models = {
+                {
+                    provider = "claude-agent-acp",
+                    model_id = "sonnet",
+                    name = "Sonnet",
+                    description = "Claude Sonnet",
+                    text = "Claude Sonnet",
+                },
             },
-            {
-                provider = "codex-acp",
-                model_id = "gpt-5.6-sol",
-                name = "GPT-5.6 Sol",
-                description = "Codex",
-                text = "Codex GPT-5.6 Sol",
-            },
-        }, models)
+        }, event)
     end)
 
-    it("caches the discovered catalog", function()
+    it("publishes provider results from fragmented stdout", function()
         local model_catalog = require("sodium.agentic_models")
-        local payload = [[{"models":[{"provider":"claude-agent-acp","model_id":"sonnet","name":"Sonnet"}],"errors":[]}]]
-        local calls = 0
-        local results = {}
         local system_opts
-        local system = function(_, opts, on_exit)
-            calls = calls + 1
+
+        model_catalog.clear_cache()
+        local updates = {}
+        model_catalog.discover(function(items, complete)
+            updates[#updates + 1] = { items = vim.deepcopy(items), complete = complete }
+        end, function(_, opts, on_exit)
             system_opts = opts
-            on_exit({ code = 0, stdout = payload, stderr = "" })
+            opts.stdout(nil, [[{"provider":"codex-acp","models":[{"provider":"codex-acp",]])
+            opts.stdout(nil, [["model_id":"gpt-5.6-sol","name":"GPT-5.6 Sol"}]}]] .. "\n")
+            opts.stdout(nil, [[{"provider":"claude-agent-acp","models":[]}]] .. "\n")
+            on_exit({ code = 0, stderr = "" })
+        end)
+
+        vim.wait(1000, function()
+            return updates[#updates] and updates[#updates].complete
+        end)
+
+        assert.is_true(#updates >= 3)
+        assert.are.equal("loading", updates[1].items[1].status)
+        assert.are.equal("gpt-5.6-sol", updates[#updates].items[2].model_id)
+        assert.is_true(updates[#updates].complete)
+        assert.are.equal(vim.fn.resolve(vim.fn.exepath("claude")), system_opts.env.CLAUDE_CODE_EXECUTABLE)
+        assert.are.equal(vim.fn.resolve(vim.fn.exepath("codex")), system_opts.env.CODEX_PATH)
+    end)
+
+    it("reuses settled provider state within one Neovim process", function()
+        local model_catalog = require("sodium.agentic_models")
+        local calls = 0
+        local first_complete = false
+        local second_complete = false
+        local runner = function(_, opts, on_exit)
+            calls = calls + 1
+            opts.stdout(nil, [[{"provider":"claude-agent-acp","models":[]}]] .. "\n")
+            opts.stdout(nil, [[{"provider":"codex-acp","models":[]}]] .. "\n")
+            on_exit({ code = 0, stderr = "" })
         end
 
         model_catalog.clear_cache()
-        model_catalog.discover(function(models)
-            results[#results + 1] = models
-        end, system)
-        model_catalog.discover(function(models)
-            results[#results + 1] = models
-        end, system)
-
+        model_catalog.discover(function(_, complete)
+            first_complete = complete
+        end, runner)
         vim.wait(1000, function()
-            return #results == 2
+            return first_complete
+        end)
+        model_catalog.discover(function(_, complete)
+            second_complete = complete
+        end, runner)
+        vim.wait(1000, function()
+            return second_complete
         end)
 
         assert.are.equal(1, calls)
-        assert.are.equal(2, #results)
-        assert.are.equal("sonnet", results[1][1].model_id)
-        assert.are.equal("sonnet", results[2][1].model_id)
-        assert.are.equal(vim.fn.resolve(vim.fn.exepath("claude")), system_opts.env.CLAUDE_CODE_EXECUTABLE)
-        assert.are.equal(vim.fn.resolve(vim.fn.exepath("codex")), system_opts.env.CODEX_PATH)
     end)
 
     it("opens one picker and returns the selected provider and model", function()
@@ -221,22 +240,26 @@ describe("agentic model catalog", function()
         assert.are.equal("Claude: unavailable\nCodex: unavailable", notification.message)
     end)
 
-    it("reports a fallback error when the helper exits without stderr", function()
+    it("turns missing provider output into error rows", function()
         local model_catalog = require("sodium.agentic_models")
-        local errors
+        local final_items
 
         model_catalog.clear_cache()
-        model_catalog.discover(function(_, discovered_errors)
-            errors = discovered_errors
+        model_catalog.discover(function(items, complete)
+            if complete then
+                final_items = items
+            end
         end, function(_, _, on_exit)
-            on_exit({ code = 1 })
+            on_exit({ code = 1, stderr = "helper failed" })
         end)
 
         vim.wait(1000, function()
-            return errors ~= nil
+            return final_items ~= nil
         end)
 
-        assert.are.same({ "Model discovery failed" }, errors)
+        assert.are.equal("error", final_items[1].status)
+        assert.are.equal("error", final_items[2].status)
+        assert.matches("helper failed", final_items[1].name)
     end)
 
     it("reports a nonempty error when both catalogs are empty", function()
