@@ -144,7 +144,7 @@ function M.discover(callback, system)
     local codex_path = vim.fn.resolve(vim.fn.exepath("codex"))
     local buffer = ""
 
-    runner({
+    local ok, runner_error = pcall(runner, {
         vim.fn.exepath("node"),
         vim.fn.expand("~/.dotfiles/node-bin/agent-model-catalog.mjs"),
     }, {
@@ -188,6 +188,11 @@ function M.discover(callback, system)
             end
         end)
     end)
+    if not ok then
+        vim.schedule(function()
+            fail_loading(tostring(runner_error))
+        end)
+    end
 end
 
 function M.pick(on_select, system)

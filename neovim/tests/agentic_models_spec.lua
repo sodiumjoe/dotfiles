@@ -76,6 +76,35 @@ describe("agentic model catalog", function()
         assert.are.equal(1, calls)
     end)
 
+    it("turns a synchronous discovery startup failure into error rows", function()
+        local model_catalog = require("sodium.agentic_models")
+        local original_snacks = _G.Snacks
+        local picker_opts
+
+        model_catalog.clear_cache()
+        _G.Snacks = {
+            picker = function(opts)
+                picker_opts = opts
+                return { closed = false, refresh = function() end }
+            end,
+        }
+
+        local ok = pcall(function()
+            model_catalog.pick(function() end, function()
+                error("discovery startup failed")
+            end)
+        end)
+
+        assert.is_true(ok)
+        vim.wait(1000, function()
+            return picker_opts.finder()[1].status == "error" and picker_opts.finder()[2].status == "error"
+        end)
+        assert.are.equal("error", picker_opts.finder()[1].status)
+        assert.matches("discovery startup failed", picker_opts.finder()[1].name)
+        assert.are.equal("error", picker_opts.finder()[2].status)
+        _G.Snacks = original_snacks
+    end)
+
     it("opens before discovery completes and refreshes for provider results", function()
         local model_catalog = require("sodium.agentic_models")
         local original_snacks = _G.Snacks
@@ -203,6 +232,43 @@ describe("agentic model catalog", function()
         picker_opts.confirm({ close = function() end }, picker_opts.finder()[2])
         assert.are.equal("codex-acp", selected.provider)
         assert.are.equal("gpt-5.6-sol", selected.model_id)
+        _G.Snacks = original_snacks
+    end)
+
+    it("preserves Claude-first order when Codex fails", function()
+        local model_catalog = require("sodium.agentic_models")
+        local original_snacks = _G.Snacks
+        local picker_opts
+        local stdout
+        local selected
+
+        model_catalog.clear_cache()
+        _G.Snacks = {
+            picker = function(opts)
+                picker_opts = opts
+                return { closed = false, refresh = function() end }
+            end,
+        }
+
+        model_catalog.pick(function(item)
+            selected = item
+        end, function(_, opts)
+            stdout = opts.stdout
+        end)
+        stdout(nil, [[{"provider":"claude-agent-acp","models":[{"provider":"claude-agent-acp","model_id":"sonnet","name":"Sonnet"}]}]] .. "\n")
+        stdout(nil, [[{"provider":"codex-acp","error":{"message":"unavailable"}}]] .. "\n")
+
+        vim.wait(1000, function()
+            return picker_opts.finder()[1].model_id == "sonnet" and picker_opts.finder()[2].status == "error"
+        end)
+
+        assert.are.equal("claude-agent-acp", picker_opts.finder()[1].provider)
+        assert.are.equal("sonnet", picker_opts.finder()[1].model_id)
+        assert.are.equal("codex-acp", picker_opts.finder()[2].provider)
+        assert.are.equal("error", picker_opts.finder()[2].status)
+        picker_opts.confirm({ close = function() end }, picker_opts.finder()[1])
+        assert.are.equal("claude-agent-acp", selected.provider)
+        assert.are.equal("sonnet", selected.model_id)
         _G.Snacks = original_snacks
     end)
 
