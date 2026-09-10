@@ -64,6 +64,7 @@ end
 vim.api.nvim_create_autocmd("FileType", {
     pattern = "markdown",
     callback = function(ev)
+        vim.opt_local.linebreak = true
         vim.keymap.set("n", "o", continue_list("o"), { buf = ev.buf })
         vim.keymap.set("n", "O", continue_list("O"), { buf = ev.buf })
         vim.keymap.set("i", "<CR>", cr_continue_list, { buf = ev.buf })
