@@ -4,6 +4,22 @@ M.state_cycle = { [" "] = "in-progress", ["/"] = "done", ["x"] = "open" }
 M.state_char = { ["in-progress"] = "/", ["done"] = "x", ["open"] = " " }
 M.state_display = { [" "] = "[ ]", ["/"] = "[/]", ["x"] = "[x]" }
 
+function M.claude_executable()
+    local path = vim.fn.resolve(vim.fn.exepath("claude"))
+    if path == "" then
+        return nil
+    end
+    return path
+end
+
+function M.codex_executable()
+    local shim = vim.env.HOME .. "/.dotfiles/bin/acp-codex"
+    if vim.fn.executable(shim) ~= 1 then
+        return nil
+    end
+    return shim
+end
+
 function M.slugify(title)
     return title:lower():gsub("[^%w]+", "-"):gsub("^-+", ""):gsub("-+$", "")
 end

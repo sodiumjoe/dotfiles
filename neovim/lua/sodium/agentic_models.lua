@@ -1,3 +1,5 @@
+local agentic_utils = require("sodium.agentic_utils")
+
 local M = {}
 
 local providers = {
@@ -140,11 +142,6 @@ function M.discover(callback, system)
 
     discovering = true
     local runner = system or vim.system
-    local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
-    local codex_path = vim.env.HOME .. "/.dotfiles/bin/acp-codex"
-    if vim.fn.executable(codex_path) ~= 1 then
-        codex_path = vim.fn.resolve(vim.fn.exepath("codex"))
-    end
     local buffer = ""
 
     local ok, runner_error = pcall(runner, {
@@ -153,8 +150,8 @@ function M.discover(callback, system)
     }, {
         text = true,
         env = {
-            CLAUDE_CODE_EXECUTABLE = claude_path ~= "" and claude_path or nil,
-            CODEX_PATH = codex_path ~= "" and codex_path or nil,
+            CLAUDE_CODE_EXECUTABLE = agentic_utils.claude_executable(),
+            CODEX_PATH = agentic_utils.codex_executable(),
         },
         stdout = function(err, data)
             if err then

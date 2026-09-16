@@ -98,4 +98,24 @@ describe("sodium.agentic_utils", function()
             assert.are.equal("[x]", au.state_display["x"])
         end)
     end)
+
+    describe("agent executables", function()
+        it("resolves codex to the CODEX_PATH-free shim", function()
+            assert.are.equal(vim.env.HOME .. "/.dotfiles/bin/acp-codex", au.codex_executable())
+        end)
+
+        it("never resolves codex to the codex-wrapper on PATH", function()
+            assert.are_not.equal(vim.fn.resolve(vim.fn.exepath("codex")), au.codex_executable())
+        end)
+
+        it("resolves claude through its symlinks or returns nil", function()
+            local claude = au.claude_executable()
+            if claude == nil then
+                assert.are.equal("", vim.fn.exepath("claude"))
+            else
+                assert.are.equal(vim.fn.resolve(vim.fn.exepath("claude")), claude)
+                assert.are_not.equal("", claude)
+            end
+        end)
+    end)
 end)
