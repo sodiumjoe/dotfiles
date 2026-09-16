@@ -923,7 +923,10 @@ return {
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
         local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
-        local codex_binary = vim.fn.exepath("acp-codex")
+        local codex_binary = vim.env.HOME .. "/.dotfiles/bin/acp-codex"
+        if vim.fn.executable(codex_binary) ~= 1 then
+            codex_binary = ""
+        end
 
         local function patch_agentic_acp_client()
             local ok, ACPClient = pcall(require, "agentic.acp.acp_client")
