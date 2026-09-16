@@ -44,7 +44,7 @@ describe("agentic model catalog", function()
         assert.are.equal("gpt-5.6-sol", updates[#updates].items[2].model_id)
         assert.is_true(updates[#updates].complete)
         assert.are.equal(vim.fn.resolve(vim.fn.exepath("claude")), system_opts.env.CLAUDE_CODE_EXECUTABLE)
-        assert.are.equal(vim.fn.resolve(vim.fn.exepath("codex")), system_opts.env.CODEX_PATH)
+        assert.are.equal(vim.env.HOME .. "/.dotfiles/bin/acp-codex", system_opts.env.CODEX_PATH)
     end)
 
     it("reuses settled provider state within one Neovim process", function()

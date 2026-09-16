@@ -46,7 +46,7 @@ describe("agentic codex provider", function()
         pcall(vim.fn.delete, tool_call_log)
     end)
 
-    it("passes the resolved codex executable directly to codex-acp", function()
+    it("passes the CODEX_PATH-free shim to codex-acp", function()
         local saved_env = vim.env.DOTFILES_ENV
         vim.env.DOTFILES_ENV = "work"
         local opts = load_agentic_setup()
@@ -55,10 +55,7 @@ describe("agentic codex provider", function()
 
         assert.are.equal("codex-acp", opts.provider)
         assert.are.equal("codex-acp", provider.command)
-        assert.are.equal(
-            vim.fn.resolve(vim.fn.exepath("codex")),
-            provider.env.CODEX_PATH
-        )
+        assert.are.equal(vim.env.HOME .. "/.dotfiles/bin/acp-codex", provider.env.CODEX_PATH)
         assert.is_nil(provider.env.CODEX_REAL_PATH)
     end)
 

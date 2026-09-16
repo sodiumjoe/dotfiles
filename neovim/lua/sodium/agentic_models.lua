@@ -141,7 +141,10 @@ function M.discover(callback, system)
     discovering = true
     local runner = system or vim.system
     local claude_path = vim.fn.resolve(vim.fn.exepath("claude"))
-    local codex_path = vim.fn.resolve(vim.fn.exepath("codex"))
+    local codex_path = vim.env.HOME .. "/.dotfiles/bin/acp-codex"
+    if vim.fn.executable(codex_path) ~= 1 then
+        codex_path = vim.fn.resolve(vim.fn.exepath("codex"))
+    end
     local buffer = ""
 
     local ok, runner_error = pcall(runner, {
