@@ -5,15 +5,12 @@ local windowRules = require("window_rules")
 hs.window.animationDuration = 0.01
 local log = hs.logger.new("window_focus", 5)
 -- log.log("logging enabled")
-local chromeFilter = hs.window.filter.new(false):setAppFilter("Google Chrome", { visible = true })
 local calendarFilter = hs.window.filter.new(false):setAppFilter("Google Calendar", { visible = true })
 local chatFilter = hs.window.filter.new(false):setAppFilter("Google Chat", { visible = true })
 local ghosttyFilter = hs.window.filter.new(false):setAppFilter("Ghostty")
 local zoomFilter = hs.window.filter.new(false)
 zoomFilter:setAppFilter("Zoom", { visible = true })
 zoomFilter:setAppFilter("zoom.us", { visible = true })
-local zoomNonMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ rejectTitles = "Zoom Meeting" })
-local zoomMeetingFilter = hs.window.filter.copy(zoomFilter):setOverrideFilter({ allowTitles = "Zoom Meeting" })
 local slackFilter = hs.window.filter.new(false):setAppFilter("Slack", { visible = true })
 
 -- hs.window.highlight.ui.overlay=true
@@ -190,9 +187,23 @@ local function layoutApp(filter, screenIndex, position)
 end
 
 local function layoutChrome(screenIndex, position)
-    windowRules.forEachManagedWindow(chromeFilter:getWindows(), function(win)
+    local chrome = hs.application.find("Google Chrome")
+    if not chrome or type(chrome) == "boolean" then
+        return
+    end
+
+    windowRules.forEachUsableManagedWindow(chrome:allWindows() or {}, function(win)
         layoutWin(win, screenIndex, position)
     end)
+end
+
+local function currentZoomWindows()
+    local zoom = hs.application.find("Zoom") or hs.application.find("zoom.us")
+    if not zoom or type(zoom) == "boolean" then
+        return { meetings = {} }
+    end
+
+    return windowRules.classifyZoomWindows(zoom:allWindows() or {})
 end
 
 local function dragWindowToSpace(win, direction, callback)
@@ -342,11 +353,11 @@ local function layoutWindows()
         slack:maximize()
     end
 
-    local zoomMeetings = zoomMeetingFilter:getWindows()
-    local zoomNonMeetingWindows = zoomNonMeetingFilter:getWindows()
-    local mainZoomWindow = zoomNonMeetingWindows[1]
-    local zoom = zoomMeetings[2]
-    local zoomMeeting = zoomMeetings[1]
+    local zoomWindows = currentZoomWindows()
+    local mainZoomWindow = zoomWindows.main
+    local zoomMeetingTop, zoomMeetingBottom = windowRules.planZoomMeetingLayout(zoomWindows.meetings, function(win)
+        return hs.grid.get(win) == positions.topZoom
+    end)
 
     if mainZoomWindow then
         hs.grid.set(mainZoomWindow, positions.maximized, hs.screen.primaryScreen())
@@ -357,17 +368,14 @@ local function layoutWindows()
     local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
         or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
 
-    if zoomMeeting then
+    if zoomMeetingTop then
         layoutChrome(2, positions.bottom)
         layoutApp(ghosttyFilter, 2, positions.bottom)
-        if hs.grid.get(zoomMeeting) == positions.topZoom then
-            layoutWin(zoomMeeting, 1, positions.bottomZoom)
-            layoutWin(zoom, 1, positions.topZoom)
-        else
-            layoutWin(zoomMeeting, 1, positions.topZoom)
-            layoutWin(zoom, 1, positions.bottomZoom)
+        layoutWin(zoomMeetingTop, 1, positions.topZoom)
+        if zoomMeetingBottom then
+            layoutWin(zoomMeetingBottom, 1, positions.bottomZoom)
         end
-        zoom:focus()
+        (zoomWindows.meetings[2] or zoomMeetingTop):focus()
         if speakers then
             speakers:setInputVolume(90)
         end
