@@ -1,0 +1,21 @@
+Warning: No archive files were found for these roots, whose canonical names are:
+	/Users/moon/stripe/work
+	//remote-moon-home//home/moon/stripe/work
+This can happen either
+because this is the first time you have synchronized these roots,
+or because you have upgraded Unison to a new version with a different
+archive format.
+
+Update detection may take a while on this run if the replicas are
+large.
+
+Unison will assume that the 'last synchronized state' of both replicas
+was completely empty.  This means that any files that are different
+will be reported as conflicts, and any files that exist only on one
+replica will be judged as new and propagated to the other replica.
+If the two replicas are identical, then no changes will be reported.
+
+If you see this message repeatedly, it may be because one of your machines
+is getting its address from DHCP, which is causing its host name to change
+between synchronizations.  See the documentation for the UNISONLOCALHOSTNAME
+environment variable for advice on how to correct this.

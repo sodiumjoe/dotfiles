@@ -15,6 +15,10 @@ unison_args=()
 pay_args=()
 ssh_args=()
 tmux_args=()
+unison_stdout=""
+unison_stderr=""
+unison_exit=0
+remote_mkdir_exit=0
 
 assert_eq() {
   local desc="$1"
@@ -90,6 +94,12 @@ ssh() {
       return 0
       ;;
     remote-moon-home)
+      if [[ "$command" == *'mkdir -p "$HOME/stripe/work"'* ]]; then
+        if (( remote_mkdir_exit != 0 )); then
+          print -u2 -- "mkdir: permission denied"
+        fi
+        return "$remote_mkdir_exit"
+      fi
       if [[ "$command" == *'printf "%s\n" "$HOME"'* ]]; then
         print -r -- "/home/moon"
       fi
@@ -114,7 +124,10 @@ tmux() {
 }
 
 unison() {
-  unison_args=("$@")
+  printf '%s\n' "$@" >| "$tmpdir/unison_args"
+  print -rn -- "$unison_stdout"
+  print -rnu2 -- "$unison_stderr"
+  return "$unison_exit"
 }
 
 pay() {
@@ -251,7 +264,9 @@ assert_eq "clean preflight exits zero" "0" "$capture_status"
 assert_eq "clean preflight is quiet" "" "$capture_output"
 
 echo "=== Test: sync uses resolved remote work URI ==="
+: > "$tmpdir/ssh_calls"
 run_capture _devbox_sync remote-moon-home
+unison_args=("${(@f)$(<"$tmpdir/unison_args")}")
 assert_eq "sync exits zero with moon remote home" "0" "$capture_status"
 assert_eq \
   "sync passes moon remote home to unison" \
@@ -265,6 +280,53 @@ else
   sync_prefer_newer="absent"
 fi
 assert_eq "sync does not resolve conflicts by mtime" "absent" "$sync_prefer_newer"
+assert_contains "sync reuses SSH control master" "ControlMaster=auto" "$sync_args"
+assert_contains "sync reuses tmux control socket" "ControlPath=$HOME/.ssh/devbox-control/%C" "$sync_args"
+assert_contains "sync SSH preflight reuses control master" "ControlMaster=auto" "$(cat "$tmpdir/ssh_calls")"
+
+echo "=== Test: foreground sync filters only the complete initial warning ==="
+archive_warning="$(cat "$repo_root/zsh/tests/fixtures/unison-first-sync-warning.txt")"
+unison_stdout="$archive_warning"$'\n\n'
+run_capture _devbox_sync remote-moon-home
+assert_eq "initial archive warning is hidden" "" "$capture_output"
+assert_eq "initial sync retains success status" "0" "$capture_status"
+
+unison_stderr=$'Warning: inconsistent archive state\nFatal error: connection lost\n'
+unison_exit=3
+unsetopt pipefail
+run_capture _devbox_sync remote-moon-home
+assert_eq "sync retains fatal status without caller pipefail" "3" "$capture_status"
+assert_eq "sync restores caller pipefail option" "off" "$options[pipefail]"
+setopt pipefail
+assert_eq \
+  "other warnings and fatal errors remain visible" \
+  $'Warning: inconsistent archive state\nFatal error: connection lost' \
+  "$capture_output"
+
+unison_stdout=$'Warning: No archive files were found for these roots, whose canonical names are:\n\t/local\n'
+unison_stderr=$'Permission denied (publickey).\n'
+run_capture _devbox_sync remote-moon-home
+assert_eq "partial warning and SSH error are preserved" "${unison_stdout}${unison_stderr%$'\n'}" "$capture_output"
+
+unison_stdout="${archive_warning/This can happen either/Permission denied (publickey).}"
+unison_stderr=""
+run_capture _devbox_sync remote-moon-home
+assert_eq "diagnostic within warning is preserved" "$unison_stdout" "$capture_output"
+
+unison_stdout=""
+unison_exit=1
+run_capture _devbox_sync remote-moon-home
+assert_eq "sync retains conflict status" "1" "$capture_status"
+unison_exit=0
+
+echo "=== Test: failed remote directory creation prevents sync ==="
+remote_mkdir_exit=1
+print -r -- "not called" >| "$tmpdir/unison_args"
+run_capture _devbox_sync remote-moon-home
+assert_eq "remote mkdir failure returns nonzero" "1" "$capture_status"
+assert_eq "remote mkdir failure prevents Unison" "not called" "$(cat "$tmpdir/unison_args")"
+assert_contains "remote mkdir diagnostic remains visible" "mkdir: permission denied" "$capture_output"
+remote_mkdir_exit=0
 
 echo "=== Test: sync loop overwrites stale pidfile under noclobber ==="
 loop_host="loop-noclobber-$$"
@@ -276,6 +338,8 @@ _devbox_remote_work_uri() { print -r -- "ssh://${1}//home/moon/stripe/work/" }
 setopt noclobber
 run_capture _devbox_sync_loop "$loop_host"
 unsetopt noclobber
+wait "$(cat "$loop_pidfile")"
+unison_args=("${(@f)$(<"$tmpdir/unison_args")}")
 assert_eq "sync loop exits zero with existing pidfile" "0" "$capture_status"
 assert_eq "sync loop replaces stale pidfile" "not-stale" "$(cat "$loop_pidfile" | sed 's/^[0-9][0-9]*$/not-stale/')"
 loop_args="${(j: :)unison_args}"
@@ -286,6 +350,8 @@ else
   loop_prefer_newer="absent"
 fi
 assert_eq "sync loop does not resolve conflicts by mtime" "absent" "$loop_prefer_newer"
+assert_contains "sync loop reuses SSH control master" "ControlMaster=auto" "$loop_args"
+assert_contains "sync loop reuses tmux control socket" "ControlPath=$HOME/.ssh/devbox-control/%C" "$loop_args"
 rm -f "$loop_pidfile"
 
 echo ""
