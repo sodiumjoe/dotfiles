@@ -1,4 +1,5 @@
 local colorscheme = require("sodium.config.colorscheme")
+local diff_highlights = require("sodium.diff_highlights")
 local p = colorscheme.palette
 local git = colorscheme.spec.git
 
@@ -47,6 +48,7 @@ describe("diff mode highlights", function()
             -- DiffText should use bg2
             local diff_text_bg = get_hl_bg("DiffText")
             assert.is_not_nil(diff_text_bg, "DiffText should have subtle bg in diff mode")
+            assert.equals(vim.api.nvim_get_color_by_name(p.bg2), get_hl_bg("DiffTextAdd"))
 
             -- Cleanup
             vim.wo.diff = false
@@ -68,8 +70,18 @@ describe("diff mode highlights", function()
 
             assert.is_not_nil(get_hl_bg("DiffAdd"), "DiffAdd bg should be restored")
             assert.is_not_nil(get_hl_bg("DiffChange"), "DiffChange bg should be restored")
+            assert.equals(vim.api.nvim_get_color_by_name(p.green), get_hl_bg("DiffTextAdd"))
 
             vim.api.nvim_buf_delete(buf, { force = true })
         end)
+    end)
+
+    it("classifies inline additions as added lines", function()
+        assert.equals("DiffSignAdd", diff_highlights.sign_group("DiffAdd"))
+        assert.equals("DiffSignAdd", diff_highlights.sign_group("DiffTextAdd"))
+        assert.equals("DiffSignChange", diff_highlights.sign_group("DiffChange"))
+        assert.equals("DiffSignChange", diff_highlights.sign_group("DiffText"))
+        assert.equals("DiffSignDelete", diff_highlights.sign_group("DiffDelete"))
+        assert.is_nil(diff_highlights.sign_group("Normal"))
     end)
 end)

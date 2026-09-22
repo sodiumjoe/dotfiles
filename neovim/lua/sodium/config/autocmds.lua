@@ -28,19 +28,14 @@ utils.augroup("AutoReloadExternalChanges", { clear = true })("FocusGained", {
 local diff_au = utils.augroup("DiffModeHighlights", { clear = true })
 local p = require("sodium.config.colorscheme").palette
 local git = require("sodium.config.colorscheme").spec.git
+local diff_highlights = require("sodium.diff_highlights")
 
 local function set_diff_highlights()
-    vim.api.nvim_set_hl(0, "DiffAdd", { bg = nil })
-    vim.api.nvim_set_hl(0, "DiffChange", { bg = nil })
-    vim.api.nvim_set_hl(0, "DiffDelete", { fg = p.bg2, bg = p.bg2 })
-    vim.api.nvim_set_hl(0, "DiffText", { bg = p.bg2 })
+    diff_highlights.apply_diff_mode(p)
 end
 
 local function restore_diff_highlights()
-    vim.api.nvim_set_hl(0, "DiffAdd", { fg = p.bg1, bg = git.add })
-    vim.api.nvim_set_hl(0, "DiffChange", { fg = p.bg1, bg = git.changed })
-    vim.api.nvim_set_hl(0, "DiffDelete", { fg = p.bg1, bg = git.removed })
-    vim.api.nvim_set_hl(0, "DiffText", { fg = p.bg1, bg = p.yellow })
+    diff_highlights.restore(p, git)
 end
 
 local function update_diff_highlights()
