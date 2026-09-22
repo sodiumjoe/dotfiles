@@ -22,7 +22,7 @@ brew "ripgrep"
 # Editor
 brew "neovim"
 brew "vim"
-brew "tree-sitter"
+brew "tree-sitter-cli"
 brew "editorconfig"
 brew "stylua"
 
