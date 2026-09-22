@@ -15,4 +15,19 @@ describe("options", function()
             assert.is_true(opts["algorithm:patience"])
         end)
     end)
+
+    describe("Neovim 0.12 APIs", function()
+        it("does not use the deprecated buffer option key", function()
+            local root = vim.env.DOTFILES_TEST_ROOT or vim.fn.expand("~/.dotfiles")
+            local files = {
+                "neovim/lua/sodium/config/lsp/formatting.lua",
+                "neovim/lua/sodium/plugins/agentic.lua",
+            }
+
+            for _, file in ipairs(files) do
+                local source = table.concat(vim.fn.readfile(root .. "/" .. file), "\n")
+                assert.is_nil(source:match("[{,]%s*buffer%s*="), file)
+            end
+        end)
+    end)
 end)

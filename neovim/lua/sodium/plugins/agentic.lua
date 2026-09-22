@@ -1085,14 +1085,14 @@ return {
                         return
                     end
                     vim.cmd.normal({ args = { "gF" }, bang = true })
-                end, { buffer = ev.buf, silent = true })
+                end, { buf = ev.buf, silent = true })
 
                 vim.keymap.set("n", "<CR>", function()
                     if open_path_reference() then
                         return
                     end
                     vim.cmd.normal({ args = { "+" }, bang = true })
-                end, { buffer = ev.buf, silent = true })
+                end, { buf = ev.buf, silent = true })
             end,
         })
     end,

@@ -30,10 +30,10 @@ function M.setup_format_on_save(client, bufnr)
         return
     end
 
-    vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buffer = bufnr })
+    vim.api.nvim_clear_autocmds({ group = autoformat_augroup, buf = bufnr })
     vim.api.nvim_create_autocmd("BufWritePre", {
         group = autoformat_augroup,
-        buffer = bufnr,
+        buf = bufnr,
         callback = function()
             vim.bo[bufnr].endofline = true
             vim.bo[bufnr].fixendofline = true
@@ -60,7 +60,7 @@ function M.setup_format_on_save(client, bufnr)
     end
     vim.api.nvim_create_autocmd("BufWritePost", {
         group = autoformat_augroup,
-        buffer = bufnr,
+        buf = bufnr,
         callback = function()
             if vim.b[bufnr].formatting then return end
             local fmt_client = get_format_client(bufnr)
