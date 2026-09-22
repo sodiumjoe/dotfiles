@@ -36,3 +36,4 @@ Brewfile
 Brewfile.lock.json
 claude/settings.json
 codex/config.toml
+.worktrees/
