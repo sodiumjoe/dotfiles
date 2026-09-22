@@ -1,4 +1,8 @@
 describe("options", function()
+    it("disables ShaDa in Plenary workers", function()
+        assert.are.equal("NONE", vim.o.shadafile)
+    end)
+
     describe("diffopt", function()
         it("keeps modern diff alignment options for readable review diffs", function()
             local opts = {}
