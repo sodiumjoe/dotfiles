@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test:unit": "npm run build && node --test --test-concurrency=1 dist/test/contracts.test.js dist/test/private-state.test.js dist/test/paths.test.js dist/test/reconcile.test.js"
+    "test:unit": "npm run build && node --test --test-concurrency=1 dist/test/contracts.test.js dist/test/private-state.test.js dist/test/paths.test.js dist/test/reconcile.test.js dist/test/singleton.test.js"
   },
   "devDependencies": {
     "@types/node": "24.10.0",
