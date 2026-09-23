@@ -1,0 +1,16 @@
+{
+  "name": "@moon/agency",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test:unit": "npm run build && node --test --test-concurrency=1 dist/test/contracts.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "typescript": "7.0.2"
+  }
+}
