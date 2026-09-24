@@ -154,3 +154,4 @@ echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
 
 python3 test-home-reconcile.py
+python3 test-bootstrap.py

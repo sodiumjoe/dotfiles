@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import pathlib
 import sys
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--preflight", action="store_true")
+parser.add_argument("--generated-root", type=pathlib.Path)
+arguments = parser.parse_args()
+if arguments.generated_root is not None and not arguments.preflight:
+    parser.error("--generated-root requires --preflight")
 
 home = pathlib.Path(os.environ["HOME"]).resolve()
 script = pathlib.Path(__file__).resolve()
@@ -22,6 +30,15 @@ optional_environments = {
 if not source_root.is_dir():
     print(f"dotfiles-reconcile: home tree is missing: {source_root}", file=sys.stderr)
     raise SystemExit(1)
+
+generated_paths = {
+    pathlib.Path(".claude/CLAUDE.md"),
+    pathlib.Path(".claude/settings.json"),
+    pathlib.Path(".codex/AGENTS.md"),
+    pathlib.Path(".codex/config.toml"),
+}
+if arguments.generated_root is not None and not arguments.generated_root.is_dir():
+    parser.error(f"generated tree is missing: {arguments.generated_root}")
 
 
 def inside_repo(path):
@@ -43,10 +60,20 @@ optional_destinations = [
     if environment not in enabled
 ]
 errors = []
-for source in sorted(source_root.rglob("*")):
-    if not source.is_symlink() and not source.is_file():
-        continue
-    destination = home / source.relative_to(source_root)
+sources = {
+    source.relative_to(source_root): source
+    for source in source_root.rglob("*")
+    if source.is_symlink() or source.is_file()
+}
+if arguments.generated_root is not None:
+    for relative in generated_paths:
+        sources.pop(relative, None)
+        generated = arguments.generated_root / relative
+        if generated.is_symlink() or generated.is_file():
+            sources[relative] = generated
+
+for relative, source in sorted(sources.items()):
+    destination = home / relative
     if source.is_symlink():
         resolved = source.resolve(strict=False)
         if not resolved.exists() or not inside_repo(resolved):
@@ -54,8 +81,7 @@ for source in sorted(source_root.rglob("*")):
             continue
         target_source = resolved
     else:
-        target_source = source
-    relative = source.relative_to(source_root)
+        target_source = source_root / relative
     enabled = optional_environments.get(relative)
     if enabled is not None and environment not in enabled:
         continue
@@ -94,6 +120,10 @@ if errors:
     for error in errors:
         print(f"dotfiles-reconcile: {error}", file=sys.stderr)
     raise SystemExit(1)
+
+if arguments.preflight:
+    print("dotfiles-reconcile: preflight passed")
+    raise SystemExit(0)
 
 changed = 0
 for parent in sorted(required_parents, key=lambda path: len(path.parts)):

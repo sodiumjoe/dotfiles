@@ -23,10 +23,10 @@ class ReconcileTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root)
 
-    def run_reconcile(self, home=None, check=True):
+    def run_reconcile(self, home=None, check=True, arguments=()):
         home = home or self.owner
         result = subprocess.run(
-            [str(self.runner)],
+            [str(self.runner), *arguments],
             env={
                 **os.environ,
                 "HOME": str(home),
@@ -124,6 +124,52 @@ class ReconcileTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(conflict.read_text(), "keep")
         self.assertFalse((self.owner / ".gitconfig").exists())
+
+    def test_preflight_checks_new_generated_destinations(self):
+        self.write(".zshenv")
+        generated = self.root / "generated"
+        (generated / ".claude").mkdir(parents=True)
+        (generated / ".claude/settings.json").write_text("{}")
+        (self.owner / ".claude").mkdir()
+        conflict = self.owner / ".claude/settings.json"
+        conflict.write_text("unmanaged")
+        result = self.run_reconcile(
+            arguments=["--preflight", "--generated-root", str(generated)],
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("destination conflict", result.stderr)
+        self.assertEqual(conflict.read_text(), "unmanaged")
+        self.assertFalse((self.owner / ".zshenv").exists())
+        self.assertFalse((self.home_tree / ".claude/settings.json").exists())
+
+    def test_preflight_is_read_only_and_ignores_generated_brewfile(self):
+        self.write(".zshenv")
+        generated = self.root / "generated"
+        (generated / ".claude").mkdir(parents=True)
+        (generated / ".claude/settings.json").write_text("{}")
+        (generated / "Brewfile").write_text("generated packages")
+        (self.owner / "Brewfile").write_text("unmanaged packages")
+        result = self.run_reconcile(
+            arguments=["--preflight", "--generated-root", str(generated)],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.owner / ".zshenv").exists())
+        self.assertFalse((self.owner / ".claude").exists())
+        self.assertFalse((self.owner / ".codex").exists())
+        self.assertEqual((self.owner / "Brewfile").read_text(), "unmanaged packages")
+
+    def test_generated_staging_requires_read_only_preflight(self):
+        self.write(".zshenv")
+        generated = self.root / "generated"
+        generated.mkdir()
+        result = self.run_reconcile(
+            arguments=["--generated-root", str(generated)],
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--preflight", result.stderr)
+        self.assertFalse((self.owner / ".zshenv").exists())
 
     def test_unresolved_source_alias_fails_before_mutation(self):
         self.write(".zshenv")

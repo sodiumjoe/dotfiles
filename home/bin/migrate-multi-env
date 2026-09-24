@@ -41,9 +41,16 @@ backup_if_dirty() {
 }
 
 echo "Backing up modified tracked files..."
-backup_if_dirty home/.claude/settings.json
-backup_if_dirty home/.codex/config.toml
-backup_if_dirty Brewfile
+mutable_files=(
+  claude/settings.json
+  codex/config.toml
+  home/.claude/settings.json
+  home/.codex/config.toml
+  Brewfile
+)
+for file in "${mutable_files[@]}"; do
+  backup_if_dirty "$file"
+done
 
 if [ "$backed_up" = true ]; then
   echo "  Backups in $backup_dir"
@@ -77,7 +84,7 @@ echo "Resetting modified tracked files..."
 # One pathspec at a time: `git checkout -- a b` restores nothing at all if any
 # of the paths is untracked, which silently leaves the tree dirty and makes the
 # pull below fail. HEAD (not the index) so staged changes are reset too.
-for f in home/.claude/settings.json home/.codex/config.toml Brewfile; do
+for f in "${mutable_files[@]}"; do
   git checkout HEAD -- "$f" 2>/dev/null || true
 done
 
@@ -99,11 +106,18 @@ if [ "$backed_up" = true ]; then
   echo "Your old configs were backed up to $backup_dir."
   echo "To check for runtime changes worth promoting:"
   echo ""
-  if [ -f "$backup_dir/home_.claude_settings.json" ]; then
-    echo "  diff <(jq --sort-keys . \"$backup_dir/home_.claude_settings.json\") <(jq --sort-keys . home/.claude/settings.json)"
-  fi
-  if [ -f "$backup_dir/home_.codex_config.toml" ]; then
-    echo "  diff \"$backup_dir/home_.codex_config.toml\" home/.codex/config.toml"
+  for saved in claude_settings.json home_.claude_settings.json; do
+    if [ -f "$backup_dir/$saved" ]; then
+      echo "  diff <(jq --sort-keys . \"$backup_dir/$saved\") <(jq --sort-keys . home/.claude/settings.json)"
+    fi
+  done
+  for saved in codex_config.toml home_.codex_config.toml; do
+    if [ -f "$backup_dir/$saved" ] && [ -f home/.codex/config.toml ]; then
+      echo "  diff \"$backup_dir/$saved\" home/.codex/config.toml"
+    fi
+  done
+  if [ -f "$backup_dir/Brewfile" ] && [ -f Brewfile ]; then
+    echo "  diff \"$backup_dir/Brewfile\" Brewfile"
   fi
   echo ""
   echo "Promote anything important into the source files (settings.base.json,"

@@ -62,15 +62,44 @@ case "$DOTFILES_ENV" in
   *) echo "bootstrap.sh: invalid environment '$DOTFILES_ENV' (expected work, devbox, or home)" >&2; exit 1 ;;
 esac
 
-echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
-echo "Using DOTFILES_ENV=$DOTFILES_ENV (wrote ~/.dotfiles-env)"
-
 export DOTFILES_ENV
 
 # --- Generate configs ---
 
-home/bin/dotfiles-generate
+staging_dir=$(mktemp -d)
+trap 'rm -rf "$staging_dir"' EXIT
+generated_root="$staging_dir/generated"
+mkdir -p "$generated_root/.claude" "$generated_root/.codex"
+
+for relative in .claude/settings.json .codex/config.toml; do
+  if [ -f "home/$relative" ]; then
+    cp "home/$relative" "$generated_root/$relative"
+  fi
+done
+
+home/bin/dotfiles-generate --out "$generated_root"
+home/bin/dotfiles-reconcile --preflight --generated-root "$generated_root"
+
+for relative in .claude/CLAUDE.md .claude/settings.json .codex/AGENTS.md .codex/config.toml; do
+  if [ -f "$generated_root/$relative" ]; then
+    case "$relative" in
+      .claude/settings.json|.codex/config.toml)
+        [ ! -f "home/$relative" ] || continue
+        ;;
+    esac
+    mkdir -p "home/${relative%/*}"
+    cp "$generated_root/$relative" "home/$relative"
+  else
+    rm -f "home/$relative"
+  fi
+done
+if [ -f "$generated_root/Brewfile" ]; then
+  cp "$generated_root/Brewfile" Brewfile
+fi
+
 home/bin/dotfiles-reconcile
+echo "DOTFILES_ENV=$DOTFILES_ENV" > ~/.dotfiles-env
+echo "Using DOTFILES_ENV=$DOTFILES_ENV (wrote ~/.dotfiles-env)"
 
 # --- Git hooks ---
 

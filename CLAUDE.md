@@ -8,7 +8,7 @@ When referring to local files, use plain repo-relative `path:line` references, e
 
 ## Neovim Architecture and Testing
 
-Both are documented in `shared/neovim.md`, which is concatenated into the generated global `claude/CLAUDE.md` and therefore already loaded in every session. Edit that file, not this one.
+Both are documented in `shared/neovim.md`, which is concatenated into the generated global `home/.claude/CLAUDE.md` and therefore already loaded in every session. Edit that file, not this one.
 
 ## Committing Changes
 
