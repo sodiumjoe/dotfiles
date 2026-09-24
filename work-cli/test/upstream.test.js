@@ -229,7 +229,7 @@ describe("checkUpstream", () => {
 
 describe("tick upstream drift integration", { concurrency: 1 }, () => {
   let tmpDir, origVault, origXdg, origConfig;
-  const workBin = path.join(__dirname, "..", "bin", "work");
+  const workBin = path.join(__dirname, "..", "..", "home", "bin", "work");
   const { execFileSync } = require("node:child_process");
 
   function setup() {
@@ -287,7 +287,9 @@ describe("tick upstream drift integration", { concurrency: 1 }, () => {
       projectPath(),
       "---\nstatus: evergreen\n---\n\n# Work\n\n## Tasks\n\n## Changelog\n",
     );
-    const output = runTick();
+    const output = runTick({
+      WORK_SKILLS_DIR: path.join(tmpDir, "no-skills"),
+    });
     assert.ok(
       output.includes("all skills up to date"),
       `expected "all skills up to date" in: ${output}`,

@@ -9,7 +9,7 @@ describe("archive-flow", { concurrency: 1 }, () => {
   let tmpDir;
   let origVault;
   let origXdg;
-  const workBin = path.join(__dirname, "..", "bin", "work");
+  const workBin = path.join(__dirname, "..", "..", "home", "bin", "work");
 
   function setup() {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "archive-flow-"));

@@ -10,7 +10,7 @@ Codex CLI operates primarily through shell commands. There are no dedicated file
 
 ## Skill Invocation
 
-Skills are discovered from `.codex/skills/<name>/SKILL.md`. Invoke them by name when the task matches the skill description.
+Skills are discovered from `home/.agents/skills/<name>/SKILL.md`. Invoke them by name when the task matches the skill description.
 
 Available work skills:
 - `brainstorming` — start new work (brainstorm + create project)
@@ -30,11 +30,10 @@ The following Claude Code features are not available in Codex:
 
 ### work-cli
 
-Binary: `~/.dotfiles/work-cli/bin/work`
+Binary: `~/bin/work`
 
-Access: `~/bin/work` symlink.
+### Deployed agent files
 
-### codex/ directory
-
-- `codex/AGENTS.md` — generated from shared base + codex overlay (do not edit directly)
-- `codex/config.toml` — model, sandbox, MCP servers, approval policy
+- `home/.codex/AGENTS.md` — generated from shared base + codex overlay (do not edit directly)
+- `home/.codex/config.toml` — model, sandbox, MCP servers, approval policy
+- `home/.agents/skills/` — canonical shared skills

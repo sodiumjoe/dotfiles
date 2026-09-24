@@ -6,8 +6,8 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DOTFILES_ROOT = path.resolve(__dirname, "..", "..");
-const COMMANDS_DIR = path.join(DOTFILES_ROOT, "claude", "commands");
-const SKILLS_DIR = path.join(DOTFILES_ROOT, "skills");
+const COMMANDS_DIR = path.join(DOTFILES_ROOT, "home", ".claude", "commands");
+const SKILLS_DIR = path.join(DOTFILES_ROOT, "home", ".agents", "skills");
 const PLUGIN_CACHE = path.join(
   os.homedir(),
   ".claude",
@@ -42,6 +42,34 @@ function supportHashes(frontmatter) {
     }
   }
   return hashes;
+}
+
+function compareVersions(left, right) {
+  const pattern = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?$/;
+  const leftMatch = left.match(pattern);
+  const rightMatch = right.match(pattern);
+  if (!leftMatch || !rightMatch) {
+    return left.localeCompare(right, undefined, { numeric: true });
+  }
+  for (let index = 1; index <= 3; index++) {
+    const difference = Number(leftMatch[index] || 0) - Number(rightMatch[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  if (!leftMatch[4] && rightMatch[4]) return 1;
+  if (leftMatch[4] && !rightMatch[4]) return -1;
+  return (leftMatch[4] || "").localeCompare(rightMatch[4] || "", undefined, {
+    numeric: true,
+  });
+}
+
+function newestInstalledVersion(pluginDir) {
+  if (!fs.existsSync(pluginDir)) return null;
+  const versions = fs
+    .readdirSync(pluginDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort(compareVersions);
+  return versions.at(-1) || null;
 }
 
 describe("commands", () => {
@@ -91,7 +119,7 @@ describe("commands", () => {
       assert.equal(
         commandBody,
         skillBody,
-        `${file} body differs from skills/${slug}/SKILL.md — these should be kept in sync`,
+        `${file} body differs from home/.agents/skills/${slug}/SKILL.md — these should be kept in sync`,
       );
     }
   });
@@ -119,14 +147,13 @@ describe("forked skills", () => {
     describe(dir.name, () => {
       it("upstream content_hash matches installed plugin", () => {
         const plugin = pluginMatch[1].trim();
-        const [pluginName, registry] = plugin.split("@");
+        const [pluginName] = plugin.split("@");
         const pluginDir = path.join(PLUGIN_CACHE, pluginName);
-        if (!fs.existsSync(pluginDir)) return;
-        const versions = fs.readdirSync(pluginDir).sort();
-        if (versions.length === 0) return;
+        const version = newestInstalledVersion(pluginDir);
+        if (!version) return;
         const upstreamPath = path.join(
           pluginDir,
-          versions[versions.length - 1],
+          version,
           "skills",
           skillMatch[1].trim(),
           "SKILL.md",
@@ -139,7 +166,7 @@ describe("forked skills", () => {
         assert.equal(
           hash,
           hashMatch[1].trim(),
-          `upstream ${plugin}:${skillMatch[1].trim()} has changed — ` +
+          `upstream ${plugin}:${skillMatch[1].trim()} has changed in ${version} — ` +
             `run \`work check-upstream --diff\` to review`,
         );
       });
@@ -150,22 +177,21 @@ describe("forked skills", () => {
         const plugin = pluginMatch[1].trim();
         const [pluginName] = plugin.split("@");
         const pluginDir = path.join(PLUGIN_CACHE, pluginName);
-        if (!fs.existsSync(pluginDir)) return;
-        const versions = fs.readdirSync(pluginDir).sort();
-        if (versions.length === 0) return;
+        const version = newestInstalledVersion(pluginDir);
+        if (!version) return;
+        const upstreamDir = path.join(
+          pluginDir,
+          version,
+          "skills",
+          skillMatch[1].trim(),
+        );
         for (const item of support) {
           const localPath = path.join(SKILLS_DIR, dir.name, item.file);
           assert.ok(
             fs.existsSync(localPath),
             `${dir.name} tracks missing support file ${item.file}`,
           );
-          const upstreamPath = path.join(
-            pluginDir,
-            versions[versions.length - 1],
-            "skills",
-            skillMatch[1].trim(),
-            item.file,
-          );
+          const upstreamPath = path.join(upstreamDir, item.file);
           assert.ok(
             fs.existsSync(upstreamPath),
             `upstream support file missing: ${item.file}`,

@@ -34,16 +34,15 @@ Similarly, use `nvim-diff` for diff/compare requests and `nvim-lua` for arbitrar
 
 ### work-cli
 
-Binary: `~/.dotfiles/work-cli/bin/work`
-
-Access: `~/bin/work` symlink.
+Binary: `~/bin/work`
 
 Also referenced by: `.claude/settings.local.json` (permission allowlist), `neovim/lua/sodium/plugins/agentic.lua` (work_bin variable).
 
-### claude/ directory
+### Deployed agent files
 
-- `claude/CLAUDE.md` — generated from shared base + claude overlay (do not edit directly)
-- `claude/settings.json` — permissions, hooks, MCP servers
-- `claude/agents/` — plan-reviewer, code-reviewer
-- `claude/commands/` — note, name, archive-plans, etc.
-- `claude/hooks/` — notify-on-stop.sh, session-project.sh
+- `home/.claude/CLAUDE.md` — generated from shared base + claude overlay (do not edit directly)
+- `home/.claude/settings.json` — permissions, hooks, MCP servers
+- `home/.claude/agents/` — plan-reviewer, code-reviewer
+- `home/.claude/commands/` — note, name, archive-plans, etc.
+- `home/.claude/hooks/` — notify-on-stop.sh, session-project.sh
+- `home/.agents/skills/` — canonical shared skills

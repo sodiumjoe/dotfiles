@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Sync Homebrew packages to match the generated Brewfile.
+# Uses --no-upgrade to avoid unintended version bumps.
+# Intentional upgrades should go through home/bin/upgrade.
+
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "brew-sync: skipping (not macOS)"
+  exit 0
+fi
+
+repo_root="${DOTFILES_DIR:-$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)}"
+cd "$repo_root"
+
+# Regenerate Brewfile in case sources changed
+home/bin/dotfiles-generate
+
+echo "Installing missing packages (--no-upgrade)..."
+brew bundle --file=Brewfile --no-upgrade
+
+echo "Done."
+echo "To see orphaned packages: brew bundle cleanup --file=Brewfile"
+echo "To upgrade specific packages: upgrade <formula>"

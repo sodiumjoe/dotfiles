@@ -2,12 +2,8 @@
 set -euo pipefail
 
 # Everything below is repo-root-relative. Safe to resolve via $0 because
-# bootstrap.sh, unlike bin/*, is never invoked through a symlink.
+# bootstrap.sh, unlike home/bin/*, is never invoked through a symlink.
 cd "$(dirname "$0")"
-
-shopt -s nullglob
-
-mkdir -p ${XDG_CONFIG_HOME:=$HOME/.config}
 
 # --- Environment detection ---
 #
@@ -73,122 +69,8 @@ export DOTFILES_ENV
 
 # --- Generate configs ---
 
-bin/dotfiles-generate
-
-# --- Symlink helper ---
-#
-# Guards against ~/.claude being a symlink into this repo, where a bare
-# `ln -sf` would destroy the source file. See bin/dotfiles-link.
-
-link() {
-  bin/dotfiles-link "$@"
-}
-
-# --- Symlink dotfiles ---
-
-files=(\
-  "curlrc"\
-  "cvimrc"\
-  "gitconfig"\
-  "ignore"\
-  "inputrc"\
-  "zshenv"\
-  )
-
-for file in ${files[@]}; do
-  dest=${HOME}/.${file}
-  if [ -L ${dest} ]; then
-    echo "${dest} symlink already exists, skipping"
-  elif [ -f ${dest} ]; then
-    echo "${dest} is a file, skipping"
-  else
-    ln -s ~/.dotfiles/${file} ${dest}
-  fi
-done
-
-xdg_files=(\
-  "alacritty"\
-  "efm-langserver"\
-  "ghostty"\
-  "hammerspoon"\
-  "karabiner"\
-  "rg"\
-  "tmux"\
-  "vivid"\
-  "work"\
-  "zsh"\
-  )
-
-for file in ${xdg_files[@]}; do
-  dest=${XDG_CONFIG_HOME}/${file}
-  if [ -L ${dest} ]; then
-    echo "${dest} symlink already exists, skipping"
-    continue
-  elif [ -f ${dest} ]; then
-    echo "${dest} is a file, skipping"
-  elif [ -d ${dest} ]; then
-    echo "${dest} is a dir, skipping"
-  else
-    ln -s ~/.dotfiles/${file} $dest
-  fi
-done
-
-if [ ! -L ~/.tmux.conf ]; then
-  ln -s ~/.dotfiles/tmux/tmux.conf ~/.tmux.conf
-fi
-
-mkdir -p ~/.claude
-link ~/.dotfiles/claude/CLAUDE.md ~/.claude/CLAUDE.md
-link ~/.dotfiles/claude/settings.json ~/.claude/settings.json
-
-mkdir -p ~/.claude/hooks
-for hook in ~/.dotfiles/claude/hooks/*; do
-  link "$hook" ~/.claude/hooks/$(basename "$hook")
-done
-
-mkdir -p ~/.claude/skills
-for skill in ~/.dotfiles/skills/*/; do
-  link "$skill" ~/.claude/skills/$(basename "$skill")
-done
-
-mkdir -p ~/.claude/agents ~/.claude/commands
-for agent in ~/.dotfiles/claude/agents/*; do
-  link "$agent" ~/.claude/agents/$(basename "$agent")
-done
-for cmd in ~/.dotfiles/claude/commands/*; do
-  link "$cmd" ~/.claude/commands/$(basename "$cmd")
-done
-
-# --- Work + devbox symlinks (Codex, work-cli) ---
-
-if [ "$DOTFILES_ENV" = "work" ] || [ "$DOTFILES_ENV" = "devbox" ]; then
-  mkdir -p ~/.codex ~/.codex/skills
-  link ~/.dotfiles/codex/config.toml ~/.codex/config.toml
-  link ~/.dotfiles/codex/AGENTS.md ~/.codex/AGENTS.md
-
-  for skill in ~/.dotfiles/skills/*/; do
-    link "$skill" ~/.codex/skills/$(basename "$skill")
-  done
-
-  mkdir -p ~/bin
-  link ~/.dotfiles/work-cli/bin/work ~/bin/work
-fi
-
-# --- Universal bin symlinks ---
-
-mkdir -p ~/bin
-for script in ~/.dotfiles/bin/*; do
-  link "$script" ~/bin/$(basename "$script")
-done
-
-# --- Neovim ---
-
-mkdir -p ${XDG_CONFIG_HOME}/nvim
-if [ -L ${XDG_CONFIG_HOME}/nvim/init.lua ]; then
-  echo "init.lua symlink already exists, skipping"
-else
-  ln -s ~/.dotfiles/init.lua ${XDG_CONFIG_HOME}/nvim/init.lua
-fi
+home/bin/dotfiles-generate
+home/bin/dotfiles-reconcile
 
 # --- Git hooks ---
 

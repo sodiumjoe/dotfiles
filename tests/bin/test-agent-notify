@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pass=0
+fail=0
+errors=()
+
+record_fail() {
+  ((++fail))
+  errors+=("$1")
+}
+
+assert_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected to contain: '$needle'\n  in: '$haystack'"
+  fi
+}
+
+assert_eq() {
+  local label="$1" expected="$2" actual="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected: '$expected'\n  actual: '$actual'"
+  fi
+}
+
+assert_empty() {
+  local label="$1" actual="$2"
+  if [[ -z "$actual" ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected empty output\n  actual: '$actual'"
+  fi
+}
+
+assert_not_contains() {
+  local label="$1" needle="$2" haystack="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    ((++pass))
+  else
+    record_fail "FAIL: $label\n  expected not to contain: '$needle'\n  in: '$haystack'"
+  fi
+}
+
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+STOP_NOTIFY="$ROOT/home/.claude/hooks/notify-on-stop.sh"
+IDLE_NOTIFY="$ROOT/home/.claude/hooks/notify-on-idle.sh"
+BELL="$ROOT/home/bin/tmux-notify-bell"
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+base_path="$PATH"
+
+mkdir -p "$tmpdir/bin"
+export OSASCRIPT_LOG="$tmpdir/osascript.log"
+export TMUX_LOG="$tmpdir/tmux.log"
+export TMUX_NOTIFY_FILE="$tmpdir/tmux-notify"
+export BOX_TYPE_FILE="$tmpdir/box-type"
+
+cat > "$tmpdir/bin/osascript" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$OSASCRIPT_LOG"
+EOF
+
+cat > "$tmpdir/bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--show-toplevel" ]]; then
+  printf '/tmp/dotfiles\n'
+  exit 0
+fi
+exit 1
+EOF
+
+cat > "$tmpdir/bin/tmux" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${TMUX_LOG:?}"
+case "${1:-}" in
+  set)
+    if [[ "${2:-}" == "-g" && "${3:-}" == "@notify_bell" ]]; then
+      printf '%s\n' "${4:-1}" > "${TMUX_NOTIFY_FILE:?}"
+      exit 0
+    fi
+    if [[ "${2:-}" == "-gu" && "${3:-}" == "@notify_bell" ]]; then
+      rm -f "${TMUX_NOTIFY_FILE:?}"
+      exit 0
+    fi
+    ;;
+  display-message)
+    case "${@: -1}" in
+      '#{window_active}')
+        printf '%s\n' "${TMUX_WINDOW_ACTIVE:-0}"
+        exit 0
+        ;;
+      '#{pane_active}')
+        printf '%s\n' "${TMUX_PANE_ACTIVE:-0}"
+        exit 0
+        ;;
+    esac
+    ;;
+  show-environment)
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+
+set_fast_sleep() {
+  cat > "$tmpdir/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$tmpdir/bin/sleep"
+}
+
+set_lingering_sleep() {
+  cat > "$tmpdir/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+/bin/sleep 10
+EOF
+  chmod +x "$tmpdir/bin/sleep"
+}
+
+cleanup_notify_pid() {
+  local pid
+  if [[ -f /tmp/claude-notify-42.pid ]]; then
+    pid=$(cat /tmp/claude-notify-42.pid 2>/dev/null || true)
+    if [[ -n "$pid" ]]; then
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f /tmp/claude-notify-42.pid
+  fi
+}
+
+reset_test_env() {
+  cleanup_notify_pid
+  rm -f "$OSASCRIPT_LOG" "$TMUX_LOG" "$TMUX_NOTIFY_FILE" "$BOX_TYPE_FILE"
+  export PATH="$tmpdir/bin:$base_path"
+  export TMUX_PANE="%42"
+  export TMUX_WINDOW_ACTIVE=0
+  export TMUX_PANE_ACTIVE=0
+}
+
+read_log() {
+  local path="$1"
+  if [[ -f "$path" ]]; then
+    cat "$path"
+  fi
+}
+
+chmod +x "$tmpdir/bin/osascript" "$tmpdir/bin/git" "$tmpdir/bin/tmux"
+
+run_notify() {
+  reset_test_env
+  set_fast_sleep
+  if [[ $# -gt 0 ]]; then
+    export NOTIFY_AGENT_NAME="$1"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  "$STOP_NOTIFY"
+  for _ in {1..100}; do
+    if [[ -f "$OSASCRIPT_LOG" ]]; then
+      break
+    fi
+    /bin/sleep 0.01
+  done
+  read_log "$OSASCRIPT_LOG"
+}
+
+run_idle_notify() {
+  reset_test_env
+  if [[ $# -gt 0 ]]; then
+    export NOTIFY_AGENT_NAME="$1"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  "$IDLE_NOTIFY"
+  read_log "$OSASCRIPT_LOG"
+}
+
+run_notify_devbox() {
+  reset_test_env
+  set_fast_sleep
+  : > "$BOX_TYPE_FILE"
+  export TMUX_WINDOW_ACTIVE=1
+  export TMUX_PANE_ACTIVE=1
+  unset NOTIFY_AGENT_NAME
+  "$STOP_NOTIFY"
+  for _ in {1..100}; do
+    if [[ -f "$TMUX_NOTIFY_FILE" ]]; then
+      break
+    fi
+    /bin/sleep 0.01
+  done
+}
+
+run_bell() {
+  reset_test_env
+  if [[ $# -gt 0 ]]; then
+    export NOTIFY_AGENT_NAME="$1"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  "$BELL" "$(printf '\342\200\213󰌗 [test]devbox')"
+  read_log "$OSASCRIPT_LOG"
+}
+
+run_bell_with_pane() {
+  local pane="$1" title="$2"
+  local window_active="${TMUX_WINDOW_ACTIVE:-0}"
+  local pane_active="${TMUX_PANE_ACTIVE:-0}"
+  reset_test_env
+  export TMUX_WINDOW_ACTIVE="$window_active"
+  export TMUX_PANE_ACTIVE="$pane_active"
+  if [[ $# -gt 2 ]]; then
+    export NOTIFY_AGENT_NAME="$3"
+  else
+    unset NOTIFY_AGENT_NAME
+  fi
+  "$BELL" "$pane" "$title"
+  read_log "$OSASCRIPT_LOG"
+}
+
+assert_notify_closes_promptly() {
+  local output
+  reset_test_env
+  set_lingering_sleep
+  export NOTIFY="$STOP_NOTIFY"
+  if output=$(node 2>&1 <<'EOF'
+const { spawn } = require('child_process');
+
+const child = spawn(process.env.NOTIFY, [], {
+  env: process.env,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+
+let closed = false;
+child.on('close', (code, signal) => {
+  closed = true;
+  if (code !== 0 || signal !== null) {
+    console.error(JSON.stringify({ event: 'close', code, signal }));
+    process.exit(1);
+  }
+  process.exit(0);
+});
+
+setTimeout(() => {
+  if (closed) {
+    return;
+  }
+  console.error(JSON.stringify({ event: 'timeout' }));
+  child.kill('SIGKILL');
+  process.exit(1);
+}, 1500);
+EOF
+  ); then
+    ((++pass))
+  else
+    record_fail "FAIL: notify process closes promptly\n  output: '$output'"
+  fi
+}
+
+out=$(run_notify)
+assert_contains "notify default message includes local origin" 'Agent is waiting for input on local (dotfiles)' "$out"
+assert_contains "notify default title is generic" 'with title "Agent"' "$out"
+
+out=$(run_notify "Codex")
+assert_contains "notify override message includes local origin" 'Codex is waiting for input on local (dotfiles)' "$out"
+assert_contains "notify override title uses agent name" 'with title "Codex"' "$out"
+
+out=$(run_idle_notify)
+assert_contains "idle notify default message includes local origin" 'Claude is waiting for input on local (dotfiles)' "$out"
+assert_eq "idle notify default osascript args include title" '- Claude is waiting for input on local (dotfiles) Claude' "$out"
+
+out=$(run_idle_notify "Agent")
+assert_contains "idle notify override message includes local origin" 'Agent is waiting for input on local (dotfiles)' "$out"
+assert_eq "idle notify override osascript args include title" '- Agent is waiting for input on local (dotfiles) Agent' "$out"
+
+run_notify_devbox
+assert_eq "devbox notify flips bell even when remote pane reports active" "1" "$(read_log "$TMUX_NOTIFY_FILE")"
+assert_empty "devbox notify does not invoke local osascript" "$(read_log "$OSASCRIPT_LOG")"
+
+out=$(run_bell)
+assert_contains "bell default message includes devbox origin" 'Agent is waiting for input on [test]devbox' "$out"
+assert_contains "bell default title is generic" 'with title "Agent"' "$out"
+assert_contains "bell keeps subtitle" 'subtitle "[test]devbox"' "$out"
+
+out=$(run_bell "Codex")
+assert_contains "bell override message includes devbox origin" 'Codex is waiting for input on [test]devbox' "$out"
+assert_contains "bell override title uses agent name" 'with title "Codex"' "$out"
+
+TMUX_WINDOW_ACTIVE=0
+TMUX_PANE_ACTIVE=0
+out=$(run_bell_with_pane "%42" "$(printf '\342\201\243\342\200\213󰌗 [🥙]barrelbreaker2')")
+assert_contains "bell removes combined tmux title tokens from message" 'Agent is waiting for input on [🥙]barrelbreaker2' "$out"
+assert_contains "bell removes combined tmux title tokens from subtitle" 'subtitle "[🥙]barrelbreaker2"' "$out"
+assert_not_contains "notification delivery does not mutate persistent pending state" '@remote_pending' "$(read_log "$TMUX_LOG")"
+
+TMUX_WINDOW_ACTIVE=1
+TMUX_PANE_ACTIVE=1
+out=$(run_bell_with_pane "%42" "$(printf '\342\200\213󰌗 [test]devbox')")
+assert_empty "bell suppresses active pane notifications" "$out"
+
+TMUX_WINDOW_ACTIVE=0
+TMUX_PANE_ACTIVE=0
+out=$(run_bell_with_pane "%42" "$(printf '\342\200\213󰌗 [test]devbox')" "Codex")
+assert_contains "bell notifies inactive panes with origin" 'Codex is waiting for input on [test]devbox' "$out"
+assert_contains "bell includes subtitle for inactive pane" 'subtitle "[test]devbox"' "$out"
+
+assert_notify_closes_promptly
+
+echo ""
+echo "agent-notify tests: $pass passed, $fail failed"
+if [[ $fail -gt 0 ]]; then
+  echo ""
+  for e in "${errors[@]}"; do
+    echo -e "$e"
+  done
+  exit 1
+fi

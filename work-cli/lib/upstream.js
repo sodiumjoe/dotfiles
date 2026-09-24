@@ -2,8 +2,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
+const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const SKILLS_DIR =
-  process.env.WORK_SKILLS_DIR || path.join(__dirname, "..", "..", "skills");
+  process.env.WORK_SKILLS_DIR ||
+  path.join(REPO_ROOT, "home", ".agents", "skills");
 
 const CONFIG_PATH =
   process.env.WORK_UPSTREAM_CONFIG ||

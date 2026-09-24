@@ -23,7 +23,7 @@ done
 
 if [ "$needs_regen" = true ]; then
   echo "Source configs changed, regenerating static files..."
-  bin/dotfiles-generate
+  home/bin/dotfiles-generate
 fi
 
 if printf '%s\n' "$changed" | grep -Eq '^(node-bin/package(-lock)?\.json|node-bin/sync-direct-bins\.mjs)$'; then
@@ -36,9 +36,9 @@ if printf '%s\n' "$changed" | grep -Eq '^(node-bin/package(-lock)?\.json|node-bi
   npm run sync-bins --prefix node-bin || echo "post-merge: node-bin bin sync failed — run 'npm run sync-bins --prefix node-bin' after npm install succeeds" >&2
 fi
 
-# Check for drift in mutable configs (settings.json, config.toml).
+# Check for drift in home/.claude/settings.json and home/.codex/config.toml.
 # Exit 1 means drift; exit 2 means the check could not run.
-bin/dotfiles-diff --quiet
+home/bin/dotfiles-diff --quiet
 case $? in
   1)
     echo ""

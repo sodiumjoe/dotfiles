@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
-const workBin = path.join(__dirname, "..", "bin", "work");
+const workBin = path.join(__dirname, "..", "..", "home", "bin", "work");
 
 describe("code review sessions", { concurrency: 1 }, () => {
   let tmpDir;
@@ -26,8 +26,12 @@ describe("code review sessions", { concurrency: 1 }, () => {
     git(["init", "-b", "main"]);
     git(["config", "user.email", "t@example.com"]);
     git(["config", "user.name", "Test User"]);
+    fs.writeFileSync(
+      path.join(repoDir, ".gitignore"),
+      ".review/\n.nvim-comments.json\n",
+    );
     fs.writeFileSync(path.join(repoDir, "file.txt"), "base\n");
-    git(["add", "file.txt"]);
+    git(["add", ".gitignore", "file.txt"]);
     git(["commit", "-m", "initial"]);
     git(["remote", "add", "origin", originDir]);
     git(["push", "-u", "origin", "main"]);

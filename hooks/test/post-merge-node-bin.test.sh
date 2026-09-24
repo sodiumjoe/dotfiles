@@ -23,21 +23,21 @@ assert_log_contains() {
   fi
 }
 
-mkdir -p "$tmpdir/repo/bin" "$tmpdir/repo/node-bin" "$tmpdir/bin"
+mkdir -p "$tmpdir/repo/home/bin" "$tmpdir/repo/node-bin" "$tmpdir/bin"
 cd "$tmpdir/repo"
 git_init
 
-cat >bin/dotfiles-diff <<'EOF'
+cat >home/bin/dotfiles-diff <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x bin/dotfiles-diff
+chmod +x home/bin/dotfiles-diff
 
-cat >bin/dotfiles-generate <<'EOF'
+cat >home/bin/dotfiles-generate <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x bin/dotfiles-generate
+chmod +x home/bin/dotfiles-generate
 
 cat >"$tmpdir/bin/npm" <<EOF
 #!/usr/bin/env bash

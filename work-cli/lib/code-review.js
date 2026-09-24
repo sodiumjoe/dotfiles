@@ -2,7 +2,16 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
-const NVIM_LUA = path.join(__dirname, "..", "..", "skills", "neovim", "scripts", "nvim-lua");
+const REPO_ROOT = path.resolve(__dirname, "..", "..");
+const NVIM_LUA = path.join(
+  REPO_ROOT,
+  "home",
+  ".agents",
+  "skills",
+  "neovim",
+  "scripts",
+  "nvim-lua",
+);
 
 function git(cwd, args) {
   return execFileSync("git", args, {

@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "comment": "Stripe overlay: scopes this directory to ESM so render-graphs.js (which uses import syntax as of upstream v6.3.0) runs correctly under Node's default CommonJS resolution, without affecting the rest of the marketplace repo."
+}

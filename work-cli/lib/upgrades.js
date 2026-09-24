@@ -1,6 +1,7 @@
 const { execFileSync } = require("node:child_process");
 const path = require("node:path");
 
+const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const DEVBOX_GITHUB = {
   neovim: { repo: "neovim/neovim", tagPrefix: "v" },
   "lua-language-server": { repo: "LuaLS/lua-language-server", tagPrefix: "" },
@@ -34,7 +35,7 @@ function checkNpmOutdated() {
   if (process.env.WORK_SKIP_UPGRADES) {
     return { count: 0, packages: [] };
   }
-  const nodeBinDir = path.join(__dirname, "..", "..", "node-bin");
+  const nodeBinDir = path.join(REPO_ROOT, "node-bin");
   try {
     let raw;
     try {

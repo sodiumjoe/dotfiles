@@ -8,12 +8,13 @@ zsh/.zhistory
 zsh/.zsh_history
 zsh/.zim
 zsh/.zsh_sessions
+karabiner/karabiner.json
 karabiner/assets/*
 karabiner/automatic_backups/*
 karabiner/Icon*
 node-bin/node_modules
 node-bin/bin
-.claude
+/.claude
 claude/CLAUDE.md
 claude/.last-cleanup
 claude/backups/
@@ -36,4 +37,8 @@ Brewfile
 Brewfile.lock.json
 claude/settings.json
 codex/config.toml
+home/.claude/CLAUDE.md
+home/.claude/settings.json
+home/.codex/AGENTS.md
+home/.codex/config.toml
 .worktrees/

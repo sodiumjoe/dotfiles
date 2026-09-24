@@ -9,6 +9,7 @@ set -euo pipefail
 # Code process reads and rewrites.
 
 cd "$(dirname "$0")"
+repo_root=$PWD
 
 pass=0
 fail=0
@@ -31,10 +32,12 @@ for env in work devbox home; do
   echo "=== $env ==="
   out="$tmproot/$env"
   mkdir -p "$out"
-  DOTFILES_ENV=$env bin/dotfiles-generate --reset --out "$out" >/dev/null
+  DOTFILES_ENV=$env home/bin/dotfiles-generate --reset --out "$out" >/dev/null
 
-  settings="$out/claude/settings.json"
-  claude_instructions="$out/claude/CLAUDE.md"
+  settings="$out/.claude/settings.json"
+  claude_instructions="$out/.claude/CLAUDE.md"
+  codex_instructions="$out/.codex/AGENTS.md"
+  codex_config="$out/.codex/config.toml"
 
   # --- claude/settings.json ---
   if ! jq empty "$settings" 2>/dev/null; then
@@ -86,57 +89,65 @@ for env in work devbox home; do
   # --- codex ---
   case "$env" in
     work|devbox)
-      check "AGENTS.md generated" "$([ -f "$out/codex/AGENTS.md" ] && echo ok || echo missing)"
-      check "config.toml generated" "$([ -f "$out/codex/config.toml" ] && echo ok || echo missing)"
+      check "AGENTS.md generated" "$([ -f "$codex_instructions" ] && echo ok || echo missing)"
+      check "config.toml generated" "$([ -f "$codex_config" ] && echo ok || echo missing)"
       check "js-infra-internal Codex plugin enabled" \
-        "$(python3 -c 'import sys, tomllib; print("ok" if tomllib.load(open(sys.argv[1], "rb")).get("plugins", {}).get("js-infra-internal@stripe-internal-marketplace", {}).get("enabled") is True else "missing")' "$out/codex/config.toml")"
+        "$(python3 -c 'import re, sys; text=open(sys.argv[1]).read(); match=re.search(r"\[plugins\.\"js-infra-internal@stripe-internal-marketplace\"\]\n(.*?)(?=\n\[|\Z)", text, re.S); print("ok" if match and re.search(r"^enabled = true$", match.group(1), re.M) else "missing")' "$codex_config")"
       check "Codex instructions constrain Markdown tables" \
-        "$(grep -Fq 'Use Markdown tables only for compact data' "$out/codex/AGENTS.md" && echo ok || echo missing)"
+        "$(grep -Fq 'Use Markdown tables only for compact data' "$codex_instructions" && echo ok || echo missing)"
+      check "Codex config has no provisioning usernames" \
+        "$(grep -Eq '/Users/moon|/home/moon|/home/owner' codex/config.base.toml "$codex_config" && echo found || echo ok)"
+      check "toolshed shims have laptop and devbox paths" \
+        "$(python3 -c 'import re, sys; text=open(sys.argv[1]).read(); blocks=re.findall(r"^\[mcp_servers\.[^]]+\]\n(.*?)(?=\n\[|\Z)", text, re.M | re.S); entries=[block for block in blocks if "toolshed_stdio_shim.sh" in block]; print("ok" if len(entries) == 2 and all(re.search(r"^command = \"sh\"$", block, re.M) and "args = [\"-lc\"" in block and "$HOME/stripe/mint/gocode/.cursor/toolshed_stdio_shim.sh" in block and "/pay/src/gocode/.cursor/toolshed_stdio_shim.sh" in block for block in entries) else f"got {len(entries)} non-portable entries")' "$codex_config")"
       ;;
     home)
-      check "no AGENTS.md on home" "$([ ! -f "$out/codex/AGENTS.md" ] && echo ok || echo exists)"
-      check "no config.toml on home" "$([ ! -f "$out/codex/config.toml" ] && echo ok || echo exists)"
+      check "no AGENTS.md on home" "$([ ! -f "$codex_instructions" ] && echo ok || echo exists)"
+      check "no config.toml on home" "$([ ! -f "$codex_config" ] && echo ok || echo exists)"
       ;;
   esac
 done
 
+source_root="$tmproot/source"
+mkdir -p "$source_root"
+cp -R shared claude codex "$source_root/"
+cp claude-overlay.md codex-overlay.md Brewfile.base Brewfile.work "$source_root/"
+out="$tmproot/regeneration"
+DOTFILES_DIR="$source_root" DOTFILES_ENV=work "$repo_root/home/bin/dotfiles-generate" --reset --out "$out" >/dev/null
+jq '.runtime_mutation = true' "$out/.claude/settings.json" > "$out/.claude/settings.next"
+mv "$out/.claude/settings.next" "$out/.claude/settings.json"
+printf '\n# runtime mutation\n' >> "$out/.codex/config.toml"
+settings_before=$(shasum -a 256 "$out/.claude/settings.json" | awk '{print $1}')
+config_before=$(shasum -a 256 "$out/.codex/config.toml" | awk '{print $1}')
+claude_before=$(shasum -a 256 "$out/.claude/CLAUDE.md" | awk '{print $1}')
+codex_before=$(shasum -a 256 "$out/.codex/AGENTS.md" | awk '{print $1}')
+printf '\nCLAUDE_STATIC_SOURCE_CHANGE\n' >> "$source_root/claude-overlay.md"
+printf '\nCODEX_STATIC_SOURCE_CHANGE\n' >> "$source_root/codex-overlay.md"
+DOTFILES_DIR="$source_root" DOTFILES_ENV=work "$repo_root/home/bin/dotfiles-generate" --out "$out" >/dev/null
+settings_after=$(shasum -a 256 "$out/.claude/settings.json" | awk '{print $1}')
+config_after=$(shasum -a 256 "$out/.codex/config.toml" | awk '{print $1}')
+claude_after=$(shasum -a 256 "$out/.claude/CLAUDE.md" | awk '{print $1}')
+codex_after=$(shasum -a 256 "$out/.codex/AGENTS.md" | awk '{print $1}')
+check "Claude mutable output survives regeneration" "$([ "$settings_before" = "$settings_after" ] && echo ok || echo changed)"
+check "Codex mutable output survives regeneration" "$([ "$config_before" = "$config_after" ] && echo ok || echo changed)"
+check "Claude static output follows source changes" "$([ "$claude_before" != "$claude_after" ] && echo ok || echo unchanged)"
+check "Codex static output follows source changes" "$([ "$codex_before" != "$codex_after" ] && echo ok || echo unchanged)"
+
+out="$tmproot/home-transition"
+DOTFILES_ENV=work home/bin/dotfiles-generate --reset --out "$out" >/dev/null
+printf 'runtime\n' > "$out/.codex/session.json"
+DOTFILES_ENV=home home/bin/dotfiles-generate --out "$out" >/dev/null
+check "home removes generated Codex instructions" "$([ ! -e "$out/.codex/AGENTS.md" ] && echo ok || echo exists)"
+check "home removes generated Codex config" "$([ ! -e "$out/.codex/config.toml" ] && echo ok || echo exists)"
+check "home preserves unrelated Codex runtime files" "$(grep -Fxq runtime "$out/.codex/session.json" && echo ok || echo missing)"
+
 # --- Invalid environment is rejected ---
 
 echo "=== validation ==="
-if DOTFILES_ENV=bogus bin/dotfiles-generate --out "$tmproot/bogus" >/dev/null 2>&1; then
+if DOTFILES_ENV=bogus home/bin/dotfiles-generate --out "$tmproot/bogus" >/dev/null 2>&1; then
   check "invalid DOTFILES_ENV rejected" "exited 0"
 else
   check "invalid DOTFILES_ENV rejected" "ok"
 fi
-
-# --- Link helper ---
-#
-# The dangerous case: dest's parent is a symlink into the repo (as ~/.claude
-# is on some machines), so src and dest are the same file. A regression here
-# destroys real config files on the next bootstrap.
-
-echo "=== dotfiles-link ==="
-linkdir="$tmproot/link"
-mkdir -p "$linkdir/repo" "$linkdir/home"
-echo "content" > "$linkdir/repo/file"
-ln -s "$linkdir/repo" "$linkdir/home/dotdir"
-
-bin/dotfiles-link "$linkdir/repo/file" "$linkdir/home/dotdir/file"
-check "self-link skipped, content preserved" \
-  "$([ ! -L "$linkdir/repo/file" ] && [ "$(cat "$linkdir/repo/file")" = "content" ] && echo ok || echo destroyed)"
-
-bin/dotfiles-link "$linkdir/repo/file" "$linkdir/home/file2"
-check "distinct dest gets working symlink" \
-  "$([ -L "$linkdir/home/file2" ] && [ "$(cat "$linkdir/home/file2")" = "content" ] && echo ok || echo broken)"
-
-bin/dotfiles-link "$linkdir/repo/missing" "$linkdir/home/file3" 2>/dev/null
-check "missing source creates nothing" \
-  "$([ ! -e "$linkdir/home/file3" ] && [ ! -L "$linkdir/home/file3" ] && echo ok || echo "created dangling link")"
-
-echo "replaced" > "$linkdir/repo/other"
-bin/dotfiles-link "$linkdir/repo/other" "$linkdir/home/file2"
-check "existing symlink retargeted" \
-  "$([ "$(cat "$linkdir/home/file2")" = "replaced" ] && echo ok || echo stale)"
 
 echo ""
 echo "$pass passed, $fail failed"

@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+import os
+import pathlib
+import sys
+
+
+home = pathlib.Path(os.environ["HOME"]).resolve()
+script = pathlib.Path(__file__).resolve()
+repo = pathlib.Path(os.environ.get("DOTFILES_DIR", script.parents[2])).resolve()
+source_root = repo / "home"
+environment = os.environ["DOTFILES_ENV"]
+valid_environments = {"work", "devbox", "home"}
+if environment not in valid_environments:
+    print(f"dotfiles-reconcile: invalid DOTFILES_ENV: {environment}", file=sys.stderr)
+    raise SystemExit(2)
+optional_environments = {
+    pathlib.Path(".codex/AGENTS.md"): {"work", "devbox"},
+    pathlib.Path(".codex/config.toml"): {"work", "devbox"},
+    pathlib.Path("bin/work"): {"work", "devbox"},
+}
+
+if not source_root.is_dir():
+    print(f"dotfiles-reconcile: home tree is missing: {source_root}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def inside_repo(path):
+    try:
+        path.resolve(strict=False).relative_to(repo)
+        return True
+    except ValueError:
+        return False
+
+
+def relative_target(source, destination):
+    return os.path.relpath(source, destination.parent)
+
+
+entries = []
+optional_destinations = [
+    home / relative
+    for relative, enabled in optional_environments.items()
+    if environment not in enabled
+]
+errors = []
+for source in sorted(source_root.rglob("*")):
+    if not source.is_symlink() and not source.is_file():
+        continue
+    destination = home / source.relative_to(source_root)
+    if source.is_symlink():
+        resolved = source.resolve(strict=False)
+        if not resolved.exists() or not inside_repo(resolved):
+            errors.append(f"invalid source alias: {source}")
+            continue
+        target_source = resolved
+    else:
+        target_source = source
+    relative = source.relative_to(source_root)
+    enabled = optional_environments.get(relative)
+    if enabled is not None and environment not in enabled:
+        continue
+    entries.append((source, target_source, destination))
+
+required_parents = set()
+for _, _, destination in entries:
+    parent = destination.parent
+    while parent != home:
+        required_parents.add(parent)
+        parent = parent.parent
+required_parents.update({home / ".claude", home / ".codex"})
+
+
+def has_symlink_ancestor(destination):
+    parent = destination.parent
+    while parent != home:
+        if parent.is_symlink():
+            return True
+        parent = parent.parent
+    return False
+
+
+for parent in sorted(required_parents, key=lambda path: len(path.parts)):
+    if not parent.is_symlink() and parent.exists() and not parent.is_dir():
+        errors.append(f"directory conflict: {parent}")
+
+for _, _, destination in entries:
+    if has_symlink_ancestor(destination):
+        continue
+    if destination.is_symlink() or not destination.exists():
+        continue
+    errors.append(f"destination conflict: {destination}")
+
+if errors:
+    for error in errors:
+        print(f"dotfiles-reconcile: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+changed = 0
+for parent in sorted(required_parents, key=lambda path: len(path.parts)):
+    if parent.is_symlink():
+        parent.unlink()
+        changed += 1
+    parent.mkdir(exist_ok=True)
+
+for destination in optional_destinations:
+    if destination.is_symlink() and inside_repo(destination):
+        destination.unlink()
+        changed += 1
+
+for _, target_source, destination in entries:
+    desired = relative_target(target_source, destination)
+    if destination.is_symlink() and os.readlink(destination) == desired:
+        continue
+    if destination.is_symlink():
+        destination.unlink()
+    destination.symlink_to(desired)
+    changed += 1
+
+print(f"dotfiles-reconcile: changed={changed}")

@@ -109,7 +109,7 @@ describe("DEVBOX_GITHUB mapping", () => {
 
 describe("tick upgrade integration", { concurrency: 1 }, () => {
   let tmpDir, origVault, origXdg;
-  const workBin = path.join(__dirname, "..", "bin", "work");
+  const workBin = path.join(__dirname, "..", "..", "home", "bin", "work");
   const { execFileSync } = require("node:child_process");
 
   function setup() {

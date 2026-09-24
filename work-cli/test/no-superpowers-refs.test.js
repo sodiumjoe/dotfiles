@@ -6,8 +6,8 @@ const path = require("node:path");
 const DOTFILES_ROOT = path.resolve(__dirname, "..", "..");
 
 const ALLOWED = new Set([
-  "skills/using-superpowers/SKILL.md",
-  "claude/commands/create-project.md",
+  "home/.agents/skills/using-superpowers/SKILL.md",
+  "home/.claude/commands/create-project.md",
 ]);
 
 function walk(dir) {
@@ -26,9 +26,11 @@ function walk(dir) {
 
 describe("no superpowers references", () => {
   it("skill and command files do not reference superpowers namespace", () => {
-    const dirs = ["skills", "claude/commands", "claude/agents"].map((d) =>
-      path.join(DOTFILES_ROOT, d),
-    );
+    const dirs = [
+      "home/.agents/skills",
+      "home/.claude/commands",
+      "home/.claude/agents",
+    ].map((d) => path.join(DOTFILES_ROOT, d));
     const files = dirs.flatMap((d) => (fs.existsSync(d) ? walk(d) : []));
     const violations = [];
 

@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const LIB = path.join(__dirname, '..', 'lib');
 const { ensure, logSyncEntries, inject, injectReviews } = require(path.join(LIB, 'daily.js'));
 const { fetchReviews, fetchReviewsAsync } = require(path.join(LIB, 'reviews.js'));
@@ -80,7 +81,7 @@ function doErrorDebug(dateStr, errors) {
     const content = fs.readFileSync(workProjectPath, 'utf-8');
     if (/^- \[[ /]\] Fix tick error:/m.test(content)) return;
   }
-  const projectRoot = path.join(__dirname, '..', '..');
+  const projectRoot = REPO_ROOT;
   const prompt = `The work tick command encountered errors on ${dateStr}:
 
 ${errors.map(e => `- ${e}`).join('\n')}
@@ -557,7 +558,7 @@ const commands = {
               if (item.type === 'brew') {
                 log(`upgrading: ${item.name}`);
                 try {
-                  execFileSync(path.join(__dirname, '..', '..', 'bin', 'upgrade'), [item.name], {
+                  execFileSync(path.join(REPO_ROOT, 'home', 'bin', 'upgrade'), [item.name], {
                     encoding: 'utf-8',
                     timeout: 120000,
                     stdio: 'pipe',
@@ -570,7 +571,7 @@ const commands = {
               } else if (item.type === 'npm') {
                 log(`upgrading npm: ${item.name}`);
                 try {
-                  const nodeBinDir = path.join(__dirname, '..', '..', 'node-bin');
+                  const nodeBinDir = path.join(REPO_ROOT, 'node-bin');
                   execFileSync('npm', ['install', `${item.name}@latest`], {
                     cwd: nodeBinDir,
                     encoding: 'utf-8',
