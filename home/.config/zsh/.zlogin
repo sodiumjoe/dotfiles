@@ -4,6 +4,7 @@
 #
 
 # Initialize Zim
-source ${ZIM_HOME}/login_init.zsh -q &!
+if [[ -f "${ZIM_HOME}/login_init.zsh" ]]; then
+  source "${ZIM_HOME}/login_init.zsh" -q &!
+fi
 # }}} End configuration added by Zim install
-

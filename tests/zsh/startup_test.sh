@@ -135,6 +135,33 @@ EOF
   capture_error="$(cat "$error_file")"
 }
 
+run_login_startup() {
+  local fixture="$1"
+  local command="${2:-exit}"
+  local home="$tmpdir/login-$fixture"
+  local bin="$home/bin"
+  local output_file="$tmpdir/login-output-$fixture"
+  local error_file="$tmpdir/login-error-$fixture"
+
+  rm -rf "$home"
+  mkdir -p "$home/.config/zsh/.zim" "$bin"
+  ln -s "$repo_root/home/.zshenv" "$home/.zshenv"
+  ln -s "$repo_root/home/.config/zsh/.zlogin" "$home/.config/zsh/.zlogin"
+
+  if [[ "$fixture" == "present" ]]; then
+    cat >"$home/.config/zsh/.zim/login_init.zsh" <<'EOF'
+print initialized >"$HOME/login-init-ran"
+EOF
+  fi
+
+  set +e
+  HOME="$home" PATH="$bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=dumb TTY=/dev/null zsh -lc "$command" >"$output_file" 2>"$error_file"
+  capture_status=$?
+  set -e
+  capture_output="$(cat "$output_file")"
+  capture_error="$(cat "$error_file")"
+}
+
 echo "=== Test: TERM=dumb startup tolerates later bash completion hooks ==="
 run_startup work dumb
 assert_eq "TERM=dumb startup exits zero" "0" "$capture_status"
@@ -183,6 +210,19 @@ complete -p fake >/dev/null 2>&1
 assert_eq "Linux zshenv leaves global compinit enabled" "skip:" "$capture_output"
 assert_eq "Linux completion registration exits zero" "0" "$capture_status"
 assert_not_contains "Linux completion registration avoids compdef error" "command not found: compdef" "$capture_error"
+
+echo ""
+echo "=== Test: login shell tolerates absent Zim runtime ==="
+run_login_startup missing 'print login-ok'
+assert_eq "login shell exits zero without Zim runtime" "0" "$capture_status"
+assert_eq "login shell runs command without Zim runtime" "login-ok" "$capture_output"
+assert_not_contains "login shell avoids missing Zim runtime warning" "login_init.zsh" "$capture_error"
+
+echo ""
+echo "=== Test: login shell initializes Zim runtime when present ==="
+run_login_startup present 'for _ in {1..100}; do [[ -f "$HOME/login-init-ran" ]] && break; sleep 0.01; done; cat "$HOME/login-init-ran"'
+assert_eq "login shell initializes present Zim runtime" "initialized" "$capture_output"
+assert_eq "login shell with Zim runtime exits zero" "0" "$capture_status"
 
 echo ""
 echo "Results: $pass passed, $fail failed"
