@@ -23,7 +23,7 @@ class ReconcileTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.root)
 
-    def run_reconcile(self, home=None, check=True, arguments=()):
+    def run_reconcile(self, home=None, check=True, arguments=(), environment="work"):
         home = home or self.owner
         result = subprocess.run(
             [str(self.runner), *arguments],
@@ -31,7 +31,7 @@ class ReconcileTest(unittest.TestCase):
                 **os.environ,
                 "HOME": str(home),
                 "DOTFILES_DIR": str(home / ".dotfiles"),
-                "DOTFILES_ENV": "work",
+                "DOTFILES_ENV": environment,
             },
             text=True,
             capture_output=True,
@@ -142,6 +142,45 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(conflict.read_text(), "unmanaged")
         self.assertFalse((self.owner / ".zshenv").exists())
         self.assertFalse((self.home_tree / ".claude/settings.json").exists())
+
+    def test_claude_settings_is_managed_in_work_and_home(self):
+        source = self.write(".claude/settings.json", '{"managed": true}\n')
+        for environment in ["work", "home"]:
+            with self.subTest(environment=environment):
+                self.run_reconcile(environment=environment)
+                destination = self.owner / ".claude/settings.json"
+                self.assertTrue(destination.is_symlink())
+                self.assertEqual(destination.resolve(), source.resolve())
+
+    def test_devbox_preserves_platform_claude_settings(self):
+        self.write(".claude/settings.json", '{"managed": true}\n')
+        hook = self.write(".claude/hooks/managed.sh", "managed\n")
+        claude = self.owner / ".claude"
+        claude.mkdir()
+        settings = claude / "settings.json"
+        settings.write_text('{"platform": true}\n')
+
+        result = self.run_reconcile(environment="devbox")
+
+        self.assertIn("changed=1", result.stdout)
+        self.assertTrue(claude.is_dir())
+        self.assertFalse(claude.is_symlink())
+        self.assertEqual(settings.read_text(), '{"platform": true}\n')
+        self.assertFalse(settings.is_symlink())
+        self.assertEqual((claude / "hooks/managed.sh").resolve(), hook.resolve())
+
+    def test_devbox_transition_prunes_repo_owned_claude_settings_link(self):
+        self.write(".claude/settings.json", '{"managed": true}\n')
+        hook = self.write(".claude/hooks/managed.sh", "managed\n")
+        self.run_reconcile(environment="work")
+        settings = self.owner / ".claude/settings.json"
+        self.assertTrue(settings.is_symlink())
+
+        result = self.run_reconcile(environment="devbox")
+
+        self.assertIn("changed=1", result.stdout)
+        self.assertFalse(settings.exists() or settings.is_symlink())
+        self.assertEqual((self.owner / ".claude/hooks/managed.sh").resolve(), hook.resolve())
 
     def test_preflight_is_read_only_and_ignores_generated_brewfile(self):
         self.write(".zshenv")

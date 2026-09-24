@@ -22,6 +22,7 @@ if environment not in valid_environments:
     print(f"dotfiles-reconcile: invalid DOTFILES_ENV: {environment}", file=sys.stderr)
     raise SystemExit(2)
 optional_environments = {
+    pathlib.Path(".claude/settings.json"): {"work", "home"},
     pathlib.Path(".codex/AGENTS.md"): {"work", "devbox"},
     pathlib.Path(".codex/config.toml"): {"work", "devbox"},
     pathlib.Path("bin/work"): {"work", "devbox"},

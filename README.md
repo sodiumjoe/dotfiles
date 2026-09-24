@@ -71,6 +71,8 @@ Mutable files (generated once on first bootstrap, then hands-off -- tools modify
 - `claude/settings.base.json` + `claude/settings.work|home.json` -> `home/.claude/settings.json` (merged via `claude/settings-merge.jq`)
 - `codex/config.base.toml` -> `home/.codex/config.toml`
 
+The repository deploys `~/.claude/settings.json` only for `work` and `home`. Devbox provisioning owns the live regular file at that path, so reconciliation preserves it while continuing to manage the other children of the real `~/.claude` directory. Switching to `devbox` removes a prior repository-owned settings symlink but does not remove or replace a platform-owned regular file.
+
 `settings-merge.jq` is a generic recursive merge: objects merge key-by-key, arrays concatenate (base first), scalars take the overlay's value. Adding a new array-valued key to the settings needs no change to the filter. Note that arrays concatenating means an overlay can only add hooks and permissions, never remove one the base declares.
 
 Use `dotfiles-generate --reset` to force-regenerate mutable files, and `--out DIR` to generate into a scratch directory without touching the working tree. Scratch output includes `Brewfile` on macOS; bootstrap publishes it at the repository root, never into the deployed home tree.
@@ -95,7 +97,7 @@ The workflow for promoting runtime changes back to source:
 
 ### Conditional Symlinks
 
-Codex instructions, Codex config, and work-cli are only symlinked when `DOTFILES_ENV` is `work` or `devbox`. Skills are deployed under `~/.agents/skills` in every environment, with individual Claude aliases under `~/.claude/skills`. Codex reads the shared skill directory directly.
+Claude settings are symlinked only for `work` and `home`. Codex instructions, Codex config, and work-cli are only symlinked when `DOTFILES_ENV` is `work` or `devbox`. Skills are deployed under `~/.agents/skills` in every environment, with individual Claude aliases under `~/.claude/skills`. Codex reads the shared skill directory directly.
 
 ### Runtime Config
 
@@ -158,7 +160,7 @@ PR review recovery state lives in `.review/session.json`, which is written befor
 ### Claude and Codex
 
 - `home/.claude/CLAUDE.md` -- generated (do not edit directly)
-- `home/.claude/settings.json` -> `~/.claude/settings.json` (permissions, hooks, MCP servers)
+- `home/.claude/settings.json` -> `~/.claude/settings.json` on work and home (permissions, hooks, MCP servers); devbox preserves the platform-owned live file
 - `claude/settings-merge.jq` -- jq filter for merging base + overlay settings
 - `home/.claude/agents/` -- plan-reviewer, code-reviewer (Claude-only)
 - `home/.claude/commands/` -- note, name, archive-plans, etc. (Claude-only)

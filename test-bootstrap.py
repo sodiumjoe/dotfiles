@@ -166,6 +166,21 @@ class BootstrapTest(DeploymentFixture):
         self.assertEqual(runtime.read_text(), '{"unmanaged": true}\n')
         self.assertEqual(self.live_links(), {})
 
+    def test_devbox_preserves_platform_claude_settings(self):
+        runtime = self.owner / ".claude/settings.json"
+        runtime.parent.mkdir()
+        content = '{"platform": true}\n'
+        runtime.write_text(content)
+
+        self.run_bootstrap("devbox")
+
+        self.assertEqual(runtime.read_text(), content)
+        self.assertFalse(runtime.is_symlink())
+        self.assertTrue(runtime.parent.is_dir())
+        self.assertFalse(runtime.parent.is_symlink())
+        self.assertTrue((self.owner / ".claude/CLAUDE.md").is_symlink())
+        self.assertEqual((self.owner / ".dotfiles-env").read_text(), "DOTFILES_ENV=devbox\n")
+
     def assert_successful_transition(self, platform):
         self.environment["DOTFILES_TEST_PLATFORM"] = platform
         self.run_bootstrap("work")
