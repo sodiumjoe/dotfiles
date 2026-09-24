@@ -87,7 +87,7 @@ run_startup() {
   rm -rf "$home"
   mkdir -p "$home/.config/zsh/.zim" "$home/.stripe/shellinit" "$home/.dotfiles/node-bin/bin" "$home/.dotfiles/node-bin/node_modules/.bin" "$home/.fzf/bin" "$home/.nodenv/shims" "$bin"
   ln -s "$repo_root/home/.zshenv" "$home/.zshenv"
-  for config in .zimrc .zshrc home.zsh named_dirs.zsh tmux-pending.zsh work.zsh; do
+  for config in .zimrc .zshrc home.zsh named_dirs.zsh tmux-pending.zsh work.zsh work_sync.zsh; do
     ln -s "$repo_root/home/.config/zsh/$config" "$home/.config/zsh/$config"
   done
   printf ':\n' >"$home/.config/zsh/.zim/init.zsh"
@@ -161,6 +161,26 @@ EOF
   capture_output="$(cat "$output_file")"
   capture_error="$(cat "$error_file")"
 }
+
+run_empty_tty_source() {
+  local home="$tmpdir/home-work-xterm"
+  local bin="$home/bin"
+  local output_file="$tmpdir/empty-tty-output"
+  local error_file="$tmpdir/empty-tty-error"
+
+  run_startup work xterm
+  set +e
+  HOME="$home" PATH="$bin:$home/.dotfiles/node-bin/node_modules/.bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=xterm TTY= zsh -c 'source "$HOME/.config/zsh/.zshrc"' >"$output_file" 2>"$error_file"
+  capture_status=$?
+  set -e
+  capture_output="$(cat "$output_file")"
+  capture_error="$(cat "$error_file")"
+}
+
+echo "=== Test: noninteractive zshrc source tolerates empty TTY ==="
+run_empty_tty_source
+assert_eq "empty TTY source exits zero" "0" "$capture_status"
+assert_not_contains "empty TTY source avoids redirection error" "no such file or directory" "$capture_error"
 
 echo "=== Test: TERM=dumb startup tolerates later bash completion hooks ==="
 run_startup work dumb

@@ -1,6 +1,8 @@
 # Use beam shape cursor on startup.
 # must go before instant prompt initialization
->$TTY echo -ne '\e[6 q'
+if [[ -n ${TTY:-} && -w $TTY ]]; then
+  >$TTY echo -ne '\e[6 q'
+fi
 
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.config/zsh/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
