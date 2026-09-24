@@ -177,10 +177,85 @@ run_empty_tty_source() {
   capture_error="$(cat "$error_file")"
 }
 
+run_unset_tty_source() {
+  local home="$tmpdir/home-work-xterm"
+  local bin="$home/bin"
+  local output_file="$tmpdir/unset-tty-output"
+  local error_file="$tmpdir/unset-tty-error"
+
+  run_startup work xterm
+  set +e
+  env -u TTY HOME="$home" PATH="$bin:$home/.dotfiles/node-bin/node_modules/.bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=xterm zsh -c 'source "$HOME/.config/zsh/.zshrc"' >"$output_file" 2>"$error_file"
+  capture_status=$?
+  set -e
+  capture_output="$(cat "$output_file")"
+  capture_error="$(cat "$error_file")"
+}
+
+run_writable_tty_source() {
+  local home="$tmpdir/home-work-xterm"
+  local bin="$home/bin"
+  local output_file="$tmpdir/writable-tty-output"
+  local error_file="$tmpdir/writable-tty-error"
+
+  run_startup work xterm
+  set +e
+  HOME="$home" PATH="$bin:$home/.dotfiles/node-bin/node_modules/.bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" TERM=xterm python3 -c '
+import os
+import pty
+import subprocess
+import sys
+
+master, slave = pty.openpty()
+environment = dict(os.environ)
+environment.pop("TTY", None)
+process = subprocess.Popen(
+    ["zsh", "-c", "source \"$HOME/.config/zsh/.zshrc\""],
+    env=environment,
+    stdin=slave,
+    stdout=slave,
+    stderr=subprocess.PIPE,
+)
+os.close(slave)
+chunks = []
+while True:
+    try:
+        chunk = os.read(master, 1024)
+    except OSError:
+        break
+    if not chunk:
+        break
+    chunks.append(chunk)
+os.close(master)
+error = process.stderr.read()
+status = process.wait()
+sys.stdout.write(b"".join(chunks).hex())
+sys.stderr.buffer.write(error)
+raise SystemExit(status)
+' >"$output_file" 2>"$error_file"
+  capture_status=$?
+  set -e
+  capture_output="$(cat "$output_file")"
+  capture_error="$(cat "$error_file")"
+}
+
 echo "=== Test: noninteractive zshrc source tolerates empty TTY ==="
 run_empty_tty_source
 assert_eq "empty TTY source exits zero" "0" "$capture_status"
 assert_not_contains "empty TTY source avoids redirection error" "no such file or directory" "$capture_error"
+
+echo ""
+echo "=== Test: noninteractive zshrc source tolerates unset TTY ==="
+run_unset_tty_source
+assert_eq "unset TTY source exits zero" "0" "$capture_status"
+assert_eq "unset TTY source has no stderr" "" "$capture_error"
+
+echo ""
+echo "=== Test: writable TTY receives beam cursor escape ==="
+run_writable_tty_source
+assert_eq "writable TTY source exits zero" "0" "$capture_status"
+assert_eq "writable TTY source has no stderr" "" "$capture_error"
+assert_eq "writable TTY receives exact beam cursor bytes" "1b5b362071" "$capture_output"
 
 echo "=== Test: TERM=dumb startup tolerates later bash completion hooks ==="
 run_startup work dumb
