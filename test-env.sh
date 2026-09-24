@@ -141,3 +141,5 @@ check "existing symlink retargeted" \
 echo ""
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
+
+python3 test-home-reconcile.py
