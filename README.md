@@ -17,31 +17,14 @@ Post-install:
 - `./macos` to apply macOS defaults
 - FileVault, caps-lock-to-ctrl, generate SSH keys, [rustup](https://www.rustup.rs/)
 
-## Symlink Strategy
+## Deployed-home model
 
-`bootstrap.sh` creates symlinks in two categories:
-
-**Root files** -> `~/.<file>`: `curlrc`, `cvimrc`, `gitconfig`, `ignore`, `inputrc`, `zshenv`
-
-**XDG directories** -> `~/.config/<dir>`: `alacritty`, `efm-langserver`, `ghostty`, `hammerspoon`, `karabiner`, `rg`, `tmux`, `vivid`, `work`, `zsh`
-
-**Special cases:**
-- `init.lua` -> `~/.config/nvim/init.lua`
-- `tmux/tmux.conf` -> `~/.tmux.conf`
-- `claude/settings.json` -> `~/.claude/settings.json` (generated, see below)
-- `claude/hooks/*` -> `~/.claude/hooks/*`
-- `claude/agents/*` -> `~/.claude/agents/*`
-- `claude/commands/*` -> `~/.claude/commands/*`
-- `skills/*/` -> `~/.claude/skills/*/` (and `~/.codex/skills/*/` on `work`/`devbox`)
-- `codex/config.toml` -> `~/.codex/config.toml` (`work`/`devbox` only)
-- `work-cli/bin/work` -> `~/bin/work` (`work`/`devbox` only)
-- `bin/*` -> `~/bin/*`
-
-**Not symlinked:** `stripe-gitconfig` (included via gitconfig `[include]`)
-
-**`~/.claude` may be the repo directory.** On some machines `~/.claude` is itself a symlink to `~/.dotfiles/claude`, so every destination above collapses onto its own source. `ln -sf` in that situation silently replaces the file with a self-referential symlink and destroys the contents, which is why `bootstrap.sh` routes all of these through `bin/dotfiles-link`, which compares `readlink -f` on both sides and skips when they match (it also refuses to create a symlink to a nonexistent source). Do not replace those calls with bare `ln -sf`. The guard is covered by `test-env.sh`.
-
-When adding new config: add the file or directory, then add it to the appropriate list in `bootstrap.sh` (`files` array for home dotfiles, `xdg_files` array for XDG configs, or a new `ln -s` for special cases).
+- Template inputs remain outside `home/`.
+- `home/` contains deployed content and ignored generated outputs.
+- Bootstrap creates real directories and relative file links.
+- `.agents/skills` is canonical; Claude aliases individual skills; Codex reads `.agents/skills` directly.
+- Runtime roots remain outside the repository.
+- Legacy ignored runtime state is not migrated.
 
 ## Environment Management
 
