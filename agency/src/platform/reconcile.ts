@@ -1,4 +1,5 @@
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "./private-state.js"
+import { DarwinObservationUnavailable } from "./darwin.js"
 import {
   sameProcess,
   type LaunchRecord,
@@ -125,6 +126,7 @@ function continuedContinuity(provider: ProcessGroupProviderIdentity, observation
   if (!groupMembersAuthorized(provider, observation.members)) return { state: "mismatch" }
   const leader = observation.leader
   if (leader !== null && !observation.members.some(member => sameProcess(leader, member))) return { state: "mismatch" }
+  if (leader === null && !observation.members.some(member => provider.group.observed.some(retained => sameProcess(retained, member)))) return { state: "mismatch" }
   return { state: "authorized", observation }
 }
 
@@ -149,8 +151,7 @@ async function signal(adapter: PlatformAdapter, processGroupId: number, value: N
   }
 }
 
-export async function reconcileRecord(path: string, adapter: PlatformAdapter): Promise<ReconcileResult> {
-  const record = await readLaunchRecordForReconciliation(path)
+async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapter, record: LaunchRecord, pendingRecord: (record: LaunchRecord) => void): Promise<ReconcileResult> {
   if (adapter.platform !== "darwin") return quarantine(path, record, "process-group reconciliation requires Darwin")
   const currentBoot = await adapter.bootId()
   if (record.launchBootId !== currentBoot) return release(path, record)
@@ -177,6 +178,7 @@ export async function reconcileRecord(path: string, adapter: PlatformAdapter): P
   }
   const pending = clone(record, { phase: "cleanup_pending", provider: pendingProvider, reason: null })
   await writeLaunchRecord(path, pending)
+  pendingRecord(pending)
   const authorization = initialContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
   if (authorization.state === "empty") return release(path, pending)
   if (authorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGTERM")
@@ -191,6 +193,18 @@ export async function reconcileRecord(path: string, adapter: PlatformAdapter): P
   const afterKill = await pollContinuity(adapter, pendingProvider, KILL_DEADLINE_MS)
   if (afterKill.state === "empty") return cleaned(path, pending)
   return quarantine(path, pending, afterKill.state === "mismatch" ? "process-group identity changed after SIGKILL" : "process-group survived SIGKILL deadline")
+}
+
+export async function reconcileRecord(path: string, adapter: PlatformAdapter): Promise<ReconcileResult> {
+  const record = await readLaunchRecordForReconciliation(path)
+  let affected = record
+  try {
+    return await reconcileProcessGroupRecord(path, adapter, record, pending => affected = pending)
+  } catch (error) {
+    if (!(error instanceof DarwinObservationUnavailable)) throw error
+    const reason = `Darwin observation unavailable: ${error.message}`.slice(0, 512)
+    return quarantine(path, affected, reason)
+  }
 }
 
 export async function reconcileLinuxNamespaceRecord(path: string, adapter: LinuxNamespaceAdapter): Promise<ReconcileResult> {

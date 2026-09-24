@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { type Duplex } from "node:stream"
 import { join } from "node:path"
+import { agencyLaunchMarker } from "./launch-marker.js"
 import { readHandlerRecord, writeHandlerRecord } from "./private-state.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type HandlerInspection, type PlatformAdapter, type ProcessIdentity } from "./types.js"
 
@@ -75,6 +76,15 @@ function remaining(deadline: number): number {
   const milliseconds = deadline - Date.now()
   if (milliseconds <= 0) throw new Error("Handler status timed out")
   return milliseconds
+}
+
+function exactDarwinHandlerBirth(birth: string, marker: string): boolean {
+  const separator = birth.indexOf(":")
+  if (separator <= 0 || birth.slice(separator + 1) !== marker) return false
+  const secondsText = birth.slice(0, separator)
+  if (!/^(0|[1-9]\d*)$/.test(secondsText)) return false
+  const seconds = Number(secondsText)
+  return Number.isSafeInteger(seconds) && seconds >= 0 && String(seconds) === secondsText
 }
 
 async function releaseGate(gate: Duplex, timeoutMs: number): Promise<void> {
@@ -256,7 +266,9 @@ export async function launchHandlerGeneration(options: LaunchHandlerOptions): Pr
   await transition(options, "launch_pending_written")
   await writeHandlerRecord(recordPath, { ...pending, launchAttempted: true })
   await transition(options, "launch_attempt_recorded")
+  const launchMarker = agencyLaunchMarker("handler", launchAttemptId)
   const child = spawn(options.handler.file, [...options.handler.args], {
+    argv0: launchMarker,
     detached: true,
     env: {
       ...process.env,
@@ -284,6 +296,7 @@ export async function launchHandlerGeneration(options: LaunchHandlerOptions): Pr
     const observed = await options.adapter.readProcess(identityMessage.identity.pid)
     if (observed === null || !sameProcess(identityMessage.identity, observed)) throw new Error("Handler identity could not be verified")
     if (observed.bootId !== launchBootId) throw new Error("Handler identity boot does not match launch boot")
+    if (options.adapter.platform === "darwin" && !exactDarwinHandlerBirth(observed.birth, launchMarker)) throw new Error("Handler identity does not contain the exact Darwin launch marker")
     await transition(options, "identity_verified")
     const published = {
       ...pending,

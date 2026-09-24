@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { readLaunchRecord, writeLaunchRecord } from "../src/platform/private-state.js"
+import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { reconcileLinuxNamespaceRecord, reconcileRecord } from "../src/platform/reconcile.js"
 import {
   RUNTIME_RECORD_VERSION,
@@ -209,6 +210,56 @@ test("ignores parent pid changes but quarantines stable identity changes without
     const observed = identity(changed)
     await assertOutcome(t, record(), new FakeAdapter({ leader: observed, group: [observed] }), { disposition: "quarantined", signals: [] })
   }
+})
+
+test("quarantines unavailable Darwin observations without unsafe escalation", async t => {
+  for (const stage of ["boot", "process", "group"] as const) {
+    const adapter = new FakeAdapter()
+    if (stage === "boot") adapter.bootId = async () => { throw new DarwinObservationUnavailable("boot unavailable") }
+    else if (stage === "process") adapter.readProcess = async () => { throw new DarwinObservationUnavailable("process unavailable") }
+    else adapter.readGroup = async () => { throw new DarwinObservationUnavailable("group unavailable") }
+    const path = await recordFixture(t, record())
+    const result = await reconcileRecord(path, adapter)
+    assert.equal(result.disposition, "quarantined")
+    assert.equal(result.record.phase, "quarantined")
+    assert.match(result.record.reason ?? "", /observation|unavailable/i)
+    assert.ok((result.record.reason ?? "").length <= 512)
+    assert.deepEqual(adapter.signals, [])
+  }
+  let groupReads = 0
+  const afterTerm = new FakeAdapter({
+    onSignal: (signal, current) => {
+      if (signal === "SIGTERM") {
+        current.leader = null
+        current.group = [identity({ pid: 102, birth: "birth-102" })]
+      }
+    },
+  })
+  afterTerm.readGroup = async () => {
+    groupReads += 1
+    if (afterTerm.signals.includes("SIGTERM")) throw new DarwinObservationUnavailable("post-TERM group unavailable")
+    return afterTerm.group
+  }
+  const path = await recordFixture(t, record())
+  const result = await reconcileRecord(path, afterTerm)
+  assert.equal(result.disposition, "quarantined")
+  assert.ok(groupReads >= 3)
+  assert.deepEqual(afterTerm.signals, ["SIGTERM"])
+})
+
+test("requires an exact cleanup-pending member before leaderless KILL", async t => {
+  const retained = identity({ pid: 102, birth: "birth-102" })
+  const replacement = identity({ pid: 103, birth: "replacement-103" })
+  const adapter = new FakeAdapter({
+    group: [identity(), retained],
+    onSignal: (signal, current) => {
+      if (signal === "SIGTERM") {
+        current.leader = null
+        current.group = [replacement]
+      }
+    },
+  })
+  await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: ["SIGTERM"] })
 })
 
 test("validates semantics before the unattempted release rule", async t => {

@@ -8,7 +8,9 @@ import { join } from "node:path"
 import { type Duplex } from "node:stream"
 import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
+import { agencyLaunchMarker, parseAgencyLaunchMarker } from "../src/platform/launch-marker.js"
 import { bindPrivateSocket } from "../src/platform/private-socket.js"
+import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { readHandlerRecord, readLaunchRecord, writeHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import {
   assertStartupLockMetadata,
@@ -53,17 +55,29 @@ type FakeGroup = {
   termOutcome: "empty" | "survive"
 }
 
-function identity(pid: number, parentPid = 1): ProcessIdentity {
+function identity(pid: number, parentPid = 1, birth = `fixture-${pid}`): ProcessIdentity {
   return {
     bootId,
     pid,
-    birth: `fixture-${pid}`,
+    birth,
     parentPid,
     processGroupId: pid,
     sessionId: pid,
     uid: process.getuid!(),
     gid: process.getgid!(),
   }
+}
+
+function canonicalHandlerBirth(birth: string): boolean {
+  const separator = birth.indexOf(":")
+  if (separator <= 0 || !/^(0|[1-9]\d*)$/.test(birth.slice(0, separator))) return false
+  return parseAgencyLaunchMarker(birth.slice(separator + 1))?.role === "handler"
+}
+
+async function handlerBirth(root: string, pid: number): Promise<string> {
+  const record = await readHandlerRecord(join(root, "handler.json"))
+  if (record.process?.pid === pid && canonicalHandlerBirth(record.process.birth)) return record.process.birth
+  return `1780000000:${agencyLaunchMarker("handler", record.launchAttemptId)}`
 }
 
 function processExists(pid: number): boolean {
@@ -80,13 +94,24 @@ class FakeAdapter implements PlatformAdapter {
   readonly platform = process.platform === "darwin" ? "darwin" : "linux"
   readonly ambiguous = new Set<number>()
 
+  constructor(private readonly root: string) {}
+
   async bootId(): Promise<string> {
     return bootId
   }
 
   async readProcess(pid: number): Promise<ProcessIdentity | null> {
     if (!processExists(pid)) return null
-    const observed = identity(pid)
+    let observed = identity(pid)
+    if (process.platform === "darwin") {
+      try {
+        observed = identity(pid, 1, await handlerBirth(this.root, pid))
+      } catch (error) {
+        if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ENOENT") {
+          if (!(error instanceof Error) || !/launch uuid/i.test(error.message)) throw error
+        }
+      }
+    }
     return this.ambiguous.has(pid) ? { ...observed, birth: `ambiguous-${pid}` } : observed
   }
 
@@ -307,7 +332,7 @@ test("rejects socket escape and symlink paths", async t => {
 
 test("validates unsafe lock metadata before starting a helper", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root)
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   const lockPath = join(root, "startup.lock")
@@ -332,7 +357,7 @@ test("validates unsafe lock metadata before starting a helper", async t => {
 
 test("read-only inspection preserves live and ambiguous sockets", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const server = await bindPrivateSocket(root, "handler.sock")
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
   t.after(async () => rm(root, { recursive: true, force: true }))
@@ -348,9 +373,25 @@ test("read-only inspection preserves live and ambiguous sockets", async t => {
   assert.equal((await lstat(join(root, "handler.sock"))).isSymbolicLink(), false)
 })
 
+test("unavailable boot and process observations preserve the socket as ambiguous", async t => {
+  const root = await fixtureRoot(t)
+  const server = await bindPrivateSocket(root, "handler.sock")
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(process.pid, process.ppid)))
+  for (const stage of ["boot", "process"] as const) {
+    const adapter = new FakeAdapter(root)
+    if (stage === "boot") adapter.bootId = async () => { throw new DarwinObservationUnavailable("boot unavailable") }
+    else adapter.readProcess = async () => { throw new DarwinObservationUnavailable("process unavailable") }
+    const inspection = await inspectHandlerGeneration(root, adapter)
+    assert.equal(inspection?.disposition, "ambiguous")
+    assert.equal(await pathExists(join(root, "handler.sock")), true)
+  }
+})
+
 test("selects one generation across 32 contenders and reconciles all records before readiness", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const cleanLeader = providerIdentity(7101)
   const ambiguousLeader = providerIdentity(7201)
   const currentAmbiguousLeader = { ...ambiguousLeader, birth: "replacement-7201" }
@@ -395,7 +436,7 @@ test("selects one generation across 32 contenders and reconciles all records bef
 
 test("discovers an unnamed retained record from the qualified inventory", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root)
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   const unnamedPath = join(config.retainedDirectory, "not-present-in-config.json")
@@ -408,7 +449,7 @@ test("discovers an unnamed retained record from the qualified inventory", async 
 test("rejects a changed ready socket path without crossing confinement", async t => {
   const root = await fixtureRoot(t)
   const outsideRoot = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   let outsideConnections = 0
   const outsideServer = await bindPrivateSocket(outsideRoot, "outside.sock", socket => {
     outsideConnections += 1
@@ -431,7 +472,7 @@ test("rejects changed ready launch identity fields", async t => {
   for (const mutation of ["launch_attempt_id", "host_id", "process_identity"] as const) {
     await t.test(mutation, async t => {
       const root = await fixtureRoot(t)
-      const adapter = new FakeAdapter()
+      const adapter = new FakeAdapter(root)
       const { config, path } = await writeConfig(root, { readyRecordMutation: mutation })
       t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
       await assert.rejects(startOrConnect({ root, hostId, adapter, handler: handlerCommand(path) }), /ready|published|identity/i)
@@ -445,7 +486,7 @@ test("rejects a dead or reused Handler after ready acknowledgement", async t => 
   for (const disposition of ["dead", "reused"] as const) {
     await t.test(disposition, async t => {
       const root = await fixtureRoot(t)
-      const adapter = new FakeAdapter()
+      const adapter = new FakeAdapter(root)
       const { config, path } = await writeConfig(root)
       let handler: ProcessIdentity | undefined
       t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
@@ -475,7 +516,7 @@ test("rejects a dead or reused Handler after ready acknowledgement", async t => 
 
 test("consumes coalesced gate and ready status frames in order", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root, { combinedReadyFrames: true })
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   const result = await startOrConnect({ root, hostId, adapter, handler: handlerCommand(path), timeoutMs: 1000 })
@@ -487,7 +528,7 @@ test("rejects symlinked and non-regular retained inventory entries before readin
   for (const kind of ["symlink", "directory"] as const) {
     await t.test(kind, async t => {
       const root = await fixtureRoot(t)
-      const adapter = new FakeAdapter()
+      const adapter = new FakeAdapter(root)
       const { config, path } = await writeConfig(root)
       t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
       const entry = join(config.retainedDirectory, "unsafe-entry")
@@ -505,7 +546,7 @@ test("rejects symlinked and non-regular retained inventory entries before readin
 
 test("replaces one exactly stale generation and never unlinks an ambiguous one", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root)
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   const first = await startOrConnect({ root, hostId, adapter, handler: handlerCommand(path) })
@@ -527,7 +568,7 @@ test("replaces one exactly stale generation and never unlinks an ambiguous one",
 
 test("times out under contention without starting outside the lock", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root)
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   let releaseLock: (() => void) | undefined
@@ -568,7 +609,7 @@ test("launcher death before gate release starts no usable Handler", async t => {
   ]) {
     await t.test(scenario.transition, async t => {
       const root = await fixtureRoot(t)
-      const adapter = new FakeAdapter()
+      const adapter = new FakeAdapter(root)
       const eventLog = join(root, "events.log")
       const releasePath = join(root, "release")
       const resultPath = join(root, "result.json")
@@ -618,8 +659,15 @@ test("a pre-release Handler exits on either gate or status-peer EOF", async t =>
   for (const closedFd of [3, 4] as const) {
     await t.test(`fd ${closedFd}`, async t => {
       const root = await fixtureRoot(t)
-      const adapter = new FakeAdapter()
+      const adapter = new FakeAdapter(root)
       const { config, path } = await writeConfig(root)
+      await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(process.pid), {
+        launchAttemptId: crypto.randomUUID(),
+        phase: "launch_pending",
+        process: null,
+        writer: "launcher",
+        reconciliation: null,
+      }))
       t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
       const child = spawn(process.execPath, [fixturePath, "handler", path], {
         detached: true,
@@ -645,7 +693,7 @@ test("a pre-release Handler exits on either gate or status-peer EOF", async t =>
 
 test("launcher death after gate release does not kill or duplicate the Handler", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const eventLog = join(root, "events.log")
   const releasePath = join(root, "release")
   const { config, path } = await writeConfig(root, { eventLog, releasePath, launcherPauseAt: "gate_released" })
@@ -665,7 +713,7 @@ test("launcher death after gate release does not kill or duplicate the Handler",
 
 test("a post-gate readiness timeout detaches the launcher without duplicating the live Handler", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const eventLog = join(root, "events.log")
   const releasePath = join(root, "release")
   const { config, path } = await writeConfig(root, {
@@ -692,7 +740,7 @@ test("a post-gate readiness timeout detaches the launcher without duplicating th
 test("a missing Handler executable is a controlled classifiable launch failure", async t => {
   const root = await fixtureRoot(t)
   t.after(async () => rm(root, { recursive: true, force: true }))
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   await assert.rejects(startOrConnect({
     root,
     hostId,
@@ -710,7 +758,7 @@ test("a missing Handler executable is a controlled classifiable launch failure",
 
 test("identity and readiness share one launch deadline", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root, { identityDelayMs: 350, readyDelayMs: 350 })
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   const started = Date.now()
@@ -722,7 +770,7 @@ test("identity and readiness share one launch deadline", async t => {
 
 test("immediate Handler death after gate release is reported without waiting for the status timeout", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root)
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   const started = Date.now()
@@ -746,7 +794,7 @@ test("Handler death at every post-gate boundary remains classifiable and never y
   for (const stage of ["before_socket_bind", "after_socket_bind_before_publication", "after_first_reconciliation", "before_ready_ack"] as const) {
     await t.test(stage, async t => {
       const root = await fixtureRoot(t)
-      const adapter = new FakeAdapter()
+      const adapter = new FakeAdapter(root)
       const eventLog = join(root, "events.log")
       const releasePath = join(root, "release")
       const resultPath = join(root, "result.json")
@@ -796,7 +844,7 @@ test("Handler death at every post-gate boundary remains classifiable and never y
 
 test("closes the startup lock handle when helper release rejects", async t => {
   const root = await fixtureRoot(t)
-  const adapter = new FakeAdapter()
+  const adapter = new FakeAdapter(root)
   const server = await bindPrivateSocket(root, "handler.sock")
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
   t.after(async () => rm(root, { recursive: true, force: true }))

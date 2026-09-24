@@ -4,6 +4,7 @@ import { lstat, open, realpath, type FileHandle } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import { type Duplex } from "node:stream"
+import { DarwinObservationUnavailable } from "./darwin.js"
 import { assertPrivateSocket, unlinkStalePrivateSocket } from "./private-socket.js"
 import { assertPrivateDirectory, readHandlerRecord } from "./private-state.js"
 import { launchHandlerGeneration, type HandlerCommand, type StartTransition } from "./startup.js"
@@ -176,9 +177,21 @@ export async function inspectHandlerGeneration(root: string, adapter: PlatformAd
     throw error
   }
   if (record.socketPath !== expectedSocketPath(root)) throw new Error("Handler socket is outside the qualified root")
-  const currentBoot = await adapter.bootId()
+  let currentBoot: string
+  try {
+    currentBoot = await adapter.bootId()
+  } catch (error) {
+    if (error instanceof DarwinObservationUnavailable) return { record, disposition: "ambiguous" }
+    throw error
+  }
   if (record.launchBootId !== currentBoot || record.process === null) return { record, disposition: "stale" }
-  const observed = await adapter.readProcess(record.process.pid)
+  let observed
+  try {
+    observed = await adapter.readProcess(record.process.pid)
+  } catch (error) {
+    if (error instanceof DarwinObservationUnavailable) return { record, disposition: "ambiguous" }
+    throw error
+  }
   if (observed === null) return { record, disposition: "stale" }
   if (!sameProcess(record.process, observed)) return { record, disposition: "ambiguous" }
   return { record, disposition: "live" }

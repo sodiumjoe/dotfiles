@@ -2,6 +2,7 @@ import { appendFile, lstat, readFile, readdir, stat, writeFile } from "node:fs/p
 import { Socket } from "node:net"
 import { basename, dirname, join } from "node:path"
 import { bindPrivateSocket } from "../../src/platform/private-socket.js"
+import { agencyLaunchMarker, parseAgencyLaunchMarker } from "../../src/platform/launch-marker.js"
 import { assertPrivateDirectory, readHandlerRecord, readLaunchRecord, writeHandlerRecord } from "../../src/platform/private-state.js"
 import { reconcileRecord } from "../../src/platform/reconcile.js"
 import { startOrConnect, type StartTransition } from "../../src/platform/singleton.js"
@@ -37,17 +38,29 @@ type FakeGroup = {
   termOutcome: "empty" | "survive"
 }
 
-function identity(pid: number, bootId: string, parentPid = 1): ProcessIdentity {
+function identity(pid: number, bootId: string, parentPid = 1, birth = `fixture-${pid}`): ProcessIdentity {
   return {
     bootId,
     pid,
-    birth: `fixture-${pid}`,
+    birth,
     parentPid,
     processGroupId: pid,
     sessionId: pid,
     uid: process.getuid!(),
     gid: process.getgid!(),
   }
+}
+
+function canonicalHandlerBirth(birth: string): boolean {
+  const separator = birth.indexOf(":")
+  if (separator <= 0 || !/^(0|[1-9]\d*)$/.test(birth.slice(0, separator))) return false
+  return parseAgencyLaunchMarker(birth.slice(separator + 1))?.role === "handler"
+}
+
+async function handlerBirth(recordPath: string, pid: number): Promise<string> {
+  const record = await readHandlerRecord(recordPath)
+  if (record.process?.pid === pid && canonicalHandlerBirth(record.process.birth)) return record.process.birth
+  return `1780000000:${agencyLaunchMarker("handler", record.launchAttemptId)}`
 }
 
 function processExists(pid: number): boolean {
@@ -71,7 +84,11 @@ function adapter(config: FixtureConfig): PlatformAdapter {
     readProcess: async pid => {
       const group = groups.get(pid)
       if (group !== undefined) return group.currentLeader
-      return processExists(pid) ? identity(pid, config.bootId) : null
+      if (!processExists(pid)) return null
+      const birth = process.platform === "darwin"
+        ? await handlerBirth(join(config.root, "handler.json"), pid)
+        : `fixture-${pid}`
+      return identity(pid, config.bootId, 1, birth)
     },
     readGroup: async processGroupId => groups.get(processGroupId)?.members ?? [],
     signalGroup: async (processGroupId, signal) => {
@@ -158,7 +175,11 @@ async function waitForGate(status: Socket, gate: Socket): Promise<boolean> {
 async function runHandler(config: FixtureConfig): Promise<void> {
   const status = socketForFd(3)
   const gate = socketForFd(4)
-  const self = identity(process.pid, config.bootId, process.ppid)
+  const recordPath = process.env.AGENCY_HANDLER_RECORD
+  const generation = process.env.AGENCY_HANDLER_GENERATION
+  if (recordPath === undefined || generation === undefined) throw new Error("Handler startup environment is incomplete")
+  const birth = process.platform === "darwin" ? await handlerBirth(recordPath, process.pid) : `fixture-${process.pid}`
+  const self = identity(process.pid, config.bootId, process.ppid, birth)
   await delay(config.identityDelayMs)
   await appendFile(config.handlerLog, `${JSON.stringify(self)}\n`, { mode: 0o600 })
   await event(config, "handler:identity_claimed")
@@ -173,9 +194,6 @@ async function runHandler(config: FixtureConfig): Promise<void> {
   status.on("error", () => undefined)
   const gateFrame = `${JSON.stringify({ type: "gate_released", generation: process.env.AGENCY_HANDLER_GENERATION })}\n`
   if (config.combinedReadyFrames !== true) status.write(gateFrame)
-  const recordPath = process.env.AGENCY_HANDLER_RECORD
-  const generation = process.env.AGENCY_HANDLER_GENERATION
-  if (recordPath === undefined || generation === undefined) throw new Error("Handler startup environment is incomplete")
   await pause(config, "before_socket_bind")
   const published = await readHandlerRecord(recordPath)
   const server = await bindPrivateSocket(dirname(published.socketPath), basename(published.socketPath), socket => {
