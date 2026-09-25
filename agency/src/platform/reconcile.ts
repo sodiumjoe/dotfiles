@@ -1,4 +1,5 @@
 import { LinuxObservationUnavailable } from "./linux.js"
+import { isDeepStrictEqual } from "node:util"
 import { agencyLaunchMarker, exactAgencyBirth, parseAgencyLaunchMarker } from "./launch-marker.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "./private-state.js"
 import { DarwinObservationUnavailable } from "./darwin.js"
@@ -241,8 +242,9 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   return quarantine(path, pending, afterKill.state === "mismatch" ? "process-group identity changed after SIGKILL" : "process-group survived SIGKILL deadline")
 }
 
-export async function reconcileRecord(path: string, adapter: PlatformAdapter): Promise<ReconcileResult> {
+export async function reconcileRecord(path: string, adapter: PlatformAdapter, expectedRecord?: LaunchRecord): Promise<ReconcileResult> {
   const record = await readLaunchRecordForReconciliation(path)
+  if (expectedRecord !== undefined && !isDeepStrictEqual(record, expectedRecord)) throw new Error("RETAINED_INVENTORY_CHANGED")
   let affected = record
   try {
     return await reconcileProcessGroupRecord(path, adapter, record, pending => affected = pending)

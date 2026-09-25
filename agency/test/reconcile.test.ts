@@ -108,6 +108,17 @@ async function assertOutcome(t: test.TestContext, starting: LaunchRecord, adapte
   assert.equal(result.record.phase, expected.disposition === "quarantined" ? "quarantined" : "cleanup_verified")
 }
 
+test("expected inventory rejects a replaced record before any write or signal", async t => {
+  const expected = record()
+  const actual = { ...expected, checkoutId: "replacement" }
+  const path = await recordFixture(t, actual)
+  const before = await readFile(path)
+  const adapter = new FakeAdapter()
+  await assert.rejects(reconcileRecord(path, adapter, expected), /RETAINED_INVENTORY_CHANGED/)
+  assert.deepEqual(adapter.signals, [])
+  assert.deepEqual(await readFile(path), before)
+})
+
 for (const platform of ["darwin", "linux"] as const) {
  test("reconciles the process-group safety matrix on " + platform, async t => {
   const fake = (options: AdapterOptions = {}) => new FakeAdapter({ ...options, platform })
