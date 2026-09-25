@@ -26,6 +26,7 @@ const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === "EN
 const conflict = (): never => { throw new CatalogError("COMMAND_CONFLICT") }
 export function createCatalogStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): CatalogStore {
   const catalog = join(root, "catalog"), accepted = new Map<string, Buffer>()
+  let snapshots: Map<string, Buffer> | null = null
   async function checkDirectory(path: string): Promise<boolean> {
     await assertPrivateDirectory(root)
     try { await assertPrivateDirectory(catalog); if (path !== catalog) await assertPrivateDirectory(path); return true }
@@ -113,6 +114,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
   }
   async function inventory(): Promise<CatalogInventory> {
     const result: CatalogInventory = { launches: [], metadata: [], commands: [], issues: [] }
+    const observedSnapshots = new Map<string, Buffer>()
     try {
       const allowed = new Set(["providers.json", "current.json", "commands", "snapshots", "probe-launches", "probe-meta", "work"])
       for (const name of await names(catalog)) {
@@ -137,7 +139,11 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
             if (bytes === null) invalid()
             const raw = decodeJson(bytes)
             if (kind === "commands") { const c = parseCommand(raw); if (c.commandId !== recordId) invalid(); result.commands.push(c) }
-            if (kind === "snapshots") { if (parseSnapshot(raw).snapshotId !== recordId) invalid() }
+            if (kind === "snapshots") {
+              if (parseSnapshot(raw).snapshotId !== recordId) invalid()
+              observedSnapshots.set(path, bytes)
+              if (snapshots !== null && !(snapshots.get(path) ?? accepted.get(path))?.equals(bytes)) invalid()
+            }
             if (kind === "probe-meta") {
               const m = parseProbeMeta(raw)
               if (m.attemptId !== recordId || m.workPath !== join(catalog, "work", m.attemptId)) invalid()
@@ -172,6 +178,11 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
       for (const entry of result.launches) if (!result.metadata.some(m => m.attemptId === entry.record.launchAttemptId)) result.issues.push(`probe-launches/${entry.record.launchAttemptId}`)
       for (const c of result.commands) if (c.snapshotId !== null) { const s = await readSnapshot(c.snapshotId); if (!s || s.hostId !== c.hostId || s.handlerGeneration !== c.handlerGeneration) invalid() }
       await readCurrent()
+      if (snapshots !== null && [...snapshots.keys()].some(path => !observedSnapshots.has(path))) invalid()
+      if (result.issues.length === 0) {
+        snapshots = observedSnapshots
+        for (const [path, bytes] of snapshots) accepted.set(path, bytes)
+      }
     } catch { result.issues.push("catalog") }
     return result
   }
