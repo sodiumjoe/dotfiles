@@ -1,41 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { EventEmitter } from "node:events"
-import { Writable, type Readable } from "node:stream"
+import { NativeFacade, type RegisteredChild, type DriverContext } from "./drivers/transport.js"
 import { fileURLToPath } from "node:url"
 import { isDeepStrictEqual } from "node:util"
 import { observeConfig, parseProfile } from "./config.js"
 import { cleanProbeEnvironment, parseProbeResult, type ProbeRequest, type ProbeResult } from "./probes.js"
 import { CatalogError, id, invalid, keys, object, parseProbeMeta } from "./types.js"
 
-export type RegisteredChild = { stdin: Writable; stdout: Readable; terminal: Promise<void>; requestCleanup(): void }
-export type DriverContext = { request: ProbeRequest; signal: AbortSignal; spawnNative(file: string, args: readonly string[]): RegisteredChild }
-export class NativeFacade extends EventEmitter implements RegisteredChild {
-  readonly stdin: Writable
-  readonly stdout: Readable
-  readonly stderr: Readable
-  readonly terminal: Promise<void>
-  constructor(private readonly child: ChildProcess, registered: Promise<void>, readonly requestCleanup: () => void) {
-    super()
-    this.stdout = child.stdout!; this.stderr = child.stderr!
-    this.on("error", () => undefined)
-    let total = 0
-    this.stdin = new Writable({ write: (bytes: Buffer, _encoding, callback) => {
-      total += bytes.length
-      if (total > 1048576) { callback(new CatalogError("PROBE_FAILED")); requestCleanup(); return }
-      void registered.then(() => { if (!child.stdin?.writable) callback(new CatalogError("PROBE_FAILED")); else child.stdin.write(bytes, callback) }, () => callback(new CatalogError("PROBE_FAILED")))
-    }, final: callback => { void registered.then(() => { child.stdin?.end(callback) }, () => callback(new CatalogError("PROBE_FAILED"))) } })
-    this.stdin.on("error", () => undefined)
-    child.stdin?.on("error", error => this.stdin.destroy(error))
-    child.on("error", error => this.emit("error", error))
-    child.on("exit", (code, signal) => this.emit("exit", code, signal))
-    this.terminal = new Promise(resolve => child.once("close", (code, signal) => { this.emit("close", code, signal); resolve() }))
-  }
-  get pid() { return this.child.pid }
-  get exitCode() { return this.child.exitCode }
-  get signalCode() { return this.child.signalCode }
-  get killed() { return false }
-  kill(): boolean { this.requestCleanup(); return false }
-}
 
 export async function runWorker(discover: (context: DriverContext) => Promise<ProbeResult>): Promise<void> {
   const controller = new AbortController()
@@ -99,4 +69,7 @@ export async function runWorker(discover: (context: DriverContext) => Promise<Pr
   await new Promise<void>(() => undefined)
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) await runWorker(async () => { throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION") })
+if (process.argv[1] === fileURLToPath(import.meta.url)) await runWorker(async context => {
+  if (context.request.profile.id === "claude-agent-acp") return (await import("./drivers/claude.js")).discoverClaude(context)
+  return (await import("./drivers/codex.js")).discoverCodex(context)
+})
