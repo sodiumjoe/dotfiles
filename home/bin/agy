@@ -1,0 +1,26 @@
+#!/bin/sh
+fail() {
+  printf '%s\n' "$1" >&2
+  exit 69
+}
+script=$0
+case "$script" in
+  */*) ;;
+  *) script=$(command -v "$script") || fail 'agy: cannot locate wrapper' ;;
+esac
+hops=0
+while [ -L "$script" ]; do
+  [ "$hops" -lt 40 ] || fail 'agy: wrapper symlink limit exceeded'
+  parent=$(CDPATH= cd -P -- "$(dirname -- "$script")" && pwd) || fail 'agy: invalid wrapper directory'
+  target=$(readlink "$script") || fail 'agy: cannot read wrapper symlink'
+  case "$target" in
+    /*) script=$target ;;
+    *) script=$parent/$target ;;
+  esac
+  hops=$((hops + 1))
+done
+repo=$(CDPATH= cd -P -- "$(dirname -- "$script")/../.." && pwd) || fail 'agy: cannot locate repository'
+runtime=$HOME/.nodenv/versions/24.13.0/bin/node
+[ -x "$runtime" ] || fail 'agy: Node 24.13.0 is unavailable in nodenv'
+[ -f "$repo/agency/dist/src/main.js" ] || fail 'agy: build missing; run npm ci and npm run build in agency with Node 24.13.0'
+exec "$runtime" "$repo/agency/dist/src/main.js" "$@"

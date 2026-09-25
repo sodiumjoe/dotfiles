@@ -7,7 +7,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test:control": "npm run build && node --test --test-concurrency=1 dist/test/control-protocol.test.js dist/test/handler-inventory.test.js dist/test/handler-daemon.test.js dist/test/handler-shutdown.test.js",
+    "test:control": "npm run build && node --test --test-concurrency=1 dist/test/control-protocol.test.js dist/test/handler-inventory.test.js dist/test/handler-daemon.test.js dist/test/handler-shutdown.test.js dist/test/control-cli.test.js",
     "qualify:linux": "npm run build && node dist/scripts/qualify-linux.js",
     "test:darwin": "npm run build && node --test --test-concurrency=1 dist/test/darwin-identity.test.js dist/test/darwin-platform.test.js",
     "test:unit": "npm run build && node --test --test-concurrency=1 dist/test/contracts.test.js dist/test/private-state.test.js dist/test/paths.test.js dist/test/reconcile.test.js dist/test/singleton.test.js"

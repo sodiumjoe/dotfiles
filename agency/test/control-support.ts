@@ -14,6 +14,13 @@ import { sameProcess, type ProcessIdentity } from "../src/platform/types.js"
 import { exchange } from "../src/control/wire.js"
 import { PROTOCOL, type ControlRequest } from "../src/control/protocol.js"
 import type { PlatformPaths } from "../src/platform/paths.js"
+import type { ControlDependencies } from "../src/cli/control.js"
+import { ControlError } from "../src/control/protocol.js"
+
+export function unavailableControlDependencies(): ControlDependencies {
+  const unavailable = async (): Promise<never> => { throw new ControlError("UNAVAILABLE") }
+  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, receipt: unavailable, inventory: unavailable, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
+}
 
 export const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
