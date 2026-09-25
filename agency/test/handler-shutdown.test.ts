@@ -10,6 +10,12 @@ import { type HandlerStatus, type ControlRequest } from "../src/control/protocol
 import { privateRoot, launch } from "./control-support.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import type { HandlerGenerationRecord, PlatformAdapter } from "../src/platform/types.js"
+import { MutationQueue } from "../src/handler/mutations.js"
+import { createAdmissionController } from "../src/checkout/admission.js"
+import { resolveCheckout } from "../src/checkout/identity.js"
+import { writeAdmission } from "../src/checkout/records.js"
+import { reconcileRecord } from "../src/platform/reconcile.js"
+import { admissionFixture } from "./checkout-support.js"
 
 const generation = randomUUID(), marker = randomUUID()
 const identity = { bootId: "boot-a", pid: 101, birth: `1:agy-handler:${marker}`, parentPid: 1, processGroupId: 101, sessionId: 101, uid: process.getuid!(), gid: process.getgid!() }
@@ -22,7 +28,7 @@ async function context(t: test.TestContext): Promise<ShutdownContext> {
   const record: HandlerGenerationRecord = { version: 1, hostId: "a".repeat(64), launchBootId: "boot-a", generation, launchAttemptId: marker, launchAttempted: true, phase: "ready", process: identity, socketPath: join(root, "handler.sock"), writer: "handler", reconciliation: { classified: 0, total: 0, quarantined: 0 }, reason: null }
   const state: HandlerStatus = { hostId: record.hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const adapter: PlatformAdapter = { platform: "linux", bootId: async () => "boot-a", readProcess: async () => { throw new Error("unexpected process observation") }, readGroup: async () => { throw new Error("unexpected group observation") }, signalGroup: async () => { throw new Error("unauthorized signal") } }
-  return { record, state, paths: { hostKey: record.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: record.socketPath }, adapter, closeAfterReply: async () => undefined }
+  return { record, state, paths: { hostKey: record.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: record.socketPath }, adapter, mutations: { queue: new MutationQueue(), accepted: [], unavailable: null }, closeAfterReply: async () => undefined }
 }
 
 test("receipts preserve exact identity and reject changed fields or unsafe storage", async t => {
@@ -109,4 +115,45 @@ test("uncertain receipt publication remains serviceable and retries the same pin
   ctx.publishReceipt = writeShutdownReceipt
   assert.ok((await shutdownHandler(command, ctx)).ok)
   assert.equal(ctx.state.phase, "draining")
+})
+
+async function checkoutContext(t: test.TestContext) {
+  const f = await admissionFixture(t), base = await context(t)
+  const ctx: ShutdownContext = { ...base, paths: f.context.paths, adapter: f.context.adapter, state: f.context.state, mutations: f.context.mutations, record: { ...base.record, generation: f.context.state.handlerGeneration } }
+  f.context.shutdownPending = () => ctx.pending !== undefined || ctx.accepted !== undefined
+  const command = { ...request(), handlerGeneration: ctx.record.generation }
+  return { f, ctx, command }
+}
+
+test("shutdown waits for an executing reservation before checking active leases", { timeout: 20000 }, async t => {
+  const { f, ctx, command } = await checkoutContext(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const controller = createAdmissionController(f.context, { resolve: resolveCheckout, publishAdmission: writeAdmission, reconcile: reconcileRecord, publishLaunch: async (path, value) => { entered.resolve(); await release.promise; await writeLaunchRecord(path, value) } })
+  const reservation = controller.reserve(f.request())
+  await entered.promise
+  const shutdown = shutdownHandler(command, ctx)
+  assert.notEqual(ctx.pending, undefined)
+  assert.equal(ctx.state.phase, "ready")
+  release.resolve()
+  assert.equal((await reservation).launch.phase, "launch_pending")
+  const reply = await shutdown
+  assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS")
+  assert.equal(ctx.state.launches.length, 1)
+  assert.equal(ctx.state.reconciliation.total, 1)
+})
+
+test("a pending shutdown coalesces retries and prevents queued reservations", { timeout: 20000 }, async t => {
+  const { f, ctx, command } = await checkoutContext(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let publications = 0
+  ctx.publishReceipt = async (root, value) => { publications++; entered.resolve(); await release.promise; await writeShutdownReceipt(root, value) }
+  const first = shutdownHandler(command, ctx)
+  await entered.promise
+  const second = shutdownHandler({ ...command, requestId: randomUUID() }, ctx)
+  const reservation = assert.rejects(f.controller.reserve(f.request()), { code: "NOT_READY" })
+  release.resolve()
+  assert.ok((await first).ok)
+  assert.ok((await second).ok)
+  await reservation
+  assert.equal(publications, 1)
+  assert.equal(ctx.state.phase, "draining")
+  assert.equal(ctx.state.launches.length, 0)
 })

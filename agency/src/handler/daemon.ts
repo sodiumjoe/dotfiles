@@ -14,6 +14,9 @@ import type { PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
 import { inventoryLaunches, summarizeLaunches, verifyInventory, type InventoryEntry } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
+import { MutationQueue, type HandlerMutations } from "./mutations.js"
+import { admissionInventoryIssues, createAdmissionController, type AdmissionController } from "../checkout/admission.js"
+import { inventoryAdmissions } from "../checkout/records.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -23,6 +26,7 @@ export type HandlerOptions = {
   status: Duplex
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
+  onAdmissionReady?: (controller: AdmissionController) => Promise<void>
 }
 
 export function receiveStart(gate: Duplex, status: Duplex, timeoutMs = 5000): Promise<void> {
@@ -151,7 +155,12 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     state.phase = "ready"
-    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, closeAfterReply: close }
+    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(entries), unavailable: null }
+    const issues = admissionInventoryIssues(options.paths.hostKey, entries, await inventoryAdmissions(options.paths.persistentRoot))
+    if (issues.length > 0) mutations.unavailable = issues.join("; ").slice(0, 512)
+    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close }
+    const admission = createAdmissionController({ paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined })
+    await options.onAdmissionReady?.(admission)
     if (termination) await terminate()
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()

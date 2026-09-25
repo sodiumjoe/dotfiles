@@ -17,17 +17,16 @@ function paired(record: LaunchRecord, admission: AdmissionRecord): boolean {
     && record.agentId === admission.agentId && record.leaseId === admission.leaseId && record.checkoutId === admission.checkout.checkoutId
 }
 
-export function classifyCheckout(checkout: CheckoutIdentity, launches: readonly InventoryEntry[], admissions: AdmissionInventory): CheckoutDecision {
+export function admissionInventoryIssues(hostId: string, launches: readonly InventoryEntry[], admissions: AdmissionInventory): string[] {
   const reasons = admissions.issues.map(issue => issue.reason), byAttempt = new Map<string, AdmissionRecord>()
   for (const value of admissions.records) {
     try {
       const record = parseAdmissionRecord(value)
-      if (byAttempt.has(record.launchAttemptId) || record.checkout.hostId !== checkout.hostId) throw new Error("admission duplicate or host mismatch")
+      if (byAttempt.has(record.launchAttemptId) || record.checkout.hostId !== hostId) throw new Error("admission duplicate or host mismatch")
       byAttempt.set(record.launchAttemptId, record)
     } catch (error) { reasons.push(String(error).slice(0, 512)) }
   }
   const seen = { launchAttemptId: new Set<string>(), agentId: new Set<string>(), leaseId: new Set<string>() }
-  const overlapping: LaunchRecord[] = []
   for (const { record } of launches) {
     for (const key of ["launchAttemptId", "agentId", "leaseId"] as const) {
       if (seen[key].has(record[key])) reasons.push(`duplicate retained ${key}`)
@@ -37,10 +36,16 @@ export function classifyCheckout(checkout: CheckoutIdentity, launches: readonly 
     if (admission === undefined) {
       if (record.phase !== "cleanup_verified") reasons.push(`unmapped launch ${record.launchAttemptId}`)
     } else if (!paired(record, admission)) reasons.push(`admission pair mismatch ${record.launchAttemptId}`)
-    else if (record.phase !== "cleanup_verified" && checkoutsOverlap(checkout, admission.checkout)) overlapping.push(record)
   }
   for (const attempt of byAttempt.keys()) if (!seen.launchAttemptId.has(attempt)) reasons.push(`orphan admission ${attempt}`)
-  if (reasons.length > 0) return { state: "unavailable", attempts: [], reasons: [...new Set(reasons)].sort() }
+  return [...new Set(reasons)].sort()
+}
+
+export function classifyCheckout(checkout: CheckoutIdentity, launches: readonly InventoryEntry[], admissions: AdmissionInventory): CheckoutDecision {
+  const reasons = admissionInventoryIssues(checkout.hostId, launches, admissions)
+  if (reasons.length > 0) return { state: "unavailable", attempts: [], reasons }
+  const byAttempt = new Map(admissions.records.map(record => [record.launchAttemptId, record]))
+  const overlapping = launches.map(entry => entry.record).filter(record => record.phase !== "cleanup_verified" && checkoutsOverlap(checkout, byAttempt.get(record.launchAttemptId)!.checkout))
   const attempts = overlapping.map(record => record.launchAttemptId).sort()
   return { state: overlapping.some(record => record.phase === "quarantined") ? "quarantined" : attempts.length > 0 ? "leased" : "available", attempts, reasons: overlapping.map(record => record.reason).filter((value): value is string => value !== null).sort() }
 }

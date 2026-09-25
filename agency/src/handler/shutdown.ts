@@ -7,6 +7,7 @@ import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
 import { inventoryLaunches, summarizeLaunches, verifyInventory } from "./inventory.js"
 import { assertSameShutdown, readShutdownReceipt, writeShutdownReceipt, type ShutdownReceipt } from "./receipt.js"
+import { refreshLaunchState, type HandlerMutations } from "./mutations.js"
 
 type ShutdownRequest = ControlRequest & { op: "shutdown" }
 export type ShutdownContext = {
@@ -14,6 +15,7 @@ export type ShutdownContext = {
   state: HandlerStatus
   paths: PlatformPaths
   adapter: PlatformAdapter
+  mutations: HandlerMutations
   closeAfterReply(): Promise<void>
   publishReceipt?: typeof writeShutdownReceipt
   accepted?: ShutdownReceipt
@@ -35,6 +37,7 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
       const result = await reconcileRecord(entry.path, context.adapter, entry.record)
       if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
       entry.record = result.record
+      context.mutations.accepted = [...context.mutations.accepted.filter(value => value.path !== entry.path), structuredClone(entry)].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
     }
   }
   await verifyInventory(directory, entries)
@@ -63,7 +66,13 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
       receipt = await context.pending.operation
     } else {
       if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler has not completed startup")
-      const operation = admit(request, context)
+      const operation = context.mutations.queue.run(async () => {
+        try {
+          if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
+          if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler is not ready")
+          return await admit(request, context)
+        } finally { await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches")) }
+      })
       context.pending = { request, operation }
       try { receipt = await operation } finally { delete context.pending }
     }

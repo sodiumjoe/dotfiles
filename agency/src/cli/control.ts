@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { isDeepStrictEqual } from "node:util"
+import { CheckoutResolutionError, resolveCheckout, type CheckoutIdentity } from "../checkout/identity.js"
+import { classifyCheckout, verifyRetainedMappings, type CheckoutDecision } from "../checkout/admission.js"
+import { inventoryAdmissions } from "../checkout/records.js"
 import { ControlError, PROTOCOL, UUID, controlError, exitCode, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply } from "../control/protocol.js"
 import { exchange } from "../control/wire.js"
 import { productionEnvironment, type HandlerEnvironment } from "../handler/environment.js"
@@ -20,6 +24,8 @@ export type ControlDependencies = {
   call(env: HandlerEnvironment, request: ControlRequest): Promise<ControlReply>
   receipt: typeof readShutdownReceipt
   inventory: typeof inventoryLaunches
+  cwd(): string
+  checkout(cwd: string, env: HandlerEnvironment): Promise<CheckoutDiagnostic>
   now(): number
   sleep(ms: number): Promise<void>
   stdout(text: string): void
@@ -32,9 +38,29 @@ export function productionControlDependencies(): ControlDependencies {
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
     call: async (env, request) => exchange(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request),
-    receipt: readShutdownReceipt, inventory: inventoryLaunches, now: Date.now,
+    receipt: readShutdownReceipt, inventory: inventoryLaunches, cwd: process.cwd, checkout: diagnoseCheckout, now: Date.now,
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     stdout: text => { process.stdout.write(text) }, stderr: text => { process.stderr.write(text) },
+  }
+}
+
+export type CheckoutDiagnostic =
+  | { state: "not_checkout"; reason: string }
+  | { state: "unavailable"; reason: string }
+  | { state: "observed"; checkout: CheckoutIdentity; admission: CheckoutDecision; authoritative: false }
+type DiagnosticDependencies = { inventory: typeof inventoryLaunches; admissions: typeof inventoryAdmissions; resolve: typeof resolveCheckout }
+
+export async function diagnoseCheckout(cwd: string, env: HandlerEnvironment, dependencies: DiagnosticDependencies = { inventory: inventoryLaunches, admissions: inventoryAdmissions, resolve: resolveCheckout }): Promise<CheckoutDiagnostic> {
+  try {
+    const directory = join(env.paths.persistentRoot, "launches")
+    const launches = await dependencies.inventory(directory), admissions = await dependencies.admissions(env.paths.persistentRoot)
+    const checkout = await dependencies.resolve(cwd, env.paths.hostKey)
+    const admission = classifyCheckout(checkout, launches, admissions)
+    if (admission.state !== "unavailable") await verifyRetainedMappings(launches, admissions, dependencies.resolve)
+    if (!isDeepStrictEqual(launches, await dependencies.inventory(directory)) || !isDeepStrictEqual(admissions, await dependencies.admissions(env.paths.persistentRoot))) throw new Error("checkout inventory changed during observation")
+    return { state: "observed", checkout, admission, authoritative: false }
+  } catch (error) {
+    return { state: error instanceof CheckoutResolutionError && error.code === "NOT_CHECKOUT" ? "not_checkout" : "unavailable", reason: String(error).slice(0, 512) }
   }
 }
 
@@ -115,7 +141,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       const handler = await dependencies.inspect(env)
       generation = handler?.record.generation ?? null
       const launches = await dependencies.inventory(join(env.paths.persistentRoot, "launches"))
-      emit(true, { node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler, launches: launches.map(entry => entry.record) })
+      emit(true, { node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler, launches: launches.map(entry => entry.record), checkout: await dependencies.checkout(dependencies.cwd(), env) })
       return 0
     }
     if (args.command === "status") {

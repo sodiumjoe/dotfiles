@@ -23,7 +23,7 @@ import { reconcileRecord } from "../src/platform/reconcile.js"
 
 export function unavailableControlDependencies(): ControlDependencies {
   const unavailable = async (): Promise<never> => { throw new ControlError("UNAVAILABLE") }
-  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, receipt: unavailable, inventory: unavailable, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
+  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, receipt: unavailable, inventory: unavailable, cwd: () => { throw new Error("unexpected cwd lookup") }, checkout: unavailable, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
 }
 
 export const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))

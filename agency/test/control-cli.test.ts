@@ -2,17 +2,23 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { chmod, copyFile, mkdir, symlink, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, symlink, writeFile, rm, stat } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import test from "node:test"
-import { runControl, type ControlDependencies } from "../src/cli/control.js"
+import { runControl, diagnoseCheckout, type ControlDependencies } from "../src/cli/control.js"
 import { ControlError, type ControlReply, type ControlRequest } from "../src/control/protocol.js"
 import type { HandlerInspection, ProcessIdentity } from "../src/platform/types.js"
 import type { ShutdownReceipt } from "../src/handler/receipt.js"
 import { privateRoot, unavailableControlDependencies } from "./control-support.js"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { LinuxObservationUnavailable } from "../src/platform/linux.js"
+import { admissionFixture } from "./checkout-support.js"
+import { launch } from "./control-support.js"
+import { resolveCheckout } from "../src/checkout/identity.js"
+import { inventoryAdmissions } from "../src/checkout/records.js"
+import { inventoryLaunches } from "../src/handler/inventory.js"
+import { writeLaunchRecord } from "../src/platform/private-state.js"
 
 function model() {
   const generation = randomUUID(), attempt = randomUUID(), hostId = "a".repeat(64)
@@ -27,6 +33,8 @@ function model() {
     inspect: async () => state.inspection,
     receipt: async () => state.receipt,
     inventory: async () => [],
+    cwd: () => "/test",
+    checkout: async () => ({ state: "not_checkout", reason: "fixture" }),
     call: async (_env, request) => {
       state.calls.push(request)
       if (request.op === "status") return status(request)
@@ -72,6 +80,34 @@ test("doctor inspects without starting or calling the daemon", async () => {
   assert.equal(m.state.starts, 0)
   assert.deepEqual(m.state.calls, [])
   assert.equal(m.output().result.handler.record.generation, m.generation)
+  assert.equal(m.output().result.checkout.state, "not_checkout")
+})
+
+test("doctor checkout observations are read-only and unavailable mappings remain explicit", { timeout: 20000 }, async t => {
+  const f = await admissionFixture(t), env = { paths: f.context.paths, adapter: f.context.adapter }
+  await rm(join(f.root, "admissions"), { recursive: true })
+  const available = await diagnoseCheckout(f.git.repo, env)
+  assert.ok(available.state === "observed" && available.authoritative === false && available.admission.state === "available")
+  await assert.rejects(stat(join(f.root, "admissions")), { code: "ENOENT" })
+  assert.equal((await diagnoseCheckout(f.git.root, env)).state, "not_checkout")
+  const request = f.request(), reservation = await f.controller.reserve(request)
+  await writeLaunchRecord(join(f.root, "launches", `${request.launchAttemptId}.json`), { ...reservation.launch, launchAttempted: true, phase: "quarantined", reason: "ambiguous" })
+  const quarantined = await diagnoseCheckout(f.git.repo, env)
+  assert.ok(quarantined.state === "observed" && quarantined.admission.state === "quarantined")
+  const legacy = launch()
+  await writeLaunchRecord(join(f.root, "launches", `${legacy.launchAttemptId}.json`), legacy)
+  const unknown = await diagnoseCheckout(f.git.linked, env)
+  assert.ok(unknown.state === "observed" && unknown.admission.state === "unavailable")
+})
+
+test("doctor rejects inventory changes observed during checkout resolution", { timeout: 20000 }, async t => {
+  const f = await admissionFixture(t), env = { paths: f.context.paths, adapter: f.context.adapter }
+  const result = await diagnoseCheckout(f.git.repo, env, { inventory: inventoryLaunches, admissions: inventoryAdmissions, resolve: async (cwd, host) => {
+    const checkout = await resolveCheckout(cwd, host), record = launch()
+    await writeLaunchRecord(join(f.root, "launches", `${record.launchAttemptId}.json`), record)
+    return checkout
+  } })
+  assert.equal(result.state, "unavailable")
 })
 
 test("shutdown success requires a receipt and independent absence, including a lost reply", async () => {
