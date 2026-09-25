@@ -43,9 +43,20 @@ export async function fileExists(path: string): Promise<boolean> {
 }
 
 export type AdmissionFixtureOperation = { checkoutPath: string; action: "reserve" | "reserve_cancel"; agentId: string; leaseId: string; launchAttemptId: string }
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; admissionOperations?: AdmissionFixtureOperation[] }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean }
+type CheckoutFixtureCleanup = { root: string; verifyCleanup: () => void; beforeCleanup: (verify: () => Promise<void>) => void }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}) {
+let fixtureBatchFailure: Error | undefined
+export function assertFixtureBatchHealthy(): void {
+  if (fixtureBatchFailure !== undefined) throw fixtureBatchFailure
+}
+function failFixtureBatch(error: unknown): Error {
+  fixtureBatchFailure ??= error instanceof Error ? error : new Error(String(error))
+  return fixtureBatchFailure
+}
+
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, checkout?: CheckoutFixtureCleanup) {
+  assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   const paths: PlatformPaths = { hostKey: "a".repeat(64), persistentRoot: join(root, "state"), runtimeRoot: join(root, "run"), handlerSocketPath: join(root, "run/handler.sock") }
@@ -69,8 +80,19 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   async function signal(expected: ProcessIdentity, value: NodeJS.Signals): Promise<void> {
     if (await authorize(expected) && await authorize(expected)) await adapter.signalGroup(expected.pid, value)
   }
-  t.after(async () => {
+  const verifyGitCleanup = async (): Promise<void> => {
+    try {
+      const evidence = JSON.parse(await readFile(join(root, "git-cleanup-failure.json"), "utf8"))
+      throw failFixtureBatch(Object.assign(new Error(`unverified Handler Git cleanup; retained ${root} and ${checkout?.root ?? "checkout"}`), { evidence }))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw failFixtureBatch(error)
+    }
+  }
+  let cleanupOperation: Promise<void> | undefined
+  const cleanup = (): Promise<void> => cleanupOperation ??= (async () => {
     await Promise.allSettled(starts)
+    await verifyGitCleanup()
+    assertFixtureBatchHealthy()
     for (const item of pending) {
       if (owned.some(identity => identity.pid === item.pid)) continue
       const identity = await observe(item.pid)
@@ -107,16 +129,20 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       for (const identity of provider.record.provider!.group.observed) assert.equal(await observe(identity.pid), null)
       assert.deepEqual(await adapter.readGroup(provider.record.provider!.group.leader.pid), [])
     }
+    checkout?.verifyCleanup()
     await writeFile(join(root, "cleanup.json"), JSON.stringify({ identities: owned, survivors: [], failedStarts: failedStarts.map(String) }), { mode: 0o600 })
     await rm(root, { recursive: true })
-  })
+  })().catch(error => { throw failFixtureBatch(error) })
+  t.after(cleanup)
+  checkout?.beforeCleanup(cleanup)
   await chown(root, process.getuid!(), process.getgid!())
   await mkdir(paths.persistentRoot, { mode: 0o700 })
   await mkdir(paths.runtimeRoot, { mode: 0o700 })
   await mkdir(join(paths.persistentRoot, "launches"), { mode: 0o700 })
   const configPath = join(root, "config.json")
   await writeFile(configPath, JSON.stringify({ paths, ...overrides }), { mode: 0o600 })
-  const start = (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
+  const start = async (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
+    assertFixtureBatchHealthy()
     let marker: string | undefined
     const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath] }, onTransition: async (transition, pid) => {
       if (transition === "launch_pending_written") marker = `agy-handler:${(await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))).launchAttemptId}`
@@ -127,7 +153,11 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
         if (identity !== null) { assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), marker); owned.push(identity) }
       }
       await hook?.(transition)
-    } })
+    } }).then(async result => { await verifyGitCleanup(); return result }, async error => {
+      await verifyGitCleanup()
+      if (overrides.admissionOperations !== undefined) throw failFixtureBatch(new Error(`admission fixture startup failed; retained ${root} and ${checkout?.root ?? "checkout"}`, { cause: error }))
+      throw error
+    })
     starts.push(operation)
     void operation.catch(error => failedStarts.push(error))
     return operation
@@ -137,6 +167,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
     return exchange(createConnection(paths.handlerSocketPath), request ?? { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: record.generation, op: "status" }, 5000)
   }
   const spawnProvider = async (): Promise<LaunchRecord> => {
+    assertFixtureBatchHealthy()
     const attempt = randomUUID(), marker = `agy-provider:${attempt}`, ready = join(root, `${attempt}-ready.json`)
     const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/provider-tree.js", import.meta.url)), "leader", ready, "normal", "5000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] })
     const provider: typeof providers[number] = { child, marker, attempt }
@@ -181,7 +212,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       return provider.record
     } finally { status.destroy(); ack.destroy() }
   }
-  return { root, paths, adapter, owned, start, call, signal, observe, configPath, spawnProvider }
+  return { root, paths, adapter, owned, start, call, signal, observe, configPath, spawnProvider, cleanup }
 }
 
 export async function privateRoot(t: TestContext): Promise<string> {

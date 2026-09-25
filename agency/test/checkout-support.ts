@@ -7,26 +7,34 @@ import { randomUUID } from "node:crypto"
 import { assertGitChildrenClosed, resolveCheckout } from "../src/checkout/identity.js"
 import { createAdmissionController, type AdmissionContext, type ReservationRequest } from "../src/checkout/admission.js"
 import { MutationQueue } from "../src/handler/mutations.js"
-import { privateRoot } from "./control-support.js"
+import { assertFixtureBatchHealthy, privateRoot } from "./control-support.js"
 
 export const testHostId = "a".repeat(64)
 
 export async function gitFixture(t: TestContext) {
+  assertFixtureBatchHealthy()
   assertGitChildrenClosed()
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-checkout-"))
   const children = new Set<number>()
   let calls = 0, uncertain = false, removed = false
-  const cleanup = async (): Promise<void> => {
-    if (removed) return
+  const cleanupBarriers: Array<() => Promise<void>> = []
+  const verifyCleanup = (): void => {
+    assertFixtureBatchHealthy()
     assertGitChildrenClosed()
     assert.equal(uncertain, false, `unverified Git cleanup; retained ${root}`)
     assert.equal(children.size, 0, `Git children remain; retained ${root}`)
+  }
+  const cleanup = async (): Promise<void> => {
+    if (removed) return
+    for (const barrier of cleanupBarriers) await barrier()
+    verifyCleanup()
     await rm(root, { recursive: true })
     removed = true
   }
   t.after(cleanup)
   const repo = join(root, "main repo"), linked = join(root, "linked"), alias = join(root, "alias"), nested = join(repo, "nested")
   const git = async (args: string[], cwd = root): Promise<string> => {
+    assertFixtureBatchHealthy()
     assertGitChildrenClosed()
     assert.ok(++calls <= 16, "fixture Git invocation budget exceeded")
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
@@ -52,7 +60,8 @@ export async function gitFixture(t: TestContext) {
   await symlink(repo, alias)
   await mkdir(nested)
   await git(["init", "-q", nested])
-  return { root, repo, linked, alias, nested, git, cleanup }
+  const beforeCleanup = (verify: () => Promise<void>): void => { cleanupBarriers.push(verify) }
+  return { root, repo, linked, alias, nested, git, cleanup, verifyCleanup, beforeCleanup }
 }
 
 export async function admissionFixture(t: TestContext) {

@@ -41,7 +41,8 @@ export async function verifyGitExit(observation: GitObservation, timeoutMs: numb
 const uncertainChildren = new Set<GitObservation>()
 
 export function assertGitChildrenClosed(): void {
-  if (uncertainChildren.size > 0) throw new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "previous Git cleanup unverified")
+  const pending = uncertainChildren.values().next().value
+  if (pending !== undefined) throw new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "previous Git cleanup unverified", { ...pending.evidence })
 }
 
 function cleanEnvironment(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

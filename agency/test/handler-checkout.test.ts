@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile, stat, rm } from "node:fs/promises"
 import { join } from "node:path"
-import test from "node:test"
+import test, { type TestContext } from "node:test"
 import { productionControlDependencies, runControl } from "../src/cli/control.js"
 import { resolveCheckout } from "../src/checkout/identity.js"
 import { readAdmission, writeAdmission } from "../src/checkout/records.js"
@@ -19,7 +19,7 @@ function client(f: Awaited<ReturnType<typeof controlFixture>>, cwd: string) {
 }
 
 test("real Handler reservations appear in status and doctor; only verified cleanup permits shutdown", { timeout: 20000 }, async t => {
-  const git = await gitFixture(t), op = operation(git.repo), f = await controlFixture(t, { admissionOperations: [op] })
+  const git = await gitFixture(t), op = operation(git.repo), f = await controlFixture(t, { admissionOperations: [op] }, git)
   await f.start()
   assert.equal((await results(f.root))[0]!.ok, true)
   const status = await f.call()
@@ -39,7 +39,7 @@ test("real Handler reservations appear in status and doctor; only verified clean
 })
 
 test("abrupt Handler death releases an unattempted lease on restart without reviving its attempt", { timeout: 20000 }, async t => {
-  const git = await gitFixture(t), old = operation(git.repo), fresh = operation(git.repo), f = await controlFixture(t, { admissionOperations: [old] })
+  const git = await gitFixture(t), old = operation(git.repo), fresh = operation(git.repo), f = await controlFixture(t, { admissionOperations: [old] }, git)
   const first = await f.start()
   assert.equal((await results(f.root))[0]!.ok, true)
   const path = join(f.paths.persistentRoot, "launches", `${old.launchAttemptId}.json`)
@@ -61,7 +61,7 @@ test("abrupt Handler death releases an unattempted lease on restart without revi
 })
 
 test("mapped same-boot quarantine survives restart while a separate worktree admits", { timeout: 20000 }, async t => {
-  const git = await gitFixture(t), denied = operation(git.repo), allowed = operation(git.linked), f = await controlFixture(t, { admissionOperations: [denied, allowed] })
+  const git = await gitFixture(t), denied = operation(git.repo), allowed = operation(git.linked), f = await controlFixture(t, { admissionOperations: [denied, allowed] }, git)
   const checkout = await resolveCheckout(git.repo, f.paths.hostKey), op = operation(git.repo)
   const record = launch({ checkoutId: checkout.checkoutId, agentId: op.agentId, leaseId: op.leaseId, launchAttemptId: op.launchAttemptId, launchBootId: await f.adapter.bootId() })
   const path = join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`)
@@ -78,7 +78,7 @@ test("mapped same-boot quarantine survives restart while a separate worktree adm
 
 for (const evidence of ["legacy", "orphan", "malformed"]) {
   test(`${evidence} evidence disables admission without disabling Handler status`, { timeout: 20000 }, async t => {
-    const git = await gitFixture(t), op = operation(git.repo), f = await controlFixture(t, { admissionOperations: [op] })
+    const git = await gitFixture(t), op = operation(git.repo), f = await controlFixture(t, { admissionOperations: [op] }, git)
     if (evidence === "legacy") {
       const record = launch({ launchBootId: await f.adapter.bootId() })
       await writeLaunchRecord(join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`), record)
@@ -99,10 +99,44 @@ for (const evidence of ["legacy", "orphan", "malformed"]) {
 }
 
 test("real Handler cancellation retains evidence and permits ordinary shutdown", { timeout: 20000 }, async t => {
-  const git = await gitFixture(t), op = operation(git.repo, "reserve_cancel"), f = await controlFixture(t, { admissionOperations: [op] })
+  const git = await gitFixture(t), op = operation(git.repo, "reserve_cancel"), f = await controlFixture(t, { admissionOperations: [op] }, git)
   await f.start()
   assert.equal((await results(f.root))[0]!.ok, true)
   assert.equal((await readLaunchRecordForReconciliation(join(f.paths.persistentRoot, "launches", `${op.launchAttemptId}.json`))).phase, "cleanup_verified")
   assert.notEqual(await readAdmission(f.paths.persistentRoot, op.launchAttemptId), null)
   assert.equal(await client(f, git.repo).run(["shutdown"]), 0)
+})
+
+test("Handler Git cleanup uncertainty fails the fixture batch", { timeout: 20000 }, async t => {
+  const teardown: Array<() => Promise<void>> = []
+  t.after(async () => { for (const cleanup of teardown) await cleanup().catch(() => undefined) })
+  const context = { after: (cleanup: () => Promise<void>) => { teardown.push(cleanup) } } as unknown as TestContext
+  const git = await gitFixture(context)
+  const config = { admissionOperations: [operation(git.repo), operation(git.linked)], syntheticGitCleanup: true }
+  const f = await controlFixture(context, config, git)
+  try {
+    await assert.rejects(f.start(), /unverified Handler Git cleanup/)
+    const evidence = JSON.parse(await readFile(join(f.root, "git-cleanup-failure.json"), "utf8"))
+    assert.notEqual(evidence.handlerPid, process.pid)
+    assert.equal(evidence.checkoutPath, git.repo)
+    assert.equal(evidence.launchAttemptId, config.admissionOperations[0]!.launchAttemptId)
+    assert.deepEqual(evidence.child, { pid: null, exited: false, closed: false, signal: null })
+    assert.deepEqual(evidence.completedOperations, [])
+    await assert.rejects(readFile(join(f.root, "admission-result.json")), { code: "ENOENT" })
+    for (const cleanup of teardown) await assert.rejects(cleanup(), /unverified Handler Git cleanup/)
+    for (const root of [git.root, f.root]) assert.equal((await stat(root)).isDirectory(), true)
+    await assert.rejects(gitFixture(context), /unverified Handler Git cleanup/)
+    await assert.rejects(controlFixture(context), /unverified Handler Git cleanup/)
+    await assert.rejects(f.start(), /unverified Handler Git cleanup/)
+    await assert.rejects(git.git(["status", "--porcelain"], git.repo), /unverified Handler Git cleanup/)
+  } finally {
+    for (const cleanup of teardown) await cleanup().catch(() => undefined)
+    const evidence = JSON.parse(await readFile(join(f.root, "git-cleanup-failure.json"), "utf8"))
+    assert.equal(evidence.child.pid, null)
+    await until(async () => await f.observe(evidence.handlerPid) === null ? true : undefined)
+    assert.deepEqual(await f.adapter.readGroup(evidence.handlerPid), [])
+    assert.equal(await f.observe(evidence.handlerPid), null)
+    await rm(f.root, { recursive: true })
+    await rm(git.root, { recursive: true })
+  }
 })

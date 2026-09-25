@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto"
+import { ChildProcess } from "node:child_process"
 import { readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { Socket } from "node:net"
 import { runHandler } from "../../src/handler/daemon.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
-import { resolveCheckout } from "../../src/checkout/identity.js"
+import { resolveCheckout, observeGitChild, verifyGitExit, assertGitChildrenClosed, CheckoutResolutionError } from "../../src/checkout/identity.js"
 import type { ControlFixtureConfig } from "../control-support.js"
 
 process.umask(0o077)
@@ -38,12 +39,17 @@ try {
     const results: unknown[] = []
     for (const operation of config.admissionOperations) {
       try {
+        if (config.syntheticGitCleanup) await verifyGitExit(observeGitChild(new ChildProcess()), 5)
         const checkout = await resolveCheckout(operation.checkoutPath, config.paths.hostKey)
         const request = { checkout, agentId: operation.agentId, leaseId: operation.leaseId, launchAttemptId: operation.launchAttemptId, handlerGeneration: process.env.AGENCY_HANDLER_GENERATION! }
         const reservation = await controller.reserve(request)
         const launch = operation.action === "reserve_cancel" ? await controller.cancel(request) : reservation.launch
         results.push({ ok: true, admission: reservation.admission, launch })
       } catch (error) {
+        try { assertGitChildrenClosed() } catch (cleanup) {
+          await writeFile(join(root, "git-cleanup-failure.json"), JSON.stringify({ handlerPid: process.pid, handlerGeneration: process.env.AGENCY_HANDLER_GENERATION, checkoutPath: operation.checkoutPath, launchAttemptId: operation.launchAttemptId, child: cleanup instanceof CheckoutResolutionError ? cleanup.child : null, completedOperations: results }), { mode: 0o600 })
+          throw cleanup
+        }
         results.push({ ok: false, code: error instanceof Error && "code" in error ? error.code : "FIXTURE_ERROR", message: String(error).slice(0, 512) })
       }
     }

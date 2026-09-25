@@ -108,3 +108,13 @@ test("fixture teardown retains its root until resolver-owned child termination i
     await verifyGitExit(observation, 5)
   }
 })
+
+test("Git root teardown requires the registered Handler cleanup barrier", { timeout: 20000 }, async t => {
+  const f = await gitFixture(t)
+  let verified = false
+  f.beforeCleanup(async () => { if (!verified) throw new Error("Handler absence unverified") })
+  try {
+    await assert.rejects(f.cleanup(), /Handler absence unverified/)
+    assert.equal((await stat(f.root)).isDirectory(), true)
+  } finally { verified = true }
+})
