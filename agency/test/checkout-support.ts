@@ -3,6 +3,11 @@ import { execFile } from "node:child_process"
 import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
 import type { TestContext } from "node:test"
+import { randomUUID } from "node:crypto"
+import { resolveCheckout } from "../src/checkout/identity.js"
+import { createAdmissionController, type AdmissionContext, type ReservationRequest } from "../src/checkout/admission.js"
+import { MutationQueue } from "../src/handler/mutations.js"
+import { privateRoot } from "./control-support.js"
 
 export const testHostId = "a".repeat(64)
 
@@ -42,4 +47,20 @@ export async function gitFixture(t: TestContext) {
   await mkdir(nested)
   await git(["init", "-q", nested])
   return { root, repo, linked, alias, nested, git }
+}
+
+export async function admissionFixture(t: TestContext) {
+  const root = await privateRoot(t), git = await gitFixture(t), checkout = await resolveCheckout(git.repo, testHostId), generation = randomUUID()
+  await mkdir(join(root, "launches"), { mode: 0o700 })
+  await mkdir(join(root, "admissions"), { mode: 0o700 })
+  const forbidden = async (): Promise<never> => { throw new Error("unauthorized process observation or signal") }
+  const context: AdmissionContext = {
+    paths: { hostKey: testHostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
+    adapter: { platform: "linux", bootId: async () => "boot-a", readProcess: forbidden, readGroup: forbidden, signalGroup: forbidden },
+    state: { hostId: testHostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
+    mutations: { queue: new MutationQueue(), accepted: [], unavailable: null },
+    shutdownPending: () => false,
+  }
+  const request = (): ReservationRequest => ({ checkout: structuredClone(checkout), handlerGeneration: generation, agentId: randomUUID(), leaseId: randomUUID(), launchAttemptId: randomUUID() })
+  return { root, git, context, checkout, controller: createAdmissionController(context), request }
 }
