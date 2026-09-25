@@ -6,6 +6,7 @@
     "node": "24.13.0"
   },
   "scripts": {
+    "test:checkout": "npm run build && node --test --test-concurrency=1 dist/test/checkout-identity.test.js",
     "build": "tsc -p tsconfig.json",
     "test:control": "npm run build && node --test --test-concurrency=1 dist/test/control-protocol.test.js dist/test/handler-inventory.test.js dist/test/handler-daemon.test.js dist/test/handler-shutdown.test.js dist/test/control-cli.test.js",
     "test:control-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-control-plane.test.js",
