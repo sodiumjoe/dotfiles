@@ -226,13 +226,11 @@ async function readbackFixture(batchId="direct-group-batch-1") {
   return { d, filesystem, receipt, input, dependencies, observed, pids }
 }
 async function frozenEvidenceBytes(){
-  const pointer=(await readFile(new URL("../../../.git",import.meta.url),"utf8")).trim()
-  assert.match(pointer,/^gitdir: /)
-  const root=join(pointer.slice("gitdir: ".length),"sdd","direct-group-batch-1")
+  const root=new URL("../../test/fixtures/direct-group-batch-1/",import.meta.url)
   return {
-    receipt:await readFile(join(root,"receipt.json")),
-    cleanup:await readFile(join(root,"cleanup-receipt.json")),
-    diagnostic:await readFile(join(root,"diagnostic-receipt.json")),
+    receipt:await readFile(new URL("receipt.json",root)),
+    cleanup:await readFile(new URL("cleanup-receipt.json",root)),
+    diagnostic:await readFile(new URL("diagnostic-receipt.json",root)),
   }
 }
 const jsonBytes=(value:unknown)=>Buffer.from(JSON.stringify(value))
