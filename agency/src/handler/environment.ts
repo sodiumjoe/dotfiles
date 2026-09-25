@@ -18,7 +18,7 @@ export function assertRuntime(version: string, platform: string): asserts platfo
 
 export async function ensurePrivateChild(parent: string, name: string): Promise<string> {
   await assertPrivateDirectory(parent)
-  if (name !== "launches" && name !== "shutdown") throw new Error("unsupported state directory")
+  if (name !== "launches" && name !== "shutdown" && name !== "admissions") throw new Error("unsupported state directory")
   const path = join(parent, name)
   try { await mkdir(path, { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error }
   await assertPrivateDirectory(path)
