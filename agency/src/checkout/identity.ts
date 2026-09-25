@@ -22,7 +22,9 @@ export function observeGitChild(child: ChildProcess): GitObservation {
     child.once("exit", (_code, signal) => { evidence.exited = true; evidence.signal = signal })
     child.once("close", () => { evidence.closed = evidence.exited || failedSpawn; resolve() })
   })
-  return { evidence, terminal }
+  const observation = { evidence, terminal }
+  uncertainChildren.add(observation)
+  return observation
 }
 
 export async function verifyGitExit(observation: GitObservation, timeoutMs: number): Promise<void> {
@@ -32,10 +34,15 @@ export async function verifyGitExit(observation: GitObservation, timeoutMs: numb
       timer = setTimeout(() => reject(new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "Git cleanup unverified", { ...observation.evidence })), timeoutMs)
     })])
     if (!observation.evidence.closed) throw new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "Git cleanup unverified", { ...observation.evidence })
+    uncertainChildren.delete(observation)
   } finally { clearTimeout(timer) }
 }
 
 const uncertainChildren = new Set<GitObservation>()
+
+export function assertGitChildrenClosed(): void {
+  if (uncertainChildren.size > 0) throw new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "previous Git cleanup unverified")
+}
 
 function cleanEnvironment(input: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = Object.fromEntries(Object.entries(input).filter(([key]) => !key.startsWith("GIT_")))
@@ -47,7 +54,7 @@ function checkPath(path: string): void {
 }
 
 async function gitValue(cwd: string, args: string[], options: IdentityOptions, deadline: number): Promise<string> {
-  if (uncertainChildren.size > 0) throw new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "previous Git cleanup unverified")
+  assertGitChildrenClosed()
   const timeout = Math.min(2000, deadline - Date.now() - 1000)
   if (timeout <= 0) throw new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "checkout resolution deadline exceeded")
   const executable = options.gitExecutable ?? "/usr/bin/git"
@@ -55,9 +62,7 @@ async function gitValue(cwd: string, args: string[], options: IdentityOptions, d
   let result: { error: Error | null; stdout: Buffer; stderr: Buffer } | undefined
   const child = execFile(executable, ["rev-parse", ...args], { cwd, env: cleanEnvironment(options.env ?? process.env), encoding: "buffer", timeout, killSignal: "SIGKILL", maxBuffer: 65536 }, (error, stdout, stderr) => { result = { error, stdout, stderr } })
   const observation = observeGitChild(child)
-  uncertainChildren.add(observation)
   await verifyGitExit(observation, timeout + 1000)
-  uncertainChildren.delete(observation)
   if (result === undefined) throw new CheckoutResolutionError("IDENTITY_UNAVAILABLE", "Git result unavailable", { ...observation.evidence })
   if (result.error !== null) {
     const notGit = result.stderr.toString("utf8").includes("not a git repository")

@@ -5,6 +5,7 @@ import { Socket } from "node:net"
 import { runHandler } from "../../src/handler/daemon.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
+import { resolveCheckout } from "../../src/checkout/identity.js"
 import type { ControlFixtureConfig } from "../control-support.js"
 
 process.umask(0o077)
@@ -31,6 +32,22 @@ try {
       if (config.mutate === "add") { record.launchAttemptId = randomUUID(); await writeFile(join(directory, record.launchAttemptId + ".json"), JSON.stringify(record), { mode: 0o600 }) }
       else { record.checkoutId = "replaced"; await writeFile(path, JSON.stringify(record), { mode: 0o600 }) }
     }
+  }, onAdmissionReady: async controller => {
+    if (config.admissionOperations === undefined) return
+    if (config.admissionOperations.length < 1 || config.admissionOperations.length > 3) throw new Error("invalid fixture operation count")
+    const results: unknown[] = []
+    for (const operation of config.admissionOperations) {
+      try {
+        const checkout = await resolveCheckout(operation.checkoutPath, config.paths.hostKey)
+        const request = { checkout, agentId: operation.agentId, leaseId: operation.leaseId, launchAttemptId: operation.launchAttemptId, handlerGeneration: process.env.AGENCY_HANDLER_GENERATION! }
+        const reservation = await controller.reserve(request)
+        const launch = operation.action === "reserve_cancel" ? await controller.cancel(request) : reservation.launch
+        results.push({ ok: true, admission: reservation.admission, launch })
+      } catch (error) {
+        results.push({ ok: false, code: error instanceof Error && "code" in error ? error.code : "FIXTURE_ERROR", message: String(error).slice(0, 512) })
+      }
+    }
+    await writeFile(join(root, "admission-result.json"), JSON.stringify(results), { mode: 0o600 })
   } })
 } catch (error) {
   await writeFile(join(root, "failure"), String(error), { mode: 0o600 })

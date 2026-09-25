@@ -42,7 +42,8 @@ export async function fileExists(path: string): Promise<boolean> {
   try { await readFile(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error }
 }
 
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number }
+export type AdmissionFixtureOperation = { checkoutPath: string; action: "reserve" | "reserve_cancel"; agentId: string; leaseId: string; launchAttemptId: string }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; admissionOperations?: AdmissionFixtureOperation[] }
 
 export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}) {
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))

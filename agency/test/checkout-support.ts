@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises"
 import { join } from "node:path"
 import type { TestContext } from "node:test"
 import { randomUUID } from "node:crypto"
-import { resolveCheckout } from "../src/checkout/identity.js"
+import { assertGitChildrenClosed, resolveCheckout } from "../src/checkout/identity.js"
 import { createAdmissionController, type AdmissionContext, type ReservationRequest } from "../src/checkout/admission.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import { privateRoot } from "./control-support.js"
@@ -12,16 +12,22 @@ import { privateRoot } from "./control-support.js"
 export const testHostId = "a".repeat(64)
 
 export async function gitFixture(t: TestContext) {
+  assertGitChildrenClosed()
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-checkout-"))
   const children = new Set<number>()
-  let calls = 0, uncertain = false
-  t.after(async () => {
+  let calls = 0, uncertain = false, removed = false
+  const cleanup = async (): Promise<void> => {
+    if (removed) return
+    assertGitChildrenClosed()
     assert.equal(uncertain, false, `unverified Git cleanup; retained ${root}`)
     assert.equal(children.size, 0, `Git children remain; retained ${root}`)
     await rm(root, { recursive: true })
-  })
+    removed = true
+  }
+  t.after(cleanup)
   const repo = join(root, "main repo"), linked = join(root, "linked"), alias = join(root, "alias"), nested = join(repo, "nested")
   const git = async (args: string[], cwd = root): Promise<string> => {
+    assertGitChildrenClosed()
     assert.ok(++calls <= 16, "fixture Git invocation budget exceeded")
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")))
     Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid", LC_ALL: "C" })
@@ -46,7 +52,7 @@ export async function gitFixture(t: TestContext) {
   await symlink(repo, alias)
   await mkdir(nested)
   await git(["init", "-q", nested])
-  return { root, repo, linked, alias, nested, git }
+  return { root, repo, linked, alias, nested, git, cleanup }
 }
 
 export async function admissionFixture(t: TestContext) {

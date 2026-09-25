@@ -1,8 +1,8 @@
 # Agency
 
-Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
+Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, internal checkout admission, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
 
-It does not yet create agents or implement model discovery, checkout admission, ACP sessions, permissions, attachment/roster streams, Neovim integration, the Bureau, or cross-host coordination. Existing retained providers are reconciled only; surviving sessions are never adopted.
+It does not yet create agents or implement model discovery, ACP sessions, permissions, attachment/roster streams, Neovim integration, the Bureau, or cross-host coordination. Existing retained providers are reconciled only; surviving sessions are never adopted. Checkout reservation/cancellation is an internal Handler API, not a public reserve command or an agent-start interface.
 
 ## Build and commands
 
@@ -32,11 +32,27 @@ The launcher may time out while a live Handler continues reconciliation. A later
 
 ## Verification scope
 
-Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, and `npm run test:control-integration` with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment.
+Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, `npm run test:control-integration`, `npm run test:checkout`, and `npm run test:checkout-integration` with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment.
 
 The Handler composition is qualified locally on Darwin. Real Linux Handler execution remains unqualified until a separately bounded remote increment. The platform layer's retained Linux qualification remains valid; synthetic Linux tests do not substitute for a real Linux Handler trial.
 
 ## Qualified contract
+
+### Checkout admission
+
+Checkout identity binds the host, canonical root, device/inode strings, common Git directory, worktree-specific Git directory, and physical ancestors. The stable ID hashes the host and root/worktree-Git-directory physical identities. Symlink and case aliases converge, while separate non-overlapping linked worktrees remain independent despite sharing a common Git directory. Nested repositories and submodules conflict with a leased parent. Dirty files are neither reset nor deleted.
+
+The resolver uses `/usr/bin/git rev-parse` with argument vectors, neutralized inherited Git redirection, bounded output, and repeated snapshots. Each direct Git child has a two-second execution limit and SIGKILL timeout/overflow policy; cleanup requires observed terminal state. Missing Git, unsupported paths, bare repositories, unstable filesystem mappings, and unverified subprocess cleanup fail closed. These observations are not a filesystem lock against hostile same-user mutation. Provider launch will require renewed validation in its later increment.
+
+Only the qualified Handler creates leases. Reservation, unattempted cancellation, and shutdown share one mutation queue. Generation and readiness checks run inside it; pending shutdown prevents new reservations, and duplicate shutdown requests retain their existing coalescing behavior. Internal retries carry immutable agent, lease, attempt, Handler-generation, and checkout identities. A released attempt can never be revived; a new reservation needs fresh IDs.
+
+Reservation first publishes the unchanged version-1 unattempted LaunchRecord, then immutable `admissions/<launchAttemptId>.json` checkout evidence. Success requires both durable publications, exact readback, complete inventory checks, and renewed checkout validation. Every metadata retry repeats file and directory durability barriers, including the persistent parent. A failed publication may leave visible blocking records. Exact matching unattempted retries may complete publication; uncertain evidence is never deleted to free a checkout. Cancellation uses qualified reconciliation only for a pinned, provably unattempted record. Metadata remains after verified release.
+
+Mapped unresolved launches block overlapping checkouts. Unmapped legacy launches, orphan or malformed metadata, inconsistent identities, or unexpected changes to the accepted launch inventory make admission globally unavailable while status and guarded shutdown remain usable. Every unresolved retained checkout mapping is checked before and after new publication. A moved/replaced mapping also blocks all new reservations because historical paths cannot locate arbitrary relocation. Exact unattempted cancellation or qualified restart/shutdown cleanup can discharge the affected launch; metadata alone is never release authority. Unexpected launch-inventory changes latch admission unavailable until a new qualified Handler generation.
+
+`agy doctor` adds a current-checkout diagnostic without starting the Handler, reserving a lease, reconciling processes, or creating admission metadata. It reports observed identity/occupancy with `authoritative: false`, or an explicit not-checkout/unavailable condition. The observation cannot authorize a writer and may become stale immediately after it returns. Existing environment initialization may still create empty state/runtime directories. The strict socket protocol and status capabilities remain unchanged.
+
+### Platform records
 
 Agency stores versioned Handler and launch records below a canonical user-owned 0700 persistent root. Records are validated before use and published through a 0600 temporary file, file `fsync`, atomic rename, and parent-directory `fsync`. Invalid, oversized, symlinked, non-private, or semantically inconsistent records fail closed.
 

@@ -94,3 +94,17 @@ test("unverified child termination remains an explicit cleanup failure", async (
   child.emit("close", -1, null)
   await verifyGitExit(observation, 5)
 })
+
+test("fixture teardown retains its root until resolver-owned child termination is verified", { timeout: 20000 }, async t => {
+  const f = await gitFixture(t), child = new ChildProcess(), observation = observeGitChild(child)
+  try {
+    await assert.rejects(verifyGitExit(observation, 5), /cleanup unverified/)
+    await assert.rejects(f.cleanup(), /cleanup unverified/)
+    assert.equal((await stat(f.root)).isDirectory(), true)
+    await assert.rejects(resolveCheckout(f.repo, testHostId), /cleanup unverified/)
+  } finally {
+    child.emit("error", new Error("synthetic spawn failed"))
+    child.emit("close", -1, null)
+    await verifyGitExit(observation, 5)
+  }
+})
