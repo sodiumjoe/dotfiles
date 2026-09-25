@@ -1,0 +1,92 @@
+import { isAbsolute, normalize } from "node:path"
+
+export const PROVIDERS = ["claude-agent-acp", "codex-acp"] as const
+export type ProviderId = typeof PROVIDERS[number]
+export type Capability = { state: "unknown" } | { state: "none" } | { state: "values"; values: string[] }
+export type Model = { providerId: ProviderId; modelId: string; resolvedModelId: string | null; displayName: string; reasoning: Capability; modes: Capability; availability: "advertised" }
+export type ProviderProfile = { id: ProviderId; enabled: boolean; executable: string; adapterPackageJson: string; sdkPackageJson: string | null; configurationFiles: string[] }
+export type ConfigEvidence = { fingerprint: string; scope: "declared-config-v1"; providerId: ProviderId; adapterVersion: string; sdkVersion: string | null }
+export type CatalogFailure = { code: CatalogErrorCode; message: string }
+export type ProviderSnapshot = { providerId: ProviderId; fingerprint: string | null; verifiedAt: number | null; verifiedHandlerGeneration: string | null; providerVersion: string | null; providerVersionSource: "reported" | "unknown"; adapterVersion: string | null; sdkVersion: string | null; models: Model[]; error: CatalogFailure | null }
+export type CatalogSnapshot = { version: 1; hostId: string; snapshotId: string; handlerGeneration: string; createdAt: number; providers: ProviderSnapshot[] }
+export const CATALOG_TTL_MS = 600000
+export const MAX_CATALOG_BYTES = 1024 * 1024
+export const catalogMessages = {
+  INVALID_CATALOG: "Invalid catalog evidence",
+  UNSUPPORTED_PROVIDER_VERSION: "Unsupported discovery dependency version",
+  CONFIG_CHANGED: "Declared provider configuration changed",
+  PROBE_FAILED: "Provider discovery failed",
+  PROBE_TIMEOUT: "Provider discovery timed out",
+  PROBE_CLEANUP_UNVERIFIED: "Discovery process cleanup is unverified",
+  CATALOG_UNAVAILABLE: "Catalog discovery is unavailable",
+  COMMAND_CONFLICT: "Refresh command identity conflicts with retained evidence",
+  STALE_HANDLER: "Handler generation changed",
+  INCOMPLETE: "Catalog operation remains incomplete",
+} as const
+export type CatalogErrorCode = keyof typeof catalogMessages
+export class CatalogError extends Error {
+  constructor(readonly code: CatalogErrorCode) { super(catalogMessages[code]) }
+}
+export function failure(error: unknown): CatalogFailure {
+  const code = error instanceof CatalogError ? error.code : "CATALOG_UNAVAILABLE"
+  return { code, message: catalogMessages[code] }
+}
+export function invalid(): never { throw new CatalogError("INVALID_CATALOG") }
+export function object(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) invalid()
+  return value as Record<string, unknown>
+}
+export function keys(value: Record<string, unknown>, expected: readonly string[]): void {
+  if (Object.keys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))) invalid()
+}
+export function text(value: unknown, max = 256): string {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value) > max || /[\x00-\x1f\x7f-\x9f]/u.test(value) || !value.isWellFormed()) invalid()
+  return value
+}
+export function id(value: unknown): string {
+  const result = text(value)
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(result)) invalid()
+  return result
+}
+export function hash(value: unknown): string {
+  const result = text(value)
+  if (!/^[0-9a-f]{64}$/.test(result)) invalid()
+  return result
+}
+export function providerId(value: unknown): ProviderId {
+  if (value !== "claude-agent-acp" && value !== "codex-acp") invalid()
+  return value
+}
+export function absolutePath(value: unknown): string {
+  const result = text(value, 4096)
+  if (!isAbsolute(result) || normalize(result) !== result || (result !== "/" && result.endsWith("/"))) invalid()
+  return result
+}
+export function timestamp(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) invalid()
+  return value
+}
+export function isFresh(verifiedAt: number | null, now: number): boolean {
+  return verifiedAt !== null && now >= verifiedAt && now - verifiedAt < CATALOG_TTL_MS
+}
+export function parseCapability(value: unknown): Capability {
+  const v = object(value)
+  if (v.state === "unknown" || v.state === "none") { keys(v, ["state"]); return { state: v.state } }
+  keys(v, ["state", "values"])
+  if (v.state !== "values" || !Array.isArray(v.values) || v.values.length < 1 || v.values.length > 32) invalid()
+  const values = v.values.map(value => text(value))
+  if (new Set(values).size !== values.length) invalid()
+  return { state: "values", values: values.sort() }
+}
+export function parseModel(value: unknown): Model {
+  const v = object(value)
+  keys(v, ["providerId", "modelId", "resolvedModelId", "displayName", "reasoning", "modes", "availability"])
+  if (v.availability !== "advertised") invalid()
+  return { providerId: providerId(v.providerId), modelId: text(v.modelId), resolvedModelId: v.resolvedModelId === null ? null : text(v.resolvedModelId), displayName: text(v.displayName, 512), reasoning: parseCapability(v.reasoning), modes: parseCapability(v.modes), availability: "advertised" }
+}
+export function parseModels(input: unknown, provider: ProviderId): Model[] {
+  if (!Array.isArray(input) || input.length > 512 || Buffer.byteLength(JSON.stringify(input)) > MAX_CATALOG_BYTES) invalid()
+  const models = input.map(parseModel), ids = new Set<string>()
+  for (const model of models) { if (model.providerId !== provider || ids.has(model.modelId)) invalid(); ids.add(model.modelId) }
+  return models.sort((a, b) => a.modelId < b.modelId ? -1 : a.modelId > b.modelId ? 1 : 0)
+}
