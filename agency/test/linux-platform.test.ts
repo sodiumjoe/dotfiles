@@ -229,8 +229,8 @@ async function frozenEvidenceBytes(){
   const root=new URL("../../test/fixtures/direct-group-batch-1/",import.meta.url)
   return {
     receipt:await readFile(new URL("receipt.json",root)),
-    cleanup:await readFile(new URL("cleanup-receipt.json",root)),
-    diagnostic:await readFile(new URL("diagnostic-receipt.json",root)),
+    cleanup:Buffer.from(await readFile(new URL("cleanup-receipt.json.base64",root),"utf8"),"base64"),
+    diagnostic:Buffer.from(await readFile(new URL("diagnostic-receipt.json.base64",root),"utf8"),"base64"),
   }
 }
 const jsonBytes=(value:unknown)=>Buffer.from(JSON.stringify(value))
