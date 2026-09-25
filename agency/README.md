@@ -1,8 +1,40 @@
-# Agency platform foundation
+# Agency
 
-This package is the qualified platform layer for Agency. It defines durable launch and Handler records, host-scoped private paths, lazy singleton startup, private Unix sockets, process identity, and conservative restart reconciliation on Darwin and Linux.
+Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
 
-It does not implement the production Handler daemon, `agy`, the Bureau, provider adapters, ACP persistence, model selection, Neovim attachment, authentication, or cross-host coordination.
+It does not yet create agents or implement model discovery, checkout admission, ACP sessions, permissions, attachment/roster streams, Neovim integration, the Bureau, or cross-host coordination. Existing retained providers are reconciled only; surviving sessions are never adopted.
+
+## Build and commands
+
+Agency requires Node 24.13.0 and the existing pinned lockfile. From `agency/`, select that Node version and run `npm ci` followed by `npm run build`. `home/bin/agy` is the repository command, deployed by the existing dotfiles workflow as `~/bin/agy`. It resolves its own symlink chain to locate this repository's build and invokes `$HOME/.nodenv/versions/24.13.0/bin/node`. Missing runtime or build produces a stderr diagnostic and exit 69; it never installs or builds implicitly.
+
+```text
+agy status [--json]
+agy handler status [--json]
+agy doctor [--json]
+agy shutdown [--stop-agents] [--json]
+agy shutdown --command-id <uuid> --handler-generation <uuid> [--stop-agents] [--json]
+```
+
+Status lazily starts or connects to one Handler. Doctor inspects state without starting a Handler or performing cleanup. Path resolution may create empty qualified state/runtime directories. Neither command creates a model session.
+
+Shutdown never starts a daemon. It refuses unverified launches unless `--stop-agents` is supplied, and even that flag cannot release ambiguous cleanup. Accepted shutdown persists an exact generation-bound receipt, closes client connections, and exits. The CLI independently observes the recorded Handler generation's absence before reporting `shutdown_complete`. A receipt alone or delivery of a signal is insufficient evidence.
+
+On an uncertain result, retain the command ID and Handler generation. Retry with both flags and the original `--stop-agents` setting. A retry cannot select a replacement Handler. Receipts remain under the persistent `shutdown/` directory; automatic expiry is not implemented. A failed directory fsync can leave a visible receipt without completing shutdown; an explicit matching retry revalidates cleanup and republishes it before draining. SIGTERM/SIGINT use the same guarded path and are deferred while startup classifies records. Incomplete cleanup leaves the Handler available for status.
+
+## Control protocol
+
+JSON command output contains one `agency-control/1` envelope with `requestId`, selected `handlerGeneration` (null before selection), `ok`, and either `result` or `error`. Shutdown also returns `commandId`. Bootstrap failures before Node starts are stderr-only; subsequent diagnostics are bounded to 8 KiB on stderr. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
+
+The internal Unix-socket protocol is separate from future attachment streams. Each connection carries one LF-terminated JSON request followed by a write-half close, and one LF-terminated reply followed by EOF. Frames are bounded to 8 MiB with strict UTF-8 and matching request/generation IDs. Duplicate frames are rejected before dispatch. Oversized status returns an explicit incomplete result. Future Neovim clients use the CLI rather than private socket framing.
+
+The launcher may time out while a live Handler continues reconciliation. A later client waits for that same generation through the singleton protocol. Readiness requires classification of every committed retained record and a final inventory comparison. Changed inventory or malformed/unattributable records prevent readiness and preserve evidence. Recognized private atomic-write remnants remain on disk but do not count as committed launch records.
+
+## Verification scope
+
+Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, and `npm run test:control-integration` with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment.
+
+The Handler composition is qualified locally on Darwin. Real Linux Handler execution remains unqualified until a separately bounded remote increment. The platform layer's retained Linux qualification remains valid; synthetic Linux tests do not substitute for a real Linux Handler trial.
 
 ## Qualified contract
 

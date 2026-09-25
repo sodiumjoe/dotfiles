@@ -11,6 +11,8 @@ import { ControlError, type ControlReply, type ControlRequest } from "../src/con
 import type { HandlerInspection, ProcessIdentity } from "../src/platform/types.js"
 import type { ShutdownReceipt } from "../src/handler/receipt.js"
 import { privateRoot, unavailableControlDependencies } from "./control-support.js"
+import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
+import { LinuxObservationUnavailable } from "../src/platform/linux.js"
 
 function model() {
   const generation = randomUUID(), attempt = randomUUID(), hostId = "a".repeat(64)
@@ -88,6 +90,57 @@ test("no receipt retry never selects a replacement generation", async () => {
   assert.equal(await runControl(["shutdown", "--command-id", randomUUID(), "--handler-generation", randomUUID(), "--json"], m.deps), 69)
   assert.deepEqual(m.state.calls, [])
   assert.equal(m.state.starts, 0)
+})
+
+test("receipt retry verifies absence after transport loss during its status probe", async () => {
+  const m = model(), commandId = randomUUID()
+  m.state.receipt = { version: 1, commandId, hostId: "a".repeat(64), handlerGeneration: m.generation, handlerIdentity: m.identity, state: "accepted", stopAgents: false }
+  m.deps.call = async (_env, request) => {
+    m.state.calls.push(request)
+    m.state.observed = null
+    throw new ControlError("UNAVAILABLE", "Handler exited during status")
+  }
+  assert.equal(await runControl(["shutdown", "--command-id", commandId, "--handler-generation", m.generation, "--json"], m.deps), 0)
+  assert.equal(m.output().result.state, "shutdown_complete")
+  assert.deepEqual(m.state.calls.map(request => request.op), ["status"])
+})
+
+test("shutdown observation failures retain retry identity and report incomplete", async () => {
+  for (const Failure of [DarwinObservationUnavailable, LinuxObservationUnavailable]) for (const boundary of ["bootId", "readProcess"] as const) for (const retry of [false, true]) {
+    const m = model(), commandId = randomUUID(), environment = m.deps.environment
+    if (retry) m.state.receipt = { version: 1, commandId, hostId: "a".repeat(64), handlerGeneration: m.generation, handlerIdentity: m.identity, state: "accepted", stopAgents: false }
+    m.deps.environment = async () => { const env = await environment(); env.adapter[boundary] = async () => { throw new Failure("observation unavailable") }; return env }
+    const args = retry ? ["shutdown", "--command-id", commandId, "--handler-generation", m.generation, "--json"] : ["shutdown", "--json"]
+    assert.equal(await runControl(args, m.deps), 75)
+    assert.equal(m.output().error.code, "INCOMPLETE")
+    assert.equal(m.output().handlerGeneration, m.generation)
+    assert.equal(m.output().commandId, m.state.receipt!.commandId)
+    assert.deepEqual(m.state.calls.map(request => request.op), retry ? [] : ["shutdown"])
+  }
+})
+
+test("status classifies expected singleton failures without hiding internal defects", async () => {
+  for (const [failure, expected] of [
+    [new Error("Handler status timed out"), 75],
+    [new Error("Handler generation is unavailable before readiness"), 75],
+    [new Error("Handler socket readiness timed out"), 75],
+    [new Error("Handler gate delivery timed out"), 75],
+    [new Error("startup lock is unavailable"), 75],
+    [new Error('Handler identity is ambiguous; startup is unavailable: {}'), 75],
+    [new Error('Handler identity became ambiguous; startup is unavailable: {}'), 75],
+    [new Error("Handler generation disappeared"), 69],
+    [new Error("Handler status peer closed"), 69],
+    [new Error("Handler exited before acknowledgement: 1"), 69],
+    [Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }), 69],
+    [new DarwinObservationUnavailable("ps unavailable"), 75],
+    [new LinuxObservationUnavailable("procfs unavailable"), 75],
+    [new Error("unexpected invariant failure"), 70],
+  ] as const) {
+    const m = model()
+    m.deps.start = async () => { throw failure }
+    assert.equal(await runControl(["status", "--json"], m.deps), expected, failure.message)
+    assert.deepEqual(m.state.calls, [])
+  }
 })
 
 test("receipt retry discharges old generations without stopping their replacements", async () => {

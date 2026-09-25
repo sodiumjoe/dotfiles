@@ -1,6 +1,16 @@
 import type { Socket } from "node:net"
 import { ControlError, MAX_FRAME_BYTES, errorReply, parseRequest, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply } from "./protocol.js"
 
+function protectSocketErrors(socket: Socket): Promise<void> {
+  return new Promise(resolve => {
+    const failed = (): void => undefined
+    const closed = (): void => { socket.off("error", failed); resolve() }
+    socket.on("error", failed)
+    if (socket.closed) setImmediate(closed)
+    else socket.once("close", closed)
+  })
+}
+
 export function encodeFrame(value: unknown): Buffer {
   const json = JSON.stringify(value)
   if (json === undefined || Buffer.byteLength(json) > MAX_FRAME_BYTES) throw new ControlError("INCOMPLETE", "response exceeds frame limit")
@@ -52,9 +62,10 @@ export async function exchange(socket: Socket, request: ControlRequest, timeoutM
 }
 
 export function sendReply(socket: Socket, reply: ControlReply, timeoutMs = 1000): Promise<void> {
+  const closed = protectSocketErrors(socket)
   let bytes: Buffer
   try { bytes = encodeFrame(reply) } catch { bytes = encodeFrame(errorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit"))) }
-  return new Promise(resolve => {
+  return new Promise<void>(resolve => {
     let settled = false
     const done = (): void => {
       if (settled) return
@@ -67,10 +78,11 @@ export function sendReply(socket: Socket, reply: ControlReply, timeoutMs = 1000)
     const timer = setTimeout(done, timeoutMs)
     socket.once("error", done); socket.once("close", done)
     if (socket.destroyed) done(); else socket.end(bytes, done)
-  })
+  }).then(() => closed)
 }
 
 export async function serveControl(socket: Socket, handler: (request: ControlRequest) => Promise<ControlReply>, timeoutMs = 5000): Promise<void> {
+  const closed = protectSocketErrors(socket)
   socket.allowHalfOpen = true
   try {
     const request = parseRequest(await receiveFrame(socket, timeoutMs))
@@ -78,4 +90,5 @@ export async function serveControl(socket: Socket, handler: (request: ControlReq
     try { reply = await handler(request) } catch (error) { reply = errorReply(request, error) }
     await sendReply(socket, reply)
   } catch { socket.destroy() }
+  finally { socket.destroy(); await closed }
 }

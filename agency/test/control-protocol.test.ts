@@ -3,12 +3,39 @@ import { randomUUID } from "node:crypto"
 import { createServer, createConnection, type Socket } from "node:net"
 import { join } from "node:path"
 import test, { type TestContext } from "node:test"
+import { Duplex } from "node:stream"
 import { parseRequest, parseReply, validateReplyForRequest, exitCode, type ControlRequest, type ControlReply } from "../src/control/protocol.js"
-import { exchange, receiveFrame, serveControl } from "../src/control/wire.js"
+import { exchange, receiveFrame, serveControl, sendReply } from "../src/control/wire.js"
 import { privateRoot } from "./control-support.js"
 
 const request = (): ControlRequest => ({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: randomUUID(), op: "status" })
 const response = (r: ControlRequest): ControlReply => ({ protocol: r.protocol, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { hostId: "a".repeat(64), handlerGeneration: r.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, quarantined: 1 }, launches: [{ launchAttemptId: "historical", agentId: "agent-a", checkoutId: "checkout-a", phase: "quarantined", reason: "ambiguous" }], capabilities: ["status", "doctor", "shutdown"] } })
+
+test("reply write failure remains handled through callback-before-error closure", async () => {
+  const socket = new Duplex({ read() {}, write(_bytes, _encoding, callback) { callback(new Error("synthetic EPIPE")) } })
+  await sendReply(socket as Socket, response(request()))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.ok(socket.closed)
+  assert.equal(socket.listenerCount("error"), 0)
+  assert.equal(socket.listenerCount("close"), 0)
+})
+
+test("client failure during asynchronous dispatch does not escape the server", async () => {
+  const socket = new Duplex({ read() {}, write(_bytes, _encoding, callback) { callback() } })
+  let started: () => void = () => undefined, release: () => void = () => undefined
+  const dispatched = new Promise<void>(resolve => { started = resolve })
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const serving = serveControl(socket as Socket, async r => { started(); await pending; return response(r) })
+  socket.push(JSON.stringify(request()) + "\n"); socket.push(null)
+  await dispatched
+  socket.destroy(new Error("synthetic connection reset during cleanup"))
+  await new Promise(resolve => setImmediate(resolve))
+  release()
+  await serving
+  assert.ok(socket.closed)
+  assert.equal(socket.listenerCount("error"), 0)
+  assert.equal(socket.listenerCount("close"), 0)
+})
 
 async function connect(t: TestContext, listener: (socket: Socket) => void): Promise<Socket> {
   const root = await privateRoot(t)

@@ -10,6 +10,8 @@ import { readShutdownReceipt, assertSameShutdown, type ShutdownReceipt } from ".
 import { inspectHandlerGeneration, startOrConnect } from "../platform/singleton.js"
 import { assertPrivateSocket } from "../platform/private-socket.js"
 import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerInspection, type ProcessIdentity } from "../platform/types.js"
+import { DarwinObservationUnavailable } from "../platform/darwin.js"
+import { LinuxObservationUnavailable } from "../platform/linux.js"
 
 export type ControlDependencies = {
   environment(): Promise<HandlerEnvironment>
@@ -65,14 +67,28 @@ function parseArguments(argv: readonly string[]): Arguments {
 }
 
 async function identityState(env: HandlerEnvironment, expected: ProcessIdentity): Promise<"absent" | "live"> {
-  const boot = await env.adapter.bootId()
-  if (boot !== expected.bootId) return "absent"
-  const current = await env.adapter.readProcess(expected.pid)
-  if (current === null) return "absent"
-  if (current.bootId !== boot || processBirthStart(current.birth) === null || processBirthStart(expected.birth) === null) throw new ControlError("INCOMPLETE", "identity observation is ambiguous")
-  if (!sameProcessGeneration(expected, current)) return "absent"
-  if (!sameProcess(expected, current)) throw new ControlError("INCOMPLETE", "same process generation changed identity")
-  return "live"
+  try {
+    const boot = await env.adapter.bootId()
+    if (boot !== expected.bootId) return "absent"
+    const current = await env.adapter.readProcess(expected.pid)
+    if (current === null) return "absent"
+    if (current.bootId !== boot || processBirthStart(current.birth) === null || processBirthStart(expected.birth) === null) throw new ControlError("INCOMPLETE", "identity observation is ambiguous")
+    if (!sameProcessGeneration(expected, current)) return "absent"
+    if (!sameProcess(expected, current)) throw new ControlError("INCOMPLETE", "same process generation changed identity")
+    return "live"
+  } catch (error) {
+    if (error instanceof DarwinObservationUnavailable || error instanceof LinuxObservationUnavailable) throw new ControlError("INCOMPLETE", error.message)
+    throw error
+  }
+}
+
+function startupError(error: unknown): ControlError {
+  if (error instanceof DarwinObservationUnavailable || error instanceof LinuxObservationUnavailable) return new ControlError("INCOMPLETE", error.message)
+  if (error instanceof Error) {
+    if (["Handler status timed out", "Handler gate delivery timed out", "Handler socket readiness timed out", "Handler generation is unavailable before readiness", "startup lock is unavailable"].includes(error.message) || /^Handler identity (is|became) ambiguous; startup is unavailable: /.test(error.message)) return new ControlError("INCOMPLETE", error.message)
+    if (["Handler generation disappeared", "Handler status peer closed"].includes(error.message) || error.message.startsWith("Handler exited before acknowledgement: ") || ["ECONNREFUSED", "ECONNRESET", "EPIPE", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) return new ControlError("UNAVAILABLE", error.message)
+  }
+  return controlError(error)
 }
 
 async function checkedCall(dependencies: ControlDependencies, env: HandlerEnvironment, request: ControlRequest): Promise<ControlReply> {
@@ -103,7 +119,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       return 0
     }
     if (args.command === "status") {
-      const inspection = await dependencies.start(env)
+      const inspection = await dependencies.start(env).catch(error => { throw startupError(error) })
       generation = inspection.record.generation
       const reply = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId, handlerGeneration: generation, op: "status" })
       if (!reply.ok) throw new ControlError(reply.error.code, reply.error.message)
@@ -129,8 +145,14 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     if (retained !== null && !sameProcess(retained.handlerIdentity, inspection.record.process)) throw new ControlError("INCOMPLETE", "receipt and Handler identity differ")
     let shouldSend = true
     if (retained !== null) {
-      const status = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, op: "status" })
-      shouldSend = status.ok && "phase" in status.result && status.result.phase === "ready"
+      shouldSend = false
+      try {
+        const status = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, op: "status" })
+        shouldSend = status.ok && "phase" in status.result && status.result.phase === "ready"
+      } catch (error) {
+        const classified = controlError(error)
+        if (classified.code !== "INCOMPLETE" && classified.code !== "UNAVAILABLE") throw classified
+      }
     }
     if (shouldSend) {
       try {
