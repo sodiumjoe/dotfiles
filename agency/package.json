@@ -1,0 +1,18 @@
+{
+  "name": "@moon/agency",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "qualify:linux": "npm run build && node dist/scripts/qualify-linux.js",
+    "test:darwin": "npm run build && node --test --test-concurrency=1 dist/test/darwin-identity.test.js dist/test/darwin-platform.test.js",
+    "test:unit": "npm run build && node --test --test-concurrency=1 dist/test/contracts.test.js dist/test/private-state.test.js dist/test/paths.test.js dist/test/reconcile.test.js dist/test/singleton.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "typescript": "7.0.2"
+  }
+}
