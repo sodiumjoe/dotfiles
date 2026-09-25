@@ -9,6 +9,8 @@ export type ConfigEvidence = { fingerprint: string; scope: "declared-config-v1";
 export type CatalogFailure = { code: CatalogErrorCode; message: string }
 export type ProviderSnapshot = { providerId: ProviderId; fingerprint: string | null; verifiedAt: number | null; verifiedHandlerGeneration: string | null; providerVersion: string | null; providerVersionSource: "reported" | "unknown"; adapterVersion: string | null; sdkVersion: string | null; models: Model[]; error: CatalogFailure | null }
 export type CatalogSnapshot = { version: 1; hostId: string; snapshotId: string; handlerGeneration: string; createdAt: number; providers: ProviderSnapshot[] }
+export type RefreshCommand = { version: 1; commandId: string; hostId: string; handlerGeneration: string; batchId: string; fingerprints: Array<{ providerId: ProviderId; fingerprint: string }>; attempts: Array<{ providerId: ProviderId; attemptId: string }>; state: "pending" | "completed" | "interrupted"; snapshotId: string | null }
+export type ProbeMeta = { version: 1; hostId: string; handlerGeneration: string; commandId: string; providerId: ProviderId; attemptId: string; agentId: string; leaseId: string; fingerprint: string; workPath: string }
 export const CATALOG_TTL_MS = 600000
 export const MAX_CATALOG_BYTES = 1024 * 1024
 export const catalogMessages = {
@@ -89,4 +91,47 @@ export function parseModels(input: unknown, provider: ProviderId): Model[] {
   const models = input.map(parseModel), ids = new Set<string>()
   for (const model of models) { if (model.providerId !== provider || ids.has(model.modelId)) invalid(); ids.add(model.modelId) }
   return models.sort((a, b) => a.modelId < b.modelId ? -1 : a.modelId > b.modelId ? 1 : 0)
+}
+
+export function parseFailure(input: unknown): CatalogFailure {
+  const v = object(input)
+  keys(v, ["code", "message"])
+  if (typeof v.code !== "string" || !Object.hasOwn(catalogMessages, v.code)) invalid()
+  const code = v.code as CatalogErrorCode
+  if (v.message !== catalogMessages[code]) invalid()
+  return { code, message: catalogMessages[code] }
+}
+export function parseProviderSnapshot(input: unknown): ProviderSnapshot {
+  const v = object(input)
+  keys(v, ["providerId", "fingerprint", "verifiedAt", "verifiedHandlerGeneration", "providerVersion", "providerVersionSource", "adapterVersion", "sdkVersion", "models", "error"])
+  const provider = providerId(v.providerId)
+  if (v.providerVersionSource !== "unknown" && v.providerVersionSource !== "reported") invalid()
+  if (v.providerVersionSource !== (v.providerVersion === null ? "unknown" : "reported")) invalid()
+  const result: ProviderSnapshot = { providerId: provider, fingerprint: v.fingerprint === null ? null : hash(v.fingerprint), verifiedAt: v.verifiedAt === null ? null : timestamp(v.verifiedAt), verifiedHandlerGeneration: v.verifiedHandlerGeneration === null ? null : id(v.verifiedHandlerGeneration), providerVersion: v.providerVersion === null ? null : text(v.providerVersion), providerVersionSource: v.providerVersionSource, adapterVersion: v.adapterVersion === null ? null : text(v.adapterVersion), sdkVersion: v.sdkVersion === null ? null : text(v.sdkVersion), models: parseModels(v.models, provider), error: v.error === null ? null : parseFailure(v.error) }
+  if (result.verifiedAt === null ? result.fingerprint !== null || result.verifiedHandlerGeneration !== null || result.models.length > 0 || result.providerVersion !== null : result.fingerprint === null || result.verifiedHandlerGeneration === null || result.adapterVersion === null) invalid()
+  return result
+}
+export function parseSnapshot(input: unknown): CatalogSnapshot {
+  const v = object(input)
+  keys(v, ["version", "hostId", "snapshotId", "handlerGeneration", "createdAt", "providers"])
+  if (v.version !== 1 || !Array.isArray(v.providers) || v.providers.length > 2) invalid()
+  const providers = v.providers.map(parseProviderSnapshot)
+  if (new Set(providers.map(p => p.providerId)).size !== providers.length || providers.some(p => p.verifiedAt !== null && p.verifiedAt > Number(v.createdAt))) invalid()
+  return { version: 1, hostId: hash(v.hostId), snapshotId: id(v.snapshotId), handlerGeneration: id(v.handlerGeneration), createdAt: timestamp(v.createdAt), providers: providers.sort((a, b) => a.providerId < b.providerId ? -1 : 1) }
+}
+export function parseCommand(input: unknown): RefreshCommand {
+  const v = object(input)
+  keys(v, ["version", "commandId", "hostId", "handlerGeneration", "batchId", "fingerprints", "attempts", "state", "snapshotId"])
+  if (v.version !== 1 || !Array.isArray(v.fingerprints) || !Array.isArray(v.attempts) || v.fingerprints.length > 2 || v.attempts.length !== v.fingerprints.length || !["pending", "completed", "interrupted"].includes(String(v.state))) invalid()
+  const fingerprints = v.fingerprints.map(input => { const p = object(input); keys(p, ["providerId", "fingerprint"]); return { providerId: providerId(p.providerId), fingerprint: hash(p.fingerprint) } })
+  const attempts = v.attempts.map(input => { const p = object(input); keys(p, ["providerId", "attemptId"]); return { providerId: providerId(p.providerId), attemptId: id(p.attemptId) } })
+  if (new Set(fingerprints.map(p => p.providerId)).size !== fingerprints.length || new Set(attempts.map(p => p.attemptId)).size !== attempts.length || attempts.some((p, i) => p.providerId !== fingerprints[i]!.providerId) || fingerprints.some((p, i) => i > 0 && fingerprints[i - 1]!.providerId >= p.providerId)) invalid()
+  if ((v.state === "completed") !== (v.snapshotId !== null)) invalid()
+  return { version: 1, commandId: id(v.commandId), hostId: hash(v.hostId), handlerGeneration: id(v.handlerGeneration), batchId: id(v.batchId), fingerprints, attempts, state: v.state as RefreshCommand["state"], snapshotId: v.snapshotId === null ? null : id(v.snapshotId) }
+}
+export function parseProbeMeta(input: unknown): ProbeMeta {
+  const v = object(input)
+  keys(v, ["version", "hostId", "handlerGeneration", "commandId", "providerId", "attemptId", "agentId", "leaseId", "fingerprint", "workPath"])
+  if (v.version !== 1) invalid()
+  return { version: 1, hostId: hash(v.hostId), handlerGeneration: id(v.handlerGeneration), commandId: id(v.commandId), providerId: providerId(v.providerId), attemptId: id(v.attemptId), agentId: id(v.agentId), leaseId: id(v.leaseId), fingerprint: hash(v.fingerprint), workPath: absolutePath(v.workPath) }
 }
