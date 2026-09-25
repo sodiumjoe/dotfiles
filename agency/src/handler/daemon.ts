@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
 import type { Server, Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
@@ -12,6 +13,7 @@ import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type P
 import type { PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
 import { inventoryLaunches, summarizeLaunches, verifyInventory, type InventoryEntry } from "./inventory.js"
+import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -71,6 +73,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let server: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
   const sockets = new Set<Socket>()
   let entries: InventoryEntry[] = []
+  let shutdown: ShutdownContext | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject })
@@ -84,7 +87,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   }
   const terminate = async (): Promise<void> => {
     termination = true
-    if (state.phase === "ready" && entries.every(entry => entry.record.phase === "cleanup_verified")) { state.phase = "draining"; await close() }
+    if (state.phase === "ready" && shutdown !== undefined) {
+      const reply = await shutdownHandler({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: options.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }, shutdown)
+      if (reply.ok) await shutdown.closeAfterReply()
+    }
   }
   const onSignal = (): void => { void terminate().catch(rejectClosed) }
   const channelError = (): void => undefined
@@ -110,13 +116,13 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await sendStatus(options.status, { type: "gate_released", generation: options.generation }).catch(() => undefined)
     const dispatch = async (request: ControlRequest): Promise<ControlReply> => {
       if (request.handlerGeneration !== options.generation) return errorReply({ ...request, handlerGeneration: options.generation }, new ControlError("STALE_HANDLER"))
-      if (request.op === "shutdown") return errorReply(request, new ControlError("INCOMPLETE", "shutdown is unavailable in this startup phase"))
+      if (request.op === "shutdown") return shutdown === undefined ? errorReply(request, new ControlError("INCOMPLETE", "Handler has not completed startup")) : shutdownHandler(request, shutdown)
       return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone(state) }
     }
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
-      void serveControl(socket, dispatch)
+      void serveControl(socket, dispatch).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
     })
     server.on("error", rejectClosed)
     current = { ...published, writer: "handler", phase: "socket_bound" }
@@ -145,6 +151,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     state.phase = "ready"
+    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, closeAfterReply: close }
     if (termination) await terminate()
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
