@@ -68,8 +68,8 @@ async function assertRuntimeParent(path: string): Promise<void> {
 export async function resolvePlatformPaths(inputs: PlatformPathInputs): Promise<PlatformPaths> {
   if (!Number.isSafeInteger(inputs.uid) || inputs.uid < 0) throw new Error("uid is invalid")
   if (!/^[0-9a-f]{64}$/.test(inputs.hostKey)) throw new Error("hostKey must be lowercase SHA-256 hex")
-  const persistentBase = inputs.xdgStateHome ?? join(inputs.home, ".local/state")
   if (!isAbsolute(inputs.home)) throw new Error("home must be absolute")
+  const persistentBase = inputs.xdgStateHome ?? join(await realpath(inputs.home), ".local/state")
   if (!isAbsolute(persistentBase)) throw new Error("persistent state path must be absolute")
   const previousUmask = process.umask(0o077)
   try {

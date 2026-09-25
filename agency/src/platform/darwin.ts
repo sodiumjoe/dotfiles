@@ -213,7 +213,7 @@ export function createDarwinAdapter(execute: DarwinCommandExecutor = executeComm
       const first = (await snapshot(execute)).get(pid) ?? null
       const second = (await snapshot(execute)).get(pid) ?? null
       if (first === null && second === null) return null
-      if (first === null || second === null || !sameRow(first, second)) throw unavailable(`Darwin PID ${pid} did not have a stable complete observation`)
+      if (first === null || second === null || !sameRow(first, second)) throw unavailable(`Darwin PID ${pid} did not have a stable complete observation: ${JSON.stringify({ first, second })}`)
       return identity(boot, second)
     },
     readGroup: async processGroupId => {
@@ -226,7 +226,7 @@ export function createDarwinAdapter(execute: DarwinCommandExecutor = executeComm
       throw unavailable(`Darwin process group ${processGroupId} did not have a stable complete observation`)
     },
     signalGroup: async (processGroupId, signal) => {
-      if (!positiveSafeInteger(processGroupId)) throw new Error("Darwin process group signal target must be a positive safe integer")
+      if (!positiveSafeInteger(processGroupId) || processGroupId <= 1) throw new Error("Darwin process group signal target must be a safe integer greater than 1")
       process.kill(-processGroupId, signal)
     },
   }

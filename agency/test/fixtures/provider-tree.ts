@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
-import { constants } from "node:fs"
+import { createHash, randomUUID } from "node:crypto"
+import { constants, closeSync, fsyncSync, openSync, writeFileSync, renameSync, lstatSync } from "node:fs"
 import { lstat, open, realpath, rename, rm, type FileHandle } from "node:fs/promises"
 import { Socket } from "node:net"
 import { basename, dirname, join } from "node:path"
@@ -164,8 +164,8 @@ async function publishBeforeMissingAcknowledgementFailure(status: Duplex, struct
   })
 }
 
-export async function stopDescendant(descendant: ReturnType<typeof spawn>, timeoutMs: number): Promise<void> {
-  if (descendant.exitCode !== null || descendant.signalCode !== null) return
+export async function stopDescendant(descendant: ReturnType<typeof spawn>, timeoutMs: number, delivery: (accepted: boolean) => void = () => undefined): Promise<void> {
+  if (descendant.exitCode !== null || descendant.signalCode !== null) { delivery(false); return }
   await new Promise<void>((resolve, reject) => {
     let settled = false
     const timer = setTimeout(() => {
@@ -185,17 +185,38 @@ export async function stopDescendant(descendant: ReturnType<typeof spawn>, timeo
     descendant.once("exit", exited)
     descendant.once("error", failed)
     try {
-      if (!descendant.kill("SIGKILL")) finish(new Error("provider-tree descendant SIGKILL delivery was rejected"))
+      const accepted = descendant.kill("SIGKILL")
+      delivery(accepted)
+      if (!accepted) finish(new Error("provider-tree descendant SIGKILL delivery was rejected"))
     } catch (error) {
       finish(error instanceof Error ? error : new Error("provider-tree descendant SIGKILL delivery threw"))
     }
   })
 }
 
-export async function leader(readyPath: string, providerMode: ProviderMode, timeoutMs: number, dependencies?: { spawnDescendant: () => ReturnType<typeof spawn>; socketForFd: (fd: number) => Duplex; readyFileSystem?: ReadyFileSystem }): Promise<never> {
+export async function leader(readyPath: string, providerMode: ProviderMode, timeoutMs: number, dependencies?: { spawnDescendant: () => ReturnType<typeof spawn>; socketForFd: (fd: number) => Duplex; readyFileSystem?: ReadyFileSystem; receiptPath?: string }): Promise<never> {
   const fixturePath = process.argv[1]
   if (fixturePath === undefined) throw new Error("provider-tree fixture path is unavailable")
+  const token = createHash("sha256").update(readyPath).digest("hex").slice(0,32)
+  const receiptPath = dependencies?.receiptPath ?? (dependencies === undefined ? process.env.AGENCY_PROVIDER_RECEIPT ?? join(dirname(readyPath), `${token.slice(0,8)}-${token.slice(8,12)}-${token.slice(12,16)}-${token.slice(16,20)}-${token.slice(20)}.json`) : undefined)
+  const receipt = { key: receiptPath === undefined ? randomUUID() : basename(receiptPath, ".json"), providerAttemptId: process.env.AGENCY_PROVIDER_ATTEMPT ?? null, batchId: process.env.AGENCY_PROVIDER_BATCH ?? null, caseId: process.env.AGENCY_PROVIDER_CASE ?? null, launchAttemptId: process.env.AGENCY_PROVIDER_LAUNCH ?? null, phase: "planned", pid: null as number | null, ownership: "direct-unreaped-child-handle", registered: false, fatalConditions: [] as string[], signalAttempt: null as string | null, delivered: null as boolean | null, outcome: "pending", error: null as string | null }
+  const persist = (): void => {
+    if (receiptPath === undefined) return
+    if (!/^[0-9a-f-]{36}\.json$/.test(basename(receiptPath))) throw new Error("provider child receipt requires UUID filename")
+    const directory = lstatSync(dirname(receiptPath))
+    if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid!() || (directory.mode & 0o777) !== 0o700) throw new Error("provider child receipt parent is not private")
+    const temporary = receiptPath + "." + randomUUID() + ".tmp"
+    const fd = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, 0o600)
+    try { writeFileSync(fd, JSON.stringify(receipt)); fsyncSync(fd) } finally { closeSync(fd) }
+    renameSync(temporary, receiptPath)
+    const parent = openSync(dirname(receiptPath), constants.O_RDONLY)
+    try { fsyncSync(parent) } finally { closeSync(parent) }
+  }
+  persist()
   const descendant = dependencies?.spawnDescendant() ?? spawn(process.execPath, [fixturePath, "descendant", providerMode], { stdio: ["ignore", "ignore", "ignore", "pipe"] })
+  receipt.pid = descendant.pid ?? null
+  receipt.phase = "spawned"
+  persist()
   const openSocket = dependencies?.socketForFd ?? socketForFd
   let status: Duplex | undefined
   let acknowledgement: Duplex | undefined
@@ -232,10 +253,27 @@ export async function leader(readyPath: string, providerMode: ProviderMode, time
     const descendantReady = descendant.stdio[3]
     if (descendantReady === null || descendantReady === undefined) throw new Error("provider descendant readiness descriptor is unavailable")
     await waitForAcknowledgement(status, acknowledgement, protect(descendantReady as Duplex), structural, timeoutMs)
+    receipt.registered = true
+    receipt.phase = "registered"
+    persist()
     if (providerMode === "leader-exits-on-term") process.once("SIGTERM", () => process.exit(0))
     await withPrivateUmask(() => publishReady(readyPath, JSON.stringify({ leaderPid: process.pid, descendantPid: descendant.pid }), dependencies?.readyFileSystem))
   } catch (error) {
-    await stopDescendant(descendant, timeoutMs)
+    receipt.error = String(error)
+    receipt.fatalConditions.push(receipt.registered ? "provider readiness failure" : "incomplete descendant registration")
+    receipt.signalAttempt = "SIGKILL"
+    persist()
+    try {
+      await stopDescendant(descendant, timeoutMs, accepted => { receipt.delivered = accepted; persist() })
+      receipt.outcome = "exited"
+      persist()
+    } catch (cleanupError) {
+      receipt.delivered ??= false
+      receipt.outcome = "error"
+      receipt.fatalConditions.push(String(cleanupError))
+      persist()
+      throw cleanupError
+    }
     throw error
   } finally {
     for (const release of releases) release()
@@ -252,6 +290,7 @@ async function descendant(providerMode: ProviderMode): Promise<never> {
 }
 
 async function main(): Promise<void> {
+  process.umask(0o077)
   const role = process.argv[2]
   if (role === "leader" && process.argv.length === 6) await leader(process.argv[3]!, mode(process.argv[4]), timeout(process.argv[5]))
   else if (role === "descendant" && process.argv.length === 4) await descendant(mode(process.argv[3]))

@@ -1,10 +1,11 @@
+import { LinuxObservationUnavailable } from "./linux.js"
+import { agencyLaunchMarker, exactAgencyBirth, parseAgencyLaunchMarker } from "./launch-marker.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "./private-state.js"
 import { DarwinObservationUnavailable } from "./darwin.js"
 import {
+  processBirthStart,
   sameProcess,
   type LaunchRecord,
-  type LinuxNamespaceAdapter,
-  type LinuxNamespaceProviderIdentity,
   type PlatformAdapter,
   type ProcessGroupProviderIdentity,
   type ProcessIdentity,
@@ -66,21 +67,13 @@ function sameGroupFields(expected: ProcessIdentity, observed: ProcessIdentity): 
 
 function processGroupIssue(record: LaunchRecord, provider: ProcessGroupProviderIdentity): string | null {
   const { leader, observed } = provider.group
+  if (parseAgencyLaunchMarker("agy-provider:" + record.launchAttemptId) === null) return "provider launch UUID is not canonical"
+  if (!exactAgencyBirth(leader.birth, agencyLaunchMarker("provider", record.launchAttemptId))) return "provider leader marker is not exact"
   if (leader.bootId !== record.launchBootId) return "provider leader boot does not match launch boot"
   if (leader.processGroupId !== leader.pid || leader.sessionId !== leader.pid) return "provider leader does not own its process group and session"
   if (!uniqueIdentities(observed)) return "provider observed identities are not unique"
   if (!observed.some(member => sameProcess(leader, member))) return "provider evidence omits the leader"
   if (observed.some(member => !sameGroupFields(leader, member))) return "provider evidence has inconsistent group identity"
-  return null
-}
-
-function namespaceIssue(record: LaunchRecord, provider: LinuxNamespaceProviderIdentity): string | null {
-  if (provider.launcher.bootId !== record.launchBootId || provider.init.bootId !== record.launchBootId) return "namespace identities do not match launch boot"
-  if (provider.namespaceId.length === 0) return "namespace identity is empty"
-  if (!uniqueIdentities(provider.observed)) return "namespace observed identities are not unique"
-  if (provider.observed.some(member => member.bootId !== record.launchBootId)) return "namespace evidence has inconsistent boot identity"
-  if (!provider.observed.some(member => sameProcess(provider.launcher, member))) return "namespace evidence omits the launcher"
-  if (!provider.observed.some(member => sameProcess(provider.init, member))) return "namespace evidence omits init"
   return null
 }
 
@@ -134,10 +127,11 @@ async function sleep(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
 }
 
-async function pollContinuity(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity, timeout: number): Promise<Continuity> {
+async function pollContinuity(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity, timeout: number, retain: (observation: GroupObservation) => Promise<void>): Promise<Continuity> {
   const deadline = Date.now() + timeout
   while (true) {
     const continuity = continuedContinuity(provider, await observeGroup(adapter, provider))
+    if (continuity.state === "authorized") await retain(continuity.observation)
     if (continuity.state !== "authorized" || Date.now() >= deadline) return continuity
     await sleep()
   }
@@ -151,8 +145,41 @@ async function signal(adapter: PlatformAdapter, processGroupId: number, value: N
   }
 }
 
+function unionMembers(first: ProcessIdentity[], second: ProcessIdentity[]): ProcessIdentity[] {
+  const result = [...first]
+  for (const member of second) if (!result.some(prior => sameProcess(prior, member))) result.push(member)
+  return result
+}
+
+function sameMembers(first: ProcessIdentity[], second: ProcessIdentity[]): boolean {
+  return first.length === second.length && first.every(member => second.some(other => sameProcess(member, other)))
+}
+
+async function retainedState(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity): Promise<"absent" | "live" | "ambiguous"> {
+  let live = false
+  for (const retained of unionMembers([provider.group.leader], provider.group.observed)) {
+    let current: ProcessIdentity | null
+    try { current = await adapter.readProcess(retained.pid) } catch { return "ambiguous" }
+    if (current === null) continue
+    if (current.pid !== retained.pid || current.bootId !== retained.bootId) continue
+    const expectedStart = processBirthStart(retained.birth)
+    const currentStart = processBirthStart(current.birth)
+    if (expectedStart === null || currentStart === null) return "ambiguous"
+    if (expectedStart !== currentStart) continue
+    if (!sameProcess(retained, current)) return "ambiguous"
+    live = true
+  }
+  return live ? "live" : "absent"
+}
+
+async function discharge(path: string, adapter: PlatformAdapter, record: LaunchRecord, disposition: "released" | "cleaned"): Promise<ReconcileResult> {
+  if (record.provider === null) return quarantine(path, record, "attempted launch has no retained provider")
+  const state = await retainedState(adapter, record.provider)
+  if (state !== "absent") return quarantine(path, record, state === "ambiguous" ? "retained member observation is ambiguous or escaped" : "retained member survived cleanup")
+  return disposition === "cleaned" ? cleaned(path, record) : release(path, record)
+}
+
 async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapter, record: LaunchRecord, pendingRecord: (record: LaunchRecord) => void): Promise<ReconcileResult> {
-  if (adapter.platform !== "darwin") return quarantine(path, record, "process-group reconciliation requires Darwin")
   const currentBoot = await adapter.bootId()
   if (record.launchBootId !== currentBoot) return release(path, record)
   if (record.phase === "quarantined") return quarantine(path, record, record.reason ?? "record was already quarantined")
@@ -163,35 +190,54 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   if (record.provider?.kind !== "process-group") return quarantine(path, record, "record does not contain process-group identity")
   const providerIssue = processGroupIssue(record, record.provider)
   if (providerIssue !== null) return quarantine(path, record, providerIssue)
-  if (record.phase === "cleanup_verified") return release(path, record)
-  const initial = initialContinuity(record.provider, await observeGroup(adapter, record.provider))
-  if (initial.state === "empty") return release(path, record)
+  if (record.phase === "cleanup_verified") return discharge(path, adapter, record, "released")
+  if (await retainedState(adapter, record.provider) === "ambiguous") return quarantine(path, record, "retained member observation is ambiguous or escaped")
+  const initial = (record.phase === "cleanup_pending" ? continuedContinuity : initialContinuity)(record.provider, await observeGroup(adapter, record.provider))
+  if (initial.state === "empty") return discharge(path, adapter, record, "released")
   if (initial.state === "mismatch") return quarantine(path, record, "process-group identity is ambiguous")
-  const verifiedLeader = initial.observation.leader
-  if (verifiedLeader === null) return quarantine(path, record, "process-group leader disappeared before cleanup")
+  const verifiedLeader = record.provider.group.leader
   const pendingProvider: ProcessGroupProviderIdentity = {
     kind: "process-group",
     group: {
       leader: verifiedLeader,
-      observed: initial.observation.members,
+      observed: unionMembers(record.provider.group.observed, initial.observation.members),
     },
   }
   const pending = clone(record, { phase: "cleanup_pending", provider: pendingProvider, reason: null })
   await writeLaunchRecord(path, pending)
   pendingRecord(pending)
-  const authorization = initialContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
-  if (authorization.state === "empty") return release(path, pending)
+  const retain = async (observation: GroupObservation): Promise<void> => {
+    const members = unionMembers(pendingProvider.group.observed, observation.members)
+    if (sameMembers(members, pendingProvider.group.observed)) return
+    pendingProvider.group.observed = members
+    await writeLaunchRecord(path, pending)
+    pendingRecord(pending)
+  }
+  if (await retainedState(adapter, pendingProvider) === "ambiguous") return quarantine(path, pending, "retained member changed before SIGTERM")
+  const authorization = (record.phase === "cleanup_pending" ? continuedContinuity : initialContinuity)(pendingProvider, await observeGroup(adapter, pendingProvider))
+  if (authorization.state === "empty") return discharge(path, adapter, pending, "released")
   if (authorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGTERM")
+  await retain(authorization.observation)
+  if (authorization.state !== "authorized" || !sameMembers(initial.observation.members, authorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGTERM")
   await signal(adapter, pendingProvider.group.leader.processGroupId, "SIGTERM")
-  const afterTerm = await pollContinuity(adapter, pendingProvider, TERM_DEADLINE_MS)
-  if (afterTerm.state === "empty") return cleaned(path, pending)
+  const afterTerm = await pollContinuity(adapter, pendingProvider, TERM_DEADLINE_MS, retain)
+  if (afterTerm.state === "empty") return discharge(path, adapter, pending, "cleaned")
   if (afterTerm.state === "mismatch") return quarantine(path, pending, "process-group identity changed after SIGTERM")
   const killAuthorization = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
-  if (killAuthorization.state === "empty") return cleaned(path, pending)
+  if (killAuthorization.state === "empty") return discharge(path, adapter, pending, "cleaned")
   if (killAuthorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGKILL")
+  await retain(killAuthorization.observation)
+  if (killAuthorization.state !== "authorized" || !sameMembers(afterTerm.observation.members, killAuthorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
+  pendingProvider.group.observed = unionMembers(pendingProvider.group.observed, killAuthorization.observation.members)
+  await writeLaunchRecord(path, pending)
+  if (await retainedState(adapter, pendingProvider) === "ambiguous") return quarantine(path, pending, "retained member changed before SIGKILL")
+  const finalKill = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
+  if (finalKill.state === "empty") return discharge(path, adapter, pending, "cleaned")
+  if (finalKill.state === "authorized") await retain(finalKill.observation)
+  if (finalKill.state !== "authorized" || !sameMembers(killAuthorization.observation.members, finalKill.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
   await signal(adapter, pendingProvider.group.leader.processGroupId, "SIGKILL")
-  const afterKill = await pollContinuity(adapter, pendingProvider, KILL_DEADLINE_MS)
-  if (afterKill.state === "empty") return cleaned(path, pending)
+  const afterKill = await pollContinuity(adapter, pendingProvider, KILL_DEADLINE_MS, retain)
+  if (afterKill.state === "empty") return discharge(path, adapter, pending, "cleaned")
   return quarantine(path, pending, afterKill.state === "mismatch" ? "process-group identity changed after SIGKILL" : "process-group survived SIGKILL deadline")
 }
 
@@ -201,35 +247,8 @@ export async function reconcileRecord(path: string, adapter: PlatformAdapter): P
   try {
     return await reconcileProcessGroupRecord(path, adapter, record, pending => affected = pending)
   } catch (error) {
-    if (!(error instanceof DarwinObservationUnavailable)) throw error
-    const reason = `Darwin observation unavailable: ${error.message}`.slice(0, 512)
+    if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable)) throw error
+    const reason = `${adapter.platform} observation unavailable: ${error.message}`.slice(0, 512)
     return quarantine(path, affected, reason)
   }
-}
-
-export async function reconcileLinuxNamespaceRecord(path: string, adapter: LinuxNamespaceAdapter): Promise<ReconcileResult> {
-  const record = await readLaunchRecordForReconciliation(path)
-  if (adapter.platform !== "linux") return quarantine(path, record, "namespace reconciliation requires Linux")
-  const currentBoot = await adapter.bootId()
-  if (record.launchBootId !== currentBoot) return release(path, record)
-  if (record.phase === "quarantined") return quarantine(path, record, record.reason ?? "record was already quarantined")
-  const semanticIssue = recordIssue(record)
-  if (semanticIssue !== null) return quarantine(path, record, semanticIssue)
-  if (!record.launchAttempted && record.provider === null) return release(path, record)
-  if (record.launchAttempted && record.provider === null) return quarantine(path, record, "launch was attempted without complete namespace identity")
-  if (record.provider?.kind !== "linux-pid-namespace") return quarantine(path, record, "record does not contain Linux namespace identity")
-  const providerIssue = namespaceIssue(record, record.provider)
-  if (providerIssue !== null) return quarantine(path, record, providerIssue)
-  if (record.phase === "cleanup_verified") return release(path, record)
-  const launcher = await adapter.readProcess(record.provider.launcher.pid)
-  const init = await adapter.readProcess(record.provider.init.pid)
-  const initNamespace = init === null ? null : await adapter.readNamespace(init.pid)
-  const members = await adapter.scanNamespace(record.provider.namespaceId)
-  if (!uniqueIdentities(members)) return quarantine(path, record, "namespace scan returned duplicate identities")
-  if (members.length > 0) return quarantine(path, record, "namespace still contains live members")
-  const exactLauncher = launcher !== null && sameProcess(record.provider.launcher, launcher)
-  const exactInit = init !== null && sameProcess(record.provider.init, init)
-  if (exactInit && initNamespace !== record.provider.namespaceId) return quarantine(path, record, "recorded init namespace identity changed")
-  if (exactLauncher || exactInit) return quarantine(path, record, "recorded identity is live but namespace scan is empty")
-  return release(path, record)
 }

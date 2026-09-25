@@ -1,4 +1,9 @@
 import assert from "node:assert/strict"
+import childProcess from "node:child_process"
+import { syncBuiltinESMExports } from "node:module"
+import { EventEmitter } from "node:events"
+import { PassThrough } from "node:stream"
+import { launchHandlerGeneration } from "../src/platform/startup.js"
 import { spawn, type ChildProcess } from "node:child_process"
 import { fstatSync, readdirSync } from "node:fs"
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises"
@@ -27,6 +32,7 @@ const hostId = "task-3-host"
 
 type FixtureConfig = {
   root: string
+  adapterMode?: "darwin-real" | "linux-real"
   bootId: string
   hostId: string
   handlerLog: string
@@ -55,7 +61,7 @@ type FakeGroup = {
   termOutcome: "empty" | "survive"
 }
 
-function identity(pid: number, parentPid = 1, birth = `fixture-${pid}`): ProcessIdentity {
+function identity(pid: number, parentPid = 1, birth = `1780000000:agy-handler:123e4567-e89b-12d3-a456-426614174000`): ProcessIdentity {
   return {
     bootId,
     pid,
@@ -103,7 +109,7 @@ class FakeAdapter implements PlatformAdapter {
   async readProcess(pid: number): Promise<ProcessIdentity | null> {
     if (!processExists(pid)) return null
     let observed = identity(pid)
-    if (process.platform === "darwin") {
+    {
       try {
         observed = identity(pid, 1, await handlerBirth(this.root, pid))
       } catch (error) {
@@ -152,7 +158,7 @@ async function writeConfig(root: string, changes: Partial<FixtureConfig> = {}): 
   return { config, path }
 }
 
-function providerIdentity(pid: number, birth = `fixture-provider-${pid}`): ProcessIdentity {
+function providerIdentity(pid: number, birth = `1780000000:agy-provider:123e4567-e89b-12d3-a456-426614174000`): ProcessIdentity {
   return {
     bootId,
     pid,
@@ -168,6 +174,7 @@ function providerIdentity(pid: number, birth = `fixture-provider-${pid}`): Proce
 function providerRecord(checkoutId: string, leader: ProcessIdentity): LaunchRecord {
   return launchRecord({
     checkoutId,
+    launchAttemptId: leader.birth.slice(leader.birth.indexOf("agy-provider:") + "agy-provider:".length),
     launchAttempted: true,
     phase: "active",
     provider: {
@@ -287,7 +294,7 @@ function handlerRecord(root: string, processIdentity: ProcessIdentity, overrides
     hostId,
     launchBootId: bootId,
     generation: "generation",
-    launchAttemptId: "attempt",
+    launchAttemptId: "123e4567-e89b-12d3-a456-426614174000",
     launchAttempted: true,
     phase: "ready",
     process: processIdentity,
@@ -875,4 +882,77 @@ test("closes the startup lock handle when helper release rejects", async t => {
     }
   })
   assert.deepEqual(matchingDescriptors, [])
+})
+
+test("singleton fixtures require exact Handler and provider markers", async t => {
+  const module = await import("../src/platform/launch-marker.js") as unknown as { exactAgencyBirth(birth: string, marker: string): boolean }
+  assert.equal(typeof module.exactAgencyBirth, "function")
+  for (const platform of ["darwin", "linux"] as const) await t.test(platform, async t => {
+    for (const role of ["handler", "provider"] as const) {
+      const marker = agencyLaunchMarker(role, "123e4567-e89b-12d3-a456-426614174000")
+      assert.equal(module.exactAgencyBirth(`0:${marker}`, marker), true)
+      for (const value of [`00:${marker}`, `-1:${marker}`, `1:prefix:${marker}`, `1:${marker}suffix`, `1:${marker.slice(0,-1)}`, `1:${marker.replace(role,role === "handler" ? "provider" : "handler")}`]) assert.equal(module.exactAgencyBirth(value, marker), false)
+    }
+    const root = await fixtureRoot(t)
+    t.after(() => rm(root, { recursive: true, force: true }))
+    await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(101)))
+    const linux = await import("../src/platform/linux.js") as unknown as { LinuxObservationUnavailable: new (message: string) => Error }
+    assert.equal(typeof linux.LinuxObservationUnavailable, "function")
+    const adapter: PlatformAdapter = { platform, bootId: async () => bootId, readProcess: async () => { throw new linux.LinuxObservationUnavailable("procfs permission") }, readGroup: async () => [], signalGroup: async () => assert.fail("unexpected signal") }
+    assert.equal((await inspectHandlerGeneration(root, adapter))?.disposition, "ambiguous")
+  })
+  const source = await readFile(new URL("../../test/fixtures/singleton-handler.ts", import.meta.url), "utf8")
+  assert.match(source, /linux-real/)
+})
+
+test("singleton fixtures enforce ownership at the Handler publication boundary", async t => {
+  for (const platform of ["darwin", "linux"] as const) for (const defect of ["group", "session", "uid", "gid", "role", "prefix", "truncated", "noncanonical"]) await t.test(platform + " " + defect, async t => {
+    const root = await fixtureRoot(t)
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const status = new PassThrough(), gate = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { pid: 801, stdio: [null, null, null, status, gate], exitCode: null, signalCode: null, unref: () => undefined })
+    let observed = identity(801)
+    t.mock.method(childProcess, "spawn", (_file: string, _args: string[], options: { argv0: string }) => {
+      observed = identity(801, 1, "1780000000:" + options.argv0)
+      if (defect === "group") observed.processGroupId = 802
+      if (defect === "session") observed.sessionId = 802
+      if (defect === "uid") observed.uid++
+      if (defect === "gid") observed.gid++
+      if (defect === "role") observed.birth = observed.birth.replace("handler", "provider")
+      if (defect === "prefix") observed.birth = "1780000000:prefix:" + options.argv0
+      if (defect === "truncated") observed.birth = observed.birth.slice(0, -1)
+      if (defect === "noncanonical") observed.birth = "01780000000:" + options.argv0
+      return child
+    })
+    syncBuiltinESMExports()
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+    const transitions: string[] = []
+    const adapter: PlatformAdapter = { platform, bootId: async () => bootId, readProcess: async () => observed, readGroup: async () => [], signalGroup: async () => assert.fail("unexpected signal") }
+    await assert.rejects(launchHandlerGeneration({ root, hostId, adapter, handler: { file: "/injected", args: [] }, timeoutMs: 500,
+      onTransition: transition => {
+        transitions.push(transition)
+        if (transition === "handler_spawned") status.write(JSON.stringify({ type: "identity", identity: observed }) + "\n")
+        if (transition === "identity_verified") throw new Error("invalid identity passed verification")
+      },
+    }), /group|session|owner|marker|identity could not be verified/)
+    assert.equal((await readHandlerRecord(join(root, "handler.json"))).phase, "launch_pending")
+    assert.ok(!transitions.includes("identity_verified"))
+  })
+})
+
+test("singleton fixtures retain ambiguity diagnostics", async t => {
+  for (const mode of ["observation", "mismatch"]) await t.test(mode, async t => {
+    const root = await fixtureRoot(t), expected = identity(101), observed = { ...expected, uid: expected.uid + 1 }
+    t.after(() => rm(root, { recursive: true, force: true }))
+    await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, expected))
+    const adapter: PlatformAdapter = { platform: "darwin", bootId: async () => bootId, readProcess: async () => {
+      if (mode === "observation") throw new DarwinObservationUnavailable("unstable PID", { cause: new Error("snapshot cause") })
+      return observed
+    }, readGroup: async () => [], signalGroup: async () => assert.fail("unexpected signal") }
+    const inspection = await inspectHandlerGeneration(root, adapter) as any
+    assert.equal(inspection.disposition, "ambiguous")
+    assert.deepEqual(inspection.diagnostic?.expected, expected)
+    if (mode === "observation") assert.match(inspection.diagnostic?.reason ?? "", /unstable PID.*snapshot cause/)
+    else assert.deepEqual(inspection.diagnostic?.observed, observed)
+  })
 })

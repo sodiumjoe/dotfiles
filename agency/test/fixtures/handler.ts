@@ -1,9 +1,12 @@
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
+import { join, dirname } from "node:path"
+import { persistAttempt, updateAttempt, persistIdentity } from "../../scripts/qualify-linux.js"
 import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
+import { createLinuxAdapter } from "../../src/platform/linux.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
-import { agencyLaunchMarker } from "../../src/platform/launch-marker.js"
+import { agencyLaunchMarker, exactAgencyBirth } from "../../src/platform/launch-marker.js"
 import { writeLaunchRecord } from "../../src/platform/private-state.js"
 import { RUNTIME_RECORD_VERSION, type LaunchPhase, type LaunchRecord, type ProcessIdentity } from "../../src/platform/types.js"
 
@@ -16,10 +19,13 @@ type Config = {
   providerReadyPath: string
   providerMode: ProviderMode
   timeoutMs: number
+  evidenceRoot?: string
+  batchId?: string
+  caseId?: string
 }
 
 const providerFixture = fileURLToPath(new URL("./provider-tree.js", import.meta.url))
-const adapter = createDarwinAdapter()
+const adapter = process.platform === "linux" ? createLinuxAdapter() : createDarwinAdapter()
 
 async function withPrivateUmask<T>(create: () => Promise<T>): Promise<T> {
   const previous = process.umask(0o077)
@@ -51,7 +57,7 @@ async function waitFor<T>(read: () => Promise<T | null>, message: string, timeou
     try {
       value = await read()
     } catch (error) {
-      if (!(error instanceof Error) || error.name !== "DarwinObservationUnavailable") throw error
+      if (!(error instanceof Error) || error.name !== "DarwinObservationUnavailable" && error.name !== "LinuxObservationUnavailable") throw error
       value = null
     }
     if (value !== null) return value
@@ -66,9 +72,8 @@ function phase(value: CrashPhase): LaunchPhase {
 }
 
 function assertProviderIdentity(leader: ProcessIdentity, members: ProcessIdentity[], marker: string, childPid: number): void {
-  const separator = leader.birth.indexOf(":")
   if (leader.pid !== childPid || leader.processGroupId !== leader.pid || leader.sessionId !== leader.pid) throw new Error("provider leader does not own its pid, group, and derived session")
-  if (separator <= 0 || leader.birth.slice(separator + 1) !== marker) throw new Error("provider leader marker is not exact")
+  if (!exactAgencyBirth(leader.birth, marker)) throw new Error("provider leader marker is not exact")
   if (leader.uid !== process.getuid!() || leader.gid !== process.getgid!()) throw new Error("provider leader owner is not exact")
   if (!members.some(member => member.pid === leader.pid && member.birth === leader.birth)) throw new Error("provider group omits its leader")
   if (members.some(member => member.bootId !== leader.bootId || member.processGroupId !== leader.processGroupId || member.sessionId !== leader.sessionId || member.uid !== leader.uid || member.gid !== leader.gid)) throw new Error("provider group identity is inconsistent")
@@ -97,6 +102,7 @@ async function emit(config: Config, handler: ProcessIdentity, provider: { leader
   return new Promise(() => undefined)
 }
 
+process.umask(0o077)
 if (process.argv.length !== 3) throw new Error("usage: handler <config>")
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as Config
 if (!["before-spawn", "after-attempt", "identity-published", "readiness", "active"].includes(config.phase)) throw new Error("handler phase is invalid")
@@ -111,8 +117,11 @@ if (config.phase === "before-spawn") await emit(config, handler, null)
 const attempted = { ...pending, launchAttempted: true }
 await writePrivateLaunchRecord(config.recordPath, attempted)
 const marker = agencyLaunchMarker("provider", launchAttemptId)
-const child = spawn(process.execPath, [providerFixture, "leader", config.providerReadyPath, config.providerMode, String(config.timeoutMs)], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "ignore", 3, 4] })
+let evidenceAttempt = config.evidenceRoot === undefined ? null : await persistAttempt(join(config.evidenceRoot, "attempts"), config.batchId!, "provider", launchAttemptId, undefined, config.caseId!)
+const childReceipt = join(config.evidenceRoot === undefined ? dirname(config.providerReadyPath) : join(config.evidenceRoot, "children"), (evidenceAttempt?.expectedChildReceiptKey ?? randomUUID()) + ".json")
+const child = spawn(process.execPath, [providerFixture, "leader", config.providerReadyPath, config.providerMode, String(config.timeoutMs)], { argv0: marker, env: { ...process.env, AGENCY_PROVIDER_RECEIPT: childReceipt, AGENCY_PROVIDER_ATTEMPT: evidenceAttempt?.attemptId, AGENCY_PROVIDER_BATCH: config.batchId, AGENCY_PROVIDER_CASE: config.caseId, AGENCY_PROVIDER_LAUNCH: launchAttemptId }, detached: true, stdio: ["ignore", "ignore", "ignore", 3, 4] })
 if (child.pid === undefined) throw new Error("provider leader pid is unavailable")
+if (evidenceAttempt !== null) evidenceAttempt = await updateAttempt(join(config.evidenceRoot!, "attempts"), evidenceAttempt, { phase: "spawned", pid: child.pid })
 const structural = await waitFor(async () => await exists(config.providerReadyPath) ? JSON.parse(await readFile(config.providerReadyPath, "utf8")) as { leaderPid: number; descendantPid: number } : null, "provider structural pids were not published", config.timeoutMs)
 if (structural.leaderPid !== child.pid) throw new Error("provider leader pid changed")
 const leader = await waitFor(() => adapter.readProcess(child.pid!), "provider leader was not observable", config.timeoutMs)
@@ -121,6 +130,10 @@ const members = await waitFor(async () => {
   return current.some(member => member.pid === structural.descendantPid) ? current : null
 }, "provider descendant was not observable", config.timeoutMs)
 assertProviderIdentity(leader, members, marker, child.pid)
+if (evidenceAttempt !== null) {
+  const entries = await Promise.all(members.map(member => persistIdentity(join(config.evidenceRoot!, "identities"), member.pid === leader.pid ? "provider" : "descendant", member)))
+  await updateAttempt(join(config.evidenceRoot!, "attempts"), evidenceAttempt, { phase: "registered", expectedDescendantPids: [structural.descendantPid], registeredIdentityKeys: entries.map(entry => entry.key) })
+}
 if (config.phase === "after-attempt") await emit(config, handler, { leader, members })
 const provider = { kind: "process-group" as const, group: { leader, observed: members } }
 await writePrivateLaunchRecord(config.recordPath, record(config, launchAttemptId, bootId, { launchAttempted: true, phase: phase(config.phase), provider }))

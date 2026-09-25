@@ -7,8 +7,6 @@ import {
   type HandlerPhase,
   type LaunchPhase,
   type LaunchRecord,
-  type LinuxNamespaceAdapter,
-  type LinuxNamespaceProviderIdentity,
   type PlatformAdapter,
   type ProcessGroupIdentity,
   type ProcessGroupProviderIdentity,
@@ -21,7 +19,7 @@ import {
 const processIdentity = {
   bootId: "boot-1",
   pid: 101,
-  birth: "birth-101",
+  birth: "101:fixture",
   parentPid: 1,
   processGroupId: 101,
   sessionId: 101,
@@ -44,15 +42,7 @@ const processGroupProvider = {
   group: processGroup,
 } satisfies ProcessGroupProviderIdentity
 
-const linuxNamespaceProvider = {
-  kind: "linux-pid-namespace",
-  launcher: processIdentity,
-  init: processIdentity,
-  namespaceId: "ns-1",
-  observed: [processIdentity],
-} satisfies LinuxNamespaceProviderIdentity
-
-const providers = [processGroupProvider, linuxNamespaceProvider] satisfies ProviderIdentity[]
+const providers = [processGroupProvider] satisfies ProviderIdentity[]
 
 const launchPhases = [
   "launch_pending",
@@ -120,17 +110,15 @@ const platformAdapter = {
   signalGroup: async () => undefined,
 } satisfies PlatformAdapter
 
-const linuxNamespaceAdapter = {
+const linuxAdapter = {
   ...platformAdapter,
   platform: "linux",
-  readNamespace: async () => "ns-1",
-  scanNamespace: async () => [processIdentity],
-} satisfies LinuxNamespaceAdapter
+} satisfies PlatformAdapter
 
 void reconcileResult
 void handlerInspection
 void platformAdapter
-void linuxNamespaceAdapter
+void linuxAdapter
 
 test("exports the runtime record version", () => {
   assert.equal(RUNTIME_RECORD_VERSION, 1)
@@ -145,4 +133,30 @@ test("sameProcess ignores only parentPid", () => {
   assert.equal(sameProcess(processIdentity, { ...observedIdentity, sessionId: 102 }), false)
   assert.equal(sameProcess(processIdentity, { ...observedIdentity, uid: 502 }), false)
   assert.equal(sameProcess(processIdentity, { ...observedIdentity, gid: 21 }), false)
+})
+
+test("rejects legacy Linux namespace launch records", async t => {
+  const types = await import("../src/platform/types.js") as unknown as {
+    processBirthStart(birth: string): string | null
+    sameProcessGeneration(a: ProcessIdentity, b: ProcessIdentity): boolean
+  }
+  await t.test("numeric generations are lossless and exclude mutable authorization fields", () => {
+    assert.equal(typeof types.processBirthStart, "function")
+    for (const value of ["0", "999999999999999999999999999999"]) assert.equal(types.processBirthStart(`${value}:a/b:c`), value)
+    for (const value of ["", "01:x", "-1:x", "1.2:x", "1e3:x", ":x", "NaN:x", "1", " 1:x"]) assert.equal(types.processBirthStart(value), null)
+    const changed = { ...processIdentity, birth: "101:changed", uid: 9, gid: 8, processGroupId: 900, sessionId: 900 }
+    assert.equal(types.sameProcessGeneration(processIdentity, changed), true)
+    assert.equal(sameProcess(processIdentity, changed), false)
+    for (const fields of [{ bootId: "other" }, { pid: 99 }, { birth: "102:fixture" }]) assert.equal(types.sameProcessGeneration(processIdentity, { ...processIdentity, ...fields }), false)
+  })
+  await t.test("runtime parser rejects the legacy union", async () => {
+    const { mkdtemp, writeFile, rm, realpath } = await import("node:fs/promises")
+    const { tmpdir } = await import("node:os")
+    const { readLaunchRecord } = await import("../src/platform/private-state.js")
+    const directory = await mkdtemp(`${await realpath(tmpdir())}/agency-contract-`)
+    t.after(() => rm(directory, { recursive: true, force: true }))
+    const path = `${directory}/record.json`
+    await writeFile(path, JSON.stringify({ ...launchRecord, provider: { kind: "linux-pid-namespace", launcher: processIdentity, init: processIdentity, namespaceId: "ns-1", observed: [processIdentity] } }), { mode: 0o600 })
+    await assert.rejects(readLaunchRecord(path), /provider|namespace|kind/i)
+  })
 })

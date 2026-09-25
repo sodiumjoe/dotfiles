@@ -1,3 +1,4 @@
+import { LinuxObservationUnavailable } from "./linux.js"
 import { spawn, type ChildProcess } from "node:child_process"
 import { constants } from "node:fs"
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises"
@@ -24,7 +25,7 @@ export type StartOrConnectOptions = {
   handler: HandlerCommand
   timeoutMs?: number
   lockTimeoutSeconds?: number
-  onTransition?: (transition: StartTransition) => Promise<void> | void
+  onTransition?: (transition: StartTransition, pid?: number) => Promise<void> | void
 }
 
 type LockMetadata = {
@@ -167,6 +168,11 @@ function expectedSocketPath(root: string): string {
   return join(root, "handler.sock")
 }
 
+function observationReason(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  return error.message + (error.cause === undefined ? "" : ": " + observationReason(error.cause))
+}
+
 export async function inspectHandlerGeneration(root: string, adapter: PlatformAdapter): Promise<HandlerInspection | null> {
   await assertPrivateDirectory(root)
   let record
@@ -181,7 +187,7 @@ export async function inspectHandlerGeneration(root: string, adapter: PlatformAd
   try {
     currentBoot = await adapter.bootId()
   } catch (error) {
-    if (error instanceof DarwinObservationUnavailable) return { record, disposition: "ambiguous" }
+    if (error instanceof DarwinObservationUnavailable || error instanceof LinuxObservationUnavailable) return { record, disposition: "ambiguous", diagnostic: { reason: observationReason(error), expected: record.process, observed: null } }
     throw error
   }
   if (record.launchBootId !== currentBoot || record.process === null) return { record, disposition: "stale" }
@@ -189,11 +195,11 @@ export async function inspectHandlerGeneration(root: string, adapter: PlatformAd
   try {
     observed = await adapter.readProcess(record.process.pid)
   } catch (error) {
-    if (error instanceof DarwinObservationUnavailable) return { record, disposition: "ambiguous" }
+    if (error instanceof DarwinObservationUnavailable || error instanceof LinuxObservationUnavailable) return { record, disposition: "ambiguous", diagnostic: { reason: observationReason(error), expected: record.process, observed: null } }
     throw error
   }
   if (observed === null) return { record, disposition: "stale" }
-  if (!sameProcess(record.process, observed)) return { record, disposition: "ambiguous" }
+  if (!sameProcess(record.process, observed)) return { record, disposition: "ambiguous", diagnostic: { reason: "observed identity mismatch", expected: record.process, observed } }
   return { record, disposition: "live" }
 }
 
@@ -242,10 +248,10 @@ export async function startOrConnect(options: StartOrConnectOptions): Promise<Ha
     await options.onTransition?.("lock_acquired")
     const deadline = Date.now() + timeoutMs
     const existing = await inspectHandlerGeneration(options.root, options.adapter)
-    if (existing?.disposition === "ambiguous") throw new Error("Handler identity is ambiguous; startup is unavailable")
+    if (existing?.disposition === "ambiguous") throw new Error("Handler identity is ambiguous; startup is unavailable: " + JSON.stringify(existing.diagnostic))
     if (existing?.disposition === "live") {
       const settled = await waitForExisting(options.root, options.adapter, deadline)
-      if (settled.disposition === "ambiguous") throw new Error("Handler identity became ambiguous; startup is unavailable")
+      if (settled.disposition === "ambiguous") throw new Error("Handler identity became ambiguous; startup is unavailable: " + JSON.stringify(settled.diagnostic))
       if (settled.disposition === "live") return settled
       await unlinkStalePrivateSocket(options.root, "handler.sock", settled)
     } else if (existing?.disposition === "stale") {

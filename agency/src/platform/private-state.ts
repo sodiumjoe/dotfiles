@@ -8,7 +8,6 @@ import {
   type HandlerGenerationRecord,
   type LaunchPhase,
   type LaunchRecord,
-  type LinuxNamespaceProviderIdentity,
   type ProcessGroupProviderIdentity,
   type ProcessIdentity,
   type ProviderIdentity,
@@ -84,15 +83,6 @@ function providerIdentity(value: unknown): ProviderIdentity | null {
       },
     } satisfies ProcessGroupProviderIdentity
   }
-  if (source.kind === "linux-pid-namespace") {
-    return {
-      kind: "linux-pid-namespace",
-      launcher: processIdentity(source.launcher, "provider.launcher"),
-      init: processIdentity(source.init, "provider.init"),
-      namespaceId: typeof source.namespaceId === "string" ? source.namespaceId : nonempty(source.namespaceId, "provider.namespaceId"),
-      observed: identities(source.observed, "provider.observed"),
-    } satisfies LinuxNamespaceProviderIdentity
-  }
   throw new Error("provider.kind is invalid")
 }
 
@@ -122,7 +112,6 @@ function parseLaunchRecord(value: unknown, strict: boolean): LaunchRecord {
 
 function assertLaunchSemantics(record: LaunchRecord): void {
   if (!record.launchAttempted && record.provider !== null && record.phase !== "quarantined") throw new Error("an unattempted launch record cannot have a provider")
-  if (record.provider?.kind === "linux-pid-namespace" && record.provider.namespaceId.length === 0 && record.phase !== "cleanup_verified" && record.phase !== "quarantined") throw new Error("namespaceId must be nonempty")
   if ((record.phase === "readiness" || record.phase === "active") && record.provider === null) throw new Error(`${record.phase} requires a provider`)
   if (record.phase === "exited_unverified" && !record.launchAttempted) throw new Error("exited_unverified requires an attempted launch")
   if (record.phase === "cleanup_pending" && (!record.launchAttempted || record.provider === null)) throw new Error("cleanup_pending requires an attempted launch and provider identity")

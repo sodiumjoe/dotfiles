@@ -210,3 +210,21 @@ test("exited_unverified preserves exact prior process and reconciliation evidenc
   await writeHandlerRecord(handlerPath, preservedNull)
   assert.deepEqual(await readHandlerRecord(handlerPath), preservedNull)
 })
+
+test("validates marker-bound provider records on both platforms", async t => {
+  const markerModule = await import("../src/platform/launch-marker.js") as unknown as { exactAgencyBirth(birth: string, marker: string): boolean }
+  const marker = "agy-provider:123e4567-e89b-12d3-a456-426614174000"
+  assert.equal(typeof markerModule.exactAgencyBirth, "function")
+  for (const platform of ["darwin", "linux"]) await t.test(platform, async t => {
+    const { directory, launchPath } = await createFixture()
+    t.after(() => import("node:fs/promises").then(fs => fs.rm(directory, { recursive: true, force: true })))
+    assert.equal(markerModule.exactAgencyBirth(`99999999999999999999:${marker}`, marker), true)
+    for (const birth of [`01:${marker}`, `1:prefix${marker}`, `1:${marker}x`, `1:${marker.slice(0,-1)}`, `1:${marker.replace("provider","handler")}`]) assert.equal(markerModule.exactAgencyBirth(birth, marker), false)
+    const leader = { ...processIdentity, birth: `123:${marker}` }
+    const valid = launchRecord({ launchAttemptId: marker.slice("agy-provider:".length), provider: { kind: "process-group", group: { leader, observed: [leader] } } })
+    await writeLaunchRecord(launchPath, valid)
+    assert.deepEqual(await readLaunchRecord(launchPath), valid)
+    await writeFile(launchPath, JSON.stringify({ ...valid, provider: { kind: "linux-pid-namespace", launcher: leader, init: leader, namespaceId: "pid:[42]", observed: [leader] } }), { mode: 0o600 })
+    await assert.rejects(readLaunchRecord(launchPath), /provider|kind|namespace/i)
+  })
+})

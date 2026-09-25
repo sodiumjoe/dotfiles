@@ -1,3 +1,4 @@
+import { createLinuxAdapter, LinuxObservationUnavailable } from "../../src/platform/linux.js"
 import { appendFile, lstat, readFile, readdir, stat, writeFile } from "node:fs/promises"
 import { Socket } from "node:net"
 import { basename, dirname, join } from "node:path"
@@ -30,7 +31,7 @@ type FixtureConfig = {
   response?: string
   timeoutMs?: number
   lockTimeoutSeconds?: number
-  adapterMode?: "darwin-real"
+  adapterMode?: "darwin-real" | "linux-real"
 }
 
 type FakeGroup = {
@@ -97,6 +98,10 @@ function processExists(pid: number): boolean {
 }
 
 function adapter(config: FixtureConfig): PlatformAdapter {
+  if (config.adapterMode === "linux-real") {
+    if (process.platform !== "linux") throw new Error("the real Linux adapter requires Linux")
+    return createLinuxAdapter()
+  }
   if (config.adapterMode === "darwin-real") {
     if (process.platform !== "darwin") throw new Error("the real Darwin adapter requires Darwin")
     return createDarwinAdapter()
@@ -112,9 +117,7 @@ function adapter(config: FixtureConfig): PlatformAdapter {
       const group = groups.get(pid)
       if (group !== undefined) return group.currentLeader
       if (!processExists(pid)) return null
-      const birth = process.platform === "darwin"
-        ? await handlerBirth(join(config.root, "handler.json"), pid)
-        : `fixture-${pid}`
+      const birth = await handlerBirth(join(config.root, "handler.json"), pid)
       return identity(pid, config.bootId, 1, birth)
     },
     readGroup: async processGroupId => groups.get(processGroupId)?.members ?? [],
@@ -178,7 +181,7 @@ async function observedIdentity(adapter: PlatformAdapter, pid: number, timeoutMs
       const observed = await adapter.readProcess(pid)
       if (observed !== null) return observed
     } catch (error) {
-      if (!(error instanceof DarwinObservationUnavailable)) throw error
+      if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable)) throw error
     }
     if (Date.now() >= deadline) throw new Error("real Darwin Handler identity is unavailable")
     await new Promise(resolve => setTimeout(resolve, 20))
@@ -243,8 +246,8 @@ async function runHandler(config: FixtureConfig): Promise<void> {
   if (recordPath === undefined || generation === undefined) throw new Error("Handler startup environment is incomplete")
   const timeoutMs = fixtureTimeout(config)
   const handlerAdapter = adapter(config)
-  const observed = config.adapterMode === "darwin-real" ? await observedIdentity(handlerAdapter, process.pid, timeoutMs) : null
-  const birth = process.platform === "darwin" ? await handlerBirth(recordPath, process.pid) : `fixture-${process.pid}`
+  const observed = config.adapterMode !== undefined ? await observedIdentity(handlerAdapter, process.pid, timeoutMs) : null
+  const birth = await handlerBirth(recordPath, process.pid)
   const self = observed ?? identity(process.pid, config.bootId, process.ppid, birth)
   await delay(config.identityDelayMs)
   await appendPrivateFile(config.handlerLog, `${JSON.stringify(self)}\n`)
@@ -280,7 +283,7 @@ async function runHandler(config: FixtureConfig): Promise<void> {
     writer: "handler",
     reconciliation: { classified: 0, total: inventoryPaths.length, quarantined: 0 },
   })
-  const reconciliationAdapter = config.adapterMode === "darwin-real" ? handlerAdapter : { ...handlerAdapter, platform: "darwin" as const }
+  const reconciliationAdapter = handlerAdapter
   let classified = 0
   let quarantined = 0
   for (const path of inventoryPaths) {
@@ -350,6 +353,7 @@ async function runContender(config: FixtureConfig, configPath: string): Promise<
   }
 }
 
+process.umask(0o077)
 const mode = process.argv[2]
 const configPath = process.argv[3]
 if ((mode !== "handler" && mode !== "contender") || configPath === undefined) throw new Error("usage: singleton-handler <handler|contender> <config>")

@@ -5,11 +5,10 @@ import { join } from "node:path"
 import test from "node:test"
 import { readLaunchRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
-import { reconcileLinuxNamespaceRecord, reconcileRecord } from "../src/platform/reconcile.js"
+import { reconcileRecord } from "../src/platform/reconcile.js"
 import {
   RUNTIME_RECORD_VERSION,
   type LaunchRecord,
-  type LinuxNamespaceAdapter,
   type PlatformAdapter,
   type ProcessIdentity,
 } from "../src/platform/types.js"
@@ -21,7 +20,7 @@ function identity(overrides: Partial<ProcessIdentity> = {}): ProcessIdentity {
   return {
     bootId: "boot-1",
     pid: 101,
-    birth: "birth-101",
+    birth: "101:agy-provider:123e4567-e89b-12d3-a456-426614174000",
     parentPid: 1,
     processGroupId: 101,
     sessionId: 101,
@@ -39,7 +38,7 @@ function record(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
     leaseId: "lease-1",
     agentId: "agent-1",
     handlerGeneration: "generation-1",
-    launchAttemptId: "attempt-1",
+    launchAttemptId: "123e4567-e89b-12d3-a456-426614174000",
     launchBootId: "boot-1",
     launchAttempted: true,
     phase: "active",
@@ -50,6 +49,7 @@ function record(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
 }
 
 type AdapterOptions = {
+  platform?: "darwin" | "linux"
   bootId?: string
   leader?: ProcessIdentity | null
   group?: ProcessIdentity[]
@@ -57,7 +57,7 @@ type AdapterOptions = {
 }
 
 class FakeAdapter implements PlatformAdapter {
-  readonly platform: "darwin" | "linux" = "darwin"
+  readonly platform: "darwin" | "linux"
   currentBootId: string
   leader: ProcessIdentity | null
   group: ProcessIdentity[]
@@ -65,6 +65,7 @@ class FakeAdapter implements PlatformAdapter {
   onSignal: AdapterOptions["onSignal"]
 
   constructor(options: AdapterOptions = {}) {
+    this.platform = options.platform ?? "darwin"
     this.currentBootId = options.bootId ?? "boot-1"
     this.leader = options.leader === undefined ? identity() : options.leader
     this.group = options.group ?? [identity()]
@@ -75,8 +76,8 @@ class FakeAdapter implements PlatformAdapter {
     return this.currentBootId
   }
 
-  async readProcess(_pid: number): Promise<ProcessIdentity | null> {
-    return this.leader
+  async readProcess(pid: number): Promise<ProcessIdentity | null> {
+    return pid === 101 ? this.leader : this.group.find(member => member.pid === pid) ?? null
   }
 
   async readGroup(): Promise<ProcessIdentity[]> {
@@ -107,65 +108,67 @@ async function assertOutcome(t: test.TestContext, starting: LaunchRecord, adapte
   assert.equal(result.record.phase, expected.disposition === "quarantined" ? "quarantined" : "cleanup_verified")
 }
 
-test("reconciles the process-group safety matrix", async t => {
+for (const platform of ["darwin", "linux"] as const) {
+ test("reconciles the process-group safety matrix on " + platform, async t => {
+  const fake = (options: AdapterOptions = {}) => new FakeAdapter({ ...options, platform })
   await t.test("releases a same-boot provably unattempted launch", async t => {
-    await assertOutcome(t, record({ launchAttempted: false, provider: null, phase: "launch_pending" }), new FakeAdapter(), { disposition: "released", signals: [] })
+    await assertOutcome(t, record({ launchAttempted: false, provider: null, phase: "launch_pending" }), fake(), { disposition: "released", signals: [] })
   })
   await t.test("quarantines a same-boot attempted launch without provider identity", async t => {
-    await assertOutcome(t, record({ provider: null, phase: "launch_pending" }), new FakeAdapter(), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record({ provider: null, phase: "launch_pending" }), fake(), { disposition: "quarantined", signals: [] })
   })
   await t.test("releases an attempted prior-boot launch without provider identity", async t => {
-    await assertOutcome(t, record({ launchBootId: "boot-old", provider: null, phase: "launch_pending" }), new FakeAdapter(), { disposition: "released", signals: [] })
+    await assertOutcome(t, record({ launchBootId: "boot-old", provider: null, phase: "launch_pending" }), fake(), { disposition: "released", signals: [] })
   })
   await t.test("releases contradictory prior-boot evidence without signaling", async t => {
-    await assertOutcome(t, record({ launchBootId: "boot-old", launchAttempted: false }), new FakeAdapter(), { disposition: "released", signals: [] })
+    await assertOutcome(t, record({ launchBootId: "boot-old", launchAttempted: false }), fake(), { disposition: "released", signals: [] })
   })
   await t.test("releases a prior-boot provider without signaling", async t => {
-    await assertOutcome(t, record(), new FakeAdapter({ bootId: "boot-2" }), { disposition: "released", signals: [] })
+    await assertOutcome(t, record(), fake({ bootId: "boot-2" }), { disposition: "released", signals: [] })
   })
   await t.test("terminates an exact live group and reports cleaned", async t => {
-    await assertOutcome(t, record(), new FakeAdapter({ onSignal: (_signal, adapter) => { adapter.leader = null; adapter.group = [] } }), { disposition: "cleaned", signals: ["SIGTERM"] })
+    await assertOutcome(t, record(), fake({ onSignal: (_signal, adapter) => { adapter.leader = null; adapter.group = [] } }), { disposition: "cleaned", signals: ["SIGTERM"] })
   })
   await t.test("releases an absent leader with an empty group", async t => {
-    await assertOutcome(t, record(), new FakeAdapter({ leader: null, group: [] }), { disposition: "released", signals: [] })
+    await assertOutcome(t, record(), fake({ leader: null, group: [] }), { disposition: "released", signals: [] })
   })
   await t.test("releases a reused leader pid when the old group is empty", async t => {
-    await assertOutcome(t, record(), new FakeAdapter({ leader: identity({ birth: "new-birth" }), group: [] }), { disposition: "released", signals: [] })
+    await assertOutcome(t, record(), fake({ leader: identity({ birth: "999:fixture" }), group: [] }), { disposition: "released", signals: [] })
   })
   await t.test("quarantines a reused leader pid with a nonempty group", async t => {
-    await assertOutcome(t, record(), new FakeAdapter({ leader: identity({ birth: "new-birth" }), group: [identity({ birth: "new-birth" })] }), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record(), fake({ leader: identity({ birth: "999:fixture" }), group: [identity({ birth: "999:fixture" })] }), { disposition: "quarantined", signals: [] })
   })
   await t.test("quarantines an exact leader with an outside-session member", async t => {
-    await assertOutcome(t, record(), new FakeAdapter({ group: [identity(), identity({ pid: 102, birth: "birth-102", sessionId: 202 })] }), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record(), fake({ group: [identity(), identity({ pid: 102, birth: "102:fixture", sessionId: 202 })] }), { disposition: "quarantined", signals: [] })
   })
   await t.test("quarantines a surviving group after TERM and KILL", async t => {
-    await assertOutcome(t, record(), new FakeAdapter(), { disposition: "quarantined", signals: ["SIGTERM", "SIGKILL"] })
+    await assertOutcome(t, record(), fake(), { disposition: "quarantined", signals: ["SIGTERM", "SIGKILL"] })
   })
   await t.test("quarantines an unattempted record with a provider", async t => {
-    await assertOutcome(t, record({ launchAttempted: false }), new FakeAdapter(), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record({ launchAttempted: false }), fake(), { disposition: "quarantined", signals: [] })
   })
   await t.test("quarantines a provider whose leader pgid differs from its pid", async t => {
     const leader = identity({ processGroupId: 202 })
-    await assertOutcome(t, record({ provider: { kind: "process-group", group: { leader, observed: [leader] } } }), new FakeAdapter(), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record({ provider: { kind: "process-group", group: { leader, observed: [leader] } } }), fake(), { disposition: "quarantined", signals: [] })
   })
   await t.test("quarantines a provider whose leader session differs from its pid", async t => {
     const leader = identity({ sessionId: 202 })
-    await assertOutcome(t, record({ provider: { kind: "process-group", group: { leader, observed: [leader] } } }), new FakeAdapter({ leader, group: [leader] }), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record({ provider: { kind: "process-group", group: { leader, observed: [leader] } } }), fake({ leader, group: [leader] }), { disposition: "quarantined", signals: [] })
   })
   await t.test("quarantines inconsistent recorded members", async t => {
     const fields: Array<Partial<ProcessIdentity>> = [{ bootId: "boot-2" }, { processGroupId: 202 }, { sessionId: 202 }]
     for (const changed of fields) {
-      const member = identity({ pid: 102, birth: "birth-102", ...changed })
-      await assertOutcome(t, record({ provider: { kind: "process-group", group: { leader: identity(), observed: [identity(), member] } } }), new FakeAdapter(), { disposition: "quarantined", signals: [] })
+      const member = identity({ pid: 102, birth: "102:fixture", ...changed })
+      await assertOutcome(t, record({ provider: { kind: "process-group", group: { leader: identity(), observed: [identity(), member] } } }), fake(), { disposition: "quarantined", signals: [] })
     }
   })
   await t.test("quarantines readiness and active records without a provider", async t => {
-    await assertOutcome(t, record({ provider: null, phase: "readiness" }), new FakeAdapter(), { disposition: "quarantined", signals: [] })
-    await assertOutcome(t, record({ provider: null, phase: "active" }), new FakeAdapter(), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record({ provider: null, phase: "readiness" }), fake(), { disposition: "quarantined", signals: [] })
+    await assertOutcome(t, record({ provider: null, phase: "active" }), fake(), { disposition: "quarantined", signals: [] })
   })
   await t.test("kills continuous same-session members after the leader exits", async t => {
-    const member = identity({ pid: 102, birth: "birth-102" })
-    const adapter = new FakeAdapter({
+    const member = identity({ pid: 102, birth: "102:fixture" })
+    const adapter = fake({
       group: [identity(), member],
       onSignal: (signal, current) => {
         if (signal === "SIGTERM") { current.leader = null; current.group = [member] }
@@ -175,29 +178,41 @@ test("reconciles the process-group safety matrix", async t => {
     await assertOutcome(t, record(), adapter, { disposition: "cleaned", signals: ["SIGTERM", "SIGKILL"] })
   })
   await t.test("quarantines a reappearing group before KILL", async t => {
-    const adapter = new FakeAdapter({ onSignal: (signal, current) => {
+    const adapter = fake({ onSignal: (signal, current) => {
       if (signal === "SIGTERM") {
-        current.leader = identity({ birth: "replacement" })
+        current.leader = identity({ birth: "999:replacement" })
         current.group = [current.leader]
       }
     } })
     await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: ["SIGTERM"] })
   })
   await t.test("quarantines a replacement at the session leader pid after a racy read", async t => {
-    const adapter = new FakeAdapter({ onSignal: (signal, current) => {
+    const adapter = fake({ onSignal: (signal, current) => {
       if (signal === "SIGTERM") {
         current.leader = null
-        current.group = [identity({ birth: "replacement" })]
+        current.group = [identity({ birth: "999:replacement" })]
       }
     } })
     await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: ["SIGTERM"] })
   })
+  await t.test("observation failure quarantines only the affected checkout", async t => {
+    const failing = fake()
+    failing.readGroup = async () => { throw new DarwinObservationUnavailable("injected observation failure") }
+    const first = await recordFixture(t, record({ checkoutId: "unavailable" }))
+    const second = await recordFixture(t, record({ checkoutId: "unrelated", launchAttempted: false, provider: null, phase: "launch_pending" }))
+    assert.equal((await reconcileRecord(first, failing)).disposition, "quarantined")
+    assert.deepEqual(failing.signals, [])
+    assert.equal((await reconcileRecord(second, fake())).disposition, "released")
+  })
+
 })
+}
+
 
 test("quarantine is scoped to one checkout record", async t => {
   const first = await recordFixture(t, record({ checkoutId: "first" }))
   const second = await recordFixture(t, record({ checkoutId: "second", launchAttempted: false, provider: null, phase: "launch_pending" }))
-  const quarantined = await reconcileRecord(first, new FakeAdapter({ leader: identity({ birth: "replacement" }), group: [identity({ birth: "replacement" })] }))
+  const quarantined = await reconcileRecord(first, new FakeAdapter({ leader: identity({ birth: "999:replacement" }), group: [identity({ birth: "999:replacement" })] }))
   const released = await reconcileRecord(second, new FakeAdapter())
   assert.equal(quarantined.disposition, "quarantined")
   assert.equal(released.disposition, "released")
@@ -231,7 +246,7 @@ test("quarantines unavailable Darwin observations without unsafe escalation", as
     onSignal: (signal, current) => {
       if (signal === "SIGTERM") {
         current.leader = null
-        current.group = [identity({ pid: 102, birth: "birth-102" })]
+        current.group = [identity({ pid: 102, birth: "102:fixture" })]
       }
     },
   })
@@ -248,8 +263,8 @@ test("quarantines unavailable Darwin observations without unsafe escalation", as
 })
 
 test("requires an exact cleanup-pending member before leaderless KILL", async t => {
-  const retained = identity({ pid: 102, birth: "birth-102" })
-  const replacement = identity({ pid: 103, birth: "replacement-103" })
+  const retained = identity({ pid: 102, birth: "102:fixture" })
+  const replacement = identity({ pid: 103, birth: "103:replacement" })
   const adapter = new FakeAdapter({
     group: [identity(), retained],
     onSignal: (signal, current) => {
@@ -277,111 +292,53 @@ test("retains malformed core records instead of releasing the checkout", async t
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), malformed)
 })
 
-class FakeLinuxAdapter extends FakeAdapter implements LinuxNamespaceAdapter {
-  override readonly platform: "darwin" | "linux" = "linux"
-  namespaceByPid = new Map<number, string | null>()
-  namespaceMembers: ProcessIdentity[] = []
 
-  async readNamespace(pid: number): Promise<string | null> {
-    return this.namespaceByPid.get(pid) ?? null
-  }
 
-  async scanNamespace(): Promise<ProcessIdentity[]> {
-    return this.namespaceMembers
-  }
-}
-
-test("process-group reconciliation quarantines a Linux adapter without signaling", async t => {
-  const adapter = new FakeLinuxAdapter({ leader: identity(), group: [identity()] })
-  await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: [] })
+test("reconciles retained-member escape without unauthorized signaling", async t => {
+  for (const platform of ["darwin", "linux"] as const) for (const scenario of ["empty", "leader", "omitted", "marker", "uid", "gid", "malformed"]) await t.test(`${platform}: ${scenario}`, async t => {
+    const leader = identity()
+    const member = identity({ pid: 102, birth: "102:descendant" })
+    const changed = { ...member, ...(scenario === "marker" ? { birth: "102:changed" } : scenario === "uid" ? { uid: member.uid + 1 } : scenario === "gid" ? { gid: member.gid + 1 } : scenario === "malformed" ? { birth: "invalid" } : { processGroupId: 202, sessionId: 202 }) }
+    const adapter = new FakeAdapter({ platform, leader: scenario === "empty" ? null : leader, group: scenario === "empty" ? [] : [leader] })
+    adapter.readProcess = async pid => pid === 102 ? changed : adapter.leader
+    const path = await recordFixture(t, record({ phase: scenario === "omitted" ? "cleanup_pending" : "active", provider: { kind: "process-group", group: { leader, observed: [leader, member] } } }))
+    const result = await reconcileRecord(path, adapter)
+    assert.equal(result.disposition, "quarantined")
+    assert.deepEqual(adapter.signals, [])
+    assert.ok(result.record.provider?.kind === "process-group" && result.record.provider.group.observed.some(value => value.pid === 102))
+  })
 })
 
-class FakeDarwinNamespaceAdapter extends FakeAdapter implements LinuxNamespaceAdapter {
-  async readNamespace(): Promise<string | null> {
-    return null
-  }
-
-  async scanNamespace(): Promise<ProcessIdentity[]> {
-    return []
-  }
-}
-
-function namespaceRecord(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
-  const launcher = identity({ pid: 201, birth: "birth-201", processGroupId: 201, sessionId: 201 })
-  const init = identity({ pid: 202, birth: "birth-202", parentPid: 201, processGroupId: 201, sessionId: 201 })
-  return record({
-    provider: { kind: "linux-pid-namespace", launcher, init, namespaceId: "pid:[4026532000]", observed: [launcher, init] },
-    ...overrides,
+test("retained-member escape preserves members first observed during signal polling", async t => {
+  for (const platform of ["darwin", "linux"] as const) for (const phase of ["SIGTERM", "SIGKILL"] as const) await t.test(platform + " " + phase, async t => {
+    const leader = identity(), member = identity({ pid: 102, birth: "102:descendant" })
+    const path = await recordFixture(t, record())
+    const adapter = new FakeAdapter({ platform })
+    let polling = 0
+    adapter.readGroup = async () => {
+      if (!adapter.signals.includes(phase)) return [leader]
+      if (++polling === 1) return [leader, member]
+      const durable = await readLaunchRecord(path)
+      assert.ok(durable.provider?.group.observed.some(value => value.pid === member.pid), "new member must be durable before next observation")
+      adapter.leader = null
+      return []
+    }
+    adapter.readProcess = async pid => pid === 101 ? adapter.leader : polling > 0 ? { ...member, processGroupId: 202, sessionId: 202 } : null
+    const result = await reconcileRecord(path, adapter)
+    assert.equal(result.disposition, "quarantined")
+    assert.deepEqual(adapter.signals, phase === "SIGTERM" ? ["SIGTERM"] : ["SIGTERM", "SIGKILL"])
+    assert.ok(result.record.provider?.group.observed.some(value => value.pid === member.pid))
   })
-}
-
-function linuxAdapter(options: { bootId?: string; launcher?: ProcessIdentity | null; init?: ProcessIdentity | null; namespaceId?: string | null; members?: ProcessIdentity[] } = {}): FakeLinuxAdapter {
-  const value = namespaceRecord().provider
-  if (value?.kind !== "linux-pid-namespace") throw new Error("namespace fixture invalid")
-  const adapter = new FakeLinuxAdapter({ ...(options.bootId === undefined ? {} : { bootId: options.bootId }), leader: null, group: [] })
-  adapter.readProcess = async pid => {
-    if (pid === value.launcher.pid) return options.launcher === undefined ? null : options.launcher
-    if (pid === value.init.pid) return options.init === undefined ? null : options.init
-    return null
-  }
-  adapter.namespaceByPid.set(value.init.pid, options.namespaceId ?? null)
-  adapter.namespaceMembers = options.members ?? []
-  return adapter
-}
-
-async function assertLinuxOutcome(t: test.TestContext, starting: LaunchRecord, adapter: FakeLinuxAdapter, disposition: "released" | "quarantined"): Promise<void> {
-  const path = await recordFixture(t, starting)
-  const result = await reconcileLinuxNamespaceRecord(path, adapter)
-  assert.equal(result.disposition, disposition)
-  assert.equal(result.record.phase, disposition === "released" ? "cleanup_verified" : "quarantined")
-  assert.deepEqual(adapter.signals, [])
-  assert.deepEqual(result.record, await readLaunchRecord(path))
-}
-
-test("namespace reconciliation quarantines a Darwin adapter", async t => {
-  const path = await recordFixture(t, namespaceRecord())
-  const adapter = new FakeDarwinNamespaceAdapter({ leader: null, group: [] })
-  const result = await reconcileLinuxNamespaceRecord(path, adapter)
-  assert.equal(result.disposition, "quarantined")
-  assert.deepEqual(adapter.signals, [])
 })
 
-test("reconciles the Linux namespace safety matrix without signaling", async t => {
-  const provider = namespaceRecord().provider
-  if (provider?.kind !== "linux-pid-namespace") throw new Error("namespace fixture invalid")
-  await t.test("releases a prior-boot record", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ bootId: "boot-2" }), "released")
-  })
-  await t.test("releases an empty namespace with both identities gone", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter(), "released")
-  })
-  await t.test("quarantines any surviving namespace member", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ members: [provider.init] }), "quarantined")
-  })
-  await t.test("quarantines a changed namespace link", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ init: provider.init, namespaceId: "pid:[changed]" }), "quarantined")
-  })
-  await t.test("releases when launcher pid is reused and the old tree is gone", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ launcher: { ...provider.launcher, birth: "replacement" } }), "released")
-  })
-  await t.test("releases when init pid is reused and the old tree is gone", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ init: { ...provider.init, birth: "replacement" } }), "released")
-  })
-  await t.test("quarantines reused identities with a nonempty namespace", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ launcher: { ...provider.launcher, birth: "replacement" }, members: [provider.init] }), "quarantined")
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ init: { ...provider.init, birth: "replacement" }, members: [provider.init] }), "quarantined")
-  })
-  await t.test("quarantines an exact live identity with an empty namespace", async t => {
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ launcher: provider.launcher }), "quarantined")
-    await assertLinuxOutcome(t, namespaceRecord(), linuxAdapter({ init: provider.init, namespaceId: provider.namespaceId }), "quarantined")
-  })
-  await t.test("quarantines malformed namespace evidence", async t => {
-    const wrongBoot = { ...provider.launcher, bootId: "boot-2" }
-    await assertLinuxOutcome(t, namespaceRecord({ provider: { ...provider, launcher: wrongBoot } }), linuxAdapter(), "quarantined")
-    await assertLinuxOutcome(t, namespaceRecord({ provider: { ...provider, namespaceId: "" } }), linuxAdapter(), "quarantined")
-    await assertLinuxOutcome(t, namespaceRecord({ provider: { ...provider, observed: [provider.launcher, provider.launcher] } }), linuxAdapter(), "quarantined")
-  })
-  await t.test("validates semantics before releasing cleanup_verified", async t => {
-    await assertLinuxOutcome(t, namespaceRecord({ launchAttempted: false, phase: "cleanup_verified" }), linuxAdapter(), "quarantined")
+test("marker-bound provider semantic UUID failure remains checkout-scoped", async t => {
+  for (const platform of ["darwin", "linux"] as const) await t.test(platform, async t => {
+    const invalid = await recordFixture(t, record({ launchAttemptId: "not-a-canonical-uuid" }))
+    const valid = await recordFixture(t, record({ checkoutId: "unrelated", launchAttempted: false, provider: null, phase: "launch_pending" }))
+    const adapter = new FakeAdapter({ platform })
+    const results = []
+    for (const path of [invalid, valid]) results.push((await reconcileRecord(path, adapter)).disposition)
+    assert.deepEqual(results, ["quarantined", "released"])
+    assert.deepEqual(adapter.signals, [])
   })
 })

@@ -93,6 +93,24 @@ test("resolves distinct private roots and a short socket path", async t => {
   }
 })
 
+test("resolves an absolute symlinked home before deriving the state fallback", async t => {
+  const base = join(await realpath(tmpdir()), `agency-paths-${crypto.randomUUID()}`)
+  const canonicalHome = join(base, "canonical-home")
+  const linkedHome = join(base, "linked-home")
+  await mkdir(canonicalHome, { recursive: true, mode: 0o700 })
+  await symlink(canonicalHome, linkedHome)
+  t.after(async () => rm(base, { recursive: true, force: true }))
+  const hostKey = "d".repeat(64)
+  const result = await resolvePlatformPaths({
+    platform: process.platform === "darwin" ? "darwin" : "linux",
+    uid: process.getuid!(),
+    hostKey,
+    home: linkedHome,
+  })
+  t.after(async () => rm(result.runtimeRoot, { recursive: true, force: true }))
+  assert.equal(result.persistentRoot, join(canonicalHome, ".local/state/agency/hosts", hostKey))
+})
+
 test("uses absolute XDG state home and rejects relative or symlink components", async t => {
   const base = join(await realpath(tmpdir()), `agency-paths-${crypto.randomUUID()}`)
   const state = join(base, "state")

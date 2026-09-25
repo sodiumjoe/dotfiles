@@ -22,6 +22,16 @@ const expectedBootId = bootOutput.trim().toLowerCase()
 const processScript = "setInterval(() => undefined, 1000)"
 const darwinTest = process.platform === "darwin" ? test : test.skip
 
+test("Darwin process groups reject unsafe signal targets", async t => {
+  const calls: unknown[] = []
+  t.mock.method(process, "kill", (...args: unknown[]) => { calls.push(args); return true })
+  const adapter = createDarwinAdapter()
+  for (const value of [0, 1, -1, -42, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) await assert.rejects(adapter.signalGroup(value, "SIGTERM"), /group|integer/i)
+  assert.deepEqual(calls, [])
+  await adapter.signalGroup(42, "SIGTERM")
+  assert.deepEqual(calls, [[-42, "SIGTERM"]])
+})
+
 type CommandOptions = Parameters<DarwinCommandExecutor>[2]
 
 function psRow(values: {
@@ -391,4 +401,16 @@ darwinTest("binds Handler launchAttemptId into argv0 without changing the comman
   assert.equal(sameProcess(result.record.process!, observed!), true)
   process.kill(-result.record.process!.processGroupId, "SIGKILL")
   await waitFor(async () => await adapter.readProcess(result.record.process!.pid) === null, "Handler fixture survived")
+})
+
+test("Darwin process groups preserve unstable identity observation diagnostics", async () => {
+  const command = agencyLaunchMarker("handler",canonicalId)
+  const { execute } = scriptedExecutor([psRow({pid:401,ppid:402,command}),psRow({pid:401,ppid:1,command})])
+  await assert.rejects(createDarwinAdapter(execute).readProcess(401), error => {
+    assert.ok(error instanceof DarwinObservationUnavailable)
+    assert.match(error.message,/"parentPid":402/)
+    assert.match(error.message,/"parentPid":1/)
+    assert.match(error.message,/"pid":401/)
+    return true
+  })
 })

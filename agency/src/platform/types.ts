@@ -21,15 +21,7 @@ export type ProcessGroupProviderIdentity = {
   group: ProcessGroupIdentity
 }
 
-export type LinuxNamespaceProviderIdentity = {
-  kind: "linux-pid-namespace"
-  launcher: ProcessIdentity
-  init: ProcessIdentity
-  namespaceId: string
-  observed: ProcessIdentity[]
-}
-
-export type ProviderIdentity = ProcessGroupProviderIdentity | LinuxNamespaceProviderIdentity
+export type ProviderIdentity = ProcessGroupProviderIdentity
 
 export type LaunchPhase =
   | "launch_pending"
@@ -85,6 +77,7 @@ export type HandlerGenerationRecord = {
 export type HandlerInspection = {
   record: HandlerGenerationRecord
   disposition: "live" | "stale" | "ambiguous"
+  diagnostic?: { reason: string; expected: ProcessIdentity | null; observed: ProcessIdentity | null }
 }
 
 export type PlatformAdapter = {
@@ -95,14 +88,24 @@ export type PlatformAdapter = {
   signalGroup(processGroupId: number, signal: NodeJS.Signals): Promise<void>
 }
 
-export type LinuxNamespaceAdapter = PlatformAdapter & {
-  readNamespace(pid: number): Promise<string | null>
-  scanNamespace(namespaceId: string): Promise<ProcessIdentity[]>
+export function processBirthStart(birth: string): string | null {
+  const separator = birth.indexOf(":")
+  if (separator <= 0) return null
+  const prefix = birth.slice(0, separator)
+  return /^(0|[1-9]\d*)$/.test(prefix) ? prefix : null
+}
+
+export function sameProcessGeneration(expected: ProcessIdentity, observed: ProcessIdentity): boolean {
+  const expectedStart = processBirthStart(expected.birth)
+  const observedStart = processBirthStart(observed.birth)
+  return expectedStart !== null && observedStart !== null
+    && expected.bootId === observed.bootId
+    && expected.pid === observed.pid
+    && expectedStart === observedStart
 }
 
 export function sameProcess(expected: ProcessIdentity, observed: ProcessIdentity): boolean {
-  return expected.bootId === observed.bootId
-    && expected.pid === observed.pid
+  return sameProcessGeneration(expected, observed)
     && expected.birth === observed.birth
     && expected.processGroupId === observed.processGroupId
     && expected.sessionId === observed.sessionId

@@ -1,3 +1,5 @@
+import { processBirthStart } from "./types.js"
+
 export type AgencyLaunchRole = "handler" | "provider"
 
 export type AgencyLaunchMarker = {
@@ -18,4 +20,10 @@ export function parseAgencyLaunchMarker(value: string): AgencyLaunchMarker | nul
   const match = MARKER.exec(value)
   if (match === null) return null
   return { role: match[1] as AgencyLaunchRole, launchAttemptId: match[2]! }
+}
+
+export function exactAgencyBirth(birth: string, marker: string): boolean {
+  return parseAgencyLaunchMarker(marker) !== null
+    && processBirthStart(birth) !== null
+    && birth.slice(birth.indexOf(":") + 1) === marker
 }
