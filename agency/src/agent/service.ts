@@ -26,7 +26,8 @@ export function createAgentService(input: { context: AdmissionContext; admission
   const { context, store, admission, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const catalogStore = createCatalogStore(root), commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const dirty = new Set<string>(), dirtyAgents = new Set<string>(), stops = new Map<string, Promise<void>>()
-  let initialized = false, closed = false, frozen = false, accepting = 0, stopping = 0, blocked: AgentFailure | null = null
+  let initialized = false, closed = false, frozen = false, inventoryEmpty = false, accepting = 0, stopping = 0, blocked: AgentFailure | null = null
+  const emptyLifecycle = (inventory: AgentInventory): boolean => !inventory.issues.length && !inventory.agents.length && !inventory.commands.length && !records.size && !commands.size && !operations.size && !intents.size
   const errorFor = (error: unknown): AgentError => error instanceof AgentError ? error : error instanceof AdmissionError ? new AgentError(error.code === "CHECKOUT_BUSY" || error.code === "CHECKOUT_QUARANTINED" ? error.code : "ADMISSION_UNAVAILABLE") : new AgentError("STARTUP_FAILED")
   const latch = (error: unknown): void => { blocked ??= agentFailure(error instanceof AgentError ? error : new AgentError("INVALID_AGENT_STATE")) }
   const available = (): void => {
@@ -37,6 +38,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
     try {
       await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
       const inventory = await store.inventory()
+      inventoryEmpty = emptyLifecycle(inventory)
       crossCheckAgents(context, inventory, await inventoryAdmissions(root))
       if (context.mutations.unavailable) throw new AgentError("ADMISSION_UNAVAILABLE")
       return inventory
@@ -277,7 +279,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
     return { record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !blocked && !closed && record.spec.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "stopping"].includes(record.phase), cleanup: launch === null ? blocked ? "unknown" : "not_reserved" : launch.phase === "cleanup_verified" ? "verified" : launch.phase === "quarantined" ? "unknown" : "unverified" }
   }
   const ordinary = (): void => {
-    if (!initialized || blocked || accepting || stopping || stops.size || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => records.has(e.record.agentId) && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
+    if (!initialized || blocked && !inventoryEmpty || accepting || stopping || stops.size || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => records.has(e.record.agentId) && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
   }
   return {
     start, stop, command,
@@ -285,6 +287,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
       const recovered = await recoverAgents({ context, store })
       for (const record of recovered.inventory.agents) records.set(record.spec.agentId, record)
       for (const command of recovered.inventory.commands) commands.set(command.commandId, command)
+      inventoryEmpty = emptyLifecycle(recovered.inventory)
       blocked = recovered.unavailable; initialized = true
     },
     async list() {
@@ -324,7 +327,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
       })
     },
     resume() { if (!closed) frozen = false },
-    async verifyDischarged() { await verify(); ordinary(); if (dirty.size || dirtyAgents.size) throw new AgentError("INCOMPLETE") },
+    async verifyDischarged() { inventoryEmpty = emptyLifecycle(await store.inventory()); if (!inventoryEmpty) await verify(); ordinary(); if (dirty.size || dirtyAgents.size) throw new AgentError("INCOMPLETE") },
     close() { closed = true; frozen = true; for (const op of operations.values()) op.controller.abort() },
   }
 }

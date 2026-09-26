@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -9,6 +9,7 @@ import { gitFixture } from "./checkout-support.js"
 import { createAgentService } from "../src/agent/service.js"
 import type { AgentService } from "../src/agent/service.js"
 import type { CommandView, StartInput } from "../src/agent/types.js"
+import { writeAdmission } from "../src/checkout/records.js"
 
 const completed = (service: AgentService, input: Pick<StartInput, "commandId" | "handlerGeneration">): Promise<CommandView> => until(async () => {
   const view = await service.command(input.commandId, input.handlerGeneration)
@@ -265,6 +266,17 @@ test("legacy reservations remain checkout blockers without fabricated agents", a
   assert.equal(f.spawns(), 0); await f.controller.cancel(reservation)
 })
 
+for (const kind of ["orphan", "malformed"] as const) test(`empty lifecycle permits shutdown despite ${kind} admission metadata`, async t => {
+  const f = await agentServiceFixture(t)
+  if (kind === "orphan") await writeAdmission(f.root, { version: 1, checkout: f.checkout, agentId: randomUUID(), leaseId: randomUUID(), handlerGeneration: randomUUID(), launchAttemptId: randomUUID() })
+  else { await mkdir(join(f.root, "admissions"), { recursive: true, mode: 0o700 }); await writeFile(join(f.root, "admissions", randomUUID() + ".json"), "{", { mode: 0o600 }) }
+  assert.notEqual((await f.service.list()).unavailable, null)
+  assert.doesNotThrow(() => f.service.assertOrdinaryShutdownSafe())
+  await f.service.freezeAndDrain(true)
+  await f.context.mutations.queue.run(() => f.service.verifyDischarged())
+  assert.equal(f.spawns(), 0)
+})
+
 test("corrupt agent metadata cannot grant liveness or prevent independent qualified cleanup", async t => {
   const f = await agentServiceFixture(t), accepted = await f.service.start(f.input)
   await completed(f.service, f.input)
@@ -272,6 +284,7 @@ test("corrupt agent metadata cannot grant liveness or prevent independent qualif
   const unknown = await f.service.list()
   assert.notEqual(unknown.unavailable, null)
   assert.equal(unknown.agents[0]!.live, false)
+  await assert.rejects(f.context.mutations.queue.run(() => f.service.verifyDischarged()))
   await f.cleanupOwned()
   assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
 })
