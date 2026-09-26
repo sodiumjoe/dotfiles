@@ -1,0 +1,131 @@
+import assert from "node:assert/strict"
+import test from "node:test"
+import { runControl, type ControlDependencies } from "../src/cli/control.js"
+import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../src/agent/protocol.js"
+import { AgentError, type AgentCommand, type AgentErrorCode } from "../src/agent/types.js"
+import { unavailableControlDependencies, until } from "./control-support.js"
+import { agentId, agentServiceFixture, sampleAgent, sampleCommand, sampleSession } from "./agent-support.js"
+import type { HandlerInspection } from "../src/platform/types.js"
+
+const flags = ["--provider", "codex-acp", "--model", "model-a", "--reasoning", "high", "--mode", "review", "--permission-profile", "fixture-deny-v1", "--json"]
+function fixture() {
+  const out: string[] = [], err: string[] = [], calls: AgentRequest[] = [], command = sampleCommand()
+  let retained: AgentCommand = { ...command, state: "completed", result: { outcome: "started", target: command.target, session: sampleSession(), failure: null } }, now = 0, starts = 0
+  const inspection: HandlerInspection = { disposition: "live", record: { version: 1, hostId: command.hostId, generation: command.handlerGeneration, launchBootId: "boot-a", launchAttemptId: agentId(50), launchAttempted: true, phase: "ready", process: { bootId: "boot-a", pid: 100, birth: `1:agy-handler:${agentId(50)}`, parentPid: 1, processGroupId: 100, sessionId: 100, uid: 1, gid: 1 }, socketPath: "/fixture/socket", writer: "handler", reconciliation: { classified: 0, total: 0, quarantined: 0 }, reason: null } }
+  const unsupported = async (): Promise<never> => { throw new Error("unexpected store mutation") }
+  const reply = (r: AgentRequest): AgentReply => {
+    if (r.op === "agent_list") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "agents", agents: [], unavailable: null } }
+    if (r.op === "agent_current") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "current", checkout: sampleAgent().spec.checkout, agent: null, blockers: [agentId(77)], unavailable: null } }
+    if (r.op === "agent_start") retained = { ...retained, commandId: r.input.commandId, handlerGeneration: r.input.handlerGeneration, input: r.input }
+    return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: retained.commandId, ok: true, result: { state: "command", command: retained, durability: "verified" } }
+  }
+  const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: command.hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/socket" }, adapter: { platform: "darwin", bootId: async () => "boot-a", readProcess: unsupported, readGroup: unsupported, signalGroup: unsupported } }), start: async () => { starts++; return inspection }, inspect: async () => inspection, cwd: () => "/checkout", now: () => now, sleep: async ms => { now += ms }, stdout: value => out.push(value), stderr: value => err.push(value), callAgent: async (_env, r) => { calls.push(r); return reply(r) }, agentStore: () => ({ readCommand: async id => id === retained.commandId ? structuredClone(retained) : null, readAgent: unsupported, inventory: unsupported, writeAgent: unsupported, writeCommand: unsupported }) }
+  return { deps, out, err, calls, command, inspection, reply, starts: () => starts, output: () => JSON.parse(out.join("")), retain(value: AgentCommand) { retained = value } }
+}
+
+test("new agent start emits one envelope and explicit effective selections", async () => {
+  const f = fixture()
+  assert.equal(await runControl(["agent", "start", ...flags], f.deps), 0)
+  assert.equal(f.out.length, 1); assert.equal(f.output().protocol, AGENT_PROTOCOL)
+  assert.equal(f.output().result.command.result.session.mode, "review")
+  assert.equal(f.starts(), 1)
+})
+
+for (const args of [["agent", "start"], ["agent", "start", ...flags.filter((_, i) => i !== 8 && i !== 9)], ["agent", "start", ...flags, "--model", "b"], ["agent", "start", ...flags, "--reasoning", ""], ["agent", "list", "--mode", "review"], ["agent", "stop", agentId(1)]]) test(`invalid agent arguments fail before environment access: ${args.join(" ")}`, async () => {
+  const f = fixture(); f.deps.environment = async () => { throw new Error("unexpected environment access") }
+  assert.equal(await runControl(args, f.deps), 64); assert.equal(f.output().protocol, AGENT_PROTOCOL); assert.equal(f.out.length, 1)
+})
+
+for (const [code, exit] of [["USAGE", 64], ["SELECTION_UNSUPPORTED", 64], ["INVALID_PROTOCOL", 65], ["ADAPTER_UNQUALIFIED", 69], ["STALE_PROVIDER", 69], ["STALE_HANDLER", 69], ["UNAVAILABLE", 69], ["INTERNAL", 70], ["CLEANUP_UNVERIFIED", 75], ["INCOMPLETE", 75]] as const) test(`agent error ${code} has exit ${exit}`, async () => {
+  const f = fixture()
+  f.deps.callAgent = async (_env, r) => agentErrorReply(r, new AgentError(code))
+  assert.equal(await runControl(["agent", "list", "--json"], f.deps), exit)
+  assert.equal(f.output().error.code, code)
+})
+
+test("pinned start lookup never starts a daemon or reads ambient cwd", async () => {
+  const f = fixture()
+  f.deps.inspect = async () => null; f.deps.cwd = () => { throw new Error("checkout removed") }
+  assert.equal(await runControl(["agent", "start", ...flags, "--command-id", f.command.commandId, "--handler-generation", f.command.handlerGeneration], f.deps), 75)
+  assert.equal(f.output().result.durability, "unverified"); assert.equal(f.starts(), 0); assert.equal(f.calls.length, 0)
+})
+
+test("replacement Handler receives only a historical lookup with distinct outer generation", async () => {
+  const f = fixture(); f.inspection.record.generation = agentId(99); f.deps.cwd = () => { throw new Error("cwd must not be read") }
+  assert.equal(await runControl(["agent", "start", ...flags, "--command-id", f.command.commandId, "--handler-generation", f.command.handlerGeneration], f.deps), 0)
+  assert.equal(f.starts(), 0); assert.equal(f.calls.length, 1)
+  assert.equal(f.calls[0]!.op, "agent_command"); assert.equal(f.calls[0]!.handlerGeneration, agentId(99))
+  assert.equal((f.calls[0] as AgentRequest & { op: "agent_command" }).commandGeneration, agentId(2))
+  assert.equal(f.output().result.command.handlerGeneration, agentId(2))
+})
+
+test("pending start polling is limited to 45 seconds and never generates another command ID", async () => {
+  const f = fixture(); f.retain(sampleCommand())
+  f.deps.callAgent = async (_env, r, timeout) => { f.calls.push(r); await f.deps.sleep(timeout!); return f.reply(r) }
+  assert.equal(await runControl(["agent", "start", ...flags], f.deps), 75)
+  assert.equal(f.deps.now(), 45000); assert.equal(f.out.length, 1)
+  assert.equal(f.calls.filter(r => r.op === "agent_start").length, 1)
+  assert.equal(f.output().result.command.state, "pending")
+})
+
+test("a lost start response is reconciled using the original command identity", async () => {
+  const f = fixture()
+  f.deps.callAgent = async (_env, r) => { f.calls.push(r); const reply = f.reply(r); if (r.op === "agent_start") throw new AgentError("UNAVAILABLE"); return reply }
+  assert.equal(await runControl(["agent", "start", ...flags], f.deps), 0)
+  assert.deepEqual(f.calls.map(r => r.op), ["agent_start", "agent_command"])
+})
+
+test("current forwards only its normalized cwd and preserves nested blockers", async () => {
+  const f = fixture(); f.deps.cwd = () => "/checkout/nested/.."
+  assert.equal(await runControl(["agent", "current", "--json"], f.deps), 0)
+  assert.equal((f.calls[0] as AgentRequest & { op: "agent_current" }).cwd, "/checkout")
+  assert.deepEqual(f.output().result.blockers, [agentId(77)])
+})
+
+test("mismatched response identities never become successful output", async () => {
+  for (const field of ["requestId", "handlerGeneration"] as const) {
+    const f = fixture(); f.deps.callAgent = async (_env, r) => ({ ...f.reply(r), [field]: agentId(99) })
+    assert.equal(await runControl(["agent", "list", "--json"], f.deps), field === "requestId" ? 65 : 69)
+  }
+})
+
+test("unsupported agent transport reports bounded upgrade guidance without restart", async () => {
+  const f = fixture(); f.deps.callAgent = async () => { throw new AgentError("UNAVAILABLE") }
+  assert.equal(await runControl(["agent", "list", "--json"], f.deps), 69)
+  assert.match(f.err.join(""), /explicit Handler restart after upgrade/)
+  assert.equal(f.starts(), 1)
+})
+
+test("stop dispatch pins the exact provider tuple without lazy startup or cwd access", async () => {
+  const f = fixture(); f.deps.cwd = () => { throw new Error("unexpected cwd") }
+  f.deps.callAgent = async (_env, request) => {
+    f.calls.push(request); assert.equal(request.op, "agent_stop")
+    if (request.op !== "agent_stop") throw new Error()
+    const target = { agentId: request.input.agentId, handlerGeneration: request.input.handlerGeneration, providerGeneration: request.input.providerGeneration }
+    return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, commandId: request.input.commandId, ok: true, result: { state: "command", durability: "verified", command: { ...f.command, op: "stop", commandId: request.input.commandId, input: request.input, target, state: "completed", result: { outcome: "stopped", target, failure: null, session: null } } } }
+  }
+  assert.equal(await runControl(["agent", "stop", agentId(1), "--handler-generation", agentId(2), "--provider-generation", agentId(3), "--json"], f.deps), 0)
+  assert.equal(f.starts(), 0); assert.equal(f.calls.length, 1)
+})
+
+test("a pinned lookup cannot create an unknown command or change retained selections", async () => {
+  const f = fixture()
+  assert.equal(await runControl(["agent", "start", ...flags, "--command-id", agentId(91), "--handler-generation", agentId(2)], f.deps), 69)
+  assert.equal(f.starts(), 0); assert.equal(f.calls.length, 0)
+  const other = fixture(), changed = flags.map(value => value === "model-a" ? "model-b" : value)
+  assert.equal(await runControl(["agent", "start", ...changed, "--command-id", agentId(6), "--handler-generation", agentId(2)], other.deps), 75)
+  assert.equal(other.output().error.code, "COMMAND_CONFLICT"); assert.equal(other.calls.length, 0)
+})
+
+test("offline visible receipt after failed fsync remains unverified until the owner repairs it", async t => {
+  const lifecycle = await agentServiceFixture(t), f = fixture()
+  lifecycle.failReceipt(true); await lifecycle.service.start(lifecycle.input)
+  await until(async () => (await lifecycle.store.readCommand(lifecycle.input.commandId))!.state === "completed" ? true : undefined)
+  f.deps.environment = async () => ({ paths: lifecycle.context.paths, adapter: lifecycle.context.adapter }); f.deps.inspect = async () => null; f.deps.agentStore = () => lifecycle.store
+  const args = ["agent", "start", ...flags, "--command-id", lifecycle.input.commandId, "--handler-generation", lifecycle.input.handlerGeneration]
+  assert.equal(await runControl(args, f.deps), 75); assert.equal(f.output().result.durability, "unverified")
+  lifecycle.failReceipt(false)
+  f.out.length = 0; f.inspection.record.generation = lifecycle.input.handlerGeneration; f.deps.inspect = async () => f.inspection
+  f.deps.callAgent = async (_env, r) => { assert.equal(r.op, "agent_command"); if (r.op !== "agent_command") throw new Error(); return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: r.commandId, ok: true, result: await lifecycle.service.command(r.commandId, r.commandGeneration) } }
+  assert.equal(await runControl(args, f.deps), 0); assert.equal(lifecycle.spawns(), 1); assert.equal(f.starts(), 0)
+})

@@ -1,5 +1,6 @@
 import { join } from "node:path"
 import type { CatalogService } from "../catalog/service.js"
+import type { AgentService } from "../agent/service.js"
 import { isDeepStrictEqual } from "node:util"
 import { ControlError, PROTOCOL, controlError, errorReply, type ControlRequest, type ControlReply, type HandlerStatus } from "../control/protocol.js"
 import type { PlatformPaths } from "../platform/paths.js"
@@ -20,6 +21,7 @@ export type ShutdownContext = {
   closeAfterReply(): Promise<void>
   publishReceipt?: typeof writeShutdownReceipt
   catalog?: Pick<CatalogService, "freezeAndDrain" | "resume" | "verifyDischarged">
+  agents?: Pick<AgentService, "assertOrdinaryShutdownSafe" | "freezeAndDrain" | "resume" | "verifyDischarged">
   accepted?: ShutdownReceipt
   pending?: { request: ShutdownRequest; operation: Promise<ShutdownReceipt> }
 }
@@ -69,18 +71,21 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
       receipt = await context.pending.operation
     } else {
       if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler has not completed startup")
+      if (!request.stopAgents) context.agents?.assertOrdinaryShutdownSafe()
       const operation = Promise.resolve().then(async () => {
+        await context.agents?.freezeAndDrain(request.stopAgents)
         await context.catalog?.freezeAndDrain()
         return context.mutations.queue.run(async () => {
         try {
           if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
           if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler is not ready")
+          try { await context.agents?.verifyDischarged() } catch { throw new ControlError("INCOMPLETE", "agent cleanup or command durability remains unverified") }
           return await admit(request, context)
         } finally { await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches")) }
         })
       })
       context.pending = { request, operation }
-      try { receipt = await operation } finally { delete context.pending; if (context.accepted === undefined && context.state.phase === "ready") context.catalog?.resume() }
+      try { receipt = await operation } finally { delete context.pending; if (context.accepted === undefined && context.state.phase === "ready") { context.catalog?.resume(); context.agents?.resume() } }
     }
     return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: context.record.generation, ok: true, result: { state: "shutdown_accepted", commandId: receipt.commandId, handlerGeneration: receipt.handlerGeneration } }
   } catch (error) { return errorReply({ ...request, handlerGeneration: context.record.generation }, controlError(error, "INCOMPLETE")) }

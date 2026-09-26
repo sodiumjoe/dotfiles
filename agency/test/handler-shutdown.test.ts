@@ -16,6 +16,8 @@ import { resolveCheckout } from "../src/checkout/identity.js"
 import { writeAdmission } from "../src/checkout/records.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
 import { admissionFixture } from "./checkout-support.js"
+import { agentServiceFixture } from "./agent-support.js"
+import { until } from "./control-support.js"
 
 const generation = randomUUID(), marker = randomUUID()
 const identity = { bootId: "boot-a", pid: 101, birth: `1:agy-handler:${marker}`, parentPid: 1, processGroupId: 101, sessionId: 101, uid: process.getuid!(), gid: process.getgid!() }
@@ -181,4 +183,45 @@ test("a pending shutdown coalesces retries and prevents queued reservations", { 
   assert.equal(publications, 1)
   assert.equal(ctx.state.phase, "draining")
   assert.equal(ctx.state.launches.length, 0)
+})
+
+for (const pause of ["reservation", "ready"] as const) test(`ordinary lifecycle shutdown refuses synchronously without cancelling ${pause}`, async t => {
+  const f = await agentServiceFixture(t, { pause }), base = await context(t)
+  const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
+  f.context.shutdownPending = () => ctx.pending !== undefined
+  await f.service.start(f.input); await f.entered
+  const reply = await shutdownHandler({ ...request(), handlerGeneration: f.input.handlerGeneration }, ctx)
+  assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS"); assert.equal(ctx.pending, undefined)
+  f.release()
+  const completed = await until(async () => { const v = await f.service.command(f.input.commandId, f.input.handlerGeneration); return v.command.state === "completed" ? v : undefined })
+  assert.equal(completed.command.result!.outcome, "started")
+})
+
+test("forced lifecycle and catalog drain independently release the mutation queue", async t => {
+  const f = await agentServiceFixture(t, { pause: "ready" }), base = await context(t)
+  const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
+  f.context.shutdownPending = () => ctx.pending !== undefined
+  let catalogDrained = false
+  ctx.catalog = { async freezeAndDrain() { await ctx.mutations.queue.run(async () => { catalogDrained = true }) }, resume() {}, async verifyDischarged() { assert.equal(catalogDrained, true) } }
+  await f.service.start(f.input); await f.entered
+  const reply = await shutdownHandler({ ...request(), handlerGeneration: f.input.handlerGeneration, stopAgents: true }, ctx)
+  assert.ok(reply.ok, JSON.stringify(reply)); assert.equal(ctx.state.phase, "draining")
+  f.release()
+  assert.equal((await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.result!.outcome, "failed")
+})
+
+test("incomplete forced lifecycle cleanup leaves Handler status and quarantine readable", async t => {
+  const f = await agentServiceFixture(t), base = await context(t)
+  const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
+  f.context.shutdownPending = () => ctx.pending !== undefined
+  await f.service.start(f.input)
+  await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
+  const read = f.context.adapter.readProcess
+  f.context.adapter.readProcess = async pid => { const identity = await read(pid); return identity ? { ...identity, birth: identity.birth.replace(/^100:/, "200:") } : null }
+  const command = { ...request(), handlerGeneration: f.input.handlerGeneration, stopAgents: true }
+  const reply = await shutdownHandler(command, ctx)
+  assert.ok(!reply.ok && reply.error.code === "INCOMPLETE", JSON.stringify(reply))
+  assert.equal(ctx.pending, undefined); assert.equal(ctx.state.phase, "ready")
+  assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "unknown")
 })
