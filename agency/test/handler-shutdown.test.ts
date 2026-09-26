@@ -90,6 +90,31 @@ test("shutdown refuses stale generations and incomplete startup without persisti
   assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
 })
 
+test("shutdown freezes outside the mutation queue and installs pending before draining", async t => {
+  const ctx = await context(t), command = request()
+  let frozen = 0, drained = false, verified = false, resumed = 0
+  ctx.catalog = {
+    async freezeAndDrain() { assert.notEqual(ctx.pending, undefined); frozen++; await ctx.mutations.queue.run(async () => { drained = true }) },
+    async verifyDischarged() { assert.equal(drained, true); verified = true },
+    resume() { resumed++ },
+  }
+  const replies = await Promise.all([shutdownHandler(command, ctx), shutdownHandler({ ...command, requestId: randomUUID() }, ctx)])
+  assert.ok(replies.every(reply => reply.ok))
+  assert.equal(frozen, 1); assert.equal(verified, true); assert.equal(resumed, 0)
+})
+
+test("refused shutdown resumes scheduling but unverified catalog prevents a receipt", async t => {
+  const ctx = await context(t), command = request()
+  let resumed = 0
+  ctx.catalog = { freezeAndDrain: async () => undefined, verifyDischarged: async () => { throw new Error("unverified probe") }, resume: () => { resumed++ } }
+  const reply = await shutdownHandler(command, ctx)
+  assert.ok(!reply.ok && reply.error.code === "INCOMPLETE")
+  assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
+  assert.equal(ctx.pending, undefined)
+  assert.equal(resumed, 1)
+  assert.equal(ctx.state.phase, "ready")
+})
+
 test("unverified launches block shutdown; --stop-agents cannot release provider-null ambiguity", async t => {
   const ctx = await context(t), record = launch(), path = join(ctx.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`)
   await writeLaunchRecord(path, record)

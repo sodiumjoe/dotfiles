@@ -4,7 +4,11 @@ import type { Duplex } from "node:stream"
 import type { Server, Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
 import { ControlError, PROTOCOL, errorReply, type HandlerStatus, type ControlRequest, type ControlReply } from "../control/protocol.js"
-import { serveControl } from "../control/wire.js"
+import { serveProtocols } from "../control/wire.js"
+import { CATALOG_PROTOCOL, catalogErrorReply, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
+import { createCatalogService, type CatalogService } from "../catalog/service.js"
+import { createCatalogStore } from "../catalog/store.js"
+import { createProbeRuntime } from "../catalog/probes.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
 import { readHandlerRecord, readLaunchRecordForReconciliation, writeHandlerRecord } from "../platform/private-state.js"
@@ -27,6 +31,7 @@ export type HandlerOptions = {
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
   onAdmissionReady?: (controller: AdmissionController) => Promise<void>
+  catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
 }
 
 export function receiveStart(gate: Duplex, status: Duplex, timeoutMs = 5000): Promise<void> {
@@ -78,6 +83,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const sockets = new Set<Socket>()
   let entries: InventoryEntry[] = []
   let shutdown: ShutdownContext | undefined
+  let catalog: CatalogService | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject })
@@ -123,10 +129,17 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       if (request.op === "shutdown") return shutdown === undefined ? errorReply(request, new ControlError("INCOMPLETE", "Handler has not completed startup")) : shutdownHandler(request, shutdown)
       return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone(state) }
     }
+    const dispatchCatalog = async (request: CatalogRequest): Promise<CatalogReply> => {
+      const bound = { ...request, handlerGeneration: options.generation }
+      if (request.handlerGeneration !== options.generation) return catalogErrorReply(bound, new ControlError("STALE_HANDLER"))
+      if (!catalog || state.phase !== "ready") return catalogErrorReply(bound, new ControlError("INCOMPLETE", "Handler has not completed startup"))
+      try { return { protocol: CATALOG_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: request.op === "model_list" ? await catalog.list() : await catalog.refresh(request.commandId, request.handlerGeneration) } }
+      catch (error) { return catalogErrorReply(bound, error) }
+    }
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
-      void serveControl(socket, dispatch).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
+      void serveProtocols(socket, dispatch, dispatchCatalog).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
     })
     server.on("error", rejectClosed)
     current = { ...published, writer: "handler", phase: "socket_bound" }
@@ -151,19 +164,28 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     await options.onPhase?.("ready")
     await verifyInventory(directory, entries)
+    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(entries), unavailable: null }
+    const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
+    if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
+    else {
+      const store = createCatalogStore(options.paths.persistentRoot)
+      const probes = createProbeRuntime({ ...catalogContext, queue: mutations.queue, store, canStart: () => catalogContext.isReady() && !catalogContext.shutdownPending() })
+      catalog = createCatalogService({ ...catalogContext, queue: mutations.queue, store, probes })
+    }
+    await catalog.initialize()
     current = { ...current, phase: "ready" }
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     state.phase = "ready"
-    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(entries), unavailable: null }
     const issues = admissionInventoryIssues(options.paths.hostKey, entries, await inventoryAdmissions(options.paths.persistentRoot))
     if (issues.length > 0) mutations.unavailable = issues.join("; ").slice(0, 512)
-    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close }
+    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog }
     const admission = createAdmissionController({ paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined })
     await options.onAdmissionReady?.(admission)
     if (termination) await terminate()
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
+    if (!termination && !closing) catalog.startScheduling()
     await closed
   } catch (error) {
     if (current !== undefined) {
@@ -171,6 +193,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     throw error
   } finally {
+    catalog?.close()
     await close()
     process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal)
     options.status.destroy(); options.gate.destroy()

@@ -6,7 +6,7 @@
     "node": "24.13.0"
   },
   "scripts": {
-    "test:catalog": "npm run build && node --test --test-concurrency=1 dist/test/catalog-types.test.js dist/test/catalog-config.test.js dist/test/catalog-store.test.js dist/test/catalog-probes.test.js dist/test/catalog-drivers.test.js dist/test/catalog-service.test.js",
+    "test:catalog": "npm run build && node --test --test-concurrency=1 dist/test/catalog-types.test.js dist/test/catalog-config.test.js dist/test/catalog-store.test.js dist/test/catalog-probes.test.js dist/test/catalog-drivers.test.js dist/test/catalog-service.test.js dist/test/catalog-protocol.test.js dist/test/catalog-cli.test.js",
     "test:checkout-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-checkout.test.js",
     "test:checkout": "npm run build && node --test --test-concurrency=1 dist/test/checkout-identity.test.js dist/test/checkout-records.test.js dist/test/handler-mutations.test.js dist/test/checkout-admission.test.js",
     "build": "tsc -p tsconfig.json",

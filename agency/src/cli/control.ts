@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto"
+import { runCatalogClient } from "../catalog/client.js"
+import { exchangeCatalog, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -22,6 +24,7 @@ export type ControlDependencies = {
   start(env: HandlerEnvironment): Promise<HandlerInspection>
   inspect(env: HandlerEnvironment): Promise<HandlerInspection | null>
   call(env: HandlerEnvironment, request: ControlRequest): Promise<ControlReply>
+  callCatalog?(env: HandlerEnvironment, request: CatalogRequest, timeoutMs?: number): Promise<CatalogReply>
   receipt: typeof readShutdownReceipt
   inventory: typeof inventoryLaunches
   cwd(): string
@@ -38,6 +41,7 @@ export function productionControlDependencies(): ControlDependencies {
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
     call: async (env, request) => exchange(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request),
+    callCatalog: async (env, request, timeoutMs) => exchangeCatalog(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
     receipt: readShutdownReceipt, inventory: inventoryLaunches, cwd: process.cwd, checkout: diagnoseCheckout, now: Date.now,
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     stdout: text => { process.stdout.write(text) }, stderr: text => { process.stderr.write(text) },
@@ -124,6 +128,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
+  if (argv.find(value => !value.startsWith("-")) === "model") return runCatalogClient(argv, { ...dependencies, callCatalog: dependencies.callCatalog ?? (async () => { throw new ControlError("UNAVAILABLE", "catalog support unavailable") }) })
   const requestId = randomUUID()
   let generation: string | null = null, commandId: string | undefined
   const json = argv.includes("--json")
@@ -135,7 +140,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
