@@ -6,6 +6,7 @@
     "node": "24.13.0"
   },
   "scripts": {
+    "test:agent": "npm run build && node --test --test-concurrency=1 dist/test/agent-types.test.js dist/test/agent-contracts.test.js",
     "test:catalog-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-catalog.test.js",
     "test:catalog": "npm run build && node --test --test-concurrency=1 dist/test/catalog-types.test.js dist/test/catalog-config.test.js dist/test/catalog-store.test.js dist/test/catalog-probes.test.js dist/test/catalog-drivers.test.js dist/test/catalog-service.test.js dist/test/catalog-protocol.test.js dist/test/catalog-cli.test.js",
     "test:checkout-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-checkout.test.js",
