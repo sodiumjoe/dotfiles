@@ -1,8 +1,8 @@
 # Agency
 
-Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, internal checkout admission, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
+Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, internal checkout admission, model discovery, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
 
-It does not yet create agents or implement model discovery, ACP sessions, permissions, attachment/roster streams, Neovim integration, the Bureau, or cross-host coordination. Existing retained providers are reconciled only; surviving sessions are never adopted. Checkout reservation/cancellation is an internal Handler API, not a public reserve command or an agent-start interface.
+It does not yet create agents or implement ACP sessions, permissions, attachment/roster streams, Neovim integration, the Bureau, or cross-host coordination. Existing retained providers are reconciled only; surviving sessions are never adopted. Checkout reservation/cancellation is an internal Handler API, not a public reserve command or an agent-start interface.
 
 ## Build and commands
 
@@ -14,6 +14,9 @@ agy handler status [--json]
 agy doctor [--json]
 agy shutdown [--stop-agents] [--json]
 agy shutdown --command-id <uuid> --handler-generation <uuid> [--stop-agents] [--json]
+agy model list [--json]
+agy model refresh [--json]
+agy model refresh --command-id <uuid> --handler-generation <uuid> [--json]
 ```
 
 Status lazily starts or connects to one Handler. Doctor inspects state without starting a Handler or performing cleanup. Path resolution may create empty qualified state/runtime directories. Neither command creates a model session.
@@ -32,11 +35,29 @@ The launcher may time out while a live Handler continues reconciliation. A later
 
 ## Verification scope
 
-Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, `npm run test:control-integration`, `npm run test:checkout`, and `npm run test:checkout-integration` with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment.
+Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, `npm run test:control-integration`, `npm run test:checkout`, `npm run test:checkout-integration`, `npm run test:catalog`, and `npm run test:catalog-integration` sequentially with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment.
 
 The Handler composition is qualified locally on Darwin. Real Linux Handler execution remains unqualified until a separately bounded remote increment. The platform layer's retained Linux qualification remains valid; synthetic Linux tests do not substitute for a real Linux Handler trial.
 
 ## Qualified contract
+
+### Model catalog
+
+The catalog is opt-in through `persistentRoot/catalog/providers.json`, a user-owned private regular file with one link and exact shape `{ "version": 1, "providers": [...] }`. An absent manifest configures no providers and launches no discovery. Agency does not create this file, search PATH, or discover provider settings automatically. Each profile has exactly `id`, `enabled`, `executable`, `adapterPackageJson`, `sdkPackageJson`, and `configurationFiles`. Paths are canonical absolute paths. IDs are `claude-agent-acp` and `codex-acp`; Claude requires SDK package metadata, while Codex requires `sdkPackageJson: null`. Configuration files are an ordered, duplicate-free list of at most 16 declared paths.
+
+Enabling a live profile causes discovery subprocesses on Handler startup, cache expiry, configuration changes, and explicit refresh, even without a model prompt. Do not enable live profiles before separately qualifying the executable, dependency versions, authentication surface, and managed-policy behavior. Local qualification uses only deterministic fake SDKs and native executables. Real-provider discovery and real Linux Handler/catalog composition remain unqualified.
+
+Claude discovery loads the explicitly configured `@anthropic-ai/claude-agent-sdk` version `0.3.232` only inside an owned worker, calls `supportedModels()` with an empty prompt stream, disables setting sources, tools, MCP servers, and session persistence, and routes native spawning through the registration gate. Other SDK versions are rejected. Codex uses only `initialize`, `initialized`, and bounded `model/list` pagination. Adapter versions come from the declared `@agentclientprotocol/<provider-id>` package metadata, not the native binary. A native version is reported only when supplied by native discovery; otherwise it is unknown. These restrictions do not establish that native startup has no authentication or other side effects.
+
+`agy model list` reads the cache and reports provider state, freshness, discovery status, and `launchAuthorized: false`. Model IDs retain advertised alias semantics; resolved model IDs and ACP modes remain unknown. Reasoning capabilities distinguish unknown evidence, explicit absence, and advertised values. Every later agent launch must revalidate model, mode, reasoning, permissions, checkout, and effective configuration.
+
+Freshness requires the current Handler's per-provider verification, unchanged declared-input fingerprint, successful cleanup/publication, and an age below ten minutes. The fingerprint binds profile values, executable and SDK entry filesystem identity, declared package metadata, and declared configuration contents, including missing files. It does not cover undeclared settings, environment changes, credentials, or arbitrary files imported by the SDK. Configuration is polled every 30 seconds; failed automatic refreshes back off for 60 seconds. Failures preserve previously verified models as stale. Successful refresh replaces a provider's complete advertised set, including removals.
+
+Refresh IDs are durable and generation-bound. Concurrent callers coalesce bounded work; an exact completed retry returns its original immutable snapshot even after newer refreshes. A disconnected CLI does not cancel discovery. JSON output uses `agency-catalog/1` and includes retry IDs for refresh. Polling is bounded to 60 seconds; on incomplete output retain both IDs and retry with the original generation. A restarted Handler interrupts pending commands and refuses new work under old IDs. A running pre-catalog Handler is not automatically restarted or replaced by a catalog client.
+
+Each probe uses a fresh private non-Git scratch directory, one detached gated Node worker, and at most one non-detached native child. Independent platform observation and durable registration precede native protocol work. Discovery is bounded to 20 seconds per provider, followed by qualified TERM/KILL cleanup and direct-worker terminal observation. Probe records live under `catalog/probe-launches` with separate metadata, commands, snapshots, and a hash-bound current pointer. They never acquire checkout leases. Snapshots support two bounded 1-MiB provider payloads plus a bounded envelope; command and metadata files retain their 1-MiB limit. Retained evidence is not automatically pruned.
+
+Ordinary shutdown cancels and drains discovery without `--stop-agents`. Checkout-related refusal resumes healthy discovery. Unverified probe cleanup blocks all new discovery and successful shutdown while preserving readable historical catalog data and independent checkout admission. A restart reconciles the exact retained probe groups before starting replacements; an attempted launch without attributable identity remains quarantined. PID alone, worker messages, EOF, a missing record, or a valid model response never authorize cleanup or fresh publication. No force-cleanup operation is provided.
 
 ### Checkout admission
 

@@ -26,6 +26,7 @@ const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === "EN
 const conflict = (): never => { throw new CatalogError("COMMAND_CONFLICT") }
 export function createCatalogStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): CatalogStore {
   const catalog = join(root, "catalog"), accepted = new Map<string, Buffer>()
+  const byteLimit = (path: string) => dirname(path) === join(catalog, "snapshots") ? 2 * MAX_CATALOG_BYTES + 8192 : MAX_CATALOG_BYTES
   let snapshots: Map<string, Buffer> | null = null
   async function checkDirectory(path: string): Promise<boolean> {
     await assertPrivateDirectory(root)
@@ -34,7 +35,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
   }
   async function read(path: string): Promise<Buffer | null> {
     if (!await checkDirectory(dirname(path))) return null
-    return readBoundedFile(path, MAX_CATALOG_BYTES, true)
+    return readBoundedFile(path, byteLimit(path), true)
   }
   async function sync(path: string): Promise<void> {
     const handle = await filesystem.open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
@@ -50,7 +51,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
   }
   async function publish(path: string, value: unknown, expected: unknown, immutable: boolean): Promise<void> {
     const bytes = Buffer.from(JSON.stringify(value))
-    if (bytes.length > MAX_CATALOG_BYTES) invalid()
+    if (bytes.length > byteLimit(path)) invalid()
     for (const [knownPath, knownBytes] of accepted) {
       const current = await read(knownPath)
       if (current === null || !current.equals(knownBytes)) throw new CatalogError("CATALOG_UNAVAILABLE")

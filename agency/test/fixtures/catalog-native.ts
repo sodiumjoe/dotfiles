@@ -1,11 +1,25 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import { watch } from "node:fs"
 
 const directory = dirname(process.argv[1]!)
 let scenario: { fail?: boolean; models?: string[]; wait?: boolean } = {}
 try { scenario = JSON.parse(await readFile(join(directory, "scenario.json"), "utf8")) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
 if (process.argv.includes("app-server") || process.argv.includes("--agency-fixture-sdk")) {
   let buffer = ""
+  let pending = Promise.resolve()
+  const release = async (): Promise<void> => {
+    if (!scenario.wait) return
+    await new Promise<void>((resolve, reject) => {
+      const watcher = watch(directory, () => { void check() })
+      watcher.on("error", reject)
+      const check = async (): Promise<void> => {
+        try { await readFile(join(directory, "release")); watcher.close(); resolve() }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") { watcher.close(); reject(error) } }
+      }
+      void check()
+    })
+  }
   const methods: string[] = []
   const models = scenario.models ?? ["fixture-model"]
   process.stdin.on("data", (bytes: Buffer) => {
@@ -13,9 +27,9 @@ if (process.argv.includes("app-server") || process.argv.includes("--agency-fixtu
     let index: number
     while ((index = buffer.indexOf("\n")) >= 0) {
       const line = buffer.slice(0, index); buffer = buffer.slice(index + 1)
-      void (async () => {
+      pending = pending.then(async () => {
         if (line === "sdk-models") {
-          if (scenario.wait) return
+          await release()
           process.stdout.write(JSON.stringify(scenario.fail ? { error: "SECRET" } : { models: models.map(value => ({ value, displayName: value, supportsEffort: true, supportedEffortLevels: ["high", "low"] })) }) + "\n")
           return
         }
@@ -24,10 +38,10 @@ if (process.argv.includes("app-server") || process.argv.includes("--agency-fixtu
         await writeFile(join(process.cwd(), "native-methods.json"), JSON.stringify(methods), { mode: 0o600 })
         if (!["initialize", "initialized", "model/list"].includes(message.method)) process.exit(1)
         if (message.method === "initialized") return
-        if (scenario.wait && message.method === "model/list") return
+        if (message.method === "model/list") await release()
         const result = message.method === "initialize" ? { serverInfo: { version: "fixture-native-1" } } : { data: models.map(id => ({ id, displayName: id, supportedReasoningEfforts: [{ reasoningEffort: "high", description: "More" }] })), nextCursor: null }
         process.stdout.write(JSON.stringify(scenario.fail && message.method === "model/list" ? { id: message.id, error: { message: "SECRET" } } : { id: message.id, result }) + "\n")
-      })().catch(() => process.exit(1))
+      }).catch(() => process.exit(1))
     }
   })
 } else process.stdin.once("data", () => process.stdout.write("registered\n"))

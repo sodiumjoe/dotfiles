@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { ChildProcess } from "node:child_process"
-import { readFile, readdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { Socket } from "node:net"
 import { runHandler } from "../../src/handler/daemon.js"
@@ -8,13 +8,63 @@ import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
 import { resolveCheckout, observeGitChild, verifyGitExit, assertGitChildrenClosed, CheckoutResolutionError } from "../../src/checkout/identity.js"
 import type { ControlFixtureConfig } from "../control-support.js"
+import type { AdmissionController } from "../../src/checkout/admission.js"
+import { createCatalogStore } from "../../src/catalog/store.js"
+import { createProbeRuntime } from "../../src/catalog/probes.js"
+import { createCatalogService } from "../../src/catalog/service.js"
+import { observeConfig } from "../../src/catalog/config.js"
+import { writeLaunchRecord } from "../../src/platform/private-state.js"
 
 process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as ControlFixtureConfig
 const root = dirname(config.paths.runtimeRoot)
 const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
+let admission: AdmissionController | undefined, admissionDone = false
+const admit = async (controller: AdmissionController): Promise<void> => {
+  if (admissionDone || config.admissionOperations === undefined) return
+  admissionDone = true
+  if (config.admissionOperations.length < 1 || config.admissionOperations.length > 3) throw new Error("invalid fixture operation count")
+  const results: unknown[] = []
+  for (const operation of config.admissionOperations) {
+    try {
+      if (config.syntheticGitCleanup) await verifyGitExit(observeGitChild(new ChildProcess()), 5)
+      const checkout = await resolveCheckout(operation.checkoutPath, config.paths.hostKey)
+      const request = { checkout, agentId: operation.agentId, leaseId: operation.leaseId, launchAttemptId: operation.launchAttemptId, handlerGeneration: process.env.AGENCY_HANDLER_GENERATION! }
+      const reservation = await controller.reserve(request)
+      const launch = operation.action === "reserve_cancel" ? await controller.cancel(request) : reservation.launch
+      results.push({ ok: true, admission: reservation.admission, launch })
+    } catch (error) {
+      try { assertGitChildrenClosed() } catch (cleanup) {
+        await writeFile(join(root, "git-cleanup-failure.json"), JSON.stringify({ handlerPid: process.pid, handlerGeneration: process.env.AGENCY_HANDLER_GENERATION, checkoutPath: operation.checkoutPath, launchAttemptId: operation.launchAttemptId, child: cleanup instanceof CheckoutResolutionError ? cleanup.child : null, completedOperations: results }), { mode: 0o600 })
+        throw cleanup
+      }
+      results.push({ ok: false, code: error instanceof Error && "code" in error ? error.code : "FIXTURE_ERROR", message: String(error).slice(0, 512) })
+    }
+  }
+  await writeFile(join(root, "admission-result.json"), JSON.stringify(results), { mode: 0o600 })
+}
 try {
-  await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), onPhase: async phase => {
+  await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), ...(config.catalog ? { catalogFactory: (context: Parameters<NonNullable<import("../../src/handler/daemon.js").HandlerOptions["catalogFactory"]>>[0]) => {
+    const store = createCatalogStore(config.paths.persistentRoot)
+    const probes = createProbeRuntime({ ...context, queue: context.mutations.queue, store, canStart: () => context.isReady() && !context.shutdownPending(), dependencies: { env: { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"), CLAUDE_CONFIG_DIR: join(root, "config"), CODEX_HOME: join(root, "config"), PATH: "/usr/bin:/bin" } } })
+    const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes })
+    return { ...service, async list() { if (config.catalog!.admissionOnList && admission) await admit(admission); return service.list() }, async initialize() {
+      if (config.catalog!.scenario === "uncertain") {
+        const profile = config.catalog!.profiles[0]!, evidence = await observeConfig(profile), attemptId = randomUUID(), commandId = randomUUID()
+        const meta = { version: 1 as const, hostId: context.paths.hostKey, handlerGeneration: context.generation, commandId, providerId: profile.id, attemptId, agentId: randomUUID(), leaseId: randomUUID(), fingerprint: evidence.fingerprint, workPath: join(context.paths.persistentRoot, "catalog/work", attemptId) }
+        await store.writeCommand({ version: 1, commandId, hostId: meta.hostId, handlerGeneration: context.generation, batchId: randomUUID(), fingerprints: [{ providerId: profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: profile.id, attemptId }], state: "pending", snapshotId: null }, null)
+        await store.writeProbeMeta(meta)
+        await mkdir(join(context.paths.persistentRoot, "catalog/probe-launches"), { mode: 0o700 })
+        await writeLaunchRecord(join(context.paths.persistentRoot, "catalog/probe-launches", attemptId + ".json"), { version: 1, checkoutId: `catalog-v1:${profile.id}:${evidence.fingerprint}`, leaseId: meta.leaseId, agentId: meta.agentId, handlerGeneration: context.generation, launchAttemptId: attemptId, launchBootId: await adapter.bootId(), launchAttempted: true, phase: "launch_pending", provider: null, reason: null })
+        await service.initialize()
+        if ((await service.list()).discovery.state !== "blocked") throw new Error("synthetic probe was not quarantined")
+        const child = new ChildProcess()
+        await writeFile(join(root, "catalog-cleanup-failure.json"), JSON.stringify({ handlerPid: process.pid, child: { pid: child.pid ?? null, exited: false, closed: false } }), { mode: 0o600 })
+        throw new Error("unverified Handler catalog cleanup")
+      }
+      await service.initialize()
+    } }
+  } } : {}), onPhase: async phase => {
     if (config.delayMs !== undefined && phase === "reconciling") await new Promise(resolve => setTimeout(resolve, config.delayMs))
     if (config.pauseAt === phase) {
       await writeFile(join(root, "paused"), phase, { mode: 0o600 })
@@ -34,26 +84,8 @@ try {
       else { record.checkoutId = "replaced"; await writeFile(path, JSON.stringify(record), { mode: 0o600 }) }
     }
   }, onAdmissionReady: async controller => {
-    if (config.admissionOperations === undefined) return
-    if (config.admissionOperations.length < 1 || config.admissionOperations.length > 3) throw new Error("invalid fixture operation count")
-    const results: unknown[] = []
-    for (const operation of config.admissionOperations) {
-      try {
-        if (config.syntheticGitCleanup) await verifyGitExit(observeGitChild(new ChildProcess()), 5)
-        const checkout = await resolveCheckout(operation.checkoutPath, config.paths.hostKey)
-        const request = { checkout, agentId: operation.agentId, leaseId: operation.leaseId, launchAttemptId: operation.launchAttemptId, handlerGeneration: process.env.AGENCY_HANDLER_GENERATION! }
-        const reservation = await controller.reserve(request)
-        const launch = operation.action === "reserve_cancel" ? await controller.cancel(request) : reservation.launch
-        results.push({ ok: true, admission: reservation.admission, launch })
-      } catch (error) {
-        try { assertGitChildrenClosed() } catch (cleanup) {
-          await writeFile(join(root, "git-cleanup-failure.json"), JSON.stringify({ handlerPid: process.pid, handlerGeneration: process.env.AGENCY_HANDLER_GENERATION, checkoutPath: operation.checkoutPath, launchAttemptId: operation.launchAttemptId, child: cleanup instanceof CheckoutResolutionError ? cleanup.child : null, completedOperations: results }), { mode: 0o600 })
-          throw cleanup
-        }
-        results.push({ ok: false, code: error instanceof Error && "code" in error ? error.code : "FIXTURE_ERROR", message: String(error).slice(0, 512) })
-      }
-    }
-    await writeFile(join(root, "admission-result.json"), JSON.stringify(results), { mode: 0o600 })
+    admission = controller
+    if (!config.catalog?.admissionOnList) await admit(controller)
   } })
 } catch (error) {
   await writeFile(join(root, "failure"), String(error), { mode: 0o600 })

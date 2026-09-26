@@ -1,8 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { mkdir, writeFile, readFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
+import assert from "node:assert/strict"
+import { fileURLToPath } from "node:url"
+import { createConnection } from "node:net"
 import type { TestContext } from "node:test"
-import { privateRoot } from "./control-support.js"
-import type { ProviderProfile } from "../src/catalog/types.js"
+import { privateRoot, controlFixture, until, type AdmissionFixtureOperation } from "./control-support.js"
+import { CatalogError, type ProviderProfile, type ProviderId } from "../src/catalog/types.js"
 import { randomUUID } from "node:crypto"
 import { ChildProcess } from "node:child_process"
 import { PassThrough } from "node:stream"
@@ -11,7 +14,12 @@ import { createCatalogStore } from "../src/catalog/store.js"
 import { observeConfig } from "../src/catalog/config.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
-import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
+import { readHandlerRecord, readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
+import { CATALOG_PROTOCOL, exchangeCatalog, type CatalogRequest } from "../src/catalog/protocol.js"
+import { ControlError, PROTOCOL } from "../src/control/protocol.js"
+import { exchange } from "../src/control/wire.js"
+import { readShutdownReceipt } from "../src/handler/receipt.js"
+import { reconcileRecord } from "../src/platform/reconcile.js"
 
 export async function profileFixture(t: TestContext) {
   const root = await privateRoot(t)
@@ -32,6 +40,81 @@ export function gate<T = void>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(r => { resolve = r })
   return { promise, resolve }
+}
+
+export async function catalogHandlerFixture(t: TestContext, options: { enabled?: ProviderId[]; wait?: boolean; admissionOperations?: AdmissionFixtureOperation[]; scenario?: "uncertain" } = {}, checkout?: Parameters<typeof controlFixture>[2]) {
+  const f = await controlFixture(t, options.admissionOperations ? { admissionOperations: options.admissionOperations } : {}, checkout)
+  f.beforeCleanup(async () => {
+    let handler
+    try { handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+    if (handler?.process && await f.observe(handler.process.pid) !== null) {
+      const request = { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.generation, op: "shutdown" as const, commandId: randomUUID(), stopAgents: true }
+      try {
+        const reply = await exchange(createConnection(f.paths.handlerSocketPath), request, 15000)
+        assert.ok(reply.ok, JSON.stringify(reply))
+      } catch (error) {
+        const receipt = await readShutdownReceipt(f.paths.persistentRoot, request.commandId)
+        if (receipt?.handlerGeneration !== handler.generation || receipt.commandId !== request.commandId || !receipt.stopAgents) throw error
+      }
+      await until(async () => await f.observe(handler!.process!.pid) === null ? true : undefined)
+      assert.deepEqual(await f.adapter.readGroup(handler.process.pid), [])
+    }
+    const inventory = await createCatalogStore(f.paths.persistentRoot).inventory()
+    assert.deepEqual(inventory.issues, [])
+    for (const entry of inventory.launches) {
+      const path = join(f.root, entry.record.launchAttemptId + "-catalog-cleanup.json")
+      await writeLaunchRecord(path, entry.record)
+      assert.equal((await reconcileRecord(path, f.adapter, entry.record)).record.phase, "cleanup_verified")
+      if (entry.record.provider === null) { assert.equal(entry.record.launchAttempted, false); continue }
+      for (let observation = 0; observation < 2; observation++) {
+        for (const identity of entry.record.provider.group.observed) assert.equal(await f.observe(identity.pid), null)
+        assert.deepEqual(await f.adapter.readGroup(entry.record.provider.group.leader.pid), [])
+      }
+    }
+  })
+  for (const name of ["home", "config", "claude-agent-acp", "codex-acp"]) await mkdir(join(f.root, name), { mode: 0o700 })
+  const profiles: ProviderProfile[] = []
+  for (const id of ["claude-agent-acp", "codex-acp"] as const) {
+    const directory = join(f.root, id), executable = join(directory, "native.mjs"), adapterPackageJson = join(directory, "adapter.json"), configuration = join(directory, "declared.json")
+    await writeFile(executable, `#!${process.execPath}\n${await readFile(fileURLToPath(new URL("./fixtures/catalog-native.js", import.meta.url)), "utf8")}`, { mode: 0o700 })
+    await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/" + id, version: "1.0.0" }), { mode: 0o600 })
+    await writeFile(configuration, "{}", { mode: 0o600 })
+    await writeFile(join(directory, "scenario.json"), JSON.stringify({ wait: options.wait ?? false }), { mode: 0o600 })
+    let sdkPackageJson: string | null = null
+    if (id === "claude-agent-acp") {
+      sdkPackageJson = join(directory, "package.json")
+      await writeFile(sdkPackageJson, JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.232", main: "sdk.mjs" }), { mode: 0o600 })
+      await writeFile(join(directory, "sdk.mjs"), await readFile(fileURLToPath(new URL("./fixtures/catalog-sdk.js", import.meta.url))), { mode: 0o600 })
+    }
+    profiles.push({ id, enabled: options.enabled?.includes(id) ?? true, executable, adapterPackageJson, sdkPackageJson, configurationFiles: [configuration] })
+  }
+  await mkdir(join(f.paths.persistentRoot, "catalog"), { mode: 0o700 })
+  if (options.enabled?.length !== 0) await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: profiles }), { mode: 0o600 })
+  await writeFile(f.configPath, JSON.stringify({ paths: f.paths, admissionOperations: options.admissionOperations, catalog: { profiles, scenario: options.scenario ?? "normal", admissionOnList: options.admissionOperations !== undefined } }), { mode: 0o600 })
+  const inventory = () => createCatalogStore(f.paths.persistentRoot).inventory()
+  const call = async (operation: { op: "model_list" } | { op: "model_refresh"; commandId: string }) => {
+    const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+    const request: CatalogRequest = { protocol: CATALOG_PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.generation, ...operation }
+    const reply = await exchangeCatalog(createConnection(f.paths.handlerSocketPath), request)
+    if (!reply.ok) throw new ControlError(reply.error.code, reply.error.message)
+    return reply.result
+  }
+  return {
+    ...f, profiles, inventory,
+    async list() { const result = await call({ op: "model_list" }); assert.equal(result.state, "catalog"); if (result.state !== "catalog") throw new Error("wrong result"); return result },
+    async refresh(commandId: string) { const result = await call({ op: "model_refresh", commandId }); if (result.state !== "refresh") throw new Error("wrong result"); return result },
+    waitCommand: (commandId: string) => until(async () => {
+      try { const command = await createCatalogStore(f.paths.persistentRoot).readCommand(commandId); return command && command.state !== "pending" ? command : undefined }
+      catch (error) { if (error instanceof CatalogError && error.code === "INVALID_CATALOG") return undefined; throw error }
+    }, 15000),
+    waitNative: (providerId: ProviderId) => until(async () => {
+      const observed = await inventory(), attempts = observed.metadata.filter(m => m.providerId === providerId).map(m => m.attemptId)
+      return observed.launches.find(e => attempts.includes(e.record.launchAttemptId) && e.record.phase !== "cleanup_verified" && e.record.provider?.group.observed.length === 2)
+    }, 10000),
+    scenario: (providerId: ProviderId, scenario: { fail?: boolean; models?: string[]; wait?: boolean }) => writeFile(join(dirname(profiles.find(p => p.id === providerId)!.executable), "scenario.json"), JSON.stringify(scenario), { mode: 0o600 }),
+    release: (providerId: ProviderId) => writeFile(join(dirname(profiles.find(p => p.id === providerId)!.executable), "release"), "released", { mode: 0o600 }),
+  }
 }
 
 export async function syntheticProbeFixture(t: TestContext, scenario = "success") {

@@ -5,7 +5,7 @@ import { chmod, link, mkdir, open, readFile, readdir, rename, rm, unlink, writeF
 import { join } from "node:path"
 import test from "node:test"
 import { createCatalogStore, type CatalogFileSystem } from "../src/catalog/store.js"
-import type { CatalogSnapshot, ProbeMeta, RefreshCommand } from "../src/catalog/types.js"
+import { parseSnapshot, type CatalogSnapshot, type ProbeMeta, type RefreshCommand } from "../src/catalog/types.js"
 import { privateRoot } from "./control-support.js"
 
 const hostId = "a".repeat(64), generation = randomUUID(), fingerprint = "b".repeat(64)
@@ -18,6 +18,20 @@ function meta(root: string, c: RefreshCommand): ProbeMeta {
   return { version: 1, hostId, handlerGeneration: generation, commandId: c.commandId, providerId: "claude-agent-acp", attemptId, agentId: randomUUID(), leaseId: randomUUID(), fingerprint, workPath: join(root, "catalog/work", attemptId) }
 }
 const launch = (m: ProbeMeta) => ({ version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, leaseId: m.leaseId, agentId: m.agentId, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
+
+test("two individually bounded provider payloads persist and retain their receipt snapshot", async t => {
+  const root = await privateRoot(t), store = createCatalogStore(root), s = snapshot(), c = command()
+  for (const providerId of ["claude-agent-acp", "codex-acp"] as const) s.providers.push({ providerId, fingerprint, verifiedAt: 100, verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown", adapterVersion: "1", sdkVersion: null, error: null, models: Array.from({ length: 400 }, (_, i) => ({ providerId, modelId: String(i).padStart(3, "0"), resolvedModelId: null, displayName: "d".repeat(512), reasoning: { state: "values", values: ["a", "b", "c", "d"].map(v => v.repeat(200)) }, modes: { state: "unknown" }, availability: "advertised" })) })
+  assert.ok(Buffer.byteLength(JSON.stringify(s)) > 1048576)
+  for (const p of s.providers) assert.ok(Buffer.byteLength(JSON.stringify(p.models)) < 1048576)
+  assert.deepEqual(parseSnapshot(s), s)
+  await store.writeCommand(c, null)
+  await store.writeSnapshot(s)
+  await store.publishCurrent(s)
+  await store.writeCommand({ ...c, state: "completed", snapshotId: s.snapshotId }, c)
+  assert.deepEqual(await createCatalogStore(root).readCurrent(), s)
+  assert.deepEqual((await store.inventory()).issues, [])
+})
 
 test("snapshots require explicit hash-bound publication and remain immutable", async t => {
   const root = await privateRoot(t), store = createCatalogStore(root), s = snapshot()

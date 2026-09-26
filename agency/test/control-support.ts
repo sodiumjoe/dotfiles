@@ -20,6 +20,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import type { Duplex } from "node:stream"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
+import type { ProviderProfile } from "../src/catalog/types.js"
 
 export function unavailableControlDependencies(): ControlDependencies {
   const unavailable = async (): Promise<never> => { throw new ControlError("UNAVAILABLE") }
@@ -43,14 +44,14 @@ export async function fileExists(path: string): Promise<boolean> {
 }
 
 export type AdmissionFixtureOperation = { checkoutPath: string; action: "reserve" | "reserve_cancel"; agentId: string; leaseId: string; launchAttemptId: string }
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain"; admissionOnList: boolean } }
 type CheckoutFixtureCleanup = { root: string; verifyCleanup: () => void; beforeCleanup: (verify: () => Promise<void>) => void }
 
 let fixtureBatchFailure: Error | undefined
 export function assertFixtureBatchHealthy(): void {
   if (fixtureBatchFailure !== undefined) throw fixtureBatchFailure
 }
-function failFixtureBatch(error: unknown): Error {
+export function failFixtureBatch(error: unknown): Error {
   fixtureBatchFailure ??= error instanceof Error ? error : new Error(String(error))
   return fixtureBatchFailure
 }
@@ -62,6 +63,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   const paths: PlatformPaths = { hostKey: "a".repeat(64), persistentRoot: join(root, "state"), runtimeRoot: join(root, "run"), handlerSocketPath: join(root, "run/handler.sock") }
   const owned: ProcessIdentity[] = [], pending: Array<{ pid: number; marker: string }> = [], starts: Promise<unknown>[] = []
   const failedStarts: unknown[] = []
+  const cleanupBarriers: Array<() => Promise<void>> = []
   const providers: Array<{ child: ChildProcess; marker: string; attempt: string; record?: LaunchRecord }> = []
   async function observe(pid: number): Promise<ProcessIdentity | null> {
     return until(async () => { try { return await adapter.readProcess(pid) } catch (error) { if (!(error instanceof Error) || !error.name.endsWith("ObservationUnavailable")) throw error; return undefined } })
@@ -82,6 +84,12 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   }
   const verifyGitCleanup = async (): Promise<void> => {
     try {
+      const evidence = JSON.parse(await readFile(join(root, "catalog-cleanup-failure.json"), "utf8"))
+      throw failFixtureBatch(Object.assign(new Error(`unverified Handler catalog cleanup; retained ${root}`), { evidence }))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw failFixtureBatch(error)
+    }
+    try {
       const evidence = JSON.parse(await readFile(join(root, "git-cleanup-failure.json"), "utf8"))
       throw failFixtureBatch(Object.assign(new Error(`unverified Handler Git cleanup; retained ${root} and ${checkout?.root ?? "checkout"}`), { evidence }))
     } catch (error) {
@@ -93,6 +101,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
     await Promise.allSettled(starts)
     await verifyGitCleanup()
     assertFixtureBatchHealthy()
+    for (const barrier of cleanupBarriers) await barrier()
     for (const item of pending) {
       if (owned.some(identity => identity.pid === item.pid)) continue
       const identity = await observe(item.pid)
@@ -212,7 +221,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       return provider.record
     } finally { status.destroy(); ack.destroy() }
   }
-  return { root, paths, adapter, owned, start, call, signal, observe, configPath, spawnProvider, cleanup }
+  return { root, paths, adapter, owned, start, call, signal, observe, configPath, spawnProvider, cleanup, beforeCleanup: (barrier: () => Promise<void>) => { cleanupBarriers.push(barrier) } }
 }
 
 export async function privateRoot(t: TestContext): Promise<string> {
