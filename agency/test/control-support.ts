@@ -56,7 +56,7 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, checkout?: CheckoutFixtureCleanup) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, checkout?: CheckoutFixtureCleanup, handlerFile?: string) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
@@ -153,7 +153,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   const start = async (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
     assertFixtureBatchHealthy()
     let marker: string | undefined
-    const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath] }, onTransition: async (transition, pid) => {
+    const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath] }, onTransition: async (transition, pid) => {
       if (transition === "launch_pending_written") marker = `agy-handler:${(await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))).launchAttemptId}`
       if (transition === "handler_spawned" && pid !== undefined) {
         assert.notEqual(marker, undefined)

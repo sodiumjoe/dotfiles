@@ -1,8 +1,8 @@
 # Agency
 
-Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, internal checkout admission, model discovery, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
+Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, checkout admission, model discovery, root-agent lifecycle, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
 
-It does not yet create agents or implement ACP sessions, permissions, attachment/roster streams, Neovim integration, the Bureau, or cross-host coordination. Existing retained providers are reconciled only; surviving sessions are never adopted. Checkout reservation/cancellation is an internal Handler API, not a public reserve command or an agent-start interface.
+Agent lifecycle and idle ACP sessions are qualified only through deterministic fixtures. The production launch-contract registry is empty: real starts return `ADAPTER_UNQUALIFIED` before reservation or spawn, including with an enabled catalog profile. Prompts, permissions UI, attachment/roster streams, Neovim integration, the Bureau, and cross-host coordination are not implemented. Surviving sessions are never adopted. Checkout reservation/cancellation remains an internal Handler API, not a public reserve command.
 
 ## Build and commands
 
@@ -17,6 +17,10 @@ agy shutdown --command-id <uuid> --handler-generation <uuid> [--stop-agents] [--
 agy model list [--json]
 agy model refresh [--json]
 agy model refresh --command-id <uuid> --handler-generation <uuid> [--json]
+agy agent start --provider <id> --model <id> --reasoning <value|none> [--mode <id>] --permission-profile <id> [--command-id <uuid>] [--handler-generation <uuid>] [--json]
+agy agent current [--json]
+agy agent list [--json]
+agy agent stop <agent-uuid> --handler-generation <uuid> --provider-generation <uuid> [--command-id <uuid>] [--json]
 ```
 
 Status lazily starts or connects to one Handler. Doctor inspects state without starting a Handler or performing cleanup. Path resolution may create empty qualified state/runtime directories. Neither command creates a model session.
@@ -35,11 +39,23 @@ The launcher may time out while a live Handler continues reconciliation. A later
 
 ## Verification scope
 
-Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, `npm run test:control-integration`, `npm run test:checkout`, `npm run test:checkout-integration`, `npm run test:catalog`, and `npm run test:catalog-integration` sequentially with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment.
+Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, `npm run test:control-integration`, `npm run test:checkout`, `npm run test:checkout-integration`, `npm run test:catalog`, `npm run test:catalog-integration`, `npm run test:agent`, and `npm run test:agent-integration` sequentially with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment. The lifecycle crash matrix covers command intent, reservation, attempted publication before spawn, exact identity, ACP session creation, readiness, receipt visibility/durability, and five stop-publication boundaries. Independent fixture ownership and repeated absence observations precede root deletion; incomplete cleanup retains roots and stops the process-bearing batch.
 
 The Handler composition is qualified locally on Darwin. Real Linux Handler execution remains unqualified until a separately bounded remote increment. The platform layer's retained Linux qualification remains valid; synthetic Linux tests do not substitute for a real Linux Handler trial.
 
 ## Qualified contract
+
+### Agent lifecycle
+
+The Handler directly owns one detached provider process and its ACP connection per root agent. A client disconnect does not terminate a ready idle session. Each accepted start retains an immutable launch specification and separate agent, provider, lease, launch-attempt, command, and session generations. The model token remains advertised identity, not a claim of resolved model execution. There are at most 16 live root agents per Handler, and overlapping checkouts cannot acquire another write-capable lease.
+
+Launch requires fresh, current-generation catalog evidence and a separately qualified code-owned launch contract. It never triggers discovery. Provider, model, reasoning, and permission profile are explicit. `none` requires evidence of absent reasoning; unknown is insufficient. Mode omission is legal only when the contract establishes one effective value. Configuration, checkout identity, and the contract fingerprint are revalidated before spawn and readiness. ACP v1 initialization, session creation, and settings readback must confirm exact values; aliases, clamping, missing evidence, and unsupported callbacks fail closed. No prompt is submitted. Unexpected permission requests receive `cancelled`; filesystem and terminal requests are rejected. Fixture permission evidence is not proof of a native provider policy or a sandbox.
+
+Agent JSON uses the separate `agency-agent/1` envelope. Start/stop polling is bounded; retain the command ID and original Handler generation after exit 75. A pinned start retry uses retained input rather than ambient cwd and never spawns again. Completed start and stop receipts remain immutable historical outcomes, even after failure, stop, or Handler replacement. Current/list report present liveness separately. Offline receipt reads report `durability: "unverified"` with exit 75, even when a completed receipt is visible. Only live qualified publication can repair durability; a replacement Handler can verify historical results without adopting sessions or replaying commands. An older Handler without agent protocol support requires explicit shutdown/restart.
+
+Successful durable ready-record publication linearizes startup success. Explicit stop first persists its exact target and intent, then cancels startup, performs qualified cleanup, publishes terminal state, and completes its receipt. Ordinary shutdown refuses starting, ready, stopping, or unresolved agents before installing shutdown state. `--stop-agents` drains lifecycle operations outside the shared mutation queue. Unverified cleanup returns incomplete and preserves Handler readiness and checkout quarantine.
+
+Records live under `agents/records` and `agents/commands`, with private atomic publication, file/directory fsync, exact readback, immutable identities, and inventory-change detection. Each directory is limited to 4096 entries, including retained history; automatic pruning is absent. A restart interrupts pending commands and starting/ready/stopping records after platform reconciliation. Independently verified cleanup may release the lease while the historical stop remains interrupted. Attempted-but-unattributed launches remain quarantined. Real-provider permission/selection/process compatibility and real Linux Handler composition require separate qualification before production contracts can be registered.
 
 ### Model catalog
 
@@ -63,7 +79,7 @@ Ordinary shutdown cancels and drains discovery without `--stop-agents`. Checkout
 
 Checkout identity binds the host, canonical root, device/inode strings, common Git directory, worktree-specific Git directory, and physical ancestors. The stable ID hashes the host and root/worktree-Git-directory physical identities. Symlink and case aliases converge, while separate non-overlapping linked worktrees remain independent despite sharing a common Git directory. Nested repositories and submodules conflict with a leased parent. Dirty files are neither reset nor deleted.
 
-The resolver uses `/usr/bin/git rev-parse` with argument vectors, neutralized inherited Git redirection, bounded output, and repeated snapshots. Each direct Git child has a two-second execution limit and SIGKILL timeout/overflow policy; cleanup requires observed terminal state. Missing Git, unsupported paths, bare repositories, unstable filesystem mappings, and unverified subprocess cleanup fail closed. These observations are not a filesystem lock against hostile same-user mutation. Provider launch will require renewed validation in its later increment.
+The resolver uses `/usr/bin/git rev-parse` with argument vectors, neutralized inherited Git redirection, bounded output, and repeated snapshots. Each direct Git child has a two-second execution limit and SIGKILL timeout/overflow policy; cleanup requires observed terminal state. Missing Git, unsupported paths, bare repositories, unstable filesystem mappings, and unverified subprocess cleanup fail closed. These observations are not a filesystem lock against hostile same-user mutation. Lifecycle startup renews checkout validation before spawn and readiness.
 
 Only the qualified Handler creates leases. Reservation, unattempted cancellation, and shutdown share one mutation queue. Generation and readiness checks run inside it; pending shutdown prevents new reservations, and duplicate shutdown requests retain their existing coalescing behavior. Internal retries carry immutable agent, lease, attempt, Handler-generation, and checkout identities. A released attempt can never be revived; a new reservation needs fresh IDs.
 

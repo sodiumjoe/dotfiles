@@ -2,16 +2,18 @@ import { assertGitChildrenClosed, checkoutIdFor } from "../src/checkout/identity
 import { PassThrough } from "node:stream"
 import { EventEmitter } from "node:events"
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process"
-import { mkdir, open, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, open, rename, rm, writeFile, readFile, readdir } from "node:fs/promises"
+import assert from "node:assert/strict"
+import { createConnection } from "node:net"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
 import { AgentError } from "../src/agent/types.js"
-import { privateRoot } from "./control-support.js"
+import { privateRoot, controlFixture, until, fileExists, failFixtureBatch } from "./control-support.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import type { AdmissionContext } from "../src/checkout/admission.js"
-import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
+import { readHandlerRecord, readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord, ProcessIdentity } from "../src/platform/types.js"
 import { createAgentService, type AgentService } from "../src/agent/service.js"
 import { createAgentStore } from "../src/agent/store.js"
@@ -20,12 +22,119 @@ import { observeConfig } from "../src/catalog/config.js"
 import { isFresh, type CatalogSnapshot, type ProviderProfile } from "../src/catalog/types.js"
 import type { CatalogService } from "../src/catalog/service.js"
 import { observeLaunchContract } from "../src/agent/contracts.js"
-import { admissionFixture } from "./checkout-support.js"
+import { admissionFixture, gitFixture } from "./checkout-support.js"
+import { inventoryAdmissions } from "../src/checkout/records.js"
+import { inventoryLaunches } from "../src/handler/inventory.js"
+import { AGENT_PROTOCOL, exchangeAgent, type AgentRequest } from "../src/agent/protocol.js"
+import { PROTOCOL } from "../src/control/protocol.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
 import type { TestContext } from "node:test"
 import { createAcpConnection } from "../src/agent/acp.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
-import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence } from "../src/agent/types.js"
+import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
+
+export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean }
+
+export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}) {
+  const git = await gitFixture(t), f = await controlFixture(t, {}, git, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)))
+  const owned = new Map<string, LaunchRecord>(), seen = new Set<string>(), requests: Promise<unknown>[] = []
+  const inventory = async () => ({ ...await createAgentStore(f.paths.persistentRoot).inventory(), launches: await inventoryLaunches(join(f.paths.persistentRoot, "launches")) })
+  async function trackProviders(): Promise<void> {
+    for (const name of (await readdir(f.root)).filter(name => /^spawn-.*\.json$/.test(name))) {
+      const hint = JSON.parse(await readFile(join(f.root, name), "utf8")) as { pid: number; agentId: string; attempt: string }
+      if (seen.has(hint.attempt)) continue
+      assert.ok(Number.isSafeInteger(hint.pid) && hint.pid > 1)
+      const agent = await createAgentStore(f.paths.persistentRoot).readAgent(hint.agentId)
+      assert.ok(agent); assert.equal(agent.spec.launchAttemptId, hint.attempt)
+      const identity = await f.observe(hint.pid)
+      if (identity === null) {
+        for (let n = 0; n < 2; n++) { assert.equal(await f.observe(hint.pid), null); assert.deepEqual(await f.adapter.readGroup(hint.pid), []) }
+      } else {
+        assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), `agy-provider:${hint.attempt}`)
+        assert.equal(identity.bootId, await f.adapter.bootId())
+        assert.equal(identity.pid, identity.processGroupId); assert.equal(identity.pid, identity.sessionId)
+        assert.equal(identity.uid, process.getuid!()); assert.equal(identity.gid, process.getgid!())
+        const members = await f.adapter.readGroup(hint.pid)
+        assert.deepEqual(await f.adapter.readGroup(hint.pid), members); assert.deepEqual(members, [identity])
+        const record: LaunchRecord = { version: 1, checkoutId: agent.spec.checkout.checkoutId, agentId: hint.agentId, leaseId: agent.spec.leaseId, handlerGeneration: agent.spec.handlerGeneration, launchAttemptId: hint.attempt, launchBootId: identity.bootId, launchAttempted: true, provider: { kind: "process-group", group: { leader: identity, observed: members } }, phase: "active", reason: null }
+        await writeLaunchRecord(join(f.root, `owned-${hint.attempt}.json`), record)
+        owned.set(hint.attempt, record)
+      }
+      seen.add(hint.attempt)
+    }
+  }
+  const handler = () => readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  const releaseBarrier = async () => { for (const name of ["release-barrier", "release-session"]) await writeFile(join(f.root, name), "released", { mode: 0o600 }) }
+  async function proveAbsent(identity: ProcessIdentity): Promise<void> {
+    await until(async () => await f.observe(identity.pid) === null ? true : undefined)
+    for (let n = 0; n < 2; n++) { assert.equal(await f.observe(identity.pid), null); assert.deepEqual(await f.adapter.readGroup(identity.pid), []) }
+  }
+  let cleaned: Promise<void> | undefined
+  const cleanupOwned = () => cleaned ??= (async () => {
+    await trackProviders(); await releaseBarrier(); await Promise.allSettled(requests)
+    const current = await handler().catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return null })
+    if (current?.process && await f.observe(current.process.pid) !== null) {
+      try { await f.call({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }) } catch {}
+      await trackProviders()
+      await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process)
+    }
+    await trackProviders()
+    const agents = await inventory(), launches = await inventoryLaunches(join(f.paths.persistentRoot, "launches")), admissions = await inventoryAdmissions(f.paths.persistentRoot), probes = await createCatalogStore(f.paths.persistentRoot).inventory()
+    assert.deepEqual(agents.issues, []); assert.deepEqual(admissions.issues, []); assert.deepEqual(probes.issues, [])
+    assert.deepEqual(probes.launches, [])
+    for (const record of owned.values()) {
+      const path = join(f.root, `${record.launchAttemptId}-supervisor-cleanup.json`)
+      await writeLaunchRecord(path, record)
+      assert.equal((await reconcileRecord(path, f.adapter, record)).record.phase, "cleanup_verified")
+      for (const identity of record.provider!.group.observed) await proveAbsent(identity)
+    }
+    for (const entry of launches) if (entry.record.provider) for (const identity of entry.record.provider.group.observed) await proveAbsent(identity)
+    for (const identity of f.owned) await proveAbsent(identity)
+    assertGitChildrenClosed(); git.verifyCleanup()
+    const evidence = { handlers: f.owned, providers: [...owned.values()], launches, admissions, agents, probes, survivors: [] }
+    await writeFile(join(f.root, "agent-cleanup.json"), JSON.stringify(evidence), { mode: 0o600 })
+    t.diagnostic("agent cleanup verified: " + JSON.stringify(evidence))
+  })().catch(error => { throw failFixtureBatch(new Error(`agent fixture cleanup incomplete; retained ${f.root} and ${git.root}`, { cause: error })) })
+  f.beforeCleanup(cleanupOwned)
+  for (const name of ["home", "profile"]) await mkdir(join(f.root, name), { mode: 0o700 })
+  const executable = join(f.root, "profile/native"), adapterPackageJson = join(f.root, "profile/adapter.json"), configuration = join(f.root, "profile/declared.json")
+  await writeFile(executable, "fixture metadata only", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.0.0" }), { mode: 0o600 }); await writeFile(configuration, "{}", { mode: 0o600 })
+  const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable, adapterPackageJson, sdkPackageJson: null, configurationFiles: [configuration] }
+  await mkdir(join(f.paths.persistentRoot, "catalog"), { mode: 0o700 })
+  await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: [profile] }), { mode: 0o600 })
+  const configure = (settings: AgentHandlerOptions) => writeFile(f.configPath, JSON.stringify({ paths: f.paths, profile, ...settings }), { mode: 0o600 })
+  await configure(options)
+  if (options.pauseAt === "session") await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 })
+  await f.start(15000)
+  async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
+    const current = await handler()
+    const operationPromise = exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, ...operation }, 15000)
+    requests.push(operationPromise)
+    try {
+      const reply = await operationPromise
+      if (!reply.ok) throw new AgentError(reply.error.code)
+      return reply.result
+    } finally { await trackProviders() }
+  }
+  const commandView = (result: Awaited<ReturnType<typeof call>>): CommandView => { assert.equal(result.state, "command"); if (result.state !== "command") throw new Error("wrong reply"); return result }
+  const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection } } }))
+  const command = async (commandId: string, commandGeneration: string) => commandView(await call({ op: "agent_command", commandId, commandGeneration }))
+  const currentAt = async (cwd: string) => { const result = await call({ op: "agent_current", cwd }); assert.equal(result.state, "current"); if (result.state !== "current") throw new Error("wrong reply"); return result }
+  return { paths: f.paths, git, inventory, startAt, currentAt, command, releaseBarrier,
+    start: (selection?: Partial<StartSelection>) => startAt(git.repo, selection),
+    current: () => currentAt(git.repo),
+    async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
+    stop: async (target: AgentTuple, commandId = randomUUID()) => commandView(await call({ op: "agent_stop", input: { ...target, commandId } })),
+    retry: async (value: AgentCommand) => commandView(await call({ op: "agent_start", input: value.input as StartInput })),
+    waitCompleted: (value: CommandView) => until(async () => { const result = await command(value.command.commandId, value.command.handlerGeneration); return result.command.state !== "pending" ? result : undefined }, 35000),
+    providerCount: () => seen.size,
+    async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); assertGitChildrenClosed(); await trackProviders() },
+    async crashHandler() { await trackProviders(); const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process) },
+    async restart() { await configure({}); await releaseBarrier(); await f.start(15000) },
+    async killProvider(target: AgentTuple) { await trackProviders(); const record = [...owned.values()].find(record => record.agentId === target.agentId && record.handlerGeneration === target.handlerGeneration); assert.ok(record?.provider); await f.signal(record.provider.group.leader, "SIGKILL"); await proveAbsent(record.provider.group.leader) },
+    verifyZeroSurvivors: cleanupOwned,
+  }
+}
 
 export const agentId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 
