@@ -1,16 +1,27 @@
-import { checkoutIdFor } from "../src/checkout/identity.js"
+import { assertGitChildrenClosed, checkoutIdFor } from "../src/checkout/identity.js"
 import { PassThrough } from "node:stream"
 import { EventEmitter } from "node:events"
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process"
-import { mkdir } from "node:fs/promises"
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { fileURLToPath } from "node:url"
 import { join } from "node:path"
-import { createAgentProcess } from "../src/agent/process.js"
+import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
 import { AgentError } from "../src/agent/types.js"
 import { privateRoot } from "./control-support.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import type { AdmissionContext } from "../src/checkout/admission.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord, ProcessIdentity } from "../src/platform/types.js"
+import { createAgentService, type AgentService } from "../src/agent/service.js"
+import { createAgentStore } from "../src/agent/store.js"
+import { createCatalogStore } from "../src/catalog/store.js"
+import { observeConfig } from "../src/catalog/config.js"
+import { isFresh, type CatalogSnapshot, type ProviderProfile } from "../src/catalog/types.js"
+import type { CatalogService } from "../src/catalog/service.js"
+import { observeLaunchContract } from "../src/agent/contracts.js"
+import { admissionFixture } from "./checkout-support.js"
+import { reconcileRecord } from "../src/platform/reconcile.js"
 import type { TestContext } from "node:test"
 import { createAcpConnection } from "../src/agent/acp.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
@@ -156,4 +167,123 @@ export function scriptedAcp(t: TestContext, scenario = "exact") {
   })
   t.after(() => { connection.close(); readable.destroy(); writable.destroy() })
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
+}
+
+export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready" } = {}) {
+  const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
+  childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
+  const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), publications: string[] = []
+  const requests: Promise<unknown>[] = [], owners: OwnedAgentProcess[] = []
+  const track = (service: AgentService): AgentService => {
+    const start = service.start.bind(service), stop = service.stop.bind(service)
+    service.start = request => { const operation = start(request); requests.push(operation); return operation }
+    service.stop = request => { const operation = stop(request); requests.push(operation); return operation }
+    return service
+  }
+  const directory = join(root, "catalog"), config = join(root, "declared.json"), executable = join(root, "native"), adapterPackageJson = join(root, "adapter.json")
+  await mkdir(directory, { mode: 0o700 })
+  await writeFile(config, "{}", { mode: 0o600 }); await writeFile(executable, "fixture", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.0.0" }), { mode: 0o600 })
+  const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable, adapterPackageJson, sdkPackageJson: null, configurationFiles: [config] }
+  await writeFile(join(directory, "providers.json"), JSON.stringify({ version: 1, providers: [profile] }), { mode: 0o600 })
+  const configuration = await observeConfig(profile), catalogStore = createCatalogStore(root)
+  let snapshot: CatalogSnapshot = { version: 1, hostId: f.context.paths.hostKey, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, createdAt: Date.now(), providers: [{ ...sampleSpec().catalogEvidence, fingerprint: configuration.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: f.context.state.handlerGeneration }] }
+  const saveCatalog = async () => { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) }
+  await saveCatalog()
+  const contract = { ...sampleContract(), entrypoint: fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url)), environment: { HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, FIXTURE_ROOT: root } }
+  contract.fingerprint = await observeLaunchContract(contract)
+  let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0
+  const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {
+    const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
+    handle.sync = async () => {
+      if (holdReady && writingReady && path === join(root, "agents/records")) { readyCommitEntered.resolve(); await readyCommitReleased.promise }
+      if (failReceipt && writingReceipt && path === join(root, "agents/commands")) throw new Error("receipt directory fsync")
+      if (failReady && writingReady && path === join(root, "agents/records")) { readyFailures++; throw new Error("ready directory fsync") }
+      if (failTerminal && writingTerminal && path === join(root, "agents/records")) { terminalFailures++; throw new Error("terminal directory fsync") }
+      await sync()
+    }
+    return handle
+  } })
+  const store = { ...base, async writeAgent(value: AgentRecord, expected: AgentRecord | null) {
+    publications.push("agent:" + value.phase)
+    if (failInitialAgent && expected === null) throw new Error("initial agent publication")
+    writingReady = value.phase === "ready"
+    writingTerminal = value.phase === "stopped"
+    try { await base.writeAgent(value, expected) } finally { writingReady = false; writingTerminal = false }
+  }, async writeCommand(value: AgentCommand, expected: AgentCommand | null) {
+    publications.push(`${value.op}:${value.state}`); writingReceipt = value.state === "completed"
+    try { await base.writeCommand(value, expected) } finally { writingReceipt = false }
+  } }
+  const unsupported = async (): Promise<never> => { throw new Error("unexpected catalog operation") }
+  const catalog: CatalogService = { initialize: async () => undefined, startScheduling() {}, list: unsupported, refresh: async () => { refreshes++; return unsupported() }, freezeAndDrain: async () => undefined, resume() {}, verifyDischarged: async () => undefined, close() {}, async launchEvidence(id) {
+    catalogReads++
+    return f.context.mutations.queue.run(async () => {
+      const provider = snapshot.providers.find(p => p.providerId === id)
+      if (!provider || !isFresh(provider.verifiedAt, Date.now()) || provider.verifiedHandlerGeneration !== f.context.state.handlerGeneration || provider.error || (await observeConfig(profile)).fingerprint !== configuration.fingerprint) throw new AgentError("MODEL_UNAVAILABLE")
+      return structuredClone({ snapshotId: snapshot.snapshotId, provider, profile, configuration })
+    })
+  } }
+  const processes = new Map<number, { identity: ProcessIdentity; child: ChildProcess }>(), peers = new Map<string, ReturnType<typeof scriptedAcp>>()
+  f.context.adapter = { platform: "linux", bootId: async () => "boot-a", readProcess: async pid => processes.get(pid)?.identity ?? null, readGroup: async group => [...processes.values()].map(v => v.identity).filter(v => v.processGroupId === group), async signalGroup(group, signal) {
+    for (const [pid, value] of processes) if (value.identity.processGroupId === group) { processes.delete(pid); value.child.emit("exit", 0, signal); value.child.emit("close", 0, signal) }
+  } }
+  const pause = async (at: typeof options.pause, signal?: AbortSignal) => {
+    if (options.pause !== at) return
+    entered.resolve()
+    if (!signal) { await released.promise; return }
+    if (signal.aborted) return
+    let aborted!: () => void
+    const cancelled = new Promise<void>(resolve => { aborted = resolve; signal.addEventListener("abort", aborted, { once: true }) })
+    try { await Promise.race([released.promise, cancelled]) } finally { signal.removeEventListener("abort", aborted) }
+  }
+  const processFactory: typeof createAgentProcess = input => {
+    const peer = scriptedAcp(t); peer.connection.close(); peers.set(input.spec.agentId, peer)
+    const owner = createAgentProcess(input, { spawn: (() => {
+      const pid = 20000 + ++spawnCount, child = new EventEmitter() as ChildProcess
+      Object.assign(child, { pid, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null })
+      processes.set(pid, { child, identity: { pid, birth: `100:agy-provider:${input.spec.launchAttemptId}`, bootId: "boot-a", parentPid: process.pid, processGroupId: pid, sessionId: pid, uid: process.getuid!(), gid: process.getgid!() } })
+      return child
+    }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
+      await writeLaunchRecord(path, record)
+      if (record.launchAttempted && record.provider === null) await pause("attempted")
+    } } })
+    owners.push(owner)
+    return { ...owner, async initialize(signal) { await pause("spawn", signal); const session = await owner.initialize(signal); await pause("ready", signal); return session } }
+  }
+  const composition = { context: f.context, admission: { ...f.controller, async reserve(request: Parameters<typeof f.controller.reserve>[0]) { await pause("reservation"); publications.push("reservation"); return f.controller.reserve(request) } }, catalog, contracts: options.contract === false ? [] : [contract], store, processFactory }
+  let service = track(createAgentService(composition))
+  t.after(async () => {
+    released.resolve(); readyCommitReleased.resolve()
+    await Promise.allSettled(requests)
+    await service.freezeAndDrain(true).catch(() => undefined)
+    service.close()
+    await Promise.allSettled(owners.map(owner => owner.cleanup()))
+    await f.context.mutations.queue.run(async () => undefined)
+    assertGitChildrenClosed()
+    for (const finish of teardown) await finish()
+  })
+  await service.initialize()
+  const input = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: sampleSpec().selection }
+  return { ...f, service, input, store, catalogStore, contract, profile, configuration, config, publications, entered: entered.promise, release: released.resolve, spawns: () => spawnCount, refreshes: () => refreshes, catalogReads: () => catalogReads, readyFailures: () => readyFailures,
+    failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value },
+    failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures,
+    holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
+    fault(agent: string) { peers.get(agent)!.triggerDrift() },
+    cleanupOwned: () => Promise.all(owners.map(owner => owner.cleanup())),
+    async changeCatalog(kind: "stale" | "rollback" | "missing" | "refresh") {
+      snapshot = structuredClone(snapshot); snapshot.snapshotId = randomUUID(); snapshot.createdAt = Date.now()
+      if (kind === "stale") snapshot.providers[0]!.verifiedAt = Date.now() - 600000
+      if (kind === "rollback") snapshot.providers[0]!.verifiedAt = Date.now() + 100000
+      if (kind === "missing") snapshot.providers[0]!.models = []
+      await saveCatalog()
+    },
+    async restart() {
+      service.close(); released.resolve()
+      await Promise.allSettled(owners.map(owner => owner.cleanup()))
+      await f.context.mutations.queue.run(async () => {
+        for (const entry of f.context.mutations.accepted) entry.record = (await reconcileRecord(entry.path, f.context.adapter, entry.record)).record
+      })
+      f.context.state.handlerGeneration = randomUUID()
+      service = track(createAgentService({ ...composition, store: createAgentStore(root) })); await service.initialize(); return service
+    },
+  }
 }

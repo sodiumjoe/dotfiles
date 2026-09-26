@@ -90,6 +90,29 @@ test("freshness respects expiry, backwards time, and generation provenance", asy
   assert.equal((await next.list()).providers[0]!.freshness, "stale")
 })
 
+test("launch evidence never refreshes and requires fresh accepted configuration provenance", async t => {
+  const f = await fixture(t), command = randomUUID()
+  await f.service.initialize()
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  assert.equal(f.started.length, 0)
+  await f.service.refresh(command, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  const completed = await f.finish(command)
+  const evidence = await f.service.launchEvidence("codex-acp")
+  assert.equal(evidence.snapshotId, completed.snapshot!.snapshotId)
+  assert.equal(evidence.provider.verifiedHandlerGeneration, f.generation)
+  evidence.provider.models.length = 0
+  assert.equal((await f.service.launchEvidence("codex-acp")).provider.models.length, 1)
+  f.advance(600000)
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  f.setTime(999999)
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  f.setTime(1000000)
+  f.evidence.get("codex-acp")!.fingerprint = "e".repeat(64)
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  assert.equal(f.started.length, 2)
+})
+
 test("partial refresh across clock rollback completes without rewriting historical verification time", async t => {
   const f = await fixture(t), first = randomUUID(), second = randomUUID()
   await f.service.initialize(); await f.service.refresh(first, f.generation)

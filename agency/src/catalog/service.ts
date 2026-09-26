@@ -12,7 +12,8 @@ export type RefreshView = Pick<RefreshCommand, "commandId" | "handlerGeneration"
 export type ProviderView = ProviderSnapshot & { state: "unconfigured" | "ready" | "unavailable" | "blocked"; freshness: "fresh" | "stale" | "unverified" }
 export type CatalogView = { state: "catalog"; hostId: string; handlerGeneration: string; observedAt: number; launchAuthorized: false; providers: ProviderView[]; refresh: RefreshView | null; discovery: { state: "idle" | "refreshing" | "blocked"; error: CatalogFailure | null } }
 export type RefreshResult = { state: "refresh"; command: RefreshView; snapshot: CatalogSnapshot | null }
-export type CatalogService = { initialize(): Promise<void>; startScheduling(): void; list(): Promise<CatalogView>; refresh(commandId: string, generation: string): Promise<RefreshResult>; freezeAndDrain(): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
+export type LaunchEvidence = { snapshotId: string; provider: ProviderSnapshot; profile: ProviderProfile; configuration: ConfigEvidence }
+export type CatalogService = { initialize(): Promise<void>; startScheduling(): void; list(): Promise<CatalogView>; launchEvidence(providerId: ProviderId): Promise<LaunchEvidence>; refresh(commandId: string, generation: string): Promise<RefreshResult>; freezeAndDrain(): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
 export type CatalogClock = { now(): number; every(ms: number, tick: () => void): () => void }
 type Config = { profiles: ProviderProfile[]; evidence: Map<ProviderId, ConfigEvidence>; errors: Map<ProviderId, CatalogFailure>; fingerprints: RefreshCommand["fingerprints"] }
 type Batch = { id: string; config: Config; requests: ProbeRequest[]; commands: string[]; controller: AbortController; operation: Promise<void> | null; snapshot: CatalogSnapshot | null; finished: boolean; started: boolean; outcomes: Map<ProviderId, ProbeOutcome> }
@@ -200,6 +201,15 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   }
   return {
     initialize, list,
+    launchEvidence(providerId) {
+      return queue.run(async () => {
+        await verify()
+        if (!canStart() || !current) throw new CatalogError("CATALOG_UNAVAILABLE")
+        const observed = await config(), profile = observed.profiles.find(p => p.id === providerId), configuration = observed.evidence.get(providerId), provider = current.providers.find(p => p.providerId === providerId)
+        if (!profile || !configuration || !provider || observed.errors.has(providerId) || provider.error || provider.verifiedHandlerGeneration !== generation || provider.fingerprint !== configuration.fingerprint || !isFresh(provider.verifiedAt, clock.now())) throw new CatalogError("CATALOG_UNAVAILABLE")
+        return structuredClone({ snapshotId: current.snapshotId, provider, profile, configuration })
+      })
+    },
     startScheduling() { if (scheduling || closed) return; scheduling = true; cancelTimer = clock.every(30000, () => { void automatic() }); void automatic() },
     async refresh(commandId, expectedGeneration) { id(commandId); if (expectedGeneration !== generation) throw new CatalogError("STALE_HANDLER"); return queue.run(() => accept(commandId)) },
     async freezeAndDrain() {
