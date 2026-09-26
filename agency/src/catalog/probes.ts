@@ -93,7 +93,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     if (!initialized || blocked || running || m.handlerGeneration !== generation || m.hostId !== paths.hostKey) throw new CatalogError("CATALOG_UNAVAILABLE")
     running = true
     let record: LaunchRecord = { version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, leaseId: m.leaseId, agentId: m.agentId, handlerGeneration: generation, launchAttemptId: m.attemptId, launchBootId: await adapter.bootId(), launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
-    let result: ProbeResult | null = null, error: CatalogFailure | null = null, child: ChildProcess | undefined, registered = false, messages = 0, candidates = 0, finished = false
+    let result: ProbeResult | null = null, error: CatalogFailure | null = null, child: ChildProcess | undefined, registered = false, messages = 0, candidates = 0, finished = false, spawnInvoked = false
     let finish!: () => void
     const completed = new Promise<void>(resolve => { finish = () => { finished = true; resolve() } })
     const fail = (cause: unknown): void => { error ??= failure(cause instanceof CatalogError ? cause : new CatalogError("PROBE_FAILED")); finish() }
@@ -119,6 +119,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         record = { ...record, launchAttempted: true }
         await update(path, record)
         if (!options.canStart() || signal.aborted || finished) throw new CatalogError("INCOMPLETE")
+        spawnInvoked = true
         child = (deps.spawn ?? spawn)(process.execPath, [options.workerFile ?? fileURLToPath(new URL("./worker.js", import.meta.url))], { argv0: agencyLaunchMarker("provider", m.attemptId), detached: true, shell: false, cwd: m.workPath, env: cleanProbeEnvironment(deps.env ?? process.env), stdio: ["ignore", "pipe", "pipe", "ipc"] })
         const facts = { child, exit: false, close: false }
         terminal.set(m.attemptId, facts)
@@ -183,7 +184,11 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     try {
       await queue.run(async () => {
         await verify()
-        const entry = accepted.find(e => e.path === path)
+        let entry = accepted.find(e => e.path === path)
+        if (entry && !spawnInvoked && entry.record.launchAttempted && entry.record.provider === null && entry.record.phase === "launch_pending") {
+          await update(path, { ...entry.record, launchAttempted: false })
+          entry = accepted.find(e => e.path === path)
+        }
         if (entry) record = await discharge(entry)
         else if (child !== undefined || record.launchAttempted) unavailable()
       })

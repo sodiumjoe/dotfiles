@@ -38,6 +38,7 @@ export function receiveFrame(socket: Socket, timeoutMs = 5000): Promise<unknown>
       chunks.push(chunk)
     }
     const end = (): void => {
+      if (size === 0) { finish(new ControlError("UNAVAILABLE", "socket closed without a frame")); return }
       try {
         const bytes = Buffer.concat(chunks, size)
         if (lines !== 1 || bytes.at(-1) !== 10) throw new Error("missing final LF")

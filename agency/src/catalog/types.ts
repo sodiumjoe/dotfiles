@@ -116,7 +116,7 @@ export function parseSnapshot(input: unknown): CatalogSnapshot {
   keys(v, ["version", "hostId", "snapshotId", "handlerGeneration", "createdAt", "providers"])
   if (v.version !== 1 || !Array.isArray(v.providers) || v.providers.length > 2) invalid()
   const providers = v.providers.map(parseProviderSnapshot)
-  if (new Set(providers.map(p => p.providerId)).size !== providers.length || providers.some(p => p.verifiedAt !== null && p.verifiedAt > Number(v.createdAt))) invalid()
+  if (new Set(providers.map(p => p.providerId)).size !== providers.length) invalid()
   return { version: 1, hostId: hash(v.hostId), snapshotId: id(v.snapshotId), handlerGeneration: id(v.handlerGeneration), createdAt: timestamp(v.createdAt), providers: providers.sort((a, b) => a.providerId < b.providerId ? -1 : 1) }
 }
 export function parseCommand(input: unknown): RefreshCommand {

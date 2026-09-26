@@ -122,11 +122,11 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
   const evidence = await observeConfig(f.profile), queue = new MutationQueue()
   const request: ProbeRequest = { profile: f.profile, evidence, meta: { version: 1, hostId: "a".repeat(64), handlerGeneration: generation, commandId, providerId: f.profile.id, attemptId, agentId: randomUUID(), leaseId: randomUUID(), fingerprint: evidence.fingerprint, workPath: join(f.root, "catalog/work", attemptId) } }
   await store.writeCommand({ version: 1, commandId, hostId: request.meta.hostId, handlerGeneration: generation, batchId, fingerprints: [{ providerId: f.profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: f.profile.id, attemptId }], state: "pending", snapshotId: null }, null)
-  const path = join(f.root, "catalog/probe-launches", attemptId + ".json"), workerObserved = gate(), workerGate = gate(), nativeRegistered = gate(), spawnObserved = gate(), nativeGate = gate()
+  const path = join(f.root, "catalog/probe-launches", attemptId + ".json"), workerObserved = gate(), workerGate = gate(), nativeRegistered = gate(), spawnObserved = gate(), nativeGate = gate(), attemptedPublication = gate(), attemptedGate = gate()
   const child = new ChildProcess(), processes = new Map<number, ProcessIdentity>(), signals: string[] = []
   const stdout = new PassThrough(), stderr = new PassThrough()
   Object.assign(child, { pid: 10001, stdout, stderr, connected: true })
-  let spawned = false, native = false, first = true, durableAtSpawn = false
+  let spawned = false, native = false, first = true, durableAtSpawn = false, attemptedPublished = false
   const identity: ProcessIdentity = { bootId: "boot", pid: 10001, parentPid: process.pid, processGroupId: 10001, sessionId: 10001, uid: process.getuid!(), gid: process.getgid!(), birth: `100:agy-provider:${attemptId}` }
   const result = { models: [], providerVersion: null, providerVersionSource: "unknown" }
   child.send = ((message: { type: string }, callback?: (error: Error | null) => void) => {
@@ -172,13 +172,18 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
     timeoutMs: scenario === "timeout" ? 50 : 1000, closeMs: 10,
     publish: async (path, record) => {
       const stage = record.provider === null ? record.launchAttempted ? "attempted" : "unattempted" : record.provider.group.observed.length === 1 ? "worker" : "native"
+      if (stage === "unattempted" && attemptedPublished && scenario === "restore-failure") throw new Error("restoration durability")
+      if (stage === "attempted" && scenario === "pause-before-attempted") { attemptedPublication.resolve(); await attemptedGate.promise }
       if (scenario === `before-${stage}`) throw new Error("publication")
       await writeLaunchRecord(path, record)
+      if (stage === "attempted") attemptedPublished = true
+      if (stage === "attempted" && ["pause-after-attempted", "restore-failure"].includes(scenario)) { attemptedPublication.resolve(); await attemptedGate.promise }
       if (scenario === `after-${stage}`) throw new Error("publication")
     },
     spawn: ((file, args, options) => {
       assertSpawn(file, args, options)
       spawned = true
+      if (scenario === "spawn-throws") throw new Error("ambiguous synchronous spawn failure")
       processes.set(10001, identity)
       if (scenario === "worker-error") queueMicrotask(() => child.emit("error", new Error("fixture spawn")))
       void readLaunchRecordForReconciliation(path).then(record => { durableAtSpawn = record.launchAttempted; spawnObserved.resolve() })
@@ -188,5 +193,5 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
   function assertSpawn(file: unknown, args: unknown, options: unknown) {
     if (file !== process.execPath || !Array.isArray(args) || typeof options !== "object" || options === null || !(options as { detached?: boolean }).detached) throw new Error("invalid worker spawn")
   }
-  return { ...f, store, runtime, request, path, signals, child, processes, workerObserved, spawnObserved, nativeRegistered, nativeSpawned: () => native, durableAtSpawn: () => durableAtSpawn, releaseWorkerIdentity: () => workerGate.resolve(), releaseResult: () => nativeGate.resolve() }
+  return { ...f, store, runtime, request, path, signals, child, processes, workerObserved, spawnObserved, nativeRegistered, attemptedPublication, releaseAttempted: () => attemptedGate.resolve(), spawnInvoked: () => spawned, nativeSpawned: () => native, durableAtSpawn: () => durableAtSpawn, releaseWorkerIdentity: () => workerGate.resolve(), releaseResult: () => nativeGate.resolve() }
 }

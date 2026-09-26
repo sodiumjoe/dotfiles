@@ -90,6 +90,26 @@ test("freshness respects expiry, backwards time, and generation provenance", asy
   assert.equal((await next.list()).providers[0]!.freshness, "stale")
 })
 
+test("partial refresh across clock rollback completes without rewriting historical verification time", async t => {
+  const f = await fixture(t), first = randomUUID(), second = randomUUID()
+  await f.service.initialize(); await f.service.refresh(first, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(first)
+  f.setTime(999999)
+  await f.service.refresh(second, f.generation)
+  await f.completeProbe("claude-agent-acp", null, "PROBE_FAILED"); await f.completeProbe("codex-acp")
+  const complete = await f.finish(second)
+  assert.equal(complete.command.state, "completed")
+  assert.equal(complete.snapshot!.createdAt, 999999)
+  assert.equal(complete.snapshot!.providers[0]!.verifiedAt, 1000000)
+  assert.deepEqual((await f.service.list()).providers.map(p => p.freshness), ["stale", "fresh"])
+  assert.deepEqual(await f.service.refresh(second, f.generation), complete)
+  await f.service.freezeAndDrain(); await f.service.verifyDischarged(); f.service.resume()
+  const third = randomUUID()
+  await f.service.refresh(third, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  assert.equal((await f.finish(third)).command.state, "completed")
+})
+
 test("verified query failure retains stale data while the other provider succeeds", async t => {
   const f = await fixture(t), first = randomUUID()
   await f.service.initialize(); await f.service.refresh(first, f.generation)

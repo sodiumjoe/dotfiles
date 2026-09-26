@@ -6,6 +6,11 @@ import { ControlError } from "../src/control/protocol.js"
 import { CATALOG_PROTOCOL, type CatalogReply, type CatalogRequest } from "../src/catalog/protocol.js"
 import { unavailableControlDependencies } from "./control-support.js"
 import type { HandlerInspection } from "../src/platform/types.js"
+import { createConnection, createServer } from "node:net"
+import { join } from "node:path"
+import { privateRoot } from "./control-support.js"
+import { exchangeCatalog } from "../src/catalog/protocol.js"
+import { serveControl } from "../src/control/wire.js"
 
 function fixture() {
   const generation = randomUUID(), hostId = "a".repeat(64), attempt = randomUUID(), calls: CatalogRequest[] = [], out: string[] = [], err: string[] = []
@@ -59,6 +64,35 @@ test("old or unavailable Handler support fails boundedly without shutdown or rep
   const stale = fixture()
   assert.equal(await runControl(["model", "refresh", "--command-id", randomUUID(), "--handler-generation", randomUUID(), "--json"], stale.deps), 69)
   assert.equal(stale.calls.length, 0)
+})
+
+for (const command of ["list", "refresh"]) test(`model ${command} handles the real pre-catalog socket close as unavailable support`, async t => {
+  const f = fixture(), root = await privateRoot(t), path = join(root, "legacy.sock")
+  let starts = 0, dispatched = 0
+  const start = f.deps.start
+  f.deps.start = async env => { starts++; return start(env) }
+  const server = createServer({ allowHalfOpen: true }, socket => { void serveControl(socket, async () => { dispatched++; throw new Error("unexpected legacy dispatch") }) })
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
+  await new Promise<void>(resolve => server.listen(path, resolve))
+  f.deps.callCatalog = async (_env, request, timeoutMs) => { f.calls.push(request); return exchangeCatalog(createConnection(path), request, timeoutMs) }
+  assert.equal(await runControl(["model", command, "--json"], f.deps), 69)
+  assert.equal(f.output().error.code, "UNAVAILABLE")
+  assert.match(f.output().error.message, /catalog.*restart/i)
+  assert.doesNotMatch(f.output().error.message, /is an old Handler/)
+  assert.equal(starts, 1)
+  assert.equal(dispatched, 0)
+  assert.ok(f.deps.now() <= 60000)
+  if (command === "refresh") assert.equal(new Set(f.calls.map(r => r.op === "model_refresh" && r.commandId)).size, 1)
+})
+
+test("nonempty malformed catalog replies retain invalid-protocol classification", async t => {
+  const f = fixture(), root = await privateRoot(t), path = join(root, "malformed.sock")
+  const server = createServer({ allowHalfOpen: true }, socket => { socket.resume(); socket.on("end", () => socket.end("malformed\n")) })
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
+  await new Promise<void>(resolve => server.listen(path, resolve))
+  f.deps.callCatalog = async (_env, request) => exchangeCatalog(createConnection(path), request)
+  assert.equal(await runControl(["model", "list", "--json"], f.deps), 65)
+  assert.equal(f.output().error.code, "INVALID_PROTOCOL")
 })
 
 test("refresh with no catalog reply reports unavailable instead of claiming an old version", async () => {

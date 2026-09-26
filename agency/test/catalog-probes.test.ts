@@ -19,6 +19,45 @@ import type { LaunchRecord } from "../src/platform/types.js"
 
 let catalogFixtureFailure: Error | undefined
 
+for (const scenario of ["pause-before-attempted", "pause-after-attempted"]) test(`cancellation during ${scenario} discharges a provably unstarted probe`, async t => {
+  const f = await syntheticProbeFixture(t, scenario), controller = new AbortController()
+  await f.runtime.recover()
+  f.releaseWorkerIdentity(); f.releaseResult()
+  const operation = f.runtime.run(f.request, controller.signal)
+  await f.attemptedPublication.promise
+  controller.abort(); f.releaseAttempted()
+  const outcome = await operation
+  assert.equal(f.spawnInvoked(), false)
+  assert.equal(outcome.record.launchAttempted, false)
+  assert.equal(outcome.record.phase, "cleanup_verified")
+  assert.equal(outcome.error!.code, "INCOMPLETE")
+  assert.deepEqual(f.signals, [])
+  await f.runtime.verifyDischarged()
+})
+
+test("uncertain pre-spawn restoration never authorizes a successful discharge", async t => {
+  const f = await syntheticProbeFixture(t, "restore-failure"), controller = new AbortController()
+  await f.runtime.recover()
+  const operation = f.runtime.run(f.request, controller.signal)
+  await f.attemptedPublication.promise
+  controller.abort(); f.releaseAttempted()
+  const outcome = await operation
+  assert.equal(f.spawnInvoked(), false)
+  assert.equal(outcome.error!.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal((await readLaunchRecordForReconciliation(f.path)).launchAttempted, true)
+  await assert.rejects(f.runtime.verifyDischarged())
+})
+
+test("entering spawn preserves attempted uncertainty even when invocation throws", async t => {
+  const f = await syntheticProbeFixture(t, "spawn-throws")
+  await f.runtime.recover()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(f.spawnInvoked(), true)
+  assert.equal(outcome.record.launchAttempted, true)
+  assert.equal((await readLaunchRecordForReconciliation(f.path)).phase, "quarantined")
+  await assert.rejects(f.runtime.verifyDischarged())
+})
+
 test("probe worker and native gates follow durable independent identity registration", async t => {
   const f = await syntheticProbeFixture(t)
   await f.runtime.recover()
