@@ -1,4 +1,7 @@
 import { checkoutIdFor } from "../src/checkout/identity.js"
+import { PassThrough } from "node:stream"
+import type { TestContext } from "node:test"
+import { createAcpConnection } from "../src/agent/acp.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence } from "../src/agent/types.js"
 
@@ -28,4 +31,56 @@ export function sampleSession(): SessionEvidence { return { sessionId: "fixture-
 export function sampleCommand(): AgentCommand {
   const spec = sampleSpec()
   return { version: 1, hostId: spec.hostId, commandId: spec.startCommandId, handlerGeneration: spec.handlerGeneration, op: "start", input: { commandId: spec.startCommandId, handlerGeneration: spec.handlerGeneration, cwd: spec.checkout.root.path, selection: spec.selection }, target: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, state: "pending", result: null }
+}
+
+export function scriptedAcp(t: TestContext, scenario = "exact") {
+  const readable = new PassThrough(), writable = new PassThrough(), sent: Array<{ method: string; params: any }> = [], permissionReplies: unknown[] = []
+  const options = [
+    { id: "model", type: "select", name: "Model", currentValue: "model-a", options: [{ value: "model-a", name: "Model α" }] },
+    { id: "reasoning", type: "select", name: "Reasoning", currentValue: "low", options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
+    { id: "mode", type: "select", name: "Mode", currentValue: "plan", options: [{ value: "plan", name: "Plan" }, { value: "review", name: "Review" }] },
+  ]
+  const send = (value: unknown) => {
+    const bytes = Buffer.from(JSON.stringify(value) + "\n")
+    if (scenario === "fragmented") for (const byte of bytes) readable.write(Buffer.from([byte]))
+    else readable.write(bytes)
+  }
+  const connection = createAcpConnection({ readable, writable, limits: sampleSpec().limits })
+  writable.on("data", (bytes: Buffer) => {
+    for (const line of bytes.toString().trim().split("\n")) {
+      const request = JSON.parse(line)
+      if (!request.method) { permissionReplies.push(request); continue }
+      sent.push(request)
+      if (scenario === "hang") continue
+      if (scenario === "utf8") { readable.write(Buffer.from([255, 10])); continue }
+      if (scenario === "oversized") { readable.write(Buffer.alloc(1048577, 32)); continue }
+      if (scenario === "empty-eof") { readable.end(); continue }
+      if (scenario === "incomplete-eof") { readable.end("{\"jsonrpc\":"); continue }
+      if (scenario === "error" || scenario === "auth") { send({ jsonrpc: "2.0", id: request.id, error: { code: scenario === "auth" ? -32000 : -32603, message: "sensitive remote diagnostic" } }); continue }
+      if (scenario === "wrong-id") { send({ jsonrpc: "2.0", id: 999, result: {} }); continue }
+      let result: unknown
+      if (request.method === "initialize") result = { protocolVersion: scenario === "version" ? 2 : 1, agentCapabilities: {} }
+      else if (request.method === "session/new") {
+        result = { sessionId: "fixture-session", configOptions: scenario === "missing" ? [] : scenario === "duplicate-option" ? [options[0], options[0]] : options }
+      } else {
+        if (["permission", "wrong-session", "filesystem", "terminal"].includes(scenario)) {
+          send({ jsonrpc: "2.0", id: "request-1", method: scenario === "filesystem" ? "fs/read_text_file" : scenario === "terminal" ? "terminal/create" : "session/request_permission", params: { sessionId: scenario === "wrong-session" ? "other" : "fixture-session", toolCall: { toolCallId: "tool-1", title: "fixture" }, options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }] } })
+          continue
+        }
+        const option = options.find(option => option.id === request.params.configId)!
+        if (scenario === "late-permission" && option.id === "mode") send({ jsonrpc: "2.0", id: "request-1", method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "tool-1", title: "fixture" }, options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }] } })
+        option.currentValue = scenario === "alias" && option.id === "model" ? "model-b" : request.params.value
+        if (scenario === "clamp" && option.id === "mode") options[1]!.currentValue = "low"
+        result = scenario === "empty-ack" ? {} : { configOptions: options }
+      }
+      if (scenario === "grouped" && typeof result === "object" && result !== null && "configOptions" in result) {
+        result = { ...result, configOptions: (result.configOptions as typeof options).map(option => ({ ...option, options: [{ group: "choices", name: "Choices", options: option.options }] })) }
+      }
+      const reply = { jsonrpc: "2.0", id: request.id, result }
+      send(reply)
+      if (scenario === "duplicate-id") send(reply)
+    }
+  })
+  t.after(() => { connection.close(); readable.destroy(); writable.destroy() })
+  return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
