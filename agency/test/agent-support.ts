@@ -1,5 +1,16 @@
 import { checkoutIdFor } from "../src/checkout/identity.js"
 import { PassThrough } from "node:stream"
+import { EventEmitter } from "node:events"
+import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process"
+import { mkdir } from "node:fs/promises"
+import { join } from "node:path"
+import { createAgentProcess } from "../src/agent/process.js"
+import { AgentError } from "../src/agent/types.js"
+import { privateRoot } from "./control-support.js"
+import { MutationQueue } from "../src/handler/mutations.js"
+import type { AdmissionContext } from "../src/checkout/admission.js"
+import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
+import type { LaunchRecord, ProcessIdentity } from "../src/platform/types.js"
 import type { TestContext } from "node:test"
 import { createAcpConnection } from "../src/agent/acp.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
@@ -31,6 +42,68 @@ export function sampleSession(): SessionEvidence { return { sessionId: "fixture-
 export function sampleCommand(): AgentCommand {
   const spec = sampleSpec()
   return { version: 1, hostId: spec.hostId, commandId: spec.startCommandId, handlerGeneration: spec.handlerGeneration, op: "start", input: { commandId: spec.startCommandId, handlerGeneration: spec.handlerGeneration, cwd: spec.checkout.root.path, selection: spec.selection }, target: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, state: "pending", result: null }
+}
+
+export function agentGate() {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+export async function syntheticAgentProcess(t: TestContext, scenario: string) {
+  const root = await privateRoot(t), spec = sampleSpec(), contract = sampleContract(), beforeSpawn = agentGate(), publication = agentGate()
+  const path = join(root, "launches", spec.launchAttemptId + ".json")
+  await mkdir(join(root, "launches"), { mode: 0o700 })
+  const launch: LaunchRecord = { version: 1, checkoutId: spec.checkout.checkoutId, agentId: spec.agentId, leaseId: spec.leaseId, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, provider: null, phase: "launch_pending", reason: null }
+  await writeLaunchRecord(path, launch)
+  const peer = scriptedAcp(t); peer.connection.close()
+  const child = new EventEmitter() as ChildProcess
+  Object.assign(child, { pid: 12345, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null })
+  let live = false, count = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, earlyWrites = 0, invalidation = "", checks = 0
+  const signals: NodeJS.Signals[] = []
+  let identity: ProcessIdentity = { pid: 12345, bootId: "boot-a", birth: `100:agy-provider:${spec.launchAttemptId}`, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
+  if (scenario === "identity-mismatch") identity.birth = "100:other"
+  if (scenario === "wrong-birth") identity.birth = `invalid:agy-provider:${spec.launchAttemptId}`
+  if (scenario === "wrong-boot") identity.bootId = "other-boot"
+  if (scenario === "wrong-group") identity.processGroupId++
+  if (scenario === "wrong-uid") identity.uid++
+  const context: AdmissionContext = {
+    paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
+    state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
+    mutations: { queue: new MutationQueue(), accepted: [{ path, record: launch }], unavailable: null }, shutdownPending: () => false,
+    adapter: { platform: "linux", bootId: async () => "boot-a", readProcess: async () => live ? structuredClone(identity) : null, readGroup: async () => live ? [structuredClone(identity)] : [], async signalGroup(group, signal) {
+      if (group !== 12345) throw new Error("wrong signal target")
+      signals.push(signal)
+      if (signal === "SIGTERM" && ["ignore-term", "esrch-survivor"].includes(scenario)) {
+        if (scenario === "esrch-survivor") throw Object.assign(new Error("missing"), { code: "ESRCH" })
+        return
+      }
+      live = false
+      queueMicrotask(() => { child.emit("exit", 0, signal); if (scenario !== "close-held") child.emit("close", 0, signal) })
+    } },
+  }
+  peer.writable.on("data", () => { if (!identityPublished) earlyWrites++ })
+  const owner = createAgentProcess({ context, spec, contract: { ...contract, environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "forbidden", NODE_PATH: "forbidden", AGENCY_TEST: "forbidden", GIT_DIR: "forbidden" } }, reservation: { launch, admission: { version: 1, checkout: spec.checkout, handlerGeneration: spec.handlerGeneration, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId } }, async revalidate() {
+    checks++
+    if (invalidation || scenario === "restore-failure" && checks > 1) throw new AgentError("CONFIG_CHANGED")
+  } }, { spawn: ((executable: string, args: string[], options: SpawnOptions) => {
+    count++; observedOptions = options
+    if (executable !== process.execPath || JSON.stringify(args) !== '["/fixture.mjs"]') throw new Error("wrong executable")
+    if (scenario === "spawn-throws") throw new Error("spawn invocation failed")
+    live = scenario !== "child-exit"
+    if (!live) queueMicrotask(() => child.emit("exit", 1, null))
+    return child
+  }) as typeof spawn, transitionIO: {
+    async publish(file, record) {
+      if (scenario === "attempt-write" && record.launchAttempted && !record.provider) throw new Error("attempt write failed")
+      if (scenario === "restore-failure" && !record.launchAttempted) throw new Error("restore failed")
+      await writeLaunchRecord(file, record)
+      if (record.provider) identityPublished = true
+      if (scenario === "publication-paused" && record.launchAttempted && !record.provider) { beforeSpawn.resolve(); await publication.promise }
+    },
+    async read(file) { if (scenario === "attempt-readback" && checks === 1) { checks++; throw new Error("readback failed") }; return readLaunchRecordForReconciliation(file) },
+  } })
+  return { owner, spec, signals, beforeSpawn, releasePublication: publication.resolve, spawnCount: () => count, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }
 
 export function scriptedAcp(t: TestContext, scenario = "exact") {
