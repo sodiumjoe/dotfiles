@@ -55,6 +55,8 @@ Agent JSON uses the separate `agency-agent/1` envelope. Start/stop polling is bo
 
 Successful durable ready-record publication linearizes startup success. Explicit stop first persists its exact target and intent, then cancels startup, performs qualified cleanup, publishes terminal state, and completes its receipt. Ordinary shutdown refuses starting, ready, stopping, or unresolved agents before installing shutdown state. `--stop-agents` drains lifecycle operations outside the shared mutation queue. Unverified cleanup returns incomplete and preserves Handler readiness and checkout quarantine.
 
+Fatal Handler closure disposes ACP and local child/pipe references without claiming provider absence or releasing a lease. This permits the failed Handler to exit naturally; a replacement still reconciles the exact retained provider group or quarantines it. Disposal prevents queued or in-progress startup from spawning or publishing readiness after closure.
+
 Records live under `agents/records` and `agents/commands`, with private atomic publication, file/directory fsync, exact readback, immutable identities, and inventory-change detection. Each directory is limited to 4096 entries, including retained history; automatic pruning is absent. A restart interrupts pending commands and starting/ready/stopping records after platform reconciliation. Independently verified cleanup may release the lease while the historical stop remains interrupted. Attempted-but-unattributed launches remain quarantined. Real-provider permission/selection/process compatibility and real Linux Handler composition require separate qualification before production contracts can be registered.
 
 ### Model catalog

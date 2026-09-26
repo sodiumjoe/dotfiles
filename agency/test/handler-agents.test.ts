@@ -31,6 +31,24 @@ test("one fixture provider failure leaves the other worktree agent ready", { tim
   await f.verifyZeroSurvivors()
 })
 
+test("fatal Handler failure exits naturally with a ready provider and restart reconciles without adoption", { timeout: 60000 }, async t => {
+  const f = await agentHandlerFixture(t, { fatalClose: true }), ready = await f.waitCompleted(await f.start())
+  assert.equal(ready.command.result!.outcome, "started")
+  await f.failHandler()
+  await f.waitHandlerExit()
+  const retained = await f.inventory()
+  assert.equal(retained.agents[0]!.phase, "ready")
+  assert.equal(retained.launches[0]!.record.phase, "active")
+  await f.restart()
+  const after = await f.list()
+  assert.equal(after.agents[0]!.live, false)
+  assert.equal(after.agents[0]!.record.phase, "interrupted")
+  assert.equal(after.agents[0]!.cleanup, "verified")
+  assert.deepEqual((await f.command(ready.command.commandId, ready.command.handlerGeneration)).command, ready.command)
+  assert.equal(f.providerCount(), 1)
+  await f.verifyZeroSurvivors()
+})
+
 const boundaries = ["intent", "reservation", "attempted", "identity", "session", "ready", "receipt", "stop-intent", "stop-cleanup", "stop-verified", "stop-receipt-before", "stop-receipt-after"] as const
 for (const pauseAt of boundaries) test(`Handler crash preserves historical evidence without adoption: ${pauseAt}`, { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t, { pauseAt })

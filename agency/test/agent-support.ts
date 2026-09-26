@@ -33,7 +33,7 @@ import { createAcpConnection } from "../src/agent/acp.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean }
+export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean; fatalClose?: boolean }
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}) {
   const git = await gitFixture(t), f = await controlFixture(t, {}, git, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)))
@@ -105,7 +105,11 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   const configure = (settings: AgentHandlerOptions) => writeFile(f.configPath, JSON.stringify({ paths: f.paths, profile, ...settings }), { mode: 0o600 })
   await configure(options)
   if (options.pauseAt === "session") await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 })
-  await f.start(15000)
+  const starting = f.start(15000)
+  if (options.fatalClose) {
+    void starting.catch(() => undefined)
+    await until(async () => { try { return (await handler()).phase === "ready" ? true : undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return undefined } }, 10000)
+  } else await starting
   async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
     const current = await handler()
     const operationPromise = exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, ...operation }, 15000)
@@ -130,6 +134,8 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     providerCount: () => seen.size,
     async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); assertGitChildrenClosed(); await trackProviders() },
     async crashHandler() { await trackProviders(); const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process) },
+    async failHandler() { await trackProviders(); await writeFile(join(f.root, "fatal-close"), "fail", { mode: 0o600 }); await until(async () => await fileExists(join(f.root, "failure")) ? true : undefined) },
+    async waitHandlerExit() { const current = await handler(); assert.ok(current.process); await proveAbsent(current.process) },
     async restart() { await configure({}); await releaseBarrier(); await f.start(15000) },
     async killProvider(target: AgentTuple) { await trackProviders(); const record = [...owned.values()].find(record => record.agentId === target.agentId && record.handlerGeneration === target.handlerGeneration); assert.ok(record?.provider); await f.signal(record.provider.group.leader, "SIGKILL"); await proveAbsent(record.provider.group.leader) },
     verifyZeroSurvivors: cleanupOwned,
@@ -178,7 +184,8 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string) {
   await writeLaunchRecord(path, launch)
   const peer = scriptedAcp(t); peer.connection.close()
   const child = new EventEmitter() as ChildProcess
-  Object.assign(child, { pid: 12345, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null })
+  let unrefs = 0
+  Object.assign(child, { pid: 12345, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() { unrefs++ } })
   let live = false, count = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, earlyWrites = 0, invalidation = "", checks = 0
   const signals: NodeJS.Signals[] = []
   let identity: ProcessIdentity = { pid: 12345, bootId: "boot-a", birth: `100:agy-provider:${spec.launchAttemptId}`, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
@@ -202,6 +209,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string) {
       queueMicrotask(() => { child.emit("exit", 0, signal); if (scenario !== "close-held") child.emit("close", 0, signal) })
     } },
   }
+  if (scenario === "queued-preparation") void context.mutations.queue.run(async () => { beforeSpawn.resolve(); await publication.promise })
   peer.writable.on("data", () => { if (!identityPublished) earlyWrites++ })
   const owner = createAgentProcess({ context, spec, contract: { ...contract, environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "forbidden", NODE_PATH: "forbidden", AGENCY_TEST: "forbidden", GIT_DIR: "forbidden" } }, reservation: { launch, admission: { version: 1, checkout: spec.checkout, handlerGeneration: spec.handlerGeneration, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId } }, async revalidate() {
     checks++
@@ -220,10 +228,11 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string) {
       await writeLaunchRecord(file, record)
       if (record.provider) identityPublished = true
       if (scenario === "publication-paused" && record.launchAttempted && !record.provider) { beforeSpawn.resolve(); await publication.promise }
+      if (scenario === "identity-publication-paused" && record.provider) { beforeSpawn.resolve(); await publication.promise }
     },
     async read(file) { if (scenario === "attempt-readback" && checks === 1) { checks++; throw new Error("readback failed") }; return readLaunchRecordForReconciliation(file) },
   } })
-  return { owner, spec, signals, beforeSpawn, releasePublication: publication.resolve, spawnCount: () => count, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
+  return { owner, spec, signals, beforeSpawn, releasePublication: publication.resolve, spawnCount: () => count, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }
 
 export function scriptedAcp(t: TestContext, scenario = "exact") {
@@ -348,7 +357,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     const peer = scriptedAcp(t); peer.connection.close(); peers.set(input.spec.agentId, peer)
     const owner = createAgentProcess(input, { spawn: (() => {
       const pid = 20000 + ++spawnCount, child = new EventEmitter() as ChildProcess
-      Object.assign(child, { pid, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null })
+      Object.assign(child, { pid, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() {} })
       processes.set(pid, { child, identity: { pid, birth: `100:agy-provider:${input.spec.launchAttemptId}`, bootId: "boot-a", parentPid: process.pid, processGroupId: pid, sessionId: pid, uid: process.getuid!(), gid: process.getgid!() } })
       return child
     }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {

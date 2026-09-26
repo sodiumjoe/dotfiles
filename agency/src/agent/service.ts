@@ -328,6 +328,6 @@ export function createAgentService(input: { context: AdmissionContext; admission
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { inventoryEmpty = emptyLifecycle(await store.inventory()); if (!inventoryEmpty) await verify(); ordinary(); if (dirty.size || dirtyAgents.size) throw new AgentError("INCOMPLETE") },
-    close() { closed = true; frozen = true; for (const op of operations.values()) op.controller.abort() },
+    close() { closed = true; frozen = true; for (const op of operations.values()) { op.owner?.dispose(); op.controller.abort() } },
   }
 }

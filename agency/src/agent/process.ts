@@ -12,7 +12,7 @@ import { createAcpConnection, type AcpConnection } from "./acp.js"
 import type { LaunchContract } from "./contracts.js"
 import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type SessionEvidence } from "./types.js"
 
-export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; fault: Promise<AgentFailure> }
+export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 
 export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number } = {}): OwnedAgentProcess {
   const { context, spec, contract } = input, { adapter, mutations } = context
@@ -20,7 +20,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
   let current = structuredClone(input.reservation.launch), spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
   let initialization: Promise<SessionEvidence> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<LaunchRecord> | undefined
-  let terminal = false, closed = false, stopping = false, failure: AgentFailure | undefined
+  let terminal = false, closed = false, stopping = false, disposed = false, failure: AgentFailure | undefined
   let resolveFault!: (value: AgentFailure) => void, resolveTerminal!: () => void, resolveClose!: () => void
   const fault = new Promise<AgentFailure>(resolve => { resolveFault = resolve })
   const terminalEvent = new Promise<void>(resolve => { resolveTerminal = resolve }), closeEvent = new Promise<void>(resolve => { resolveClose = resolve })
@@ -110,6 +110,11 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
   }
   return {
     record: snapshot, fault, cleanup,
+    dispose() {
+      if (disposed) return
+      disposed = true; stopping = true; controller.abort(); connection?.close()
+      child?.stdin?.destroy(); child?.stdout?.destroy(); child?.stderr?.destroy(); child?.unref()
+    },
     initialize(signal) {
       if (initialization) return initialization
       const abort = (): void => { controller.abort(); if (!stopping) fail(new AgentError("STARTUP_FAILED")) }

@@ -97,6 +97,40 @@ test("inherited descriptors are destroyed only after independent process absence
   assert.equal(f.pipesDestroyed(), true)
 })
 
+test("disposal while preparation is queued prevents spawning", async t => {
+  const f = await syntheticAgentProcess(t, "queued-preparation"), initializing = f.owner.initialize(new AbortController().signal)
+  await f.beforeSpawn.promise
+  f.owner.dispose(); f.owner.dispose(); f.releasePublication()
+  await assert.rejects(initializing)
+  assert.equal(f.spawnCount(), 0)
+  assert.equal((await f.record()).launchAttempted, false)
+  assert.deepEqual(f.signals, [])
+})
+
+for (const scenario of ["publication-paused", "identity-publication-paused"] as const) test(`disposal during ${scenario} releases handles without late startup or cleanup claims`, async t => {
+  const f = await syntheticAgentProcess(t, scenario), initializing = f.owner.initialize(new AbortController().signal)
+  await f.beforeSpawn.promise
+  const retained = await f.record()
+  f.owner.dispose(); f.owner.dispose(); f.releasePublication()
+  await assert.rejects(initializing)
+  assert.equal(f.spawnCount(), scenario === "publication-paused" ? 0 : 1)
+  assert.deepEqual(await f.record(), retained)
+  assert.deepEqual(f.signals, [])
+  if (scenario === "identity-publication-paused") { assert.equal(f.pipesDestroyed(), true); assert.equal(f.unrefs(), 1) }
+})
+
+test("disposal after unverified cleanup releases handles without changing quarantine", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  f.replaceIdentity()
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  const retained = await f.record()
+  assert.equal(retained.phase, "quarantined")
+  f.owner.dispose(); f.owner.dispose()
+  assert.equal(f.pipesDestroyed(), true); assert.equal(f.unrefs(), 1)
+  assert.deepEqual(f.signals, []); assert.deepEqual(await f.record(), retained)
+})
+
 test("direct Node fixture stays idle after exact ACP setup and leaves no survivors", async t => {
   assertFixtureBatchHealthy()
   const entrypoint = fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))
