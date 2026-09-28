@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
+import { removeProviderState } from "../src/agent/state.js"
 import { AgentError } from "../src/agent/types.js"
 import { privateRoot, controlFixture, until, fileExists, failFixtureBatch } from "./control-support.js"
 import { MutationQueue } from "../src/handler/mutations.js"
@@ -287,10 +288,11 @@ export function scriptedAcp(t: TestContext, scenario = "exact") {
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready" } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; pauseStateRemoval?: boolean; failStateRemoval?: boolean } = {}) {
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
-  const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), publications: string[] = []
+  const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), publications: string[] = []
+  let stateRemovalCalls = 0
   const requests: Promise<unknown>[] = [], owners: OwnedAgentProcess[] = []
   const track = (service: AgentService): AgentService => {
     const start = service.start.bind(service), stop = service.stop.bind(service)
@@ -355,22 +357,28 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   }
   const processFactory: typeof createAgentProcess = input => {
     const peer = scriptedAcp(t); peer.connection.close(); peers.set(input.spec.agentId, peer)
-    const owner = createAgentProcess(input, { spawn: (() => {
+    const processDependencies = { spawn: (() => {
       const pid = 20000 + ++spawnCount, child = new EventEmitter() as ChildProcess
       Object.assign(child, { pid, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() {} })
       processes.set(pid, { child, identity: { pid, birth: `100:agy-provider:${input.spec.launchAttemptId}`, bootId: "boot-a", parentPid: process.pid, processGroupId: pid, sessionId: pid, uid: process.getuid!(), gid: process.getgid!() } })
       return child
-    }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
+    }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path: string, record: LaunchRecord) {
       await writeLaunchRecord(path, record)
       if (record.launchAttempted && record.provider === null) await pause("attempted")
-    } } })
+    } }, ...((options.pauseStateRemoval || options.failStateRemoval) ? { async removeProviderState(persistentRoot: string, attempt: string) {
+      stateRemovalCalls++
+      if (options.pauseStateRemoval) await stateRemovalReleased.promise
+      if (options.failStateRemoval) throw new Error("state removal failed")
+      await removeProviderState(persistentRoot, attempt)
+    } } : {}) }
+    const owner = createAgentProcess(input, processDependencies)
     owners.push(owner)
     return { ...owner, async initialize(signal) { await pause("spawn", signal); const session = await owner.initialize(signal); await pause("ready", signal); return session } }
   }
   const composition = { context: f.context, admission: { ...f.controller, async reserve(request: Parameters<typeof f.controller.reserve>[0]) { await pause("reservation"); publications.push("reservation"); return f.controller.reserve(request) } }, catalog, contracts: options.contract === false ? [] : [contract], store, processFactory }
   let service = track(createAgentService(composition))
   t.after(async () => {
-    released.resolve(); readyCommitReleased.resolve()
+    released.resolve(); readyCommitReleased.resolve(); stateRemovalReleased.resolve()
     await Promise.allSettled(requests)
     await service.freezeAndDrain(true).catch(() => undefined)
     service.close()
@@ -386,7 +394,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures,
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
     fault(agent: string) { peers.get(agent)!.triggerDrift() },
-    cleanupOwned: () => Promise.all(owners.map(owner => owner.cleanup())),
+    cleanupOwned: () => Promise.all(owners.map(owner => owner.cleanup())), stateRemovalCalls: () => stateRemovalCalls, releaseStateRemoval: stateRemovalReleased.resolve,
     async changeCatalog(kind: "stale" | "rollback" | "missing" | "refresh") {
       snapshot = structuredClone(snapshot); snapshot.snapshotId = randomUUID(); snapshot.createdAt = Date.now()
       if (kind === "stale") snapshot.providers[0]!.verifiedAt = Date.now() - 600000

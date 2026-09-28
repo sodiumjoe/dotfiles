@@ -15,7 +15,7 @@ import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type Sess
 
 export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 
-export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number } = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; removeProviderState?: typeof removeProviderState } = {}): OwnedAgentProcess {
   const { context, spec, contract } = input, { adapter, mutations } = context
   const directory = join(context.paths.persistentRoot, "launches"), path = join(directory, spec.launchAttemptId + ".json")
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
@@ -100,12 +100,17 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
           entry.record = structuredClone(current)
         } finally { await refreshLaunchState(context.state, mutations, directory) }
         if (current.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
+        try {
+          if (child && !terminal && !await waitBounded(terminalEvent, 1000)) throw new AgentError("CLEANUP_UNVERIFIED")
+          await absent()
+          if (child && !closed) await waitBounded(closeEvent, 1000)
+          if (child) { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() }
+          await (dependencies.removeProviderState ?? removeProviderState)(context.paths.persistentRoot, spec.launchAttemptId)
+        } catch {
+          mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`
+          throw new AgentError("CLEANUP_UNVERIFIED")
+        }
       })
-      if (child && !terminal && !await waitBounded(terminalEvent, 1000)) throw new AgentError("CLEANUP_UNVERIFIED")
-      await absent()
-      if (child && !closed) await waitBounded(closeEvent, 1000)
-      if (child) { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() }
-      await removeProviderState(context.paths.persistentRoot, spec.launchAttemptId)
       return structuredClone(current)
     })().catch(() => { throw new AgentError("CLEANUP_UNVERIFIED") })
     return cleaning

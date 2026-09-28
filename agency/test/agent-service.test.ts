@@ -257,8 +257,59 @@ test("failed state removal leaves stop pending and blocks the current Handler", 
   await f.service.stop(stop)
   await until(async () => (await f.service.list()).unavailable?.code === "CLEANUP_UNVERIFIED" ? true : undefined)
   assert.notEqual((await f.service.list()).agents[0]!.cleanup, "verified")
-  assert.equal((await f.service.command(stop.commandId, stop.handlerGeneration)).command.state, "pending")
+  assert.equal((await f.store.readCommand(stop.commandId))!.state, "pending")
   await assert.rejects(f.service.start({ ...f.input, commandId: randomUUID() }), { code: "ADMISSION_UNAVAILABLE" })
+})
+
+test("a concurrent checkout reservation waits for provider-state deletion", async t => {
+  const f = await agentServiceFixture(t, { pauseStateRemoval: true })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const stopped = await f.service.stop({ ...ready.command.target!, commandId: randomUUID() })
+  await until(async () => f.stateRemovalCalls() ? true : undefined)
+  const request = f.request()
+  let settled = false, mutationEntered = false
+  const mutation = f.context.mutations.queue.run(async () => { mutationEntered = true })
+  const reservation = f.controller.reserve(request).then(value => { settled = true; return value }, error => { settled = true; throw error })
+  void reservation.catch(() => undefined)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(mutationEntered, false)
+  assert.equal(settled, false)
+  assert.equal(f.context.mutations.accepted.find(entry => entry.record.launchAttemptId === attempt)?.record.phase, "cleanup_verified")
+  f.releaseStateRemoval()
+  await mutation
+  await completed(f.service, stopped.command)
+  assert.equal((await reservation).launch.launchAttemptId, request.launchAttemptId)
+  assert.equal((await f.controller.cancel(request)).phase, "cleanup_verified")
+})
+
+test("state-deletion failure leaves a queued checkout reservation unavailable", async t => {
+  const f = await agentServiceFixture(t, { pauseStateRemoval: true, failStateRemoval: true })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const stopped = await f.service.stop({ ...ready.command.target!, commandId: randomUUID() })
+  await until(async () => f.stateRemovalCalls() ? true : undefined)
+  const reservation = f.controller.reserve(f.request())
+  f.releaseStateRemoval()
+  await assert.rejects(reservation, { code: "ADMISSION_UNAVAILABLE" })
+  assert.notEqual(f.context.mutations.unavailable, null)
+  assert.equal((await f.store.readCommand(stopped.command.commandId))!.state, "pending")
+})
+
+test("recovery with malformed command evidence retains state and reports cleanup unknown", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const stopped = await f.service.stop({ ...ready.command.target!, commandId: randomUUID() })
+  await completed(f.service, stopped.command)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const retained = await prepareProviderState(f.root, attempt, f.contract.environment)
+  await writeFile(join(f.root, "agents/commands", f.input.commandId + ".json"), "{}", { mode: 0o600 })
+  const next = await f.restart(), listed = await next.list()
+  assert.notEqual(listed.unavailable, null)
+  assert.equal(listed.agents[0]!.cleanup, "unknown")
+  assert.equal((await lstat(retained.root)).isDirectory(), true)
 })
 
 test("restart interrupts a pending stop independently of verified platform cleanup", async t => {
