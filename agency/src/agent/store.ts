@@ -64,7 +64,14 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   async function inventory(): Promise<AgentInventory> {
     const result: AgentInventory = { agents: [], commands: [], issues: [] }, observed = new Map<string, FileEvidence>()
     try {
-      for (const name of await names(directory)) if (name !== "records" && name !== "commands") unavailable()
+      for (const name of await names(directory)) {
+        if (name === "records" || name === "commands") continue
+        if (name !== "provider-state") unavailable()
+        const state = join(directory, name)
+        await assertPrivateDirectory(state)
+        const stat = await lstat(state)
+        if (!stat.isDirectory() || stat.uid !== process.getuid!() || (stat.mode & 0o777) !== 0o700) unavailable()
+      }
       for (const kind of ["records", "commands"] as const) {
         for (const name of await names(join(directory, kind))) {
           const path = join(directory, kind, name)

@@ -20,7 +20,7 @@ import type { AgentInventory, AgentStore } from "./store.js"
 import { AgentError, agentFailure, parseStartInput, parseStopInput, type AgentCommand, type AgentFailure, type AgentList, type AgentRecord, type AgentView, type CommandResult, type CommandView, type CurrentAgent, type StartInput, type StopInput } from "./types.js"
 
 export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgent>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
-type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
 
 export function createAgentService(input: { context: AdmissionContext; admission: AdmissionController; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore; processFactory?: typeof createAgentProcess }): AgentService {
   const { context, store, admission, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
@@ -76,6 +76,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
   }
   async function finishStart(op: Live): Promise<void> {
     if (!op.result) return
+    if (op.owner && op.result.outcome === "failed" && !op.cleanupVerified) return
     const command = commands.get(op.initial.spec.startCommandId)
     if (!command || command.state !== "pending") return
     await publishCommand({ ...command, state: "completed", result: op.result }, command)
@@ -98,7 +99,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
         await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
         if (result.record.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
       })
-    })()
+    })().then(() => { op.cleanupVerified = true }).catch(error => { latch(new AgentError("CLEANUP_UNVERIFIED")); throw error })
     return op.cleanup
   }
   async function failOperation(op: Live, error: unknown): Promise<void> {
@@ -208,7 +209,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
         const spec = resolveLaunchSpec({ ids: { hostId: context.paths.hostKey, handlerGeneration: generation, agentId: randomUUID(), providerGeneration: randomUUID(), leaseId: randomUUID(), launchAttemptId: randomUUID(), startCommandId: request.commandId }, checkout, selection: request.selection, ...evidence, contract })
         if (await observeLaunchContract(contract) !== fingerprint) throw new AgentError("CONFIG_CHANGED")
         const record: AgentRecord = { version: 1, spec, phase: "starting", session: null, failure: null }
-        const op: Live = { initial: record, contract, evidence, controller: new AbortController(), ready: false, started: false, uncertain: null, result: null, fault: null }
+        const op: Live = { initial: record, contract, evidence, controller: new AbortController(), cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
         const accepted: AgentCommand = { version: 1, hostId: spec.hostId, commandId: request.commandId, handlerGeneration: generation, input: request, op: "start", target: agentTuple(record), state: "pending", result: null }
         operations.set(spec.agentId, op); intents.set(request.commandId, op)
         try { await publishCommand(accepted, null); await publishAgent(record, null) }
@@ -276,7 +277,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
   }
   function agentView(record: AgentRecord): AgentView {
     const launch = context.mutations.accepted.find(e => e.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, op = operations.get(record.spec.agentId)
-    return { record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !blocked && !closed && record.spec.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "stopping"].includes(record.phase), cleanup: launch === null ? blocked ? "unknown" : "not_reserved" : launch.phase === "cleanup_verified" ? "verified" : launch.phase === "quarantined" ? "unknown" : "unverified" }
+    return { record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !blocked && !closed && record.spec.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "stopping"].includes(record.phase), cleanup: launch === null ? blocked ? "unknown" : "not_reserved" : launch.phase === "cleanup_verified" ? blocked?.code === "CLEANUP_UNVERIFIED" ? "unknown" : op && !op.cleanupVerified ? "unverified" : "verified" : launch.phase === "quarantined" ? "unknown" : "unverified" }
   }
   const ordinary = (): void => {
     if (!initialized || blocked && !inventoryEmpty || accepting || stopping || stops.size || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => records.has(e.record.agentId) && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")

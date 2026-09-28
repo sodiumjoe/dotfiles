@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { mkdir, rename, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -10,6 +10,7 @@ import { createAgentService } from "../src/agent/service.js"
 import type { AgentService } from "../src/agent/service.js"
 import type { CommandView, StartInput } from "../src/agent/types.js"
 import { writeAdmission } from "../src/checkout/records.js"
+import { prepareProviderState, providerStatePath } from "../src/agent/state.js"
 
 const completed = (service: AgentService, input: Pick<StartInput, "commandId" | "handlerGeneration">): Promise<CommandView> => until(async () => {
   const view = await service.command(input.commandId, input.handlerGeneration)
@@ -219,6 +220,47 @@ test("restart interrupts an accepted pending start without replay", async t => {
   assert.equal(f.spawns(), 0)
 })
 
+test("restart removes retained state only for the matching verified launch", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const retained = await prepareProviderState(f.root, attempt, f.contract.environment)
+  assert.equal(retained.root, providerStatePath(f.root, attempt))
+  assert.deepEqual((await f.store.inventory()).issues, [])
+  const next = await f.restart()
+  assert.equal((await next.list()).unavailable, null)
+  await assert.rejects(lstat(retained.root), { code: "ENOENT" })
+})
+
+test("restart retains an unknown state root and blocks new agent work", async t => {
+  const f = await agentServiceFixture(t)
+  await mkdir(join(f.root, "agents"), { mode: 0o700 })
+  await mkdir(join(f.root, "agents/provider-state"), { mode: 0o700 })
+  const unknown = join(f.root, "agents/provider-state", randomUUID())
+  await mkdir(unknown, { mode: 0o700 })
+  const next = await f.restart()
+  assert.equal((await next.list()).unavailable?.code, "CLEANUP_UNVERIFIED")
+  assert.equal((await lstat(unknown)).isDirectory(), true)
+})
+
+test("failed state removal leaves stop pending and blocks the current Handler", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const state = providerStatePath(f.root, attempt)
+  await rename(state, state + "-old"); await mkdir(state, { mode: 0o700 })
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await until(async () => (await f.service.list()).unavailable?.code === "CLEANUP_UNVERIFIED" ? true : undefined)
+  assert.notEqual((await f.service.list()).agents[0]!.cleanup, "verified")
+  assert.equal((await f.service.command(stop.commandId, stop.handlerGeneration)).command.state, "pending")
+  await assert.rejects(f.service.start({ ...f.input, commandId: randomUUID() }), { code: "ADMISSION_UNAVAILABLE" })
+})
+
 test("restart interrupts a pending stop independently of verified platform cleanup", async t => {
   const f = await agentServiceFixture(t)
   await f.service.start(f.input); const ready = await completed(f.service, f.input)
@@ -286,7 +328,9 @@ test("corrupt agent metadata cannot grant liveness or prevent independent qualif
   assert.equal(unknown.agents[0]!.live, false)
   await assert.rejects(f.context.mutations.queue.run(() => f.service.verifyDischarged()))
   await f.cleanupOwned()
-  assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
+  const cleaned = (await f.service.list()).agents[0]!
+  assert.equal(cleaned.launch?.phase, "cleanup_verified")
+  assert.equal(cleaned.cleanup, "unverified")
 })
 
 test("sixteen ready agents exhaust lifecycle capacity without publishing a seventeenth intent", async t => {

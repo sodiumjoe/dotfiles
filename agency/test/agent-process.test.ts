@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { syntheticAgentProcess, sampleSpec, sampleContract } from "./agent-support.js"
 import { spawn, type ChildProcess } from "node:child_process"
-import { mkdtemp, mkdir, realpath, rm, stat } from "node:fs/promises"
+import { lstat, mkdtemp, mkdir, realpath, rename, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createAgentProcess } from "../src/agent/process.js"
@@ -14,6 +14,7 @@ import { reconcileRecord } from "../src/platform/reconcile.js"
 import { checkoutIdFor } from "../src/checkout/identity.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import { assertFixtureBatchHealthy, failFixtureBatch, until } from "./control-support.js"
+import { providerStatePath } from "../src/agent/state.js"
 
 test("direct owner publishes identity before ACP, starts once, and coalesces cleanup", async t => {
   const f = await syntheticAgentProcess(t, "normal"), abort = new AbortController()
@@ -33,6 +34,24 @@ test("direct owner publishes identity before ACP, starts once, and coalesces cle
   assert.equal(cleaned[0]!.phase, "cleanup_verified")
   assert.deepEqual(cleaned[0], cleaned[1])
   assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("owner prepares state before attempted publication and removes it after verified process cleanup", async t => {
+  const f = await syntheticAgentProcess(t, "normal"), path = providerStatePath(f.root, f.spec.launchAttemptId)
+  await f.owner.initialize(new AbortController().signal)
+  assert.equal((await lstat(path)).isDirectory(), true)
+  assert.equal((await f.record()).launchAttempted, true)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  await assert.rejects(lstat(path), { code: "ENOENT" })
+})
+
+test("state cleanup failure rejects owner cleanup and retains the substituted root", async t => {
+  const f = await syntheticAgentProcess(t, "normal"), path = providerStatePath(f.root, f.spec.launchAttemptId)
+  await f.owner.initialize(new AbortController().signal)
+  await rename(path, path + "-old")
+  await mkdir(path, { mode: 0o700 })
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  assert.equal((await lstat(path)).isDirectory(), true)
 })
 
 test("cancellation during attempted publication does not spawn", async t => {

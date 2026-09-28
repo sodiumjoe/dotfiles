@@ -9,6 +9,7 @@ import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
 import { sameProcess, sameProcessGeneration, type LaunchRecord, type ProcessIdentity } from "../platform/types.js"
 import { createAcpConnection, type AcpConnection } from "./acp.js"
+import { prepareProviderState, removeProviderState } from "./state.js"
 import type { LaunchContract } from "./contracts.js"
 import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type SessionEvidence } from "./types.js"
 
@@ -50,7 +51,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
   }
   const spawnOptions: SpawnOptions = {
     argv0: marker, detached: true, shell: false, cwd: spec.checkout.root.path, stdio: ["pipe", "pipe", "pipe"],
-    env: Object.fromEntries(Object.entries(contract.environment.fixed).filter(([key]) => !["NODE_OPTIONS", "NODE_PATH"].includes(key) && !key.startsWith("AGENCY_") && !key.startsWith("GIT_"))),
+    env: {},
   }
   const observe = async (): Promise<{ leader: ProcessIdentity; observed: ProcessIdentity[] }> => {
     if (!child?.pid) throw new AgentError("STARTUP_FAILED")
@@ -104,6 +105,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
       await absent()
       if (child && !closed) await waitBounded(closeEvent, 1000)
       if (child) { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() }
+      await removeProviderState(context.paths.persistentRoot, spec.launchAttemptId)
       return structuredClone(current)
     })().catch(() => { throw new AgentError("CLEANUP_UNVERIFIED") })
     return cleaning
@@ -123,6 +125,9 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
       preparation = mutations.queue.run(async () => {
         check(); await input.revalidate(); check()
         if (await adapter.bootId() !== current.launchBootId) throw new AgentError("CONFIG_CHANGED")
+        const prepared = await prepareProviderState(context.paths.persistentRoot, spec.launchAttemptId, contract.environment)
+        spawnOptions.env = prepared.environment
+        check()
         await transition({ ...current, launchAttempted: true })
         await input.revalidate(); check()
         if (await adapter.bootId() !== current.launchBootId) throw new AgentError("CONFIG_CHANGED")

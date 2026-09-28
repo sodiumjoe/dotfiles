@@ -76,6 +76,38 @@ test("private atomic remnants are ignored but unsafe directories are not empty i
   assert.ok((await createAgentStore(other).inventory()).issues.length)
 })
 
+test("private provider-state coexists with record and command evidence without entering inventory", async t => {
+  const root = await privateRoot(t), store = createAgentStore(root), agent = sampleAgent(), command = sampleCommand()
+  await store.writeAgent(agent, null); await store.writeCommand(command, null)
+  const state = join(root, "agents/provider-state")
+  await mkdir(state, { mode: 0o700 })
+  assert.deepEqual(await store.inventory(), { agents: [agent], commands: [command], issues: [] })
+  await mkdir(join(state, agent.spec.launchAttemptId), { mode: 0o700 })
+  await writeFile(join(state, agent.spec.launchAttemptId, "provider-data"), "live", { mode: 0o600 })
+  assert.deepEqual(await store.inventory(), { agents: [agent], commands: [command], issues: [] })
+  assert.deepEqual(await store.readAgent(agent.spec.agentId), agent)
+  assert.deepEqual(await store.readCommand(command.commandId), command)
+})
+
+for (const defect of ["symlink", "wrong-mode", "non-directory", "other-child"] as const) {
+  test(`unsafe agents directory child latches inventory and blocks writes: ${defect}`, async t => {
+    const root = await privateRoot(t), store = createAgentStore(root), agent = sampleAgent()
+    await store.writeAgent(agent, null)
+    const state = join(root, "agents/provider-state")
+    if (defect === "symlink") await symlink(root, state)
+    if (defect === "wrong-mode") { await mkdir(state, { mode: 0o700 }); await chmod(state, 0o750) }
+    if (defect === "non-directory") await writeFile(state, "state", { mode: 0o600 })
+    if (defect === "other-child") await mkdir(join(root, "agents/other"), { mode: 0o700 })
+    assert.ok((await store.inventory()).issues.length)
+    await assert.rejects(store.writeCommand(sampleCommand(), null), { code: "INVALID_AGENT_STATE" })
+    if (defect === "wrong-mode") await chmod(state, 0o700)
+    if (defect === "symlink") await rm(state)
+    if (defect === "non-directory") await rm(state)
+    if (defect === "other-child") await rm(join(root, "agents/other"), { recursive: true })
+    assert.ok((await store.inventory()).issues.length)
+  })
+}
+
 for (const failure of ["file-sync", "rename", "directory-sync", "readback"] as const) {
   test(`publication ${failure} failure retains evidence and exact retry repeats durability`, async t => {
     const root = await privateRoot(t), value = sampleCommand(), path = join(root, "agents/commands", value.commandId + ".json")

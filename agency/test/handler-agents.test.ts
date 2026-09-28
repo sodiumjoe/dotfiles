@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { lstat, readdir } from "node:fs/promises"
 import { agentHandlerFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
+import { providerStatePath } from "../src/agent/state.js"
 
 test("ready agent survives client disconnect and stops with proof", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t), accepted = await f.start()
@@ -39,11 +41,13 @@ test("fatal Handler failure exits naturally with a ready provider and restart re
   const retained = await f.inventory()
   assert.equal(retained.agents[0]!.phase, "ready")
   assert.equal(retained.launches[0]!.record.phase, "active")
+  assert.equal((await lstat(providerStatePath(f.paths.persistentRoot, retained.launches[0]!.record.launchAttemptId))).isDirectory(), true)
   await f.restart()
   const after = await f.list()
   assert.equal(after.agents[0]!.live, false)
   assert.equal(after.agents[0]!.record.phase, "interrupted")
   assert.equal(after.agents[0]!.cleanup, "verified")
+  await assert.rejects(lstat(providerStatePath(f.paths.persistentRoot, retained.launches[0]!.record.launchAttemptId)), { code: "ENOENT" })
   assert.deepEqual((await f.command(ready.command.commandId, ready.command.handlerGeneration)).command, ready.command)
   assert.equal(f.providerCount(), 1)
   await f.verifyZeroSurvivors()
@@ -77,15 +81,23 @@ for (const pauseAt of boundaries) test(`Handler crash preserves historical evide
   }
   if (pauseAt === "attempted") {
     assert.equal(after.agents[0]!.cleanup, "unknown")
-    const blocked = await f.start(); const result = await f.waitCompleted(blocked)
-    assert.equal(result.command.result!.outcome, "failed")
-    assert.equal(result.command.result!.failure!.code, "CHECKOUT_QUARANTINED")
+    assert.equal((await lstat(providerStatePath(f.paths.persistentRoot, before.launches[0]!.record.launchAttemptId))).isDirectory(), true)
+    await assert.rejects(f.start(), { code: "ADMISSION_UNAVAILABLE" })
     assert.equal(f.providerCount(), 0)
   } else {
     assert.ok(after.agents.every(a => ["not_reserved", "verified"].includes(a.cleanup)))
+    for (const launch of evidence.launches) if (launch.record.phase === "cleanup_verified") await assert.rejects(lstat(providerStatePath(f.paths.persistentRoot, launch.record.launchAttemptId)), { code: "ENOENT" })
     const replacement = await f.start(); assert.equal((await f.waitCompleted(replacement)).command.result!.outcome, "started")
     await f.stop(replacement.command.target!)
   }
+  await f.verifyZeroSurvivors()
+})
+
+test("verified cleanup leaves no retained provider-state roots", { timeout: 60000 }, async t => {
+  const f = await agentHandlerFixture(t), ready = await f.waitCompleted(await f.start())
+  const stopped = await f.stop(ready.command.target!)
+  await f.waitCompleted(stopped)
+  assert.deepEqual(await readdir(f.paths.persistentRoot + "/agents/provider-state"), [])
   await f.verifyZeroSurvivors()
 })
 

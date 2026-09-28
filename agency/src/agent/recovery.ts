@@ -4,6 +4,10 @@ import { admissionInventoryIssues } from "../checkout/admission.js"
 import { inventoryAdmissions, type AdmissionInventory } from "../checkout/records.js"
 import { refreshLaunchState } from "../handler/mutations.js"
 import { join } from "node:path"
+import { lstat, readdir } from "node:fs/promises"
+import { UUID } from "../control/protocol.js"
+import { assertPrivateDirectory } from "../platform/private-state.js"
+import { removeProviderState } from "./state.js"
 import type { AgentInventory, AgentStore } from "./store.js"
 import { AgentError, agentFailure, type AgentFailure, type AgentRecord, type AgentTuple } from "./types.js"
 
@@ -52,6 +56,23 @@ export async function recoverAgents(input: { context: AdmissionContext; store: A
       }
       inventory = await store.inventory()
       crossCheckAgents(context, inventory, await inventoryAdmissions(context.paths.persistentRoot))
+      const state = join(context.paths.persistentRoot, "agents", "provider-state")
+      let stateEntries: string[] = []
+      try {
+        await assertPrivateDirectory(state)
+        const stat = await lstat(state)
+        if ((stat.mode & 0o777) !== 0o700) throw new AgentError("CLEANUP_UNVERIFIED")
+        stateEntries = await readdir(state)
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new AgentError("CLEANUP_UNVERIFIED") }
+      for (const attempt of stateEntries) {
+        if (!UUID.test(attempt)) throw new AgentError("CLEANUP_UNVERIFIED")
+        const agents = inventory.agents.filter(agent => agent.spec.launchAttemptId === attempt)
+        const launches = context.mutations.accepted.filter(entry => entry.record.launchAttemptId === attempt)
+        if (agents.length !== 1 || launches.length !== 1) throw new AgentError("CLEANUP_UNVERIFIED")
+        const spec = agents[0]!.spec, launch = launches[0]!.record
+        if (launch.phase !== "cleanup_verified" || launch.agentId !== spec.agentId || launch.leaseId !== spec.leaseId || launch.handlerGeneration !== spec.handlerGeneration || launch.checkoutId !== spec.checkout.checkoutId) throw new AgentError("CLEANUP_UNVERIFIED")
+        await removeProviderState(context.paths.persistentRoot, attempt)
+      }
     })
     return { inventory, unavailable: null }
   } catch (error) { return { inventory, unavailable: agentFailure(error) } }
