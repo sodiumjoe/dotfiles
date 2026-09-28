@@ -18,6 +18,8 @@ async function pin(path: string): Promise<ArtifactPin> {
   return { path, sha256: createHash("sha256").update(await readFile(path)).digest("hex"), identity: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.gid, stat.nlink].map(String) as unknown as ArtifactPin["identity"] }
 }
 
+function wrongSha(sha256: string): string { return (sha256[0] === "0" ? "1" : "0") + sha256.slice(1) }
+
 async function qualificationFixture(t: TestContext) {
   const root = await privateRoot(t)
   const packageJson = join(root, "package.json"), entrypoint = join(root, "adapter.mjs"), codex = join(root, "codex")
@@ -46,16 +48,27 @@ test("qualification binds executable paths, identities, bytes, version and selec
   const observation = await verifyCodexQualification(manifest)
   assert.equal(observation.nodeVersion, "24.13.0")
   assert.deepEqual(observation.selection, { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" })
-  for (const path of [f.packageJson, f.entrypoint]) {
-    await f.replaceSameBytes(path)
-    await assert.rejects(verifyCodexQualification(manifest), { code: "ADAPTER_UNQUALIFIED" })
+})
+
+test("qualification independently verifies every artifact pin", { skip: !canVerify }, async t => {
+  for (const name of ["adapterPackageJson", "adapterEntrypoint", "codexExecutable", "nodeExecutable"] as const) {
+    await t.test(`${name} rejects a wrong SHA`, async t => {
+      const f = await qualificationFixture(t)
+      const manifest = parseCodexQualificationManifest(f.manifest)
+      await verifyCodexQualification(manifest)
+      manifest[name].sha256 = wrongSha(manifest[name].sha256)
+      await assert.rejects(verifyCodexQualification(manifest), { code: "ADAPTER_UNQUALIFIED" })
+    })
   }
-  const node = await pin(process.execPath)
-  assert.equal((await observeArtifact(node)).sha256, node.sha256)
-  await assert.rejects(observeArtifact({ ...node, identity: [...node.identity.slice(0, 1), "0", ...node.identity.slice(2)] as unknown as ArtifactPin["identity"] }), { code: "ADAPTER_UNQUALIFIED" })
-  const temporaryCodex = await pin(f.codex)
-  await f.replaceSameBytes(f.codex)
-  await assert.rejects(observeArtifact(temporaryCodex), { code: "ADAPTER_UNQUALIFIED" })
+  for (const name of ["adapterPackageJson", "adapterEntrypoint"] as const) {
+    await t.test(`${name} rejects same-byte replacement`, async t => {
+      const f = await qualificationFixture(t)
+      const manifest = parseCodexQualificationManifest(f.manifest)
+      await verifyCodexQualification(manifest)
+      await f.replaceSameBytes(manifest[name].path)
+      await assert.rejects(verifyCodexQualification(manifest), { code: "ADAPTER_UNQUALIFIED" })
+    })
+  }
 })
 
 test("manifest rejects extra fields and every unapproved selection and policy change", async t => {
@@ -108,7 +121,7 @@ test("artifact observation rejects symlinks and replacement with identical bytes
   await assert.rejects(observeArtifact({ ...await pin(f.codex), path: link }), { code: "ADAPTER_UNQUALIFIED" })
 })
 
-test("artifact observation rejects byte, mode, link count, ownership and file-type drift", async t => {
+test("artifact observation rejects content, mode, link count, ownership and file-type drift", async t => {
   const f = await qualificationFixture(t)
   const original = f.manifest.adapterEntrypoint
   await writeFile(f.entrypoint, "changed contents", { mode: 0o600 })
@@ -134,6 +147,15 @@ test("artifact observation rejects byte, mode, link count, ownership and file-ty
   const stat = await lstat(oversized, { bigint: true })
   const oversizedPin: ArtifactPin = { path: oversized, sha256: "0".repeat(64), identity: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.gid, stat.nlink].map(String) as unknown as ArtifactPin["identity"] }
   await assert.rejects(observeArtifact(oversizedPin), { code: "ADAPTER_UNQUALIFIED" })
+})
+
+test("artifact observation rejects wrong SHA with unchanged file identity", async t => {
+  const f = await qualificationFixture(t)
+  const valid = f.manifest.adapterEntrypoint
+  const wrong = { ...valid, sha256: wrongSha(valid.sha256) }
+  assert.deepEqual((await pin(f.entrypoint)).identity, wrong.identity)
+  await assert.rejects(observeArtifact(wrong), { code: "ADAPTER_UNQUALIFIED" })
+  assert.deepEqual(await observeArtifact(valid), valid)
 })
 
 test("offline verification rejects package metadata and alternate Node paths", { skip: !canVerify }, async t => {
