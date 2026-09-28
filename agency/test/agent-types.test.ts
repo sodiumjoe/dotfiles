@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec } from "../src/agent/types.js"
+import { agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec, parseSession } from "../src/agent/types.js"
 import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
 
 test("launch evidence is strict, immutable by copying, and never fabricates a resolved model", () => {
@@ -31,6 +31,11 @@ test("ready records require exact complete session evidence", () => {
     assert.throws(() => parseAgentRecord({ ...ready, session: { ...sampleSession(), ...change } }), { code: "INVALID_AGENT_STATE" })
   }
   assert.throws(() => parseAgentRecord({ ...record, phase: "failed", failure: null }))
+})
+
+test("session permission evidence accepts only the two closed authorities", () => {
+  assert.equal(parseSession({ ...sampleSession(), permissionEvidence: "agency-deny-all-v1" }).permissionEvidence, "agency-deny-all-v1")
+  assert.throws(() => parseSession({ ...sampleSession(), permissionEvidence: "unrestricted" }), { code: "INVALID_AGENT_STATE" })
 })
 
 test("commands bind operation, identity, result, and original generation", () => {

@@ -50,7 +50,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
   }
   const spawnOptions: SpawnOptions = {
     argv0: marker, detached: true, shell: false, cwd: spec.checkout.root.path, stdio: ["pipe", "pipe", "pipe"],
-    env: Object.fromEntries(Object.entries(contract.environment).filter(([key]) => !["NODE_OPTIONS", "NODE_PATH"].includes(key) && !key.startsWith("AGENCY_") && !key.startsWith("GIT_"))),
+    env: Object.fromEntries(Object.entries(contract.environment.fixed).filter(([key]) => !["NODE_OPTIONS", "NODE_PATH"].includes(key) && !key.startsWith("AGENCY_") && !key.startsWith("GIT_"))),
   }
   const observe = async (): Promise<{ leader: ProcessIdentity; observed: ProcessIdentity[] }> => {
     if (!child?.pid) throw new AgentError("STARTUP_FAILED")

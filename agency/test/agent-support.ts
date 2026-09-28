@@ -160,7 +160,7 @@ export function sampleSpec(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
 }
 
 export function sampleContract(): LaunchContract {
-  return { id: "fixture-v1", providerId: "codex-acp", adapterVersion: "1.0.0", entrypoint: "/fixture.mjs", fingerprint: "c".repeat(64), modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode", environment: {}, permissionEvidence: "fixture-contract-v1" }
+  return { id: "fixture-v1", providerId: "codex-acp", adapterVersion: "1.0.0", entrypoint: "/fixture.mjs", fingerprint: "c".repeat(64), modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode", environment: { fixed: {}, private: {} }, permissionEvidence: "fixture-contract-v1", qualification: null }
 }
 
 export function sampleAgent(): AgentRecord { return { version: 1, spec: sampleSpec(), phase: "starting", session: null, failure: null } }
@@ -211,7 +211,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string) {
   }
   if (scenario === "queued-preparation") void context.mutations.queue.run(async () => { beforeSpawn.resolve(); await publication.promise })
   peer.writable.on("data", () => { if (!identityPublished) earlyWrites++ })
-  const owner = createAgentProcess({ context, spec, contract: { ...contract, environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "forbidden", NODE_PATH: "forbidden", AGENCY_TEST: "forbidden", GIT_DIR: "forbidden" } }, reservation: { launch, admission: { version: 1, checkout: spec.checkout, handlerGeneration: spec.handlerGeneration, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId } }, async revalidate() {
+  const owner = createAgentProcess({ context, spec, contract: { ...contract, environment: { fixed: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "forbidden", NODE_PATH: "forbidden", AGENCY_TEST: "forbidden", GIT_DIR: "forbidden" }, private: {} } }, reservation: { launch, admission: { version: 1, checkout: spec.checkout, handlerGeneration: spec.handlerGeneration, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId } }, async revalidate() {
     checks++
     if (invalidation || scenario === "restore-failure" && checks > 1) throw new AgentError("CONFIG_CHANGED")
   } }, { spawn: ((executable: string, args: string[], options: SpawnOptions) => {
@@ -307,7 +307,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   let snapshot: CatalogSnapshot = { version: 1, hostId: f.context.paths.hostKey, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, createdAt: Date.now(), providers: [{ ...sampleSpec().catalogEvidence, fingerprint: configuration.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: f.context.state.handlerGeneration }] }
   const saveCatalog = async () => { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) }
   await saveCatalog()
-  const contract = { ...sampleContract(), entrypoint: fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url)), environment: { HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, FIXTURE_ROOT: root } }
+  const contract = { ...sampleContract(), entrypoint: fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url)), environment: { fixed: { HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, FIXTURE_ROOT: root }, private: {} } }
   contract.fingerprint = await observeLaunchContract(contract)
   let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0
   const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {

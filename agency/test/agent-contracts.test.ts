@@ -8,10 +8,10 @@ import { privateRoot } from "./control-support.js"
 
 function input() {
   const spec = sampleSpec()
-  return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, startCommandId: spec.startCommandId }, selection: spec.selection, checkout: spec.checkout, snapshotId: spec.catalogSnapshotId, provider: spec.catalogEvidence, configuration: spec.configuration, contract: sampleContract() }
+  return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, startCommandId: spec.startCommandId }, selection: spec.selection, checkout: spec.checkout, snapshotId: spec.catalogSnapshotId, provider: spec.catalogEvidence, profile: { id: "codex-acp" as const, enabled: true, executable: "/fixture-codex", adapterPackageJson: "/fixture-package.json", sdkPackageJson: null, configurationFiles: ["/fixture-config.json"] }, configuration: spec.configuration, contract: sampleContract() }
 }
 
-test("production has no qualified launch contracts", () => { assert.deepEqual(productionLaunchContracts(), []) })
+test("production has no qualified launch contracts", () => { assert.deepEqual(productionLaunchContracts(), []); assert.ok(Object.isFrozen(productionLaunchContracts())) })
 
 test("explicit selections resolve without substitution", () => {
   const value = input(), spec = resolveLaunchSpec(value)
@@ -61,10 +61,10 @@ test("contract and evidence disagreement cannot authorize a launch", () => {
 test("launch fingerprints bind code, physical identity, policy and environment without importing", async t => {
   const root = await privateRoot(t), entrypoint = join(root, "fixture.mjs")
   await writeFile(entrypoint, "throw new Error('must not import')", { mode: 0o600 })
-  const contract = { ...sampleContract(), entrypoint, environment: { Z: "last", A: "first" } }
+  const contract = { ...sampleContract(), entrypoint, environment: { fixed: { Z: "last", A: "first" }, private: {} } }
   const first = await observeLaunchContract(contract)
-  assert.equal(first, await observeLaunchContract({ ...contract, environment: { A: "first", Z: "last" } }))
-  assert.notEqual(first, await observeLaunchContract({ ...contract, environment: { A: "changed", Z: "last" } }))
+  assert.equal(first, await observeLaunchContract({ ...contract, environment: { fixed: { A: "first", Z: "last" }, private: {} } }))
+  assert.notEqual(first, await observeLaunchContract({ ...contract, environment: { fixed: { A: "changed", Z: "last" }, private: {} } }))
   assert.notEqual(first, await observeLaunchContract({ ...contract, permissionProfiles: ["other"] }))
   await rename(entrypoint, entrypoint + "-old")
   await writeFile(entrypoint, "throw new Error('must not import')", { mode: 0o600 })

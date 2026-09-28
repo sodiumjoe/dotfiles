@@ -43,7 +43,7 @@ async function pause(name: string): Promise<void> {
 const contract: LaunchContract = {
   id: "fixture-v1", providerId: "codex-acp", adapterVersion: "1.0.0", entrypoint: fileURLToPath(new URL("./agent-provider.js", import.meta.url)), fingerprint: "0".repeat(64),
   modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode",
-  environment: { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "home"), TMPDIR: root, FIXTURE_ROOT: root }, permissionEvidence: "fixture-contract-v1",
+  environment: { fixed: { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "home"), TMPDIR: root, FIXTURE_ROOT: root }, private: {} }, permissionEvidence: "fixture-contract-v1", qualification: null,
 }
 contract.fingerprint = await observeLaunchContract(contract)
 try {

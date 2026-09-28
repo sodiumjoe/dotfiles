@@ -5,6 +5,7 @@ import { parseAdmissionRecord } from "../checkout/records.js"
 import type { LaunchRecord } from "../platform/types.js"
 
 export type Reasoning = { kind: "none" } | { kind: "value"; value: string }
+export type PermissionEvidence = "fixture-contract-v1" | "agency-deny-all-v1"
 export type StartSelection = { providerId: ProviderId; modelId: string; reasoning: Reasoning; mode: string | null; permissionProfile: string }
 export type AgentTuple = { agentId: string; handlerGeneration: string; providerGeneration: string }
 export type AgentIds = AgentTuple & { hostId: string; leaseId: string; launchAttemptId: string; startCommandId: string }
@@ -15,7 +16,7 @@ export type LaunchSpec = AgentIds & {
   checkout: CheckoutIdentity; catalogSnapshotId: string; catalogEvidence: ProviderSnapshot; configuration: ConfigEvidence
   contractId: string; contractFingerprint: string; containment: "direct-process-group-v1"; authority: "normal-user"; limits: AgentLimits
 }
-export type SessionEvidence = { sessionId: string; sessionGeneration: string; protocolVersion: 1; modelId: string; reasoning: Reasoning; mode: string; permissionProfile: string; permissionEvidence: "fixture-contract-v1" }
+export type SessionEvidence = { sessionId: string; sessionGeneration: string; protocolVersion: 1; modelId: string; reasoning: Reasoning; mode: string; permissionProfile: string; permissionEvidence: PermissionEvidence }
 export type AgentPhase = "starting" | "ready" | "stopping" | "stopped" | "failed" | "interrupted"
 export type AgentRecord = { version: 1; spec: LaunchSpec; phase: AgentPhase; session: SessionEvidence | null; failure: AgentFailure | null }
 export type StartInput = { commandId: string; handlerGeneration: string; cwd: string; selection: StartSelection }
@@ -76,8 +77,8 @@ export function parseAgentFailure(input: unknown): AgentFailure {
 export function parseSession(input: unknown): SessionEvidence {
   return checked(() => {
     const v = object(input); keys(v, ["sessionId", "sessionGeneration", "protocolVersion", "modelId", "reasoning", "mode", "permissionProfile", "permissionEvidence"])
-    if (v.protocolVersion !== 1 || v.permissionEvidence !== "fixture-contract-v1") invalidAgent()
-    return { sessionId: agentText(v.sessionId, 1024), sessionGeneration: id(v.sessionGeneration), protocolVersion: 1, modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: agentText(v.mode), permissionProfile: agentText(v.permissionProfile), permissionEvidence: "fixture-contract-v1" }
+    if (v.protocolVersion !== 1 || v.permissionEvidence !== "fixture-contract-v1" && v.permissionEvidence !== "agency-deny-all-v1") invalidAgent()
+    return { sessionId: agentText(v.sessionId, 1024), sessionGeneration: id(v.sessionGeneration), protocolVersion: 1, modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: agentText(v.mode), permissionProfile: agentText(v.permissionProfile), permissionEvidence: v.permissionEvidence }
   })
 }
 function sessionMatches(session: SessionEvidence, selection: StartSelection): boolean {
