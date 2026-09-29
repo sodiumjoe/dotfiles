@@ -40,6 +40,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
     if (now() >= overallDeadline || !connection && now() >= spawnDeadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   const bounded = async <T>(operation: () => Promise<T>, deadline: number, code: "STARTUP_TIMEOUT" | "CLEANUP_UNVERIFIED"): Promise<T> => {
+    if (deadline === Infinity) return operation()
     let timer: NodeJS.Timeout | undefined
     try {
       if (now() >= deadline) throw new AgentError(code)
@@ -75,17 +76,17 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
       || members.some(member => member.bootId !== leader.bootId || member.processGroupId !== leader.pid || member.sessionId !== leader.pid || member.uid !== leader.uid || member.gid !== leader.gid)) throw new AgentError("STARTUP_FAILED")
     return { leader, observed: members }
   }
-  const waitBounded = async (event: Promise<void>, ms: number): Promise<boolean> => {
+  const waitForCloseOrGrace = async (ms: number): Promise<void> => {
     let timer: NodeJS.Timeout | undefined
-    try { return await Promise.race([event.then(() => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), ms) })]) }
+    try { await Promise.race([closeEvent, new Promise<void>(resolve => { timer = setTimeout(resolve, ms) })]) }
     finally { clearTimeout(timer) }
   }
-  const absent = async (): Promise<void> => {
-    if (current.provider === null || await adapter.bootId() !== current.launchBootId) return
+  const absent = async (deadline: number): Promise<void> => {
+    if (current.provider === null || await bounded(() => adapter.bootId(), deadline, "CLEANUP_UNVERIFIED") !== current.launchBootId) return
     for (let pass = 0; pass < 2; pass++) {
-      if ((await adapter.readGroup(current.provider.group.leader.processGroupId)).length) throw new AgentError("CLEANUP_UNVERIFIED")
+      if ((await bounded(() => adapter.readGroup(current.provider!.group.leader.processGroupId), deadline, "CLEANUP_UNVERIFIED")).length) throw new AgentError("CLEANUP_UNVERIFIED")
       for (const retained of current.provider.group.observed) {
-        const observed = await adapter.readProcess(retained.pid)
+        const observed = await bounded(() => adapter.readProcess(retained.pid), deadline, "CLEANUP_UNVERIFIED")
         if (observed && sameProcessGeneration(retained, observed)) throw new AgentError("CLEANUP_UNVERIFIED")
       }
     }
@@ -95,16 +96,24 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
     if (input.isReady?.()) overallDeadline = Infinity
     stopping = true; controller.abort(); connection?.close()
     child?.stdout?.resume(); child?.stderr?.resume()
-    cleaning = (async () => {
+    let expired = false
+    const checkCleanup = (): void => {
+      if (expired || overallDeadline !== Infinity && now() >= overallDeadline) throw new AgentError("CLEANUP_UNVERIFIED")
+    }
+    cleaning = bounded(async () => {
       await preparation?.catch(() => undefined)
+      checkCleanup()
       await mutations.queue.run(async () => {
         try {
+          checkCleanup()
           await refreshLaunchState(context.state, mutations, directory)
+          checkCleanup()
           current = snapshot()
           if (!spawnInvoked && current.launchAttempted && current.provider === null) {
             try { current = await restoreUninvokedLaunch(context, current, { spawnInvoked: false }, dependencies.transitionIO) }
             catch { current = snapshot() }
           }
+          checkCleanup()
           const terminationDeadline = Math.min(overallDeadline, now() + (phases?.processTerminateMs ?? 5000))
           const cleanupAdapter: PlatformAdapter = {
             platform: adapter.platform,
@@ -121,19 +130,24 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
             if (!entry) throw new AgentError("CLEANUP_UNVERIFIED")
             entry.record = structuredClone(current)
           } finally { await refreshLaunchState(context.state, mutations, directory) }
+          checkCleanup()
           if (current.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
           if (child && !terminal) await bounded(() => terminalEvent, terminationDeadline, "CLEANUP_UNVERIFIED")
-          await bounded(absent, Math.min(overallDeadline, now() + (phases?.absenceMs ?? 2000)), "CLEANUP_UNVERIFIED")
-          if (child && !closed) await waitBounded(closeEvent, Math.max(1, Math.min(phases?.transportCloseMs ?? 1000, overallDeadline - now())))
+          await absent(Math.min(overallDeadline, now() + (phases?.absenceMs ?? 2000)))
+          checkCleanup()
+          if (child && !closed) await waitForCloseOrGrace(phases?.transportCloseMs ?? 1000)
+          checkCleanup()
           if (child) { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() }
           await (dependencies.removeProviderState ?? removeProviderState)(context.paths.persistentRoot, spec.launchAttemptId)
+          checkCleanup()
         } catch {
           mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`
           throw new AgentError("CLEANUP_UNVERIFIED")
         }
       })
+      checkCleanup()
       return structuredClone(current)
-    })().catch(() => { mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`; throw new AgentError("CLEANUP_UNVERIFIED") })
+    }, overallDeadline, "CLEANUP_UNVERIFIED").catch(() => { expired = true; mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`; throw new AgentError("CLEANUP_UNVERIFIED") })
     return cleaning
   }
   return {

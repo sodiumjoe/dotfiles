@@ -20,12 +20,12 @@ import type { AgentInventory, AgentStore } from "./store.js"
 import { AgentError, agentFailure, parseStartInput, parseStopInput, type AgentCommand, type AgentFailure, type AgentList, type AgentRecord, type AgentView, type CommandResult, type CommandView, type CurrentAgent, type LaunchSpec, type StartInput, type StopInput } from "./types.js"
 
 export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgent>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
-type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
   observeLaunchEvidence(spec: LaunchSpec, expected: LaunchEvidence): Promise<void>
-  fatalReservationTimeout(spec: LaunchSpec): never
+  fatalStartupTimeout(spec: LaunchSpec): never
 }
 
 function productionDependencies(root: string): AgentServiceDependencies {
@@ -40,7 +40,7 @@ function productionDependencies(root: string): AgentServiceDependencies {
         || !profile || !isDeepStrictEqual(profile, expected.profile)
         || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
     },
-    fatalReservationTimeout() {
+    fatalStartupTimeout() {
       if (handlerPid !== process.pid) throw new AgentError("STARTUP_TIMEOUT")
       process.kill(handlerPid, "SIGKILL")
       throw new AgentError("STARTUP_TIMEOUT")
@@ -56,6 +56,15 @@ export function createAgentService(input: { context: AdmissionContext; admission
   const emptyLifecycle = (inventory: AgentInventory): boolean => !inventory.issues.length && !inventory.agents.length && !inventory.commands.length && !records.size && !commands.size && !operations.size && !intents.size
   const errorFor = (error: unknown): AgentError => error instanceof AgentError ? error : error instanceof AdmissionError ? new AgentError(error.code === "CHECKOUT_BUSY" || error.code === "CHECKOUT_QUARANTINED" ? error.code : "ADMISSION_UNAVAILABLE") : new AgentError("STARTUP_FAILED")
   const latch = (error: unknown): void => { blocked ??= agentFailure(error instanceof AgentError ? error : new AgentError("INVALID_AGENT_STATE")) }
+  function expire(op: Live, phase: "reservation" | "startup"): never {
+    if (op.expired) throw new AgentError("STARTUP_TIMEOUT")
+    op.expired = true; clearTimeout(op.watchdog)
+    op.fault ??= agentFailure(new AgentError("STARTUP_TIMEOUT"))
+    latch(new AgentError("STARTUP_TIMEOUT"))
+    context.mutations.unavailable ??= `${phase} timed out: ${op.initial.spec.launchAttemptId}`
+    op.controller.abort()
+    dependencies.fatalStartupTimeout(op.initial.spec)
+  }
   const available = (): void => {
     if (!initialized || closed || frozen || context.shutdownPending() || context.state.phase !== "ready") throw new AgentError("NOT_READY")
     if (blocked || context.mutations.unavailable) throw new AgentError("ADMISSION_UNAVAILABLE")
@@ -104,6 +113,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   async function finishStart(op: Live): Promise<void> {
+    if (op.expired) return
     if (!op.result) return
     if (op.owner && op.result.outcome === "failed" && !op.cleanupVerified) return
     const command = commands.get(op.initial.spec.startCommandId)
@@ -112,9 +122,12 @@ export function createAgentService(input: { context: AdmissionContext; admission
   }
   function cleanup(op: Live): Promise<void> {
     if (op.cleanup) return op.cleanup
+    const checkCleanup = (): void => { if (op.expired || !op.ready && performance.now() >= op.deadline) throw new AgentError("CLEANUP_UNVERIFIED") }
     op.cleanup = (async () => {
+      checkCleanup()
       if (op.owner) { await op.owner.cleanup(); return }
       await queue.run(async () => {
+        checkCleanup()
         const spec = op.initial.spec, entry = context.mutations.accepted.find(e => e.record.launchAttemptId === spec.launchAttemptId)
         if (!entry) {
           await verify()
@@ -122,16 +135,21 @@ export function createAgentService(input: { context: AdmissionContext; admission
           return
         }
         if (entry.record.agentId !== spec.agentId || entry.record.leaseId !== spec.leaseId) throw new AgentError("CLEANUP_UNVERIFIED")
+        checkCleanup()
         const result = await reconcileRecord(entry.path, context.adapter, entry.record)
         if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new AgentError("CLEANUP_UNVERIFIED")
         entry.record = result.record
         await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
         if (result.record.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
       })
-    })().then(() => { op.cleanupVerified = true }).catch(error => { latch(new AgentError("CLEANUP_UNVERIFIED")); throw error })
+    })().then(() => {
+      checkCleanup()
+      op.cleanupVerified = true; clearTimeout(op.watchdog)
+    }).catch(error => { latch(new AgentError("CLEANUP_UNVERIFIED")); throw error })
     return op.cleanup
   }
   async function failOperation(op: Live, error: unknown): Promise<void> {
+    if (op.expired) return
     op.fault ??= agentFailure(errorFor(error)); op.controller.abort(); op.uncertain = null
     if (!op.ready) op.result = { outcome: "failed", target: agentTuple(op.initial), failure: op.fault, session: null }
     await queue.run(async () => {
@@ -151,12 +169,16 @@ export function createAgentService(input: { context: AdmissionContext; admission
     if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
     op.ready = true
+    clearTimeout(op.watchdog)
     op.deadline = Infinity
     op.result = { outcome: "started", target: agentTuple(record), failure: null, session: record.session }
   }
   function launch(op: Live): void {
     if (op.started || closed) return
     op.started = true
+    void new Promise<void>(resolve => { op.watchdog = setTimeout(resolve, Math.max(1, op.deadline - performance.now())) }).then(() => {
+      if (!closed && !op.ready && !op.cleanupVerified && !op.expired) expire(op, "startup")
+    }).catch(latch)
     op.work = (async () => {
       let reservationTimedOut = false
       try {
@@ -174,10 +196,8 @@ export function createAgentService(input: { context: AdmissionContext; admission
           ])
         } finally { clearTimeout(timer) }
         if (reservation === timeout || performance.now() >= reservationDeadline) {
-          reservationTimedOut = true; op.controller.abort()
-          latch(new AgentError("STARTUP_TIMEOUT"))
-          context.mutations.unavailable ??= `reservation timed out: ${spec.launchAttemptId}`
-          dependencies.fatalReservationTimeout(spec)
+          reservationTimedOut = true
+          expire(op, "reservation")
         }
         if (op.controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
         op.owner = dependencies.processFactory({ context, reservation, spec, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, revalidate: () => revalidate(op) })
@@ -192,7 +212,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
           await finishStart(op)
         })
       } catch (error) {
-        if (!reservationTimedOut && !closed && !op.ready && !op.uncertain) await failOperation(op, error)
+        if (!reservationTimedOut && !op.expired && !closed && !op.ready && !op.uncertain) await failOperation(op, error)
       }
     })().catch(latch)
   }
@@ -394,6 +414,6 @@ export function createAgentService(input: { context: AdmissionContext; admission
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { inventoryEmpty = emptyLifecycle(await store.inventory()); if (!inventoryEmpty) await verify(); ordinary(); if (dirty.size || dirtyAgents.size) throw new AgentError("INCOMPLETE") },
-    close() { closed = true; frozen = true; for (const op of operations.values()) { op.owner?.dispose(); op.controller.abort() } },
+    close() { closed = true; frozen = true; for (const op of operations.values()) { clearTimeout(op.watchdog); op.owner?.dispose(); op.controller.abort() } },
   }
 }

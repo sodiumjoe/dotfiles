@@ -50,6 +50,98 @@ test("spawn phase timeout during attempted publication prevents a late spawn", a
   assert.equal(f.spawnCount(), 0)
 })
 
+for (const scenario of ["publication-never", "publication-paused"] as const) test(`failed-start envelope bounds ${scenario} cleanup while retaining queue ownership`, async t => {
+  const f = await syntheticAgentProcess(t, scenario)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const initializing = f.owner.initialize(new AbortController().signal)
+  void initializing.catch(() => undefined)
+  await f.beforeSpawn.promise
+  t.mock.timers.tick(5000)
+  await assert.rejects(initializing, { code: "STARTUP_TIMEOUT" })
+  let settled = false, queueReleased = false
+  const cleaning = f.owner.cleanup()
+  void cleaning.then(() => { settled = true }, () => { settled = true })
+  const following = f.context.mutations.queue.run(async () => { queueReleased = true; return f.context.mutations.unavailable })
+  t.mock.timers.tick(25000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, true)
+  await assert.rejects(cleaning, { code: "CLEANUP_UNVERIFIED" })
+  assert.equal(queueReleased, false)
+  assert.notEqual(f.context.mutations.unavailable, null)
+  assert.equal(f.spawnCount(), 0)
+  assert.notEqual((await f.record()).phase, "cleanup_verified")
+  if (scenario === "publication-paused") {
+    f.releasePublication()
+    assert.notEqual(await following, null)
+    await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+    assert.notEqual((await f.record()).phase, "cleanup_verified")
+    assert.equal(f.spawnCount(), 0)
+  }
+})
+
+for (const scenario of ["removal-never", "removal-paused"] as const) test(`failed-start envelope bounds ${scenario} without releasing its mutation`, async t => {
+  const f = await syntheticAgentProcess(t, scenario, true)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  await f.owner.initialize(new AbortController().signal)
+  let settled = false, queueReleased = false
+  const cleaning = f.owner.cleanup()
+  void cleaning.then(() => { settled = true }, () => { settled = true })
+  await f.removalEntered
+  const following = f.context.mutations.queue.run(async () => { queueReleased = true; return f.context.mutations.unavailable })
+  t.mock.timers.tick(30000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, true)
+  await assert.rejects(cleaning, { code: "CLEANUP_UNVERIFIED" })
+  assert.equal(queueReleased, false)
+  assert.notEqual(f.context.mutations.unavailable, null)
+  if (scenario === "removal-paused") {
+    f.releaseRemoval()
+    assert.notEqual(await following, null)
+    await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  }
+})
+
+test("late absence response cannot start another observation after the startup envelope", async t => {
+  const f = await syntheticAgentProcess(t, "absence-paused", true)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  await f.owner.initialize(new AbortController().signal)
+  const cleaning = f.owner.cleanup()
+  void cleaning.catch(() => undefined)
+  await f.absentEntered
+  t.mock.timers.tick(30000)
+  await assert.rejects(cleaning, { code: "CLEANUP_UNVERIFIED" })
+  f.releaseAbsence()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.lateAbsenceReads(), 0)
+  assert.notEqual(f.context.mutations.unavailable, null)
+  f.owner.dispose()
+})
+
+test("failed-start envelope cannot shorten transport-close grace into cleanup success", async t => {
+  const f = await syntheticAgentProcess(t, "close-held", true)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.tick(29500)
+  let closeWait = false, settled = false
+  const set = globalThis.setTimeout
+  t.mock.method(globalThis, "setTimeout", ((callback: () => void, ms?: number) => { if (ms! <= 1000 && f.owner.record().phase === "cleanup_verified") closeWait = true; return set(callback, ms) }) as typeof setTimeout)
+  const cleaning = f.owner.cleanup()
+  void cleaning.then(() => { settled = true }, () => { settled = true })
+  while (!closeWait) await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(500)
+  const observationDeadline = performance.now() + 100
+  while (!settled && performance.now() < observationDeadline) await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, true)
+  await assert.rejects(cleaning, { code: "CLEANUP_UNVERIFIED" })
+  assert.equal(f.pipesDestroyed(), false)
+  assert.notEqual(f.context.mutations.unavailable, null)
+  t.mock.timers.tick(500)
+  await f.context.mutations.queue.run(async () => undefined)
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  assert.equal((await lstat(providerStatePath(f.root, f.spec.launchAttemptId))).isDirectory(), true)
+  f.owner.dispose()
+})
+
 test("process terminal observation uses the five-second termination deadline", async t => {
   const f = await syntheticAgentProcess(t, "termination-hang")
   await f.owner.initialize(new AbortController().signal)

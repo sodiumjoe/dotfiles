@@ -73,7 +73,10 @@ try {
       } }
     },
     agentFactory(input) {
-      let writingReceipt = false
+      let writingReceipt = false, evidenceCalls = 0
+      const startupHang = async (boundary: AgentHandlerOptions["startupHang"]): Promise<void> => {
+        if (config.startupHang === boundary) await new Promise<void>(() => undefined)
+      }
       const hang = async (boundary: AgentHandlerOptions["reservationHang"]): Promise<void> => {
         if (config.reservationHang === boundary) await new Promise<void>(() => undefined)
       }
@@ -92,6 +95,7 @@ try {
       } })
       return createAgentService({ ...input, store: { ...base, async writeAgent(next, expected) {
         await base.writeAgent(next, expected)
+        if (next.phase === "ready") await startupHang("publication")
         if (next.phase === "ready") await pause("ready")
       }, async writeCommand(next, expected) {
         if (next.op === "stop" && next.state === "completed") await pause("stop-receipt-before")
@@ -113,10 +117,11 @@ try {
         } } })
         return { ...owner, async cleanup() { const record = await owner.cleanup(); await pause("stop-verified"); return record } }
       }, async observeLaunchEvidence(spec, expected) {
+        if (++evidenceCalls === 5) await startupHang("evidence")
         const current = await createCatalogStore(config.paths.persistentRoot).readCurrent()
         if (!current || current.snapshotId !== spec.catalogSnapshotId || !isDeepStrictEqual(current.providers[0], spec.catalogEvidence) || !isDeepStrictEqual(config.profile, expected.profile) || !isDeepStrictEqual(await observeConfig(config.profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
-      }, fatalReservationTimeout(spec): never {
-        if (!config.reservationHang || spec.handlerGeneration !== generation) throw new Error("unexpected fixture reservation timeout")
+      }, fatalStartupTimeout(spec): never {
+        if (!(config.reservationHang || config.startupHang) || spec.handlerGeneration !== generation) throw new Error("unexpected fixture startup timeout")
         const handlerPid = process.pid
         writeFileSync(join(root, "reservation-timeout.json"), JSON.stringify({ pid: handlerPid, signal: "SIGKILL", attempt: spec.launchAttemptId }), { mode: 0o600 })
         if (handlerPid !== process.pid) throw new Error("fixture Handler identity changed")

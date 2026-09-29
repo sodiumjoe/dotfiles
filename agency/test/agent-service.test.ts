@@ -5,7 +5,7 @@ import { promises as filesystem } from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
 import { lstat, mkdir, rename, rm, readdir, writeFile, readFile } from "node:fs/promises"
 import { join } from "node:path"
-import { agentServiceFixture } from "./agent-support.js"
+import { agentGate, agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 import { gitFixture } from "./checkout-support.js"
 import { createAgentService } from "../src/agent/service.js"
@@ -600,6 +600,55 @@ test("ready evidence observation cannot publish after the startup envelope", asy
   assert.equal((await f.service.list()).agents[0]!.record.failure?.code, "STARTUP_TIMEOUT")
   assert.equal(f.publications.includes("agent:ready"), false)
   assert.equal((await f.store.readCommand(f.input.commandId))!.state, "pending")
+  assert.notEqual((await f.service.list()).agents[0]!.cleanup, "verified")
+})
+
+for (const boundary of [4, 5, "publication"] as const) test(`startup watchdog fail-stops stalled readiness ${boundary} without abandoning its queue`, async t => {
+  const entered = agentGate(), released = agentGate()
+  t.after(() => released.resolve())
+  const f = await agentServiceFixture(t, { async observe(count) { if (count === boundary) { entered.resolve(); await released.promise } } })
+  if (boundary === "publication") f.holdReady(true)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  await f.service.start(f.input)
+  await (boundary === "publication" ? f.readyCommitEntered : entered.promise)
+  let queueReleased = false
+  const following = f.context.mutations.queue.run(async () => { queueReleased = true; return f.context.mutations.unavailable })
+  t.mock.timers.tick(30000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.fatalCalls(), 1)
+  assert.notEqual(f.context.mutations.unavailable, null)
+  assert.equal(queueReleased, false)
+  assert.equal((await f.store.readCommand(f.input.commandId))!.state, "pending")
+  released.resolve(); f.releaseReadyCommit()
+  assert.notEqual(await following, null)
+  t.mock.timers.tick(30000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.fatalCalls(), 1)
+  assert.equal(f.publications.includes("start:completed"), false)
+  assert.equal((await f.service.list()).agents[0]!.live, false)
+  assert.notEqual((await f.service.list()).agents[0]!.cleanup, "verified")
+})
+
+for (const boundary of ["preparation", "removal"] as const) test(`startup watchdog fail-stops stalled failed-start ${boundary}`, async t => {
+  const f = await agentServiceFixture(t, boundary === "preparation" ? { pause: "attempted" } : { pauseStateRemoval: true, async observe(count) { if (count === 5) throw new Error("final evidence failed") } })
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  await f.service.start(f.input)
+  if (boundary === "preparation") {
+    await f.entered
+    t.mock.timers.tick(5000)
+    await new Promise(resolve => setImmediate(resolve))
+  } else while (!f.stateRemovalCalls()) await new Promise(resolve => setImmediate(resolve))
+  let queueReleased = false
+  const following = f.context.mutations.queue.run(async () => { queueReleased = true; return f.context.mutations.unavailable })
+  t.mock.timers.tick(30000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.fatalCalls(), 1)
+  assert.notEqual(f.context.mutations.unavailable, null)
+  assert.equal(queueReleased, false)
+  f.release(); f.releaseStateRemoval()
+  assert.notEqual(await following, null)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.publications.includes("start:completed"), false)
   assert.notEqual((await f.service.list()).agents[0]!.cleanup, "verified")
 })
 
