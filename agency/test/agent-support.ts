@@ -146,6 +146,22 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     async reservationTimeoutEvidence() { return JSON.parse(await readFile(join(f.root, "reservation-timeout.json"), "utf8")) as { pid: number; signal: string; attempt: string } },
     async restart() { await configure({}); await releaseBarrier(); await f.start(15000) },
     async killProvider(target: AgentTuple) { await trackProviders(); const record = [...owned.values()].find(record => record.agentId === target.agentId && record.handlerGeneration === target.handlerGeneration); assert.ok(record?.provider); await f.signal(record.provider.group.leader, "SIGKILL"); await proveAbsent(record.provider.group.leader) },
+    async assertProviderAbsent(target: AgentTuple) {
+      await trackProviders()
+      const agent = await createAgentStore(f.paths.persistentRoot).readAgent(target.agentId)
+      assert.ok(agent)
+      assert.equal(agent.spec.handlerGeneration, target.handlerGeneration)
+      assert.equal(agent.spec.providerGeneration, target.providerGeneration)
+      const record = owned.get(agent.spec.launchAttemptId)
+      assert.ok(record?.provider)
+      assert.equal(record.agentId, target.agentId)
+      assert.equal(record.handlerGeneration, target.handlerGeneration)
+      const identities = new Map([record.provider.group.leader, ...record.provider.group.observed].map(identity => [identity.pid, identity]))
+      for (let pass = 0; pass < 2; pass++) {
+        for (const identity of identities.values()) assert.equal(await f.observe(identity.pid), null)
+        assert.deepEqual(await f.adapter.readGroup(record.provider.group.leader.processGroupId), [])
+      }
+    },
     verifyZeroSurvivors: cleanupOwned,
     async cleanupEvidence() { return JSON.parse(await readFile(join(f.root, "agent-cleanup.json"), "utf8")) as { providers: LaunchRecord[]; launches: Array<{ path: string; record: LaunchRecord }>; survivors: unknown[] } },
   }

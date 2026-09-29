@@ -96,6 +96,7 @@ test("private Handler protocol routes one prompt through the ready owned provide
   const inventory = await f.inventory(), agent = inventory.agents.find(record => record.spec.agentId === target.agentId)!
   assert.equal(inventory.launches.find(entry => entry.record.agentId === target.agentId)!.record.phase, "cleanup_verified")
   await assert.rejects(lstat(providerStatePath(f.paths.persistentRoot, agent.spec.launchAttemptId)), { code: "ENOENT" })
+  await f.assertProviderAbsent(target)
   await f.verifyZeroSurvivors()
   const cleanup = await f.cleanupEvidence()
   assert.equal(cleanup.providers.find(record => record.agentId === target.agentId)!.launchAttemptId, agent.spec.launchAttemptId)
