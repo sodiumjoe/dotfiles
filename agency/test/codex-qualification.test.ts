@@ -5,7 +5,7 @@ import { constants } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
-import childProcess, { execFile } from "node:child_process"
+import { execFile } from "node:child_process"
 import { syncBuiltinESMExports } from "node:module"
 import { promisify } from "node:util"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
@@ -19,6 +19,7 @@ import { createLinuxAdapter } from "../src/platform/linux.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import { sameProcess } from "../src/platform/types.js"
+import { exchangeAgent as exchangeAgentProtocol } from "../src/agent/protocol.js"
 import { codexQualificationMain, durableQualificationWrite, parseCodexQualificationReport, parseQualificationCandidate, pinnedArtifact, qualificationPaths, renderPublishedQualificationSource, runCodexQualification, snapshotTree, validateQualifiedOwnership, type QualificationDependencies } from "../scripts/qualify-codex.js"
 import * as qualificationScript from "../scripts/qualify-codex.js"
 
@@ -250,6 +251,7 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     normalStatePaths: [normal],
     async createExecutionRoot() { const execution = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqx-" : "/tmp/agyqx-"); executionRoots.push(execution); return execution },
   }
+  ;(dependencies as any).currentRevision = async () => ({ branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit })
   t.after(async () => {
     assert.deepEqual(productionLaunchContracts(), registryBefore)
     for (const execution of executionRoots) {
@@ -293,6 +295,40 @@ test("qualification rejects invalid reviewed revisions before artifact verificat
   assert.deepEqual(await readdir(f.request.evidenceParent), [])
 })
 
+test("default current revision observation uses bounded branch and HEAD commands", async () => {
+  const observe = (qualificationScript as unknown as { observeCurrentRevision?: (execute?: unknown) => Promise<{ branch: string; commit: string }> }).observeCurrentRevision
+  assert.equal(typeof observe, "function")
+  const calls: Array<{ file: string; args: readonly string[]; options: Record<string, unknown> }> = []
+  const execute = async (file: string, args: readonly string[], options: Record<string, unknown>) => {
+    calls.push({ file, args, options })
+    return args[0] === "branch" ? { stdout: reviewedRevision.reviewedBranch + "\n", stderr: "" } : { stdout: reviewedRevision.reviewedCommit + "\n", stderr: "" }
+  }
+  assert.deepEqual(await observe!(execute), { branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit })
+  assert.deepEqual(calls.map(({ file, args }) => ({ file, args })), [
+    { file: "/usr/bin/git", args: ["branch", "--show-current"] },
+    { file: "/usr/bin/git", args: ["rev-parse", "--verify", "HEAD"] },
+  ])
+  for (const { options } of calls) {
+    assert.equal(options.cwd, "/Users/moon/.dotfiles/.worktrees/agency-agent-lifecycle")
+    assert.equal(options.timeout, 5000)
+    assert.equal(options.maxBuffer, 4096)
+  }
+})
+
+test("live qualification rejects current branch or HEAD drift before evidence creation", async t => {
+  for (const current of [
+    { branch: "master", commit: reviewedRevision.reviewedCommit },
+    { branch: reviewedRevision.reviewedBranch, commit: "b".repeat(40) },
+  ]) {
+    const f = await qualificationHarnessFixture(t)
+    let observations = 0
+    ;(f.dependencies as any).currentRevision = async () => { observations++; return current }
+    await assert.rejects(runCodexQualification(f.request, f.dependencies), { code: "ADAPTER_UNQUALIFIED" })
+    assert.equal(observations, 1)
+    assert.deepEqual(await readdir(f.request.evidenceParent), [])
+  }
+})
+
 for (const gate of ["artifact", "normal"] as const) test(`initial ${gate} failure writes a not-started report without launching`, async t => {
   const f = await qualificationHarnessFixture(t), verify = f.dependencies.verify
   if (gate === "artifact") f.dependencies.verify = async () => { throw new AgentError("ADAPTER_UNQUALIFIED") }
@@ -308,19 +344,13 @@ for (const gate of ["artifact", "normal"] as const) test(`initial ${gate} failur
   assert.deepEqual(f.executionRoots, [])
 })
 
-test("qualification binds the controller revision without source-worktree Git subprocesses", async t => {
-  const f = await qualificationHarnessFixture(t), original = childProcess.execFile
-  const execute = promisify(original)
-  childProcess.execFile = Object.assign(((...args: Parameters<typeof execFile>) => Reflect.apply(original, childProcess, args)) as typeof execFile, {
-    [promisify.custom]: (file: string, argv: readonly string[], options: Parameters<typeof execute>[2]) => {
-      if (file === "/usr/bin/git" && (argv[0] === "rev-parse" || argv[0] === "branch")) throw new Error("source-worktree Git is outside qualification authority")
-      return execute(file, argv, options)
-    },
-  })
-  syncBuiltinESMExports()
-  t.after(() => { childProcess.execFile = original; syncBuiltinESMExports() })
+test("qualification binds the controller revision to the observed current revision", async t => {
+  const f = await qualificationHarnessFixture(t)
+  let observations = 0
+  ;(f.dependencies as any).currentRevision = async () => { observations++; return { branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit } }
   const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.equal(observations, 1)
   assert.equal(report.branch, reviewedRevision.reviewedBranch)
   assert.equal(report.commit, reviewedRevision.reviewedCommit)
 })
@@ -344,7 +374,37 @@ test("successful fixture qualification has complete postconditions and no profil
   assert.ok(Object.values(report.deadlines).every(value => value.outcome === "completed"))
   assert.deepEqual(parseCodexQualificationReport(report), report)
   assert.deepEqual(productionLaunchContracts(), f.registryBefore)
+  for (const version of [1, 2]) assert.throws(() => parseQualificationCandidate({ ...f.candidate, version }), { code: "ADAPTER_UNQUALIFIED" })
   for (const version of [1, 2]) assert.throws(() => parseCodexQualificationReport({ ...report, version }), { code: "REPORT_INVALID" })
+})
+
+test("prompt Handler exchange reserves bounded dispatch and reply overhead", async t => {
+  const f = await qualificationHarnessFixture(t)
+  let promptTimeout: number | null = null
+  ;(f.dependencies as any).exchangeAgent = (socket: Parameters<typeof exchangeAgentProtocol>[0], request: Parameters<typeof exchangeAgentProtocol>[1], timeout: number) => {
+    if (request.op === "agent_prompt") promptTimeout = timeout
+    return exchangeAgentProtocol(socket, request, timeout)
+  }
+  const { report } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.equal(promptTimeout, 95000)
+  assert.ok(promptTimeout > f.candidate.manifest.deadlines.promptMs)
+  assert.ok(promptTimeout <= f.candidate.manifest.deadlines.promptMs + f.candidate.manifest.deadlines.commandMs)
+})
+
+test("top-level prompt remains not started when the Handler never receives prompt authority", async t => {
+  const f = await qualificationHarnessFixture(t)
+  ;(f.dependencies as any).exchangeAgent = (socket: Parameters<typeof exchangeAgentProtocol>[0], request: Parameters<typeof exchangeAgentProtocol>[1], timeout: number) => {
+    if (request.op === "agent_prompt") { socket.destroy(); return Promise.reject(new AgentError("INVALID_PROTOCOL")) }
+    return exchangeAgentProtocol(socket, request, timeout)
+  }
+  const { report } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, false)
+  assert.equal(report.failure, "INVALID_PROTOCOL")
+  assert.deepEqual(report.prompt, { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null })
+  assert.equal(report.deadlines.prompt.outcome, "not_reached")
+  assert.deepEqual(report.prompt, report.observation.receipt!.prompt)
+  assert.deepEqual(report.protocol.methods, report.observation.receipt!.methods)
 })
 
 test("successful prompt qualification removes surrounding whitespace only", async t => {
@@ -412,6 +472,21 @@ test("source generation is bound to the exact report bytes and reviewed candidat
   assert.throws(() => renderPublishedQualificationSource(f.candidate, JSON.parse(equivalent.toString()), observed, digest(equivalent), reviewedRevision), { code: "EVIDENCE_PUBLICATION_FAILED" })
   for (const revision of [{ ...reviewedRevision, reviewedCommit: "b".repeat(40) }, { ...reviewedRevision, reviewedBranch: "master" }]) {
     assert.throws(() => renderPublishedQualificationSource(f.candidate, result.report, observed, observed, revision), { code: "ADAPTER_UNQUALIFIED" })
+  }
+})
+
+test("source generation rejects current branch or HEAD drift before revalidation", async t => {
+  const f = await qualificationHarnessFixture(t), result = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(result.report.qualified, true, JSON.stringify(result.report))
+  for (const current of [
+    { branch: "master", commit: reviewedRevision.reviewedCommit },
+    { branch: reviewedRevision.reviewedBranch, commit: "b".repeat(40) },
+  ]) {
+    let observations = 0
+    ;(f.dependencies as any).currentRevision = async () => { observations++; return current }
+    const args = ["--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", result.reportPath!, "--report-sha256", result.reportSha256!, ...revisionArgs]
+    await assert.rejects(Reflect.apply(codexQualificationMain, undefined, [args, f.dependencies]), { code: "ADAPTER_UNQUALIFIED" })
+    assert.equal(observations, 1)
   }
 })
 
@@ -600,6 +675,27 @@ test("qualified report rejects missing and substituted identity and session evid
     assert.throws(() => parseCodexQualificationReport(value))
   }
   assert.throws(() => validateQualifiedOwnership({ ...baseline.ownership, extra: true }))
+})
+
+test("report parser rejects contradictory prompt receipt evidence", async t => {
+  const f = await qualificationHarnessFixture(t)
+  const { report: baseline } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(baseline.qualified, true, JSON.stringify(baseline))
+  const cases: Array<[string, (report: any) => void]> = [
+    ["receipt prompt", r => { r.observation.receipt.prompt.answer += "x" }],
+    ["receipt methods", r => { r.observation.receipt.methods.pop() }],
+    ["protocol methods", r => { r.protocol.methods.pop() }],
+    ["prompt method without attempt", r => { const empty = { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null }; r.qualified = false; r.failure = "STARTUP_FAILED"; r.prompt = empty; r.observation.receipt.prompt = empty }],
+    ["attempt without prompt method", r => { r.qualified = false; r.failure = "STARTUP_FAILED"; r.protocol.methods.pop(); r.observation.receipt.methods.pop() }],
+    ["receipt prompt duration", r => { r.observation.receipt.prompt.durationMs += 1 }],
+    ["receipt phase duration", r => { r.observation.receipt.durations.prompt += 1 }],
+    ["top-level prompt duration", r => { r.prompt.durationMs += 1 }],
+  ]
+  for (const [name, mutate] of cases) await t.test(name, () => {
+    const report = structuredClone(baseline)
+    mutate(report)
+    assert.throws(() => parseCodexQualificationReport(report), { code: "REPORT_INVALID" })
+  })
 })
 
 test("two-child qualification requires exact retained descriptor identities", async t => {
