@@ -183,5 +183,5 @@ export function launchEvidenceFromQualifiedCandidate(input: CodexQualificationCa
 export function renderQualifiedContractSource(input: CodexQualificationCandidate, evidence: { qualified: true; manifestFingerprint: string }): string {
   const candidate = parseCandidate(input)
   if (evidence.qualified !== true || evidence.manifestFingerprint !== candidate.fingerprint) invalid()
-  return `import type { LaunchContract } from "./contracts.js"\nimport { contractFromQualifiedCandidate } from "./qualification.js"\nexport function qualifiedLaunchContracts(): readonly LaunchContract[] { return Object.freeze([contractFromQualifiedCandidate(${JSON.stringify(candidate)})]) }`
+  return `import type { LaunchContract } from "./contracts.js"\n\nexport const codexDarwinArm64QualifiedContract: LaunchContract = ${JSON.stringify(contractFromQualifiedCandidate(candidate), null, 2)}`
 }

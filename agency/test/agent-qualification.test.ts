@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { chmod, link, mkdir, open, readFile, lstat, rename, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import test, { type TestContext } from "node:test"
 import { parseLaunchContract, productionLaunchContracts, resolveLaunchSpec } from "../src/agent/contracts.js"
 import { contractFromQualifiedCandidate, launchEvidenceFromQualifiedCandidate, observeArtifact, parseCodexQualificationManifest, renderQualifiedContractSource, verifyCodexQualification, type ArtifactPin } from "../src/agent/qualification.js"
@@ -190,7 +191,13 @@ test("qualified candidate derives exact contract and catalog evidence", { skip: 
   assert.equal(evidence.profile.adapterPackageJson, f.packageJson)
   assert.equal(evidence.provider.models[0]?.modelId, "gpt-5.6-sol")
   assert.equal(evidence.configuration.fingerprint, observed.fingerprint)
-  assert.match(renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: candidate.fingerprint }), /agency-deny-all-v1/)
+  const source = renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: candidate.fingerprint })
+  const sourcePath = join(f.root, "codex-qualified-contract.mts")
+  await symlink(fileURLToPath(new URL("../src/agent/qualification.js", import.meta.url)), join(f.root, "qualification.js"))
+  await writeFile(sourcePath, source)
+  const generated = await import(pathToFileURL(sourcePath).href)
+  assert.deepEqual(Object.keys(generated), ["codexDarwinArm64QualifiedContract"])
+  assert.deepEqual(parseLaunchContract(generated.codexDarwinArm64QualifiedContract), contract)
   assert.throws(() => renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: "0".repeat(64) }), { code: "ADAPTER_UNQUALIFIED" })
 })
 

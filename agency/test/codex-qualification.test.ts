@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile, symlink, open, readdir, chmod 
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createHash } from "node:crypto"
-import { execFile } from "node:child_process"
+import childProcess, { execFile } from "node:child_process"
+import { syncBuiltinESMExports } from "node:module"
 import { promisify } from "node:util"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
 import { launchEvidenceFromQualifiedCandidate, qualificationFingerprint } from "../src/agent/qualification.js"
@@ -15,7 +16,10 @@ import { createLinuxAdapter } from "../src/platform/linux.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import { sameProcess } from "../src/platform/types.js"
-import { durableQualificationWrite, parseCodexQualificationReport, pinnedArtifact, qualificationPaths, renderPublishedQualificationSource, runCodexQualification, snapshotTree, validateQualifiedOwnership, type QualificationDependencies } from "../scripts/qualify-codex.js"
+import { codexQualificationMain, durableQualificationWrite, parseCodexQualificationReport, pinnedArtifact, qualificationPaths, renderPublishedQualificationSource, runCodexQualification, snapshotTree, validateQualifiedOwnership, type QualificationDependencies } from "../scripts/qualify-codex.js"
+
+const reviewedRevision = { reviewedBranch: "moon/agency-agent-lifecycle", reviewedCommit: "1234567890abcdef1234567890abcdef12345678" }
+const revisionArgs = ["--reviewed-branch", reviewedRevision.reviewedBranch, "--reviewed-commit", reviewedRevision.reviewedCommit]
 
 async function qualificationHarnessFixture(t: TestContext, scenario = "normal") {
   const root = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqt-" : "/tmp/agyqt-")
@@ -74,8 +78,44 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     }
     await rm(root, { recursive: true, force: true })
   })
-  return { root, user, candidate, request: { candidatePath, evidenceParent }, dependencies }
+  return { root, user, candidate, request: { candidatePath, evidenceParent, ...reviewedRevision }, dependencies }
 }
+
+test("qualification rejects invalid reviewed revisions before artifact verification or attempt creation", async t => {
+  const f = await qualificationHarnessFixture(t)
+  let verified = 0
+  f.dependencies.verify = async () => { verified++; throw new Error("verification must not run") }
+  for (const revision of [
+    {}, { reviewedBranch: reviewedRevision.reviewedBranch }, { reviewedCommit: reviewedRevision.reviewedCommit },
+    { ...reviewedRevision, reviewedBranch: "master" }, { ...reviewedRevision, reviewedBranch: "moon/agency-agent-lifecycle\n" },
+    ...["", "abc123", "g".repeat(40), "A".repeat(40), "0".repeat(40), reviewedRevision.reviewedCommit + "\n", 123].map(reviewedCommit => ({ ...reviewedRevision, reviewedCommit })),
+  ]) {
+    await assert.rejects(runCodexQualification({ candidatePath: f.request.candidatePath, evidenceParent: f.request.evidenceParent, ...revision } as typeof f.request, f.dependencies), { code: "ADAPTER_UNQUALIFIED" })
+  }
+  assert.equal(verified, 0)
+  assert.deepEqual(await readdir(f.request.evidenceParent), [])
+})
+
+test("qualification binds the controller revision without source-worktree Git subprocesses", async t => {
+  const f = await qualificationHarnessFixture(t), original = childProcess.execFile
+  const execute = promisify(original)
+  childProcess.execFile = Object.assign(((...args: Parameters<typeof execFile>) => Reflect.apply(original, childProcess, args)) as typeof execFile, {
+    [promisify.custom]: (file: string, argv: readonly string[], options: Parameters<typeof execute>[2]) => {
+      if (file === "/usr/bin/git" && (argv[0] === "rev-parse" || argv[0] === "branch")) throw new Error("source-worktree Git is outside qualification authority")
+      return execute(file, argv, options)
+    },
+  })
+  syncBuiltinESMExports()
+  t.after(() => { childProcess.execFile = original; syncBuiltinESMExports() })
+  const { report } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.equal(report.branch, reviewedRevision.reviewedBranch)
+  assert.equal(report.commit, reviewedRevision.reviewedCommit)
+  const nextRequest = { ...f.request, reviewedCommit: "b".repeat(40) }
+  const { report: again } = await runCodexQualification(nextRequest, f.dependencies)
+  assert.equal(again.failure, "ATTEMPT_ALREADY_STARTED")
+  assert.deepEqual(again.ownership.handlers, [])
+})
 
 test("successful fixture qualification has complete postconditions and no profile", async t => {
   const f = await qualificationHarnessFixture(t)
@@ -126,7 +166,7 @@ test("report publication fsync failure cannot qualify or register", async t => {
     assert.ok(!(await readdir(join(directory, name))).includes("report.json"))
     const failed = JSON.parse(await readFile(join(directory, name, "report-failed.json"), "utf8"))
     assert.equal(parseCodexQualificationReport(failed).qualified, false)
-    await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", join(directory, name, "report-failed.json")]), { code: 1 })
+    await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", join(directory, name, "report-failed.json"), ...revisionArgs]), { code: 1 })
   }
 })
 
@@ -145,24 +185,61 @@ test("marker fsync failure consumes the only attempt before Handler launch", asy
 
 test("source rejects a success report while its publication is still pending", async t => {
   const f = await qualificationHarnessFixture(t)
-  let rejected = 0, visible = ""
+  let rejected = 0, visible = "", resolved = false, copied = false
+  const copy = join(f.root, "report-copy.json")
   f.dependencies.publish = async (path, value) => {
     await durableQualificationWrite(path, value)
+    if (path === copy) { assert.equal(resolved, false); copied = true }
     if (!path.endsWith("/report.json") || !(value as { qualified: boolean }).qualified) return
+    assert.equal(resolved, false)
     visible = path
     for (const capability of [[], ["--publication-capability", (value as { publication: { capabilityHash: string } }).publication.capabilityHash]]) {
-      try { await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", path, ...capability]) } catch { rejected++ }
+      try { await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", path, ...revisionArgs, ...capability]) } catch { rejected++ }
     }
   }
-  const { report, publicationCapability } = await runCodexQualification(f.request, f.dependencies)
+  const result = await runCodexQualification({ ...f.request, reportPath: copy }, f.dependencies).then(result => { resolved = true; return result })
+  const { report, publicationCapability } = result
   assert.equal(report.qualified, true)
+  assert.equal(copied, true)
+  await t.test("returns the exact published report path", async () => {
+    assert.ok("reportPath" in result)
+    assert.equal(result.reportPath, visible)
+    assert.deepEqual(JSON.parse(await readFile(visible, "utf8")), report)
+    assert.deepEqual(JSON.parse(await readFile(copy, "utf8")), report)
+  })
   assert.equal(rejected, 2)
   assert.ok(publicationCapability)
   assert.ok(!JSON.stringify(report).includes(publicationCapability))
-  assert.match(renderPublishedQualificationSource(f.candidate, report, publicationCapability), /qualifiedLaunchContracts/)
-  assert.throws(() => renderPublishedQualificationSource(f.candidate, report, "0".repeat(64)), { code: "EVIDENCE_PUBLICATION_FAILED" })
-  const source = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible, "--publication-capability", publicationCapability])
-  assert.match(source.stdout, /qualifiedLaunchContracts/); assert.deepEqual(productionLaunchContracts(), [])
+  await t.test("emits the named contract source", () => {
+    assert.match(renderPublishedQualificationSource(f.candidate, report, publicationCapability, reviewedRevision), /export const codexDarwinArm64QualifiedContract: LaunchContract/)
+  })
+  assert.throws(() => renderPublishedQualificationSource(f.candidate, report, "0".repeat(64), reviewedRevision), { code: "EVIDENCE_PUBLICATION_FAILED" })
+  for (const revision of [undefined, { ...reviewedRevision, reviewedCommit: "b".repeat(40) }, { ...reviewedRevision, reviewedBranch: "master" }]) {
+    await t.test(`rejects the wrong revision handoff ${JSON.stringify(revision)}`, () => {
+      assert.throws(() => Reflect.apply(renderPublishedQualificationSource, undefined, [f.candidate, report, publicationCapability, revision]), { code: "ADAPTER_UNQUALIFIED" })
+    })
+  }
+  const sourceArgs = ["--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible, "--publication-capability", publicationCapability]
+  await assert.rejects(codexQualificationMain(sourceArgs), { code: "ADAPTER_UNQUALIFIED" })
+  await assert.rejects(codexQualificationMain([...sourceArgs, "--reviewed-branch", reviewedRevision.reviewedBranch, "--reviewed-commit", "b".repeat(40)]), { code: "ADAPTER_UNQUALIFIED" })
+  const source = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), ...sourceArgs, ...revisionArgs])
+  assert.match(source.stdout, /export const codexDarwinArm64QualifiedContract: LaunchContract/); assert.deepEqual(productionLaunchContracts(), [])
+  assert.ok(!source.stdout.includes(publicationCapability)); assert.ok(!source.stdout.includes(visible))
+})
+
+test("failed secondary publication returns only the durable failure report without a capability", async t => {
+  const f = await qualificationHarnessFixture(t), copy = join(f.root, "report-copy.json")
+  f.dependencies.publish = async (path, value) => {
+    if (path === copy) throw new Error("secondary publication failed")
+    await durableQualificationWrite(path, value)
+  }
+  const result = await runCodexQualification({ ...f.request, reportPath: copy }, f.dependencies)
+  assert.equal(result.report.failure, "EVIDENCE_PUBLICATION_FAILED")
+  assert.equal(result.publicationCapability, null)
+  assert.ok("reportPath" in result && typeof result.reportPath === "string")
+  assert.ok(result.reportPath.endsWith("/report-failed.json"))
+  assert.deepEqual(JSON.parse(await readFile(result.reportPath, "utf8")), result.report)
+  assert.throws(() => renderPublishedQualificationSource(f.candidate, result.report, "0".repeat(64), reviewedRevision), { code: "ADAPTER_UNQUALIFIED" })
 })
 
 test("source rejects visible success bytes after fsync and invalidation both fail", async t => {
@@ -174,13 +251,16 @@ test("source rejects visible success bytes after fsync and invalidation both fai
     try { await durableQualificationWrite(path, value, { open: (async (...args: Parameters<typeof open>) => { const handle = await open(...args); handle.sync = async () => { throw new Error("fixture fsync failure") }; return handle }) as typeof open }) }
     catch (error) { await chmod(dirname(path), 0); throw error }
   }
-  const { report, publicationCapability } = await runCodexQualification(f.request, f.dependencies)
+  const result = await runCodexQualification(f.request, f.dependencies)
+  const { report, publicationCapability } = result
   await chmod(dirname(visible), 0o700)
+  assert.ok("reportPath" in result)
+  assert.equal(result.reportPath, null)
   assert.equal(publicationCapability, null)
   assert.equal(report.qualified, false); assert.equal(report.failure, "EVIDENCE_PUBLICATION_FAILED")
   assert.equal(JSON.parse(await readFile(visible, "utf8")).qualified, true)
-  await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible]), { code: 1 })
-  await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible, "--publication-capability", "0".repeat(64)]), { code: 1 })
+  await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible, ...revisionArgs]), { code: 1 })
+  await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible, "--publication-capability", "0".repeat(64), ...revisionArgs]), { code: 1 })
 })
 
 for (const kind of ["delayed", "never-settling"] as const) test(`${kind} parent absence prevents qualification and retains roots`, async t => {
@@ -362,7 +442,7 @@ test("two-child qualification requires exact retained descriptor identities", as
   const baseline = structuredClone(report)
   baseline.observation.descriptors!.processes.reverse()
   assert.equal(parseCodexQualificationReport(baseline).qualified, true)
-  assert.match(renderPublishedQualificationSource(f.candidate, baseline, publicationCapability), /qualifiedLaunchContracts/)
+  assert.match(renderPublishedQualificationSource(f.candidate, baseline, publicationCapability, reviewedRevision), /codexDarwinArm64QualifiedContract/)
   for (const mutation of ["omitted", "substituted-birth", "substituted-parent", "extra"] as const) {
     const value = structuredClone(baseline), descriptors = value.observation.descriptors!.processes, absence = value.observation.absence!
     const child = descriptors.find(p => p.role === "child")!
@@ -377,7 +457,7 @@ test("two-child qualification requires exact retained descriptor identities", as
       Object.assign(absence.targets.find(p => p.pid === child.process.pid)!, child.process)
     }
     await t.test(`parser rejects ${mutation} descriptor identity`, () => { assert.throws(() => parseCodexQualificationReport(value), { code: "REPORT_INVALID" }) })
-    await t.test(`source rejects ${mutation} descriptor identity`, () => { assert.throws(() => renderPublishedQualificationSource(f.candidate, value, publicationCapability), { code: "REPORT_INVALID" }) })
+    await t.test(`source rejects ${mutation} descriptor identity`, () => { assert.throws(() => renderPublishedQualificationSource(f.candidate, value, publicationCapability, reviewedRevision), { code: "REPORT_INVALID" }) })
   }
   await t.test("runtime retains both initialized children before readiness", () => {
     for (const group of [report.ownership.providerProcessGroup!, report.observation.retained.launch!.provider!.group]) {

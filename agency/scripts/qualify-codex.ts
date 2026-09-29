@@ -61,8 +61,9 @@ export type CodexQualificationReport = {
     handler: "absent" | "present" | "unknown"; userState: "unchanged" | "changed" | "unknown"; catalogProfile: "absent" | "present" | "unknown"; normalAgencyState: "unchanged" | "changed" | "unknown"
   }
 }
-export type QualificationRequest = { candidatePath: string; evidenceParent: string; reportPath?: string }
-export type QualificationResult = { report: CodexQualificationReport; publicationCapability: string | null }
+export type ReviewedRevision = { reviewedBranch: string; reviewedCommit: string }
+export type QualificationRequest = ReviewedRevision & { candidatePath: string; evidenceParent: string; reportPath?: string }
+export type QualificationResult = { report: CodexQualificationReport; reportPath: string | null; publicationCapability: string | null }
 export type QualificationDependencies = {
   adapter: PlatformAdapter; hostKey: string; verify: typeof verifyCodexQualification
   handler(candidatePath: string, executionRoot: string): HandlerCommand
@@ -76,6 +77,10 @@ class QualificationError extends Error { constructor(readonly code: Failure) { s
 function fail(code: Failure): never { throw new QualificationError(code) }
 const classify = (error: unknown, fallback: Failure): Failure => error instanceof QualificationError || error instanceof AgentError || error instanceof QualificationObservationError ? error.code : fallback
 const equal = (left: unknown, right: unknown, code: Failure = "OWNERSHIP_INVALID"): void => { if (!isDeepStrictEqual(left, right)) fail(code) }
+function reviewedRevision(value: { reviewedBranch: unknown; reviewedCommit: unknown } | undefined): { branch: "moon/agency-agent-lifecycle"; commit: string } {
+  if (value?.reviewedBranch !== "moon/agency-agent-lifecycle" || typeof value.reviewedCommit !== "string" || !/^[0-9a-f]{40}$/.test(value.reviewedCommit) || value.reviewedCommit === "0".repeat(40)) fail("ADAPTER_UNQUALIFIED")
+  return { branch: "moon/agency-agent-lifecycle", commit: value.reviewedCommit }
+}
 function object(value: unknown, names: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== names.length || names.some(name => !Object.hasOwn(value, name))) fail("REPORT_INVALID")
   return value as Record<string, unknown>
@@ -270,8 +275,10 @@ function validateAbsenceObservation(value: unknown, limitMs: number): void {
   equal(a.groups, [...new Set(targets.map(p => p.processGroupId))].sort((a, b) => a - b), "REPORT_INVALID")
   if (a.outcome === "completed" && (a.passes !== 2 || a.durationMs >= limitMs || a.handler !== "absent" || a.provider !== "absent")) fail("REPORT_INVALID")
 }
-export function renderPublishedQualificationSource(candidate: CodexQualificationCandidate, value: unknown, capability: string): string {
+export function renderPublishedQualificationSource(candidate: CodexQualificationCandidate, value: unknown, capability: string, revision: ReviewedRevision): string {
+  const reviewed = reviewedRevision(revision)
   const report = parseCodexQualificationReport(value)
+  equal({ branch: report.branch, commit: report.commit }, reviewed, "ADAPTER_UNQUALIFIED")
   if (!report.qualified) fail("ADAPTER_UNQUALIFIED")
   if (!/^[0-9a-f]{64}$/.test(capability) || !report.publication.capabilityHash || !timingSafeEqual(createHash("sha256").update(capability).digest(), Buffer.from(report.publication.capabilityHash, "hex"))) fail("EVIDENCE_PUBLICATION_FAILED")
   return renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: report.manifestFingerprint })
@@ -380,15 +387,15 @@ async function evidenceDirectory(parent: string): Promise<string> {
   return directory
 }
 export async function runCodexQualification(request: QualificationRequest, dependencies?: QualificationDependencies): Promise<QualificationResult> {
+  const revision = reviewedRevision(request)
+  if (request.reportPath !== undefined) canonical(request.reportPath)
   const candidate = parseQualificationCandidate(await readPrivateJson(request.candidatePath))
   const deps = dependencies ?? await defaultDependencies(), publish = deps.publish ?? durableQualificationWrite
   const observation = await deps.verify(candidate.manifest)
   equal(observation.fingerprint, candidate.fingerprint, "ADAPTER_UNQUALIFIED")
-  const git = promisify(execFile), repo = fileURLToPath(new URL("../../", import.meta.url))
-  const commit = (await git("/usr/bin/git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim()
-  if ((await git("/usr/bin/git", ["branch", "--show-current"], { cwd: repo })).stdout.trim() !== "moon/agency-agent-lifecycle") fail("ADAPTER_UNQUALIFIED")
+  const git = promisify(execFile)
   const report: CodexQualificationReport = {
-    version: 1, manifestFingerprint: candidate.fingerprint, branch: "moon/agency-agent-lifecycle", commit, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), qualified: false, failure: null,
+    version: 1, manifestFingerprint: candidate.fingerprint, ...revision, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), qualified: false, failure: null,
     publication: { capabilityHash: null },
     observation: { ...observation, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, descriptors: null, absence: null, userState: { before: [], after: [] }, normalAgencyState: { before: [], after: [] } },
     protocol: { protocolVersion: 1, methods: [] }, selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, session: null, authentication: "unknown",
@@ -683,18 +690,22 @@ export async function runCodexQualification(request: QualificationRequest, depen
     report.qualified = true
     try { parseCodexQualificationReport(report) } catch { report.qualified = false; report.failure = "REPORT_INVALID"; publicationCapability = null }
   }
+  const primaryReportPath = join(evidence, "report.json")
+  let reportPath: string | null = null
   try {
-    await publish(join(evidence, "report.json"), report)
+    await publish(primaryReportPath, report)
     if (request.reportPath) await publish(request.reportPath, report)
+    reportPath = primaryReportPath
   } catch {
     const unpublished = structuredClone(report)
     report.qualified = false; report.failure = "EVIDENCE_PUBLICATION_FAILED"; publicationCapability = null
-    for (const path of [join(evidence, "report.json"), ...(request.reportPath ? [request.reportPath] : [])]) {
+    for (const path of [primaryReportPath, ...(request.reportPath ? [request.reportPath] : [])]) {
       try { equal(await readPrivateJson(path), unpublished, "EVIDENCE_PUBLICATION_FAILED"); await rm(path); await syncDirectory(dirname(path)) } catch {}
     }
-    await durableQualificationWrite(join(evidence, "report-failed.json"), report).catch(() => undefined)
+    const failedReportPath = join(evidence, "report-failed.json")
+    try { await durableQualificationWrite(failedReportPath, report); reportPath = failedReportPath } catch {}
   }
-  return { report, publicationCapability }
+  return { report, reportPath, publicationCapability }
 }
 
 export async function pinnedArtifact(path: string, sha256: string): Promise<ArtifactPin> {
@@ -723,18 +734,20 @@ export async function offlineCandidate(candidatePath: string, evidenceParent: st
 }
 export async function codexQualificationMain(argv: readonly string[]): Promise<number> {
   const args = new Map<string, string>()
-  for (let i = 0; i < argv.length; i += 2) { const name = argv[i]!, value = argv[i + 1]; if (!["--stage", "--candidate", "--evidence-parent", "--report", "--publication-capability"].includes(name) || args.has(name) || !value) fail("USAGE"); args.set(name, value!) }
+  for (let i = 0; i < argv.length; i += 2) { const name = argv[i]!, value = argv[i + 1]; if (!["--stage", "--candidate", "--evidence-parent", "--report", "--publication-capability", "--reviewed-branch", "--reviewed-commit"].includes(name) || args.has(name) || !value) fail("USAGE"); args.set(name, value!) }
   const stage = args.get("--stage"), candidatePath = args.get("--candidate"), evidenceParent = args.get("--evidence-parent")
   if (!candidatePath || !evidenceParent || !["offline", "live", "source"].includes(stage ?? "")) fail("USAGE")
   canonical(candidatePath!); canonical(evidenceParent!)
   if (stage === "offline") { const candidate = await offlineCandidate(candidatePath!, evidenceParent!); process.stdout.write(JSON.stringify({ stage, fingerprint: candidate.fingerprint }) + "\n"); return 0 }
+  const revision = reviewedRevision({ reviewedBranch: args.get("--reviewed-branch"), reviewedCommit: args.get("--reviewed-commit") })
+  const reviewed = { reviewedBranch: revision.branch, reviewedCommit: revision.commit }
   if (stage === "source") {
     const path = args.get("--report"), capability = args.get("--publication-capability"); if (!path || !capability) fail("USAGE")
     const report = parseCodexQualificationReport(await readPrivateJson(path!)), candidate = parseQualificationCandidate(await readPrivateJson(candidatePath!))
-    process.stdout.write(renderPublishedQualificationSource(candidate, report, capability!) + "\n"); return 0
+    process.stdout.write(renderPublishedQualificationSource(candidate, report, capability!, reviewed) + "\n"); return 0
   }
-  const { report, publicationCapability } = await runCodexQualification({ candidatePath: candidatePath!, evidenceParent: evidenceParent!, ...(args.has("--report") ? { reportPath: args.get("--report")! } : {}) })
-  process.stdout.write(JSON.stringify({ qualified: report.qualified, failure: report.failure, publicationCapability }) + "\n"); return report.qualified ? 0 : 1
+  const { report, reportPath, publicationCapability } = await runCodexQualification({ candidatePath: candidatePath!, evidenceParent: evidenceParent!, ...reviewed, ...(args.has("--report") ? { reportPath: args.get("--report")! } : {}) })
+  process.stdout.write(JSON.stringify({ qualified: report.qualified, failure: report.failure, reportPath, publicationCapability }) + "\n"); return report.qualified ? 0 : 1
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   codexQualificationMain(process.argv.slice(2)).then(code => { process.exitCode = code }, error => { process.stderr.write(classify(error, "ADAPTER_UNQUALIFIED") + "\n"); process.exitCode = 1 })
