@@ -7,6 +7,7 @@ import { execFile } from "node:child_process"
 import { isDeepStrictEqual, promisify } from "node:util"
 import { fileURLToPath } from "node:url"
 import { observeArtifact, parseCodexQualificationManifest, qualificationFingerprint, renderQualifiedContractSource, verifyCodexQualification, type ArtifactPin, type CodexQualificationCandidate, type CodexQualificationManifest, type CodexQualificationObservation } from "../src/agent/qualification.js"
+import { observeCodexUserSecurityState, parseCodexUserSecurityStatePolicy, pinCodexUserSecurityStatePolicy, type CodexUserSecurityStateCheck } from "../src/agent/codex-user-security.js"
 import { AGENT_CODES, AgentError, parseAgentCommand, parseAgentRecord, parseSession, tupleOf, type AgentCommand, type AgentRecord, type AgentTuple, type SessionEvidence } from "../src/agent/types.js"
 import { AGENT_PROTOCOL, exchangeAgent, parseAgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { createAgentStore } from "../src/agent/store.js"
@@ -27,7 +28,7 @@ import { observeQualificationDescriptors, QualificationObservationError, verifyQ
 
 const METHODS = ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode"] as const
 const PHASES = ["commandStart", "reservation", "spawn", "initialize", "session", "model", "reasoning", "mode", "transportClose", "processTerminate", "absence", "overall"] as const
-const FAILURES = [...AGENT_CODES, "ATTEMPT_ALREADY_STARTED", "EVIDENCE_PUBLICATION_FAILED", "EVIDENCE_MISSING", "OWNERSHIP_INVALID", "HANDLER_STARTUP_FAILED", "HANDLER_TERMINATED", "COMMAND_START_TIMEOUT", "OVERALL_TIMEOUT", "USER_STATE_CHANGED", "USER_STATE_UNAVAILABLE", "NORMAL_STATE_CHANGED", "DESCRIPTOR_LEAK", "DESCRIPTOR_UNAVAILABLE", "ABSENCE_TIMEOUT", "ABSENCE_UNAVAILABLE", "PROCESS_SURVIVED", "REPORT_INVALID"] as const
+const FAILURES = [...AGENT_CODES, "ATTEMPT_ALREADY_STARTED", "EVIDENCE_PUBLICATION_FAILED", "EVIDENCE_MISSING", "OWNERSHIP_INVALID", "HANDLER_STARTUP_FAILED", "HANDLER_TERMINATED", "COMMAND_START_TIMEOUT", "OVERALL_TIMEOUT", "USER_SECURITY_STATE_CHANGED", "USER_SECURITY_STATE_UNAVAILABLE", "NORMAL_STATE_UNAVAILABLE", "USER_STATE_UNAVAILABLE", "NORMAL_STATE_CHANGED", "DESCRIPTOR_LEAK", "DESCRIPTOR_UNAVAILABLE", "ABSENCE_TIMEOUT", "ABSENCE_UNAVAILABLE", "PROCESS_SURVIVED", "REPORT_INVALID"] as const
 type Failure = typeof FAILURES[number]
 type Phase = typeof PHASES[number]
 type Outcome = "completed" | "timed_out" | "failed" | "not_reached"
@@ -42,13 +43,14 @@ export type QualificationReceipt = {
   terminal: boolean; transportClosed: boolean; handlesClosed: boolean; failure: Failure | null
 }
 type Retained = { command: AgentCommand | null; agent: AgentRecord | null; admission: AdmissionRecord | null; launch: LaunchRecord | null; handlers: HandlerGenerationRecord[]; recovery: { command: AgentCommand | null; agent: AgentRecord | null; launch: LaunchRecord | null; admission: AdmissionRecord | null; consistent: boolean } | null }
-export type QualificationObservation = CodexQualificationObservation & {
+export type QualificationObservation = {
+  candidate: CodexQualificationCandidate; verification: CodexQualificationObservation | null
   retained: Retained; receipt: QualificationReceipt | null; descriptors: DescriptorObservation | null; absence: ParentAbsence | null
-  userState: { before: TreeObservation[]; after: TreeObservation[] }
+  userSecurityState: { before: CodexUserSecurityStateCheck | null; after: CodexUserSecurityStateCheck | null }
   normalAgencyState: { before: TreeObservation[]; after: TreeObservation[] }
 }
 export type CodexQualificationReport = {
-  version: 1; manifestFingerprint: string; branch: "moon/agency-agent-lifecycle"; commit: string; startedAt: string; endedAt: string; qualified: boolean; failure: Failure | null
+  version: 2; manifestFingerprint: string; branch: "moon/agency-agent-lifecycle"; commit: string; startedAt: string; endedAt: string; qualified: boolean; failure: Failure | null
   publication: { capabilityHash: string | null }
   observation: QualificationObservation; protocol: { methods: readonly string[]; protocolVersion: 1 }
   selection: { modelId: "gpt-5.6-sol"; reasoning: "high"; mode: "read-only" }; session: SessionEvidence | null
@@ -58,7 +60,7 @@ export type CodexQualificationReport = {
     transport: "closed" | "open" | "unknown"; directChild: "terminal" | "live" | "unknown"; processGroup: "absent" | "present" | "unknown"
     reservation: "released" | "retained" | "unknown"; providerState: "absent" | "present" | "unknown"; qualificationCwd: "absent" | "present" | "unknown"
     executionRoot: "absent" | "present" | "unknown"; lifecycleOperation: "terminal" | "in_flight" | "unknown"; ownedHandles: "closed" | "open" | "unknown"
-    handler: "absent" | "present" | "unknown"; userState: "unchanged" | "changed" | "unknown"; catalogProfile: "absent" | "present" | "unknown"; normalAgencyState: "unchanged" | "changed" | "unknown"
+    handler: "absent" | "present" | "unknown"; userSecurityState: "unchanged" | "changed" | "unknown"; catalogProfile: "absent" | "present" | "unknown"; normalAgencyState: "unchanged" | "changed" | "unknown"
   }
 }
 export type ReviewedRevision = { reviewedBranch: string; reviewedCommit: string }
@@ -67,7 +69,7 @@ export type QualificationResult = { report: CodexQualificationReport; reportPath
 export type QualificationDependencies = {
   adapter: PlatformAdapter; hostKey: string; verify: typeof verifyCodexQualification
   handler(candidatePath: string, executionRoot: string): HandlerCommand
-  userStatePaths: readonly string[]; normalStatePaths: readonly string[]; createExecutionRoot(): Promise<string>
+  observeUserSecurityState?: typeof observeCodexUserSecurityState; normalStatePaths: readonly string[]; createExecutionRoot(): Promise<string>
   publish?: typeof durableQualificationWrite; start?: typeof startOrConnect
   descriptorCommand?: DescriptorCommand
   absenceAdapter?: Pick<PlatformAdapter, "readProcess" | "readGroup">
@@ -128,11 +130,11 @@ export function validateQualifiedOwnership(value: unknown): QualifiedOwnership {
 }
 export function parseQualificationCandidate(value: unknown): CodexQualificationCandidate {
   const v = object(value, ["version", "manifest", "fingerprint"]), manifest = parseCodexQualificationManifest(v.manifest)
-  if (v.version !== 1 || v.fingerprint !== qualificationFingerprint(manifest)) fail("ADAPTER_UNQUALIFIED")
-  return { version: 1, manifest, fingerprint: v.fingerprint as string }
+  if (v.version !== 2 || v.fingerprint !== qualificationFingerprint(manifest)) fail("ADAPTER_UNQUALIFIED")
+  return { version: 2, manifest, fingerprint: v.fingerprint as string }
 }
 const limits = (m: CodexQualificationManifest): Record<Phase, number> => ({ commandStart: m.deadlines.commandMs, reservation: m.deadlines.reservationMs, spawn: m.deadlines.spawnMs, initialize: m.deadlines.initializeMs, session: m.deadlines.sessionMs, model: m.deadlines.optionMs, reasoning: m.deadlines.optionMs, mode: m.deadlines.optionMs, transportClose: m.deadlines.transportCloseMs, processTerminate: m.deadlines.processTerminateMs, absence: m.deadlines.absenceMs, overall: m.deadlines.overallMs })
-const success = { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedHandles: "closed", handler: "absent", userState: "unchanged", catalogProfile: "absent", normalAgencyState: "unchanged" } as const
+const success = { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedHandles: "closed", handler: "absent", userSecurityState: "unchanged", catalogProfile: "absent", normalAgencyState: "unchanged" } as const
 function correlate(report: CodexQualificationReport): void {
   const { ownership: own, session, observation: { retained: e } } = report
   if (!e.command || !e.agent || !e.admission || !e.launch || !session) fail("OWNERSHIP_INVALID")
@@ -147,7 +149,7 @@ function correlate(report: CodexQualificationReport): void {
   equal(own.providerProcessGroup, l.provider?.group)
   equal(own.handlers, e.handlers.map(h => ({ generation: h.generation, launchAttemptId: h.launchAttemptId, process: h.process })))
   if (l.launchBootId !== own.providerProcessGroup?.leader.bootId || e.handlers.some(h => h.hostId !== s.hostId || h.launchBootId !== h.process?.bootId)) fail("OWNERSHIP_INVALID")
-  if (s.contractFingerprint !== report.manifestFingerprint || s.contractId !== report.observation.manifest.contractId) fail("OWNERSHIP_INVALID")
+  if (s.contractFingerprint !== report.manifestFingerprint || s.contractId !== report.observation.candidate.manifest.contractId) fail("OWNERSHIP_INVALID")
 }
 function parseTree(value: unknown): TreeObservation {
   const t = object(value, ["state", "digest", "entries", "bytes"])
@@ -163,19 +165,37 @@ export function parseQualificationReceipt(value: unknown): QualificationReceipt 
   if (r.failure !== null && !FAILURES.includes(r.failure as Failure)) fail("REPORT_INVALID")
   return structuredClone(r) as QualificationReceipt
 }
+function parseSecurityCheck(value: unknown): CodexUserSecurityStateCheck {
+  const check = object(value, ["outcome", "reason", "observation"])
+  if (check.outcome === "match") {
+    if (check.reason !== null) fail("REPORT_INVALID")
+    try { return { outcome: "match", reason: null, observation: parseCodexUserSecurityStatePolicy(check.observation) } } catch { fail("REPORT_INVALID") }
+  }
+  const reasons = check.outcome === "mismatch" ? ["root_missing", "root_kind", "root_identity", "config_missing", "config_kind", "config_identity", "config_link_target", "config_target_missing", "config_target_kind", "config_target_identity", "config_target_hash", "auth_present", "requirements_present"] : check.outcome === "unavailable" ? ["root_unavailable", "config_unavailable", "config_target_unavailable", "auth_unavailable", "requirements_unavailable"] : []
+  if (typeof check.reason !== "string" || !reasons.includes(check.reason) || check.observation !== null) fail("REPORT_INVALID")
+  return structuredClone(check) as CodexUserSecurityStateCheck
+}
+function validateVerification(value: unknown, candidate: CodexQualificationCandidate): void {
+  const observed = object(value, ["version", "manifest", "fingerprint", "nodeVersion", "selection", "artifacts"])
+  equal(observed, { ...candidate, nodeVersion: candidate.manifest.nodeVersion, selection: candidate.manifest.selection, artifacts: { adapterPackageJson: candidate.manifest.adapterPackageJson, adapterEntrypoint: candidate.manifest.adapterEntrypoint, codexExecutable: candidate.manifest.codexExecutable, nodeExecutable: candidate.manifest.nodeExecutable } }, "REPORT_INVALID")
+}
 export function parseCodexQualificationReport(value: unknown): CodexQualificationReport {
   if (Buffer.byteLength(JSON.stringify(value)) > 1048576) fail("REPORT_INVALID")
   const r = object(value, ["version", "manifestFingerprint", "branch", "commit", "startedAt", "endedAt", "qualified", "failure", "publication", "observation", "protocol", "selection", "session", "authentication", "ownership", "deadlines", "postconditions"])
-  if (r.version !== 1 || r.branch !== "moon/agency-agent-lifecycle" || !/^[0-9a-f]{40}$/.test(String(r.commit)) || typeof r.qualified !== "boolean" || (r.failure !== null && !FAILURES.includes(r.failure as Failure))) fail("REPORT_INVALID")
+  if (r.version !== 2 || r.branch !== "moon/agency-agent-lifecycle" || !/^[0-9a-f]{40}$/.test(String(r.commit)) || typeof r.qualified !== "boolean" || (r.failure !== null && (!FAILURES.includes(r.failure as Failure) || r.failure === "USER_STATE_UNAVAILABLE"))) fail("REPORT_INVALID")
   for (const key of ["startedAt", "endedAt"]) if (new Date(text(r[key])).toISOString() !== r[key]) fail("REPORT_INVALID")
   if (String(r.endedAt) < String(r.startedAt)) fail("REPORT_INVALID")
   const publication = object(r.publication, ["capabilityHash"])
   if (publication.capabilityHash !== null && !/^[0-9a-f]{64}$/.test(String(publication.capabilityHash))) fail("REPORT_INVALID")
-  const o = object(r.observation, ["version", "manifest", "fingerprint", "nodeVersion", "selection", "artifacts", "retained", "receipt", "descriptors", "absence", "userState", "normalAgencyState"])
-  const candidate = parseQualificationCandidate({ version: o.version, manifest: o.manifest, fingerprint: o.fingerprint })
-  if (r.manifestFingerprint !== candidate.fingerprint || o.nodeVersion !== "24.13.0") fail("REPORT_INVALID")
-  equal(o.selection, candidate.manifest.selection, "REPORT_INVALID")
-  equal(o.artifacts, { adapterPackageJson: candidate.manifest.adapterPackageJson, adapterEntrypoint: candidate.manifest.adapterEntrypoint, codexExecutable: candidate.manifest.codexExecutable, nodeExecutable: candidate.manifest.nodeExecutable }, "REPORT_INVALID")
+  const o = object(r.observation, ["candidate", "verification", "retained", "receipt", "descriptors", "absence", "userSecurityState", "normalAgencyState"])
+  const candidate = parseQualificationCandidate(o.candidate)
+  if (r.manifestFingerprint !== candidate.fingerprint) fail("REPORT_INVALID")
+  if (o.verification !== null) validateVerification(o.verification, candidate)
+  const security = object(o.userSecurityState, ["before", "after"])
+  for (const side of ["before", "after"]) if (security[side] !== null) {
+    const check = parseSecurityCheck(security[side])
+    if (check.outcome === "match") equal(check.observation, candidate.manifest.userSecurityState, "REPORT_INVALID")
+  }
   const retained = object(o.retained, ["command", "agent", "admission", "launch", "handlers", "recovery"])
   if (retained.command !== null) parseAgentCommand(retained.command)
   if (retained.agent !== null) parseAgentRecord(retained.agent)
@@ -206,7 +226,7 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
     }
   }
   if (o.receipt !== null) parseQualificationReceipt(o.receipt)
-  for (const key of ["userState", "normalAgencyState"]) {
+  for (const key of ["normalAgencyState"]) {
     const pair = object(o[key], ["before", "after"])
     for (const side of ["before", "after"]) { if (!Array.isArray(pair[side]) || (pair[side] as unknown[]).length > 2) fail("REPORT_INVALID"); (pair[side] as unknown[]).forEach(parseTree) }
   }
@@ -220,10 +240,11 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
   const deadlines = object(r.deadlines, PHASES), expectedLimits = limits(candidate.manifest)
   for (const name of PHASES) { const d = object(deadlines[name], ["limitMs", "outcome"]); if (d.limitMs !== expectedLimits[name] || !["completed", "timed_out", "failed", "not_reached"].includes(String(d.outcome))) fail("REPORT_INVALID") }
   const post = object(r.postconditions, Object.keys(success))
-  const opposites = { transport: "open", directChild: "live", processGroup: "present", reservation: "retained", providerState: "present", qualificationCwd: "present", executionRoot: "present", lifecycleOperation: "in_flight", ownedHandles: "open", handler: "present", userState: "changed", catalogProfile: "present", normalAgencyState: "changed" }
+  const opposites = { transport: "open", directChild: "live", processGroup: "present", reservation: "retained", providerState: "present", qualificationCwd: "present", executionRoot: "present", lifecycleOperation: "in_flight", ownedHandles: "open", handler: "present", userSecurityState: "changed", catalogProfile: "present", normalAgencyState: "changed" }
   for (const key of Object.keys(success) as Array<keyof typeof success>) if (![success[key], opposites[key], "unknown"].includes(String(post[key]))) fail("REPORT_INVALID")
   const report = structuredClone({ ...r, ownership, session }) as CodexQualificationReport
   if (report.qualified) {
+    if (report.observation.verification === null || report.observation.userSecurityState.before?.outcome !== "match" || report.observation.userSecurityState.after?.outcome !== "match") fail("REPORT_INVALID")
     if (report.failure !== null || report.authentication !== "ambient_accepted" || session === null || publication.capabilityHash === null || ownership.handlers.length !== 1 || ownership.providerProcessGroup === null || retained.recovery !== null || Object.entries(ownership).some(([, v]) => v === null)) fail("REPORT_INVALID")
     equal({ modelId: session!.modelId, reasoning: session!.reasoning, mode: session!.mode, permissionProfile: session!.permissionProfile, permissionEvidence: session!.permissionEvidence }, { modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all", permissionEvidence: "agency-deny-all-v1" }, "REPORT_INVALID")
     equal(post, success, "REPORT_INVALID"); equal(protocol.methods, METHODS, "REPORT_INVALID")
@@ -236,7 +257,9 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
     if (!descriptors || descriptors.outcome !== "verified" || !absence || absence.outcome !== "completed" || absence.passes !== 2 || absence.handler !== "absent" || absence.provider !== "absent" || absence.durationMs >= expectedLimits.absence) fail("REPORT_INVALID")
     const targets = [...ownership.handlers.map(h => h.process), ...ownership.providerProcessGroup!.observed].sort((a, b) => a.pid - b.pid)
     equal([...absence.targets].sort((a, b) => a.pid - b.pid), targets, "REPORT_INVALID")
-    for (const key of ["userState", "normalAgencyState"] as const) { const pair = report.observation[key]; if (!pair.before.length) fail("REPORT_INVALID"); equal(pair.before, pair.after, "REPORT_INVALID") }
+    const normal = report.observation.normalAgencyState
+    if (!normal.before.length) fail("REPORT_INVALID")
+    equal(normal.before, normal.after, "REPORT_INVALID")
     correlate(report)
   } else if (report.failure === null) fail("REPORT_INVALID")
   return report
@@ -372,7 +395,7 @@ async function defaultDependencies(): Promise<QualificationDependencies> {
   const hostKey = await readHostId("darwin")
   return { adapter: createDarwinAdapter(), hostKey, verify: verifyCodexQualification,
     handler: (candidatePath, root) => ({ file: process.execPath, args: [fileURLToPath(new URL("./qualify-codex-handler.js", import.meta.url)), candidatePath, root], env: { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])), PATH: "/usr/bin:/bin", HOME: root } }),
-    userStatePaths: ["/Users/moon/.codex"], normalStatePaths: [join(process.env.XDG_STATE_HOME ?? "/Users/moon/.local/state", "agency/hosts", hostKey), `/private/tmp/agy-${process.getuid!()}-${hostKey.slice(0, 12)}`],
+    observeUserSecurityState: observeCodexUserSecurityState, normalStatePaths: [join(process.env.XDG_STATE_HOME ?? "/Users/moon/.local/state", "agency/hosts", hostKey), `/private/tmp/agy-${process.getuid!()}-${hostKey.slice(0, 12)}`],
     createExecutionRoot: () => mkdtemp("/private/tmp/agyq-"),
   }
 }
@@ -391,20 +414,22 @@ export async function runCodexQualification(request: QualificationRequest, depen
   if (request.reportPath !== undefined) canonical(request.reportPath)
   const candidate = parseQualificationCandidate(await readPrivateJson(request.candidatePath))
   const deps = dependencies ?? await defaultDependencies(), publish = deps.publish ?? durableQualificationWrite
-  const observation = await deps.verify(candidate.manifest)
-  equal(observation.fingerprint, candidate.fingerprint, "ADAPTER_UNQUALIFIED")
+  const directory = await evidenceDirectory(request.evidenceParent), marker = join(directory, `${candidate.fingerprint}.attempt-consumed.json`)
+  if (await exists(marker)) fail("ATTEMPT_ALREADY_STARTED")
+  const evidence = await mkdtemp(join(directory, "attempt-"))
+  await syncDirectory(directory)
+  try { await publish(marker, { version: 2, manifestFingerprint: candidate.fingerprint, state: "attempt_consumed", evidence, ...revision }) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") fail("ATTEMPT_ALREADY_STARTED"); fail("EVIDENCE_PUBLICATION_FAILED") }
   const git = promisify(execFile)
   const report: CodexQualificationReport = {
-    version: 1, manifestFingerprint: candidate.fingerprint, ...revision, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), qualified: false, failure: null,
+    version: 2, manifestFingerprint: candidate.fingerprint, ...revision, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), qualified: false, failure: null,
     publication: { capabilityHash: null },
-    observation: { ...observation, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, descriptors: null, absence: null, userState: { before: [], after: [] }, normalAgencyState: { before: [], after: [] } },
+    observation: { candidate, verification: null, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, descriptors: null, absence: null, userSecurityState: { before: null, after: null }, normalAgencyState: { before: [], after: [] } },
     protocol: { protocolVersion: 1, methods: [] }, selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, session: null, authentication: "unknown",
     ownership: { handlerGeneration: null, agentId: null, providerGeneration: null, leaseId: null, launchAttemptId: null, sessionId: null, handlers: [], providerProcessGroup: null },
     deadlines: Object.fromEntries(PHASES.map(name => [name, { limitMs: limits(candidate.manifest)[name], outcome: "not_reached" }])) as CodexQualificationReport["deadlines"],
     postconditions: Object.fromEntries(Object.keys(success).map(name => [name, "unknown"])) as CodexQualificationReport["postconditions"],
   }
-  const directory = await evidenceDirectory(request.evidenceParent), evidence = await mkdtemp(join(directory, "attempt-"))
-  await syncDirectory(directory); await publish(join(evidence, "manifest.json"), candidate)
   let root: string | undefined, paths: PlatformPaths | undefined, rootIdentity: { dev: bigint; ino: bigint } | undefined
   let current: HandlerGenerationRecord | undefined, target: AgentTuple | null = null, commandId: string | undefined, startSent = false, stopSent = false, recovered = false, handlerInvoked = false
   let overallStart = performance.now(), overallDeadline = Infinity
@@ -413,6 +438,26 @@ export async function runCodexQualification(request: QualificationRequest, depen
   let cleanupLaunch: LaunchRecord | undefined
   const sockets = new Set<Socket>(), retained = report.observation.retained
   const setFailure = (error: unknown, fallback: Failure): void => { report.failure ??= classify(error, fallback) }
+  let preflightComplete = false
+  async function observeSecurity(side: "before" | "after"): Promise<void> {
+    let check: CodexUserSecurityStateCheck
+    try {
+      check = parseSecurityCheck(await (deps.observeUserSecurityState ?? observeCodexUserSecurityState)(candidate.manifest.userSecurityState))
+      if (check.outcome === "match") equal(check.observation, candidate.manifest.userSecurityState, "REPORT_INVALID")
+    } catch { check = { outcome: "unavailable", reason: "root_unavailable", observation: null } }
+    report.observation.userSecurityState[side] = check
+    if (check.outcome === "mismatch") { report.postconditions.userSecurityState = "changed"; fail("USER_SECURITY_STATE_CHANGED") }
+    if (check.outcome === "unavailable") { report.postconditions.userSecurityState = "unknown"; fail("USER_SECURITY_STATE_UNAVAILABLE") }
+    if (side === "after") report.postconditions.userSecurityState = "unchanged"
+  }
+  async function observeNormal(side: "before" | "after"): Promise<void> {
+    try { report.observation.normalAgencyState[side] = await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true))) }
+    catch { report.postconditions.normalAgencyState = "unknown"; fail("NORMAL_STATE_UNAVAILABLE") }
+    if (side === "after") {
+      report.postconditions.normalAgencyState = isDeepStrictEqual(report.observation.normalAgencyState.before, report.observation.normalAgencyState.after) ? "unchanged" : "changed"
+      if (report.postconditions.normalAgencyState === "changed") fail("NORMAL_STATE_CHANGED")
+    }
+  }
   const budget = (): number => { const remaining = overallDeadline - performance.now(); if (remaining <= 0) { report.deadlines.overall.outcome = "timed_out"; fail("OVERALL_TIMEOUT") }; return Math.min(remaining, candidate.manifest.deadlines.commandMs) }
   const keepHandler = (h: HandlerGenerationRecord): void => {
     if (!h.process || h.hostId !== deps.hostKey || h.socketPath !== paths!.handlerSocketPath || !h.launchAttempted) fail("OWNERSHIP_INVALID")
@@ -538,8 +583,13 @@ export async function runCodexQualification(request: QualificationRequest, depen
     if (launch && !launch.launchAttempted && performance.now() - overallStart >= candidate.manifest.deadlines.reservationMs && report.failure === "HANDLER_TERMINATED") { report.deadlines.reservation.outcome = "timed_out"; report.failure = "STARTUP_TIMEOUT" }
   }
   try {
-    report.observation.userState.before = await Promise.all(deps.userStatePaths.map(path => snapshotTree(path)))
-    report.observation.normalAgencyState.before = await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true)))
+    try { await publish(join(evidence, "manifest.json"), candidate) } catch { fail("EVIDENCE_PUBLICATION_FAILED") }
+    const verification = await deps.verify(candidate.manifest)
+    try { validateVerification(verification, candidate) } catch { fail("ADAPTER_UNQUALIFIED") }
+    report.observation.verification = verification
+    await observeSecurity("before")
+    await observeNormal("before")
+    preflightComplete = true
     const marker = join(directory, `${candidate.fingerprint}.live-started.json`)
     try { await publish(marker, { version: 1, manifestFingerprint: candidate.fingerprint, state: "live_started", evidence }) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") fail("ATTEMPT_ALREADY_STARTED"); fail("EVIDENCE_PUBLICATION_FAILED") }
@@ -673,14 +723,11 @@ export async function runCodexQualification(request: QualificationRequest, depen
         } else { report.postconditions.executionRoot = "present"; report.postconditions.qualificationCwd = "present" }
       } catch (error) { setFailure(error, "CLEANUP_UNVERIFIED") }
     }
-    try {
-      report.observation.userState.after = await Promise.all(deps.userStatePaths.map(path => snapshotTree(path)))
-      report.observation.normalAgencyState.after = await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true)))
-      report.postconditions.userState = isDeepStrictEqual(report.observation.userState.before, report.observation.userState.after) ? "unchanged" : "changed"
-      report.postconditions.normalAgencyState = isDeepStrictEqual(report.observation.normalAgencyState.before, report.observation.normalAgencyState.after) ? "unchanged" : "changed"
-      if (report.postconditions.userState === "changed") setFailure(new QualificationError("USER_STATE_CHANGED"), "USER_STATE_CHANGED")
-      if (report.postconditions.normalAgencyState === "changed") setFailure(new QualificationError("NORMAL_STATE_CHANGED"), "NORMAL_STATE_CHANGED")
-    } catch (error) { setFailure(error, "USER_STATE_UNAVAILABLE") }
+    if (!root) { report.postconditions.handler = "absent"; report.postconditions.processGroup = "absent"; report.postconditions.executionRoot = "absent"; report.postconditions.qualificationCwd = "absent" }
+    if (preflightComplete) {
+      try { await observeSecurity("after") } catch (error) { setFailure(error, "USER_SECURITY_STATE_UNAVAILABLE") }
+      try { await observeNormal("after") } catch (error) { setFailure(error, "NORMAL_STATE_UNAVAILABLE") }
+    }
   }
   report.endedAt = new Date().toISOString()
   let publicationCapability: string | null = null
@@ -715,34 +762,70 @@ export async function pinnedArtifact(path: string, sha256: string): Promise<Arti
 export async function offlineCandidate(candidatePath: string, evidenceParent: string): Promise<CodexQualificationCandidate> {
   if (process.execPath !== "/Users/moon/.nodenv/versions/24.13.0/bin/node" || process.versions.node !== "24.13.0" || process.platform !== "darwin" || process.arch !== "arm64") fail("ADAPTER_UNQUALIFIED")
   const manifest = parseCodexQualificationManifest({
-    version: 1, policy: "agency-codex-deny-all-v1", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-agency-deny-all-v1", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0",
+    version: 2, policy: "agency-codex-deny-all-v2", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-agency-deny-all-v2", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0",
     adapterPackageJson: await pinnedArtifact("/Users/moon/.dotfiles/node-bin/node_modules/@agentclientprotocol/codex-acp/package.json", "a11749f7a18a1249ced9068a030371aa284b0a7d63c731a3ee078ed48ecb2513"),
     adapterEntrypoint: await pinnedArtifact("/Users/moon/.dotfiles/node-bin/node_modules/@agentclientprotocol/codex-acp/dist/index.js", "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8"),
     codexExecutable: await pinnedArtifact("/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", "8eaf1ad12fe6bf89b1710330f58900014322c7c5af677e43be116d8ac5fc0a9e"),
     nodeExecutable: await pinnedArtifact("/Users/moon/.nodenv/versions/24.13.0/bin/node", "6f2e835e57feb7a29ffcd53a4d4eb60224ec264a1e002c3ba6d99999ea29807d"), nodeVersion: "24.13.0", protocolVersion: 1,
     qualificationCwd: { source: "attempt-root", relative: "checkout" }, deadlines: { commandMs: 5000, reservationMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 45000 },
     selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" }, optionIds: { model: "model", reasoning: "reasoning_effort", mode: "mode" },
-    environment: { fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) }, private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" } }, userStatePaths: ["/Users/moon/.codex"],
+    environment: { fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) }, private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" } },
+    userSecurityState: await pinCodexUserSecurityStatePolicy({ root: "/Users/moon/.codex", configPath: "/Users/moon/.codex/config.toml", configLinkTarget: "../.dotfiles/home/.codex/config.toml", configTargetPath: "/Users/moon/.dotfiles/home/.codex/config.toml", absent: ["/Users/moon/.codex/auth.json", "/Users/moon/.codex/requirements.toml"] }),
   })
-  const observed = await verifyCodexQualification(manifest), candidate = { version: 1 as const, manifest, fingerprint: observed.fingerprint }
+  const observed = await verifyCodexQualification(manifest), candidate = { version: 2 as const, manifest, fingerprint: observed.fingerprint }
   const directory = await evidenceDirectory(evidenceParent), evidence = await mkdtemp(join(directory, "offline-")); await syncDirectory(directory)
   await durableQualificationWrite(join(evidence, "manifest.json"), candidate)
   try { await mkdir(dirname(candidatePath), { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error }
   await durableQualificationWrite(candidatePath, candidate)
-  await durableQualificationWrite(join(evidence, "report.json"), { version: 1, stage: "offline", qualified: false, observation: observed })
+  await durableQualificationWrite(join(evidence, "report.json"), { version: 2, stage: "offline", qualified: false, observation: observed })
   return candidate
+}
+async function readPublicationCapability(): Promise<string> {
+  const bytes = Buffer.alloc(65), input = process.stdin
+  let length = 0
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: unknown): void => {
+        input.off("readable", readable); input.off("end", ended); input.off("error", failed); input.off("close", closed)
+        input.pause()
+        if (error) reject(error); else resolve()
+      }
+      const failed = (error: unknown): void => finish(error)
+      const ended = (): void => finish()
+      const closed = (): void => finish(new QualificationError("USAGE"))
+      const readable = (): void => {
+        try {
+          while (length < bytes.length) {
+            const chunk: unknown = input.read(bytes.length - length)
+            if (chunk === null) break
+            if (!Buffer.isBuffer(chunk) || chunk.length > bytes.length - length) fail("USAGE")
+            chunk.copy(bytes, length); length += chunk.length
+          }
+          if (length === bytes.length && input.readableLength > 0) fail("USAGE")
+          input.read(0)
+          if (input.readableEnded) finish()
+        } catch (error) { finish(error) }
+      }
+      input.on("readable", readable); input.once("end", ended); input.once("error", failed); input.once("close", closed)
+      readable()
+    })
+    if (length !== 65 || bytes[64] !== 10 || !/^[0-9a-f]{64}$/.test(bytes.subarray(0, 64).toString("latin1"))) fail("USAGE")
+    return bytes.subarray(0, 64).toString("latin1")
+  } catch { fail("USAGE") } finally { bytes.fill(0) }
 }
 export async function codexQualificationMain(argv: readonly string[]): Promise<number> {
   const args = new Map<string, string>()
-  for (let i = 0; i < argv.length; i += 2) { const name = argv[i]!, value = argv[i + 1]; if (!["--stage", "--candidate", "--evidence-parent", "--report", "--publication-capability", "--reviewed-branch", "--reviewed-commit"].includes(name) || args.has(name) || !value) fail("USAGE"); args.set(name, value!) }
+  for (let i = 0; i < argv.length; i += 2) { const name = argv[i]!, value = argv[i + 1]; if (!["--stage", "--candidate", "--evidence-parent", "--report", "--publication-capability", "--publication-capability-stdin", "--reviewed-branch", "--reviewed-commit"].includes(name) || args.has(name) || !value) fail("USAGE"); args.set(name, value!) }
   const stage = args.get("--stage"), candidatePath = args.get("--candidate"), evidenceParent = args.get("--evidence-parent")
   if (!candidatePath || !evidenceParent || !["offline", "live", "source"].includes(stage ?? "")) fail("USAGE")
+  if (args.has("--publication-capability-stdin") && (args.get("--publication-capability-stdin") !== "true" || args.has("--publication-capability") || stage !== "source")) fail("USAGE")
   canonical(candidatePath!); canonical(evidenceParent!)
   if (stage === "offline") { const candidate = await offlineCandidate(candidatePath!, evidenceParent!); process.stdout.write(JSON.stringify({ stage, fingerprint: candidate.fingerprint }) + "\n"); return 0 }
   const revision = reviewedRevision({ reviewedBranch: args.get("--reviewed-branch"), reviewedCommit: args.get("--reviewed-commit") })
   const reviewed = { reviewedBranch: revision.branch, reviewedCommit: revision.commit }
   if (stage === "source") {
-    const path = args.get("--report"), capability = args.get("--publication-capability"); if (!path || !capability) fail("USAGE")
+    const path = args.get("--report"); if (!path || !args.has("--publication-capability") && !args.has("--publication-capability-stdin")) fail("USAGE")
+    const capability = args.has("--publication-capability-stdin") ? await readPublicationCapability() : args.get("--publication-capability")!
     const report = parseCodexQualificationReport(await readPrivateJson(path!)), candidate = parseQualificationCandidate(await readPrivateJson(candidatePath!))
     process.stdout.write(renderPublishedQualificationSource(candidate, report, capability!, reviewed) + "\n"); return 0
   }

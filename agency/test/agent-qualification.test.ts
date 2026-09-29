@@ -1,15 +1,19 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { chmod, link, mkdir, open, readFile, lstat, rename, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import test, { type TestContext } from "node:test"
 import { parseLaunchContract, productionLaunchContracts, resolveLaunchSpec } from "../src/agent/contracts.js"
-import { contractFromQualifiedCandidate, launchEvidenceFromQualifiedCandidate, observeArtifact, parseCodexQualificationManifest, renderQualifiedContractSource, verifyCodexQualification, type ArtifactPin } from "../src/agent/qualification.js"
+import { contractFromQualifiedCandidate, launchEvidenceFromQualifiedCandidate, observeArtifact, parseCodexQualificationManifest, qualificationFingerprint, renderQualifiedContractSource, verifyCodexQualification, type ArtifactPin } from "../src/agent/qualification.js"
+import { parseQualificationCandidate } from "../scripts/qualify-codex.js"
+import type { SecurityIdentity } from "../src/agent/codex-user-security.js"
 import { qualifiedLaunchContracts } from "../src/agent/qualified-contracts.js"
 import { privateRoot } from "./control-support.js"
-import { sampleSpec } from "./agent-support.js"
+import { sampleSecurityPolicy, sampleSpec } from "./agent-support.js"
 
 const managedCodex = "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin"
 const canVerify = process.platform === "darwin" && process.arch === "arm64" && process.versions.node === "24.13.0" && existsSync(managedCodex)
@@ -28,7 +32,7 @@ async function qualificationFixture(t: TestContext) {
   await writeFile(entrypoint, "throw new Error('must not import')", { mode: 0o600 })
   await writeFile(codex, "must not execute", { mode: 0o700 })
   const manifest = {
-    version: 1, policy: "agency-codex-deny-all-v1", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-agency-deny-all-v1",
+    version: 2, policy: "agency-codex-deny-all-v2", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-agency-deny-all-v2",
     adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0", adapterPackageJson: await pin(packageJson), adapterEntrypoint: await pin(entrypoint), codexExecutable: existsSync(managedCodex) ? await pin(managedCodex) : { ...await pin(codex), path: managedCodex }, nodeExecutable: await pin(process.execPath), nodeVersion: "24.13.0", protocolVersion: 1,
     qualificationCwd: { source: "attempt-root", relative: "checkout" },
     deadlines: { commandMs: 5000, reservationMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 45000 },
@@ -38,7 +42,7 @@ async function qualificationFixture(t: TestContext) {
       fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) },
       private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" },
     },
-    userStatePaths: ["/Users/moon/.codex"],
+    userSecurityState: sampleSecurityPolicy(),
   }
   return { root, manifest, packageJson, entrypoint, codex, async replaceSameBytes(path: string) { const content = await readFile(path); await rename(path, `${path}.old`); await writeFile(path, content, { mode: path === codex ? 0o700 : 0o600 }) } }
 }
@@ -75,8 +79,12 @@ test("qualification independently verifies every artifact pin", { skip: !canVeri
 test("manifest rejects extra fields and every unapproved selection and policy change", async t => {
   const f = await qualificationFixture(t)
   const base = f.manifest
+  assert.equal(parseCodexQualificationManifest(base).version, 2)
   const changes: Array<[string, (v: typeof base) => void]> = [
     ["extra field", v => { Object.assign(v, { extra: true }) }],
+    ["version 1", v => { v.version = 1 }],
+    ["policy v1", v => { v.policy = "agency-codex-deny-all-v1" }],
+    ["contract v1", v => { v.contractId = "codex-darwin-arm64-agency-deny-all-v1" }],
     ["provider", v => { v.providerId = "claude-agent-acp" }],
     ["platform", v => { v.platform = "linux" }],
     ["architecture", v => { v.architecture = "x64" }],
@@ -99,7 +107,10 @@ test("manifest rejects extra fields and every unapproved selection and policy ch
     ["private absolute path", v => { v.environment.private.HOME = "/tmp/home" }],
     ["private traversal", v => { v.environment.private.HOME = "../home" }],
     ["missing deny-all evidence", v => { v.policy = "other" }],
-    ["user state path", v => { v.userStatePaths = ["/tmp/codex"] }],
+    ["user security root", v => { const root = "/Users/moon/.codex-substituted"; v.userSecurityState.root.path = root; v.userSecurityState.config.path = root + "/config.toml"; v.userSecurityState.absent = [root + "/auth.json", root + "/requirements.toml"] }],
+    ["absent order", v => { v.userSecurityState.absent = [v.userSecurityState.absent[1], v.userSecurityState.absent[0]] }],
+    ["config link target", v => { v.userSecurityState.config.linkTarget = "../.dotfiles/home/.codex/./config.toml" }],
+    ["canonical target", v => { v.userSecurityState.config.linkTarget = "../config.toml"; v.userSecurityState.config.target.path = "/Users/moon/config.toml" }],
     ["noncanonical artifact", v => { v.adapterEntrypoint.path += "/../adapter.mjs" }],
     ["invalid identity", v => { v.codexExecutable.identity = [...v.codexExecutable.identity.slice(0, 8), "2"] as unknown as ArtifactPin["identity"] }],
     ["oversized artifact", v => { v.adapterEntrypoint.identity = [...v.adapterEntrypoint.identity.slice(0, 2), "268435457", ...v.adapterEntrypoint.identity.slice(3)] as unknown as ArtifactPin["identity"] }],
@@ -109,6 +120,41 @@ test("manifest rejects extra fields and every unapproved selection and policy ch
     mutate(value)
     assert.throws(() => parseCodexQualificationManifest(value), { code: "ADAPTER_UNQUALIFIED" }, name)
   }
+})
+
+test("security target pins change qualification identity without observing runtime user state", { skip: !canVerify }, async t => {
+  const f = await qualificationFixture(t), base = parseCodexQualificationManifest(f.manifest)
+  const fingerprint = qualificationFingerprint(base), manifests = [], fingerprints = []
+  for (const field of [...Array.from({ length: 9 }, (_, index) => index), "sha256"] as const) {
+    const value = structuredClone(base), target = value.userSecurityState.config.target
+    if (field === "sha256") target.sha256 = wrongSha(target.sha256)
+    else { const identity = [...target.identity]; identity[field] = String(BigInt(identity[field]!) + 1n); target.identity = identity as unknown as SecurityIdentity }
+    const manifest = parseCodexQualificationManifest(value), changed = qualificationFingerprint(manifest)
+    assert.notEqual(changed, fingerprint)
+    assert.throws(() => parseQualificationCandidate({ version: 2, manifest, fingerprint }), { code: "ADAPTER_UNQUALIFIED" })
+    manifests.push(manifest); fingerprints.push(changed)
+  }
+  const script = `
+    import fs from "node:fs/promises"
+    import { syncBuiltinESMExports } from "node:module"
+    const reads = []
+    for (const name of ["lstat", "realpath", "open", "readlink", "readdir", "readFile"]) {
+      const original = fs[name]
+      fs[name] = (...args) => {
+        const path = String(args[0])
+        if (path.startsWith("/Users/moon/.codex") || path === "/Users/moon/.dotfiles/home/.codex/config.toml") { reads.push(path); throw new Error("user security observation at runtime") }
+        return Reflect.apply(original, fs, args)
+      }
+    }
+    syncBuiltinESMExports()
+    const { verifyCodexQualification } = await import(process.argv[1])
+    const fingerprints = []
+    for (const manifest of JSON.parse(process.argv[2])) fingerprints.push((await verifyCodexQualification(manifest)).fingerprint)
+    process.stdout.write(JSON.stringify({ fingerprints, reads }))
+  `
+  const result = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script, new URL("../src/agent/qualification.js", import.meta.url).href, JSON.stringify(manifests)])
+  assert.equal(result.stderr, "")
+  assert.deepEqual(JSON.parse(result.stdout), { fingerprints, reads: [] })
 })
 
 test("artifact observation rejects symlinks and replacement with identical bytes", async t => {
@@ -180,7 +226,7 @@ test("production registry cannot acquire a candidate implicitly", () => {
 test("qualified candidate derives exact contract and catalog evidence", { skip: !canVerify }, async t => {
   const f = await qualificationFixture(t)
   const observed = await verifyCodexQualification(parseCodexQualificationManifest(f.manifest))
-  const candidate = { version: 1 as const, manifest: observed.manifest, fingerprint: observed.fingerprint }
+  const candidate = { version: 2 as const, manifest: observed.manifest, fingerprint: observed.fingerprint }
   const contract = contractFromQualifiedCandidate(candidate)
   assert.equal(contract.permissionEvidence, "agency-deny-all-v1")
   assert.deepEqual(contract.environment, f.manifest.environment)
@@ -204,7 +250,7 @@ test("qualified candidate derives exact contract and catalog evidence", { skip: 
 async function qualifiedResolveInput(t: TestContext) {
   const f = await qualificationFixture(t)
   const observation = await verifyCodexQualification(parseCodexQualificationManifest(f.manifest))
-  const candidate = { version: 1 as const, manifest: observation.manifest, fingerprint: observation.fingerprint }
+  const candidate = { version: 2 as const, manifest: observation.manifest, fingerprint: observation.fingerprint }
   const spec = sampleSpec()
   const evidence = launchEvidenceFromQualifiedCandidate(candidate, spec.handlerGeneration, 1000)
   return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, startCommandId: spec.startCommandId }, selection: { providerId: "codex-acp" as const, modelId: "gpt-5.6-sol", reasoning: { kind: "value" as const, value: "high" }, mode: "read-only", permissionProfile: "deny-all" }, checkout: spec.checkout, ...evidence, contract: contractFromQualifiedCandidate(candidate) }
