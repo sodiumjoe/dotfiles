@@ -10,7 +10,7 @@ import { observeCodexUserSecurityState, parseCodexUserSecurityStatePolicy, pinCo
 type IOOperation = "lstat" | "readlink" | "realpath" | "open" | "stat" | "read"
 type IOOverrides = {
   lstat?: (path: string, count: number, next: () => Promise<BigIntStats>) => Promise<BigIntStats>
-  readlink?: (path: string, count: number, next: () => Promise<string>) => Promise<string>
+  readlink?: (path: string, count: number, next: () => Promise<Buffer>) => Promise<Buffer>
   realpath?: (path: string, count: number, next: () => Promise<string>) => Promise<string>
   open?: (path: string, count: number, next: () => Promise<FileHandle>) => Promise<FileHandle>
   stat?: (path: string, count: number, next: () => Promise<BigIntStats>) => Promise<BigIntStats>
@@ -44,7 +44,7 @@ function instrument(overrides: IOOverrides = {}) {
       const name = String(path)
       readlinkPaths.push(name)
       const count = nextCount("readlink", name)
-      const next = () => readlink(path, options as { encoding: "utf8" })
+      const next = () => readlink(path, options as { encoding: "buffer" })
       return overrides.readlink ? overrides.readlink(name, count, next) : next()
     }) as typeof readlink,
     realpath: (async (path, options) => {
@@ -153,7 +153,7 @@ async function securityFixture(t: TestContext) {
           if (path === target && mutation === "oversized-target") return cloneStat(stat, { size: 1_048_577n })
           return stat
         },
-        readlink: async (path, _count, next) => mutation === "retarget-identical-bytes" && path === config ? relative(dirname(config), alternate) : next(),
+        readlink: async (path, _count, next) => mutation === "retarget-identical-bytes" && path === config ? Buffer.from(relative(dirname(config), alternate)) : next(),
         read: async (_path, count, next, args) => {
           const result = await next() as { bytesRead: number; buffer: Buffer }
           if (mutation === "wrong-bytes-stable-identity" && count === 1) (args[0] as Buffer)[0] = 0x58
@@ -352,7 +352,7 @@ test("indeterminate I/O values are unavailable at their own stage", async t => {
   assert.equal((await observeCodexUserSecurityState(policy)).outcome, "match")
   const cases: readonly (readonly [CodexUserSecurityStateIO, string])[] = [
     [instrument({ realpath: async (path, _count, next) => path === f.root ? Buffer.from("invalid") as unknown as string : next() }).io, "root_unavailable"],
-    [instrument({ readlink: async (path, _count, next) => path === f.config ? Buffer.from("invalid") as unknown as string : next() }).io, "config_unavailable"],
+    [instrument({ readlink: async (path, _count, next) => path === f.config ? "invalid" as unknown as Buffer : next() }).io, "config_unavailable"],
     [instrument({ realpath: async (path, _count, next) => path === f.config ? Buffer.from("invalid") as unknown as string : next() }).io, "config_unavailable"],
     [instrument({ lstat: async (path, _count, next) => path === f.target ? {} as BigIntStats : next() }).io, "config_target_unavailable"],
     [instrument({ read: async () => ({ bytesRead: undefined }) }).io, "config_target_unavailable"],
@@ -371,4 +371,48 @@ test("unexpected metadata failures retain the affected stage", async t => {
     } }).io
     assert.deepEqual(await observeCodexUserSecurityState(policy, io), { outcome: "unavailable", reason, observation: null }, method)
   }
+})
+
+test("the 1 MiB target limit is never crossed during pinning or observed growth", async t => {
+  const f = await securityFixture(t)
+  const limit = 1_048_576
+  await writeFile(f.target, Buffer.alloc(limit, 0x61))
+  const bounded = (grow: boolean) => {
+    let received = 0, exceeded = false
+    const audit = instrument({
+      read: async (_path, _count, next, args) => {
+        const length = args[2] as number
+        if (received + length > limit) { exceeded = true; throw errno("EIO") }
+        const result = await next() as { bytesRead: number }
+        received += result.bytesRead
+        return result
+      },
+      stat: async (_path, count, next) => {
+        const stat = await next()
+        return grow && count === 2 ? cloneStat(stat, { size: stat.size + 1n }) : stat
+      },
+    })
+    return { ...audit, received: () => received, exceeded: () => exceeded }
+  }
+  const pinAudit = bounded(false)
+  const policy = await pinCodexUserSecurityStatePolicy(f.input, pinAudit.io)
+  assert.equal(pinAudit.received(), limit)
+  assert.equal(pinAudit.exceeded(), false)
+  assert.equal((await observeCodexUserSecurityState(policy)).outcome, "match")
+  const growthAudit = bounded(true)
+  assert.deepEqual(await observeCodexUserSecurityState(policy, growthAudit.io), { outcome: "mismatch", reason: "config_target_identity", observation: null })
+  assert.equal(growthAudit.received(), limit)
+  assert.equal(growthAudit.exceeded(), false)
+})
+
+test("invalid raw config symlink bytes are unavailable", async t => {
+  const f = await securityFixture(t)
+  const policy = await pinCodexUserSecurityStatePolicy(f.input)
+  assert.equal((await observeCodexUserSecurityState(policy)).outcome, "match")
+  const raw = Buffer.from([0xff])
+  const io: CodexUserSecurityStateIO = {
+    ...instrument().io,
+    readlink: (async (_path, options) => options && typeof options === "object" && options.encoding === "buffer" ? raw : raw.toString("utf8")) as typeof readlink,
+  }
+  assert.deepEqual(await observeCodexUserSecurityState(policy, io), { outcome: "unavailable", reason: "config_unavailable", observation: null })
 })

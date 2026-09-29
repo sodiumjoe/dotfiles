@@ -72,6 +72,10 @@ function linkTarget(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value) > 4096 || !value.isWellFormed() || /[\x00-\x1f\x7f]/u.test(value) || isAbsolute(value)) invalid()
   return value
 }
+function decodeLinkTarget(value: unknown): string {
+  if (!Buffer.isBuffer(value)) throw new TypeError("invalid link bytes")
+  return new TextDecoder("utf-8", { fatal: true }).decode(value)
+}
 function parse(value: unknown): CodexUserSecurityStatePolicy {
   const policy = record(value, ["version", "root", "config", "absent"])
   if (policy.version !== 1) invalid()
@@ -104,8 +108,8 @@ async function hashTarget(path: string, expected: SecurityIdentity, io: CodexUse
     const hash = createHash("sha256")
     const buffer = Buffer.alloc(64 * 1024)
     let bytes = 0
-    while (true) {
-      const result = await handle.read(buffer, 0, Math.min(buffer.length, MAX_CONFIG_BYTES + 1 - bytes), null)
+    while (bytes < MAX_CONFIG_BYTES) {
+      const result = await handle.read(buffer, 0, Math.min(buffer.length, MAX_CONFIG_BYTES - bytes), null)
       if (result.bytesRead === 0) break
       bytes += result.bytesRead
       if (bytes > MAX_CONFIG_BYTES) invalid()
@@ -119,7 +123,7 @@ async function capture(input: CodexUserSecurityStateInput, io: CodexUserSecurity
   const root = await io.lstat(input.root, { bigint: true })
   if (!validRoot(root) || await io.realpath(input.root) !== input.root) invalid()
   const config = await io.lstat(input.configPath, { bigint: true })
-  if (!config.isSymbolicLink() || await io.readlink(input.configPath) !== input.configLinkTarget || await io.realpath(input.configPath) !== input.configTargetPath) invalid()
+  if (!config.isSymbolicLink() || decodeLinkTarget(await io.readlink(input.configPath, { encoding: "buffer" })) !== input.configLinkTarget || await io.realpath(input.configPath) !== input.configTargetPath) invalid()
   const target = await io.lstat(input.configTargetPath, { bigint: true })
   if (!target.isFile() || target.nlink !== 1n || target.size > BigInt(MAX_CONFIG_BYTES)) invalid()
   for (const path of input.absent) {
@@ -189,8 +193,8 @@ async function observedHashTarget(policy: CodexUserSecurityStatePolicy, io: Code
     const hash = createHash("sha256")
     const buffer = Buffer.alloc(64 * 1024)
     let bytes = 0
-    while (true) {
-      const requested = Math.min(buffer.length, MAX_CONFIG_BYTES + 1 - bytes)
+    while (bytes < MAX_CONFIG_BYTES) {
+      const requested = Math.min(buffer.length, MAX_CONFIG_BYTES - bytes)
       const result = await required(() => handle.read(buffer, 0, requested, null), "config_target_missing", "config_target_unavailable")
       if (typeof result !== "object" || result === null || !Number.isInteger(result.bytesRead) || result.bytesRead < 0 || result.bytesRead > requested) unavailable("config_target_unavailable")
       if (result.bytesRead === 0) break
@@ -220,7 +224,9 @@ export async function observeCodexUserSecurityState(policy: CodexUserSecuritySta
     const link = checkedStat(await required(() => io.lstat(expected.config.path, { bigint: true }), "config_missing", "config_unavailable"), "config_unavailable")
     if (!link.isSymbolicLink()) mismatch("config_kind")
     if (!isDeepStrictEqual(statIdentity(link), expected.config.identity)) mismatch("config_identity")
-    const text = checkedText(await required(() => io.readlink(expected.config.path), "config_missing", "config_unavailable"), "config_unavailable")
+    const rawLink = await required(() => io.readlink(expected.config.path, { encoding: "buffer" }), "config_missing", "config_unavailable")
+    let text: string
+    try { text = decodeLinkTarget(rawLink) } catch { unavailable("config_unavailable") }
     if (text !== expected.config.linkTarget) mismatch("config_link_target")
     const resolvedTarget = checkedText(await required(() => io.realpath(expected.config.path), "config_target_missing", "config_unavailable"), "config_unavailable")
     if (resolvedTarget !== expected.config.target.path) mismatch("config_link_target")
