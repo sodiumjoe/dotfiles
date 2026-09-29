@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { fstatSync, writeFileSync } from "node:fs"
+import { closeSync, fstatSync, openSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 const scenario = process.argv[2] ?? "normal"
 if (scenario === "child") {
+  if (process.argv[3] === "child-descriptor-leak") writeFileSync(join(process.argv[4]!, "receipts/child-fd-audit.json"), JSON.stringify({ inheritedDirectory: fstatSync(3).isDirectory() }), { mode: 0o600 })
   process.stdin.resume()
   if (process.argv[3] !== "survivor") process.stdin.on("end", () => process.exit(0))
   setInterval(() => undefined, 1000)
@@ -26,8 +27,9 @@ if (scenario === "child") {
       const request = JSON.parse(line)
       if (!request.method) continue
       if (scenario === "adapter-exit") { process.exit(2) }
-      if (!child && scenario !== "parent-overall") {
-        child = spawn(process.execPath, [fileURLToPath(import.meta.url), "child", scenario], { stdio: ["pipe", "pipe", "pipe"], env: {} })
+      if (!child) {
+        const fd = scenario === "child-descriptor-leak" ? openSync(join(process.argv[3]!, "receipts"), "r") : undefined
+        try { child = spawn(process.execPath, [fileURLToPath(import.meta.url), "child", scenario, process.argv[3]!], { stdio: ["pipe", "pipe", "pipe", ...(fd === undefined ? [] : [fd])], env: {} }) as ChildProcessWithoutNullStreams } finally { if (fd !== undefined) closeSync(fd) }
         child.stdout.resume(); child.stderr.resume(); child.on("exit", () => { process.exit(3) })
       }
       if (scenario === "codex-exit") { child!.kill("SIGKILL"); return }

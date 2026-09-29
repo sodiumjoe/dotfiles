@@ -31,7 +31,6 @@ try {
         }) as typeof spawn,
         ...(scenario === "state-removal" ? { removeProviderState: async () => { throw new AgentError("CLEANUP_UNVERIFIED") } } : {}),
         publish: async (path, value) => {
-          if (scenario === "descriptor-leak") { const audit = await readPrivateJson(join(root, "receipts/fd-audit.json")) as { inheritedDirectory: boolean }; Object.assign(value as object, { descriptors: !audit.inheritedDirectory }) }
           if (scenario !== "missing-evidence") await durableQualificationWrite(path, value)
         },
         })(options)

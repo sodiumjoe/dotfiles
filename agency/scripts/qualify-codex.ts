@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto"
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
 import { constants, type BigIntStats } from "node:fs"
 import { lstat, mkdir, mkdtemp, open, readdir, realpath, rm } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize } from "node:path"
@@ -23,10 +23,11 @@ import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerGene
 import { PROTOCOL, uuid } from "../src/control/protocol.js"
 import { exchange } from "../src/control/wire.js"
 import type { PlatformPaths } from "../src/platform/paths.js"
+import { observeQualificationDescriptors, QualificationObservationError, verifyQualificationAbsence, type DescriptorCommand, type DescriptorObservation, type ParentAbsence } from "./qualification-observation.js"
 
 const METHODS = ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode"] as const
 const PHASES = ["commandStart", "reservation", "spawn", "initialize", "session", "model", "reasoning", "mode", "transportClose", "processTerminate", "absence", "overall"] as const
-const FAILURES = [...AGENT_CODES, "ATTEMPT_ALREADY_STARTED", "EVIDENCE_PUBLICATION_FAILED", "EVIDENCE_MISSING", "OWNERSHIP_INVALID", "HANDLER_STARTUP_FAILED", "HANDLER_TERMINATED", "COMMAND_START_TIMEOUT", "OVERALL_TIMEOUT", "USER_STATE_CHANGED", "USER_STATE_UNAVAILABLE", "NORMAL_STATE_CHANGED", "DESCRIPTOR_LEAK", "PROCESS_SURVIVED", "REPORT_INVALID"] as const
+const FAILURES = [...AGENT_CODES, "ATTEMPT_ALREADY_STARTED", "EVIDENCE_PUBLICATION_FAILED", "EVIDENCE_MISSING", "OWNERSHIP_INVALID", "HANDLER_STARTUP_FAILED", "HANDLER_TERMINATED", "COMMAND_START_TIMEOUT", "OVERALL_TIMEOUT", "USER_STATE_CHANGED", "USER_STATE_UNAVAILABLE", "NORMAL_STATE_CHANGED", "DESCRIPTOR_LEAK", "DESCRIPTOR_UNAVAILABLE", "ABSENCE_TIMEOUT", "ABSENCE_UNAVAILABLE", "PROCESS_SURVIVED", "REPORT_INVALID"] as const
 type Failure = typeof FAILURES[number]
 type Phase = typeof PHASES[number]
 type Outcome = "completed" | "timed_out" | "failed" | "not_reached"
@@ -38,16 +39,17 @@ export type QualifiedOwnership = {
 }
 export type QualificationReceipt = {
   version: 1; handlerGeneration: string; launchAttemptId: string; methods: string[]; durations: Partial<Record<Phase, number>>
-  terminal: boolean; transportClosed: boolean; handlesClosed: boolean; descriptors: boolean; failure: Failure | null
+  terminal: boolean; transportClosed: boolean; handlesClosed: boolean; failure: Failure | null
 }
 type Retained = { command: AgentCommand | null; agent: AgentRecord | null; admission: AdmissionRecord | null; launch: LaunchRecord | null; handlers: HandlerGenerationRecord[]; recovery: { command: AgentCommand | null; agent: AgentRecord | null; launch: LaunchRecord | null; admission: AdmissionRecord | null; consistent: boolean } | null }
 export type QualificationObservation = CodexQualificationObservation & {
-  retained: Retained; receipt: QualificationReceipt | null
+  retained: Retained; receipt: QualificationReceipt | null; descriptors: DescriptorObservation | null; absence: ParentAbsence | null
   userState: { before: TreeObservation[]; after: TreeObservation[] }
   normalAgencyState: { before: TreeObservation[]; after: TreeObservation[] }
 }
 export type CodexQualificationReport = {
   version: 1; manifestFingerprint: string; branch: "moon/agency-agent-lifecycle"; commit: string; startedAt: string; endedAt: string; qualified: boolean; failure: Failure | null
+  publication: { capabilityHash: string | null }
   observation: QualificationObservation; protocol: { methods: readonly string[]; protocolVersion: 1 }
   selection: { modelId: "gpt-5.6-sol"; reasoning: "high"; mode: "read-only" }; session: SessionEvidence | null
   authentication: "ambient_accepted" | "auth_required" | "failed" | "unknown"; ownership: QualifiedOwnership
@@ -60,16 +62,19 @@ export type CodexQualificationReport = {
   }
 }
 export type QualificationRequest = { candidatePath: string; evidenceParent: string; reportPath?: string }
+export type QualificationResult = { report: CodexQualificationReport; publicationCapability: string | null }
 export type QualificationDependencies = {
   adapter: PlatformAdapter; hostKey: string; verify: typeof verifyCodexQualification
   handler(candidatePath: string, executionRoot: string): HandlerCommand
   userStatePaths: readonly string[]; normalStatePaths: readonly string[]; createExecutionRoot(): Promise<string>
   publish?: typeof durableQualificationWrite; start?: typeof startOrConnect
+  descriptorCommand?: DescriptorCommand
+  absenceAdapter?: Pick<PlatformAdapter, "readProcess" | "readGroup">
   beforeCleanup?: (root: string, report: CodexQualificationReport) => Promise<void>
 }
 class QualificationError extends Error { constructor(readonly code: Failure) { super(code) } }
 function fail(code: Failure): never { throw new QualificationError(code) }
-const classify = (error: unknown, fallback: Failure): Failure => error instanceof QualificationError || error instanceof AgentError ? error.code : fallback
+const classify = (error: unknown, fallback: Failure): Failure => error instanceof QualificationError || error instanceof AgentError || error instanceof QualificationObservationError ? error.code : fallback
 const equal = (left: unknown, right: unknown, code: Failure = "OWNERSHIP_INVALID"): void => { if (!isDeepStrictEqual(left, right)) fail(code) }
 function object(value: unknown, names: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== names.length || names.some(name => !Object.hasOwn(value, name))) fail("REPORT_INVALID")
@@ -145,21 +150,23 @@ function parseTree(value: unknown): TreeObservation {
   return t as TreeObservation
 }
 export function parseQualificationReceipt(value: unknown): QualificationReceipt {
-  const r = object(value, ["version", "handlerGeneration", "launchAttemptId", "methods", "durations", "terminal", "transportClosed", "handlesClosed", "descriptors", "failure"])
+  const r = object(value, ["version", "handlerGeneration", "launchAttemptId", "methods", "durations", "terminal", "transportClosed", "handlesClosed", "failure"])
   if (r.version !== 1 || !Array.isArray(r.methods) || r.methods.length > 5 || r.methods.some((m, i) => m !== METHODS[i])) fail("REPORT_INVALID")
   uuid(r.handlerGeneration); uuid(r.launchAttemptId)
-  for (const name of ["terminal", "transportClosed", "handlesClosed", "descriptors"]) if (typeof r[name] !== "boolean") fail("REPORT_INVALID")
+  for (const name of ["terminal", "transportClosed", "handlesClosed"]) if (typeof r[name] !== "boolean") fail("REPORT_INVALID")
   if (!r.durations || typeof r.durations !== "object" || Array.isArray(r.durations) || Object.entries(r.durations).some(([key, value]) => !PHASES.includes(key as Phase) || typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 120000)) fail("REPORT_INVALID")
   if (r.failure !== null && !FAILURES.includes(r.failure as Failure)) fail("REPORT_INVALID")
   return structuredClone(r) as QualificationReceipt
 }
 export function parseCodexQualificationReport(value: unknown): CodexQualificationReport {
   if (Buffer.byteLength(JSON.stringify(value)) > 1048576) fail("REPORT_INVALID")
-  const r = object(value, ["version", "manifestFingerprint", "branch", "commit", "startedAt", "endedAt", "qualified", "failure", "observation", "protocol", "selection", "session", "authentication", "ownership", "deadlines", "postconditions"])
+  const r = object(value, ["version", "manifestFingerprint", "branch", "commit", "startedAt", "endedAt", "qualified", "failure", "publication", "observation", "protocol", "selection", "session", "authentication", "ownership", "deadlines", "postconditions"])
   if (r.version !== 1 || r.branch !== "moon/agency-agent-lifecycle" || !/^[0-9a-f]{40}$/.test(String(r.commit)) || typeof r.qualified !== "boolean" || (r.failure !== null && !FAILURES.includes(r.failure as Failure))) fail("REPORT_INVALID")
   for (const key of ["startedAt", "endedAt"]) if (new Date(text(r[key])).toISOString() !== r[key]) fail("REPORT_INVALID")
   if (String(r.endedAt) < String(r.startedAt)) fail("REPORT_INVALID")
-  const o = object(r.observation, ["version", "manifest", "fingerprint", "nodeVersion", "selection", "artifacts", "retained", "receipt", "userState", "normalAgencyState"])
+  const publication = object(r.publication, ["capabilityHash"])
+  if (publication.capabilityHash !== null && !/^[0-9a-f]{64}$/.test(String(publication.capabilityHash))) fail("REPORT_INVALID")
+  const o = object(r.observation, ["version", "manifest", "fingerprint", "nodeVersion", "selection", "artifacts", "retained", "receipt", "descriptors", "absence", "userState", "normalAgencyState"])
   const candidate = parseQualificationCandidate({ version: o.version, manifest: o.manifest, fingerprint: o.fingerprint })
   if (r.manifestFingerprint !== candidate.fingerprint || o.nodeVersion !== "24.13.0") fail("REPORT_INVALID")
   equal(o.selection, candidate.manifest.selection, "REPORT_INVALID")
@@ -202,6 +209,8 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
   if (protocol.protocolVersion !== 1 || !Array.isArray(protocol.methods) || protocol.methods.length > 5 || protocol.methods.some((m, i) => m !== METHODS[i])) fail("REPORT_INVALID")
   equal(r.selection, { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, "REPORT_INVALID")
   const session = r.session === null ? null : parseSession(r.session), ownership = validateQualifiedOwnership(r.ownership)
+  if (o.descriptors !== null) validateDescriptorObservation(o.descriptors, ownership, candidate.manifest.deadlines.commandMs)
+  if (o.absence !== null) validateAbsenceObservation(o.absence, candidate.manifest.deadlines.absenceMs)
   if (!["ambient_accepted", "auth_required", "failed", "unknown"].includes(String(r.authentication))) fail("REPORT_INVALID")
   const deadlines = object(r.deadlines, PHASES), expectedLimits = limits(candidate.manifest)
   for (const name of PHASES) { const d = object(deadlines[name], ["limitMs", "outcome"]); if (d.limitMs !== expectedLimits[name] || !["completed", "timed_out", "failed", "not_reached"].includes(String(d.outcome))) fail("REPORT_INVALID") }
@@ -210,18 +219,61 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
   for (const key of Object.keys(success) as Array<keyof typeof success>) if (![success[key], opposites[key], "unknown"].includes(String(post[key]))) fail("REPORT_INVALID")
   const report = structuredClone({ ...r, ownership, session }) as CodexQualificationReport
   if (report.qualified) {
-    if (report.failure !== null || report.authentication !== "ambient_accepted" || session === null || ownership.handlers.length !== 1 || ownership.providerProcessGroup === null || retained.recovery !== null || Object.entries(ownership).some(([, v]) => v === null)) fail("REPORT_INVALID")
+    if (report.failure !== null || report.authentication !== "ambient_accepted" || session === null || publication.capabilityHash === null || ownership.handlers.length !== 1 || ownership.providerProcessGroup === null || retained.recovery !== null || Object.entries(ownership).some(([, v]) => v === null)) fail("REPORT_INVALID")
     equal({ modelId: session!.modelId, reasoning: session!.reasoning, mode: session!.mode, permissionProfile: session!.permissionProfile, permissionEvidence: session!.permissionEvidence }, { modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all", permissionEvidence: "agency-deny-all-v1" }, "REPORT_INVALID")
     equal(post, success, "REPORT_INVALID"); equal(protocol.methods, METHODS, "REPORT_INVALID")
     if (PHASES.some(name => report.deadlines[name].outcome !== "completed")) fail("REPORT_INVALID")
     const receipt = report.observation.receipt
-    if (!receipt || !receipt.terminal || !receipt.transportClosed || !receipt.handlesClosed || !receipt.descriptors || receipt.failure !== null || receipt.handlerGeneration !== ownership.handlerGeneration || receipt.launchAttemptId !== ownership.launchAttemptId) fail("REPORT_INVALID")
+    if (!receipt || !receipt.terminal || !receipt.transportClosed || !receipt.handlesClosed || receipt.failure !== null || receipt.handlerGeneration !== ownership.handlerGeneration || receipt.launchAttemptId !== ownership.launchAttemptId) fail("REPORT_INVALID")
     equal(receipt.methods, METHODS, "REPORT_INVALID")
-    for (const name of PHASES) if (receipt.durations[name] === undefined || receipt.durations[name]! >= expectedLimits[name]) fail("REPORT_INVALID")
+    for (const name of PHASES.filter(name => name !== "absence")) if (receipt.durations[name] === undefined || receipt.durations[name]! >= expectedLimits[name]) fail("REPORT_INVALID")
+    const descriptors = report.observation.descriptors, absence = report.observation.absence
+    if (!descriptors || descriptors.outcome !== "verified" || !absence || absence.outcome !== "completed" || absence.passes !== 2 || absence.handler !== "absent" || absence.provider !== "absent" || absence.durationMs >= expectedLimits.absence) fail("REPORT_INVALID")
+    const targets = [...ownership.handlers.map(h => h.process), ...ownership.providerProcessGroup!.observed, ownership.providerProcessGroup!.leader, ...descriptors.processes.map(p => p.process)]
+    const unique = [...new Map(targets.map(p => [p.pid, p])).values()].sort((a, b) => a.pid - b.pid)
+    equal([...absence.targets].sort((a, b) => a.pid - b.pid), unique, "REPORT_INVALID")
     for (const key of ["userState", "normalAgencyState"] as const) { const pair = report.observation[key]; if (!pair.before.length) fail("REPORT_INVALID"); equal(pair.before, pair.after, "REPORT_INVALID") }
     correlate(report)
   } else if (report.failure === null) fail("REPORT_INVALID")
   return report
+}
+function validateDescriptorObservation(value: unknown, ownership: QualifiedOwnership, limitMs: number): void {
+  const d = object(value, ["outcome", "durationMs", "processes"])
+  if (!["verified", "leaked"].includes(String(d.outcome)) || typeof d.durationMs !== "number" || !Number.isFinite(d.durationMs) || d.durationMs < 0 || d.durationMs >= limitMs || !Array.isArray(d.processes) || d.processes.length < 3 || d.processes.length > 4098) fail("REPORT_INVALID")
+  const processes = d.processes.map(raw => {
+    const p = object(raw, ["process", "role", "descriptors"]), process = identity(p.process)
+    if (!["handler", "adapter", "child"].includes(String(p.role)) || !Array.isArray(p.descriptors) || p.descriptors.length < 3 || p.descriptors.length > 256) fail("REPORT_INVALID")
+    const descriptors = p.descriptors.map(raw => {
+      const fd = object(raw, ["fd", "type", "allowed"])
+      if (!Number.isSafeInteger(fd.fd) || (fd.fd as number) < 0 || (fd.fd as number) > 999999 || !["REG", "DIR", "PIPE", "unix", "CHR", "KQUEUE", "IPv4", "IPv6", "PSXSEM", "PSXSHM"].includes(String(fd.type)) || typeof fd.allowed !== "boolean") fail("REPORT_INVALID")
+      if (fd.allowed && !((fd.fd as number) <= 2 && (["PIPE", "unix"].includes(String(fd.type)) || p.role === "handler" && fd.type === "CHR") || p.role === "handler" && (fd.fd as number) <= 4 && ["PIPE", "unix"].includes(String(fd.type)))) fail("REPORT_INVALID")
+      return fd
+    })
+    if (new Set(descriptors.map(d => d.fd)).size !== descriptors.length || [0, 1, 2].some(fd => !descriptors.some(d => d.fd === fd))) fail("REPORT_INVALID")
+    if (p.role === "handler") { if (!ownership.handlers.some(h => isDeepStrictEqual(h.process, process))) fail("REPORT_INVALID") }
+    else {
+      const group = ownership.providerProcessGroup
+      if (!group || process.bootId !== group.leader.bootId || process.processGroupId !== group.leader.pid || process.sessionId !== group.leader.pid || process.uid !== group.leader.uid || process.gid !== group.leader.gid || p.role === "adapter" && !isDeepStrictEqual(process, group.leader) || p.role === "child" && process.pid === group.leader.pid) fail("REPORT_INVALID")
+    }
+    return { process, role: p.role, descriptors }
+  })
+  if (new Set(processes.map(p => p.process.pid)).size !== processes.length || processes.filter(p => p.role === "handler").length !== ownership.handlers.length || processes.filter(p => p.role === "adapter").length !== 1 || !processes.some(p => p.role === "child")) fail("REPORT_INVALID")
+  for (const child of processes.filter(p => p.role === "child")) { let current = child, visited = new Set<number>(); while (current.role !== "adapter") { if (visited.has(current.process.pid)) fail("REPORT_INVALID"); visited.add(current.process.pid); const parent = processes.find(p => p.process.pid === current.process.parentPid && p.role !== "handler"); if (!parent) fail("REPORT_INVALID"); current = parent } }
+  if ((d.outcome === "verified") !== processes.every(p => p.descriptors.every(fd => fd.allowed))) fail("REPORT_INVALID")
+}
+function validateAbsenceObservation(value: unknown, limitMs: number): void {
+  const a = object(value, ["limitMs", "durationMs", "outcome", "passes", "targets", "groups", "handler", "provider"])
+  if (a.limitMs !== limitMs || typeof a.durationMs !== "number" || !Number.isFinite(a.durationMs) || a.durationMs < 0 || !["completed", "timed_out", "failed"].includes(String(a.outcome)) || !Number.isSafeInteger(a.passes) || (a.passes as number) < 0 || (a.passes as number) > 2 || !Array.isArray(a.targets) || a.targets.length > 4100 || !Array.isArray(a.groups) || a.groups.length > 3 || !["absent", "present", "unknown"].includes(String(a.handler)) || !["absent", "present", "unknown"].includes(String(a.provider))) fail("REPORT_INVALID")
+  const targets = a.targets.map(identity)
+  if (new Set(targets.map(p => p.pid)).size !== targets.length) fail("REPORT_INVALID")
+  equal(a.groups, [...new Set(targets.map(p => p.processGroupId))].sort((a, b) => a - b), "REPORT_INVALID")
+  if (a.outcome === "completed" && (a.passes !== 2 || a.durationMs >= limitMs || a.handler !== "absent" || a.provider !== "absent")) fail("REPORT_INVALID")
+}
+export function renderPublishedQualificationSource(candidate: CodexQualificationCandidate, value: unknown, capability: string): string {
+  const report = parseCodexQualificationReport(value)
+  if (!report.qualified) fail("ADAPTER_UNQUALIFIED")
+  if (!/^[0-9a-f]{64}$/.test(capability) || !report.publication.capabilityHash || !timingSafeEqual(createHash("sha256").update(capability).digest(), Buffer.from(report.publication.capabilityHash, "hex"))) fail("EVIDENCE_PUBLICATION_FAILED")
+  return renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: report.manifestFingerprint })
 }
 export function qualificationPaths(root: string, hostKey: string): PlatformPaths {
   canonical(root); if (!/^[a-f0-9]{64}$/.test(hostKey)) fail("REPORT_INVALID")
@@ -296,11 +348,10 @@ async function observe<T>(operation: () => Promise<T>): Promise<T> {
 }
 async function terminal(adapter: PlatformAdapter, p: ProcessIdentity): Promise<boolean> { const actual = await observe(() => adapter.readProcess(p.pid)); return actual === null || !sameProcessGeneration(p, actual) }
 async function absentGroup(adapter: PlatformAdapter, group: ProcessGroupIdentity): Promise<boolean> {
-  for (let pass = 0; pass < 2; pass++) {
-    if ((await observe(() => adapter.readGroup(group.leader.processGroupId))).length) return false
-    for (const p of [group.leader, ...group.observed]) if (!await terminal(adapter, p)) return false
-  }
-  return true
+  const result = await verifyQualificationAbsence(adapter, [], group, [], 2000)
+  if (result.outcome === "timed_out") fail("ABSENCE_TIMEOUT")
+  if (result.outcome === "failed" && result.provider !== "present") fail("ABSENCE_UNAVAILABLE")
+  return result.outcome === "completed"
 }
 async function terminateHandler(adapter: PlatformAdapter, p: ProcessIdentity): Promise<void> {
   const current = await adapter.readProcess(p.pid)
@@ -327,7 +378,7 @@ async function evidenceDirectory(parent: string): Promise<string> {
   await assertPrivateDirectory(directory); await syncDirectory(parent)
   return directory
 }
-export async function runCodexQualification(request: QualificationRequest, dependencies?: QualificationDependencies): Promise<CodexQualificationReport> {
+export async function runCodexQualification(request: QualificationRequest, dependencies?: QualificationDependencies): Promise<QualificationResult> {
   const candidate = parseQualificationCandidate(await readPrivateJson(request.candidatePath))
   const deps = dependencies ?? await defaultDependencies(), publish = deps.publish ?? durableQualificationWrite
   const observation = await deps.verify(candidate.manifest)
@@ -337,7 +388,8 @@ export async function runCodexQualification(request: QualificationRequest, depen
   if ((await git("/usr/bin/git", ["branch", "--show-current"], { cwd: repo })).stdout.trim() !== "moon/agency-agent-lifecycle") fail("ADAPTER_UNQUALIFIED")
   const report: CodexQualificationReport = {
     version: 1, manifestFingerprint: candidate.fingerprint, branch: "moon/agency-agent-lifecycle", commit, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), qualified: false, failure: null,
-    observation: { ...observation, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, userState: { before: [], after: [] }, normalAgencyState: { before: [], after: [] } },
+    publication: { capabilityHash: null },
+    observation: { ...observation, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, descriptors: null, absence: null, userState: { before: [], after: [] }, normalAgencyState: { before: [], after: [] } },
     protocol: { protocolVersion: 1, methods: [] }, selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, session: null, authentication: "unknown",
     ownership: { handlerGeneration: null, agentId: null, providerGeneration: null, leaseId: null, launchAttemptId: null, sessionId: null, handlers: [], providerProcessGroup: null },
     deadlines: Object.fromEntries(PHASES.map(name => [name, { limitMs: limits(candidate.manifest)[name], outcome: "not_reached" }])) as CodexQualificationReport["deadlines"],
@@ -443,8 +495,14 @@ export async function runCodexQualification(request: QualificationRequest, depen
   }
   async function waitAbsentHandler(h: HandlerGenerationRecord): Promise<void> {
     const deadline = performance.now() + candidate.manifest.deadlines.processTerminateMs
-    while (!await terminal(deps.adapter, h.process!) || (await observe(() => deps.adapter.readGroup(h.process!.processGroupId))).length) { if (performance.now() >= deadline) fail("PROCESS_SURVIVED"); await delay() }
-    for (let pass = 0; pass < 2; pass++) if (!await terminal(deps.adapter, h.process!) || (await observe(() => deps.adapter.readGroup(h.process!.processGroupId))).length) fail("PROCESS_SURVIVED")
+    while (true) {
+      const remaining = deadline - performance.now()
+      if (remaining <= 0) fail("PROCESS_SURVIVED")
+      const absent = await within(Promise.all([terminal(deps.adapter, h.process!), observe(() => deps.adapter.readGroup(h.process!.processGroupId))]), remaining, "ABSENCE_TIMEOUT")
+      if (performance.now() >= deadline) fail("ABSENCE_TIMEOUT")
+      if (absent[0] && !absent[1].length) return
+      await delay()
+    }
   }
   async function recover(): Promise<void> {
     if (recovered || !paths || !current?.process) return
@@ -513,6 +571,8 @@ export async function runCodexQualification(request: QualificationRequest, depen
     equal(await createAgentStore(paths.persistentRoot).readCommand(commandId), retained.command)
     equal(await createAgentStore(paths.persistentRoot).readAgent(target.agentId), retained.agent)
     correlate(report)
+    report.observation.descriptors = await observeQualificationDescriptors(deps.adapter, handlerOwners.map(h => h.process!), report.ownership.providerProcessGroup!, budget(), deps.descriptorCommand)
+    if (report.observation.descriptors.outcome !== "verified") fail("DESCRIPTOR_LEAK")
     stopSent = true
     const stopping = await requestAgent({ op: "agent_stop", input: { ...target, commandId: randomUUID() } })
     if (stopping.state !== "command" || stopping.durability !== "verified") fail("CLEANUP_UNVERIFIED")
@@ -577,8 +637,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
           report.protocol.methods = receipt.methods
           report.postconditions.directChild = receipt.terminal ? "terminal" : "unknown"
           report.postconditions.transport = receipt.transportClosed ? "closed" : "open"; report.postconditions.ownedHandles = receipt.handlesClosed ? "closed" : "open"
-          for (const [name, duration] of Object.entries(receipt.durations) as Array<[Phase, number]>) report.deadlines[name].outcome = duration < report.deadlines[name].limitMs ? "completed" : "timed_out"
-          if (!receipt.descriptors) { report.failure = "DESCRIPTOR_LEAK"; fail("DESCRIPTOR_LEAK") }
+          for (const [name, duration] of Object.entries(receipt.durations) as Array<[Phase, number]>) if (name !== "absence") report.deadlines[name].outcome = duration < report.deadlines[name].limitMs ? "completed" : "timed_out"
           if (receipt.failure) {
             if (report.failure === "ADMISSION_UNAVAILABLE" || report.failure === "INCOMPLETE") report.failure = receipt.failure
             else setFailure(new QualificationError(receipt.failure), receipt.failure)
@@ -587,6 +646,15 @@ export async function runCodexQualification(request: QualificationRequest, depen
         if (!verified || report.postconditions.providerState !== "absent") fail("CLEANUP_UNVERIFIED")
       } catch (error) { setFailure(error, "EVIDENCE_MISSING") }
       for (const socket of sockets) socket.destroy()
+      try {
+        const absence = await verifyQualificationAbsence(deps.absenceAdapter ?? deps.adapter, handlerOwners.map(h => h.process!), cleanupLaunch?.provider?.group ?? report.ownership.providerProcessGroup, report.observation.descriptors?.processes.map(p => p.process) ?? [], candidate.manifest.deadlines.absenceMs)
+        report.observation.absence = absence
+        report.deadlines.absence.outcome = absence.outcome
+        report.postconditions.handler = handlerInvoked && !handlerOwners.length ? "unknown" : absence.handler
+        report.postconditions.processGroup = report.postconditions.processGroup === "unknown" ? "unknown" : absence.provider
+        report.postconditions.ownedHandles = absence.outcome === "completed" && report.observation.descriptors?.outcome === "verified" && report.postconditions.transport === "closed" ? "closed" : "unknown"
+        if (absence.outcome !== "completed") fail(absence.outcome === "timed_out" ? "ABSENCE_TIMEOUT" : absence.handler === "present" || absence.provider === "present" ? "PROCESS_SURVIVED" : "ABSENCE_UNAVAILABLE")
+      } catch (error) { setFailure(error, "ABSENCE_UNAVAILABLE") }
       try {
         if (report.postconditions.handler === "absent" && report.postconditions.processGroup === "absent" && report.postconditions.reservation === "released" && report.postconditions.providerState === "absent") {
           const observedRoot = await lstat(root!, { bigint: true })
@@ -607,22 +675,25 @@ export async function runCodexQualification(request: QualificationRequest, depen
     } catch (error) { setFailure(error, "USER_STATE_UNAVAILABLE") }
   }
   report.endedAt = new Date().toISOString()
+  let publicationCapability: string | null = null
   if (report.failure === null) {
+    publicationCapability = randomBytes(32).toString("hex")
+    report.publication.capabilityHash = createHash("sha256").update(publicationCapability).digest("hex")
     report.qualified = true
-    try { parseCodexQualificationReport(report) } catch { report.qualified = false; report.failure = "REPORT_INVALID" }
+    try { parseCodexQualificationReport(report) } catch { report.qualified = false; report.failure = "REPORT_INVALID"; publicationCapability = null }
   }
   try {
     await publish(join(evidence, "report.json"), report)
     if (request.reportPath) await publish(request.reportPath, report)
   } catch {
     const unpublished = structuredClone(report)
-    report.qualified = false; report.failure = "EVIDENCE_PUBLICATION_FAILED"
+    report.qualified = false; report.failure = "EVIDENCE_PUBLICATION_FAILED"; publicationCapability = null
     for (const path of [join(evidence, "report.json"), ...(request.reportPath ? [request.reportPath] : [])]) {
       try { equal(await readPrivateJson(path), unpublished, "EVIDENCE_PUBLICATION_FAILED"); await rm(path); await syncDirectory(dirname(path)) } catch {}
     }
     await durableQualificationWrite(join(evidence, "report-failed.json"), report).catch(() => undefined)
   }
-  return report
+  return { report, publicationCapability }
 }
 
 export async function pinnedArtifact(path: string, sha256: string): Promise<ArtifactPin> {
@@ -651,19 +722,18 @@ export async function offlineCandidate(candidatePath: string, evidenceParent: st
 }
 export async function codexQualificationMain(argv: readonly string[]): Promise<number> {
   const args = new Map<string, string>()
-  for (let i = 0; i < argv.length; i += 2) { const name = argv[i]!, value = argv[i + 1]; if (!["--stage", "--candidate", "--evidence-parent", "--report"].includes(name) || args.has(name) || !value) fail("USAGE"); args.set(name, value!) }
+  for (let i = 0; i < argv.length; i += 2) { const name = argv[i]!, value = argv[i + 1]; if (!["--stage", "--candidate", "--evidence-parent", "--report", "--publication-capability"].includes(name) || args.has(name) || !value) fail("USAGE"); args.set(name, value!) }
   const stage = args.get("--stage"), candidatePath = args.get("--candidate"), evidenceParent = args.get("--evidence-parent")
   if (!candidatePath || !evidenceParent || !["offline", "live", "source"].includes(stage ?? "")) fail("USAGE")
   canonical(candidatePath!); canonical(evidenceParent!)
   if (stage === "offline") { const candidate = await offlineCandidate(candidatePath!, evidenceParent!); process.stdout.write(JSON.stringify({ stage, fingerprint: candidate.fingerprint }) + "\n"); return 0 }
   if (stage === "source") {
-    const path = args.get("--report"); if (!path) fail("USAGE")
+    const path = args.get("--report"), capability = args.get("--publication-capability"); if (!path || !capability) fail("USAGE")
     const report = parseCodexQualificationReport(await readPrivateJson(path!)), candidate = parseQualificationCandidate(await readPrivateJson(candidatePath!))
-    if (!report.qualified) fail("ADAPTER_UNQUALIFIED")
-    process.stdout.write(renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: report.manifestFingerprint }) + "\n"); return 0
+    process.stdout.write(renderPublishedQualificationSource(candidate, report, capability!) + "\n"); return 0
   }
-  const report = await runCodexQualification({ candidatePath: candidatePath!, evidenceParent: evidenceParent!, ...(args.has("--report") ? { reportPath: args.get("--report")! } : {}) })
-  process.stdout.write(JSON.stringify({ qualified: report.qualified, failure: report.failure }) + "\n"); return report.qualified ? 0 : 1
+  const { report, publicationCapability } = await runCodexQualification({ candidatePath: candidatePath!, evidenceParent: evidenceParent!, ...(args.has("--report") ? { reportPath: args.get("--report")! } : {}) })
+  process.stdout.write(JSON.stringify({ qualified: report.qualified, failure: report.failure, publicationCapability }) + "\n"); return report.qualified ? 0 : 1
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   codexQualificationMain(process.argv.slice(2)).then(code => { process.exitCode = code }, error => { process.stderr.write(classify(error, "ADAPTER_UNQUALIFIED") + "\n"); process.exitCode = 1 })

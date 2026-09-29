@@ -40,10 +40,10 @@ export function fatalQualificationHandler(spec: LaunchSpec): never {
   process.kill(process.pid, "SIGKILL")
   throw new AgentError("STARTUP_TIMEOUT")
 }
-type AuditOptions = { spawn?: typeof spawn; removeProviderState?: NonNullable<Parameters<typeof createAgentProcess>[1]>["removeProviderState"]; publish?: typeof durableQualificationWrite; descriptors?: boolean }
+type AuditOptions = { spawn?: typeof spawn; removeProviderState?: NonNullable<Parameters<typeof createAgentProcess>[1]>["removeProviderState"]; publish?: typeof durableQualificationWrite }
 export function qualificationProcessFactory(root: string, reservationTimes: Map<string, number>, options: AuditOptions = {}): typeof createAgentProcess {
   return input => {
-    const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, terminal: false, transportClosed: false, handlesClosed: false, descriptors: options.descriptors ?? true, failure: null }
+    const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, terminal: false, transportClosed: false, handlesClosed: false, failure: null }
     const reservation = reservationTimes.get(input.spec.launchAttemptId)
     if (reservation !== undefined) receipt.durations.reservation = reservation
     let child: ChildProcess | undefined, started = performance.now(), phaseStart = 0, pendingId: unknown, phase: "initialize" | "session" | "model" | "reasoning" | "mode" | undefined, buffer = "", closeStart = 0, terminalAt = 0, closedAt = 0, absenceStart = 0

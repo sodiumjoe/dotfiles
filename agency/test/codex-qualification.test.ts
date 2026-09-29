@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test, type TestContext } from "node:test"
 import { mkdir, mkdtemp, readFile, rm, writeFile, symlink, open, readdir, chmod } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createHash } from "node:crypto"
 import { execFile } from "node:child_process"
@@ -15,7 +15,7 @@ import { createLinuxAdapter } from "../src/platform/linux.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import { sameProcess } from "../src/platform/types.js"
-import { durableQualificationWrite, parseCodexQualificationReport, pinnedArtifact, qualificationPaths, runCodexQualification, snapshotTree, validateQualifiedOwnership, type QualificationDependencies } from "../scripts/qualify-codex.js"
+import { durableQualificationWrite, parseCodexQualificationReport, pinnedArtifact, qualificationPaths, renderPublishedQualificationSource, runCodexQualification, snapshotTree, validateQualifiedOwnership, type QualificationDependencies } from "../scripts/qualify-codex.js"
 
 async function qualificationHarnessFixture(t: TestContext, scenario = "normal") {
   const root = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqt-" : "/tmp/agyqt-")
@@ -34,6 +34,19 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     adapter: platform, hostKey: "a".repeat(64),
     verify: async () => ({ ...candidate, nodeVersion: "24.13.0", selection: manifest.selection, artifacts: { adapterPackageJson: manifest.adapterPackageJson, adapterEntrypoint: manifest.adapterEntrypoint, codexExecutable: manifest.codexExecutable, nodeExecutable: manifest.nodeExecutable } }),
     handler: (path, execution) => ({ file: process.execPath, args: [fileURLToPath(new URL("./fixtures/qualification-handler.js", import.meta.url)), path, execution, scenario] }),
+    async descriptorCommand(file, args, options) {
+      assert.equal(file, "/usr/sbin/lsof"); assert.deepEqual(args.slice(0, 3), ["-nP", "-a", "-p"]); assert.equal(args[4], "-F0pftn"); assert.ok(options.timeout > 0 && options.timeout <= 5000)
+      const pid = Number(args[3]), process = await platform.readProcess(pid)
+      assert.ok(process)
+      const handler = process.birth.includes("agy-handler:"), adapter = process.birth.includes("agy-provider:")
+      let extra = ""
+      if (scenario === "descriptor-leak" && adapter || scenario === "child-descriptor-leak" && !handler && !adapter) {
+        const audit = JSON.parse(await readFile(join(executionRoots.at(-1)!, "receipts", adapter ? "fd-audit.json" : "child-fd-audit.json"), "utf8"))
+        assert.equal(audit.inheritedDirectory, true)
+        extra = "f3\0tDIR\0nevidence-directory\0\n"
+      }
+      return { stdout: `p${pid}\0\nf0\0tPIPE\0npipe0\0\nf1\0tPIPE\0npipe1\0\nf2\0tPIPE\0npipe2\0\n${handler ? "f3\0tunix\0nstatus\0\nf4\0tunix\0ngate\0\n" : ""}${extra}`, stderr: "" }
+    },
     userStatePaths: [user], normalStatePaths: [normal],
     async createExecutionRoot() { const execution = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqx-" : "/tmp/agyqx-"); executionRoots.push(execution); return execution },
   }
@@ -66,7 +79,7 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
 
 test("successful fixture qualification has complete postconditions and no profile", async t => {
   const f = await qualificationHarnessFixture(t)
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, true, JSON.stringify(report))
   assert.deepEqual(report.protocol.methods, ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode"])
   assert.deepEqual(report.selection, { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" })
@@ -74,7 +87,7 @@ test("successful fixture qualification has complete postconditions and no profil
   assert.ok(Object.values(report.deadlines).every(value => value.outcome === "completed"))
   assert.deepEqual(parseCodexQualificationReport(report), report)
   assert.deepEqual(productionLaunchContracts(), [])
-  const again = await runCodexQualification(f.request, f.dependencies)
+  const { report: again } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(again.qualified, false); assert.equal(again.failure, "ATTEMPT_ALREADY_STARTED")
 })
 
@@ -86,11 +99,11 @@ for (const [scenario, failure] of [
   ["missing-option", "SELECTION_UNSUPPORTED"], ["duplicate-option", "INVALID_PROTOCOL"],
   ["adapter-exit", "STARTUP_FAILED"], ["codex-exit", "STARTUP_FAILED"],
   ["handler-startup", "HANDLER_STARTUP_FAILED"], ["stop-failure", "CLEANUP_UNVERIFIED"],
-  ["state-removal", "CLEANUP_UNVERIFIED"], ["missing-evidence", "EVIDENCE_MISSING"], ["descriptor-leak", "DESCRIPTOR_LEAK"],
+  ["state-removal", "CLEANUP_UNVERIFIED"], ["missing-evidence", "EVIDENCE_MISSING"], ["descriptor-leak", "DESCRIPTOR_LEAK"], ["child-descriptor-leak", "DESCRIPTOR_LEAK"],
   ...["model", "reasoning", "mode"].flatMap(phase => ["model", "reasoning", "mode", "alias"].map(field => [`substitute-${phase}-${field}`, "SELECTION_UNSUPPORTED"])),
 ] as const) test(`fixture qualification rejects ${scenario}`, async t => {
   const f = await qualificationHarnessFixture(t, scenario)
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, failure, JSON.stringify(report))
   assert.equal(report.postconditions.handler, "absent")
   assert.equal(report.postconditions.processGroup, "absent")
@@ -105,7 +118,7 @@ test("report publication fsync failure cannot qualify or register", async t => {
     if (path.endsWith("/report.json")) return durableQualificationWrite(path, value, { open: (async (...args: Parameters<typeof open>) => { const handle = await open(...args); handle.sync = async () => { throw new Error("fixture fsync failure") }; return handle }) as typeof open })
     await durableQualificationWrite(path, value)
   }
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "EVIDENCE_PUBLICATION_FAILED")
   assert.throws(() => parseCodexQualificationReport({ ...report, qualified: true }))
   const directory = join(f.request.evidenceParent, "codex-qualification")
@@ -123,11 +136,73 @@ test("marker fsync failure consumes the only attempt before Handler launch", asy
     if (path.endsWith(".live-started.json")) return durableQualificationWrite(path, value, { open: (async (...args: Parameters<typeof open>) => { const handle = await open(...args); handle.sync = async () => { throw new Error("fixture fsync failure") }; return handle }) as typeof open })
     await durableQualificationWrite(path, value)
   }
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "EVIDENCE_PUBLICATION_FAILED"); assert.deepEqual(report.ownership.handlers, [])
   delete f.dependencies.publish
-  const again = await runCodexQualification(f.request, f.dependencies)
+  const { report: again } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(again.qualified, false); assert.equal(again.failure, "ATTEMPT_ALREADY_STARTED"); assert.deepEqual(again.ownership.handlers, [])
+})
+
+test("source rejects a success report while its publication is still pending", async t => {
+  const f = await qualificationHarnessFixture(t)
+  let rejected = 0, visible = ""
+  f.dependencies.publish = async (path, value) => {
+    await durableQualificationWrite(path, value)
+    if (!path.endsWith("/report.json") || !(value as { qualified: boolean }).qualified) return
+    visible = path
+    for (const capability of [[], ["--publication-capability", (value as { publication: { capabilityHash: string } }).publication.capabilityHash]]) {
+      try { await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", path, ...capability]) } catch { rejected++ }
+    }
+  }
+  const { report, publicationCapability } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true)
+  assert.equal(rejected, 2)
+  assert.ok(publicationCapability)
+  assert.ok(!JSON.stringify(report).includes(publicationCapability))
+  assert.match(renderPublishedQualificationSource(f.candidate, report, publicationCapability), /qualifiedLaunchContracts/)
+  assert.throws(() => renderPublishedQualificationSource(f.candidate, report, "0".repeat(64)), { code: "EVIDENCE_PUBLICATION_FAILED" })
+  const source = await promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible, "--publication-capability", publicationCapability])
+  assert.match(source.stdout, /qualifiedLaunchContracts/); assert.deepEqual(productionLaunchContracts(), [])
+})
+
+test("source rejects visible success bytes after fsync and invalidation both fail", async t => {
+  const f = await qualificationHarnessFixture(t)
+  let visible = ""
+  f.dependencies.publish = async (path, value) => {
+    if (!path.endsWith("/report.json")) return durableQualificationWrite(path, value)
+    visible = path
+    try { await durableQualificationWrite(path, value, { open: (async (...args: Parameters<typeof open>) => { const handle = await open(...args); handle.sync = async () => { throw new Error("fixture fsync failure") }; return handle }) as typeof open }) }
+    catch (error) { await chmod(dirname(path), 0); throw error }
+  }
+  const { report, publicationCapability } = await runCodexQualification(f.request, f.dependencies)
+  await chmod(dirname(visible), 0o700)
+  assert.equal(publicationCapability, null)
+  assert.equal(report.qualified, false); assert.equal(report.failure, "EVIDENCE_PUBLICATION_FAILED")
+  assert.equal(JSON.parse(await readFile(visible, "utf8")).qualified, true)
+  await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible]), { code: 1 })
+  await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL("../scripts/qualify-codex.js", import.meta.url)), "--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", visible, "--publication-capability", "0".repeat(64)]), { code: 1 })
+})
+
+for (const kind of ["delayed", "never-settling"] as const) test(`${kind} parent absence prevents qualification and retains roots`, async t => {
+  const f = await qualificationHarnessFixture(t)
+  f.dependencies.absenceAdapter = { readProcess: () => kind === "never-settling" ? new Promise(() => undefined) : new Promise(resolve => setTimeout(() => resolve(null), 1300)), async readGroup() { return [] } }
+  const { report, publicationCapability } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, false); assert.equal(report.failure, "ABSENCE_TIMEOUT")
+  assert.equal(report.deadlines.absence.outcome, "timed_out")
+  assert.equal(report.observation.absence!.outcome, "timed_out")
+  assert.equal(report.postconditions.handler, "unknown"); assert.equal(report.postconditions.processGroup, "unknown")
+  assert.equal(report.postconditions.ownedHandles, "unknown"); assert.equal(report.postconditions.executionRoot, "present")
+  assert.equal(publicationCapability, null); assert.deepEqual(productionLaunchContracts(), [])
+})
+
+test("missing descriptor evidence prevents qualification", async t => {
+  const f = await qualificationHarnessFixture(t)
+  f.dependencies.descriptorCommand = async () => ({ stdout: "", stderr: "" })
+  const { report, publicationCapability } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, false); assert.equal(report.failure, "DESCRIPTOR_UNAVAILABLE")
+  assert.equal(report.observation.descriptors, null); assert.equal(report.postconditions.ownedHandles, "unknown")
+  assert.equal(report.postconditions.handler, "absent"); assert.equal(report.postconditions.processGroup, "absent")
+  assert.equal(publicationCapability, null); assert.deepEqual(productionLaunchContracts(), [])
 })
 
 test("surviving provider group prevents qualification and retains state", async t => {
@@ -136,7 +211,7 @@ test("surviving provider group prevents qualification and retains state", async 
   let providerGroup = 0
   f.dependencies.beforeCleanup = async (_root, report) => { providerGroup = report.ownership.providerProcessGroup!.leader.processGroupId }
   f.dependencies.adapter = { ...platform, async signalGroup(group, signal) { if (group !== providerGroup) await platform.signalGroup(group, signal) } }
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "CLEANUP_UNVERIFIED", JSON.stringify(report))
   assert.equal(report.postconditions.processGroup, "present"); assert.equal(report.postconditions.executionRoot, "present")
   assert.equal(report.postconditions.handler, "absent"); assert.deepEqual(productionLaunchContracts(), [])
@@ -166,7 +241,7 @@ test("tree observation rejects symlinks and detects user-state drift without ret
 test("an oversized user-state tree fails before Handler startup", async t => {
   const f = await qualificationHarnessFixture(t), handle = await open(join(f.user, "large"), "wx", 0o600)
   await handle.truncate(268435457); await handle.close()
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "USER_STATE_UNAVAILABLE")
   assert.deepEqual(report.ownership.handlers, []); assert.deepEqual(productionLaunchContracts(), [])
 })
@@ -174,21 +249,21 @@ test("an oversized user-state tree fails before Handler startup", async t => {
 test("an unreadable user-state tree has a closed prelaunch failure", async t => {
   const f = await qualificationHarnessFixture(t), path = join(f.user, "unreadable")
   await writeFile(path, "unreadable", { mode: 0o600 }); await chmod(path, 0)
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "USER_STATE_UNAVAILABLE")
   assert.deepEqual(report.ownership.handlers, []); assert.deepEqual(productionLaunchContracts(), [])
 })
 
 test("a pending start beyond reservationMs keeps a healthy Handler alive", async t => {
   const f = await qualificationHarnessFixture(t, "slow-session")
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, true, JSON.stringify({ failure: report.failure, deadlines: report.deadlines, postconditions: report.postconditions }))
   assert.equal(report.ownership.handlers.length, 1)
 })
 
 test("a reservation fail-stop recovers once without another start", async t => {
   const f = await qualificationHarnessFixture(t, "reservation-hang")
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "STARTUP_TIMEOUT")
   assert.equal(report.ownership.handlers.length, 2); assert.equal(report.postconditions.reservation, "released")
   assert.equal(report.postconditions.handler, "absent"); assert.equal(report.ownership.providerProcessGroup, null)
@@ -196,14 +271,14 @@ test("a reservation fail-stop recovers once without another start", async t => {
 
 test("an initial command-publication timeout recovers with no retry", async t => {
   const f = await qualificationHarnessFixture(t, "command-hang")
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "COMMAND_START_TIMEOUT")
   assert.equal(report.ownership.handlers.length, 2); assert.equal(report.postconditions.handler, "absent")
 })
 
 test("the parent overall deadline includes a pending stop and records timeout", async t => {
   const f = await qualificationHarnessFixture(t, "parent-overall")
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "OVERALL_TIMEOUT")
   assert.equal(report.deadlines.overall.outcome, "timed_out")
   assert.equal(report.ownership.handlers.length, 2)
@@ -214,7 +289,7 @@ test("the parent overall deadline includes a pending stop and records timeout", 
 test("user-state drift prevents qualification after successful ACP and stop", async t => {
   const f = await qualificationHarnessFixture(t)
   f.dependencies.beforeCleanup = async () => { await writeFile(join(f.user, "changed"), "new") }
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "USER_STATE_CHANGED")
   assert.equal(report.postconditions.userState, "changed"); assert.equal(report.postconditions.handler, "absent")
   assert.equal(report.postconditions.processGroup, "absent"); assert.deepEqual(productionLaunchContracts(), [])
@@ -229,7 +304,7 @@ for (const changed of ["handler", "provider", "command", "agent", "session"] as 
     if (changed === "agent") report.observation.retained.agent!.spec.leaseId = "00000000-0000-4000-8000-999999999999"
     if (changed === "session") report.session!.sessionId = "replaced"
   }
-  const report = await runCodexQualification(f.request, f.dependencies)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, false); assert.equal(report.failure, "OWNERSHIP_INVALID")
   assert.equal(report.postconditions.handler, "absent"); assert.equal(report.postconditions.processGroup, "absent")
   assert.deepEqual(productionLaunchContracts(), [])
@@ -251,7 +326,7 @@ test("injected launch evidence rejects a substituted contract or permission prof
 
 test("qualified report rejects missing and substituted identity and session evidence", async t => {
   const f = await qualificationHarnessFixture(t)
-  const baseline = await runCodexQualification(f.request, f.dependencies)
+  const { report: baseline } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(baseline.qualified, true, JSON.stringify(baseline))
   for (const mutate of [
     (r: any) => { r.ownership.handlers = [] }, (r: any) => { r.ownership.handlers.push(r.ownership.handlers[0]) },
@@ -265,6 +340,10 @@ test("qualified report rejects missing and substituted identity and session evid
     (r: any) => { r.session.modelId = "gpt-5.6" }, (r: any) => { r.session.reasoning.value = "low" },
     (r: any) => { r.session.mode = "write" }, (r: any) => { r.session.permissionEvidence = "fixture-contract-v1" },
     (r: any) => { r.deadlines.overall.outcome = "not_reached" }, (r: any) => { r.postconditions.processGroup = "present" },
+    (r: any) => { r.observation.descriptors = null }, (r: any) => { r.observation.descriptors.processes.pop() },
+    (r: any) => { r.observation.absence = null }, (r: any) => { r.observation.absence.outcome = "timed_out" },
+    (r: any) => { r.observation.absence.durationMs = r.observation.absence.limitMs },
+    (r: any) => { r.observation.absence.targets.pop() }, (r: any) => { r.publication.capabilityHash = null },
     (r: any) => { r.failure = "unbounded failure text" }, (r: any) => { r.extra = true },
   ]) {
     const value = structuredClone(baseline); mutate(value)
