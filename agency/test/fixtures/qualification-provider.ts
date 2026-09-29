@@ -63,6 +63,14 @@ if (scenario === "child") {
           changed.currentValue = "substituted"; changed.options = [{ value: "substituted" }]
         }
         result = { configOptions: options }
+      } else if (request.method === "session/prompt") {
+        if (scenario === "prompt-exit") { process.exit(2) }
+        if (request.params.sessionId !== "fixture-session" || !Array.isArray(request.params.prompt) || request.params.prompt.length !== 1 || request.params.prompt[0]?.type !== "text") process.exit(5)
+        const match = /^Return exactly this token and no other text:\n(AGENCY_CODEX_SMOKE_[0-9a-f]{32})\n\nDo not inspect files or use tools\.$/.exec(request.params.prompt[0].text)
+        if (!match) process.exit(5)
+        const answer = scenario === "prompt-whitespace" ? ` \n${match[1]}\n ` : match[1]
+        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } })
+        result = { stopReason: scenario === "prompt-max-tokens" ? "max_tokens" : "end_turn" }
       } else process.exit(5)
       send({ jsonrpc: "2.0", id: request.id, result })
     }

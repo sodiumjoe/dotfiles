@@ -44,10 +44,10 @@ export function fatalQualificationHandler(spec: LaunchSpec): never {
 type AuditOptions = { spawn?: typeof spawn; removeProviderState?: NonNullable<Parameters<typeof createAgentProcess>[1]>["removeProviderState"]; publish?: typeof durableQualificationWrite }
 export function qualificationProcessFactory(root: string, reservationTimes: Map<string, number>, options: AuditOptions = {}): typeof createAgentProcess {
   return input => {
-    const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, terminal: false, transportClosed: false, handlesClosed: false, failure: null }
+    const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, prompt: { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null }, terminal: false, transportClosed: false, handlesClosed: false, failure: null }
     const reservation = reservationTimes.get(input.spec.launchAttemptId)
     if (reservation !== undefined) receipt.durations.reservation = reservation
-    let child: ChildProcess | undefined, started = performance.now(), phaseStart = 0, pendingId: unknown, phase: "initialize" | "session" | "model" | "reasoning" | "mode" | undefined, buffer = "", closeStart = 0, terminalAt = 0, closedAt = 0, absenceStart = 0
+    let child: ChildProcess | undefined, started = performance.now(), phaseStart = 0, pendingId: unknown, phase: "initialize" | "session" | "model" | "reasoning" | "mode" | "prompt" | undefined, sessionId: string | undefined, buffer = "", closeStart = 0, terminalAt = 0, closedAt = 0, absenceStart = 0
     const adapter = input.context.adapter
     const observedInput = { ...input, context: { ...input.context, adapter: { ...adapter,
       async readGroup(group: number) { const result = await adapter.readGroup(group); if (closeStart && !result.length) { absenceStart ||= performance.now(); receipt.durations.absence = performance.now() - absenceStart }; return result },
@@ -62,10 +62,15 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
           const request = JSON.parse(chunk.toString())
           if (typeof request.method === "string") {
             const method = request.method === "session/set_config_option" ? request.method + ":" + request.params.configId : request.method
-            const expected = ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode"][receipt.methods.length]
+            const expected = ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode", "session/prompt"][receipt.methods.length]
             if (method !== expected) throw new AgentError("INVALID_PROTOCOL")
-            receipt.methods.push(method); phase = ["initialize", "session", "model", "reasoning", "mode"][receipt.methods.length - 1] as typeof phase
+            receipt.methods.push(method); phase = ["initialize", "session", "model", "reasoning", "mode", "prompt"][receipt.methods.length - 1] as typeof phase
             phaseStart = performance.now(); pendingId = request.id
+            if (method === "session/prompt") {
+              const prompt = request.params?.prompt?.[0]?.text, match = typeof prompt === "string" ? /^Return exactly this token and no other text:\n(AGENCY_CODEX_SMOKE_[0-9a-f]{32})\n\nDo not inspect files or use tools\.$/.exec(prompt) : null
+              if (!match || request.params.prompt.length !== 1 || request.params.prompt[0].type !== "text" || request.params.sessionId !== sessionId) throw new AgentError("INVALID_PROTOCOL")
+              receipt.prompt = { state: "in_flight_failed", challenge: match[1]!, prompt, answer: "", normalizedAnswer: null, stopReason: null, durationMs: 0 }
+            }
             if (receipt.methods.length === 1) receipt.durations.spawn = phaseStart - started
           }
         } catch { receipt.failure = "INVALID_PROTOCOL" }
@@ -77,7 +82,23 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
         let newline: number
         while ((newline = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1)
-          try { const response = JSON.parse(line); if (response.id === pendingId && response.result !== undefined && phase) { receipt.durations[phase] = performance.now() - phaseStart; pendingId = undefined } } catch { receipt.failure = "INVALID_PROTOCOL" }
+          try {
+            const response = JSON.parse(line)
+            if (response.method === "session/update" && response.params?.sessionId === sessionId && response.params.update?.sessionUpdate === "agent_message_chunk" && response.params.update.content?.type === "text" && receipt.prompt.state === "in_flight_failed") {
+              const text = response.params.update.content.text
+              if (typeof text !== "string" || !text.isWellFormed() || Buffer.byteLength(receipt.prompt.answer + text) > 4096) throw new AgentError("INVALID_PROTOCOL")
+              receipt.prompt.answer += text
+            }
+            if (response.id === pendingId && response.result !== undefined && phase) {
+              const duration = performance.now() - phaseStart
+              receipt.durations[phase] = duration
+              if (phase === "session" && typeof response.result.sessionId === "string") sessionId = response.result.sessionId
+              if (phase === "prompt" && receipt.prompt.state === "in_flight_failed" && ["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"].includes(response.result.stopReason)) {
+                receipt.prompt = { ...receipt.prompt, state: "completed", normalizedAnswer: receipt.prompt.answer.trim(), stopReason: response.result.stopReason, durationMs: duration }
+              }
+              pendingId = undefined
+            }
+          } catch { receipt.failure = "INVALID_PROTOCOL" }
         }
       })
       child.once("exit", () => { receipt.terminal = true; terminalAt = performance.now(); if (closeStart) receipt.durations.processTerminate = terminalAt - closeStart })
@@ -132,6 +153,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
             receipt.handlesClosed = receipt.transportClosed
             if (closedAt && terminalAt) receipt.durations.transportClose = Math.max(0, closedAt - terminalAt)
             if (!child) { receipt.terminal = true; receipt.durations.processTerminate = 0 }
+            if (receipt.prompt.state === "in_flight_failed" && phaseStart) receipt.prompt.durationMs = performance.now() - phaseStart
             await (options.publish ?? durableQualificationWrite)(join(root, "receipts", input.spec.launchAttemptId + ".json"), receipt)
           }
           return result

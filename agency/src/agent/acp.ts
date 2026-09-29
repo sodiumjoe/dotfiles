@@ -241,7 +241,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     const id = ++nextId
     return new Promise((resolve, reject) => {
       const phases = contract?.qualification?.deadlines
-      const phaseMs = method === "session/prompt" ? 90000 : phases ? method === "initialize" ? phases.initializeMs : method === "session/new" ? phases.sessionMs : phases.optionMs : limits.rpcMs
+      const phaseMs = method === "session/prompt" ? phases?.promptMs ?? 90000 : phases ? method === "initialize" ? phases.initializeMs : method === "session/new" ? phases.sessionMs : phases.optionMs : limits.rpcMs
       const requestDeadline = Math.min(deadline, now() + phaseMs)
       const timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, requestDeadline - now()))
       pending.set(id, { method, prefix, deadline: requestDeadline, resolve, reject, timer })

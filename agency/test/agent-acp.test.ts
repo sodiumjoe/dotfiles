@@ -206,6 +206,25 @@ test("ACP applies the 90 second prompt deadline", async t => {
   await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
 })
 
+test("qualified ACP uses promptMs without widening to overallMs", async t => {
+  let now = 0
+  const contract = sampleQualifiedContract()
+  assert.equal(contract.qualification!.deadlines.promptMs, 90000)
+  assert.equal(contract.qualification!.deadlines.overallMs, 150000)
+  const peer = scriptedAcp(t, "exact", { qualified: true, prompt() {}, now: () => now })
+  await peer.connection.initialize(sampleQualifiedSpec(), contract, new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let settled = false
+  const pending = peer.connection.prompt("challenge", new AbortController().signal)
+  void pending.then(() => { settled = true }, () => { settled = true })
+  await new Promise(resolve => setImmediate(resolve))
+  now = 89999; t.mock.timers.tick(89999)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+  now = 90000; t.mock.timers.tick(1)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+})
+
 test("ACP rejects an answer larger than 4096 bytes", async t => {
   const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(4097) } } } }) } })
   await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
