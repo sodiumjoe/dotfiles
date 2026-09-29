@@ -351,3 +351,38 @@ test("qualified report rejects missing and substituted identity and session evid
   }
   assert.throws(() => validateQualifiedOwnership({ ...baseline.ownership, extra: true }))
 })
+
+test("two-child qualification requires exact retained descriptor identities", async t => {
+  const f = await qualificationHarnessFixture(t, "two-children")
+  const { report, publicationCapability } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.ok(publicationCapability)
+  const children = report.observation.descriptors!.processes.filter(p => p.role === "child")
+  assert.equal(children.length, 2)
+  const baseline = structuredClone(report)
+  baseline.observation.descriptors!.processes.reverse()
+  assert.equal(parseCodexQualificationReport(baseline).qualified, true)
+  assert.match(renderPublishedQualificationSource(f.candidate, baseline, publicationCapability), /qualifiedLaunchContracts/)
+  for (const mutation of ["omitted", "substituted-birth", "substituted-parent", "extra"] as const) {
+    const value = structuredClone(baseline), descriptors = value.observation.descriptors!.processes, absence = value.observation.absence!
+    const child = descriptors.find(p => p.role === "child")!
+    if (mutation === "omitted") descriptors.splice(descriptors.indexOf(child), 1)
+    else if (mutation === "extra") {
+      const extra = structuredClone(child)
+      extra.process.pid = Math.max(...absence.targets.map(p => p.pid)) + 1
+      descriptors.push(extra); absence.targets.push(structuredClone(extra.process))
+    } else {
+      if (mutation === "substituted-birth") child.process.birth = "1:substituted"
+      else child.process.parentPid = descriptors.find(p => p.role === "child" && p !== child)!.process.pid
+      Object.assign(absence.targets.find(p => p.pid === child.process.pid)!, child.process)
+    }
+    await t.test(`parser rejects ${mutation} descriptor identity`, () => { assert.throws(() => parseCodexQualificationReport(value), { code: "REPORT_INVALID" }) })
+    await t.test(`source rejects ${mutation} descriptor identity`, () => { assert.throws(() => renderPublishedQualificationSource(f.candidate, value, publicationCapability), { code: "REPORT_INVALID" }) })
+  }
+  await t.test("runtime retains both initialized children before readiness", () => {
+    for (const group of [report.ownership.providerProcessGroup!, report.observation.retained.launch!.provider!.group]) {
+      assert.equal(group.observed.length, 3)
+      for (const child of children) assert.deepEqual(group.observed.find(p => p.pid === child.process.pid), child.process)
+    }
+  })
+})

@@ -29,8 +29,12 @@ if (scenario === "child") {
       if (scenario === "adapter-exit") { process.exit(2) }
       if (!child) {
         const fd = scenario === "child-descriptor-leak" ? openSync(join(process.argv[3]!, "receipts"), "r") : undefined
-        try { child = spawn(process.execPath, [fileURLToPath(import.meta.url), "child", scenario, process.argv[3]!], { stdio: ["pipe", "pipe", "pipe", ...(fd === undefined ? [] : [fd])], env: {} }) as ChildProcessWithoutNullStreams } finally { if (fd !== undefined) closeSync(fd) }
-        child.stdout.resume(); child.stderr.resume(); child.on("exit", () => { process.exit(3) })
+        try {
+          for (let i = 0; i < (scenario === "two-children" ? 2 : 1); i++) {
+            child = spawn(process.execPath, [fileURLToPath(import.meta.url), "child", scenario, process.argv[3]!], { stdio: ["pipe", "pipe", "pipe", ...(fd === undefined ? [] : [fd])], env: {} }) as ChildProcessWithoutNullStreams
+            child.stdout.resume(); child.stderr.resume(); child.on("exit", () => { process.exit(3) })
+          }
+        } finally { if (fd !== undefined) closeSync(fd) }
       }
       if (scenario === "codex-exit") { child!.kill("SIGKILL"); return }
       let result: unknown

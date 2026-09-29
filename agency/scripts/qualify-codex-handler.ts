@@ -10,6 +10,7 @@ import { AgentError, type LaunchSpec } from "../src/agent/types.js"
 import { isFresh } from "../src/catalog/types.js"
 import type { CatalogService, LaunchEvidence } from "../src/catalog/service.js"
 import { runHandler, type HandlerOptions } from "../src/handler/daemon.js"
+import { commitLaunchTransition } from "../src/handler/launch-transitions.js"
 import { assertPrivateDirectory } from "../src/platform/private-state.js"
 import { createDarwinAdapter } from "../src/platform/darwin.js"
 import { readHostId } from "../src/platform/host-id.js"
@@ -86,7 +87,38 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
     let cleanup: ReturnType<typeof owner.cleanup> | undefined
     return {
       ...owner,
-      async initialize(signal) { started = performance.now(); try { return await owner.initialize(signal) } catch (error) { if (error instanceof AgentError) receipt.failure = error.code; throw error } },
+      async initialize(signal) {
+        started = performance.now()
+        const deadline = input.deadline ?? started + (input.contract.qualification?.deadlines.overallMs ?? input.spec.limits.startupMs)
+        const check = (): void => {
+          if (signal.aborted) throw new AgentError("STARTUP_FAILED")
+          if (performance.now() >= deadline) throw new AgentError("STARTUP_TIMEOUT")
+        }
+        try {
+          const session = await owner.initialize(signal)
+          await input.context.mutations.queue.run(async () => {
+            check(); await input.revalidate(); check()
+            const record = owner.record(), group = record.provider?.group
+            if (record.phase !== "readiness" || !group) throw new AgentError("STARTUP_FAILED")
+            const first = await adapter.readGroup(group.leader.pid); check()
+            const second = await adapter.readGroup(group.leader.pid); check()
+            if (second.length < 2 || second.length > 4096 || new Set(second.map(p => p.pid)).size !== second.length || !isDeepStrictEqual([...first].sort((a, b) => a.pid - b.pid), [...second].sort((a, b) => a.pid - b.pid)) || !second.some(p => isDeepStrictEqual(p, group.leader)) || group.observed.some(p => !second.some(other => isDeepStrictEqual(p, other)))) throw new AgentError("STARTUP_FAILED")
+            for (const member of second) {
+              if (member.bootId !== group.leader.bootId || member.processGroupId !== group.leader.pid || member.sessionId !== group.leader.pid || member.uid !== group.leader.uid || member.gid !== group.leader.gid) throw new AgentError("STARTUP_FAILED")
+              let current = member, visited = new Set<number>()
+              while (current.pid !== group.leader.pid) {
+                if (visited.has(current.pid)) throw new AgentError("STARTUP_FAILED")
+                visited.add(current.pid)
+                const parent = second.find(p => p.pid === current.parentPid)
+                if (!parent) throw new AgentError("STARTUP_FAILED")
+                current = parent
+              }
+            }
+            check(); await commitLaunchTransition(input.context, record, { ...record, provider: { kind: "process-group", group: { leader: group.leader, observed: second } } }); check()
+          })
+          check(); return session
+        } catch (error) { if (error instanceof AgentError) receipt.failure = error.code; throw error }
+      },
       cleanup() {
         if (cleanup) return cleanup
         closeStart = performance.now()

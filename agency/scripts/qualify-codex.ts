@@ -229,9 +229,8 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
     for (const name of PHASES.filter(name => name !== "absence")) if (receipt.durations[name] === undefined || receipt.durations[name]! >= expectedLimits[name]) fail("REPORT_INVALID")
     const descriptors = report.observation.descriptors, absence = report.observation.absence
     if (!descriptors || descriptors.outcome !== "verified" || !absence || absence.outcome !== "completed" || absence.passes !== 2 || absence.handler !== "absent" || absence.provider !== "absent" || absence.durationMs >= expectedLimits.absence) fail("REPORT_INVALID")
-    const targets = [...ownership.handlers.map(h => h.process), ...ownership.providerProcessGroup!.observed, ownership.providerProcessGroup!.leader, ...descriptors.processes.map(p => p.process)]
-    const unique = [...new Map(targets.map(p => [p.pid, p])).values()].sort((a, b) => a.pid - b.pid)
-    equal([...absence.targets].sort((a, b) => a.pid - b.pid), unique, "REPORT_INVALID")
+    const targets = [...ownership.handlers.map(h => h.process), ...ownership.providerProcessGroup!.observed].sort((a, b) => a.pid - b.pid)
+    equal([...absence.targets].sort((a, b) => a.pid - b.pid), targets, "REPORT_INVALID")
     for (const key of ["userState", "normalAgencyState"] as const) { const pair = report.observation[key]; if (!pair.before.length) fail("REPORT_INVALID"); equal(pair.before, pair.after, "REPORT_INVALID") }
     correlate(report)
   } else if (report.failure === null) fail("REPORT_INVALID")
@@ -258,6 +257,8 @@ function validateDescriptorObservation(value: unknown, ownership: QualifiedOwner
     return { process, role: p.role, descriptors }
   })
   if (new Set(processes.map(p => p.process.pid)).size !== processes.length || processes.filter(p => p.role === "handler").length !== ownership.handlers.length || processes.filter(p => p.role === "adapter").length !== 1 || !processes.some(p => p.role === "child")) fail("REPORT_INVALID")
+  const retained = [...ownership.handlers.map(h => h.process), ...ownership.providerProcessGroup!.observed]
+  equal(processes.map(p => p.process).sort((a, b) => a.pid - b.pid), retained.sort((a, b) => a.pid - b.pid), "REPORT_INVALID")
   for (const child of processes.filter(p => p.role === "child")) { let current = child, visited = new Set<number>(); while (current.role !== "adapter") { if (visited.has(current.process.pid)) fail("REPORT_INVALID"); visited.add(current.process.pid); const parent = processes.find(p => p.process.pid === current.process.parentPid && p.role !== "handler"); if (!parent) fail("REPORT_INVALID"); current = parent } }
   if ((d.outcome === "verified") !== processes.every(p => p.descriptors.every(fd => fd.allowed))) fail("REPORT_INVALID")
 }
@@ -466,11 +467,11 @@ export async function runCodexQualification(request: QualificationRequest, depen
       if (launch.provider !== null) {
         if (report.ownership.providerProcessGroup !== null) {
           equal(report.ownership.providerProcessGroup.leader, launch.provider.group.leader)
-          if (["cleanup_pending", "cleanup_verified"].includes(launch.phase)) {
+          if (["readiness", "active", "cleanup_pending", "cleanup_verified"].includes(launch.phase)) {
             for (const p of report.ownership.providerProcessGroup.observed) if (!launch.provider.group.observed.some(other => isDeepStrictEqual(p, other))) fail("OWNERSHIP_INVALID")
           } else equal(report.ownership.providerProcessGroup, launch.provider.group)
         }
-        else report.ownership.providerProcessGroup = structuredClone(launch.provider.group)
+        if (report.ownership.providerProcessGroup === null || ["readiness", "active"].includes(launch.phase)) report.ownership.providerProcessGroup = structuredClone(launch.provider.group)
         cleanupLaunch = structuredClone(launch)
         validateQualifiedOwnership(report.ownership)
       }
