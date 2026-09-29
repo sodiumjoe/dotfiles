@@ -45,6 +45,20 @@ The Handler composition is qualified locally on Darwin. Real Linux Handler execu
 
 ## Qualified contract
 
+### Dormant Codex qualification
+
+`npm run qualify:codex -- --stage offline --candidate PATH --evidence-parent PATH` verifies the pinned Darwin arm64 Node 24.13.0 executable, Codex ACP 1.7.0 package and entrypoint, and managed Codex 0.155.1 executable. It writes a mode-0600 candidate with bigint filesystem identities, file and directory fsync, and exact readback. An existing candidate is never overwritten. Artifact drift requires design review; this command does not refresh pins.
+
+The candidate does not register a launch contract. Both production registries remain empty. The offline report records artifact observations and cannot be consumed as successful live evidence.
+
+The separate `--stage live` workflow consumes one durable attempt per candidate fingerprint beneath the evidence parent. Its Handler uses a fixed catalog, an isolated execution root, a synthetic Git checkout, and the exact selection `gpt-5.6-sol`, `high`, `read-only`, `deny-all`. The provider receives private HOME and CODEX_HOME directories. No prompt is submitted. The workflow hashes the existing user Codex tree before and after the attempt, retaining only aggregate digests and counts. It refuses unreadable, changing, symlinked, or oversized user state. It does not initialize normal Agency state or create a catalog profile.
+
+The parent distinguishes the pending start receipt from the asynchronous reservation. Handler timers enforce reservation and startup phases. A live pending Handler is observed until the separate overall deadline, which covers successful stop. A fail-stop permits one sequential recovery Handler on the same roots, with no second start request. Unknown ownership, incomplete cleanup, authentication requirements, substituted session evidence, failed publication, or surviving processes prevent qualification. Reports contain bounded structured evidence; raw adapter output and authentication material are not retained.
+
+`npm run qualify:codex -- --stage source --candidate PATH --evidence-parent PATH --report PATH` parses a successful report and prints a static TypeScript contract module. It does not change the registry or source files. A live attempt requires separate authorization; implementing and testing this harness does not run that stage.
+
+`npm run test:codex-qualification` runs fixture providers through the actual Handler, agent service, ACP, stop, and cleanup paths. The fixtures use local Node processes and never launch the real adapter or Codex executable.
+
 ### Agent lifecycle
 
 The Handler directly owns one detached provider process and its ACP connection per root agent. A client disconnect does not terminate a ready idle session. Each accepted start retains an immutable launch specification and separate agent, provider, lease, launch-attempt, command, and session generations. The model token remains advertised identity, not a claim of resolved model execution. There are at most 16 live root agents per Handler, and overlapping checkouts cannot acquire another write-capable lease.

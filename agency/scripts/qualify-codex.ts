@@ -1,0 +1,670 @@
+import { createHash, randomUUID } from "node:crypto"
+import { constants, type BigIntStats } from "node:fs"
+import { lstat, mkdir, mkdtemp, open, readdir, realpath, rm } from "node:fs/promises"
+import { dirname, isAbsolute, join, normalize } from "node:path"
+import { createConnection, type Socket } from "node:net"
+import { execFile } from "node:child_process"
+import { isDeepStrictEqual, promisify } from "node:util"
+import { fileURLToPath } from "node:url"
+import { observeArtifact, parseCodexQualificationManifest, qualificationFingerprint, renderQualifiedContractSource, verifyCodexQualification, type ArtifactPin, type CodexQualificationCandidate, type CodexQualificationManifest, type CodexQualificationObservation } from "../src/agent/qualification.js"
+import { AGENT_CODES, AgentError, parseAgentCommand, parseAgentRecord, parseSession, tupleOf, type AgentCommand, type AgentRecord, type AgentTuple, type SessionEvidence } from "../src/agent/types.js"
+import { AGENT_PROTOCOL, exchangeAgent, parseAgentReply, type AgentRequest } from "../src/agent/protocol.js"
+import { createAgentStore } from "../src/agent/store.js"
+import { providerStatePath } from "../src/agent/state.js"
+import { inventoryAdmissions, parseAdmissionRecord, readAdmission, type AdmissionRecord } from "../src/checkout/records.js"
+import { admissionInventoryIssues } from "../src/checkout/admission.js"
+import { inventoryLaunches } from "../src/handler/inventory.js"
+import { reconcileRecord } from "../src/platform/reconcile.js"
+import { readHandlerRecord, readLaunchRecordForReconciliation, assertPrivateDirectory } from "../src/platform/private-state.js"
+import { createDarwinAdapter } from "../src/platform/darwin.js"
+import { readHostId } from "../src/platform/host-id.js"
+import { startOrConnect, type HandlerCommand } from "../src/platform/singleton.js"
+import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessGroupIdentity, type ProcessIdentity } from "../src/platform/types.js"
+import { PROTOCOL, uuid } from "../src/control/protocol.js"
+import { exchange } from "../src/control/wire.js"
+import type { PlatformPaths } from "../src/platform/paths.js"
+
+const METHODS = ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode"] as const
+const PHASES = ["commandStart", "reservation", "spawn", "initialize", "session", "model", "reasoning", "mode", "transportClose", "processTerminate", "absence", "overall"] as const
+const FAILURES = [...AGENT_CODES, "ATTEMPT_ALREADY_STARTED", "EVIDENCE_PUBLICATION_FAILED", "EVIDENCE_MISSING", "OWNERSHIP_INVALID", "HANDLER_STARTUP_FAILED", "HANDLER_TERMINATED", "COMMAND_START_TIMEOUT", "OVERALL_TIMEOUT", "USER_STATE_CHANGED", "USER_STATE_UNAVAILABLE", "NORMAL_STATE_CHANGED", "DESCRIPTOR_LEAK", "PROCESS_SURVIVED", "REPORT_INVALID"] as const
+type Failure = typeof FAILURES[number]
+type Phase = typeof PHASES[number]
+type Outcome = "completed" | "timed_out" | "failed" | "not_reached"
+export type TreeObservation = { state: "absent" | "present"; digest: string; entries: number; bytes: number }
+export type QualifiedOwnership = {
+  handlerGeneration: string | null; agentId: string | null; providerGeneration: string | null; leaseId: string | null; launchAttemptId: string | null; sessionId: string | null
+  handlers: readonly { generation: string; launchAttemptId: string; process: ProcessIdentity }[]
+  providerProcessGroup: ProcessGroupIdentity | null
+}
+export type QualificationReceipt = {
+  version: 1; handlerGeneration: string; launchAttemptId: string; methods: string[]; durations: Partial<Record<Phase, number>>
+  terminal: boolean; transportClosed: boolean; handlesClosed: boolean; descriptors: boolean; failure: Failure | null
+}
+type Retained = { command: AgentCommand | null; agent: AgentRecord | null; admission: AdmissionRecord | null; launch: LaunchRecord | null; handlers: HandlerGenerationRecord[]; recovery: { command: AgentCommand | null; agent: AgentRecord | null; launch: LaunchRecord | null; admission: AdmissionRecord | null; consistent: boolean } | null }
+export type QualificationObservation = CodexQualificationObservation & {
+  retained: Retained; receipt: QualificationReceipt | null
+  userState: { before: TreeObservation[]; after: TreeObservation[] }
+  normalAgencyState: { before: TreeObservation[]; after: TreeObservation[] }
+}
+export type CodexQualificationReport = {
+  version: 1; manifestFingerprint: string; branch: "moon/agency-agent-lifecycle"; commit: string; startedAt: string; endedAt: string; qualified: boolean; failure: Failure | null
+  observation: QualificationObservation; protocol: { methods: readonly string[]; protocolVersion: 1 }
+  selection: { modelId: "gpt-5.6-sol"; reasoning: "high"; mode: "read-only" }; session: SessionEvidence | null
+  authentication: "ambient_accepted" | "auth_required" | "failed" | "unknown"; ownership: QualifiedOwnership
+  deadlines: Record<Phase, { limitMs: number; outcome: Outcome }>
+  postconditions: {
+    transport: "closed" | "open" | "unknown"; directChild: "terminal" | "live" | "unknown"; processGroup: "absent" | "present" | "unknown"
+    reservation: "released" | "retained" | "unknown"; providerState: "absent" | "present" | "unknown"; qualificationCwd: "absent" | "present" | "unknown"
+    executionRoot: "absent" | "present" | "unknown"; lifecycleOperation: "terminal" | "in_flight" | "unknown"; ownedHandles: "closed" | "open" | "unknown"
+    handler: "absent" | "present" | "unknown"; userState: "unchanged" | "changed" | "unknown"; catalogProfile: "absent" | "present" | "unknown"; normalAgencyState: "unchanged" | "changed" | "unknown"
+  }
+}
+export type QualificationRequest = { candidatePath: string; evidenceParent: string; reportPath?: string }
+export type QualificationDependencies = {
+  adapter: PlatformAdapter; hostKey: string; verify: typeof verifyCodexQualification
+  handler(candidatePath: string, executionRoot: string): HandlerCommand
+  userStatePaths: readonly string[]; normalStatePaths: readonly string[]; createExecutionRoot(): Promise<string>
+  publish?: typeof durableQualificationWrite; start?: typeof startOrConnect
+  beforeCleanup?: (root: string, report: CodexQualificationReport) => Promise<void>
+}
+class QualificationError extends Error { constructor(readonly code: Failure) { super(code) } }
+function fail(code: Failure): never { throw new QualificationError(code) }
+const classify = (error: unknown, fallback: Failure): Failure => error instanceof QualificationError || error instanceof AgentError ? error.code : fallback
+const equal = (left: unknown, right: unknown, code: Failure = "OWNERSHIP_INVALID"): void => { if (!isDeepStrictEqual(left, right)) fail(code) }
+function object(value: unknown, names: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== names.length || names.some(name => !Object.hasOwn(value, name))) fail("REPORT_INVALID")
+  return value as Record<string, unknown>
+}
+function text(value: unknown, max = 1024): string {
+  if (typeof value !== "string" || !value.length || Buffer.byteLength(value) > max || !value.isWellFormed() || /[\x00-\x1f\x7f]/u.test(value)) fail("REPORT_INVALID")
+  return value as string
+}
+function canonical(path: string): string { if (!isAbsolute(path) || normalize(path) !== path || path.endsWith("/")) fail("REPORT_INVALID"); return text(path, 4096) }
+function identity(value: unknown): ProcessIdentity {
+  const p = object(value, ["bootId", "pid", "birth", "parentPid", "processGroupId", "sessionId", "uid", "gid"])
+  for (const key of ["pid", "parentPid", "processGroupId", "sessionId", "uid", "gid"]) if (!Number.isSafeInteger(p[key]) || (p[key] as number) < (["pid", "processGroupId", "sessionId"].includes(key) ? 2 : 0)) fail("OWNERSHIP_INVALID")
+  text(p.bootId); if (processBirthStart(text(p.birth)) === null) fail("OWNERSHIP_INVALID")
+  return structuredClone(p) as ProcessIdentity
+}
+export function validateQualifiedOwnership(value: unknown): QualifiedOwnership {
+  const p = object(value, ["handlerGeneration", "agentId", "providerGeneration", "leaseId", "launchAttemptId", "sessionId", "handlers", "providerProcessGroup"])
+  const ids = ["handlerGeneration", "agentId", "providerGeneration", "leaseId", "launchAttemptId"] as const
+  for (const name of ids) if (p[name] !== null) uuid(p[name])
+  const present = ids.map(name => p[name]).filter(v => v !== null)
+  if (new Set(present).size !== present.length) fail("OWNERSHIP_INVALID")
+  if (p.sessionId !== null) text(p.sessionId)
+  if (!Array.isArray(p.handlers) || p.handlers.length > 2) fail("OWNERSHIP_INVALID")
+  const handlers = (p.handlers as unknown[]).map(raw => {
+    const h = object(raw, ["generation", "launchAttemptId", "process"]), process = identity(h.process)
+    const generation = uuid(h.generation), launchAttemptId = uuid(h.launchAttemptId)
+    if (process.pid !== process.processGroupId || process.pid !== process.sessionId || process.birth.slice(process.birth.indexOf(":") + 1) !== `agy-handler:${launchAttemptId}`) fail("OWNERSHIP_INVALID")
+    return { generation, launchAttemptId, process }
+  })
+  if (new Set(handlers.map(h => h.generation)).size !== handlers.length || new Set(handlers.map(h => h.launchAttemptId)).size !== handlers.length || new Set(handlers.map(h => h.process.birth)).size !== handlers.length) fail("OWNERSHIP_INVALID")
+  const generationIds = [...present, ...handlers.map(h => h.launchAttemptId), ...handlers.slice(1).map(h => h.generation)]
+  if (new Set(generationIds).size !== generationIds.length) fail("OWNERSHIP_INVALID")
+  if (p.handlerGeneration !== null && handlers[0]?.generation !== p.handlerGeneration) fail("OWNERSHIP_INVALID")
+  let providerProcessGroup: ProcessGroupIdentity | null = null
+  if (p.providerProcessGroup !== null) {
+    const group = object(p.providerProcessGroup, ["leader", "observed"]), leader = identity(group.leader)
+    if (!Array.isArray(group.observed) || group.observed.length === 0 || group.observed.length > 4096) fail("OWNERSHIP_INVALID")
+    const observed = (group.observed as unknown[]).map(identity)
+    if (!handlers[0] || leader.parentPid !== handlers[0].process.pid || leader.pid !== leader.processGroupId || leader.pid !== leader.sessionId || leader.birth.slice(leader.birth.indexOf(":") + 1) !== `agy-provider:${p.launchAttemptId}` || new Set(observed.map(p => p.pid)).size !== observed.length || !observed.some(p => isDeepStrictEqual(p, leader))) fail("OWNERSHIP_INVALID")
+    if (leader.bootId !== handlers[0].process.bootId || leader.uid !== handlers[0].process.uid || leader.gid !== handlers[0].process.gid) fail("OWNERSHIP_INVALID")
+    for (const p of observed) if (p.bootId !== leader.bootId || p.processGroupId !== leader.pid || p.sessionId !== leader.pid || p.uid !== leader.uid || p.gid !== leader.gid) fail("OWNERSHIP_INVALID")
+    providerProcessGroup = { leader, observed }
+  }
+  return { handlerGeneration: p.handlerGeneration as string | null, agentId: p.agentId as string | null, providerGeneration: p.providerGeneration as string | null, leaseId: p.leaseId as string | null, launchAttemptId: p.launchAttemptId as string | null, sessionId: p.sessionId as string | null, handlers, providerProcessGroup }
+}
+export function parseQualificationCandidate(value: unknown): CodexQualificationCandidate {
+  const v = object(value, ["version", "manifest", "fingerprint"]), manifest = parseCodexQualificationManifest(v.manifest)
+  if (v.version !== 1 || v.fingerprint !== qualificationFingerprint(manifest)) fail("ADAPTER_UNQUALIFIED")
+  return { version: 1, manifest, fingerprint: v.fingerprint as string }
+}
+const limits = (m: CodexQualificationManifest): Record<Phase, number> => ({ commandStart: m.deadlines.commandMs, reservation: m.deadlines.reservationMs, spawn: m.deadlines.spawnMs, initialize: m.deadlines.initializeMs, session: m.deadlines.sessionMs, model: m.deadlines.optionMs, reasoning: m.deadlines.optionMs, mode: m.deadlines.optionMs, transportClose: m.deadlines.transportCloseMs, processTerminate: m.deadlines.processTerminateMs, absence: m.deadlines.absenceMs, overall: m.deadlines.overallMs })
+const success = { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedHandles: "closed", handler: "absent", userState: "unchanged", catalogProfile: "absent", normalAgencyState: "unchanged" } as const
+function correlate(report: CodexQualificationReport): void {
+  const { ownership: own, session, observation: { retained: e } } = report
+  if (!e.command || !e.agent || !e.admission || !e.launch || !session) fail("OWNERSHIP_INVALID")
+  const c = parseAgentCommand(e.command!), a = parseAgentRecord(e.agent!), d = parseAdmissionRecord(e.admission!), s = a.spec, l = e.launch!
+  const selected = { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" }
+  equal(s.selection, selected); equal(c.input, { commandId: s.startCommandId, handlerGeneration: s.handlerGeneration, cwd: s.checkout.root.path, selection: selected })
+  if (a.phase !== "ready" || c.state !== "completed" || c.result?.outcome !== "started" || c.commandId !== s.startCommandId || c.hostId !== s.hostId) fail("OWNERSHIP_INVALID")
+  equal(c.target, tupleOf(s)); equal(c.result!.target, tupleOf(s)); equal(c.result!.session, session); equal(a.session, session)
+  equal(d, { version: 1, checkout: s.checkout, agentId: s.agentId, handlerGeneration: s.handlerGeneration, leaseId: s.leaseId, launchAttemptId: s.launchAttemptId })
+  for (const key of ["agentId", "handlerGeneration", "leaseId", "launchAttemptId"] as const) if (own[key] !== s[key] || l[key] !== s[key]) fail("OWNERSHIP_INVALID")
+  if (own.providerGeneration !== s.providerGeneration || own.sessionId !== session!.sessionId || l.checkoutId !== s.checkout.checkoutId || !l.launchAttempted || l.phase !== "active") fail("OWNERSHIP_INVALID")
+  equal(own.providerProcessGroup, l.provider?.group)
+  equal(own.handlers, e.handlers.map(h => ({ generation: h.generation, launchAttemptId: h.launchAttemptId, process: h.process })))
+  if (l.launchBootId !== own.providerProcessGroup?.leader.bootId || e.handlers.some(h => h.hostId !== s.hostId || h.launchBootId !== h.process?.bootId)) fail("OWNERSHIP_INVALID")
+  if (s.contractFingerprint !== report.manifestFingerprint || s.contractId !== report.observation.manifest.contractId) fail("OWNERSHIP_INVALID")
+}
+function parseTree(value: unknown): TreeObservation {
+  const t = object(value, ["state", "digest", "entries", "bytes"])
+  if (!["absent", "present"].includes(String(t.state)) || !/^[a-f0-9]{64}$/.test(String(t.digest)) || !Number.isSafeInteger(t.entries) || (t.entries as number) < 0 || (t.entries as number) > 8192 || !Number.isSafeInteger(t.bytes) || (t.bytes as number) < 0 || (t.bytes as number) > 268435456) fail("REPORT_INVALID")
+  return t as TreeObservation
+}
+export function parseQualificationReceipt(value: unknown): QualificationReceipt {
+  const r = object(value, ["version", "handlerGeneration", "launchAttemptId", "methods", "durations", "terminal", "transportClosed", "handlesClosed", "descriptors", "failure"])
+  if (r.version !== 1 || !Array.isArray(r.methods) || r.methods.length > 5 || r.methods.some((m, i) => m !== METHODS[i])) fail("REPORT_INVALID")
+  uuid(r.handlerGeneration); uuid(r.launchAttemptId)
+  for (const name of ["terminal", "transportClosed", "handlesClosed", "descriptors"]) if (typeof r[name] !== "boolean") fail("REPORT_INVALID")
+  if (!r.durations || typeof r.durations !== "object" || Array.isArray(r.durations) || Object.entries(r.durations).some(([key, value]) => !PHASES.includes(key as Phase) || typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 120000)) fail("REPORT_INVALID")
+  if (r.failure !== null && !FAILURES.includes(r.failure as Failure)) fail("REPORT_INVALID")
+  return structuredClone(r) as QualificationReceipt
+}
+export function parseCodexQualificationReport(value: unknown): CodexQualificationReport {
+  if (Buffer.byteLength(JSON.stringify(value)) > 1048576) fail("REPORT_INVALID")
+  const r = object(value, ["version", "manifestFingerprint", "branch", "commit", "startedAt", "endedAt", "qualified", "failure", "observation", "protocol", "selection", "session", "authentication", "ownership", "deadlines", "postconditions"])
+  if (r.version !== 1 || r.branch !== "moon/agency-agent-lifecycle" || !/^[0-9a-f]{40}$/.test(String(r.commit)) || typeof r.qualified !== "boolean" || (r.failure !== null && !FAILURES.includes(r.failure as Failure))) fail("REPORT_INVALID")
+  for (const key of ["startedAt", "endedAt"]) if (new Date(text(r[key])).toISOString() !== r[key]) fail("REPORT_INVALID")
+  if (String(r.endedAt) < String(r.startedAt)) fail("REPORT_INVALID")
+  const o = object(r.observation, ["version", "manifest", "fingerprint", "nodeVersion", "selection", "artifacts", "retained", "receipt", "userState", "normalAgencyState"])
+  const candidate = parseQualificationCandidate({ version: o.version, manifest: o.manifest, fingerprint: o.fingerprint })
+  if (r.manifestFingerprint !== candidate.fingerprint || o.nodeVersion !== "24.13.0") fail("REPORT_INVALID")
+  equal(o.selection, candidate.manifest.selection, "REPORT_INVALID")
+  equal(o.artifacts, { adapterPackageJson: candidate.manifest.adapterPackageJson, adapterEntrypoint: candidate.manifest.adapterEntrypoint, codexExecutable: candidate.manifest.codexExecutable, nodeExecutable: candidate.manifest.nodeExecutable }, "REPORT_INVALID")
+  const retained = object(o.retained, ["command", "agent", "admission", "launch", "handlers", "recovery"])
+  if (retained.command !== null) parseAgentCommand(retained.command)
+  if (retained.agent !== null) parseAgentRecord(retained.agent)
+  if (retained.admission !== null) parseAdmissionRecord(retained.admission)
+  if (!Array.isArray(retained.handlers) || retained.handlers.length > 2) fail("REPORT_INVALID")
+  for (const raw of retained.handlers as unknown[]) {
+    const h = object(raw, ["version", "hostId", "launchBootId", "generation", "launchAttemptId", "launchAttempted", "phase", "process", "socketPath", "writer", "reconciliation", "reason"])
+    if (h.version !== 1 || !/^[0-9a-f]{64}$/.test(String(h.hostId)) || typeof h.launchAttempted !== "boolean" || !["launch_pending", "identity_published", "socket_bound", "reconciling", "ready", "exited_unverified"].includes(String(h.phase)) || !["launcher", "handler", "reconciler"].includes(String(h.writer))) fail("REPORT_INVALID")
+    uuid(h.generation); uuid(h.launchAttemptId); text(h.launchBootId); canonical(text(h.socketPath)); if (h.process !== null) identity(h.process)
+    if (h.reason !== null) text(h.reason, 512)
+    if (h.reconciliation !== null) { const counts = object(h.reconciliation, ["classified", "total", "quarantined"]); if (Object.values(counts).some(n => !Number.isSafeInteger(n) || (n as number) < 0) || (counts.classified as number) > (counts.total as number) || (counts.quarantined as number) > (counts.classified as number)) fail("REPORT_INVALID") }
+  }
+  if (retained.launch !== null) {
+    if (retained.agent === null) fail("REPORT_INVALID")
+    const agent = parseAgentRecord(retained.agent)
+    parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: agent.spec.startCommandId, handlerGeneration: agent.spec.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record: agent, launch: retained.launch, live: false, cleanup: "unverified" }], unavailable: null } })
+  }
+  if (retained.recovery !== null) {
+    const recovery = object(retained.recovery, ["command", "agent", "launch", "admission", "consistent"])
+    if (typeof recovery.consistent !== "boolean") fail("REPORT_INVALID")
+    if (recovery.command !== null) parseAgentCommand(recovery.command)
+    if (recovery.agent !== null) parseAgentRecord(recovery.agent)
+    if (recovery.admission !== null) parseAdmissionRecord(recovery.admission)
+    if (recovery.launch !== null) {
+      if (recovery.agent === null) fail("REPORT_INVALID")
+      const agent = parseAgentRecord(recovery.agent)
+      parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: agent.spec.startCommandId, handlerGeneration: agent.spec.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record: agent, launch: recovery.launch, live: false, cleanup: "unverified" }], unavailable: null } })
+    }
+  }
+  if (o.receipt !== null) parseQualificationReceipt(o.receipt)
+  for (const key of ["userState", "normalAgencyState"]) {
+    const pair = object(o[key], ["before", "after"])
+    for (const side of ["before", "after"]) { if (!Array.isArray(pair[side]) || (pair[side] as unknown[]).length > 2) fail("REPORT_INVALID"); (pair[side] as unknown[]).forEach(parseTree) }
+  }
+  const protocol = object(r.protocol, ["methods", "protocolVersion"])
+  if (protocol.protocolVersion !== 1 || !Array.isArray(protocol.methods) || protocol.methods.length > 5 || protocol.methods.some((m, i) => m !== METHODS[i])) fail("REPORT_INVALID")
+  equal(r.selection, { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, "REPORT_INVALID")
+  const session = r.session === null ? null : parseSession(r.session), ownership = validateQualifiedOwnership(r.ownership)
+  if (!["ambient_accepted", "auth_required", "failed", "unknown"].includes(String(r.authentication))) fail("REPORT_INVALID")
+  const deadlines = object(r.deadlines, PHASES), expectedLimits = limits(candidate.manifest)
+  for (const name of PHASES) { const d = object(deadlines[name], ["limitMs", "outcome"]); if (d.limitMs !== expectedLimits[name] || !["completed", "timed_out", "failed", "not_reached"].includes(String(d.outcome))) fail("REPORT_INVALID") }
+  const post = object(r.postconditions, Object.keys(success))
+  const opposites = { transport: "open", directChild: "live", processGroup: "present", reservation: "retained", providerState: "present", qualificationCwd: "present", executionRoot: "present", lifecycleOperation: "in_flight", ownedHandles: "open", handler: "present", userState: "changed", catalogProfile: "present", normalAgencyState: "changed" }
+  for (const key of Object.keys(success) as Array<keyof typeof success>) if (![success[key], opposites[key], "unknown"].includes(String(post[key]))) fail("REPORT_INVALID")
+  const report = structuredClone({ ...r, ownership, session }) as CodexQualificationReport
+  if (report.qualified) {
+    if (report.failure !== null || report.authentication !== "ambient_accepted" || session === null || ownership.handlers.length !== 1 || ownership.providerProcessGroup === null || retained.recovery !== null || Object.entries(ownership).some(([, v]) => v === null)) fail("REPORT_INVALID")
+    equal({ modelId: session!.modelId, reasoning: session!.reasoning, mode: session!.mode, permissionProfile: session!.permissionProfile, permissionEvidence: session!.permissionEvidence }, { modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all", permissionEvidence: "agency-deny-all-v1" }, "REPORT_INVALID")
+    equal(post, success, "REPORT_INVALID"); equal(protocol.methods, METHODS, "REPORT_INVALID")
+    if (PHASES.some(name => report.deadlines[name].outcome !== "completed")) fail("REPORT_INVALID")
+    const receipt = report.observation.receipt
+    if (!receipt || !receipt.terminal || !receipt.transportClosed || !receipt.handlesClosed || !receipt.descriptors || receipt.failure !== null || receipt.handlerGeneration !== ownership.handlerGeneration || receipt.launchAttemptId !== ownership.launchAttemptId) fail("REPORT_INVALID")
+    equal(receipt.methods, METHODS, "REPORT_INVALID")
+    for (const name of PHASES) if (receipt.durations[name] === undefined || receipt.durations[name]! >= expectedLimits[name]) fail("REPORT_INVALID")
+    for (const key of ["userState", "normalAgencyState"] as const) { const pair = report.observation[key]; if (!pair.before.length) fail("REPORT_INVALID"); equal(pair.before, pair.after, "REPORT_INVALID") }
+    correlate(report)
+  } else if (report.failure === null) fail("REPORT_INVALID")
+  return report
+}
+export function qualificationPaths(root: string, hostKey: string): PlatformPaths {
+  canonical(root); if (!/^[a-f0-9]{64}$/.test(hostKey)) fail("REPORT_INVALID")
+  const paths = { hostKey, persistentRoot: join(root, "state"), runtimeRoot: join(root, "runtime"), handlerSocketPath: join(root, "runtime/handler.sock") }
+  if (Buffer.byteLength(paths.handlerSocketPath) >= 100) fail("REPORT_INVALID")
+  return paths
+}
+async function syncDirectory(path: string): Promise<void> { const f = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); try { await f.sync() } finally { await f.close() } }
+export async function durableQualificationWrite(path: string, value: unknown, io: { open: typeof open } = { open }): Promise<void> {
+  canonical(path); await assertPrivateDirectory(dirname(path))
+  const bytes = Buffer.from(JSON.stringify(value)); if (bytes.length > 1048576) fail("EVIDENCE_PUBLICATION_FAILED")
+  const f = await io.open(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600)
+  try { await f.writeFile(bytes); await f.sync() } finally { await f.close() }
+  const parent = await io.open(dirname(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+  try { await parent.sync() } finally { await parent.close() }
+  equal(await readPrivateJson(path), value, "EVIDENCE_PUBLICATION_FAILED")
+}
+export async function readPrivateJson(path: string): Promise<unknown> {
+  canonical(path)
+  if (await realpath(path) !== path) fail("EVIDENCE_MISSING")
+  const f = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const before = await f.stat({ bigint: true })
+    if (!before.isFile() || before.uid !== BigInt(process.getuid!()) || (before.mode & 0o777n) !== 0o600n || before.nlink !== 1n || before.size > 1048576n) fail("EVIDENCE_MISSING")
+    const bytes = await f.readFile(); equal(statIdentity(await f.stat({ bigint: true })), statIdentity(before), "EVIDENCE_MISSING")
+    if (BigInt(bytes.length) !== before.size) fail("EVIDENCE_MISSING")
+    equal(statIdentity(await lstat(path, { bigint: true })), statIdentity(before), "EVIDENCE_MISSING")
+    if (await realpath(path) !== path) fail("EVIDENCE_MISSING")
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+  } finally { await f.close() }
+}
+const statIdentity = (s: BigIntStats): ArtifactPin["identity"] => [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs, s.mode, s.uid, s.gid, s.nlink].map(String) as unknown as ArtifactPin["identity"]
+export async function snapshotTree(path: string, allowSockets = false): Promise<TreeObservation> {
+  canonical(path)
+  let initial: BigIntStats
+  try { initial = await lstat(path, { bigint: true }) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "absent", digest: createHash("sha256").update("absent").digest("hex"), entries: 0, bytes: 0 }; fail("USER_STATE_UNAVAILABLE") }
+  let entries = 0, bytes = 0
+  const hash = createHash("sha256")
+  async function visit(current: string, relative: string, before: BigIntStats): Promise<void> {
+    if (++entries > 8192 || before.isSymbolicLink() || !before.isFile() && !before.isDirectory() && !(allowSockets && before.isSocket()) || await realpath(current) !== current) fail("USER_STATE_UNAVAILABLE")
+    hash.update(JSON.stringify([relative, statIdentity(before)]))
+    if (before.isDirectory()) {
+      const names = (await readdir(current)).sort()
+      if (entries + names.length > 8192) fail("USER_STATE_UNAVAILABLE")
+      for (const name of names) await visit(join(current, name), relative + "/" + name, await lstat(join(current, name), { bigint: true }))
+      equal(names, (await readdir(current)).sort(), "USER_STATE_UNAVAILABLE")
+    } else if (before.isFile()) {
+      if (before.nlink !== 1n || before.size > BigInt(268435456 - bytes)) fail("USER_STATE_UNAVAILABLE")
+      const file = await open(current, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      try {
+        equal(statIdentity(await file.stat({ bigint: true })), statIdentity(before), "USER_STATE_UNAVAILABLE")
+        let read = 0
+        for await (const chunk of file.createReadStream({ autoClose: false })) { bytes += chunk.length; read += chunk.length; if (bytes > 268435456) fail("USER_STATE_UNAVAILABLE"); hash.update(chunk) }
+        if (BigInt(read) !== before.size) fail("USER_STATE_UNAVAILABLE")
+        equal(statIdentity(await file.stat({ bigint: true })), statIdentity(before), "USER_STATE_UNAVAILABLE")
+      } finally { await file.close() }
+    }
+    equal(statIdentity(await lstat(current, { bigint: true })), statIdentity(before), "USER_STATE_UNAVAILABLE")
+  }
+  try { await visit(path, "", initial) } catch { fail("USER_STATE_UNAVAILABLE") }
+  return { state: "present", digest: hash.digest("hex"), entries, bytes }
+}
+async function exists(path: string): Promise<boolean> { try { await lstat(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error } }
+async function within<T>(operation: Promise<T>, ms: number, code: Failure): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  try { return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new QualificationError(code)), Math.max(1, ms)) })]) } finally { clearTimeout(timer) }
+}
+const delay = () => new Promise<void>(resolve => setTimeout(resolve, 25))
+async function observe<T>(operation: () => Promise<T>): Promise<T> {
+  const end = performance.now() + 1000
+  while (true) { try { return await operation() } catch (error) { if (!(error instanceof Error) || !error.name.endsWith("ObservationUnavailable") || performance.now() >= end) throw error; await delay() } }
+}
+async function terminal(adapter: PlatformAdapter, p: ProcessIdentity): Promise<boolean> { const actual = await observe(() => adapter.readProcess(p.pid)); return actual === null || !sameProcessGeneration(p, actual) }
+async function absentGroup(adapter: PlatformAdapter, group: ProcessGroupIdentity): Promise<boolean> {
+  for (let pass = 0; pass < 2; pass++) {
+    if ((await observe(() => adapter.readGroup(group.leader.processGroupId))).length) return false
+    for (const p of [group.leader, ...group.observed]) if (!await terminal(adapter, p)) return false
+  }
+  return true
+}
+async function terminateHandler(adapter: PlatformAdapter, p: ProcessIdentity): Promise<void> {
+  const current = await adapter.readProcess(p.pid)
+  if (current === null) return
+  if (!sameProcess(p, current)) fail("OWNERSHIP_INVALID")
+  await adapter.signalGroup(p.processGroupId, "SIGKILL")
+}
+async function defaultDependencies(): Promise<QualificationDependencies> {
+  if (process.platform !== "darwin") fail("ADAPTER_UNQUALIFIED")
+  const hostKey = await readHostId("darwin")
+  return { adapter: createDarwinAdapter(), hostKey, verify: verifyCodexQualification,
+    handler: (candidatePath, root) => ({ file: process.execPath, args: [fileURLToPath(new URL("./qualify-codex-handler.js", import.meta.url)), candidatePath, root], env: { ...Object.fromEntries(Object.keys(process.env).map(key => [key, undefined])), PATH: "/usr/bin:/bin", HOME: root } }),
+    userStatePaths: ["/Users/moon/.codex"], normalStatePaths: [join(process.env.XDG_STATE_HOME ?? "/Users/moon/.local/state", "agency/hosts", hostKey), `/private/tmp/agy-${process.getuid!()}-${hostKey.slice(0, 12)}`],
+    createExecutionRoot: () => mkdtemp("/private/tmp/agyq-"),
+  }
+}
+
+async function evidenceDirectory(parent: string): Promise<string> {
+  canonical(parent)
+  const stat = await lstat(parent)
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid!() || stat.mode & 0o022 || await realpath(parent) !== parent) fail("EVIDENCE_PUBLICATION_FAILED")
+  const directory = join(parent, "codex-qualification")
+  try { await mkdir(directory, { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error }
+  await assertPrivateDirectory(directory); await syncDirectory(parent)
+  return directory
+}
+export async function runCodexQualification(request: QualificationRequest, dependencies?: QualificationDependencies): Promise<CodexQualificationReport> {
+  const candidate = parseQualificationCandidate(await readPrivateJson(request.candidatePath))
+  const deps = dependencies ?? await defaultDependencies(), publish = deps.publish ?? durableQualificationWrite
+  const observation = await deps.verify(candidate.manifest)
+  equal(observation.fingerprint, candidate.fingerprint, "ADAPTER_UNQUALIFIED")
+  const git = promisify(execFile), repo = fileURLToPath(new URL("../../", import.meta.url))
+  const commit = (await git("/usr/bin/git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim()
+  if ((await git("/usr/bin/git", ["branch", "--show-current"], { cwd: repo })).stdout.trim() !== "moon/agency-agent-lifecycle") fail("ADAPTER_UNQUALIFIED")
+  const report: CodexQualificationReport = {
+    version: 1, manifestFingerprint: candidate.fingerprint, branch: "moon/agency-agent-lifecycle", commit, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), qualified: false, failure: null,
+    observation: { ...observation, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, userState: { before: [], after: [] }, normalAgencyState: { before: [], after: [] } },
+    protocol: { protocolVersion: 1, methods: [] }, selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, session: null, authentication: "unknown",
+    ownership: { handlerGeneration: null, agentId: null, providerGeneration: null, leaseId: null, launchAttemptId: null, sessionId: null, handlers: [], providerProcessGroup: null },
+    deadlines: Object.fromEntries(PHASES.map(name => [name, { limitMs: limits(candidate.manifest)[name], outcome: "not_reached" }])) as CodexQualificationReport["deadlines"],
+    postconditions: Object.fromEntries(Object.keys(success).map(name => [name, "unknown"])) as CodexQualificationReport["postconditions"],
+  }
+  const directory = await evidenceDirectory(request.evidenceParent), evidence = await mkdtemp(join(directory, "attempt-"))
+  await syncDirectory(directory); await publish(join(evidence, "manifest.json"), candidate)
+  let root: string | undefined, paths: PlatformPaths | undefined, rootIdentity: { dev: bigint; ino: bigint } | undefined
+  let current: HandlerGenerationRecord | undefined, target: AgentTuple | null = null, commandId: string | undefined, startSent = false, stopSent = false, recovered = false, handlerInvoked = false
+  let overallStart = performance.now(), overallDeadline = Infinity
+  const parentDurations: QualificationReceipt["durations"] = {}
+  const handlerOwners: HandlerGenerationRecord[] = []
+  let cleanupLaunch: LaunchRecord | undefined
+  const sockets = new Set<Socket>(), retained = report.observation.retained
+  const setFailure = (error: unknown, fallback: Failure): void => { report.failure ??= classify(error, fallback) }
+  const budget = (): number => { const remaining = overallDeadline - performance.now(); if (remaining <= 0) { report.deadlines.overall.outcome = "timed_out"; fail("OVERALL_TIMEOUT") }; return Math.min(remaining, candidate.manifest.deadlines.commandMs) }
+  const keepHandler = (h: HandlerGenerationRecord): void => {
+    if (!h.process || h.hostId !== deps.hostKey || h.socketPath !== paths!.handlerSocketPath || !h.launchAttempted) fail("OWNERSHIP_INVALID")
+    if (!retained.handlers.some(previous => previous.generation === h.generation)) {
+      retained.handlers.push(structuredClone(h))
+      handlerOwners.push(structuredClone(h))
+      report.ownership.handlers = retained.handlers.map(h => ({ generation: h.generation, launchAttemptId: h.launchAttemptId, process: structuredClone(h.process!) }))
+      report.ownership.handlerGeneration ??= h.generation
+      validateQualifiedOwnership(report.ownership)
+    } else {
+      const previous = retained.handlers.find(previous => previous.generation === h.generation)!
+      equal(previous.process, h.process); equal(previous.launchAttemptId, h.launchAttemptId)
+      retained.handlers[retained.handlers.indexOf(previous)] = structuredClone(h)
+    }
+    current = h
+  }
+  async function launchHandler(): Promise<void> {
+    try {
+      const inspection = await (deps.start ?? startOrConnect)({ root: paths!.runtimeRoot, hostId: deps.hostKey, adapter: deps.adapter, handler: deps.handler(request.candidatePath, root!), timeoutMs: candidate.manifest.deadlines.commandMs,
+        async onTransition(transition) { if (transition === "handler_spawned") handlerInvoked = true; if (transition === "identity_published") keepHandler(await readHandlerRecord(join(paths!.runtimeRoot, "handler.json"))) },
+      })
+      if (inspection.disposition !== "live") fail("HANDLER_STARTUP_FAILED")
+      keepHandler(inspection.record)
+    } catch (error) {
+      const h = await readHandlerRecord(join(paths!.runtimeRoot, "handler.json")).catch(() => null)
+      if (h?.process) keepHandler(h)
+      throw error
+    }
+  }
+  async function requestAgent(op: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }, timeout = budget()) {
+    const socket = createConnection(paths!.handlerSocketPath); sockets.add(socket)
+    const call = exchangeAgent(socket, { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current!.generation, ...op }, Math.ceil(timeout))
+    const lost = async (): Promise<never> => {
+      while (!socket.destroyed) { if (await terminal(deps.adapter, current!.process!)) { socket.destroy(); fail("HANDLER_TERMINATED") }; await delay() }
+      return new Promise<never>(() => undefined)
+    }
+    try { const reply = await Promise.race([call, lost()]); if (!reply.ok) throw new AgentError(reply.error.code); return reply.result }
+    finally { socket.destroy(); sockets.delete(socket) }
+  }
+  async function inventory(): Promise<void> {
+    if (!paths) return
+    const store = createAgentStore(paths.persistentRoot), inv = await store.inventory()
+    if (inv.issues.length || inv.agents.length > 1 || inv.commands.filter(c => c.op === "start").length > 1) fail("OWNERSHIP_INVALID")
+    const agent = target ? inv.agents.find(a => a.spec.agentId === target!.agentId) : inv.agents[0]
+    if (!agent) return
+    const s = agent.spec
+    if (s.handlerGeneration !== report.ownership.handlerGeneration || s.hostId !== deps.hostKey || s.checkout.root.path !== join(root!, candidate.manifest.qualificationCwd.relative)) fail("OWNERSHIP_INVALID")
+    if (target) equal(target, tupleOf(s))
+    target ??= tupleOf(s); commandId ??= s.startCommandId
+    for (const key of ["agentId", "providerGeneration", "leaseId", "launchAttemptId"] as const) {
+      if (report.ownership[key] !== null && report.ownership[key] !== s[key]) fail("OWNERSHIP_INVALID")
+      report.ownership[key] = s[key]
+    }
+    const launch = await readLaunchRecordForReconciliation(join(paths.persistentRoot, "launches", `${s.launchAttemptId}.json`)).catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error })
+    if (launch) {
+      for (const key of ["agentId", "leaseId", "handlerGeneration", "launchAttemptId"] as const) if (launch[key] !== s[key]) fail("OWNERSHIP_INVALID")
+      if (launch.checkoutId !== s.checkout.checkoutId) fail("OWNERSHIP_INVALID")
+      if (report.deadlines.reservation.outcome !== "timed_out") report.deadlines.reservation.outcome = "completed"
+      if (launch.provider !== null) {
+        if (report.ownership.providerProcessGroup !== null) {
+          equal(report.ownership.providerProcessGroup.leader, launch.provider.group.leader)
+          if (["cleanup_pending", "cleanup_verified"].includes(launch.phase)) {
+            for (const p of report.ownership.providerProcessGroup.observed) if (!launch.provider.group.observed.some(other => isDeepStrictEqual(p, other))) fail("OWNERSHIP_INVALID")
+          } else equal(report.ownership.providerProcessGroup, launch.provider.group)
+        }
+        else report.ownership.providerProcessGroup = structuredClone(launch.provider.group)
+        cleanupLaunch = structuredClone(launch)
+        validateQualifiedOwnership(report.ownership)
+      }
+    }
+  }
+  async function waitCommand(id: string, generation: string) {
+    while (true) {
+      budget()
+      try {
+        const command = await requestAgent({ op: "agent_command", commandId: id, commandGeneration: generation })
+        const list = await requestAgent({ op: "agent_list" })
+        if (command.state !== "command" || command.durability !== "verified" || list.state !== "agents") fail("INVALID_PROTOCOL")
+        await inventory()
+        if (command.command.state !== "pending") return { command: command.command, list }
+      } catch (error) {
+        if (await terminal(deps.adapter, current!.process!)) fail("HANDLER_TERMINATED")
+        budget()
+        if (!(error instanceof AgentError) || !["INCOMPLETE", "UNAVAILABLE"].includes(error.code)) throw error
+      }
+      await delay()
+    }
+  }
+  async function waitAbsentHandler(h: HandlerGenerationRecord): Promise<void> {
+    const deadline = performance.now() + candidate.manifest.deadlines.processTerminateMs
+    while (!await terminal(deps.adapter, h.process!) || (await observe(() => deps.adapter.readGroup(h.process!.processGroupId))).length) { if (performance.now() >= deadline) fail("PROCESS_SURVIVED"); await delay() }
+    for (let pass = 0; pass < 2; pass++) if (!await terminal(deps.adapter, h.process!) || (await observe(() => deps.adapter.readGroup(h.process!.processGroupId))).length) fail("PROCESS_SURVIVED")
+  }
+  async function recover(): Promise<void> {
+    if (recovered || !paths || !current?.process) return
+    recovered = true
+    for (const socket of sockets) socket.destroy()
+    await terminateHandler(deps.adapter, current.process); await waitAbsentHandler(current)
+    await inventory()
+    if (report.ownership.providerProcessGroup && !await absentGroup(deps.adapter, report.ownership.providerProcessGroup)) {
+      const path = join(paths.persistentRoot, "launches", report.ownership.launchAttemptId + ".json"), launch = await readLaunchRecordForReconciliation(path)
+      equal(launch.provider?.group, report.ownership.providerProcessGroup)
+      if ((await reconcileRecord(path, deps.adapter, launch)).record.phase !== "cleanup_verified" || !await absentGroup(deps.adapter, report.ownership.providerProcessGroup)) fail("PROCESS_SURVIVED")
+    }
+    await launchHandler()
+    const socket = createConnection(paths.handlerSocketPath)
+    const status = await exchange(socket, { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "status" }, candidate.manifest.deadlines.commandMs)
+    if (!status.ok) fail("CLEANUP_UNVERIFIED")
+    if (commandId) await requestAgent({ op: "agent_command", commandId, commandGeneration: report.ownership.handlerGeneration! }, candidate.manifest.deadlines.commandMs)
+    const launches = await inventoryLaunches(join(paths.persistentRoot, "launches")), admissions = await inventoryAdmissions(paths.persistentRoot), inv = await createAgentStore(paths.persistentRoot).inventory()
+    const launch = launches.find(e => e.record.launchAttemptId === report.ownership.launchAttemptId)?.record
+    const command = inv.commands.find(c => c.commandId === commandId)
+    const consistent = !inv.issues.length && !admissionInventoryIssues(deps.hostKey, launches, admissions).length
+    retained.recovery = { command: command ?? null, agent: inv.agents.find(a => a.spec.agentId === report.ownership.agentId) ?? null, launch: launch ?? null, admission: admissions.records.find(a => a.launchAttemptId === report.ownership.launchAttemptId) ?? null, consistent }
+    if (consistent && launch?.phase === "cleanup_verified" && command && command.state !== "pending") report.postconditions.reservation = "released"
+    else report.postconditions.reservation = launch ? "retained" : "unknown"
+    if (launch && !launch.launchAttempted && performance.now() - overallStart >= candidate.manifest.deadlines.reservationMs && report.failure === "HANDLER_TERMINATED") { report.deadlines.reservation.outcome = "timed_out"; report.failure = "STARTUP_TIMEOUT" }
+  }
+  try {
+    report.observation.userState.before = await Promise.all(deps.userStatePaths.map(path => snapshotTree(path)))
+    report.observation.normalAgencyState.before = await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true)))
+    const marker = join(directory, `${candidate.fingerprint}.live-started.json`)
+    try { await publish(marker, { version: 1, manifestFingerprint: candidate.fingerprint, state: "live_started", evidence }) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") fail("ATTEMPT_ALREADY_STARTED"); fail("EVIDENCE_PUBLICATION_FAILED") }
+    root = await deps.createExecutionRoot(); await assertPrivateDirectory(root); const rootStat = await lstat(root, { bigint: true }); rootIdentity = { dev: rootStat.dev, ino: rootStat.ino }
+    paths = qualificationPaths(root, deps.hostKey)
+    await mkdir(paths.persistentRoot, { mode: 0o700 }); await mkdir(paths.runtimeRoot, { mode: 0o700 }); await mkdir(join(root, "receipts"), { mode: 0o700 })
+    const cwd = join(root, candidate.manifest.qualificationCwd.relative); await mkdir(cwd, { mode: 0o700 })
+    await git("/usr/bin/git", ["-c", "init.defaultBranch=qualification", "init", "--quiet", cwd], { env: { PATH: "/usr/bin:/bin", HOME: root, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }, timeout: 5000, maxBuffer: 4096 })
+    overallStart = performance.now(); overallDeadline = overallStart + candidate.manifest.deadlines.overallMs
+    await within((async () => {
+    try { await launchHandler() } catch (error) { setFailure(error, "HANDLER_STARTUP_FAILED"); throw error }
+    budget()
+    commandId = randomUUID(); startSent = true
+    let pending
+    const started = performance.now()
+    try { pending = await within(requestAgent({ op: "agent_start", input: { commandId, handlerGeneration: current!.generation, cwd, selection: { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" } } }), candidate.manifest.deadlines.commandMs, "COMMAND_START_TIMEOUT") }
+    catch (error) {
+      const timeout = performance.now() - started >= candidate.manifest.deadlines.commandMs || error instanceof AgentError && ["INCOMPLETE", "STARTUP_TIMEOUT"].includes(error.code)
+      report.deadlines.commandStart.outcome = timeout ? "timed_out" : "failed"
+      if (timeout) report.failure = "COMMAND_START_TIMEOUT"; else setFailure(error, "STARTUP_FAILED")
+      for (const socket of sockets) socket.destroy(); throw error
+    }
+    if (performance.now() - started >= candidate.manifest.deadlines.commandMs || pending.state !== "command" || pending.durability !== "verified" || pending.command.state !== "pending" || !pending.command.target) fail("INVALID_PROTOCOL")
+    report.deadlines.commandStart.outcome = "completed"; parentDurations.commandStart = performance.now() - started; target = pending.command.target
+    const complete = await waitCommand(commandId, current!.generation)
+    if (complete.command.result?.outcome !== "started") throw new AgentError(complete.command.result?.failure?.code ?? "STARTUP_FAILED")
+    const ready = complete.list.agents.find(a => a.record.spec.agentId === target!.agentId)
+    if (!ready || ready.record.phase !== "ready" || ready.launch?.phase !== "active") fail("OWNERSHIP_INVALID")
+    retained.command = complete.command; retained.agent = ready.record; retained.launch = ready.launch
+    retained.admission = await readAdmission(paths.persistentRoot, ready.record.spec.launchAttemptId)
+    report.session = parseSession(complete.command.result.session); report.ownership.sessionId = report.session.sessionId
+    report.selection = { modelId: report.session.modelId as "gpt-5.6-sol", reasoning: report.session.reasoning.kind === "value" ? report.session.reasoning.value as "high" : fail("SELECTION_UNSUPPORTED"), mode: report.session.mode as "read-only" }
+    report.authentication = "ambient_accepted"
+    await deps.beforeCleanup?.(root, report)
+    equal(await readHandlerRecord(join(paths.runtimeRoot, "handler.json")), retained.handlers[0])
+    equal(await readLaunchRecordForReconciliation(join(paths.persistentRoot, "launches", ready.record.spec.launchAttemptId + ".json")), retained.launch)
+    equal(await createAgentStore(paths.persistentRoot).readCommand(commandId), retained.command)
+    equal(await createAgentStore(paths.persistentRoot).readAgent(target.agentId), retained.agent)
+    correlate(report)
+    stopSent = true
+    const stopping = await requestAgent({ op: "agent_stop", input: { ...target, commandId: randomUUID() } })
+    if (stopping.state !== "command" || stopping.durability !== "verified") fail("CLEANUP_UNVERIFIED")
+    const stopped = await waitCommand(stopping.command.commandId, current!.generation)
+    if (stopped.command.result?.outcome !== "stopped" || stopped.list.agents.some(a => a.live || a.cleanup !== "verified")) fail("CLEANUP_UNVERIFIED")
+    budget(); report.deadlines.overall.outcome = "completed"; parentDurations.overall = performance.now() - overallStart
+    })(), candidate.manifest.deadlines.overallMs, "OVERALL_TIMEOUT")
+  } catch (error) {
+    if (stopSent && report.session !== null && error instanceof AgentError && ["ADMISSION_UNAVAILABLE", "INCOMPLETE"].includes(error.code)) setFailure(new QualificationError("CLEANUP_UNVERIFIED"), "CLEANUP_UNVERIFIED")
+    else setFailure(error, "STARTUP_FAILED")
+    if (report.failure === "AUTH_REQUIRED") report.authentication = "auth_required"
+    else if (startSent && report.authentication !== "ambient_accepted") report.authentication = "failed"
+    if (paths && current?.process) {
+      try {
+        await inventory()
+        if (await terminal(deps.adapter, current.process) || report.failure === "COMMAND_START_TIMEOUT" || report.failure === "OVERALL_TIMEOUT") await recover()
+        else if (target && !stopSent) { stopSent = true; const result = await requestAgent({ op: "agent_stop", input: { ...target as AgentTuple, commandId: randomUUID() } }, 5000); if (result.state !== "command") fail("CLEANUP_UNVERIFIED") }
+      } catch (cleanupError) { setFailure(cleanupError, "CLEANUP_UNVERIFIED") }
+    }
+  } finally {
+    if (paths) {
+      try {
+        await inventory()
+        if (current?.process && !await terminal(deps.adapter, current.process)) {
+          const socket = createConnection(paths.handlerSocketPath)
+          const shutdown = await exchange(socket, { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }, 5000)
+          if (!shutdown.ok) fail("CLEANUP_UNVERIFIED")
+        }
+      } catch (error) { setFailure(error, "CLEANUP_UNVERIFIED"); if (current?.process) await terminateHandler(deps.adapter, current.process).catch(error => setFailure(error, "CLEANUP_UNVERIFIED")) }
+      try {
+        for (const h of handlerOwners) await waitAbsentHandler(h)
+        report.postconditions.handler = handlerOwners.length || !handlerInvoked ? "absent" : "unknown"
+      } catch (error) { report.postconditions.handler = "present"; setFailure(error, "PROCESS_SURVIVED") }
+      try {
+        if (cleanupLaunch?.provider && !await absentGroup(deps.adapter, cleanupLaunch.provider.group)) {
+          const path = join(paths.persistentRoot, "launches", cleanupLaunch.launchAttemptId + ".json"), currentLaunch = await readLaunchRecordForReconciliation(path)
+          for (const key of ["agentId", "leaseId", "handlerGeneration", "launchAttemptId", "checkoutId"] as const) equal(currentLaunch[key], cleanupLaunch[key])
+          equal(currentLaunch.provider, cleanupLaunch.provider)
+          const result = await reconcileRecord(path, deps.adapter, currentLaunch)
+          cleanupLaunch = result.record
+        }
+        if (cleanupLaunch?.provider) report.postconditions.processGroup = await absentGroup(deps.adapter, cleanupLaunch.provider.group) ? "absent" : "present"
+      } catch (error) { setFailure(error, "CLEANUP_UNVERIFIED") }
+      try {
+        await inventory()
+        const group = cleanupLaunch?.provider?.group ?? report.ownership.providerProcessGroup
+        report.postconditions.processGroup = group ? await absentGroup(deps.adapter, group) ? "absent" : "present" : "absent"
+        if (report.postconditions.processGroup !== "absent") fail("PROCESS_SURVIVED")
+        const inv = await createAgentStore(paths.persistentRoot).inventory(), launches = await inventoryLaunches(join(paths.persistentRoot, "launches")), admissions = await inventoryAdmissions(paths.persistentRoot)
+        if (!group && launches.some(e => e.record.launchAttempted && e.record.provider === null)) report.postconditions.processGroup = "unknown"
+        const verified = !inv.issues.length && !admissionInventoryIssues(deps.hostKey, launches, admissions).length && launches.every(e => e.record.phase === "cleanup_verified") && inv.commands.every(c => c.state !== "pending") && inv.agents.every(a => !["starting", "ready", "stopping"].includes(a.phase))
+        if (!recovered) report.postconditions.reservation = verified ? "released" : "retained"
+        else if (!verified && report.postconditions.reservation === "released") report.postconditions.reservation = "retained"
+        report.postconditions.lifecycleOperation = verified ? "terminal" : "in_flight"
+        report.postconditions.providerState = report.ownership.launchAttemptId && await exists(providerStatePath(paths.persistentRoot, report.ownership.launchAttemptId)) ? "present" : "absent"
+        report.postconditions.catalogProfile = await exists(join(paths.persistentRoot, "catalog/providers.json")) ? "present" : "absent"
+        if (report.ownership.launchAttemptId) {
+          report.observation.receipt = parseQualificationReceipt(await readPrivateJson(join(root!, "receipts", report.ownership.launchAttemptId + ".json")))
+          const receipt = report.observation.receipt
+          Object.assign(receipt.durations, parentDurations)
+          if (receipt.launchAttemptId !== report.ownership.launchAttemptId || receipt.handlerGeneration !== report.ownership.handlerGeneration) fail("OWNERSHIP_INVALID")
+          report.protocol.methods = receipt.methods
+          report.postconditions.directChild = receipt.terminal ? "terminal" : "unknown"
+          report.postconditions.transport = receipt.transportClosed ? "closed" : "open"; report.postconditions.ownedHandles = receipt.handlesClosed ? "closed" : "open"
+          for (const [name, duration] of Object.entries(receipt.durations) as Array<[Phase, number]>) report.deadlines[name].outcome = duration < report.deadlines[name].limitMs ? "completed" : "timed_out"
+          if (!receipt.descriptors) { report.failure = "DESCRIPTOR_LEAK"; fail("DESCRIPTOR_LEAK") }
+          if (receipt.failure) {
+            if (report.failure === "ADMISSION_UNAVAILABLE" || report.failure === "INCOMPLETE") report.failure = receipt.failure
+            else setFailure(new QualificationError(receipt.failure), receipt.failure)
+          }
+        } else { report.postconditions.directChild = "terminal"; report.postconditions.transport = "closed"; report.postconditions.ownedHandles = "closed" }
+        if (!verified || report.postconditions.providerState !== "absent") fail("CLEANUP_UNVERIFIED")
+      } catch (error) { setFailure(error, "EVIDENCE_MISSING") }
+      for (const socket of sockets) socket.destroy()
+      try {
+        if (report.postconditions.handler === "absent" && report.postconditions.processGroup === "absent" && report.postconditions.reservation === "released" && report.postconditions.providerState === "absent") {
+          const observedRoot = await lstat(root!, { bigint: true })
+          equal({ dev: observedRoot.dev, ino: observedRoot.ino }, rootIdentity)
+          await assertPrivateDirectory(root!); await rm(root!, { recursive: true })
+          report.postconditions.executionRoot = !await exists(root!) ? "absent" : "present"
+          report.postconditions.qualificationCwd = report.postconditions.executionRoot
+        } else { report.postconditions.executionRoot = "present"; report.postconditions.qualificationCwd = "present" }
+      } catch (error) { setFailure(error, "CLEANUP_UNVERIFIED") }
+    }
+    try {
+      report.observation.userState.after = await Promise.all(deps.userStatePaths.map(path => snapshotTree(path)))
+      report.observation.normalAgencyState.after = await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true)))
+      report.postconditions.userState = isDeepStrictEqual(report.observation.userState.before, report.observation.userState.after) ? "unchanged" : "changed"
+      report.postconditions.normalAgencyState = isDeepStrictEqual(report.observation.normalAgencyState.before, report.observation.normalAgencyState.after) ? "unchanged" : "changed"
+      if (report.postconditions.userState === "changed") setFailure(new QualificationError("USER_STATE_CHANGED"), "USER_STATE_CHANGED")
+      if (report.postconditions.normalAgencyState === "changed") setFailure(new QualificationError("NORMAL_STATE_CHANGED"), "NORMAL_STATE_CHANGED")
+    } catch (error) { setFailure(error, "USER_STATE_UNAVAILABLE") }
+  }
+  report.endedAt = new Date().toISOString()
+  if (report.failure === null) {
+    report.qualified = true
+    try { parseCodexQualificationReport(report) } catch { report.qualified = false; report.failure = "REPORT_INVALID" }
+  }
+  try {
+    await publish(join(evidence, "report.json"), report)
+    if (request.reportPath) await publish(request.reportPath, report)
+  } catch {
+    const unpublished = structuredClone(report)
+    report.qualified = false; report.failure = "EVIDENCE_PUBLICATION_FAILED"
+    for (const path of [join(evidence, "report.json"), ...(request.reportPath ? [request.reportPath] : [])]) {
+      try { equal(await readPrivateJson(path), unpublished, "EVIDENCE_PUBLICATION_FAILED"); await rm(path); await syncDirectory(dirname(path)) } catch {}
+    }
+    await durableQualificationWrite(join(evidence, "report-failed.json"), report).catch(() => undefined)
+  }
+  return report
+}
+
+export async function pinnedArtifact(path: string, sha256: string): Promise<ArtifactPin> {
+  const pin: ArtifactPin = { path, sha256, identity: statIdentity(await lstat(path, { bigint: true })) }
+  return observeArtifact(pin)
+}
+export async function offlineCandidate(candidatePath: string, evidenceParent: string): Promise<CodexQualificationCandidate> {
+  if (process.execPath !== "/Users/moon/.nodenv/versions/24.13.0/bin/node" || process.versions.node !== "24.13.0" || process.platform !== "darwin" || process.arch !== "arm64") fail("ADAPTER_UNQUALIFIED")
+  const manifest = parseCodexQualificationManifest({
+    version: 1, policy: "agency-codex-deny-all-v1", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-agency-deny-all-v1", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0",
+    adapterPackageJson: await pinnedArtifact("/Users/moon/.dotfiles/node-bin/node_modules/@agentclientprotocol/codex-acp/package.json", "a11749f7a18a1249ced9068a030371aa284b0a7d63c731a3ee078ed48ecb2513"),
+    adapterEntrypoint: await pinnedArtifact("/Users/moon/.dotfiles/node-bin/node_modules/@agentclientprotocol/codex-acp/dist/index.js", "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8"),
+    codexExecutable: await pinnedArtifact("/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", "8eaf1ad12fe6bf89b1710330f58900014322c7c5af677e43be116d8ac5fc0a9e"),
+    nodeExecutable: await pinnedArtifact("/Users/moon/.nodenv/versions/24.13.0/bin/node", "6f2e835e57feb7a29ffcd53a4d4eb60224ec264a1e002c3ba6d99999ea29807d"), nodeVersion: "24.13.0", protocolVersion: 1,
+    qualificationCwd: { source: "attempt-root", relative: "checkout" }, deadlines: { commandMs: 5000, reservationMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 45000 },
+    selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" }, optionIds: { model: "model", reasoning: "reasoning_effort", mode: "mode" },
+    environment: { fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) }, private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" } }, userStatePaths: ["/Users/moon/.codex"],
+  })
+  const observed = await verifyCodexQualification(manifest), candidate = { version: 1 as const, manifest, fingerprint: observed.fingerprint }
+  const directory = await evidenceDirectory(evidenceParent), evidence = await mkdtemp(join(directory, "offline-")); await syncDirectory(directory)
+  await durableQualificationWrite(join(evidence, "manifest.json"), candidate)
+  try { await mkdir(dirname(candidatePath), { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error }
+  await durableQualificationWrite(candidatePath, candidate)
+  await durableQualificationWrite(join(evidence, "report.json"), { version: 1, stage: "offline", qualified: false, observation: observed })
+  return candidate
+}
+export async function codexQualificationMain(argv: readonly string[]): Promise<number> {
+  const args = new Map<string, string>()
+  for (let i = 0; i < argv.length; i += 2) { const name = argv[i]!, value = argv[i + 1]; if (!["--stage", "--candidate", "--evidence-parent", "--report"].includes(name) || args.has(name) || !value) fail("USAGE"); args.set(name, value!) }
+  const stage = args.get("--stage"), candidatePath = args.get("--candidate"), evidenceParent = args.get("--evidence-parent")
+  if (!candidatePath || !evidenceParent || !["offline", "live", "source"].includes(stage ?? "")) fail("USAGE")
+  canonical(candidatePath!); canonical(evidenceParent!)
+  if (stage === "offline") { const candidate = await offlineCandidate(candidatePath!, evidenceParent!); process.stdout.write(JSON.stringify({ stage, fingerprint: candidate.fingerprint }) + "\n"); return 0 }
+  if (stage === "source") {
+    const path = args.get("--report"); if (!path) fail("USAGE")
+    const report = parseCodexQualificationReport(await readPrivateJson(path!)), candidate = parseQualificationCandidate(await readPrivateJson(candidatePath!))
+    if (!report.qualified) fail("ADAPTER_UNQUALIFIED")
+    process.stdout.write(renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: report.manifestFingerprint }) + "\n"); return 0
+  }
+  const report = await runCodexQualification({ candidatePath: candidatePath!, evidenceParent: evidenceParent!, ...(args.has("--report") ? { reportPath: args.get("--report")! } : {}) })
+  process.stdout.write(JSON.stringify({ qualified: report.qualified, failure: report.failure }) + "\n"); return report.qualified ? 0 : 1
+}
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  codexQualificationMain(process.argv.slice(2)).then(code => { process.exitCode = code }, error => { process.stderr.write(classify(error, "ADAPTER_UNQUALIFIED") + "\n"); process.exitCode = 1 })
+}
