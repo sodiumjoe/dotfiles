@@ -280,8 +280,8 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   return { owner, root, spec, context, signals, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }
 
-export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qualified?: boolean; response?: (request: any, reply: any) => unknown; hold?: number } = {}) {
-  const readable = new PassThrough(), writable = new PassThrough(), sent: Array<{ method: string; params: any }> = [], permissionReplies: unknown[] = []
+export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qualified?: boolean; response?: (request: any, reply: any) => unknown; prompt?: (request: any, send: (value: unknown) => void) => void; hold?: number; now?: () => number } = {}) {
+  const readable = new PassThrough(), writable = new PassThrough(), sent: Array<{ jsonrpc: "2.0"; id: number; method: string; params: any }> = [], permissionReplies: unknown[] = []
   const options = [
     { id: "model", type: "select", name: "Model", currentValue: "model-a", options: [{ value: "model-a", name: "Model α" }] },
     { id: "reasoning", type: "select", name: "Reasoning", currentValue: "low", options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
@@ -296,7 +296,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qual
     if (scenario === "fragmented") for (const byte of bytes) readable.write(Buffer.from([byte]))
     else readable.write(bytes)
   }
-  const connection = createAcpConnection({ readable, writable, limits: sampleSpec().limits })
+  const connection = createAcpConnection({ readable, writable, limits: sampleSpec().limits, ...(settings.now ? { now: settings.now } : {}) })
   writable.on("data", (bytes: Buffer) => {
     for (const line of bytes.toString().trim().split("\n")) {
       const request = JSON.parse(line)
@@ -314,6 +314,10 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qual
       if (request.method === "initialize") result = { protocolVersion: scenario === "version" ? 2 : 1, agentCapabilities: {} }
       else if (request.method === "session/new") {
         result = { sessionId: "fixture-session", configOptions: scenario === "missing" ? [] : scenario === "duplicate-option" ? [options[0], options[0]] : options }
+      } else if (request.method === "session/prompt") {
+        if (!settings.prompt) continue
+        settings.prompt(request, send)
+        continue
       } else {
         if (["permission", "wrong-session", "filesystem", "terminal"].includes(scenario)) {
           send({ jsonrpc: "2.0", id: "request-1", method: scenario === "filesystem" ? "fs/read_text_file" : scenario === "terminal" ? "terminal/create" : "session/request_permission", params: { sessionId: scenario === "wrong-session" ? "other" : "fixture-session", toolCall: { toolCallId: "tool-1", title: "fixture" }, options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }] } })

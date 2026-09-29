@@ -17,6 +17,7 @@ export type LaunchSpec = AgentIds & {
   contractId: string; contractFingerprint: string; containment: "direct-process-group-v1"; authority: "normal-user"; limits: AgentLimits
 }
 export type SessionEvidence = { sessionId: string; sessionGeneration: string; protocolVersion: 1; modelId: string; reasoning: Reasoning; mode: string; permissionProfile: string; permissionEvidence: PermissionEvidence }
+export type PromptResult = { stopReason: "end_turn"; text: string }
 export type AgentPhase = "starting" | "ready" | "stopping" | "stopped" | "failed" | "interrupted"
 export type AgentRecord = { version: 1; spec: LaunchSpec; phase: AgentPhase; session: SessionEvidence | null; failure: AgentFailure | null }
 export type StartInput = { commandId: string; handlerGeneration: string; cwd: string; selection: StartSelection }

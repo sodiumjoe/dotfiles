@@ -2,7 +2,290 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { PassThrough, Writable } from "node:stream"
 import { createAcpConnection } from "../src/agent/acp.js"
+import type { PromptResult } from "../src/agent/types.js"
 import { sampleContract, sampleSpec, sampleQualifiedContract, sampleQualifiedSpec, scriptedAcp } from "./agent-support.js"
+
+test("ACP returns the bounded text answer from one successful prompt turn", async t => {
+  const peer = scriptedAcp(t, "fragmented", { prompt(request, send) {
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_thought_chunk", messageId: "thought-1", content: { type: "text", text: "private thought" } } } })
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "plan", entries: [{ content: "Answer", priority: "high", status: "in_progress" }] } } })
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "config_option_update", configOptions: [
+      { id: "model", type: "select", currentValue: "model-a", options: [{ value: "model-a" }] },
+      { id: "reasoning", type: "select", currentValue: "high", options: [{ value: "low" }, { value: "high" }] },
+      { id: "mode", type: "select", currentValue: "review", options: [{ value: "plan" }, { value: "review" }] },
+    ] } } })
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "session_info_update", title: "Fixture", _meta: { codex: { threadStatus: "active" } } } } })
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "usage_update", used: 10, size: 100, cost: { amount: 0.01, currency: "USD" } } } })
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ans" } } } })
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "wer" } } } })
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", usage: null, _meta: { quota: { token_count: null, model_usage: [] } } } })
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  const result: PromptResult = await peer.connection.prompt("challenge", new AbortController().signal)
+  assert.deepEqual(result, { stopReason: "end_turn", text: "answer" })
+  assert.deepEqual(peer.sent.at(-1), { jsonrpc: "2.0", id: 6, method: "session/prompt", params: { sessionId: "fixture-session", prompt: [{ type: "text", text: "challenge" }] } })
+})
+
+test("ACP accepts a second prompt only after the first has settled", async t => {
+  let turn = 0
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+    const text = `answer-${++turn}`
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } } })
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  assert.deepEqual(await peer.connection.prompt("first", new AbortController().signal), { stopReason: "end_turn", text: "answer-1" })
+  assert.deepEqual(await peer.connection.prompt("second", new AbortController().signal), { stopReason: "end_turn", text: "answer-2" })
+  assert.deepEqual(peer.sent.slice(-2).map(request => [request.id, request.method]), [[6, "session/prompt"], [7, "session/prompt"]])
+})
+
+for (const [name, update] of [
+  ["thought extra key", { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thought" }, extra: true }],
+  ["plan entry extra key", { sessionUpdate: "plan", entries: [{ content: "Answer", priority: "high", status: "pending", extra: true }] }],
+  ["configuration option extra key", { sessionUpdate: "config_option_update", configOptions: [
+    { id: "model", type: "select", currentValue: "model-a", options: [{ value: "model-a" }], extra: true },
+    { id: "reasoning", type: "select", currentValue: "high", options: [{ value: "low" }, { value: "high" }] },
+    { id: "mode", type: "select", currentValue: "review", options: [{ value: "plan" }, { value: "review" }] },
+  ] }],
+  ["empty session information", { sessionUpdate: "session_info_update" }],
+  ["usage cost extra key", { sessionUpdate: "usage_update", used: 1, size: 2, cost: { amount: 0, currency: "USD", extra: true } }],
+] as const) test(`ACP rejects malformed informational update: ${name}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update } })
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+for (const content of [{ type: "image", data: "AA==", mimeType: "image/png" }, { type: "text", text: "answer", extra: true }, { type: "text" }]) test(`ACP rejects non-exact answer content: ${JSON.stringify(content)}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content } } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP rejects an answer chunk for another session", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "other-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } } } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP faults on an unsolicited answer chunk", async t => {
+  const peer = scriptedAcp(t)
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  peer.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } } } })
+  assert.equal((await peer.connection.fault).code, "INVALID_PROTOCOL")
+})
+
+for (const tail of [
+  { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "late" } } } },
+  { jsonrpc: "2.0", id: 6, result: { stopReason: "end_turn" } },
+] as const) test(`ACP rejects activity after the prompt result: ${JSON.stringify(tail)}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } } } })
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+    send(tail)
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP rejects an unknown prompt result ID", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", id: 999, result: { stopReason: "end_turn" } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+for (const result of [
+  {}, { stopReason: null }, { stopReason: "end_turn", extra: true }, { stopReason: "end_turn", usage: { totalTokens: -1, inputTokens: 1, outputTokens: 1 } },
+] as const) test(`ACP rejects malformed prompt result ${JSON.stringify(result)}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) { send({ jsonrpc: "2.0", id: request.id, result }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+for (const stopReason of ["max_tokens", "max_turn_requests", "refusal", "cancelled"]) test(`ACP rejects prompt stop reason ${stopReason}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) { send({ jsonrpc: "2.0", id: request.id, result: { stopReason } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP rejects EOF during a prompt", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt() { peer.readable.end() } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "STARTUP_FAILED" })
+})
+
+test("ACP abort rejects the active prompt and clears its listener", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt() {} }), controller = new AbortController()
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  const add = controller.signal.addEventListener.bind(controller.signal), remove = controller.signal.removeEventListener.bind(controller.signal)
+  let additions = 0, removals = 0
+  t.mock.method(controller.signal, "addEventListener", ((type: string, listener: EventListenerOrEventListenerObject, options?: AddEventListenerOptions | boolean) => { if (type === "abort") additions++; add(type, listener, options) }) as typeof controller.signal.addEventListener)
+  t.mock.method(controller.signal, "removeEventListener", ((type: string, listener: EventListenerOrEventListenerObject, options?: EventListenerOptions | boolean) => { if (type === "abort") removals++; remove(type, listener, options) }) as typeof controller.signal.removeEventListener)
+  const pending = peer.connection.prompt("challenge", controller.signal)
+  controller.abort()
+  await assert.rejects(pending, { code: "STARTUP_FAILED" })
+  assert.equal(additions, 1)
+  assert.equal(removals, 1)
+})
+
+test("closing an active prompt clears its request, write timer, and abort listener", async t => {
+  const peer = scriptedAcp(t), controller = new AbortController()
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  const originalSet = globalThis.setTimeout, originalClear = globalThis.clearTimeout, active = new Set<NodeJS.Timeout>()
+  t.mock.method(globalThis, "setTimeout", ((callback: () => void, ms?: number) => {
+    const timer = originalSet(() => { active.delete(timer); callback() }, ms)
+    active.add(timer); return timer
+  }) as typeof setTimeout)
+  t.mock.method(globalThis, "clearTimeout", (timer: Parameters<typeof clearTimeout>[0]) => { active.delete(timer as NodeJS.Timeout); originalClear(timer) })
+  const add = controller.signal.addEventListener.bind(controller.signal), remove = controller.signal.removeEventListener.bind(controller.signal)
+  let additions = 0, removals = 0
+  t.mock.method(controller.signal, "addEventListener", ((type: string, listener: EventListenerOrEventListenerObject, options?: AddEventListenerOptions | boolean) => { if (type === "abort") additions++; add(type, listener, options) }) as typeof controller.signal.addEventListener)
+  t.mock.method(controller.signal, "removeEventListener", ((type: string, listener: EventListenerOrEventListenerObject, options?: EventListenerOptions | boolean) => { if (type === "abort") removals++; remove(type, listener, options) }) as typeof controller.signal.removeEventListener)
+  const originalWrite = peer.writable._write.bind(peer.writable)
+  peer.writable._write = (_chunk, _encoding, _callback) => undefined
+  t.after(() => { peer.writable._write = originalWrite; for (const timer of active) originalClear(timer) })
+  const pending = peer.connection.prompt("challenge", controller.signal)
+  peer.connection.close()
+  await assert.rejects(pending, { code: "STARTUP_FAILED" })
+  assert.equal(active.size, 0)
+  assert.equal(additions, 1)
+  assert.equal(removals, 1)
+})
+
+test("ACP applies the 90 second prompt deadline", async t => {
+  let now = 0
+  const peer = scriptedAcp(t, "exact", { prompt() {}, now: () => now })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let settled = false
+  const pending = peer.connection.prompt("challenge", new AbortController().signal)
+  void pending.then(() => { settled = true }, () => { settled = true })
+  await new Promise(resolve => setImmediate(resolve))
+  now = 89999; t.mock.timers.tick(89999)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+  now = 90000; t.mock.timers.tick(1)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+})
+
+test("ACP rejects an answer larger than 4096 bytes", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(4097) } } } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP rejects an oversized frame during a prompt", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt() { peer.readable.write(Buffer.alloc(1048577, 32)) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP bounds prompt frames in the rolling window", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) {
+    for (let i = 0; i < 257; i++) send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "usage_update", used: i, size: 1000 } } })
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP bounds prompt bytes in the rolling window", async t => {
+  const entries = Array.from({ length: 16 }, () => ({ content: "x".repeat(3800), priority: "low", status: "pending" }))
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) {
+    for (let i = 0; i < 18; i++) send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "plan", entries } } })
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP times out a backpressured prompt write", async t => {
+  const peer = scriptedAcp(t)
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const original = peer.writable._write.bind(peer.writable)
+  peer.writable._write = (_chunk, _encoding, _callback) => undefined
+  t.after(() => { peer.writable._write = original })
+  const pending = peer.connection.prompt("challenge", new AbortController().signal)
+  t.mock.timers.tick(5000)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+})
+
+test("ACP permits only one active prompt", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt() {} }), firstController = new AbortController()
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  const first = peer.connection.prompt("first", firstController.signal)
+  await assert.rejects(peer.connection.prompt("second", new AbortController().signal), { code: "INVALID_AGENT_STATE" })
+  firstController.abort()
+  await assert.rejects(first)
+})
+
+test("ACP rejects configuration drift during a prompt", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt() { peer.triggerDrift() } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
+})
+
+for (const sessionUpdate of ["tool_call", "tool_call_update"]) test(`ACP rejects ${sessionUpdate} during a prompt`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate, toolCallId: "tool-1", title: "fixture" } } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+for (const method of ["fs/read_text_file", "fs/write_text_file", "terminal/create", "terminal/output", "terminal/release", "terminal/wait_for_exit", "terminal/kill", "fixture/unknown"]) test(`ACP rejects forbidden client request ${method}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", id: "client-1", method, params: { sessionId: "fixture-session" } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+  assert.deepEqual(peer.permissionReplies, [])
+})
+
+const permission = (overrides: Record<string, unknown> = {}) => ({ jsonrpc: "2.0", id: "permission-1", method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "tool-1", title: "fixture" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }], ...overrides } })
+for (const [name, request] of [
+  ["extra request key", { ...permission(), extra: true }],
+  ["extra params key", permission({ extra: true })],
+  ["wrong session", permission({ sessionId: "other-session" })],
+  ["missing tool identity", permission({ toolCall: { title: "fixture" } })],
+  ["duplicate options", permission({ options: [{ optionId: "same", name: "One", kind: "allow_once" }, { optionId: "same", name: "Two", kind: "reject_once" }] })],
+  ["too many options", permission({ options: Array.from({ length: 33 }, (_, index) => ({ optionId: `option-${index}`, name: "Choice", kind: "reject_once" })) })],
+  ["invalid option kind", permission({ options: [{ optionId: "allow", name: "Allow", kind: "selected" }] })],
+] as const) test(`ACP rejects malformed permission request: ${name}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send(request) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+  assert.deepEqual(peer.permissionReplies, [])
+})
+
+test("ACP cancels a valid permission request before failing the prompt", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send(permission()) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "PERMISSION_UNSUPPORTED" })
+  assert.deepEqual(peer.permissionReplies, [{ jsonrpc: "2.0", id: "permission-1", result: { outcome: { outcome: "cancelled" } } }])
+})
+
+for (const kind of ["allow_once", "allow_always", "reject_once", "reject_always"] as const) test(`ACP cancels permission option kind ${kind}`, async t => {
+  const request = permission({ options: [{ optionId: kind, name: "Choice", kind }] })
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send(request) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "PERMISSION_UNSUPPORTED" })
+  assert.equal(peer.permissionReplies.length, 1)
+})
+
+test("ACP cancels the pinned adapter permission shape before failing the prompt", async t => {
+  const request = permission({
+    toolCall: { toolCallId: "tool-1", kind: "execute", status: "pending", title: "Run command", rawInput: { command: ["pwd"] }, locations: [{ path: "/checkout" }] },
+    options: [
+      { optionId: "allow_once", name: "Allow", kind: "allow_once", _meta: { permission: { version: 1, description: "one turn" } } },
+      { optionId: "allow_always", name: "Always", kind: "allow_always" },
+      { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+      { optionId: "reject_always", name: "Never", kind: "reject_always" },
+    ],
+    _meta: { permission: { version: 1, title: "Run command?" } },
+  })
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send(request) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "PERMISSION_UNSUPPORTED" })
+  assert.deepEqual(peer.permissionReplies, [{ jsonrpc: "2.0", id: "permission-1", result: { outcome: { outcome: "cancelled" } } }])
+})
 
 test("production evidence follows the qualified contract without widening ACP", async t => {
   const peer = scriptedAcp(t, "exact", { qualified: true })
