@@ -26,17 +26,53 @@ test("ACP returns the bounded text answer from one successful prompt turn", asyn
   assert.deepEqual(peer.sent.at(-1), { jsonrpc: "2.0", id: 6, method: "session/prompt", params: { sessionId: "fixture-session", prompt: [{ type: "text", text: "challenge" }] } })
 })
 
-test("ACP accepts a second prompt only after the first has settled", async t => {
-  let turn = 0
+test("ACP rejects connection reuse before a delayed first-turn chunk can cross turns", async t => {
   const peer = scriptedAcp(t, "exact", { prompt(request, send) {
-    const text = `answer-${++turn}`
-    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } } })
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } } } })
     send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
   } })
   await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
-  assert.deepEqual(await peer.connection.prompt("first", new AbortController().signal), { stopReason: "end_turn", text: "answer-1" })
-  assert.deepEqual(await peer.connection.prompt("second", new AbortController().signal), { stopReason: "end_turn", text: "answer-2" })
-  assert.deepEqual(peer.sent.slice(-2).map(request => [request.id, request.method]), [[6, "session/prompt"], [7, "session/prompt"]])
+  assert.deepEqual(await peer.connection.prompt("first", new AbortController().signal), { stopReason: "end_turn", text: "answer" })
+  await assert.rejects(peer.connection.prompt("second", new AbortController().signal), { code: "INVALID_AGENT_STATE" })
+  assert.deepEqual(peer.sent.filter(request => request.method === "session/prompt").map(request => request.id), [6])
+  peer.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "delayed-first-turn" } } } })
+  assert.equal((await peer.connection.fault).code, "INVALID_PROTOCOL")
+})
+
+type MetadataLayer = "session params" | "config update" | "current mode" | "option" | "group" | "choice"
+function metadataNotification(layer: MetadataLayer, value: unknown) {
+  if (layer === "session params") return { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thought" } }, _meta: value } }
+  if (layer === "current mode") return { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "review", _meta: value } } }
+  const modelChoice = { value: "model-a", ...(layer === "choice" ? { _meta: value } : {}) }
+  const modelOptions = layer === "group" ? [{ group: "models", name: "Models", options: [modelChoice], _meta: value }] : [modelChoice]
+  const configOptions = [
+    { id: "model", type: "select", currentValue: "model-a", options: modelOptions, ...(layer === "option" ? { _meta: value } : {}) },
+    { id: "reasoning", type: "select", currentValue: "high", options: [{ value: "low" }, { value: "high" }] },
+    { id: "mode", type: "select", currentValue: "review", options: [{ value: "plan" }, { value: "review" }] },
+  ]
+  return { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "config_option_update", configOptions, ...(layer === "config update" ? { _meta: value } : {}) } } }
+}
+
+for (const layer of ["session params", "config update", "current mode", "option", "group", "choice"] as const) test(`ACP accepts bounded documented metadata on ${layer}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+    send(metadataNotification(layer, { fixture: true }))
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } } } })
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  assert.deepEqual(await peer.connection.prompt("challenge", new AbortController().signal), { stopReason: "end_turn", text: "answer" })
+})
+
+for (const layer of ["session params", "config update", "current mode", "option", "group", "choice"] as const) test(`ACP bounds documented metadata on ${layer}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send(metadataNotification(layer, { value: "x".repeat(16384) })) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP rejects end_turn without an answer chunk", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) { send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } }) } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
 })
 
 for (const [name, update] of [

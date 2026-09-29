@@ -7,7 +7,7 @@ import { AgentError, agentFailure, agentText, parseLaunchSpec, type AgentFailure
 export type AcpConnection = { initialize(spec: LaunchSpec, contract: LaunchContract, signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; fault: Promise<AgentFailure>; close(): void }
 type ConfigOption = { id: string; currentValue: string; values: string[] }
 type Pending = { method: string; prefix: number; deadline: number; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
-type PromptState = { requestId: number; text: string; bytes: number; responseReceived: boolean }
+type PromptState = { requestId: number; text: string; bytes: number; chunks: number; responseReceived: boolean }
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]): void {
   if (Object.keys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))) invalid()
@@ -127,29 +127,33 @@ function parseOptions(value: unknown): ConfigOption[] {
   if (!Array.isArray(value) || value.length > 128 || Buffer.byteLength(JSON.stringify(value)) > 1048576) invalid()
   const result = value.map(raw => {
     const v = object(raw)
-    knownKeys(v, ["id", "type", "currentValue", "options"], ["id", "type", "name", "description", "category", "currentValue", "options"])
+    knownKeys(v, ["id", "type", "currentValue", "options"], ["id", "type", "name", "description", "category", "currentValue", "options", "_meta"])
     if (v.type !== "select" || !Array.isArray(v.options) || v.options.length > 256) invalid()
     if (Object.hasOwn(v, "name")) agentText(v.name, 1024)
     if (Object.hasOwn(v, "description") && v.description !== null) boundedText(v.description, 4096)
     if (Object.hasOwn(v, "category") && v.category !== null) agentText(v.category)
+    if (Object.hasOwn(v, "_meta")) metadata(v._meta)
     const values: string[] = []
     for (const rawOption of v.options) {
       const option = object(rawOption)
       if (Object.hasOwn(option, "options")) {
-        knownKeys(option, ["group", "options"], ["group", "name", "options"])
+        knownKeys(option, ["group", "options"], ["group", "name", "options", "_meta"])
         agentText(option.group)
         if (Object.hasOwn(option, "name")) agentText(option.name, 1024)
+        if (Object.hasOwn(option, "_meta")) metadata(option._meta)
         if (!Array.isArray(option.options) || option.options.length > 256) invalid()
         for (const item of option.options) {
-          const choice = object(item); knownKeys(choice, ["value"], ["value", "name", "description"])
+          const choice = object(item); knownKeys(choice, ["value"], ["value", "name", "description", "_meta"])
           if (Object.hasOwn(choice, "name")) agentText(choice.name, 1024)
           if (Object.hasOwn(choice, "description") && choice.description !== null) boundedText(choice.description, 4096)
+          if (Object.hasOwn(choice, "_meta")) metadata(choice._meta)
           values.push(agentText(choice.value))
         }
       } else {
-        knownKeys(option, ["value"], ["value", "name", "description"])
+        knownKeys(option, ["value"], ["value", "name", "description", "_meta"])
         if (Object.hasOwn(option, "name")) agentText(option.name, 1024)
         if (Object.hasOwn(option, "description") && option.description !== null) boundedText(option.description, 4096)
+        if (Object.hasOwn(option, "_meta")) metadata(option._meta)
         values.push(agentText(option.value))
       }
       if (values.length > 256) invalid()
@@ -188,7 +192,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   let buffer = "", frameBytes = 0, startupBytes = 0, nextId = 0, queuedBytes = 0, closed = false, ready = false
   let failure: AgentError | null = null, sessionId: string | null = null, options: ConfigOption[] = [], deadline = Infinity
   let violation: AgentError | null = null, denial: Promise<void> | undefined
-  let spec: LaunchSpec | undefined, contract: LaunchContract | undefined, initialization: Promise<SessionEvidence> | undefined, promptState: PromptState | null = null
+  let spec: LaunchSpec | undefined, contract: LaunchContract | undefined, initialization: Promise<SessionEvidence> | undefined, promptState: PromptState | null = null, promptUsed = false
   let resolveFault!: (value: AgentFailure) => void
   const fault = new Promise<AgentFailure>(resolve => { resolveFault = resolve })
   const fail = (error: unknown): void => {
@@ -279,19 +283,26 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       exactKeys(v, ["jsonrpc", "method", "params"])
       if (method !== "session/update") invalid()
       const params = object(v.params)
-      exactKeys(params, ["sessionId", "update"])
+      knownKeys(params, ["sessionId", "update"], ["sessionId", "update", "_meta"])
+      if (Object.hasOwn(params, "_meta")) metadata(params._meta)
       if (sessionId === null || params.sessionId !== sessionId) invalid()
       const update = object(params.update), kind = agentText(update.sessionUpdate)
       if (promptState?.responseReceived) invalid()
       if (kind === "agent_message_chunk") {
         if (!ready || !promptState) invalid()
         const text = contentChunk(update)
+        promptState.chunks++
         promptState.bytes += Buffer.byteLength(text)
         if (promptState.bytes > 4096) invalid()
         promptState.text += text
-      } else if (kind === "config_option_update") { exactKeys(update, ["sessionUpdate", "configOptions"]); options = parseOptions(update.configOptions) }
+      } else if (kind === "config_option_update") {
+        knownKeys(update, ["sessionUpdate", "configOptions"], ["sessionUpdate", "configOptions", "_meta"])
+        if (Object.hasOwn(update, "_meta")) metadata(update._meta)
+        options = parseOptions(update.configOptions)
+      }
       else if (kind === "current_mode_update") {
-        exactKeys(update, ["sessionUpdate", "currentModeId"])
+        knownKeys(update, ["sessionUpdate", "currentModeId"], ["sessionUpdate", "currentModeId", "_meta"])
+        if (Object.hasOwn(update, "_meta")) metadata(update._meta)
         if (!contract?.modeOption) throw new AgentError("SELECTION_UNSUPPORTED")
         const option = options.find(option => option.id === contract!.modeOption)
         if (!option) invalid()
@@ -318,6 +329,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     else if (waiter.method === "session/prompt") {
       if (!promptState || promptState.requestId !== v.id) invalid()
       promptResponse(response)
+      if (promptState.chunks === 0) invalid()
       promptState.responseReceived = true
       const id = v.id
       queueMicrotask(() => {
@@ -380,10 +392,12 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       return initialization
     },
     async prompt(text, signal) {
+      if (promptUsed) throw new AgentError("INVALID_AGENT_STATE")
       check()
       if (!ready || promptState || typeof text !== "string" || text.length === 0 || Buffer.byteLength(text) > 4096 || !text.isWellFormed()) throw new AgentError("INVALID_AGENT_STATE")
       const abort = (): void => fail(new AgentError("STARTUP_FAILED"))
-      promptState = { requestId: 0, text: "", bytes: 0, responseReceived: false }
+      promptUsed = true
+      promptState = { requestId: 0, text: "", bytes: 0, chunks: 0, responseReceived: false }
       try {
         signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort()
         await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] })
