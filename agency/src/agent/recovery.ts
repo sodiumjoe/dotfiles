@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { lstat, readdir } from "node:fs/promises"
 import { UUID } from "../control/protocol.js"
 import { assertPrivateDirectory } from "../platform/private-state.js"
-import { removeProviderState } from "./state.js"
+import { readProviderStateReceipt, removeProviderState } from "./state.js"
 import type { AgentInventory, AgentStore } from "./store.js"
 import { AgentError, agentFailure, type AgentFailure, type AgentRecord, type AgentTuple } from "./types.js"
 
@@ -64,14 +64,35 @@ export async function recoverAgents(input: { context: AdmissionContext; store: A
         if ((stat.mode & 0o777) !== 0o700) throw new AgentError("CLEANUP_UNVERIFIED")
         stateEntries = await readdir(state)
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new AgentError("CLEANUP_UNVERIFIED") }
-      for (const attempt of stateEntries) {
-        if (!UUID.test(attempt)) throw new AgentError("CLEANUP_UNVERIFIED")
+      const roots = new Set<string>(), receipts = new Map<string, { pending: boolean; complete: boolean }>()
+      for (const name of stateEntries) {
+        if (UUID.test(name)) { roots.add(name); continue }
+        const match = /^\.cleanup-([0-9a-f-]+)\.(pending|complete)\.json$/.exec(name)
+        if (!match || !UUID.test(match[1]!)) throw new AgentError("CLEANUP_UNVERIFIED")
+        const receipt = receipts.get(match[1]!) ?? { pending: false, complete: false }
+        receipt[match[2]! as "pending" | "complete"] = true
+        receipts.set(match[1]!, receipt)
+      }
+      const attempts = new Set([...roots, ...receipts.keys()])
+      for (const agent of inventory.agents) {
+        const attempt = agent.spec.launchAttemptId
+        const launch = context.mutations.accepted.find(entry => entry.record.launchAttemptId === attempt)?.record
+        if (launch?.launchAttempted && launch.phase === "cleanup_verified" && !attempts.has(attempt)) throw new AgentError("CLEANUP_UNVERIFIED")
+      }
+      for (const attempt of attempts) {
         const agents = inventory.agents.filter(agent => agent.spec.launchAttemptId === attempt)
         const launches = context.mutations.accepted.filter(entry => entry.record.launchAttemptId === attempt)
         if (agents.length !== 1 || launches.length !== 1) throw new AgentError("CLEANUP_UNVERIFIED")
         const spec = agents[0]!.spec, launch = launches[0]!.record
         if (launch.phase !== "cleanup_verified" || launch.agentId !== spec.agentId || launch.leaseId !== spec.leaseId || launch.handlerGeneration !== spec.handlerGeneration || launch.checkoutId !== spec.checkout.checkoutId) throw new AgentError("CLEANUP_UNVERIFIED")
-        await removeProviderState(context.paths.persistentRoot, attempt)
+        const evidence = receipts.get(attempt)
+        if (evidence?.pending) {
+          const pending = await readProviderStateReceipt(context.paths.persistentRoot, attempt, "pending")
+          if (!evidence.complete) throw new AgentError("CLEANUP_UNVERIFIED")
+          const complete = await readProviderStateReceipt(context.paths.persistentRoot, attempt, "complete")
+          if (roots.has(attempt) || !isDeepStrictEqual(pending.root, complete.root)) throw new AgentError("CLEANUP_UNVERIFIED")
+        } else if (evidence?.complete) throw new AgentError("CLEANUP_UNVERIFIED")
+        else await removeProviderState(context.paths.persistentRoot, attempt)
       }
     })
     return { inventory, unavailable: null }

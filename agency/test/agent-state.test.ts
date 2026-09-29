@@ -72,6 +72,15 @@ test("cleanup never removes a root substituted between verification and quaranti
   assert.equal(await readFile(join(f.root, "agents/provider-state", quarantined, "sentinel"), "utf8"), "retain")
 })
 
+test("failed parent sync after removal retains pending evidence instead of completed evidence", async t => {
+  const f = await stateFixture(t)
+  const prepared = await prepareProviderState(f.root, f.launchAttemptId, f.policy)
+  await f.verified()
+  await assert.rejects(removeProviderState(f.root, f.launchAttemptId, { afterQuarantineRemoval: async () => { throw new Error("parent sync failed") } }), { code: "CLEANUP_UNVERIFIED" })
+  await assert.rejects(lstat(prepared.root), { code: "ENOENT" })
+  assert.deepEqual((await readdir(join(f.root, "agents/provider-state"))).sort(), [`.cleanup-${f.launchAttemptId}.pending.json`])
+})
+
 for (const defect of ["missing-marker", "symlink-child", "public-child", "unexpected-root"] as const) {
   test(`cleanup retains unsafe provider state: ${defect}`, async t => {
     const f = await stateFixture(t)

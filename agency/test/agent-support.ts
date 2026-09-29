@@ -288,7 +288,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact") {
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; pauseStateRemoval?: boolean; failStateRemoval?: boolean } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean } = {}) {
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
   const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), publications: string[] = []
@@ -365,11 +365,11 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path: string, record: LaunchRecord) {
       await writeLaunchRecord(path, record)
       if (record.launchAttempted && record.provider === null) await pause("attempted")
-    } }, ...((options.pauseStateRemoval || options.failStateRemoval) ? { async removeProviderState(persistentRoot: string, attempt: string) {
+    } }, ...((options.pauseStateRemoval || options.failStateRemoval || options.failAfterStateRemoval) ? { async removeProviderState(persistentRoot: string, attempt: string) {
       stateRemovalCalls++
       if (options.pauseStateRemoval) await stateRemovalReleased.promise
       if (options.failStateRemoval) throw new Error("state removal failed")
-      await removeProviderState(persistentRoot, attempt)
+      await removeProviderState(persistentRoot, attempt, options.failAfterStateRemoval ? { afterQuarantineRemoval: async () => { throw new Error("parent sync failed") } } : {})
     } } : {}) }
     const owner = createAgentProcess(input, processDependencies)
     owners.push(owner)

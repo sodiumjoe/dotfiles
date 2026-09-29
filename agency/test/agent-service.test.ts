@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, rename, rm, readdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -220,7 +220,7 @@ test("restart interrupts an accepted pending start without replay", async t => {
   assert.equal(f.spawns(), 0)
 })
 
-test("restart removes retained state only for the matching verified launch", async t => {
+test("restart rejects a state root reappearing after completed removal", async t => {
   const f = await agentServiceFixture(t)
   await f.service.start(f.input)
   const ready = await completed(f.service, f.input)
@@ -231,8 +231,86 @@ test("restart removes retained state only for the matching verified launch", asy
   assert.equal(retained.root, providerStatePath(f.root, attempt))
   assert.deepEqual((await f.store.inventory()).issues, [])
   const next = await f.restart()
+  assert.equal((await next.list()).unavailable?.code, "CLEANUP_UNVERIFIED")
+  assert.equal((await lstat(retained.root)).isDirectory(), true)
+})
+
+test("restart removes a retained verified root without removal receipts", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const parent = join(f.root, "agents/provider-state")
+  await rm(join(parent, `.cleanup-${attempt}.pending.json`))
+  await rm(join(parent, `.cleanup-${attempt}.complete.json`))
+  const retained = await prepareProviderState(f.root, attempt, f.contract.environment)
+  const next = await f.restart()
   assert.equal((await next.list()).unavailable, null)
   await assert.rejects(lstat(retained.root), { code: "ENOENT" })
+})
+
+test("restart accepts a completed removal receipt without a state root", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const entries = await readdir(join(f.root, "agents/provider-state"))
+  assert.ok(entries.includes(`.cleanup-${attempt}.complete.json`))
+  const next = await f.restart()
+  assert.equal((await next.list()).unavailable, null)
+  assert.equal((await next.list()).agents[0]!.cleanup, "verified")
+})
+
+test("restart cannot verify an attempted launch with neither root nor receipt", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const parent = join(f.root, "agents/provider-state")
+  await rm(join(parent, `.cleanup-${attempt}.pending.json`))
+  await rm(join(parent, `.cleanup-${attempt}.complete.json`))
+  const next = await f.restart()
+  assert.equal((await next.list()).unavailable?.code, "CLEANUP_UNVERIFIED")
+  assert.equal((await next.list()).agents[0]!.cleanup, "unknown")
+})
+
+test("restart reports cleanup unknown when removal stopped before parent sync", async t => {
+  const f = await agentServiceFixture(t, { failAfterStateRemoval: true })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await until(async () => (await f.service.list()).unavailable?.code === "CLEANUP_UNVERIFIED" ? true : undefined)
+  assert.deepEqual(await readdir(join(f.root, "agents/provider-state")), [`.cleanup-${attempt}.pending.json`])
+  await assert.rejects(lstat(providerStatePath(f.root, attempt)), { code: "ENOENT" })
+  assert.equal((await f.store.readCommand(stop.commandId))!.state, "pending")
+  f.context.mutations.unavailable = null
+  const next = await f.restart()
+  assert.equal((await next.list()).unavailable?.code, "CLEANUP_UNVERIFIED")
+  assert.equal((await next.list()).agents[0]!.cleanup, "unknown")
+})
+
+for (const defect of ["malformed-completion", "missing-pending", "arbitrary-entry"] as const) test(`restart rejects invalid cleanup evidence: ${defect}`, async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const attempt = (await f.store.readAgent(ready.command.target!.agentId))!.spec.launchAttemptId
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const parent = join(f.root, "agents/provider-state")
+  if (defect === "malformed-completion") await writeFile(join(parent, `.cleanup-${attempt}.complete.json`), "{}", { mode: 0o600 })
+  if (defect === "missing-pending") await rm(join(parent, `.cleanup-${attempt}.pending.json`))
+  if (defect === "arbitrary-entry") await writeFile(join(parent, `.cleanup-${attempt}.trash`), "x", { mode: 0o600 })
+  const next = await f.restart()
+  assert.equal((await next.list()).unavailable?.code, "CLEANUP_UNVERIFIED")
+  assert.equal((await next.list()).agents[0]!.cleanup, "unknown")
 })
 
 test("restart retains an unknown state root and blocks new agent work", async t => {

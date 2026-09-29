@@ -34,7 +34,12 @@ test("one fixture provider failure leaves the other worktree agent ready", { tim
 })
 
 test("fatal Handler failure exits naturally with a ready provider and restart reconciles without adoption", { timeout: 60000 }, async t => {
-  const f = await agentHandlerFixture(t, { fatalClose: true }), ready = await f.waitCompleted(await f.start())
+  const f = await agentHandlerFixture(t, { fatalClose: true })
+  await until(async () => {
+    try { await f.list(); return true }
+    catch (error) { if ((error as { code?: string }).code === "NOT_READY") return undefined; throw error }
+  }, 15000)
+  const ready = await f.waitCompleted(await f.start())
   assert.equal(ready.command.result!.outcome, "started")
   await f.failHandler()
   await f.waitHandlerExit()
@@ -93,11 +98,12 @@ for (const pauseAt of boundaries) test(`Handler crash preserves historical evide
   await f.verifyZeroSurvivors()
 })
 
-test("verified cleanup leaves no retained provider-state roots", { timeout: 60000 }, async t => {
+test("verified cleanup retains receipts but no provider-state root", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t), ready = await f.waitCompleted(await f.start())
   const stopped = await f.stop(ready.command.target!)
   await f.waitCompleted(stopped)
-  assert.deepEqual(await readdir(f.paths.persistentRoot + "/agents/provider-state"), [])
+  const attempt = (await f.inventory()).agents[0]!.spec.launchAttemptId
+  assert.deepEqual((await readdir(f.paths.persistentRoot + "/agents/provider-state")).sort(), [`.cleanup-${attempt}.complete.json`, `.cleanup-${attempt}.pending.json`])
   await f.verifyZeroSurvivors()
 })
 

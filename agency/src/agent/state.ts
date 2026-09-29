@@ -14,9 +14,11 @@ export type PreparedProviderState = { root: string; environment: NodeJS.ProcessE
 type RootIdentity = { dev: string; ino: string; uid: string; gid: string; mode: string }
 type LaunchIdentity = Pick<LaunchRecord, "agentId" | "leaseId" | "handlerGeneration" | "launchAttemptId" | "checkoutId" | "launchBootId">
 type Marker = { version: 1; launchAttemptId: string; launch: LaunchIdentity; root: RootIdentity }
-type RemovalDependencies = { beforeQuarantineRename?: () => Promise<void> }
+type RemovalDependencies = { beforeQuarantineRename?: () => Promise<void>; afterQuarantineRemoval?: () => Promise<void> }
+type RemovalReceipt = Marker & { status: "pending" | "complete" }
 
 const MARKER = ".agency-state.json"
+const receiptName = (attempt: string, status: RemovalReceipt["status"]): string => `.cleanup-${attempt}.${status}.json`
 const accepted = new Map<string, RootIdentity>()
 const failure = (): never => { throw new AgentError("CLEANUP_UNVERIFIED") }
 const absent = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
@@ -113,6 +115,46 @@ async function marker(path: string): Promise<Marker> {
   } finally { await handle.close() }
 }
 
+async function readReceipt(path: string, launch: LaunchRecord, status: RemovalReceipt["status"]): Promise<RemovalReceipt> {
+  const before = await lstat(path, { bigint: true })
+  if (!before.isFile() || before.nlink !== 1n || before.uid !== BigInt(process.getuid!()) || privateMode(before) !== 0o600n || before.size > 4096n) failure()
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const opened = await handle.stat({ bigint: true })
+    if (!opened.isFile() || opened.nlink !== 1n || opened.size !== before.size || !isDeepStrictEqual(identity(opened), identity(before))) failure()
+    const bytes = await handle.readFile()
+    if (bytes.length > 4096 || BigInt(bytes.length) !== before.size) failure()
+    const value: unknown = JSON.parse(bytes.toString("utf8"))
+    if (typeof value !== "object" || value === null || Array.isArray(value)) failure()
+    const parsed = value as RemovalReceipt
+    if (parsed.version !== 1 || parsed.status !== status || parsed.launchAttemptId !== launch.launchAttemptId || !parsed.launch || !parsed.root || Object.keys(parsed).length !== 5 || Object.keys(parsed.launch).length !== 6 || Object.keys(parsed.root).length !== 5 || !isDeepStrictEqual(parsed.launch, launchIdentity(launch))) failure()
+    if (Object.keys(parsed.root).sort().join() !== "dev,gid,ino,mode,uid" || Object.values(parsed.root).some(part => typeof part !== "string" || !/^(0|[1-9][0-9]*)$/.test(part)) || BigInt(parsed.root.uid) !== BigInt(process.getuid!()) || (BigInt(parsed.root.mode) & 0o170777n) !== 0o040700n) failure()
+    const after = await lstat(path, { bigint: true })
+    if (after.size !== before.size || after.nlink !== 1n || !isDeepStrictEqual(identity(after), identity(before))) failure()
+    return parsed
+  } finally { await handle.close() }
+}
+
+export async function readProviderStateReceipt(persistentRoot: string, launchAttemptId: string, status: RemovalReceipt["status"]): Promise<RemovalReceipt> {
+  try {
+    providerStatePath(persistentRoot, launchAttemptId)
+    const parent = join(persistentRoot, "agents", "provider-state")
+    await directory(persistentRoot); await directory(join(persistentRoot, "agents")); await directory(parent)
+    const launch = await retainedLaunch(persistentRoot, launchAttemptId)
+    if (launch.phase !== "cleanup_verified") failure()
+    return await readReceipt(join(parent, receiptName(launchAttemptId, status)), launch, status)
+  }
+  catch { return failure() }
+}
+
+async function writeReceipt(parent: string, value: RemovalReceipt): Promise<void> {
+  const temporary = join(parent, `.cleanup-${value.launchAttemptId}-${randomUUID()}.tmp`)
+  const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+  try { await handle.writeFile(JSON.stringify(value)); await handle.sync() } finally { await handle.close() }
+  await rename(temporary, join(parent, receiptName(value.launchAttemptId, value.status)))
+  await syncDirectory(parent)
+}
+
 export async function prepareProviderState(persistentRoot: string, launchAttemptId: string, policy: LaunchEnvironmentPolicy): Promise<PreparedProviderState> {
   const root = providerStatePath(persistentRoot, launchAttemptId)
   const environment = resolvedLaunchEnvironment(root, policy)
@@ -159,6 +201,10 @@ export async function removeProviderState(persistentRoot: string, launchAttemptI
     catch (error) { if (absent(error) && !accepted.has(root)) return; throw error }
     const proof = await marker(join(root, MARKER))
     if (proof.launchAttemptId !== launchAttemptId || !isDeepStrictEqual(proof.launch, launchIdentity(launch)) || !isDeepStrictEqual(proof.root, original) || accepted.has(root) && !isDeepStrictEqual(accepted.get(root), original)) failure()
+    for (const status of ["pending", "complete"] as const) {
+      try { await lstat(join(parent, receiptName(launchAttemptId, status))); failure() }
+      catch (error) { if (!absent(error)) throw error }
+    }
     await inspectTree(root)
     await dependencies.beforeQuarantineRename?.()
     const quarantine = join(parent, `.cleanup-${launchAttemptId}-${randomUUID()}`)
@@ -168,8 +214,11 @@ export async function removeProviderState(persistentRoot: string, launchAttemptI
     const movedProof = await marker(join(quarantine, MARKER))
     if (!isDeepStrictEqual(movedProof, proof)) failure()
     await inspectTree(quarantine)
+    await writeReceipt(parent, { ...proof, status: "pending" })
     await rm(quarantine, { recursive: true })
+    await dependencies.afterQuarantineRemoval?.()
     await syncDirectory(parent)
+    await writeReceipt(parent, { ...proof, status: "complete" })
     accepted.delete(root)
   } catch { failure() }
 }
