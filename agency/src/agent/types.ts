@@ -27,11 +27,15 @@ export type AgentView = { record: AgentRecord; launch: LaunchRecord | null; live
 export type CommandView = { state: "command"; command: AgentCommand; durability: "verified" | "unverified" }
 export type AgentList = { state: "agents"; agents: AgentView[]; unavailable: AgentFailure | null }
 export type CurrentAgent = { state: "current"; checkout: CheckoutIdentity; agent: AgentView | null; blockers: string[]; unavailable: AgentFailure | null }
-export const AGENT_CODES = ["USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "CHECKOUT_BUSY", "CHECKOUT_QUARANTINED", "ADMISSION_UNAVAILABLE", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "PERMISSION_UNSUPPORTED", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL"] as const
+export const AGENT_CODES = ["USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "CHECKOUT_BUSY", "CHECKOUT_QUARANTINED", "ADMISSION_UNAVAILABLE", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL"] as const
 export type AgentErrorCode = typeof AGENT_CODES[number]
 export type AgentFailure = { code: AgentErrorCode; message: string }
 export class AgentError extends Error { constructor(readonly code: AgentErrorCode) { super(code.replaceAll("_", " ").toLowerCase()) } }
 export function invalidAgent(): never { throw new AgentError("INVALID_AGENT_STATE") }
+export function parsePermissionEvidence(value: unknown): PermissionEvidence {
+  if (value !== "fixture-contract-v1" && value !== "agency-deny-all-v1") invalidAgent()
+  return value
+}
 export function agentFailure(error: unknown): AgentFailure {
   const code = error instanceof AgentError ? error.code : "INTERNAL"
   return { code, message: new AgentError(code).message }
@@ -77,8 +81,8 @@ export function parseAgentFailure(input: unknown): AgentFailure {
 export function parseSession(input: unknown): SessionEvidence {
   return checked(() => {
     const v = object(input); keys(v, ["sessionId", "sessionGeneration", "protocolVersion", "modelId", "reasoning", "mode", "permissionProfile", "permissionEvidence"])
-    if (v.protocolVersion !== 1 || v.permissionEvidence !== "fixture-contract-v1" && v.permissionEvidence !== "agency-deny-all-v1") invalidAgent()
-    return { sessionId: agentText(v.sessionId, 1024), sessionGeneration: id(v.sessionGeneration), protocolVersion: 1, modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: agentText(v.mode), permissionProfile: agentText(v.permissionProfile), permissionEvidence: v.permissionEvidence }
+    if (v.protocolVersion !== 1) invalidAgent()
+    return { sessionId: agentText(v.sessionId, 1024), sessionGeneration: id(v.sessionGeneration), protocolVersion: 1, modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: agentText(v.mode), permissionProfile: agentText(v.permissionProfile), permissionEvidence: parsePermissionEvidence(v.permissionEvidence) }
   })
 }
 function sessionMatches(session: SessionEvidence, selection: StartSelection): boolean {

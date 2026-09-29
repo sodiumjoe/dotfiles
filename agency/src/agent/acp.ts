@@ -6,7 +6,7 @@ import { AgentError, agentFailure, agentText, parseLaunchSpec, type AgentFailure
 
 export type AcpConnection = { initialize(spec: LaunchSpec, contract: LaunchContract, signal: AbortSignal): Promise<SessionEvidence>; fault: Promise<AgentFailure>; close(): void }
 type ConfigOption = { id: string; currentValue: string; values: string[] }
-type Pending = { method: string; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
+type Pending = { method: string; prefix: number; deadline: number; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
 function parseOptions(value: unknown): ConfigOption[] {
   if (!Array.isArray(value) || value.length > 128 || Buffer.byteLength(JSON.stringify(value)) > 1048576) invalid()
@@ -17,6 +17,7 @@ function parseOptions(value: unknown): ConfigOption[] {
     for (const rawOption of v.options) {
       const option = object(rawOption)
       if (Object.hasOwn(option, "options")) {
+        agentText(option.group)
         if (!Array.isArray(option.options) || option.options.length > 256) invalid()
         for (const item of option.options) { const choice = object(item); if (Object.hasOwn(choice, "options")) invalid(); values.push(agentText(choice.value)) }
       } else values.push(agentText(option.value))
@@ -35,15 +36,20 @@ function desiredOptions(spec: LaunchSpec, contract: LaunchContract): Array<[stri
   return result
 }
 function exact(options: ConfigOption[], spec: LaunchSpec, contract: LaunchContract): void {
-  for (const [key, value] of desiredOptions(spec, contract)) {
-    const option = options.find(option => option.id === key)
-    if (!option || option.currentValue !== value || !option.values.includes(value)) throw new AgentError("SELECTION_UNSUPPORTED")
-  }
+  const desired = desiredOptions(spec, contract)
+  exactPrefix(options, desired, desired.length)
   if (contract.reasoningOption === null && options.some(option => ["reasoning", "reasoning_effort", "effort"].includes(option.id))) throw new AgentError("SELECTION_UNSUPPORTED")
   if (contract.modeOption === null && options.some(option => option.id === "mode")) throw new AgentError("SELECTION_UNSUPPORTED")
 }
 
-export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number }): AcpConnection {
+function exactPrefix(options: ConfigOption[], desired: readonly [string, string][], count: number): void {
+  for (const [id, value] of desired.slice(0, count)) {
+    const option = options.find(candidate => candidate.id === id)
+    if (!option || option.currentValue !== value || !option.values.includes(value)) throw new AgentError("SELECTION_UNSUPPORTED")
+  }
+}
+
+export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number }): AcpConnection {
   const { readable, writable, limits } = input, now = input.now ?? (() => performance.now())
   const decoder = new TextDecoder("utf-8", { fatal: true }), pending = new Map<number, Pending>()
   const writes = new Set<(error?: Error | null) => void>()
@@ -56,7 +62,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   const fault = new Promise<AgentFailure>(resolve => { resolveFault = resolve })
   const fail = (error: unknown): void => {
     if (failure) return
-    failure = error instanceof AgentError ? error : new AgentError("INVALID_PROTOCOL")
+    failure = error instanceof AgentError && error.code !== "INVALID_AGENT_STATE" ? error : new AgentError("INVALID_PROTOCOL")
     for (const finish of writes) finish(failure)
     for (const request of pending.values()) { clearTimeout(request.timer); request.reject(failure) }
     pending.clear(); buffer = ""; options = []; windows.clear()
@@ -95,12 +101,15 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     writes.add(finish)
     try { writable.write(bytes, finish) } catch (error) { finish(error as Error) }
   })
-  const request = (method: string, params: unknown): Promise<unknown> => {
+  const request = (method: string, params: unknown, prefix = 0): Promise<unknown> => {
     try { check(); if (pending.size >= 8) invalid() } catch (error) { return Promise.reject(error) }
     const id = ++nextId
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.min(limits.rpcMs, Math.max(1, deadline - now())))
-      pending.set(id, { method, resolve, reject, timer })
+      const phases = contract?.qualification?.deadlines
+      const phaseMs = phases ? method === "initialize" ? phases.initializeMs : method === "session/new" ? phases.sessionMs : phases.optionMs : limits.rpcMs
+      const requestDeadline = Math.min(deadline, now() + phaseMs)
+      const timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, requestDeadline - now()))
+      pending.set(id, { method, prefix, deadline: requestDeadline, resolve, reject, timer })
       void write({ jsonrpc: "2.0", id, method, params }).catch(fail)
     })
   }
@@ -147,11 +156,21 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     if (Object.hasOwn(v, "method") || typeof v.id !== "number" || !pending.has(v.id) || Object.hasOwn(v, "result") === Object.hasOwn(v, "error")) invalid()
     if (Object.keys(v).some(key => !["jsonrpc", "id", "result", "error"].includes(key))) invalid()
     const waiter = pending.get(v.id)!
-    if (Object.hasOwn(v, "error")) throw new AgentError("STARTUP_FAILED")
+    if (now() >= waiter.deadline) throw new AgentError("STARTUP_TIMEOUT")
+    if (Object.hasOwn(v, "error")) {
+      const error = object(v.error)
+      if (Object.keys(error).length !== 2 || !Object.hasOwn(error, "code") || !Object.hasOwn(error, "message") || !Number.isSafeInteger(error.code)) invalid()
+      const message = agentText(error.message)
+      if (waiter.method === "session/new" && error.code === -32000 && message === "Authentication required") throw new AgentError("AUTH_REQUIRED")
+      throw new AgentError("STARTUP_FAILED")
+    }
     const response = object(v.result)
     if (waiter.method === "initialize") { if (response.protocolVersion !== 1) invalid() }
     else if (waiter.method === "session/new") { sessionId = agentText(response.sessionId, 1024); options = parseOptions(response.configOptions) }
-    else options = parseOptions(response.configOptions)
+    else {
+      options = parseOptions(response.configOptions)
+      exactPrefix(options, desiredOptions(spec!, contract!), waiter.prefix)
+    }
     clearTimeout(waiter.timer); pending.delete(v.id); waiter.resolve(v.result)
   }
   const data = (chunk: Buffer): void => {
@@ -179,20 +198,22 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         let timer: NodeJS.Timeout | undefined
         try {
           spec = parseLaunchSpec(inputSpec); contract = parseLaunchContract(inputContract)
-          deadline = now() + limits.startupMs
-          timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), limits.startupMs)
+          deadline = Math.min(input.deadline ?? Infinity, now() + (contract.qualification?.deadlines.overallMs ?? limits.startupMs))
+          timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, deadline - now()))
           signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort()
           check()
           await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
           check()
           await request("session/new", { cwd: spec.checkout.root.path, mcpServers: [] })
-          for (const [configId, value] of desiredOptions(spec, contract)) {
+          const desired = desiredOptions(spec, contract)
+          for (const [index, [configId, value]] of desired.entries()) {
             check()
             if (!options.find(option => option.id === configId)?.values.includes(value)) throw new AgentError("SELECTION_UNSUPPORTED")
-            await request("session/set_config_option", { sessionId, configId, value })
+            await request("session/set_config_option", { sessionId, configId, value }, index + 1)
+            exactPrefix(options, desired, index + 1)
           }
           check(); exact(options, spec, contract); ready = true
-          return { sessionId: sessionId!, sessionGeneration: randomUUID(), protocolVersion: 1 as const, modelId: spec.selection.modelId, reasoning: structuredClone(spec.selection.reasoning), mode: spec.selection.mode, permissionProfile: spec.selection.permissionProfile, permissionEvidence: "fixture-contract-v1" as const }
+          return { sessionId: sessionId!, sessionGeneration: randomUUID(), protocolVersion: 1 as const, modelId: spec.selection.modelId, reasoning: structuredClone(spec.selection.reasoning), mode: spec.selection.mode, permissionProfile: spec.selection.permissionProfile, permissionEvidence: contract.permissionEvidence }
         } catch (error) { await denial?.catch(() => undefined); fail(error); throw failure! }
         finally { clearTimeout(timer); signal.removeEventListener("abort", abort) }
       })()

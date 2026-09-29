@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { mkdir, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { observeLaunchContract, productionLaunchContracts, resolveLaunchSpec } from "../src/agent/contracts.js"
-import { sampleContract, sampleSpec } from "./agent-support.js"
+import { observeLaunchContract, parseLaunchContract, productionLaunchContracts, resolveLaunchSpec } from "../src/agent/contracts.js"
+import { sampleContract, sampleQualifiedContract, sampleSpec } from "./agent-support.js"
 import { privateRoot } from "./control-support.js"
 
 function input() {
@@ -12,6 +12,14 @@ function input() {
 }
 
 test("production has no qualified launch contracts", () => { assert.deepEqual(productionLaunchContracts(), []); assert.ok(Object.isFrozen(productionLaunchContracts())) })
+
+test("qualified contracts cannot substitute fixture or arbitrary permission evidence", () => {
+  const contract = sampleQualifiedContract()
+  assert.equal(parseLaunchContract(contract).permissionEvidence, "agency-deny-all-v1")
+  for (const permissionEvidence of ["fixture-contract-v1", "agency-deny-all-v2", "arbitrary", "", null]) assert.throws(() => parseLaunchContract({ ...contract, permissionEvidence }), { code: "ADAPTER_UNQUALIFIED" })
+  assert.throws(() => parseLaunchContract({ ...contract, permissionProfiles: ["fixture-deny-v1"] }), { code: "ADAPTER_UNQUALIFIED" })
+  assert.deepEqual(productionLaunchContracts(), [])
+})
 
 test("explicit selections resolve without substitution", () => {
   const value = input(), spec = resolveLaunchSpec(value)

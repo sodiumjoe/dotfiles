@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec, parseSession } from "../src/agent/types.js"
+import { agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec, parseSession, parseAgentFailure } from "../src/agent/types.js"
 import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
 
 test("launch evidence is strict, immutable by copying, and never fabricates a resolved model", () => {
@@ -34,8 +34,12 @@ test("ready records require exact complete session evidence", () => {
 })
 
 test("session permission evidence accepts only the two closed authorities", () => {
-  assert.equal(parseSession({ ...sampleSession(), permissionEvidence: "agency-deny-all-v1" }).permissionEvidence, "agency-deny-all-v1")
-  assert.throws(() => parseSession({ ...sampleSession(), permissionEvidence: "unrestricted" }), { code: "INVALID_AGENT_STATE" })
+  for (const permissionEvidence of ["fixture-contract-v1", "agency-deny-all-v1"]) assert.equal(parseSession({ ...sampleSession(), permissionEvidence }).permissionEvidence, permissionEvidence)
+  for (const permissionEvidence of ["", "unrestricted", "agency-deny-all-v2", "agency-deny-all-v1 ", "FIXTURE-CONTRACT-V1", null, 1, {}]) assert.throws(() => parseSession({ ...sampleSession(), permissionEvidence }), { code: "INVALID_AGENT_STATE" })
+})
+
+test("authentication failure has a closed persistable error code", () => {
+  assert.deepEqual(parseAgentFailure({ code: "AUTH_REQUIRED", message: "auth required" }), { code: "AUTH_REQUIRED", message: "auth required" })
 })
 
 test("commands bind operation, identity, result, and original generation", () => {

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { lstat, mkdir, rename, rm, readdir, writeFile } from "node:fs/promises"
+import { promises as filesystem } from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
+import { lstat, mkdir, rename, rm, readdir, writeFile, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -495,4 +497,171 @@ for (const missing of ["agent", "command", "admission", "launch"] as const) test
   await rm(path)
   assert.notEqual((await f.service.list()).unavailable, null)
   await assert.rejects(f.service.start({ ...f.input, commandId: randomUUID() }))
+})
+test("launch evidence is observed before reservation, before spawn and before readiness", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  assert.equal((await completed(f.service, f.input)).command.result!.outcome, "started")
+  assert.ok(f.evidenceCalls() >= 3)
+  assert.ok(f.publications.indexOf("evidence") < f.publications.indexOf("reservation"))
+  assert.equal(f.cleanupCalls(), 0)
+})
+
+test("reservation deadline fail-stops without awaiting a never-settling reserve", async t => {
+  const f = await agentServiceFixture(t, { neverReserve: true })
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  await f.service.start(f.input)
+  await f.reservationEntered
+  assert.equal(f.reservationCalls(), 1)
+  t.mock.timers.tick(4999)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.fatalCalls(), 0)
+  t.mock.timers.tick(1)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.fatalCalls(), 1)
+  assert.equal(f.spawns(), 0)
+  assert.notEqual(f.context.mutations.unavailable, null)
+  assert.equal((await f.store.readCommand(f.input.commandId))!.state, "pending")
+})
+
+test("successful reservation clears its timer before provider startup", async t => {
+  const f = await agentServiceFixture(t, { pause: "ready" })
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  await f.service.start(f.input); await f.entered
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(5001)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.fatalCalls(), 0)
+  t.mock.timers.reset()
+  f.release()
+  assert.equal((await completed(f.service, f.input)).command.result!.outcome, "started")
+})
+
+test("initial command deadline never acts as a reservation timeout", async t => {
+  const f = await agentServiceFixture(t, { pauseCommand: true })
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let settled = false
+  const pending = f.service.start(f.input)
+  void pending.then(() => { settled = true }, () => { settled = true })
+  await f.commandEntered
+  t.mock.timers.tick(5000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, true)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+  assert.equal(f.fatalCalls(), 0)
+  assert.equal(f.reservationCalls(), 0)
+  f.release(); t.mock.timers.reset()
+  await f.context.mutations.queue.run(async () => undefined)
+  assert.equal(f.reservationCalls(), 0)
+  assert.equal(f.spawns(), 0)
+})
+
+test("injected complete evidence launches without catalog configuration or snapshot files", async t => {
+  const f = await agentServiceFixture(t, { injectedOnly: true })
+  await f.service.start(f.input)
+  assert.equal((await completed(f.service, f.input)).command.result!.outcome, "started")
+  await assert.rejects(lstat(join(f.root, "catalog")), { code: "ENOENT" })
+  assert.equal(f.evidenceCalls(), 5)
+})
+
+test("a reservation released after its deadline cannot spawn or repeat fail-stop", async t => {
+  const f = await agentServiceFixture(t, { pause: "reservation" })
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  await f.service.start(f.input); await f.entered
+  t.mock.timers.tick(5000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.fatalCalls(), 1)
+  f.release(); t.mock.timers.tick(10000)
+  await f.context.mutations.queue.run(async () => undefined)
+  assert.equal(f.fatalCalls(), 1)
+  assert.equal(f.spawns(), 0)
+  assert.equal(f.publications.includes("agent:ready"), false)
+})
+
+test("late reservation completion cannot beat an overdue timeout callback", async t => {
+  let now = performance.now()
+  t.mock.method(performance, "now", () => now)
+  const f = await agentServiceFixture(t, { pause: "reservation" })
+  await f.service.start(f.input); await f.entered
+  now += 5001
+  f.release()
+  await until(async () => f.fatalCalls() || f.spawns() ? true : undefined)
+  assert.equal(f.fatalCalls(), 1)
+  assert.equal(f.spawns(), 0)
+  assert.equal(f.publications.includes("agent:ready"), false)
+})
+
+test("ready evidence observation cannot publish after the startup envelope", async t => {
+  let now = performance.now()
+  t.mock.method(performance, "now", () => now)
+  const f = await agentServiceFixture(t, { async observe(count) { if (count === 5) now += 45000 } })
+  await f.service.start(f.input)
+  await until(async () => (await f.service.list()).unavailable?.code === "CLEANUP_UNVERIFIED" ? true : undefined)
+  assert.equal((await f.service.list()).agents[0]!.record.failure?.code, "STARTUP_TIMEOUT")
+  assert.equal(f.publications.includes("agent:ready"), false)
+  assert.equal((await f.store.readCommand(f.input.commandId))!.state, "pending")
+  assert.notEqual((await f.service.list()).agents[0]!.cleanup, "verified")
+})
+
+test("initial receipt completing after its deadline cannot launch before the timer runs", async t => {
+  let now = performance.now()
+  t.mock.method(performance, "now", () => now)
+  const f = await agentServiceFixture(t, { pauseCommand: true })
+  const pending = f.service.start(f.input)
+  await f.commandEntered
+  now += 5000; f.release()
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+  assert.equal(f.reservationCalls(), 0)
+  assert.equal(f.spawns(), 0)
+  assert.equal(f.fatalCalls(), 0)
+})
+
+test("a later explicit stop gets fresh budgets after durable service readiness", async t => {
+  let now = performance.now()
+  t.mock.method(performance, "now", () => now)
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  now += 45001
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result!.outcome, "stopped")
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
+})
+
+for (const [boundary, reservations, spawns] of [[1, 0, 0], [3, 1, 0], [5, 1, 1]] as const) for (const artifact of ["configuration", "adapterPackageJson", "codexExecutable", "adapterEntrypoint", "catalog", "profile"] as const) test(`evidence gate ${boundary} rejects replacement of ${artifact}`, async t => {
+  const f = await agentServiceFixture(t, { async observe(count) {
+    if (count !== boundary) return
+    if (artifact === "catalog") { await f.changeCatalog("refresh"); return }
+    if (artifact === "profile") { f.profile.enabled = false; return }
+    const path = artifact === "configuration" ? f.config : artifact === "adapterPackageJson" ? f.profile.adapterPackageJson : artifact === "codexExecutable" ? f.profile.executable : f.contract.entrypoint
+    const bytes = await readFile(path)
+    await rename(path, path + ".old")
+    await writeFile(path, bytes, { mode: artifact === "codexExecutable" ? 0o700 : 0o600 })
+  } })
+  await f.service.start(f.input)
+  assert.equal((await completed(f.service, f.input)).command.result!.outcome, "failed")
+  assert.equal(f.reservationCalls(), reservations)
+  assert.equal(f.spawns(), spawns)
+  assert.equal(f.cleanupCalls(), reservations)
+  assert.equal(f.publications.includes("agent:ready"), false)
+  assert.equal((await f.service.list()).agents[0]!.cleanup, reservations ? "verified" : "not_reserved")
+})
+
+for (const boundary of [1, 3, 5]) test(`evidence gate ${boundary} rejects changed Node executable identity`, async t => {
+  let changed = false
+  const original = filesystem.lstat
+  const mocked = t.mock.method(filesystem, "lstat", async (path: any, options: any) => {
+    const metadata = await original(path, options)
+    return changed && path === process.execPath ? new Proxy(metadata, { get(target, key, receiver) { return key === "ino" ? BigInt(target.ino) + 1n : Reflect.get(target, key, receiver) } }) : metadata
+  })
+  syncBuiltinESMExports()
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports() })
+  const f = await agentServiceFixture(t, { async observe(count) { if (count === boundary) changed = true } })
+  await f.service.start(f.input)
+  assert.equal((await completed(f.service, f.input)).command.result!.outcome, "failed")
+  assert.equal(f.reservationCalls(), boundary === 1 ? 0 : 1)
+  assert.equal(f.spawns(), boundary === 5 ? 1 : 0)
+  assert.equal(f.publications.includes("agent:ready"), false)
+  assert.equal(f.cleanupCalls(), boundary === 1 ? 0 : 1)
 })

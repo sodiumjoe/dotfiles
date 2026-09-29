@@ -15,6 +15,26 @@ import { launch } from "./control-support.js"
 
 const dependencies: AdmissionDependencies = { resolve: resolveCheckout, publishLaunch: writeLaunchRecord, publishAdmission: writeAdmission, reconcile: reconcileRecord }
 
+test("pending reservation publication retains its mutation queue until durable completion", async t => {
+  const f = await admissionFixture(t), request = f.request()
+  let release!: () => void, entered!: () => void, queued = false
+  const barrier = new Promise<void>(resolve => { entered = resolve }), held = new Promise<void>(resolve => { release = resolve })
+  t.after(() => release())
+  const controller = createAdmissionController(f.context, { ...dependencies, async publishLaunch(path, record) { await writeLaunchRecord(path, record); entered(); await held } })
+  const pending = controller.reserve(request)
+  await barrier
+  const following = f.context.mutations.queue.run(async () => { queued = true })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(queued, false)
+  assert.equal((await inventoryLaunches(join(f.root, "launches"))).length, 1)
+  assert.equal((await inventoryAdmissions(f.root)).records.length, 0)
+  release()
+  assert.equal((await pending).launch.launchAttemptId, request.launchAttemptId)
+  await following
+  assert.equal(queued, true)
+  assert.equal((await controller.cancel(request)).phase, "cleanup_verified")
+})
+
 test("32 same-checkout reservations admit exactly one writer", { timeout: 20000 }, async t => {
   const f = await admissionFixture(t)
   const outcomes = await Promise.allSettled(Array.from({ length: 32 }, () => f.controller.reserve(f.request())))

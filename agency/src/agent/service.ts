@@ -5,7 +5,7 @@ import { observeConfig, readProfiles } from "../catalog/config.js"
 import { createCatalogStore } from "../catalog/store.js"
 import type { CatalogService, LaunchEvidence } from "../catalog/service.js"
 import { id, isFresh } from "../catalog/types.js"
-import { AdmissionError, type AdmissionContext, type AdmissionController } from "../checkout/admission.js"
+import { AdmissionError, type AdmissionContext, type AdmissionController, type Reservation } from "../checkout/admission.js"
 import { checkoutsOverlap, resolveCheckout } from "../checkout/identity.js"
 import { inventoryAdmissions } from "../checkout/records.js"
 import { ControlError } from "../control/protocol.js"
@@ -17,14 +17,40 @@ import { observeLaunchContract, parseLaunchContract, resolveLaunchSpec, type Lau
 import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import { agentTuple, crossCheckAgents, recoverAgents } from "./recovery.js"
 import type { AgentInventory, AgentStore } from "./store.js"
-import { AgentError, agentFailure, parseStartInput, parseStopInput, type AgentCommand, type AgentFailure, type AgentList, type AgentRecord, type AgentView, type CommandResult, type CommandView, type CurrentAgent, type StartInput, type StopInput } from "./types.js"
+import { AgentError, agentFailure, parseStartInput, parseStopInput, type AgentCommand, type AgentFailure, type AgentList, type AgentRecord, type AgentView, type CommandResult, type CommandView, type CurrentAgent, type LaunchSpec, type StartInput, type StopInput } from "./types.js"
 
 export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgent>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
-type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
 
-export function createAgentService(input: { context: AdmissionContext; admission: AdmissionController; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore; processFactory?: typeof createAgentProcess }): AgentService {
+export type AgentServiceDependencies = {
+  processFactory: typeof createAgentProcess
+  observeLaunchEvidence(spec: LaunchSpec, expected: LaunchEvidence): Promise<void>
+  fatalReservationTimeout(spec: LaunchSpec): never
+}
+
+function productionDependencies(root: string): AgentServiceDependencies {
+  const handlerPid = process.pid
+  return {
+    processFactory: createAgentProcess,
+    async observeLaunchEvidence(spec, expected) {
+      const current = await createCatalogStore(root).readCurrent()
+      const profile = (await readProfiles(root)).find(value => value.id === spec.selection.providerId)
+      if (!current || current.snapshotId !== spec.catalogSnapshotId
+        || !isDeepStrictEqual(current.providers.find(value => value.providerId === spec.selection.providerId), spec.catalogEvidence)
+        || !profile || !isDeepStrictEqual(profile, expected.profile)
+        || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
+    },
+    fatalReservationTimeout() {
+      if (handlerPid !== process.pid) throw new AgentError("STARTUP_TIMEOUT")
+      process.kill(handlerPid, "SIGKILL")
+      throw new AgentError("STARTUP_TIMEOUT")
+    },
+  }
+}
+
+export function createAgentService(input: { context: AdmissionContext; admission: AdmissionController; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore }, dependencies: AgentServiceDependencies = productionDependencies(input.context.paths.persistentRoot)): AgentService {
   const { context, store, admission, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
-  const catalogStore = createCatalogStore(root), commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
+  const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const dirty = new Set<string>(), dirtyAgents = new Set<string>(), stops = new Map<string, Promise<void>>()
   let initialized = false, closed = false, frozen = false, inventoryEmpty = false, accepting = 0, stopping = 0, blocked: AgentFailure | null = null
   const emptyLifecycle = (inventory: AgentInventory): boolean => !inventory.issues.length && !inventory.agents.length && !inventory.commands.length && !records.size && !commands.size && !operations.size && !intents.size
@@ -68,11 +94,14 @@ export function createAgentService(input: { context: AdmissionContext; admission
     if (context.state.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
     if (context.state.phase !== "ready") throw new AgentError("NOT_READY")
     await verify()
-    const spec = op.initial.spec, current = await catalogStore.readCurrent(), profile = (await readProfiles(root)).find(p => p.id === spec.selection.providerId)
-    if (!current || current.snapshotId !== spec.catalogSnapshotId || !isDeepStrictEqual(current.providers.find(p => p.providerId === spec.selection.providerId), spec.catalogEvidence) || !isFresh(spec.catalogEvidence.verifiedAt, Date.now())) throw new AgentError("MODEL_UNAVAILABLE")
-    if (!profile || !isDeepStrictEqual(profile, op.evidence.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration) || await observeLaunchContract(op.contract) !== spec.contractFingerprint) throw new AgentError("CONFIG_CHANGED")
+    const spec = op.initial.spec
+    if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
+    if (!isFresh(spec.catalogEvidence.verifiedAt, Date.now())) throw new AgentError("MODEL_UNAVAILABLE")
+    await dependencies.observeLaunchEvidence(spec, op.evidence)
+    if (await observeLaunchContract(op.contract) !== spec.contractFingerprint) throw new AgentError("CONFIG_CHANGED")
     if (!isDeepStrictEqual(await resolveCheckout(spec.checkout.root.path, spec.hostId), spec.checkout)) throw new AgentError("CONFIG_CHANGED")
     if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
+    if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   async function finishStart(op: Live): Promise<void> {
     if (!op.result) return
@@ -120,18 +149,38 @@ export function createAgentService(input: { context: AdmissionContext; admission
     catch (error) { op.uncertain = record; throw error }
     op.uncertain = null
     if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
+    if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
     op.ready = true
+    op.deadline = Infinity
     op.result = { outcome: "started", target: agentTuple(record), failure: null, session: record.session }
   }
   function launch(op: Live): void {
     if (op.started || closed) return
     op.started = true
     op.work = (async () => {
+      let reservationTimedOut = false
       try {
         if (op.controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
         const spec = op.initial.spec
-        const reservation = await admission.reserve({ checkout: spec.checkout, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, handlerGeneration: generation })
-        op.owner = (input.processFactory ?? createAgentProcess)({ context, reservation, spec, contract: op.contract, revalidate: () => revalidate(op) })
+        await queue.run(() => revalidate(op))
+        const timeout = Symbol("reservation timeout")
+        const reservationDeadline = Math.min(op.deadline, performance.now() + (op.contract.qualification?.deadlines.reservationMs ?? 5000))
+        let timer: NodeJS.Timeout | undefined
+        let reservation: Reservation | typeof timeout
+        try {
+          reservation = await Promise.race([
+            admission.reserve({ checkout: spec.checkout, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, handlerGeneration: generation }),
+            new Promise<typeof timeout>(resolve => { timer = setTimeout(() => resolve(timeout), Math.max(1, reservationDeadline - performance.now())) }),
+          ])
+        } finally { clearTimeout(timer) }
+        if (reservation === timeout || performance.now() >= reservationDeadline) {
+          reservationTimedOut = true; op.controller.abort()
+          latch(new AgentError("STARTUP_TIMEOUT"))
+          context.mutations.unavailable ??= `reservation timed out: ${spec.launchAttemptId}`
+          dependencies.fatalReservationTimeout(spec)
+        }
+        if (op.controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
+        op.owner = dependencies.processFactory({ context, reservation, spec, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, revalidate: () => revalidate(op) })
         void op.owner.fault.then(failure => { if (!closed && !op.controller.signal.aborted) void failOperation(op, new AgentError(failure.code)).catch(latch) })
         if (op.controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
         const session = await op.owner.initialize(op.controller.signal)
@@ -143,7 +192,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
           await finishStart(op)
         })
       } catch (error) {
-        if (!closed && !op.ready && !op.uncertain) await failOperation(op, error)
+        if (!reservationTimedOut && !closed && !op.ready && !op.uncertain) await failOperation(op, error)
       }
     })().catch(latch)
   }
@@ -200,7 +249,15 @@ export function createAgentService(input: { context: AdmissionContext; admission
       if (fingerprint !== contract.fingerprint) throw new AgentError("CONFIG_CHANGED")
       let evidence: LaunchEvidence
       try { evidence = await catalog.launchEvidence(request.selection.providerId) } catch { throw new AgentError("MODEL_UNAVAILABLE") }
-      return await queue.run(async () => {
+      let timedOut = false, acceptingOperation: Live | undefined, timer: NodeJS.Timeout | undefined
+      const commandDeadline = performance.now() + (contract.qualification?.deadlines.commandMs ?? 5000)
+      const checkCommandDeadline = (): void => {
+        if (timedOut || performance.now() >= commandDeadline) {
+          timedOut = true; acceptingOperation?.controller.abort(); throw new AgentError("STARTUP_TIMEOUT")
+        }
+      }
+      const acceptance = queue.run(async () => {
+        checkCommandDeadline()
         await verify(); available()
         const previous = commands.get(request.commandId)
         if (previous) { if (previous.op !== "start" || !isDeepStrictEqual(previous.input, request)) throw new AgentError("COMMAND_CONFLICT"); return view(previous) }
@@ -209,13 +266,21 @@ export function createAgentService(input: { context: AdmissionContext; admission
         const spec = resolveLaunchSpec({ ids: { hostId: context.paths.hostKey, handlerGeneration: generation, agentId: randomUUID(), providerGeneration: randomUUID(), leaseId: randomUUID(), launchAttemptId: randomUUID(), startCommandId: request.commandId }, checkout, selection: request.selection, ...evidence, contract })
         if (await observeLaunchContract(contract) !== fingerprint) throw new AgentError("CONFIG_CHANGED")
         const record: AgentRecord = { version: 1, spec, phase: "starting", session: null, failure: null }
-        const op: Live = { initial: record, contract, evidence, controller: new AbortController(), cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
+        const op: Live = { initial: record, contract, evidence, controller: new AbortController(), deadline: performance.now() + (contract.qualification?.deadlines.overallMs ?? spec.limits.startupMs), cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
         const accepted: AgentCommand = { version: 1, hostId: spec.hostId, commandId: request.commandId, handlerGeneration: generation, input: request, op: "start", target: agentTuple(record), state: "pending", result: null }
+        checkCommandDeadline()
+        acceptingOperation = op
         operations.set(spec.agentId, op); intents.set(request.commandId, op)
-        try { await publishCommand(accepted, null); await publishAgent(record, null) }
-        catch { throw new AgentError("INCOMPLETE") }
+        try { await publishCommand(accepted, null); checkCommandDeadline(); await publishAgent(record, null) }
+        catch (error) { if (error instanceof AgentError && error.code === "STARTUP_TIMEOUT") throw error; throw new AgentError("INCOMPLETE") }
+        checkCommandDeadline()
         launch(op); return view(accepted)
       })
+      try {
+        return await Promise.race([acceptance, new Promise<never>((_, reject) => { timer = setTimeout(() => {
+          timedOut = true; acceptingOperation?.controller.abort(); reject(new AgentError("STARTUP_TIMEOUT"))
+        }, Math.max(1, commandDeadline - performance.now())) })])
+      } finally { clearTimeout(timer) }
     } finally { accepting-- }
   }
   async function stop(raw: StopInput): Promise<CommandView> {

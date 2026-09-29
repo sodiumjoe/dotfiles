@@ -4,6 +4,44 @@ import { lstat, readdir } from "node:fs/promises"
 import { agentHandlerFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 import { providerStatePath } from "../src/agent/state.js"
+import { readHandlerRecord } from "../src/platform/private-state.js"
+import { join } from "node:path"
+
+for (const reservationHang of ["before", "launch", "admission"] as const) test(`reservation timeout kills only its Handler and recovers the same attempt: ${reservationHang}`, { timeout: 60000 }, async t => {
+  const f = await agentHandlerFixture(t, { reservationHang })
+  const accepted = await f.start()
+  const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  assert.ok(handler.process)
+  await f.waitHandlerExit()
+  const retained = await f.inventory(), timeout = await f.reservationTimeoutEvidence()
+  assert.equal(timeout.signal, "SIGKILL")
+  assert.equal(timeout.pid, handler.process.pid)
+  assert.equal(retained.agents.length, 1)
+  assert.equal(timeout.attempt, retained.agents[0]!.spec.launchAttemptId)
+  assert.equal(retained.commands[0]!.commandId, accepted.command.commandId)
+  assert.equal(retained.commands[0]!.state, "pending")
+  assert.equal(retained.launches.length, reservationHang === "before" ? 0 : 1)
+  assert.equal(f.providerCount(), 0)
+  await f.restart()
+  const recovered = await f.inventory(), listed = await f.list()
+  assert.equal(recovered.agents.length, 1)
+  assert.equal(recovered.agents[0]!.spec.launchAttemptId, timeout.attempt)
+  assert.equal(listed.agents.every(agent => !agent.live && agent.record.phase !== "ready"), true)
+  assert.equal(recovered.launches.every(launch => launch.record.phase === "cleanup_verified") || listed.unavailable !== null, true)
+  if (reservationHang === "launch") {
+    assert.equal(listed.unavailable?.code, "INVALID_AGENT_STATE")
+    assert.equal(recovered.commands[0]!.state, "pending")
+    await assert.rejects(f.start())
+    assert.equal((await f.inventory()).agents.length, 1)
+  }
+  if (reservationHang === "admission") {
+    assert.equal(listed.unavailable, null)
+    assert.equal(recovered.launches[0]!.record.phase, "cleanup_verified")
+    assert.equal(recovered.commands[0]!.state, "interrupted")
+  }
+  assert.equal(f.providerCount(), 0)
+  await f.verifyZeroSurvivors()
+})
 
 test("ready agent survives client disconnect and stops with proof", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t), accepted = await f.start()

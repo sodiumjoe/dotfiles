@@ -7,7 +7,7 @@ import { refreshLaunchState } from "../handler/mutations.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
-import { sameProcess, sameProcessGeneration, type LaunchRecord, type ProcessIdentity } from "../platform/types.js"
+import { sameProcess, sameProcessGeneration, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { createAcpConnection, type AcpConnection } from "./acp.js"
 import { prepareProviderState, removeProviderState } from "./state.js"
 import type { LaunchContract } from "./contracts.js"
@@ -15,8 +15,10 @@ import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type Sess
 
 export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 
-export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; removeProviderState?: typeof removeProviderState } = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; deadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; removeProviderState?: typeof removeProviderState } = {}): OwnedAgentProcess {
   const { context, spec, contract } = input, { adapter, mutations } = context
+  const now = dependencies.now ?? (() => performance.now()), phases = contract.qualification?.deadlines
+  let overallDeadline = input.deadline ?? Infinity, spawnDeadline = Infinity
   const directory = join(context.paths.persistentRoot, "launches"), path = join(directory, spec.launchAttemptId + ".json")
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
   let current = structuredClone(input.reservation.launch), spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
@@ -35,6 +37,16 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
     if (context.state.handlerGeneration !== spec.handlerGeneration) throw new AgentError("STALE_HANDLER")
     if (context.state.phase !== "ready") throw new AgentError("NOT_READY")
     if (mutations.unavailable !== null) throw new AgentError("ADMISSION_UNAVAILABLE")
+    if (now() >= overallDeadline || !connection && now() >= spawnDeadline) throw new AgentError("STARTUP_TIMEOUT")
+  }
+  const bounded = async <T>(operation: () => Promise<T>, deadline: number, code: "STARTUP_TIMEOUT" | "CLEANUP_UNVERIFIED"): Promise<T> => {
+    let timer: NodeJS.Timeout | undefined
+    try {
+      if (now() >= deadline) throw new AgentError(code)
+      const value = await Promise.race([operation(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new AgentError(code)), Math.max(1, deadline - now())) })])
+      if (now() >= deadline) throw new AgentError(code)
+      return value
+    } finally { clearTimeout(timer) }
   }
   const snapshot = (): LaunchRecord => structuredClone(mutations.accepted.find(entry => entry.record.launchAttemptId === spec.launchAttemptId)?.record ?? current)
   const transition = async (next: LaunchRecord): Promise<void> => {
@@ -80,30 +92,39 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
   }
   function cleanup(): Promise<LaunchRecord> {
     if (cleaning) return cleaning
+    if (input.isReady?.()) overallDeadline = Infinity
     stopping = true; controller.abort(); connection?.close()
     child?.stdout?.resume(); child?.stderr?.resume()
     cleaning = (async () => {
       await preparation?.catch(() => undefined)
       await mutations.queue.run(async () => {
-        await refreshLaunchState(context.state, mutations, directory)
-        current = snapshot()
-        if (!spawnInvoked && current.launchAttempted && current.provider === null) {
-          try { current = await restoreUninvokedLaunch(context, current, { spawnInvoked: false }, dependencies.transitionIO) }
-          catch { current = snapshot() }
-        }
         try {
-          const result = await reconcileRecord(path, adapter, current)
-          current = result.record
-          if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(path), current)) throw new AgentError("CLEANUP_UNVERIFIED")
-          const entry = mutations.accepted.find(entry => entry.path === path)
-          if (!entry) throw new AgentError("CLEANUP_UNVERIFIED")
-          entry.record = structuredClone(current)
-        } finally { await refreshLaunchState(context.state, mutations, directory) }
-        if (current.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
-        try {
-          if (child && !terminal && !await waitBounded(terminalEvent, 1000)) throw new AgentError("CLEANUP_UNVERIFIED")
-          await absent()
-          if (child && !closed) await waitBounded(closeEvent, 1000)
+          await refreshLaunchState(context.state, mutations, directory)
+          current = snapshot()
+          if (!spawnInvoked && current.launchAttempted && current.provider === null) {
+            try { current = await restoreUninvokedLaunch(context, current, { spawnInvoked: false }, dependencies.transitionIO) }
+            catch { current = snapshot() }
+          }
+          const terminationDeadline = Math.min(overallDeadline, now() + (phases?.processTerminateMs ?? 5000))
+          const cleanupAdapter: PlatformAdapter = {
+            platform: adapter.platform,
+            bootId: () => bounded(() => adapter.bootId(), terminationDeadline, "CLEANUP_UNVERIFIED"),
+            readProcess: pid => bounded(() => adapter.readProcess(pid), terminationDeadline, "CLEANUP_UNVERIFIED"),
+            readGroup: group => bounded(() => adapter.readGroup(group), terminationDeadline, "CLEANUP_UNVERIFIED"),
+            signalGroup: (group, signal) => bounded(() => adapter.signalGroup(group, signal), terminationDeadline, "CLEANUP_UNVERIFIED"),
+          }
+          try {
+            const result = await reconcileRecord(path, cleanupAdapter, current)
+            current = result.record
+            if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(path), current)) throw new AgentError("CLEANUP_UNVERIFIED")
+            const entry = mutations.accepted.find(entry => entry.path === path)
+            if (!entry) throw new AgentError("CLEANUP_UNVERIFIED")
+            entry.record = structuredClone(current)
+          } finally { await refreshLaunchState(context.state, mutations, directory) }
+          if (current.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
+          if (child && !terminal) await bounded(() => terminalEvent, terminationDeadline, "CLEANUP_UNVERIFIED")
+          await bounded(absent, Math.min(overallDeadline, now() + (phases?.absenceMs ?? 2000)), "CLEANUP_UNVERIFIED")
+          if (child && !closed) await waitBounded(closeEvent, Math.max(1, Math.min(phases?.transportCloseMs ?? 1000, overallDeadline - now())))
           if (child) { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() }
           await (dependencies.removeProviderState ?? removeProviderState)(context.paths.persistentRoot, spec.launchAttemptId)
         } catch {
@@ -112,7 +133,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
         }
       })
       return structuredClone(current)
-    })().catch(() => { throw new AgentError("CLEANUP_UNVERIFIED") })
+    })().catch(() => { mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`; throw new AgentError("CLEANUP_UNVERIFIED") })
     return cleaning
   }
   return {
@@ -127,6 +148,8 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
       const abort = (): void => { controller.abort(); if (!stopping) fail(new AgentError("STARTUP_FAILED")) }
       signal.addEventListener("abort", abort, { once: true })
       if (signal.aborted) controller.abort()
+      overallDeadline = Math.min(overallDeadline, now() + (phases?.overallMs ?? spec.limits.startupMs))
+      spawnDeadline = Math.min(overallDeadline, now() + (phases?.spawnMs ?? 5000))
       preparation = mutations.queue.run(async () => {
         check(); await input.revalidate(); check()
         if (await adapter.bootId() !== current.launchBootId) throw new AgentError("CONFIG_CHANGED")
@@ -139,19 +162,19 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
         check(); spawnInvoked = true
         child = (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint], spawnOptions)
         registerChildObservers(child)
-        const first = await observe(), second = await observe()
+        const first = await bounded(observe, spawnDeadline, "STARTUP_TIMEOUT"), second = await bounded(observe, spawnDeadline, "STARTUP_TIMEOUT")
         check()
         if (!sameProcess(first.leader, second.leader) || first.observed.length !== second.observed.length || first.observed.some(member => !second.observed.some(other => sameProcess(member, other)))) throw new AgentError("STARTUP_FAILED")
         await transition({ ...current, phase: "readiness", provider: { kind: "process-group", group: second } })
       })
       initialization = (async () => {
         try {
-          await preparation; check()
+          await bounded(() => preparation!, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
-          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, ...(dependencies.now ? { now: dependencies.now } : {}) })
+          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
           const session = await connection.initialize(spec, contract, controller.signal)
-          check(); return session
+          check(); if (!input.isReady) overallDeadline = Infinity; return session
         } catch (error) { fail(error); throw error }
         finally { signal.removeEventListener("abort", abort) }
       })()

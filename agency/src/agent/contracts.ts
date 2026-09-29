@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util"
 import { digest, readBoundedFile } from "../catalog/config.js"
 import { absolutePath, hash, keys, object, parseCapability, providerId, type Capability, type ConfigEvidence, type ProviderId, type ProviderProfile, type ProviderSnapshot } from "../catalog/types.js"
 import type { CheckoutIdentity } from "../checkout/identity.js"
-import { AGENT_LIMITS, AgentError, agentText, parseLaunchSpec, parseSelection, type AgentIds, type LaunchSpec, type PermissionEvidence, type StartSelection } from "./types.js"
+import { AGENT_LIMITS, AgentError, agentText, parseLaunchSpec, parseSelection, parsePermissionEvidence, type AgentIds, type LaunchSpec, type PermissionEvidence, type StartSelection } from "./types.js"
 import { parseCodexQualificationManifest, qualificationFingerprint, verifyCodexQualification, type CodexQualificationManifest, type LaunchEnvironmentPolicy } from "./qualification.js"
 import { qualifiedLaunchContracts } from "./qualified-contracts.js"
 
@@ -13,7 +13,8 @@ export function parseLaunchContract(input: unknown): LaunchContract {
   try {
     const v = object(input)
     keys(v, ["id", "providerId", "adapterVersion", "entrypoint", "fingerprint", "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "environment", "permissionEvidence", "qualification"])
-    if (v.permissionEvidence !== "fixture-contract-v1" && v.permissionEvidence !== "agency-deny-all-v1" || !Array.isArray(v.permissionProfiles) || v.permissionProfiles.length < 1 || v.permissionProfiles.length > 16) throw new Error()
+    const permissionEvidence = parsePermissionEvidence(v.permissionEvidence)
+    if (!Array.isArray(v.permissionProfiles) || v.permissionProfiles.length < 1 || v.permissionProfiles.length > 16) throw new Error()
     const modes = parseCapability(v.modes), reasoning = parseCapability(v.reasoning), environment = object(v.environment)
     keys(environment, ["fixed", "private"])
     const fixed = object(environment.fixed), privatePaths = object(environment.private)
@@ -24,7 +25,7 @@ export function parseLaunchContract(input: unknown): LaunchContract {
     if (new Set(optionIds).size !== optionIds.length || Object.keys(fixed).length + Object.keys(privatePaths).length > 128 || Buffer.byteLength(JSON.stringify(environment)) > 65536) throw new Error()
     for (const [key, value] of [...Object.entries(fixed), ...Object.entries(privatePaths)]) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== "string" || value.includes("\0") || !value.isWellFormed()) throw new Error()
     if (Object.keys(fixed).some(key => Object.hasOwn(privatePaths, key))) throw new Error()
-    const contract: LaunchContract = { id: agentText(v.id), providerId: providerId(v.providerId), adapterVersion: agentText(v.adapterVersion), entrypoint: absolutePath(v.entrypoint), fingerprint: hash(v.fingerprint), modes, reasoning, effectiveMode, permissionProfiles, modelOption, modeOption, reasoningOption, environment: { fixed: { ...fixed } as Record<string, string>, private: { ...privatePaths } as Record<string, string> }, permissionEvidence: v.permissionEvidence, qualification: null }
+    const contract: LaunchContract = { id: agentText(v.id), providerId: providerId(v.providerId), adapterVersion: agentText(v.adapterVersion), entrypoint: absolutePath(v.entrypoint), fingerprint: hash(v.fingerprint), modes, reasoning, effectiveMode, permissionProfiles, modelOption, modeOption, reasoningOption, environment: { fixed: { ...fixed } as Record<string, string>, private: { ...privatePaths } as Record<string, string> }, permissionEvidence, qualification: null }
     if (contract.permissionEvidence === "fixture-contract-v1") {
       if (v.qualification !== null) throw new Error()
     } else {
