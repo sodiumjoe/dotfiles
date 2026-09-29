@@ -44,6 +44,11 @@ process.stdin.on("data", (chunk: Buffer) => {
         }
         if (option.id === "mode") await barrier("configured")
         result = { configOptions: options }
+      } else if (request.method === "session/prompt") {
+        if (request.params.sessionId !== "fixture-session" || request.params.prompt?.length !== 1 || request.params.prompt[0]?.type !== "text") throw new Error("wrong prompt")
+        await barrier("prompt")
+        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${request.params.prompt[0].text}` } } } })
+        result = { stopReason: "end_turn" }
       } else throw new Error("unexpected fixture request")
       send({ jsonrpc: "2.0", id: request.id, result })
     }).catch(() => { process.exitCode = 2; process.stdin.destroy(); process.stdout.destroy(); clearInterval(idle) })

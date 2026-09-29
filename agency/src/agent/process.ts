@@ -11,9 +11,9 @@ import { sameProcess, sameProcessGeneration, type LaunchRecord, type PlatformAda
 import { createAcpConnection, type AcpConnection } from "./acp.js"
 import { prepareProviderState, removeProviderState } from "./state.js"
 import type { LaunchContract } from "./contracts.js"
-import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type SessionEvidence } from "./types.js"
+import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
-export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
+export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 
 export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; deadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; removeProviderState?: typeof removeProviderState } = {}): OwnedAgentProcess {
   const { context, spec, contract } = input, { adapter, mutations } = context
@@ -23,7 +23,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
   let current = structuredClone(input.reservation.launch), spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
   let initialization: Promise<SessionEvidence> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<LaunchRecord> | undefined
-  let terminal = false, closed = false, stopping = false, disposed = false, failure: AgentFailure | undefined
+  let terminal = false, closed = false, stopping = false, disposed = false, initialized = false, failure: AgentFailure | undefined
   let resolveFault!: (value: AgentFailure) => void, resolveTerminal!: () => void, resolveClose!: () => void
   const fault = new Promise<AgentFailure>(resolve => { resolveFault = resolve })
   const terminalEvent = new Promise<void>(resolve => { resolveTerminal = resolve }), closeEvent = new Promise<void>(resolve => { resolveClose = resolve })
@@ -152,6 +152,10 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
   }
   return {
     record: snapshot, fault, cleanup,
+    prompt(text, signal) {
+      if (!initialized || !connection || stopping || disposed || terminal || closed) return Promise.reject(new AgentError("NOT_READY"))
+      return connection.prompt(text, signal)
+    },
     dispose() {
       if (disposed) return
       disposed = true; stopping = true; controller.abort(); connection?.close()
@@ -188,7 +192,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
           connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
           const session = await connection.initialize(spec, contract, controller.signal)
-          check(); if (!input.isReady) overallDeadline = Infinity; return session
+          check(); initialized = true; if (!input.isReady) overallDeadline = Infinity; return session
         } catch (error) { fail(error); throw error }
         finally { signal.removeEventListener("abort", abort) }
       })()

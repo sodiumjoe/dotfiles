@@ -82,6 +82,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
       }
       if (reply) {
         if (!reply.ok) throw new AgentError(reply.error.code)
+        if (reply.result.state === "prompt") throw new AgentError("INVALID_PROTOCOL")
         if (reply.result.state !== "command") { emit(true, reply.result); return reply.result.unavailable ? 69 : 0 }
         last = reply.result
         if (last.command.state !== "pending" && last.durability === "verified") { emit(true, last); return last.command.result?.outcome === "started" || last.command.result?.outcome === "stopped" ? 0 : 75 }

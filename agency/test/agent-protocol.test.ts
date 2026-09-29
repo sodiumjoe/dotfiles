@@ -4,7 +4,7 @@ import { createConnection, createServer } from "node:net"
 import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { AGENT_PROTOCOL, agentErrorReply, exchangeAgent, parseAgentReply, parseAgentRequest, validateAgentReply, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
-import { AgentError } from "../src/agent/types.js"
+import { AgentError, parsePromptInput, type PromptView } from "../src/agent/types.js"
 import { CheckoutResolutionError } from "../src/checkout/identity.js"
 import { parseRequest, parseReply } from "../src/control/protocol.js"
 import { serveProtocols } from "../src/control/wire.js"
@@ -30,6 +30,29 @@ test("historical command generation is independent of the serving Handler", () =
   const reply = parseAgentReply(response(r))
   assert.doesNotThrow(() => validateAgentReply(reply, r))
   assert.throws(() => validateAgentReply(reply, { ...r, commandGeneration: agentId(55) }), { code: "INVALID_PROTOCOL" })
+})
+
+test("prompt framing preserves exact tuple, bounded text, and reply identity", () => {
+  const input = { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3), text: "challenge" }
+  const request: AgentRequest = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: input.handlerGeneration, op: "agent_prompt", input }
+  const result: PromptView = { state: "prompt", target: { agentId: input.agentId, handlerGeneration: input.handlerGeneration, providerGeneration: input.providerGeneration }, stopReason: "end_turn", text: "answer" }
+  const reply: AgentReply = { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ok: true, result }
+  assert.deepEqual(parsePromptInput(input), input)
+  assert.deepEqual(parseAgentRequest(request), request)
+  assert.deepEqual(parseAgentReply(reply), reply)
+  assert.doesNotThrow(() => validateAgentReply(reply, request))
+  for (const value of [
+    { ...input, extra: true },
+    { ...input, text: "" },
+    { ...input, text: "a".repeat(4097) },
+  ]) assert.throws(() => parsePromptInput(value), { code: "INVALID_AGENT_STATE" })
+  for (const value of [
+    { ...reply, result: { ...result, extra: true } },
+    { ...reply, result: { ...result, text: "a".repeat(4097) } },
+    { ...reply, result: { ...result, stopReason: "cancelled" } },
+  ]) assert.throws(() => parseAgentReply(value), { code: "INVALID_PROTOCOL" })
+  assert.throws(() => validateAgentReply({ ...reply, result: { ...result, target: { ...result.target, providerGeneration: agentId(99) } } }, request), { code: "INVALID_PROTOCOL" })
+  assert.throws(() => validateAgentReply(response(request), request), { code: "INVALID_PROTOCOL" })
 })
 
 test("one half-closed socket dispatches agent traffic without changing legacy framing", async t => {

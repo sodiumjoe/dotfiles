@@ -17,10 +17,11 @@ import { observeLaunchContract, parseLaunchContract, resolveLaunchSpec, type Lau
 import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import { agentTuple, crossCheckAgents, recoverAgents } from "./recovery.js"
 import type { AgentInventory, AgentStore } from "./store.js"
-import { AgentError, agentFailure, parseStartInput, parseStopInput, type AgentCommand, type AgentFailure, type AgentList, type AgentRecord, type AgentView, type CommandResult, type CommandView, type CurrentAgent, type LaunchSpec, type StartInput, type StopInput } from "./types.js"
+import { AgentError, agentFailure, parsePromptInput, parseStartInput, parseStopInput, type AgentCommand, type AgentFailure, type AgentList, type AgentRecord, type AgentView, type CommandResult, type CommandView, type CurrentAgent, type LaunchSpec, type PromptInput, type PromptView, type StartInput, type StopInput } from "./types.js"
 
-export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgent>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
-type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
+export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgent>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
+type LivePrompt = { controller: AbortController; promise: Promise<PromptView> }
+type Live = { initial: AgentRecord; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
@@ -286,7 +287,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
         const spec = resolveLaunchSpec({ ids: { hostId: context.paths.hostKey, handlerGeneration: generation, agentId: randomUUID(), providerGeneration: randomUUID(), leaseId: randomUUID(), launchAttemptId: randomUUID(), startCommandId: request.commandId }, checkout, selection: request.selection, ...evidence, contract })
         if (await observeLaunchContract(contract) !== fingerprint) throw new AgentError("CONFIG_CHANGED")
         const record: AgentRecord = { version: 1, spec, phase: "starting", session: null, failure: null }
-        const op: Live = { initial: record, contract, evidence, controller: new AbortController(), deadline: performance.now() + (contract.qualification?.deadlines.overallMs ?? spec.limits.startupMs), cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
+        const op: Live = { initial: record, contract, evidence, controller: new AbortController(), deadline: performance.now() + (contract.qualification?.deadlines.overallMs ?? spec.limits.startupMs), prompt: null, cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
         const accepted: AgentCommand = { version: 1, hostId: spec.hostId, commandId: request.commandId, handlerGeneration: generation, input: request, op: "start", target: agentTuple(record), state: "pending", result: null }
         checkCommandDeadline()
         acceptingOperation = op
@@ -329,12 +330,51 @@ export function createAgentService(input: { context: AdmissionContext; admission
       })
     } finally { stopping-- }
   }
+  async function prompt(raw: PromptInput): Promise<PromptView> {
+    const request = parsePromptInput(raw)
+    let pending!: Promise<PromptView>
+    await queue.run(async () => {
+      available()
+      if (request.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
+      const record = records.get(request.agentId)
+      if (!record) throw new AgentError("UNAVAILABLE")
+      if (record.spec.handlerGeneration !== request.handlerGeneration) throw new AgentError("STALE_HANDLER")
+      if (record.spec.providerGeneration !== request.providerGeneration) throw new AgentError("STALE_PROVIDER")
+      const op = operations.get(request.agentId)
+      if (record.phase !== "ready" || !op?.ready || !op.owner || op.controller.signal.aborted || op.fault || op.cleanupVerified) throw new AgentError("NOT_READY")
+      if (op.prompt) throw new AgentError("INCOMPLETE")
+      const controller = new AbortController()
+      const abort = (): void => controller.abort()
+      op.controller.signal.addEventListener("abort", abort, { once: true })
+      if (op.controller.signal.aborted) controller.abort()
+      pending = Promise.resolve().then(async () => {
+        try {
+          await revalidate(op)
+          if (controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
+          const result = await op.owner!.prompt(request.text, controller.signal)
+          await revalidate(op)
+          return { state: "prompt", target: agentTuple(record), stopReason: result.stopReason, text: result.text }
+        } catch (error) {
+          const failure = errorFor(error)
+          if (!controller.signal.aborted && !op.controller.signal.aborted && !closed) await failOperation(op, failure)
+          throw failure
+        } finally {
+          op.controller.signal.removeEventListener("abort", abort)
+          if (op.prompt?.promise === pending) op.prompt = null
+        }
+      })
+      op.prompt = { controller, promise: pending }
+    })
+    return pending
+  }
   function scheduleStop(command: AgentCommand): void {
     if (stops.has(command.commandId) || command.state !== "pending") return
     const op = operations.get(command.target!.agentId)
+    const activePrompt = op?.prompt?.promise
     op?.controller.abort()
     const operation = (async () => {
       try {
+        await activePrompt?.catch(() => undefined)
         await queue.run(async () => {
           if (closed) throw new AgentError("NOT_READY")
           const record = records.get(command.target!.agentId)!
@@ -365,10 +405,10 @@ export function createAgentService(input: { context: AdmissionContext; admission
     return { record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !blocked && !closed && record.spec.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "stopping"].includes(record.phase), cleanup: launch === null ? blocked ? "unknown" : "not_reserved" : launch.phase === "cleanup_verified" ? blocked && (!op || blocked.code === "CLEANUP_UNVERIFIED") ? "unknown" : op && !op.cleanupVerified ? "unverified" : "verified" : launch.phase === "quarantined" ? "unknown" : "unverified" }
   }
   const ordinary = (): void => {
-    if (!initialized || blocked && !inventoryEmpty || accepting || stopping || stops.size || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => records.has(e.record.agentId) && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
+    if (!initialized || blocked && !inventoryEmpty || accepting || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => records.has(e.record.agentId) && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
   }
   return {
-    start, stop, command,
+    start, stop, prompt, command,
     async initialize() {
       const recovered = await recoverAgents({ context, store })
       for (const record of recovered.inventory.agents) records.set(record.spec.agentId, record)
@@ -400,6 +440,9 @@ export function createAgentService(input: { context: AdmissionContext; admission
       if (!stopAgents) ordinary()
       frozen = true
       if (!stopAgents) return
+      const prompts = [...operations.values()].flatMap(op => op.prompt ? [op.prompt] : [])
+      for (const active of prompts) active.controller.abort()
+      await Promise.all(prompts.map(active => active.promise.catch(() => undefined)))
       for (const record of records.values()) {
         const view = agentView(record)
         if (!["starting", "ready", "stopping"].includes(record.phase) && ["not_reserved", "verified"].includes(view.cleanup)) continue
@@ -414,6 +457,6 @@ export function createAgentService(input: { context: AdmissionContext; admission
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { inventoryEmpty = emptyLifecycle(await store.inventory()); if (!inventoryEmpty) await verify(); ordinary(); if (dirty.size || dirtyAgents.size) throw new AgentError("INCOMPLETE") },
-    close() { closed = true; frozen = true; for (const op of operations.values()) { clearTimeout(op.watchdog); op.owner?.dispose(); op.controller.abort() } },
+    close() { closed = true; frozen = true; for (const op of operations.values()) { clearTimeout(op.watchdog); op.prompt?.controller.abort(); op.owner?.dispose(); op.controller.abort() } },
   }
 }

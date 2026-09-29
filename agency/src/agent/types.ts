@@ -22,6 +22,8 @@ export type AgentPhase = "starting" | "ready" | "stopping" | "stopped" | "failed
 export type AgentRecord = { version: 1; spec: LaunchSpec; phase: AgentPhase; session: SessionEvidence | null; failure: AgentFailure | null }
 export type StartInput = { commandId: string; handlerGeneration: string; cwd: string; selection: StartSelection }
 export type StopInput = AgentTuple & { commandId: string }
+export type PromptInput = AgentTuple & { text: string }
+export type PromptView = { state: "prompt"; target: AgentTuple; stopReason: "end_turn"; text: string }
 export type AgentCommand = { version: 1; hostId: string; commandId: string; handlerGeneration: string; input: StartInput | StopInput; op: "start" | "stop"; target: AgentTuple | null; state: "pending" | "completed" | "interrupted"; result: CommandResult | null }
 export type CommandResult = { outcome: "started" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: SessionEvidence | null }
 export type AgentView = { record: AgentRecord; launch: LaunchRecord | null; live: boolean; cleanup: "not_reserved" | "unverified" | "verified" | "unknown" }
@@ -69,6 +71,20 @@ export function parseStartInput(input: unknown): StartInput {
 }
 export function parseStopInput(input: unknown): StopInput {
   return checked(() => { const v = object(input); keys(v, ["commandId", "handlerGeneration", "agentId", "providerGeneration"]); return { commandId: id(v.commandId), ...parseTuple({ agentId: v.agentId, handlerGeneration: v.handlerGeneration, providerGeneration: v.providerGeneration }) } })
+}
+function promptText(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value) > 4096 || !value.isWellFormed()) invalidAgent()
+  return value
+}
+export function parsePromptInput(input: unknown): PromptInput {
+  return checked(() => { const v = object(input); keys(v, ["agentId", "handlerGeneration", "providerGeneration", "text"]); return { ...parseTuple({ agentId: v.agentId, handlerGeneration: v.handlerGeneration, providerGeneration: v.providerGeneration }), text: promptText(v.text) } })
+}
+export function parsePromptView(input: unknown): PromptView {
+  return checked(() => {
+    const v = object(input); keys(v, ["state", "target", "stopReason", "text"])
+    if (v.state !== "prompt" || v.stopReason !== "end_turn") invalidAgent()
+    return { state: "prompt", target: parseTuple(v.target), stopReason: "end_turn", text: promptText(v.text) }
+  })
 }
 export function parseAgentFailure(input: unknown): AgentFailure {
   return checked(() => {

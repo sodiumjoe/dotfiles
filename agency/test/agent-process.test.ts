@@ -254,6 +254,18 @@ test("direct owner publishes identity before ACP, starts once, and coalesces cle
   assert.deepEqual(f.signals, ["SIGTERM"])
 })
 
+test("owned process forwards one prompt only while its initialized connection is live", async t => {
+  const before = await syntheticAgentProcess(t, "normal")
+  await assert.rejects(before.owner.prompt("challenge", new AbortController().signal), { code: "NOT_READY" })
+  await before.owner.cleanup()
+
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  assert.deepEqual(await f.owner.prompt("challenge", new AbortController().signal), { stopReason: "end_turn", text: "challenge" })
+  await f.owner.cleanup()
+  await assert.rejects(f.owner.prompt("late", new AbortController().signal), { code: "NOT_READY" })
+})
+
 test("owner prepares state before attempted publication and removes it after verified process cleanup", async t => {
   const f = await syntheticAgentProcess(t, "normal"), path = providerStatePath(f.root, f.spec.launchAttemptId)
   await f.owner.initialize(new AbortController().signal)

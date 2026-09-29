@@ -6,13 +6,13 @@ import { CheckoutResolutionError } from "../checkout/identity.js"
 import { ControlError } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
-import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentFailure, parseAgentRecord, parseStartInput, parseStopInput, type AgentFailure, type AgentList, type AgentView, type CommandView, type CurrentAgent, type StartInput, type StopInput } from "./types.js"
+import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentFailure, parseAgentRecord, parsePromptInput, parsePromptView, parseStartInput, parseStopInput, type AgentFailure, type AgentList, type AgentView, type CommandView, type CurrentAgent, type PromptInput, type PromptView, type StartInput, type StopInput } from "./types.js"
 
 export const AGENT_PROTOCOL = "agency-agent/1" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (
-  | { op: "agent_start"; input: StartInput } | { op: "agent_stop"; input: StopInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
+  | { op: "agent_start"; input: StartInput } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
 )
-export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgent } | { ok: false; error: AgentFailure })
+export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgent | PromptView } | { ok: false; error: AgentFailure })
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
 const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_stop" ? request.input.commandId : undefined
 function identity(input: unknown): ProcessIdentity {
@@ -54,6 +54,7 @@ export function parseAgentRequest(input: unknown): AgentRequest {
     keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"])
     if (v.op === "agent_start") { const input = parseStartInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_start", input } }
     if (v.op === "agent_stop") { const input = parseStopInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_stop", input } }
+    if (v.op === "agent_prompt") { const input = parsePromptInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_prompt", input } }
     return invalid()
   } catch { return invalid() }
 }
@@ -72,6 +73,7 @@ export function parseAgentReply(input: unknown): AgentReply {
       return { ...common, ok: true, result: { state: "command", command, durability: r.durability as CommandView["durability"] } }
     }
     if (common.commandId) invalid()
+    if (r.state === "prompt") return { ...common, ok: true, result: parsePromptView(r) }
     const unavailable = r.unavailable === null ? null : parseAgentFailure(r.unavailable)
     if (r.state === "agents") {
       keys(r, ["state", "agents", "unavailable"])
@@ -96,6 +98,7 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   const result = reply.result
   if (request.op === "agent_list") { if (result.state !== "agents") invalid(); return }
   if (request.op === "agent_current") { if (result.state !== "current") invalid(); return }
+  if (request.op === "agent_prompt") { if (result.state !== "prompt" || !isDeepStrictEqual(result.target, { agentId: request.input.agentId, handlerGeneration: request.input.handlerGeneration, providerGeneration: request.input.providerGeneration })) invalid(); return }
   if (result.state !== "command") return invalid()
   if (request.op === "agent_command") { if (result.command.handlerGeneration !== request.commandGeneration) invalid(); return }
   if (result.command.op !== (request.op === "agent_start" ? "start" : "stop") || !isDeepStrictEqual(result.command.input, request.input)) invalid()

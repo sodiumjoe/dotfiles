@@ -200,6 +200,97 @@ test("ordinary shutdown refusal does not cancel accepted startup", async t => {
   await f.service.freezeAndDrain(true); f.service.assertOrdinaryShutdownSafe()
 })
 
+test("ready service prompts through its exact live owner with pre- and post-revalidation", async t => {
+  const f = await agentServiceFixture(t)
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input)
+  const before = f.evidenceCalls()
+  const prompt = { ...ready.command.target!, text: "challenge" }
+  assert.deepEqual(await f.service.prompt(prompt), { state: "prompt", target: ready.command.target, stopReason: "end_turn", text: "answer:challenge" })
+  assert.equal(f.evidenceCalls(), before + 2)
+  await assert.rejects(f.service.prompt({ ...prompt, providerGeneration: randomUUID() }), { code: "STALE_PROVIDER" })
+  await f.service.freezeAndDrain(true)
+})
+
+test("one retained prompt blocks concurrency and freeze drains it before cleanup", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input), input = { ...ready.command.target!, text: "challenge" }
+  const pending = f.service.prompt(input)
+  void pending.catch(() => undefined)
+  await f.promptEntered
+  await assert.rejects(f.service.prompt(input), { code: "INCOMPLETE" })
+  const draining = f.service.freezeAndDrain(true)
+  await assert.rejects(pending, { code: "STARTUP_FAILED" })
+  await draining
+  assert.doesNotThrow(() => f.service.assertOrdinaryShutdownSafe())
+  await f.context.mutations.queue.run(() => f.service.verifyDischarged())
+  await assert.rejects(f.service.prompt(input), { code: "NOT_READY" })
+})
+
+test("stop aborts and settles a retained prompt before verified cleanup", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input), pending = f.service.prompt({ ...ready.command.target!, text: "challenge" })
+  void pending.catch(() => undefined)
+  await f.promptEntered
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await assert.rejects(pending, { code: "STARTUP_FAILED" })
+  assert.equal((await completed(f.service, stop)).command.result!.outcome, "stopped")
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
+})
+
+for (const failure of ["connection", "provider"] as const) test(`${failure} failure settles a retained prompt and verifies cleanup`, async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input), pending = f.service.prompt({ ...ready.command.target!, text: "challenge" })
+  void pending.catch(() => undefined)
+  await f.promptEntered
+  if (failure === "connection") f.fault(ready.command.target!.agentId)
+  else f.exit(ready.command.target!.agentId)
+  await assert.rejects(pending)
+  await until(async () => (await f.service.list()).agents[0]!.cleanup === "verified" ? true : undefined)
+  assert.equal((await f.service.list()).agents[0]!.live, false)
+})
+
+for (const phase of ["before", "after"] as const) test(`configuration drift ${phase} prompt completion fails and cleans the owner`, async t => {
+  const f = await agentServiceFixture(t, { prompt: phase === "after" ? "hang" : "normal" })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input), input = { ...ready.command.target!, text: "challenge" }
+  if (phase === "before") await writeFile(f.config, '{"changed":true}')
+  const pending = f.service.prompt(input)
+  void pending.catch(() => undefined)
+  if (phase === "after") { await f.promptEntered; await writeFile(f.config, '{"changed":true}'); f.completePrompt(ready.command.target!.agentId) }
+  await assert.rejects(pending, { code: "CONFIG_CHANGED" })
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
+})
+
+test("prompt rejects stale and unavailable identities and readiness boundaries", async t => {
+  const f = await agentServiceFixture(t, { pause: "ready" })
+  const accepted = await f.service.start(f.input), target = accepted.command.target!
+  await f.entered
+  await assert.rejects(f.service.prompt({ ...target, text: "challenge" }), { code: "NOT_READY" })
+  await assert.rejects(f.service.prompt({ ...target, handlerGeneration: randomUUID(), text: "challenge" }), { code: "STALE_HANDLER" })
+  await assert.rejects(f.service.prompt({ ...target, agentId: randomUUID(), text: "challenge" }), { code: "UNAVAILABLE" })
+  f.release()
+  await completed(f.service, f.input)
+  const stop = { ...target, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  await assert.rejects(f.service.prompt({ ...target, text: "challenge" }), { code: "NOT_READY" })
+})
+
+test("close aborts a retained prompt and discharge refuses it until settlement", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input), pending = f.service.prompt({ ...ready.command.target!, text: "challenge" })
+  void pending.catch(() => undefined)
+  await f.promptEntered
+  await assert.rejects(f.context.mutations.queue.run(() => f.service.verifyDischarged()))
+  f.service.close()
+  await assert.rejects(pending, { code: "STARTUP_FAILED" })
+})
+
 test("restart repairs completed receipt durability without adopting or replaying a provider", async t => {
   const f = await agentServiceFixture(t)
   f.failReceipt(true); await f.service.start(f.input)

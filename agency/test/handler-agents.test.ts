@@ -85,6 +85,28 @@ test("ready agent survives client disconnect and stops with proof", { timeout: 6
   await f.verifyZeroSurvivors()
 })
 
+test("private Handler protocol routes one prompt through the ready owned provider", { timeout: 60000 }, async t => {
+  const f = await agentHandlerFixture(t), ready = await f.waitCompleted(await f.start())
+  assert.equal(ready.command.result!.outcome, "started")
+  assert.deepEqual(await f.prompt(ready.command.target!, "challenge"), { state: "prompt", target: ready.command.target, stopReason: "end_turn", text: "answer:challenge" })
+  await f.stop(ready.command.target!)
+  await f.verifyZeroSurvivors()
+})
+
+test("Handler failure during a prompt closes the client and restart verifies provider cleanup", { timeout: 60000 }, async t => {
+  const f = await agentHandlerFixture(t, { pauseAt: "prompt" }), ready = await f.waitCompleted(await f.start())
+  const pending = f.prompt(ready.command.target!, "challenge")
+  void pending.catch(() => undefined)
+  await f.waitPrompt()
+  await f.crashHandler()
+  await assert.rejects(pending)
+  await f.restart()
+  const listed = await f.list()
+  assert.equal(listed.agents[0]!.live, false)
+  assert.equal(listed.agents[0]!.cleanup, "verified")
+  await f.verifyZeroSurvivors()
+})
+
 test("one fixture provider failure leaves the other worktree agent ready", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t), first = await f.start()
   await f.waitCompleted(first)

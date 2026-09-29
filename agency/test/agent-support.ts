@@ -37,7 +37,7 @@ import { createAcpConnection } from "../src/agent/acp.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; reservationHang?: "before" | "launch" | "admission"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; fatalClose?: boolean }
+export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; reservationHang?: "before" | "launch" | "admission"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; fatalClose?: boolean }
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}) {
   const git = await gitFixture(t), f = await controlFixture(t, {}, git, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)))
@@ -68,7 +68,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     }
   }
   const handler = () => readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
-  const releaseBarrier = async () => { for (const name of ["release-barrier", "release-session"]) await writeFile(join(f.root, name), "released", { mode: 0o600 }) }
+  const releaseBarrier = async () => { for (const name of ["release-barrier", "release-session", "release-prompt"]) await writeFile(join(f.root, name), "released", { mode: 0o600 }) }
   async function proveAbsent(identity: ProcessIdentity, timeout = 15000): Promise<void> {
     await until(async () => await f.observe(identity.pid) === null ? true : undefined, timeout)
     for (let n = 0; n < 2; n++) { assert.equal(await f.observe(identity.pid), null); assert.deepEqual(await f.adapter.readGroup(identity.pid), []) }
@@ -109,12 +109,13 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   const configure = (settings: AgentHandlerOptions) => writeFile(f.configPath, JSON.stringify({ paths: f.paths, profile, ...settings }), { mode: 0o600 })
   await configure(options)
   if (options.pauseAt === "session") await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 })
+  if (options.pauseAt === "prompt") await writeFile(join(f.root, "pause-prompt"), "pause", { mode: 0o600 })
   const starting = f.start(15000)
   if (options.fatalClose) {
     void starting.catch(() => undefined)
     await until(async () => { try { return (await handler()).phase === "ready" ? true : undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return undefined } }, 10000)
   } else await starting
-  async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
+  async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_prompt" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
     const current = await handler()
     const operationPromise = exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, ...operation }, 15000)
     requests.push(operationPromise)
@@ -133,10 +134,12 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     current: () => currentAt(git.repo),
     async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
     stop: async (target: AgentTuple, commandId = randomUUID()) => commandView(await call({ op: "agent_stop", input: { ...target, commandId } })),
+    async prompt(target: AgentTuple, text: string) { const result = await call({ op: "agent_prompt", input: { ...target, text } }); assert.equal(result.state, "prompt"); if (result.state !== "prompt") throw new Error("wrong reply"); return result },
     retry: async (value: AgentCommand) => commandView(await call({ op: "agent_start", input: value.input as StartInput })),
     waitCompleted: (value: CommandView) => until(async () => { const result = await command(value.command.commandId, value.command.handlerGeneration); return result.command.state !== "pending" ? result : undefined }, 35000),
     providerCount: () => seen.size,
     async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); assertGitChildrenClosed(); await trackProviders() },
+    async waitPrompt() { await until(async () => await fileExists(join(f.root, "at-prompt")) ? true : undefined, 35000); await trackProviders() },
     async crashHandler() { await trackProviders(); const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process) },
     async failHandler() { await trackProviders(); await writeFile(join(f.root, "fatal-close"), "fail", { mode: 0o600 }); await until(async () => await fileExists(join(f.root, "failure")) ? true : undefined) },
     async waitHandlerExit(timeout?: number) { const current = await handler(); assert.ok(current.process); await proveAbsent(current.process, timeout); await trackProviders() },
@@ -210,7 +213,10 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   await mkdir(join(root, "launches"), { mode: 0o700 })
   const launch: LaunchRecord = { version: 1, checkoutId: spec.checkout.checkoutId, agentId: spec.agentId, leaseId: spec.leaseId, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, provider: null, phase: "launch_pending", reason: null }
   await writeLaunchRecord(path, launch)
-  const peer = scriptedAcp(t); peer.connection.close()
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+    send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: request.params.prompt[0].text } } } })
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } }); peer.connection.close()
   const child = new EventEmitter() as ChildProcess
   let unrefs = 0
   Object.assign(child, { pid: 12345, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() { unrefs++ } })
@@ -341,10 +347,10 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qual
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; injectedOnly?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; neverReserve?: boolean; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; injectedOnly?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; neverReserve?: boolean; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
-  const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), reservationEntered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), publications: string[] = []
+  const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), reservationEntered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), promptEntered = agentGate(), publications: string[] = []
   let stateRemovalCalls = 0, evidenceCalls = 0, fatalCalls = 0, reservationCalls = 0, cleanupCalls = 0
   const requests: Promise<unknown>[] = [], owners: OwnedAgentProcess[] = []
   const track = (service: AgentService): AgentService => {
@@ -397,7 +403,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
       return structuredClone({ snapshotId: snapshot.snapshotId, provider, profile, configuration })
     })
   } }
-  const processes = new Map<number, { identity: ProcessIdentity; child: ChildProcess }>(), peers = new Map<string, ReturnType<typeof scriptedAcp>>()
+  const processes = new Map<number, { agentId: string; identity: ProcessIdentity; child: ChildProcess }>(), peers = new Map<string, ReturnType<typeof scriptedAcp>>(), pendingPrompts = new Map<string, { request: any; send(value: unknown): void }>()
   f.context.adapter = { platform: "linux", bootId: async () => "boot-a", readProcess: async pid => processes.get(pid)?.identity ?? null, readGroup: async group => [...processes.values()].map(v => v.identity).filter(v => v.processGroupId === group), async signalGroup(group, signal) {
     for (const [pid, value] of processes) if (value.identity.processGroupId === group) { processes.delete(pid); value.child.emit("exit", 0, signal); value.child.emit("close", 0, signal) }
   } }
@@ -411,11 +417,17 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     try { await Promise.race([released.promise, cancelled]) } finally { signal.removeEventListener("abort", aborted) }
   }
   const processFactory: typeof createAgentProcess = input => {
-    const peer = scriptedAcp(t); peer.connection.close(); peers.set(input.spec.agentId, peer)
+    const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+      promptEntered.resolve()
+      pendingPrompts.set(input.spec.agentId, { request, send })
+      if (options.prompt === "hang") return
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${request.params.prompt[0].text}` } } } })
+      send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+    } }); peer.connection.close(); peers.set(input.spec.agentId, peer)
     const processDependencies = { spawn: (() => {
       const pid = 20000 + ++spawnCount, child = new EventEmitter() as ChildProcess
       Object.assign(child, { pid, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() {} })
-      processes.set(pid, { child, identity: { pid, birth: `100:agy-provider:${input.spec.launchAttemptId}`, bootId: "boot-a", parentPid: process.pid, processGroupId: pid, sessionId: pid, uid: process.getuid!(), gid: process.getgid!() } })
+      processes.set(pid, { agentId: input.spec.agentId, child, identity: { pid, birth: `100:agy-provider:${input.spec.launchAttemptId}`, bootId: "boot-a", parentPid: process.pid, processGroupId: pid, sessionId: pid, uid: process.getuid!(), gid: process.getgid!() } })
       return child
     }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path: string, record: LaunchRecord) {
       await writeLaunchRecord(path, record)
@@ -449,11 +461,13 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   await service.initialize()
   const input = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: sampleSpec().selection }
   return { ...f, service, input, store, catalogStore, contract, profile, configuration, config, publications, entered: entered.promise, release: released.resolve, spawns: () => spawnCount, refreshes: () => refreshes, catalogReads: () => catalogReads, readyFailures: () => readyFailures,
-    evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, reservationCalls: () => reservationCalls, cleanupCalls: () => cleanupCalls, reservationEntered: reservationEntered.promise, commandEntered: commandEntered.promise,
+    evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, reservationCalls: () => reservationCalls, cleanupCalls: () => cleanupCalls, reservationEntered: reservationEntered.promise, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
     failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value },
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures,
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
     fault(agent: string) { peers.get(agent)!.triggerDrift() },
+    completePrompt(agent: string, answer = "answer:challenge") { const pending = pendingPrompts.get(agent); if (!pending) throw new Error("prompt not pending"); pending.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } }); pending.send({ jsonrpc: "2.0", id: pending.request.id, result: { stopReason: "end_turn" } }) },
+    exit(agent: string) { const owner = [...processes.entries()].find(([, value]) => value.agentId === agent); if (!owner) throw new Error("provider not live"); const [pid, value] = owner; processes.delete(pid); value.child.emit("exit", 1, null); value.child.emit("close", 1, null) },
     cleanupOwned: () => Promise.all(owners.map(owner => owner.cleanup())), stateRemovalCalls: () => stateRemovalCalls, releaseStateRemoval: stateRemovalReleased.resolve,
     async changeCatalog(kind: "stale" | "rollback" | "missing" | "refresh") {
       snapshot = structuredClone(snapshot); snapshot.snapshotId = randomUUID(); snapshot.createdAt = Date.now()
