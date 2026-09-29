@@ -228,6 +228,20 @@ test("one retained prompt blocks concurrency and freeze drains it before cleanup
   await assert.rejects(f.service.prompt(input), { code: "NOT_READY" })
 })
 
+test("non-stopping freeze rejects an active prompt without freezing later acceptance", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  await f.service.start(f.input)
+  const ready = await completed(f.service, f.input), pending = f.service.prompt({ ...ready.command.target!, text: "challenge" })
+  void pending.catch(() => undefined)
+  await f.promptEntered
+  await assert.rejects(f.service.freezeAndDrain(false), { code: "ACTIVE_AGENTS" })
+  const replacement = { ...f.input, cwd: f.git.linked, commandId: randomUUID() }
+  await f.service.start(replacement)
+  assert.equal((await completed(f.service, replacement)).command.result!.outcome, "started")
+  await f.service.freezeAndDrain(true)
+  await assert.rejects(pending, { code: "STARTUP_FAILED" })
+})
+
 test("stop aborts and settles a retained prompt before verified cleanup", async t => {
   const f = await agentServiceFixture(t, { prompt: "hang" })
   await f.service.start(f.input)

@@ -88,9 +88,19 @@ test("ready agent survives client disconnect and stops with proof", { timeout: 6
 test("private Handler protocol routes one prompt through the ready owned provider", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t), ready = await f.waitCompleted(await f.start())
   assert.equal(ready.command.result!.outcome, "started")
-  assert.deepEqual(await f.prompt(ready.command.target!, "challenge"), { state: "prompt", target: ready.command.target, stopReason: "end_turn", text: "answer:challenge" })
-  await f.stop(ready.command.target!)
+  const target = ready.command.target!
+  assert.deepEqual(await f.prompt(target, "challenge"), { state: "prompt", target, stopReason: "end_turn", text: "answer:challenge" })
+  const stop = await f.stop(target), stopped = await f.waitCompleted(stop)
+  assert.equal(stopped.command.result!.outcome, "stopped")
+  assert.equal((await f.current()).agent, null)
+  const inventory = await f.inventory(), agent = inventory.agents.find(record => record.spec.agentId === target.agentId)!
+  assert.equal(inventory.launches.find(entry => entry.record.agentId === target.agentId)!.record.phase, "cleanup_verified")
+  await assert.rejects(lstat(providerStatePath(f.paths.persistentRoot, agent.spec.launchAttemptId)), { code: "ENOENT" })
   await f.verifyZeroSurvivors()
+  const cleanup = await f.cleanupEvidence()
+  assert.equal(cleanup.providers.find(record => record.agentId === target.agentId)!.launchAttemptId, agent.spec.launchAttemptId)
+  assert.equal(cleanup.launches.find(entry => entry.record.agentId === target.agentId)!.record.phase, "cleanup_verified")
+  assert.deepEqual(cleanup.survivors, [])
 })
 
 test("Handler failure during a prompt closes the client and restart verifies provider cleanup", { timeout: 60000 }, async t => {

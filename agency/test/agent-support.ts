@@ -147,6 +147,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     async restart() { await configure({}); await releaseBarrier(); await f.start(15000) },
     async killProvider(target: AgentTuple) { await trackProviders(); const record = [...owned.values()].find(record => record.agentId === target.agentId && record.handlerGeneration === target.handlerGeneration); assert.ok(record?.provider); await f.signal(record.provider.group.leader, "SIGKILL"); await proveAbsent(record.provider.group.leader) },
     verifyZeroSurvivors: cleanupOwned,
+    async cleanupEvidence() { return JSON.parse(await readFile(join(f.root, "agent-cleanup.json"), "utf8")) as { providers: LaunchRecord[]; launches: Array<{ path: string; record: LaunchRecord }>; survivors: unknown[] } },
   }
 }
 
