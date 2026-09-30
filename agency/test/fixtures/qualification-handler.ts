@@ -63,7 +63,7 @@ try {
               const release = join(dirname(candidatePath), "release-prompt-publication")
               for (let attempt = 0; attempt < 500; attempt++) {
                 if (await readFile(release).then(() => true, () => false)) {
-                  await durableQualificationWrite(join(dirname(candidatePath), "prompt-publication-resumed.json"), { resumed: true })
+                  setImmediate(() => { void durableQualificationWrite(join(dirname(candidatePath), "prompt-publication-resumed.json"), { resumed: true }).catch(() => { process.exitCode = 1 }) })
                   break
                 }
                 await new Promise(resolve => setTimeout(resolve, 10))
