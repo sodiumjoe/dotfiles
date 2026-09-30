@@ -80,6 +80,45 @@ describe("agentic chat path:line links", function()
         assert.are.equal(2, vim.api.nvim_win_get_cursor(0)[1])
     end)
 
+    local function gf_on(line, col)
+        setup_agentic_config()
+
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_set_current_buf(buf)
+        vim.bo[buf].buftype = "nofile"
+        vim.bo[buf].filetype = "AgenticChat"
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { line })
+        vim.api.nvim_win_set_cursor(0, { 1, col })
+
+        local gf_map = find_buffer_map(buf, "gf")
+        assert.is_not_nil(gf_map)
+        gf_map.callback()
+    end
+
+    it("opens the destination of a markdown link when the cursor is on its label", function()
+        local target = vim.fn.tempname()
+        vim.fn.writefile({ "one", "two" }, target)
+
+        local line = "see [foo](" .. target .. ") here"
+        gf_on(line, assert(line:find("foo", 1, true)))
+
+        assert.are.equal(vim.fn.resolve(target), vim.fn.resolve(vim.api.nvim_buf_get_name(0)))
+        assert.are.equal(1, vim.api.nvim_win_get_cursor(0)[1])
+        vim.fn.delete(target)
+    end)
+
+    it("honors line anchors and angle-bracket destinations in markdown links", function()
+        local target = vim.fn.tempname()
+        vim.fn.writefile({ "one", "two", "three" }, target)
+
+        local line = "[a](x) and [foo bar](<" .. target .. "#L3>)"
+        gf_on(line, assert(line:find("bar", 1, true)))
+
+        assert.are.equal(vim.fn.resolve(target), vim.fn.resolve(vim.api.nvim_buf_get_name(0)))
+        assert.are.equal(3, vim.api.nvim_win_get_cursor(0)[1])
+        vim.fn.delete(target)
+    end)
+
     it("opens references in the editor window without entering the target buffer in the widget window", function()
         setup_agentic_config()
 

@@ -159,24 +159,59 @@ local function fallback_tool_call_message(update, normalized)
     return message
 end
 
+local function split_line_anchor(ref)
+    local path, line = ref:match("^(.+)#L(%d+)%-L%d+$")
+    if not path or not line then
+        path, line = ref:match("^(.+)#L(%d+)$")
+    end
+    if not path or not line then
+        path, line = ref:match("^(.+):(%d+)$")
+    end
+    return path, tonumber(line)
+end
+
+local function markdown_link_destination()
+    local text = vim.api.nvim_get_current_line()
+    local col = vim.api.nvim_win_get_cursor(0)[2] + 1
+    local init = 1
+    while true do
+        local s, e, dest = text:find("%b[]%(([^)]*)%)", init)
+        if not s or s > col then
+            return
+        end
+        if col <= e then
+            dest = vim.trim(dest)
+            local bracketed = dest:match("^<(.*)>$")
+            if bracketed then
+                dest = bracketed:gsub("\\([<>])", "%1")
+            else
+                dest = dest:match("^(%S+)")
+            end
+            return dest
+        end
+        init = e + 1
+    end
+end
+
 local function current_path_reference()
-    local word = vim.fn.expand("<cWORD>")
-    if word == "" then
-        return
-    end
+    local path, line
+    local dest = markdown_link_destination()
+    if dest and dest ~= "" and not dest:match("^%a[%w+.-]*://") then
+        path, line = split_line_anchor(dest)
+        path = path or dest
+    else
+        local word = vim.fn.expand("<cWORD>")
+        if word == "" then
+            return
+        end
 
-    word = word:gsub("^[`(<%[]+", "")
-    word = word:gsub("[`>%)%],.;]+$", "")
+        word = word:gsub("^[`(<%[]+", "")
+        word = word:gsub("[`>%)%],.;]+$", "")
 
-    local path, line = word:match("^(.+)#L(%d+)%-L%d+$")
-    if not path or not line then
-        path, line = word:match("^(.+)#L(%d+)$")
-    end
-    if not path or not line then
-        path, line = word:match("^(.+):(%d+)$")
-    end
-    if not path or not line then
-        return
+        path, line = split_line_anchor(word)
+        if not path or not line then
+            return
+        end
     end
 
     local absolute = vim.fn.fnamemodify(path, ":p")
@@ -184,7 +219,7 @@ local function current_path_reference()
         return
     end
 
-    return absolute, tonumber(line)
+    return absolute, line
 end
 
 local function find_editor_window()
@@ -197,7 +232,7 @@ end
 
 local function open_path_reference()
     local path, line = current_path_reference()
-    if not path or not line then
+    if not path then
         return false
     end
 
@@ -208,7 +243,7 @@ local function open_path_reference()
         end
     end
 
-    vim.cmd("edit +" .. line .. " " .. vim.fn.fnameescape(path))
+    vim.cmd("edit " .. (line and ("+" .. line .. " ") or "") .. vim.fn.fnameescape(path))
     return true
 end
 
