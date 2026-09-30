@@ -79,4 +79,51 @@ describe("agentic chat path:line links", function()
         assert.are.equal(home_target, vim.api.nvim_buf_get_name(0))
         assert.are.equal(2, vim.api.nvim_win_get_cursor(0)[1])
     end)
+
+    it("opens references in the editor window without entering the target buffer in the widget window", function()
+        setup_agentic_config()
+
+        vim.fn.writefile({ "one", "two", "three" }, target_name)
+        local target_path = vim.fn.fnamemodify(target_name, ":p")
+
+        local editor_buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_set_current_buf(editor_buf)
+        local editor_win = vim.api.nvim_get_current_win()
+
+        local chat_buf = vim.api.nvim_create_buf(false, true)
+        vim.bo[chat_buf].buftype = "nofile"
+        vim.bo[chat_buf].filetype = "AgenticChat"
+        vim.api.nvim_buf_set_lines(chat_buf, 0, -1, false, {
+            "See " .. target_name .. ":2 for context",
+        })
+        local chat_win = vim.api.nvim_open_win(chat_buf, true, { split = "below" })
+        vim.w[chat_win].agentic_bufnr = chat_buf
+        vim.api.nvim_win_set_cursor(chat_win, { 1, 6 })
+
+        local entered_wins = {}
+        local group = vim.api.nvim_create_augroup("AgenticChatLinksSpec", { clear = true })
+        vim.api.nvim_create_autocmd("BufEnter", {
+            group = group,
+            callback = function(ev)
+                if vim.api.nvim_buf_get_name(ev.buf) == target_path then
+                    table.insert(entered_wins, vim.api.nvim_get_current_win())
+                end
+            end,
+        })
+
+        local gf_map = find_buffer_map(chat_buf, "gf")
+        assert.is_not_nil(gf_map)
+        gf_map.callback()
+        vim.api.nvim_del_augroup_by_id(group)
+
+        assert.are.same({ editor_win }, entered_wins)
+        assert.are.equal(editor_win, vim.api.nvim_get_current_win())
+        assert.are.equal(target_path, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(editor_win)))
+        assert.are.equal(2, vim.api.nvim_win_get_cursor(editor_win)[1])
+        assert.are.equal(chat_buf, vim.api.nvim_win_get_buf(chat_win))
+
+        vim.api.nvim_win_close(chat_win, true)
+        vim.api.nvim_buf_delete(chat_buf, { force = true })
+        vim.api.nvim_buf_delete(editor_buf, { force = true })
+    end)
 end)

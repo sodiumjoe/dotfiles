@@ -187,10 +187,25 @@ local function current_path_reference()
     return absolute, tonumber(line)
 end
 
+local function find_editor_window()
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if vim.w[win].agentic_bufnr == nil and vim.api.nvim_win_get_config(win).relative == "" then
+            return win
+        end
+    end
+end
+
 local function open_path_reference()
     local path, line = current_path_reference()
     if not path or not line then
         return false
+    end
+
+    if vim.w.agentic_bufnr ~= nil then
+        local editor_win = find_editor_window()
+        if editor_win then
+            vim.api.nvim_set_current_win(editor_win)
+        end
     end
 
     vim.cmd("edit +" .. line .. " " .. vim.fn.fnameescape(path))
