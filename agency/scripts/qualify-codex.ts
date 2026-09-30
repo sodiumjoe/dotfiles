@@ -23,11 +23,11 @@ import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerGene
 import { PROTOCOL, uuid } from "../src/control/protocol.js"
 import { exchange } from "../src/control/wire.js"
 import type { PlatformPaths } from "../src/platform/paths.js"
-import { descriptorLimits, descriptorPurposeValid, observeQualificationDescriptors, QualificationObservationError, verifyQualificationAbsence, type DescriptorCommand, type DescriptorEvidence, type DescriptorObservation, type ParentAbsence } from "./qualification-observation.js"
+import { verifyQualificationAbsence, type ParentAbsence } from "./qualification-observation.js"
 
 const METHODS = ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode", "session/prompt"] as const
 const PHASES = ["commandStart", "reservation", "spawn", "initialize", "session", "model", "reasoning", "mode", "prompt", "transportClose", "processTerminate", "absence", "overall"] as const
-const FAILURES = [...AGENT_CODES, "EVIDENCE_PUBLICATION_FAILED", "EVIDENCE_MISSING", "OWNERSHIP_INVALID", "HANDLER_STARTUP_FAILED", "HANDLER_TERMINATED", "COMMAND_START_TIMEOUT", "OVERALL_TIMEOUT", "NORMAL_STATE_UNAVAILABLE", "USER_STATE_UNAVAILABLE", "NORMAL_STATE_CHANGED", "DESCRIPTOR_LEAK", "DESCRIPTOR_UNAVAILABLE", "ABSENCE_TIMEOUT", "ABSENCE_UNAVAILABLE", "PROCESS_SURVIVED", "REPORT_INVALID"] as const
+const FAILURES = [...AGENT_CODES, "EVIDENCE_PUBLICATION_FAILED", "EVIDENCE_MISSING", "OWNERSHIP_INVALID", "HANDLER_STARTUP_FAILED", "HANDLER_TERMINATED", "COMMAND_START_TIMEOUT", "OVERALL_TIMEOUT", "NORMAL_STATE_UNAVAILABLE", "USER_STATE_UNAVAILABLE", "NORMAL_STATE_CHANGED", "ABSENCE_TIMEOUT", "ABSENCE_UNAVAILABLE", "PROCESS_SURVIVED", "REPORT_INVALID"] as const
 type Failure = typeof FAILURES[number]
 type Phase = typeof PHASES[number]
 type Outcome = "completed" | "timed_out" | "failed" | "not_reached"
@@ -40,7 +40,7 @@ export type QualifiedOwnership = {
 export type QualificationReceipt = {
   version: 1; handlerGeneration: string; launchAttemptId: string; methods: string[]; durations: Partial<Record<Phase, number>>
   prompt: PromptAttempt
-  terminal: boolean; transportClosed: boolean; handlesClosed: boolean; failure: Failure | null
+  terminal: boolean; transportClosed: boolean; streamsClosed: boolean; failure: Failure | null
 }
 type PromptStopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled"
 export type PromptAttempt =
@@ -50,7 +50,7 @@ export type PromptAttempt =
 type Retained = { command: AgentCommand | null; agent: AgentRecord | null; admission: AdmissionRecord | null; launch: LaunchRecord | null; handlers: HandlerGenerationRecord[]; recovery: { command: AgentCommand | null; agent: AgentRecord | null; launch: LaunchRecord | null; admission: AdmissionRecord | null; consistent: boolean } | null }
 export type QualificationObservation = {
   candidate: CodexQualificationCandidate; verification: CodexQualificationObservation | null
-  retained: Retained; receipt: QualificationReceipt | null; descriptors: DescriptorObservation | null; absence: ParentAbsence | null
+  retained: Retained; receipt: QualificationReceipt | null; absence: ParentAbsence | null
   normalAgencyState: { before: TreeObservation[]; after: TreeObservation[] }
 }
 export type CodexQualificationReport = {
@@ -63,7 +63,7 @@ export type CodexQualificationReport = {
   postconditions: {
     transport: "closed" | "open" | "unknown"; directChild: "terminal" | "live" | "unknown"; processGroup: "absent" | "present" | "unknown"
     reservation: "released" | "retained" | "unknown"; providerState: "absent" | "present" | "unknown"; qualificationCwd: "absent" | "present" | "unknown"
-    executionRoot: "absent" | "present" | "unknown"; lifecycleOperation: "terminal" | "in_flight" | "unknown"; ownedHandles: "closed" | "open" | "unknown"
+    executionRoot: "absent" | "present" | "unknown"; lifecycleOperation: "terminal" | "in_flight" | "unknown"; ownedStreams: "closed" | "open" | "unknown"
     handler: "absent" | "present" | "unknown"; catalogProfile: "absent" | "present" | "unknown"; normalAgencyState: "unchanged" | "changed" | "unknown"
   }
 }
@@ -83,13 +83,12 @@ export type QualificationDependencies = {
   normalStatePaths: readonly string[]; createExecutionRoot(): Promise<string>
   publish?: typeof durableQualificationWrite; start?: typeof startOrConnect
   currentRevision?: typeof observeCurrentRevision; exchangeAgent?: typeof exchangeAgent
-  descriptorCommand?: DescriptorCommand
   absenceAdapter?: Pick<PlatformAdapter, "readProcess" | "readGroup">
   beforeCleanup?: (root: string, report: CodexQualificationReport) => Promise<void>
 }
 class QualificationError extends Error { constructor(readonly code: Failure) { super(code) } }
 function fail(code: Failure): never { throw new QualificationError(code) }
-const classify = (error: unknown, fallback: Failure): Failure => error instanceof QualificationError || error instanceof AgentError || error instanceof QualificationObservationError ? error.code : fallback
+const classify = (error: unknown, fallback: Failure): Failure => error instanceof QualificationError || error instanceof AgentError ? error.code : fallback
 const equal = (left: unknown, right: unknown, code: Failure = "OWNERSHIP_INVALID"): void => { if (!isDeepStrictEqual(left, right)) fail(code) }
 function reviewedRevision(value: { reviewedBranch: unknown; reviewedCommit: unknown } | undefined): { branch: "moon/agency-agent-lifecycle"; commit: string } {
   if (value?.reviewedBranch !== "moon/agency-agent-lifecycle" || typeof value.reviewedCommit !== "string" || !/^[0-9a-f]{40}$/.test(value.reviewedCommit) || value.reviewedCommit === "0".repeat(40)) fail("ADAPTER_UNQUALIFIED")
@@ -158,7 +157,7 @@ export function parseQualificationCandidate(value: unknown): CodexQualificationC
   return { version: 3, manifest, fingerprint: v.fingerprint as string }
 }
 const limits = (m: CodexQualificationManifest): Record<Phase, number> => ({ commandStart: m.deadlines.commandMs, reservation: m.deadlines.reservationMs, spawn: m.deadlines.spawnMs, initialize: m.deadlines.initializeMs, session: m.deadlines.sessionMs, model: m.deadlines.optionMs, reasoning: m.deadlines.optionMs, mode: m.deadlines.optionMs, prompt: m.deadlines.promptMs, transportClose: m.deadlines.transportCloseMs, processTerminate: m.deadlines.processTerminateMs, absence: m.deadlines.absenceMs, overall: m.deadlines.overallMs })
-const success = { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedHandles: "closed", handler: "absent", catalogProfile: "absent", normalAgencyState: "unchanged" } as const
+const success = { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedStreams: "closed", handler: "absent", catalogProfile: "absent", normalAgencyState: "unchanged" } as const
 function correlate(report: CodexQualificationReport): void {
   const { ownership: own, session, observation: { retained: e } } = report
   if (!e.command || !e.agent || !e.admission || !e.launch || !session) fail("OWNERSHIP_INVALID")
@@ -181,10 +180,10 @@ function parseTree(value: unknown): TreeObservation {
   return t as TreeObservation
 }
 export function parseQualificationReceipt(value: unknown, manifest: CodexQualificationManifest): QualificationReceipt {
-  const r = object(value, ["version", "handlerGeneration", "launchAttemptId", "methods", "durations", "prompt", "terminal", "transportClosed", "handlesClosed", "failure"])
+  const r = object(value, ["version", "handlerGeneration", "launchAttemptId", "methods", "durations", "prompt", "terminal", "transportClosed", "streamsClosed", "failure"])
   if (r.version !== 1 || !Array.isArray(r.methods) || r.methods.length > 6 || r.methods.some((m, i) => m !== METHODS[i])) fail("REPORT_INVALID")
   uuid(r.handlerGeneration); uuid(r.launchAttemptId)
-  for (const name of ["terminal", "transportClosed", "handlesClosed"]) if (typeof r[name] !== "boolean") fail("REPORT_INVALID")
+  for (const name of ["terminal", "transportClosed", "streamsClosed"]) if (typeof r[name] !== "boolean") fail("REPORT_INVALID")
   if (!r.durations || typeof r.durations !== "object" || Array.isArray(r.durations) || Object.entries(r.durations).some(([key, value]) => !PHASES.includes(key as Phase) || typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > (key === "overall" || key === "prompt" ? manifest.deadlines.overallMs : 120000))) fail("REPORT_INVALID")
   parsePromptAttempt(r.prompt, manifest)
   if (r.failure !== null && !FAILURES.includes(r.failure as Failure)) fail("REPORT_INVALID")
@@ -214,7 +213,7 @@ function parsePromptAttempt(value: unknown, manifest: CodexQualificationManifest
   if (p.state === "in_flight_failed") {
     if (p.normalizedAnswer !== null || p.stopReason !== null) fail("REPORT_INVALID")
   } else {
-    if (p.normalizedAnswer !== answer.trim() || !reasons.includes(String(p.stopReason))) fail("REPORT_INVALID")
+    if (p.normalizedAnswer !== answer.trim() || typeof p.stopReason !== "string" || !reasons.includes(p.stopReason)) fail("REPORT_INVALID")
   }
   return structuredClone(p) as PromptAttempt
 }
@@ -244,7 +243,7 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
   if (r.version !== 3 || r.branch !== "moon/agency-agent-lifecycle" || !/^[0-9a-f]{40}$/.test(String(r.commit)) || typeof r.qualified !== "boolean" || (r.failure !== null && (!FAILURES.includes(r.failure as Failure) || r.failure === "USER_STATE_UNAVAILABLE"))) fail("REPORT_INVALID")
   for (const key of ["startedAt", "endedAt"]) if (new Date(text(r[key])).toISOString() !== r[key]) fail("REPORT_INVALID")
   if (String(r.endedAt) < String(r.startedAt)) fail("REPORT_INVALID")
-  const o = object(r.observation, ["candidate", "verification", "retained", "receipt", "descriptors", "absence", "normalAgencyState"])
+  const o = object(r.observation, ["candidate", "verification", "retained", "receipt", "absence", "normalAgencyState"])
   const candidate = parseQualificationCandidate(o.candidate)
   if (r.manifestFingerprint !== candidate.fingerprint) fail("REPORT_INVALID")
   if (o.verification !== null) validateVerification(o.verification, candidate)
@@ -302,14 +301,13 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
   }
   equal(r.selection, { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, "REPORT_INVALID")
   const session = r.session === null ? null : parseSession(r.session), ownership = validateQualifiedOwnership(r.ownership)
-  if (o.descriptors !== null) validateDescriptorObservation(o.descriptors, ownership, candidate.manifest.deadlines.commandMs)
   if (o.absence !== null) validateAbsenceObservation(o.absence, candidate.manifest.deadlines.absenceMs)
   if (!["ambient_accepted", "auth_required", "failed", "unknown"].includes(String(r.authentication))) fail("REPORT_INVALID")
   const deadlines = object(r.deadlines, PHASES), expectedLimits = limits(candidate.manifest)
   for (const name of PHASES) { const d = object(deadlines[name], ["limitMs", "outcome"]); if (d.limitMs !== expectedLimits[name] || !["completed", "timed_out", "failed", "not_reached"].includes(String(d.outcome))) fail("REPORT_INVALID") }
   if ((deadlines.prompt as { outcome: unknown }).outcome !== promptDeadlineOutcome(receipt?.prompt ?? prompt, expectedLimits.prompt)) fail("REPORT_INVALID")
   const post = object(r.postconditions, Object.keys(success))
-  const opposites = { transport: "open", directChild: "live", processGroup: "present", reservation: "retained", providerState: "present", qualificationCwd: "present", executionRoot: "present", lifecycleOperation: "in_flight", ownedHandles: "open", handler: "present", catalogProfile: "present", normalAgencyState: "changed" }
+  const opposites = { transport: "open", directChild: "live", processGroup: "present", reservation: "retained", providerState: "present", qualificationCwd: "present", executionRoot: "present", lifecycleOperation: "in_flight", ownedStreams: "open", handler: "present", catalogProfile: "present", normalAgencyState: "changed" }
   for (const key of Object.keys(success) as Array<keyof typeof success>) if (![success[key], opposites[key], "unknown"].includes(String(post[key]))) fail("REPORT_INVALID")
   const report = structuredClone({ ...r, ownership, session, prompt }) as CodexQualificationReport
   if (report.qualified) {
@@ -320,12 +318,25 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
     equal(post, success, "REPORT_INVALID"); equal(protocol.methods, METHODS, "REPORT_INVALID")
     if (PHASES.some(name => report.deadlines[name].outcome !== "completed")) fail("REPORT_INVALID")
     const receipt = report.observation.receipt
-    if (!receipt || !receipt.terminal || !receipt.transportClosed || !receipt.handlesClosed || receipt.failure !== null || receipt.handlerGeneration !== ownership.handlerGeneration || receipt.launchAttemptId !== ownership.launchAttemptId) fail("REPORT_INVALID")
+    if (!receipt || !receipt.terminal || !receipt.transportClosed || !receipt.streamsClosed || receipt.failure !== null || receipt.handlerGeneration !== ownership.handlerGeneration || receipt.launchAttemptId !== ownership.launchAttemptId) fail("REPORT_INVALID")
     equal(receipt.methods, METHODS, "REPORT_INVALID")
     for (const name of PHASES.filter(name => name !== "absence")) if (receipt.durations[name] === undefined || receipt.durations[name]! >= expectedLimits[name]) fail("REPORT_INVALID")
-    const descriptors = report.observation.descriptors, absence = report.observation.absence
-    if (!descriptors || descriptors.outcome !== "verified" || !absence || absence.outcome !== "completed" || absence.passes !== 2 || absence.handler !== "absent" || absence.provider !== "absent" || absence.durationMs >= expectedLimits.absence) fail("REPORT_INVALID")
-    const targets = [...ownership.handlers.map(h => h.process), ...ownership.providerProcessGroup!.observed].sort((a, b) => a.pid - b.pid)
+    const absence = report.observation.absence
+    if (!absence || absence.outcome !== "completed" || absence.passes !== 2 || absence.handler !== "absent" || absence.provider !== "absent" || absence.durationMs >= expectedLimits.absence) fail("REPORT_INVALID")
+    const provider = ownership.providerProcessGroup!
+    if (provider.observed.length < 2) fail("REPORT_INVALID")
+    for (const child of provider.observed) {
+      let current = child
+      const visited = new Set<number>()
+      while (current.pid !== provider.leader.pid) {
+        if (visited.has(current.pid)) fail("REPORT_INVALID")
+        visited.add(current.pid)
+        const parent = provider.observed.find(p => p.pid === current.parentPid)
+        if (!parent) fail("REPORT_INVALID")
+        current = parent
+      }
+    }
+    const targets = [...ownership.handlers.map(h => h.process), ...provider.observed].sort((a, b) => a.pid - b.pid)
     equal([...absence.targets].sort((a, b) => a.pid - b.pid), targets, "REPORT_INVALID")
     const normal = report.observation.normalAgencyState
     if (!normal.before.length) fail("REPORT_INVALID")
@@ -333,33 +344,6 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
     correlate(report)
   } else if (report.failure === null) fail("REPORT_INVALID")
   return report
-}
-function validateDescriptorObservation(value: unknown, ownership: QualifiedOwnership, limitMs: number): void {
-  const d = object(value, ["outcome", "durationMs", "processes"])
-  if (!["verified", "leaked"].includes(String(d.outcome)) || typeof d.durationMs !== "number" || !Number.isFinite(d.durationMs) || d.durationMs < 0 || d.durationMs >= limitMs || !Array.isArray(d.processes) || d.processes.length < 3 || d.processes.length > 4098) fail("REPORT_INVALID")
-  const processes = d.processes.map(raw => {
-    const p = object(raw, ["process", "role", "descriptors"]), process = identity(p.process)
-    if (!["handler", "adapter", "child"].includes(String(p.role)) || !Array.isArray(p.descriptors) || p.descriptors.length < 3 || p.descriptors.length > 256) fail("REPORT_INVALID")
-    const descriptors = p.descriptors.map(raw => {
-      const fd = object(raw, ["fd", "type", "allowed", "purpose"])
-      if (!Number.isSafeInteger(fd.fd) || (fd.fd as number) < 0 || (fd.fd as number) > 999999 || !["REG", "DIR", "PIPE", "unix", "CHR", "KQUEUE", "IPv4", "IPv6", "PSXSEM", "PSXSHM"].includes(String(fd.type)) || typeof fd.allowed !== "boolean") fail("REPORT_INVALID")
-      if (typeof fd.type !== "string" || typeof fd.purpose !== "string" || !descriptorPurposeValid(fd.fd as number, fd.type, fd.purpose, p.role as DescriptorEvidence["role"]) || fd.allowed !== (fd.purpose !== "unexpected")) fail("REPORT_INVALID")
-      return fd
-    })
-    if (new Set(descriptors.map(d => d.fd)).size !== descriptors.length || [0, 1, 2].some(fd => !descriptors.some(d => d.fd === fd))) fail("REPORT_INVALID")
-    for (const [purpose, maximum] of Object.entries(descriptorLimits(p.role as DescriptorEvidence["role"]))) if (descriptors.filter(fd => fd.purpose === purpose).length > maximum) fail("REPORT_INVALID")
-    if (p.role === "handler") { if (!ownership.handlers.some(h => isDeepStrictEqual(h.process, process))) fail("REPORT_INVALID") }
-    else {
-      const group = ownership.providerProcessGroup
-      if (!group || process.bootId !== group.leader.bootId || process.processGroupId !== group.leader.pid || process.sessionId !== group.leader.pid || process.uid !== group.leader.uid || process.gid !== group.leader.gid || p.role === "adapter" && !isDeepStrictEqual(process, group.leader) || p.role === "child" && process.pid === group.leader.pid) fail("REPORT_INVALID")
-    }
-    return { process, role: p.role, descriptors }
-  })
-  if (new Set(processes.map(p => p.process.pid)).size !== processes.length || processes.filter(p => p.role === "handler").length !== ownership.handlers.length || processes.filter(p => p.role === "adapter").length !== 1 || !processes.some(p => p.role === "child")) fail("REPORT_INVALID")
-  const retained = [...ownership.handlers.map(h => h.process), ...ownership.providerProcessGroup!.observed]
-  equal(processes.map(p => p.process).sort((a, b) => a.pid - b.pid), retained.sort((a, b) => a.pid - b.pid), "REPORT_INVALID")
-  for (const child of processes.filter(p => p.role === "child")) { let current = child, visited = new Set<number>(); while (current.role !== "adapter") { if (visited.has(current.process.pid)) fail("REPORT_INVALID"); visited.add(current.process.pid); const parent = processes.find(p => p.process.pid === current.process.parentPid && p.role !== "handler"); if (!parent) fail("REPORT_INVALID"); current = parent } }
-  if ((d.outcome === "verified") !== processes.every(p => p.descriptors.every(fd => fd.allowed))) fail("REPORT_INVALID")
 }
 function validateAbsenceObservation(value: unknown, limitMs: number): void {
   const a = object(value, ["limitMs", "durationMs", "outcome", "passes", "targets", "groups", "handler", "provider"])
@@ -462,7 +446,7 @@ async function observe<T>(operation: () => Promise<T>): Promise<T> {
 }
 async function terminal(adapter: PlatformAdapter, p: ProcessIdentity): Promise<boolean> { const actual = await observe(() => adapter.readProcess(p.pid)); return actual === null || !sameProcessGeneration(p, actual) }
 async function absentGroup(adapter: PlatformAdapter, group: ProcessGroupIdentity): Promise<boolean> {
-  const result = await verifyQualificationAbsence(adapter, [], group, [], 2000)
+  const result = await verifyQualificationAbsence(adapter, [], group, 2000)
   if (result.outcome === "timed_out") fail("ABSENCE_TIMEOUT")
   if (result.outcome === "failed" && result.provider !== "present") fail("ABSENCE_UNAVAILABLE")
   return result.outcome === "completed"
@@ -505,7 +489,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
   const git = promisify(execFile)
   const report: CodexQualificationReport = {
     version: 3, manifestFingerprint: candidate.fingerprint, ...revision, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), qualified: false, failure: null,
-    observation: { candidate, verification: null, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, descriptors: null, absence: null, normalAgencyState: { before: [], after: [] } },
+    observation: { candidate, verification: null, retained: { command: null, agent: null, admission: null, launch: null, handlers: [], recovery: null }, receipt: null, absence: null, normalAgencyState: { before: [], after: [] } },
     prompt: { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null },
     protocol: { protocolVersion: 1, methods: [] }, selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, session: null, authentication: "unknown",
     ownership: { handlerGeneration: null, agentId: null, providerGeneration: null, leaseId: null, launchAttemptId: null, sessionId: null, handlers: [], providerProcessGroup: null },
@@ -709,8 +693,6 @@ export async function runCodexQualification(request: QualificationRequest, depen
     equal(await createAgentStore(paths.persistentRoot).readCommand(commandId), retained.command)
     equal(await createAgentStore(paths.persistentRoot).readAgent(target.agentId), retained.agent)
     correlate(report)
-    report.observation.descriptors = await observeQualificationDescriptors(deps.adapter, handlerOwners.map(h => h.process!), report.ownership.providerProcessGroup!, budget(), deps.descriptorCommand, { handlerSocketPath: paths.handlerSocketPath, providerStateRoot: providerStatePath(paths.persistentRoot, report.ownership.launchAttemptId!) })
-    if (report.observation.descriptors.outcome !== "verified") fail("DESCRIPTOR_LEAK")
     stopSent = true
     const stopping = await requestAgent({ op: "agent_stop", input: { ...target, commandId: randomUUID() } })
     if (stopping.state !== "command" || stopping.durability !== "verified") fail("CLEANUP_UNVERIFIED")
@@ -777,7 +759,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
           if (receipt.launchAttemptId !== report.ownership.launchAttemptId || receipt.handlerGeneration !== report.ownership.handlerGeneration) fail("OWNERSHIP_INVALID")
           report.protocol.methods = receipt.methods
           report.postconditions.directChild = receipt.terminal ? "terminal" : "unknown"
-          report.postconditions.transport = receipt.transportClosed ? "closed" : "open"; report.postconditions.ownedHandles = receipt.handlesClosed ? "closed" : "open"
+          report.postconditions.transport = receipt.transportClosed ? "closed" : "open"; report.postconditions.ownedStreams = receipt.streamsClosed ? "closed" : "open"
           for (const [name, duration] of Object.entries(receipt.durations) as Array<[Phase, number]>) if (name !== "absence" && name !== "prompt") report.deadlines[name].outcome = duration < report.deadlines[name].limitMs ? "completed" : "timed_out"
           report.deadlines.prompt.outcome = promptDeadlineOutcome(receipt.prompt, candidate.manifest.deadlines.promptMs)
           if (report.deadlines.prompt.outcome === "timed_out") setFailure(new AgentError("STARTUP_TIMEOUT"), "STARTUP_TIMEOUT")
@@ -785,17 +767,16 @@ export async function runCodexQualification(request: QualificationRequest, depen
             if (report.failure === "ADMISSION_UNAVAILABLE" || report.failure === "INCOMPLETE") report.failure = receipt.failure
             else setFailure(new QualificationError(receipt.failure), receipt.failure)
           }
-        } else { report.postconditions.directChild = "terminal"; report.postconditions.transport = "closed"; report.postconditions.ownedHandles = "closed" }
+        } else { report.postconditions.directChild = "terminal"; report.postconditions.transport = "closed"; report.postconditions.ownedStreams = "closed" }
         if (!verified || report.postconditions.providerState !== "absent") fail("CLEANUP_UNVERIFIED")
       } catch (error) { setFailure(error, "EVIDENCE_MISSING") }
       for (const socket of sockets) socket.destroy()
       try {
-        const absence = await verifyQualificationAbsence(deps.absenceAdapter ?? deps.adapter, handlerOwners.map(h => h.process!), cleanupLaunch?.provider?.group ?? report.ownership.providerProcessGroup, report.observation.descriptors?.processes.map(p => p.process) ?? [], candidate.manifest.deadlines.absenceMs)
+        const absence = await verifyQualificationAbsence(deps.absenceAdapter ?? deps.adapter, handlerOwners.map(h => h.process!), cleanupLaunch?.provider?.group ?? report.ownership.providerProcessGroup, candidate.manifest.deadlines.absenceMs)
         report.observation.absence = absence
         report.deadlines.absence.outcome = absence.outcome
         report.postconditions.handler = handlerInvoked && !handlerOwners.length ? "unknown" : absence.handler
         report.postconditions.processGroup = report.postconditions.processGroup === "unknown" ? "unknown" : absence.provider
-        report.postconditions.ownedHandles = absence.outcome === "completed" && report.observation.descriptors?.outcome === "verified" && report.postconditions.transport === "closed" ? "closed" : "unknown"
         if (absence.outcome !== "completed") fail(absence.outcome === "timed_out" ? "ABSENCE_TIMEOUT" : absence.handler === "present" || absence.provider === "present" ? "PROCESS_SURVIVED" : "ABSENCE_UNAVAILABLE")
       } catch (error) { setFailure(error, "ABSENCE_UNAVAILABLE") }
       try {
@@ -886,7 +867,7 @@ export async function codexQualificationMain(argv: readonly string[], dependenci
     const verification = await deps.verify(candidate.manifest)
     validateVerification(verification, candidate)
     equal(await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true))), report.observation.normalAgencyState.after, "ADAPTER_UNQUALIFIED")
-    const absence = await verifyQualificationAbsence(deps.adapter, report.ownership.handlers.map(h => h.process), report.ownership.providerProcessGroup, report.observation.descriptors?.processes.map(p => p.process) ?? [], candidate.manifest.deadlines.absenceMs)
+    const absence = await verifyQualificationAbsence(deps.adapter, report.ownership.handlers.map(h => h.process), report.ownership.providerProcessGroup, candidate.manifest.deadlines.absenceMs)
     if (absence.outcome !== "completed") fail("PROCESS_SURVIVED")
     await requirePrivateAbsence(privatePaths)
     process.stdout.write(source); return 0

@@ -5,7 +5,7 @@ import { constants } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createHash } from "node:crypto"
-import { execFile } from "node:child_process"
+import childProcess, { execFile } from "node:child_process"
 import { syncBuiltinESMExports } from "node:module"
 import { promisify } from "node:util"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
@@ -241,20 +241,6 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     adapter: platform, hostKey: "a".repeat(64),
     verify: async () => ({ ...candidate, nodeVersion: "24.13.0", selection: manifest.selection, artifacts: { adapterPackageJson: manifest.adapterPackageJson, adapterEntrypoint: manifest.adapterEntrypoint, codexExecutable: manifest.codexExecutable, nodeExecutable: manifest.nodeExecutable } }),
     handler: (path, execution) => ({ file: process.execPath, args: [fileURLToPath(new URL("./fixtures/qualification-handler.js", import.meta.url)), path, execution, scenario] }),
-    async descriptorCommand(file, args, options) {
-      assert.equal(file, "/usr/sbin/lsof"); assert.deepEqual(args.slice(0, 3), ["-nP", "-a", "-p"]); assert.equal(args[4], "-F0pftndGPT"); assert.ok(options.timeout > 0 && options.timeout <= 5000)
-      const pid = Number(args[3]), process = await platform.readProcess(pid)
-      assert.ok(process)
-      const handler = process.birth.includes("agy-handler:"), adapter = process.birth.includes("agy-provider:")
-      let extra = ""
-      if (scenario === "descriptor-leak" && adapter || scenario === "child-descriptor-leak" && !handler && !adapter) {
-        const audit = JSON.parse(await readFile(join(executionRoots.at(-1)!, "receipts", adapter ? "fd-audit.json" : "child-fd-audit.json"), "utf8"))
-        assert.equal(audit.inheritedDirectory, true)
-        extra = "f3\0tDIR\0nevidence-directory\0\n"
-      }
-      const runtime = "f10\0tKQUEUE\0G0x3;0x2\0ncount=0, state=0x8\0\nf11\0tPIPE\0d0xaaa\0n->0xbbb\0\nf12\0tPIPE\0d0xbbb\0n->0xaaa\0\nf13\0tDIR\0G0x1;0x2\0n/\0\nf14\0tCHR\0G0x1;0x2\0n/dev/null\0\n"
-      return { stdout: `p${pid}\0\nf0\0tPIPE\0npipe0\0\nf1\0tPIPE\0npipe1\0\nf2\0tPIPE\0npipe2\0\n${handler ? `f3\0tunix\0n->0xabc\0\nf4\0tunix\0n${join(executionRoots.at(-1)!, "runtime/handler.sock")}\0\n` : ""}${runtime}${extra}`, stderr: "" }
-    },
     normalStatePaths: [normal],
     async createExecutionRoot() { const execution = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqx-" : "/tmp/agyqx-"); executionRoots.push(execution); return execution },
   }
@@ -304,7 +290,7 @@ async function assertClosedQualificationFailure(f: Awaited<ReturnType<typeof qua
     assert.deepEqual(report.protocol.methods, report.observation.receipt.methods)
     assert.deepEqual(report.prompt, report.observation.receipt.prompt)
     assert.equal(report.observation.receipt.transportClosed, true)
-    assert.equal(report.observation.receipt.handlesClosed, true)
+    assert.equal(report.observation.receipt.streamsClosed, true)
   }
   assert.equal(report.postconditions.transport, "closed")
   assert.equal(report.postconditions.directChild, "terminal")
@@ -314,7 +300,7 @@ async function assertClosedQualificationFailure(f: Awaited<ReturnType<typeof qua
   assert.equal(report.postconditions.qualificationCwd, "absent")
   assert.equal(report.postconditions.executionRoot, "absent")
   assert.equal(report.postconditions.lifecycleOperation, "terminal")
-  assert.equal(report.postconditions.ownedHandles, report.observation.descriptors?.outcome === "verified" ? "closed" : "unknown")
+  assert.equal(report.postconditions.ownedStreams, "closed")
   assert.equal(report.postconditions.handler, "absent")
   assert.equal(report.postconditions.catalogProfile, "absent")
   assert.equal(report.postconditions.normalAgencyState, "unchanged")
@@ -417,7 +403,7 @@ test("successful fixture qualification has complete postconditions and no profil
   assert.ok(report.prompt.durationMs! < report.deadlines.prompt.limitMs)
   assert.equal(Object.hasOwn(report.observation, "userSecurityState"), false)
   assert.equal(Object.hasOwn(report.postconditions, "userSecurityState"), false)
-  assert.deepEqual(report.postconditions, { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedHandles: "closed", handler: "absent", catalogProfile: "absent", normalAgencyState: "unchanged" })
+  assert.deepEqual(report.postconditions, { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedStreams: "closed", handler: "absent", catalogProfile: "absent", normalAgencyState: "unchanged" })
   assert.ok(Object.values(report.deadlines).every(value => value.outcome === "completed"))
   assert.deepEqual(parseCodexQualificationReport(report), report)
   assert.deepEqual(productionLaunchContracts(), f.registryBefore)
@@ -589,7 +575,7 @@ test("Handler death during prompt recovers from prompt evidence published before
   assert.ok(report.observation.receipt)
   assert.equal(report.observation.receipt!.terminal, false)
   assert.equal(report.observation.receipt!.transportClosed, false)
-  assert.equal(report.observation.receipt!.handlesClosed, false)
+  assert.equal(report.observation.receipt!.streamsClosed, false)
   assert.equal(report.prompt.state, "in_flight_failed")
   assert.match(report.prompt.challenge!, /^AGENCY_CODEX_SMOKE_[0-9a-f]{32}$/)
   assert.equal(report.prompt.answer, "")
@@ -663,7 +649,7 @@ for (const [scenario, failure] of [
   ["missing-option", "SELECTION_UNSUPPORTED"], ["duplicate-option", "INVALID_PROTOCOL"],
   ["adapter-exit", "STARTUP_FAILED"], ["codex-exit", "STARTUP_FAILED"], ["prompt-exit", "STARTUP_FAILED"], ["prompt-max-tokens", "INVALID_PROTOCOL"],
   ["handler-startup", "HANDLER_STARTUP_FAILED"], ["stop-failure", "CLEANUP_UNVERIFIED"],
-  ["state-removal", "CLEANUP_UNVERIFIED"], ["missing-evidence", "EVIDENCE_MISSING"], ["descriptor-leak", "DESCRIPTOR_LEAK"], ["child-descriptor-leak", "DESCRIPTOR_LEAK"],
+  ["state-removal", "CLEANUP_UNVERIFIED"], ["missing-evidence", "EVIDENCE_MISSING"],
   ...["model", "reasoning", "mode"].flatMap(phase => ["model", "reasoning", "mode", "alias"].map(field => [`substitute-${phase}-${field}`, "SELECTION_UNSUPPORTED"])),
 ] as const) test(`fixture qualification rejects ${scenario}`, async t => {
   const f = await qualificationHarnessFixture(t, scenario)
@@ -817,18 +803,54 @@ for (const kind of ["delayed", "never-settling"] as const) test(`${kind} parent 
   assert.equal(report.deadlines.absence.outcome, "timed_out")
   assert.equal(report.observation.absence!.outcome, "timed_out")
   assert.equal(report.postconditions.handler, "unknown"); assert.equal(report.postconditions.processGroup, "unknown")
-  assert.equal(report.postconditions.ownedHandles, "unknown"); assert.equal(report.postconditions.executionRoot, "present")
+  assert.equal(report.postconditions.ownedStreams, "closed"); assert.equal(report.postconditions.executionRoot, "present")
   assert.deepEqual(productionLaunchContracts(), f.registryBefore)
 })
 
-test("missing descriptor evidence prevents qualification", async t => {
+test("qualification succeeds without descriptor inspection and retains cleanup proof", async t => {
   const f = await qualificationHarnessFixture(t)
-  f.dependencies.descriptorCommand = async () => ({ stdout: "", stderr: "" })
+  const original = childProcess.execFile
+  let inspections = 0
+  childProcess.execFile = ((...args: Parameters<typeof execFile>) => {
+    if (args[0] === "/usr/sbin/lsof") { inspections++; throw new Error("descriptor inspection excluded") }
+    return original(...args)
+  }) as typeof execFile
+  syncBuiltinESMExports(); t.after(() => { childProcess.execFile = original; syncBuiltinESMExports() })
   const { report } = await runCodexQualification(f.request, f.dependencies)
-  assert.equal(report.qualified, false); assert.equal(report.failure, "DESCRIPTOR_UNAVAILABLE")
-  assert.equal(report.observation.descriptors, null); assert.equal(report.postconditions.ownedHandles, "unknown")
-  assert.equal(report.postconditions.handler, "absent"); assert.equal(report.postconditions.processGroup, "absent")
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.equal(inspections, 0)
+  assert.equal(Object.hasOwn(report.observation, "descriptors"), false)
+  assert.deepEqual(report.postconditions, { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedStreams: "closed", handler: "absent", catalogProfile: "absent", normalAgencyState: "unchanged" })
+  assert.equal(report.observation.receipt!.streamsClosed, true)
+  assert.equal(report.observation.receipt!.terminal, true)
+  assert.equal(report.observation.receipt!.transportClosed, true)
+  assert.deepEqual(report.observation.normalAgencyState.before, report.observation.normalAgencyState.after)
+  assert.equal(report.observation.absence!.outcome, "completed")
+  assert.equal(report.observation.absence!.passes, 2)
   assert.deepEqual(productionLaunchContracts(), f.registryBefore)
+})
+
+test("report and source accept no descriptor inventory but require remaining cleanup evidence", async t => {
+  const f = await qualificationHarnessFixture(t)
+  const { report, reportSha256 } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.ok(reportSha256)
+  assert.equal(Object.hasOwn(report.observation, "descriptors"), false)
+  assert.equal(parseCodexQualificationReport(report).qualified, true)
+  assert.match(renderPublishedQualificationSource(f.candidate, report, reportSha256, reportSha256, reviewedRevision), /codexDarwinArm64QualifiedContract/)
+  const cases: Array<[string, (value: any) => void]> = [
+    ["missing receipt", value => { value.observation.receipt = null }],
+    ...["terminal", "transportClosed", "streamsClosed"].map(key => [`receipt ${key}`, (value: any) => { value.observation.receipt[key] = false }] as [string, (value: any) => void]),
+    ...Object.keys(report.postconditions).map(key => [`postcondition ${key}`, (value: any) => { value.postconditions[key] = "unknown" }] as [string, (value: any) => void]),
+    ["missing absence", value => { value.observation.absence = null }],
+    ["missing process identity", value => { value.observation.absence.targets.pop() }],
+    ["changed normal state", value => { value.observation.normalAgencyState.after = [] }],
+  ]
+  for (const [name, mutate] of cases) await t.test(name, () => {
+    const value = structuredClone(report); mutate(value)
+    assert.throws(() => parseCodexQualificationReport(value))
+    assert.throws(() => renderPublishedQualificationSource(f.candidate, value, reportSha256, reportSha256, reviewedRevision))
+  })
 })
 
 test("surviving provider group prevents qualification and retains state", async t => {
@@ -962,7 +984,7 @@ test("qualified report rejects missing and substituted identity and session evid
     (r: any) => { r.session.modelId = "gpt-5.6" }, (r: any) => { r.session.reasoning.value = "low" },
     (r: any) => { r.session.mode = "write" }, (r: any) => { r.session.permissionEvidence = "fixture-contract-v1" },
     (r: any) => { r.deadlines.overall.outcome = "not_reached" }, (r: any) => { r.postconditions.processGroup = "present" },
-    (r: any) => { r.observation.descriptors = null }, (r: any) => { r.observation.descriptors.processes.pop() },
+    (r: any) => { r.observation.descriptors = {} },
     (r: any) => { r.observation.absence = null }, (r: any) => { r.observation.absence.outcome = "timed_out" },
     (r: any) => { r.observation.absence.durationMs = r.observation.absence.limitMs },
     (r: any) => { r.observation.absence.targets.pop() },
@@ -1003,6 +1025,15 @@ test("report parser rejects contradictory prompt receipt evidence", async t => {
   })
 })
 
+test("prompt receipt preserves multibyte whitespace split across stdout Buffers", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-unicode-fragmented")
+  const { report } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.equal(report.prompt.answer, `\u2003${report.prompt.challenge}\u2003`)
+  assert.equal(report.prompt.normalizedAnswer, report.prompt.challenge)
+  assert.deepEqual(report.observation.receipt!.prompt, report.prompt)
+})
+
 test("report parser derives prompt deadline outcome from authoritative receipt prompt evidence", async t => {
   const f = await qualificationHarnessFixture(t)
   const { report: baseline } = await runCodexQualification(f.request, f.dependencies)
@@ -1033,6 +1064,10 @@ test("report parser derives prompt deadline outcome from authoritative receipt p
     const unbounded = failed({ ...completed, durationMs }, "timed_out")
     assert.throws(() => parseCodexQualificationReport(unbounded), { code: "REPORT_INVALID" })
   }
+  for (const stopReason of [["end_turn"], { toString: "end_turn" }, {}]) await t.test(`rejects non-string prompt stopReason ${JSON.stringify(stopReason)}`, () => {
+    const invalid = failed({ ...completed, stopReason }, "completed")
+    assert.throws(() => parseCodexQualificationReport(invalid), { code: "REPORT_INVALID" })
+  })
 })
 
 test("completed over-deadline receipts retain prompt and method evidence after root removal", async t => {
@@ -1084,22 +1119,6 @@ test("source generation rechecks authenticated private paths and emits exact sou
   await rm(root, { recursive: true })
 })
 
-for (const scenario of ["normal", "descriptor-leak", "child-descriptor-leak"]) test(`Darwin runtime descriptors classify live fixture tree: ${scenario}`, { skip: process.platform !== "darwin" }, async t => {
-  const f = await qualificationHarnessFixture(t, scenario), observations: string[] = []
-  f.dependencies.descriptorCommand = async (file, args, options) => {
-    const result = await promisify(execFile)(file, args, { ...options, encoding: "utf8" })
-    observations.push(result.stdout.replaceAll("\0", "|"))
-    return result
-  }
-  const result = await runCodexQualification(f.request, f.dependencies)
-  assert.equal(result.report.qualified, scenario === "normal", result.report.failure + "\n" + observations.join("\n"))
-  if (scenario !== "normal") {
-    assert.equal(result.report.failure, "DESCRIPTOR_LEAK")
-    const role = scenario === "descriptor-leak" ? "adapter" : "child"
-    assert.equal(result.report.observation.descriptors!.processes.find(p => p.role === role)!.descriptors.find(d => d.fd === 3)!.allowed, false)
-  }
-  assert.ok(result.report.observation.descriptors!.processes.every(p => p.descriptors.some(d => d.fd > 4)))
-})
 
 test("source rejects retained private path substitution before mutable observations", async t => {
   const f = await qualificationHarnessFixture(t), result = await runCodexQualification(f.request, f.dependencies)
@@ -1114,37 +1133,50 @@ test("source rejects retained private path substitution before mutable observati
   assert.equal(revalidated, 0)
 })
 
-test("two-child qualification requires exact retained descriptor identities", async t => {
+test("two-child qualification requires exact retained process absence identities", async t => {
   const f = await qualificationHarnessFixture(t, "two-children")
   const { report, reportSha256 } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(report.qualified, true, JSON.stringify(report))
   assert.ok(reportSha256)
-  const children = report.observation.descriptors!.processes.filter(p => p.role === "child")
+  const children = report.ownership.providerProcessGroup!.observed.filter(p => p.pid !== report.ownership.providerProcessGroup!.leader.pid)
   assert.equal(children.length, 2)
   const baseline = structuredClone(report)
-  baseline.observation.descriptors!.processes.reverse()
+  baseline.observation.absence!.targets.reverse()
   assert.equal(parseCodexQualificationReport(baseline).qualified, true)
   assert.match(renderPublishedQualificationSource(f.candidate, baseline, reportSha256, reportSha256, reviewedRevision), /codexDarwinArm64QualifiedContract/)
   for (const mutation of ["omitted", "substituted-birth", "substituted-parent", "extra"] as const) {
-    const value = structuredClone(baseline), descriptors = value.observation.descriptors!.processes, absence = value.observation.absence!
-    const child = descriptors.find(p => p.role === "child")!
-    if (mutation === "omitted") descriptors.splice(descriptors.indexOf(child), 1)
+    const value = structuredClone(baseline), absence = value.observation.absence!
+    const child = absence.targets.find(p => p.pid === children[0]!.pid)!
+    if (mutation === "omitted") absence.targets.splice(absence.targets.indexOf(child), 1)
     else if (mutation === "extra") {
       const extra = structuredClone(child)
-      extra.process.pid = Math.max(...absence.targets.map(p => p.pid)) + 1
-      descriptors.push(extra); absence.targets.push(structuredClone(extra.process))
+      extra.pid = Math.max(...absence.targets.map(p => p.pid)) + 1
+      absence.targets.push(extra)
     } else {
-      if (mutation === "substituted-birth") child.process.birth = "1:substituted"
-      else child.process.parentPid = descriptors.find(p => p.role === "child" && p !== child)!.process.pid
-      Object.assign(absence.targets.find(p => p.pid === child.process.pid)!, child.process)
+      if (mutation === "substituted-birth") child.birth = "1:substituted"
+      else child.parentPid = children[1]!.pid
     }
-    await t.test(`parser rejects ${mutation} descriptor identity`, () => { assert.throws(() => parseCodexQualificationReport(value), { code: "REPORT_INVALID" }) })
-    await t.test(`source rejects ${mutation} descriptor identity`, () => { assert.throws(() => renderPublishedQualificationSource(f.candidate, value, reportSha256, reportSha256, reviewedRevision), { code: "REPORT_INVALID" }) })
+    await t.test(`parser rejects ${mutation} process identity`, () => { assert.throws(() => parseCodexQualificationReport(value), { code: "REPORT_INVALID" }) })
+    await t.test(`source rejects ${mutation} process identity`, () => { assert.throws(() => renderPublishedQualificationSource(f.candidate, value, reportSha256, reportSha256, reviewedRevision), { code: "REPORT_INVALID" }) })
   }
   await t.test("runtime retains both initialized children before readiness", () => {
     for (const group of [report.ownership.providerProcessGroup!, report.observation.retained.launch!.provider!.group]) {
       assert.equal(group.observed.length, 3)
-      for (const child of children) assert.deepEqual(group.observed.find(p => p.pid === child.process.pid), child.process)
+      for (const child of children) assert.deepEqual(group.observed.find(p => p.pid === child.pid), child)
     }
+  })
+  for (const mutation of ["missing children", "cyclic child ancestry"] as const) await t.test(`parser and source reject ${mutation} across retained views`, () => {
+    const value = structuredClone(baseline)
+    const groups = [value.ownership.providerProcessGroup!, value.observation.retained.launch!.provider!.group]
+    if (mutation === "missing children") {
+      for (const group of groups) group.observed = group.observed.filter(p => p.pid === group.leader.pid)
+      value.observation.absence!.targets = value.observation.absence!.targets.filter(p => !children.some(child => child.pid === p.pid))
+    } else {
+      for (const processes of [...groups.map(group => group.observed), value.observation.absence!.targets]) {
+        for (const child of children) processes.find(p => p.pid === child.pid)!.parentPid = children.find(peer => peer.pid !== child.pid)!.pid
+      }
+    }
+    assert.throws(() => parseCodexQualificationReport(value))
+    assert.throws(() => renderPublishedQualificationSource(f.candidate, value, reportSha256, reportSha256, reviewedRevision))
   })
 })

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { openSync, closeSync, writeFileSync } from "node:fs"
+import { writeFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { runHandler } from "../../src/handler/daemon.js"
@@ -39,20 +39,25 @@ try {
       processFactory: options => {
         const owner = qualificationProcessFactory(root, times, {
         spawn: ((file: string, args: readonly string[], config: Parameters<typeof spawn>[2]) => {
-          if (scenario !== "descriptor-leak") {
-            const child = spawn(file, [...args, scenario, root, dirname(candidatePath)], config!)
-            if (scenario.startsWith("prompt-forward-")) {
-              const original = child.stdin!.write.bind(child.stdin!), path = join(dirname(candidatePath), "prompt-forward-audit.json")
-              let promptWrites = 0
-              child.stdin!.write = ((chunk: Buffer | string, ...rest: unknown[]) => {
-                try { if (JSON.parse(chunk.toString()).method === "session/prompt") writeFileSync(path, JSON.stringify({ promptWrites: ++promptWrites }), { mode: 0o600 }) } catch {}
-                return (original as (...args: unknown[]) => boolean)(chunk, ...rest)
-              }) as NonNullable<typeof child.stdin>["write"]
-            }
-            return child
+          const child = spawn(file, [...args, scenario, root, dirname(candidatePath)], config!)
+          if (scenario === "prompt-unicode-fragmented") {
+            const emit = child.stdout!.emit.bind(child.stdout!)
+            child.stdout!.emit = ((event: string | symbol, ...values: unknown[]) => {
+              if (event !== "data" || !Buffer.isBuffer(values[0])) return emit(event, ...values)
+              const chunk = values[0]
+              for (let index = 0; index < chunk.length; index++) emit("data", chunk.subarray(index, index + 1))
+              return true
+            }) as NonNullable<typeof child.stdout>["emit"]
           }
-          const fd = openSync(join(root, "receipts"), "r")
-          try { return spawn(file, [...args, scenario, root], { ...config, stdio: ["pipe", "pipe", "pipe", fd] }) } finally { closeSync(fd) }
+          if (scenario.startsWith("prompt-forward-")) {
+            const original = child.stdin!.write.bind(child.stdin!), path = join(dirname(candidatePath), "prompt-forward-audit.json")
+            let promptWrites = 0
+            child.stdin!.write = ((chunk: Buffer | string, ...rest: unknown[]) => {
+              try { if (JSON.parse(chunk.toString()).method === "session/prompt") writeFileSync(path, JSON.stringify({ promptWrites: ++promptWrites }), { mode: 0o600 }) } catch {}
+              return (original as (...args: unknown[]) => boolean)(chunk, ...rest)
+            }) as NonNullable<typeof child.stdin>["write"]
+          }
+          return child
         }) as typeof spawn,
         ...(scenario === "state-removal" ? { removeProviderState: async () => { throw new AgentError("CLEANUP_UNVERIFIED") } } : {}),
         publish: async (path, value) => {

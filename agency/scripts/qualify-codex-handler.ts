@@ -44,7 +44,8 @@ export function fatalQualificationHandler(spec: LaunchSpec): never {
 type AuditOptions = { spawn?: typeof spawn; removeProviderState?: NonNullable<Parameters<typeof createAgentProcess>[1]>["removeProviderState"]; publish?: typeof durableQualificationWrite }
 export function qualificationProcessFactory(root: string, reservationTimes: Map<string, number>, options: AuditOptions = {}): typeof createAgentProcess {
   return input => {
-    const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, prompt: { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null }, terminal: false, transportClosed: false, handlesClosed: false, failure: null }
+    const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, prompt: { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null }, terminal: false, transportClosed: false, streamsClosed: false, failure: null }
+    const decoder = new TextDecoder("utf-8", { fatal: true })
     const reservation = reservationTimes.get(input.spec.launchAttemptId)
     if (reservation !== undefined) receipt.durations.reservation = reservation
     let child: ChildProcess | undefined, started = performance.now(), phaseStart = 0, pendingId: unknown, phase: "initialize" | "session" | "model" | "reasoning" | "mode" | "prompt" | undefined, sessionId: string | undefined, buffer = "", closeStart = 0, terminalAt = 0, closedAt = 0, absenceStart = 0, promptEvidence: Promise<void> | undefined
@@ -111,7 +112,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
       }) as NonNullable<ChildProcess["stdin"]>["write"]
       child.stdout!.on("data", (chunk: Buffer) => {
         if (buffer.length + chunk.length > input.spec.limits.frameBytes) { receipt.failure = "INVALID_PROTOCOL"; buffer = ""; return }
-        buffer += chunk.toString("utf8")
+        try { buffer += decoder.decode(chunk, { stream: true }) } catch { receipt.failure = "INVALID_PROTOCOL"; buffer = ""; return }
         let newline: number
         while ((newline = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1)
@@ -134,6 +135,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
           } catch { receipt.failure = "INVALID_PROTOCOL" }
         }
       })
+      child.stdout!.once("end", () => { try { decoder.decode() } catch { receipt.failure = "INVALID_PROTOCOL" } })
       child.once("exit", () => { releasePrompt(); receipt.terminal = true; terminalAt = performance.now(); if (closeStart) receipt.durations.processTerminate = terminalAt - closeStart })
       child.once("close", () => { releasePrompt(); closedAt = performance.now() })
       return child
@@ -193,7 +195,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
             await promptForward?.completion
             await new Promise<void>(resolve => setImmediate(resolve))
             receipt.transportClosed = child === undefined || closedAt > 0 && !!child.stdin?.destroyed && !!child.stdout?.destroyed && !!child.stderr?.destroyed
-            receipt.handlesClosed = receipt.transportClosed
+            receipt.streamsClosed = receipt.transportClosed
             if (closedAt && terminalAt) receipt.durations.transportClose = Math.max(0, closedAt - terminalAt)
             if (!child) { receipt.terminal = true; receipt.durations.processTerminate = 0 }
             if (receipt.prompt.state === "in_flight_failed" && phaseStart) receipt.prompt.durationMs = performance.now() - phaseStart
