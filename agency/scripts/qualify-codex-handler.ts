@@ -47,7 +47,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
     const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, prompt: { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null }, terminal: false, transportClosed: false, handlesClosed: false, failure: null }
     const reservation = reservationTimes.get(input.spec.launchAttemptId)
     if (reservation !== undefined) receipt.durations.reservation = reservation
-    let child: ChildProcess | undefined, started = performance.now(), phaseStart = 0, pendingId: unknown, phase: "initialize" | "session" | "model" | "reasoning" | "mode" | "prompt" | undefined, sessionId: string | undefined, buffer = "", closeStart = 0, terminalAt = 0, closedAt = 0, absenceStart = 0
+    let child: ChildProcess | undefined, started = performance.now(), phaseStart = 0, pendingId: unknown, phase: "initialize" | "session" | "model" | "reasoning" | "mode" | "prompt" | undefined, sessionId: string | undefined, buffer = "", closeStart = 0, terminalAt = 0, closedAt = 0, absenceStart = 0, promptEvidence: Promise<void> | undefined
     const adapter = input.context.adapter
     const observedInput = { ...input, context: { ...input.context, adapter: { ...adapter,
       async readGroup(group: number) { const result = await adapter.readGroup(group); if (closeStart && !result.length) { absenceStart ||= performance.now(); receipt.durations.absence = performance.now() - absenceStart }; return result },
@@ -58,6 +58,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
       child = (options.spawn ?? spawn)(file, args, config!)
       const original = child.stdin!.write.bind(child.stdin!)
       child.stdin!.write = ((chunk: Buffer | string, ...rest: unknown[]) => {
+        let publishPrompt = false
         try {
           const request = JSON.parse(chunk.toString())
           if (typeof request.method === "string") {
@@ -70,10 +71,20 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
               const prompt = request.params?.prompt?.[0]?.text, match = typeof prompt === "string" ? /^Return exactly this token and no other text:\n(AGENCY_CODEX_SMOKE_[0-9a-f]{32})\n\nDo not inspect files or use tools\.$/.exec(prompt) : null
               if (!match || request.params.prompt.length !== 1 || request.params.prompt[0].type !== "text" || request.params.sessionId !== sessionId) throw new AgentError("INVALID_PROTOCOL")
               receipt.prompt = { state: "in_flight_failed", challenge: match[1]!, prompt, answer: "", normalizedAnswer: null, stopReason: null, durationMs: 0 }
+              publishPrompt = true
             }
             if (receipt.methods.length === 1) receipt.durations.spawn = phaseStart - started
           }
         } catch { receipt.failure = "INVALID_PROTOCOL" }
+        if (publishPrompt) {
+          const callback = rest.find(value => typeof value === "function") as ((error?: Error | null) => void) | undefined
+          promptEvidence = (options.publish ?? durableQualificationWrite)(join(root, "receipts", input.spec.launchAttemptId + ".prompt.json"), receipt)
+          void promptEvidence.then(() => { (original as (...args: unknown[]) => boolean)(chunk, ...rest) }, error => {
+            receipt.failure = "EVIDENCE_PUBLICATION_FAILED"
+            callback?.(error instanceof Error ? error : new Error("prompt evidence publication failed"))
+          })
+          return false
+        }
         return (original as (...args: unknown[]) => boolean)(chunk, ...rest)
       }) as NonNullable<ChildProcess["stdin"]>["write"]
       child.stdout!.on("data", (chunk: Buffer) => {
@@ -148,6 +159,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
           try { result = await owner.cleanup() }
           catch (error) { receipt.failure = "CLEANUP_UNVERIFIED"; throw error }
           finally {
+            await promptEvidence?.catch(() => undefined)
             await new Promise<void>(resolve => setImmediate(resolve))
             receipt.transportClosed = child === undefined || closedAt > 0 && !!child.stdin?.destroyed && !!child.stdout?.destroyed && !!child.stderr?.destroyed
             receipt.handlesClosed = receipt.transportClosed

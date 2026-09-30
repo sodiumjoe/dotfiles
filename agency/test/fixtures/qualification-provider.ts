@@ -18,6 +18,8 @@ if (scenario === "child") {
     { id: "mode", type: "select", currentValue: "read-only", options: [{ value: "read-only" }] },
   ]
   const send = (value: unknown): void => { process.stdout.write(JSON.stringify(value) + "\n") }
+  const update = (value: unknown, sessionId = "fixture-session"): void => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: value } })
+  const audit = (value: unknown): void => writeFileSync(join(process.argv[3]!, "receipts/provider-audit.json"), JSON.stringify(value), { mode: 0o600 })
   let buffer = ""
   process.stdin.on("data", (chunk: Buffer) => {
     buffer += chunk.toString("utf8")
@@ -68,9 +70,45 @@ if (scenario === "child") {
         if (request.params.sessionId !== "fixture-session" || !Array.isArray(request.params.prompt) || request.params.prompt.length !== 1 || request.params.prompt[0]?.type !== "text") process.exit(5)
         const match = /^Return exactly this token and no other text:\n(AGENCY_CODEX_SMOKE_[0-9a-f]{32})\n\nDo not inspect files or use tools\.$/.exec(request.params.prompt[0].text)
         if (!match) process.exit(5)
-        const answer = scenario === "prompt-whitespace" ? ` \n${match[1]}\n ` : match[1]
-        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } })
-        result = { stopReason: scenario === "prompt-max-tokens" ? "max_tokens" : "end_turn" }
+        const token = match[1]!
+        const answer = scenario === "prompt-whitespace" ? ` \n${token}\n ` : token
+        if (scenario === "handler-death") { process.kill(process.ppid, "SIGKILL"); continue }
+        if (scenario === "prompt-abort" || scenario === "prompt-deadline") continue
+        if (scenario === "prompt-non-text") { update({ sessionUpdate: "agent_message_chunk", content: { type: "image", data: "x", mimeType: "image/png" } }); continue }
+        if (scenario === "prompt-tool-call" || scenario === "prompt-tool-call-update") { update({ sessionUpdate: scenario.slice(7), toolCallId: "tool" }); continue }
+        if (scenario === "prompt-permission" || scenario === "prompt-permission-malformed") {
+          const options = scenario.endsWith("malformed") ? [{ optionId: "same", name: "One", kind: "allow_once" }, { optionId: "same", name: "Two", kind: "reject_once" }] : [{ optionId: "cancel", name: "Cancel", kind: "reject_once" }]
+          send({ jsonrpc: "2.0", id: "prompt-permission", method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "tool", title: "fixture" }, options } }); continue
+        }
+        const clientMethod = new Map([
+          ["prompt-fs-read", "fs/read_text_file"], ["prompt-fs-write", "fs/write_text_file"],
+          ["prompt-terminal-create", "terminal/create"], ["prompt-terminal-output", "terminal/output"], ["prompt-terminal-release", "terminal/release"], ["prompt-terminal-wait-for-exit", "terminal/wait_for_exit"], ["prompt-terminal-kill", "terminal/kill"],
+          ["prompt-unknown-request", "unexpected/method"],
+        ]).get(scenario)
+        if (clientMethod) { send({ jsonrpc: "2.0", id: "prompt-client-request", method: clientMethod, params: { sessionId: "fixture-session" } }); continue }
+        if (scenario === "prompt-answer-overflow") { update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(4097) } }); continue }
+        if (scenario === "prompt-frame-overflow") { process.stdout.write("x".repeat(65537) + "\n"); continue }
+        if (scenario === "prompt-config-drift") {
+          update({ sessionUpdate: "config_option_update", configOptions: options.map(option => option.id === "model" ? { ...option, currentValue: "substituted", options: [{ value: "substituted" }] } : option) }); continue
+        }
+        const chunks = scenario === "prompt-fragmented" ? [answer.slice(0, 1), answer.slice(1)] : scenario === "prompt-multiple" ? [answer.slice(0, 7), answer.slice(7, 23), answer.slice(23)] : [scenario === "prompt-extra-content" ? answer + "extra" : answer]
+        if (scenario === "prompt-late-result") {
+          send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+          update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } })
+          continue
+        }
+        for (const text of chunks) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } }, scenario === "prompt-wrong-session-id" ? "wrong-session" : "fixture-session")
+        if (scenario === "prompt-wrong-session-id") continue
+        if (scenario === "prompt-wrong-request-id") { send({ jsonrpc: "2.0", id: request.id + 100, result: { stopReason: "end_turn" } }); continue }
+        if (scenario === "prompt-malformed-result") { send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn", extra: true } }); continue }
+        if (scenario === "prompt-duplicate-result") {
+          send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+          send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+          continue
+        }
+        const stopReason = new Map([["prompt-max-tokens", "max_tokens"], ["prompt-max-turn-requests", "max_turn_requests"], ["prompt-refusal", "refusal"], ["prompt-cancelled", "cancelled"]]).get(scenario) ?? "end_turn"
+        if (scenario === "prompt-fragmented" || scenario === "prompt-multiple" || scenario === "prompt-whitespace") audit({ scenario, chunks: chunks.length })
+        result = { stopReason }
       } else process.exit(5)
       send({ jsonrpc: "2.0", id: request.id, result })
     }

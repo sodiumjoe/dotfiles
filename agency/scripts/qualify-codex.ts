@@ -752,7 +752,9 @@ export async function runCodexQualification(request: QualificationRequest, depen
         report.postconditions.providerState = report.ownership.launchAttemptId && await exists(providerStatePath(paths.persistentRoot, report.ownership.launchAttemptId)) ? "present" : "absent"
         report.postconditions.catalogProfile = await exists(join(paths.persistentRoot, "catalog/providers.json")) ? "present" : "absent"
         if (report.ownership.launchAttemptId) {
-          report.observation.receipt = parseQualificationReceipt(await readPrivateJson(join(root!, "receipts", report.ownership.launchAttemptId + ".json")), candidate.manifest)
+          const receiptPath = join(root!, "receipts", report.ownership.launchAttemptId + ".json")
+          const promptReceiptPath = join(root!, "receipts", report.ownership.launchAttemptId + ".prompt.json")
+          report.observation.receipt = parseQualificationReceipt(await readPrivateJson(await exists(receiptPath) ? receiptPath : promptReceiptPath), candidate.manifest)
           const receipt = report.observation.receipt
           Object.assign(receipt.durations, parentDurations)
           report.prompt = structuredClone(receipt.prompt)

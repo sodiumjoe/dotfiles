@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { chmod, link, mkdir, open, readFile, lstat, rename, symlink, writeFile } from "node:fs/promises"
+import { chmod, link, mkdir, open, readFile, lstat, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import test, { type TestContext } from "node:test"
@@ -187,6 +187,41 @@ test("production registry cannot acquire a candidate implicitly", () => {
   assert.deepEqual(productionLaunchContracts(), [])
   assert.ok(Object.isFrozen(qualifiedLaunchContracts()))
   assert.ok(Object.isFrozen(productionLaunchContracts()))
+})
+
+test("isolated registration rollback removes generated source and restores frozen empty registries at every gate", async t => {
+  for (const boundary of ["source-generation", "qualified-insertion", "production-insertion", "focused-test", "full-test", "post-registration"] as const) await t.test(boundary, async t => {
+    const root = await privateRoot(t), generated = join(root, "generated.mts"), qualified = join(root, "qualified.mts"), production = join(root, "production.mts")
+    await symlink(fileURLToPath(new URL("../src/agent/qualification.js", import.meta.url)), join(root, "qualification.js"))
+    const emptyQualified = `export function qualifiedLaunchContracts() { return Object.freeze([]) }`
+    const emptyProduction = `export function productionLaunchContracts() { return Object.freeze([]) }`
+    await writeFile(qualified, emptyQualified)
+    await writeFile(production, emptyProduction)
+    const load = async (path: string) => import(pathToFileURL(path).href + `?fixture=${Math.random()}`)
+    try {
+      if (boundary === "source-generation") throw new Error(boundary)
+      const f = await qualificationFixture(t), manifest = parseCodexQualificationManifest(f.manifest)
+      const candidate = { version: 3 as const, manifest, fingerprint: qualificationFingerprint(manifest) }
+      await writeFile(generated, renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: candidate.fingerprint }))
+      if (boundary === "qualified-insertion") throw new Error(boundary)
+      await writeFile(qualified, `import { codexDarwinArm64QualifiedContract } from "./generated.mts"\nexport function qualifiedLaunchContracts() { return Object.freeze([codexDarwinArm64QualifiedContract]) }`)
+      if (boundary === "production-insertion") throw new Error(boundary)
+      await writeFile(production, `import { qualifiedLaunchContracts } from "./qualified.mts"\nexport function productionLaunchContracts() { return Object.freeze([...qualifiedLaunchContracts()]) }`)
+      const beforeQualified = (await load(qualified)).qualifiedLaunchContracts(), beforeProduction = (await load(production)).productionLaunchContracts()
+      assert.equal(beforeQualified.length, 1); assert.equal(beforeProduction.length, 1)
+      assert.ok(Object.isFrozen(beforeQualified)); assert.ok(Object.isFrozen(beforeProduction))
+      throw new Error(boundary)
+    } catch (error) {
+      assert.equal((error as Error).message, boundary)
+      await writeFile(qualified, emptyQualified)
+      await writeFile(production, emptyProduction)
+      await rm(generated, { force: true })
+    }
+    const afterQualified = (await load(qualified)).qualifiedLaunchContracts(), afterProduction = (await load(production)).productionLaunchContracts()
+    assert.deepEqual(afterQualified, []); assert.deepEqual(afterProduction, [])
+    assert.ok(Object.isFrozen(afterQualified)); assert.ok(Object.isFrozen(afterProduction))
+    await assert.rejects(lstat(generated), { code: "ENOENT" })
+  })
 })
 
 test("qualified candidate derives exact contract and catalog evidence", { skip: !canVerify }, async t => {

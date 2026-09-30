@@ -20,10 +20,14 @@ const command: DescriptorCommand = async (file, args, options) => {
 }
 
 test("descriptor observations bind Handler, adapter, and newly observed child identities", async () => {
-  const result = await observeQualificationDescriptors(live, [handler], group, 2000, command)
+  const inspected: number[] = []
+  const inspect: DescriptorCommand = async (...args) => { inspected.push(Number(args[1][3])); return command(...args) }
+  const result = await observeQualificationDescriptors(live, [handler], group, 2000, inspect)
   assert.equal(result.outcome, "verified")
   assert.deepEqual(result.processes.map(p => [p.role, p.process.pid, p.descriptors.map(d => d.fd)]), [["handler", 100, [0, 1, 2, 3, 4]], ["adapter", 200, [0, 1, 2]], ["child", 201, [0, 1, 2]]])
+  assert.deepEqual(inspected, [100, 200, 201])
   assert.ok(!JSON.stringify(result).includes("channel3"))
+  assert.ok(!JSON.stringify(result).includes("pipe0"))
 })
 
 for (const [role, pid] of [["handler", 100], ["adapter", 200], ["child", 201]] as const) test(`descriptor observation detects an inherited ${role} evidence handle`, async () => {
@@ -36,7 +40,7 @@ for (const [role, pid] of [["handler", 100], ["adapter", 200], ["child", 201]] a
   assert.ok(!JSON.stringify(result).includes("secret-evidence"))
 })
 
-for (const raw of ["", "p999\0\nf0\0tPIPE\0np\0\n", "p100\0\nf0\0tPIPE\0np\0\n", "p100\0\nf0\0tUNKNOWN\0np\0\n"]) test(`descriptor observation refuses missing or unknown evidence ${JSON.stringify(raw)}`, async () => {
+for (const raw of ["", "p999\0\nf0\0tPIPE\0np\0\n", "p100\0\nf0\0tPIPE\0np\0\n", "p100\0\nf0\0tUNKNOWN\0np\0\n", output(100) + "f0\0tPIPE\0nduplicate\0\n", "p100\0\n" + "f5\0tPIPE\0np\0\n".repeat(257)]) test(`descriptor observation refuses missing or unknown evidence ${JSON.stringify(raw).slice(0, 80)}`, async () => {
   await assert.rejects(observeQualificationDescriptors(live, [handler], group, 2000, async () => ({ stdout: raw, stderr: "" })), { code: "DESCRIPTOR_UNAVAILABLE" })
 })
 

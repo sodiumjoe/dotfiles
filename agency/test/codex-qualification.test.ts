@@ -230,6 +230,7 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
   const candidatePath = join(root, "candidate.json")
   await writeFile(candidatePath, JSON.stringify(candidate), { mode: 0o600 })
   const executionRoots: string[] = []
+  let providerAudit: unknown = null
   const platform = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   const dependencies: QualificationDependencies = {
     adapter: platform, hostKey: "a".repeat(64),
@@ -250,6 +251,7 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     },
     normalStatePaths: [normal],
     async createExecutionRoot() { const execution = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqx-" : "/tmp/agyqx-"); executionRoots.push(execution); return execution },
+    async beforeCleanup(root) { providerAudit = await readFile(join(root, "receipts/provider-audit.json"), "utf8").then(JSON.parse).catch(() => null) },
   }
   ;(dependencies as any).currentRevision = async () => ({ branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit })
   t.after(async () => {
@@ -277,7 +279,44 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     }
     await rm(root, { recursive: true, force: true })
   })
-  return { root, user, normal, candidate, registryBefore, executionRoots, request: { candidatePath, evidenceParent, ...reviewedRevision }, dependencies }
+  return { root, user, normal, candidate, registryBefore, executionRoots, providerAudit: () => providerAudit, request: { candidatePath, evidenceParent, ...reviewedRevision }, dependencies }
+}
+
+async function assertClosedQualificationFailure(f: Awaited<ReturnType<typeof qualificationHarnessFixture>>, result: Awaited<ReturnType<typeof runCodexQualification>>, failure: string) {
+  const { report, reportPath, reportSha256 } = result
+  assert.equal(report.qualified, false)
+  assert.equal(report.failure, failure, JSON.stringify(report))
+  assert.ok(reportPath)
+  assert.match(reportSha256!, /^[0-9a-f]{64}$/)
+  const reportBytes = await readFile(reportPath!)
+  assert.equal(digest(reportBytes), reportSha256)
+  assert.deepEqual(JSON.parse(reportBytes.toString("utf8")), report)
+  assert.ok(report.protocol.methods.filter(method => method === "session/new").length <= 1)
+  assert.ok(report.protocol.methods.filter(method => method === "session/prompt").length <= 1)
+  if (report.observation.receipt) {
+    assert.deepEqual(report.protocol.methods, report.observation.receipt.methods)
+    assert.deepEqual(report.prompt, report.observation.receipt.prompt)
+    assert.equal(report.observation.receipt.transportClosed, true)
+    assert.equal(report.observation.receipt.handlesClosed, true)
+  }
+  assert.equal(report.postconditions.transport, "closed")
+  assert.equal(report.postconditions.directChild, "terminal")
+  assert.equal(report.postconditions.processGroup, "absent")
+  assert.equal(report.postconditions.reservation, "released")
+  assert.equal(report.postconditions.providerState, "absent")
+  assert.equal(report.postconditions.qualificationCwd, "absent")
+  assert.equal(report.postconditions.executionRoot, "absent")
+  assert.equal(report.postconditions.lifecycleOperation, "terminal")
+  assert.equal(report.postconditions.ownedHandles, report.observation.descriptors?.outcome === "verified" ? "closed" : "unknown")
+  assert.equal(report.postconditions.handler, "absent")
+  assert.equal(report.postconditions.catalogProfile, "absent")
+  assert.equal(report.postconditions.normalAgencyState, "unchanged")
+  assert.deepEqual(report.observation.normalAgencyState.after, report.observation.normalAgencyState.before)
+  for (const executionRoot of f.executionRoots) await assert.rejects(lstat(executionRoot), { code: "ENOENT" })
+  assert.deepEqual(productionLaunchContracts(), [])
+  assert.deepEqual(qualifiedLaunchContracts(), [])
+  assert.ok(Object.isFrozen(productionLaunchContracts()))
+  assert.ok(Object.isFrozen(qualifiedLaunchContracts()))
 }
 
 test("qualification rejects invalid reviewed revisions before artifact verification or attempt creation", async t => {
@@ -400,13 +439,14 @@ test("top-level prompt remains not started when the Handler never receives promp
     if (request.op === "agent_prompt") { socket.destroy(); return Promise.reject(new AgentError("INVALID_PROTOCOL")) }
     return exchangeAgentProtocol(socket, request, timeout)
   }
-  const { report } = await runCodexQualification(f.request, f.dependencies)
+  const result = await runCodexQualification(f.request, f.dependencies), { report } = result
   assert.equal(report.qualified, false)
   assert.equal(report.failure, "INVALID_PROTOCOL")
   assert.deepEqual(report.prompt, { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null })
   assert.equal(report.deadlines.prompt.outcome, "not_reached")
   assert.deepEqual(report.prompt, report.observation.receipt!.prompt)
   assert.deepEqual(report.protocol.methods, report.observation.receipt!.methods)
+  await assertClosedQualificationFailure(f, result, "INVALID_PROTOCOL")
 })
 
 test("successful prompt qualification removes surrounding whitespace only", async t => {
@@ -416,6 +456,115 @@ test("successful prompt qualification removes surrounding whitespace only", asyn
   assert.equal(report.prompt.state, "completed")
   assert.equal(report.prompt.answer, ` \n${report.prompt.challenge}\n `)
   assert.equal(report.prompt.normalizedAnswer, report.prompt.challenge)
+})
+
+for (const scenario of ["prompt-fragmented", "prompt-multiple"] as const) test(`successful qualification accepts ${scenario} text chunks`, async t => {
+  const f = await qualificationHarnessFixture(t, scenario)
+  const { report } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.equal(report.prompt.state, "completed")
+  assert.equal(report.prompt.answer, report.prompt.challenge)
+  assert.equal(report.prompt.normalizedAnswer, report.prompt.challenge)
+  assert.deepEqual(report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
+  assert.deepEqual(f.providerAudit(), { scenario, chunks: scenario === "prompt-fragmented" ? 2 : 3 })
+})
+
+for (const [scenario, failure] of [
+  ["prompt-extra-content", "ADAPTER_UNQUALIFIED"], ["prompt-non-text", "INVALID_PROTOCOL"],
+  ["prompt-malformed-result", "INVALID_PROTOCOL"], ["prompt-duplicate-result", "INVALID_PROTOCOL"],
+  ["prompt-late-result", "INVALID_PROTOCOL"], ["prompt-wrong-request-id", "INVALID_PROTOCOL"], ["prompt-wrong-session-id", "INVALID_PROTOCOL"],
+  ["prompt-max-tokens", "INVALID_PROTOCOL"], ["prompt-max-turn-requests", "INVALID_PROTOCOL"], ["prompt-refusal", "INVALID_PROTOCOL"], ["prompt-cancelled", "INVALID_PROTOCOL"],
+  ["prompt-tool-call", "INVALID_PROTOCOL"], ["prompt-tool-call-update", "INVALID_PROTOCOL"],
+  ["prompt-permission", "PERMISSION_UNSUPPORTED"], ["prompt-permission-malformed", "INVALID_PROTOCOL"],
+  ["prompt-fs-read", "INVALID_PROTOCOL"], ["prompt-fs-write", "INVALID_PROTOCOL"],
+  ["prompt-terminal-create", "INVALID_PROTOCOL"], ["prompt-terminal-output", "INVALID_PROTOCOL"], ["prompt-terminal-release", "INVALID_PROTOCOL"], ["prompt-terminal-wait-for-exit", "INVALID_PROTOCOL"], ["prompt-terminal-kill", "INVALID_PROTOCOL"],
+  ["prompt-unknown-request", "INVALID_PROTOCOL"], ["prompt-answer-overflow", "INVALID_PROTOCOL"], ["prompt-frame-overflow", "INVALID_PROTOCOL"],
+  ["prompt-config-drift", "SELECTION_UNSUPPORTED"],
+] as const) test(`prompt failure ${scenario} is single-attempt and fully cleaned`, async t => {
+  const f = await qualificationHarnessFixture(t, scenario)
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, failure)
+  assert.notEqual(result.report.prompt.state, "not_started")
+  assert.deepEqual(result.report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
+})
+
+test("Handler death during prompt recovers from prompt evidence published before provider forwarding", async t => {
+  const f = await qualificationHarnessFixture(t, "handler-death")
+  const result = await runCodexQualification(f.request, f.dependencies)
+  const { report, reportPath, reportSha256 } = result
+  assert.equal(report.qualified, false)
+  assert.equal(report.failure, "UNAVAILABLE")
+  assert.ok(reportPath)
+  assert.equal(digest(await readFile(reportPath!)), reportSha256)
+  assert.equal(report.ownership.handlers.length, 2)
+  assert.ok(report.observation.receipt)
+  assert.equal(report.observation.receipt!.terminal, false)
+  assert.equal(report.observation.receipt!.transportClosed, false)
+  assert.equal(report.observation.receipt!.handlesClosed, false)
+  assert.equal(report.prompt.state, "in_flight_failed")
+  assert.match(report.prompt.challenge!, /^AGENCY_CODEX_SMOKE_[0-9a-f]{32}$/)
+  assert.equal(report.prompt.answer, "")
+  assert.equal(report.prompt.normalizedAnswer, null)
+  assert.equal(report.prompt.stopReason, null)
+  assert.deepEqual(report.prompt, report.observation.receipt!.prompt)
+  assert.deepEqual(report.protocol.methods, report.observation.receipt!.methods)
+  assert.deepEqual(report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
+  assert.ok(report.observation.retained.recovery)
+  assert.equal(report.observation.retained.recovery!.consistent, true)
+  assert.equal(report.observation.retained.recovery!.launch!.phase, "cleanup_verified")
+  assert.equal(report.postconditions.processGroup, "absent")
+  assert.equal(report.postconditions.reservation, "released")
+  assert.equal(report.postconditions.providerState, "absent")
+  assert.equal(report.postconditions.qualificationCwd, "absent")
+  assert.equal(report.postconditions.executionRoot, "absent")
+  assert.equal(report.postconditions.lifecycleOperation, "terminal")
+  assert.equal(report.postconditions.handler, "absent")
+  assert.equal(report.postconditions.catalogProfile, "absent")
+  assert.equal(report.postconditions.normalAgencyState, "unchanged")
+  assert.equal(report.observation.absence!.outcome, "completed")
+  assert.equal(report.observation.absence!.handler, "absent")
+  assert.equal(report.observation.absence!.provider, "absent")
+  for (const executionRoot of f.executionRoots) await assert.rejects(lstat(executionRoot), { code: "ENOENT" })
+  assert.deepEqual(productionLaunchContracts(), [])
+  assert.deepEqual(qualifiedLaunchContracts(), [])
+})
+
+for (const [scenario, failure, promptState] of [["adapter-exit", "STARTUP_FAILED", "not_started"], ["codex-exit", "STARTUP_FAILED", "not_started"], ["prompt-exit", "STARTUP_FAILED", "in_flight_failed"]] as const) test(`${scenario} retains failure evidence and completes owned cleanup`, async t => {
+  const f = await qualificationHarnessFixture(t, scenario)
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, failure)
+  assert.equal(result.report.prompt.state, promptState)
+  assert.equal(result.report.protocol.methods.filter(method => method === "session/prompt").length, promptState === "in_flight_failed" ? 1 : 0)
+})
+
+test("prompt client abort after Handler authority settles once and completes cleanup", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-abort")
+  ;(f.dependencies as any).exchangeAgent = (socket: Parameters<typeof exchangeAgentProtocol>[0], request: Parameters<typeof exchangeAgentProtocol>[1], timeout: number) => {
+    const result = exchangeAgentProtocol(socket, request, timeout)
+    if (request.op === "agent_prompt") void (async () => {
+      const receipts = join(f.executionRoots.at(-1)!, "receipts")
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if ((await readdir(receipts)).some(name => name.endsWith(".prompt.json"))) { socket.destroy(); return }
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      socket.destroy()
+    })()
+    return result
+  }
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, "UNAVAILABLE")
+  assert.equal(result.report.prompt.state, "in_flight_failed")
+  assert.deepEqual(result.report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
+})
+
+test("prompt deadline records one timed-out attempt and completes cleanup", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-deadline")
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, "STARTUP_TIMEOUT")
+  assert.equal(result.report.prompt.state, "in_flight_failed")
+  assert.ok(result.report.prompt.durationMs! >= result.report.deadlines.prompt.limitMs)
+  assert.equal(result.report.deadlines.prompt.outcome, "timed_out")
+  assert.deepEqual(result.report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
 })
 
 for (const [scenario, failure] of [
@@ -478,6 +627,37 @@ test("source generation is bound to the exact report bytes and reviewed candidat
   for (const revision of [{ ...reviewedRevision, reviewedCommit: "b".repeat(40) }, { ...reviewedRevision, reviewedBranch: "master" }]) {
     assert.throws(() => renderPublishedQualificationSource(f.candidate, result.report, observed, observed, revision), { code: "ADAPTER_UNQUALIFIED" })
   }
+  for (const version of [1, 2]) {
+    assert.throws(() => renderPublishedQualificationSource({ ...f.candidate, version } as typeof f.candidate, result.report, observed, observed, reviewedRevision), { code: "ADAPTER_UNQUALIFIED" })
+    assert.throws(() => renderPublishedQualificationSource(f.candidate, { ...result.report, version }, observed, observed, reviewedRevision), { code: "REPORT_INVALID" })
+  }
+})
+
+test("source generation rejects same-buffer report replacement without starting revalidation", async t => {
+  const f = await qualificationHarnessFixture(t), result = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(result.report.qualified, true, JSON.stringify(result.report))
+  const replacement = join(f.root, "replacement-report.json"), bytes = await readFile(result.reportPath!)
+  await writeFile(replacement, bytes, { mode: 0o600 })
+  const originalOpen = fsPromises.open
+  let replaced = false, revalidated = 0
+  fsPromises.open = (async (path: any, flags: any, mode: any) => {
+    const handle = await originalOpen(path, flags, mode)
+    if (path !== result.reportPath) return handle
+    return new Proxy(handle, { get(target, property) {
+      if (property === "read") return async (...args: any[]) => {
+        const value = await (target.read as any)(...args)
+        if (!replaced) { replaced = true; await rename(replacement, result.reportPath!) }
+        return value
+      }
+      const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value
+    } })
+  }) as typeof open
+  syncBuiltinESMExports()
+  const dependencies = { ...f.dependencies, async currentRevision() { revalidated++; return { branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit } }, async verify(value: Parameters<QualificationDependencies["verify"]>[0]) { revalidated++; return f.dependencies.verify(value) } }
+  try {
+    await assert.rejects(codexQualificationMain(["--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", result.reportPath!, "--report-sha256", result.reportSha256!, ...revisionArgs], dependencies), { code: "EVIDENCE_MISSING" })
+    assert.equal(revalidated, 0)
+  } finally { fsPromises.open = originalOpen; syncBuiltinESMExports() }
 })
 
 test("source generation rejects current branch or HEAD drift before revalidation", async t => {
@@ -699,9 +879,10 @@ test("qualified report rejects missing and substituted identity and session evid
     (r: any) => { r.observation.absence.durationMs = r.observation.absence.limitMs },
     (r: any) => { r.observation.absence.targets.pop() },
     (r: any) => { r.observation.verification = null }, (r: any) => { r.observation.verification.fingerprint = "0".repeat(64) },
+    (r: any) => { r.observation.candidate.fingerprint = "0".repeat(64) }, (r: any) => { r.observation.candidate.manifest.adapterEntrypoint.sha256 = "0".repeat(64) },
     (r: any) => { r.observation.version = 2 }, (r: any) => { r.observation.userState = { before: [], after: [] } },
     (r: any) => { r.postconditions.userState = "unchanged" },
-    (r: any) => { r.prompt.answer += "extra" }, (r: any) => { r.prompt.normalizedAnswer = "wrong" },
+    (r: any) => { r.prompt.answer += "extra" }, (r: any) => { r.prompt.answer = "x".repeat(4097) }, (r: any) => { r.prompt.prompt += "x" }, (r: any) => { r.prompt.challenge = "AGENCY_CODEX_SMOKE_short" }, (r: any) => { r.prompt.normalizedAnswer = "wrong" },
     (r: any) => { r.prompt.stopReason = "max_tokens" }, (r: any) => { r.prompt.durationMs = 90000 },
     (r: any) => { r.qualified = false; r.failure = "STARTUP_FAILED"; r.prompt.state = "in_flight_failed" },
     (r: any) => { r.protocol.methods.pop() },
