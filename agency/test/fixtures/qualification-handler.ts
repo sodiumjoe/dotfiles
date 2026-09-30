@@ -62,7 +62,10 @@ try {
             if (scenario === "prompt-forward-abort-gap") {
               const release = join(dirname(candidatePath), "release-prompt-publication")
               for (let attempt = 0; attempt < 500; attempt++) {
-                if (await readFile(release).then(() => true, () => false)) break
+                if (await readFile(release).then(() => true, () => false)) {
+                  await durableQualificationWrite(join(dirname(candidatePath), "prompt-publication-resumed.json"), { resumed: true })
+                  break
+                }
                 await new Promise(resolve => setTimeout(resolve, 10))
               }
             } else await new Promise(resolve => setTimeout(resolve, scenario === "prompt-forward-timeout" ? 5500 : scenario === "prompt-forward-success" ? 100 : 3000))

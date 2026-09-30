@@ -558,8 +558,8 @@ test("prompt abort revokes forwarding before delayed wrapper cleanup", async t =
       socket.destroy()
       await waitFor(join(f.root, "provider-cleanup-blocked.json"))
       await writeFile(join(f.root, "release-prompt-publication"), "release", { mode: 0o600 })
-      await new Promise(resolve => setTimeout(resolve, 100))
-      await writeFile(join(f.root, "release-provider-cleanup"), "release", { mode: 0o600 })
+      try { await waitFor(join(f.root, "prompt-publication-resumed.json")) }
+      finally { await writeFile(join(f.root, "release-provider-cleanup"), "release", { mode: 0o600 }) }
     })()
     return result
   }
