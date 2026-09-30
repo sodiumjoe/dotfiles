@@ -312,6 +312,8 @@ test("default current revision observation uses bounded branch and HEAD commands
     assert.equal(options.cwd, "/Users/moon/.dotfiles/.worktrees/agency-agent-lifecycle")
     assert.equal(options.timeout, 5000)
     assert.equal(options.maxBuffer, 4096)
+    assert.deepEqual(options.env, { HOME: "/var/empty", LC_ALL: "C", PATH: "/usr/bin:/bin" })
+    assert.equal(Object.keys(options.env as object).some(key => key === "GIT_DIR" || key === "GIT_WORK_TREE" || key === "GIT_COMMON_DIR" || key.startsWith("GIT_CONFIG_")), false)
   }
 })
 
@@ -434,7 +436,10 @@ for (const [scenario, failure] of [
   assert.equal(report.postconditions.processGroup, "absent")
   assert.equal(report.authentication, scenario === "auth-required" ? "auth_required" : report.authentication)
   if (scenario === "prompt-exit") assert.deepEqual(report.prompt, { state: "in_flight_failed", challenge: report.prompt.challenge, prompt: report.prompt.prompt, answer: "", normalizedAnswer: null, stopReason: null, durationMs: report.prompt.durationMs })
+  if (scenario === "prompt-exit") assert.equal(report.deadlines.prompt.outcome, "failed")
   if (scenario === "prompt-max-tokens") { assert.equal(report.prompt.state, "completed"); assert.equal(report.prompt.stopReason, "max_tokens"); assert.equal(report.prompt.normalizedAnswer, report.prompt.challenge) }
+  if (scenario === "prompt-max-tokens") assert.equal(report.deadlines.prompt.outcome, "completed")
+  if (scenario === "prompt-exit" || scenario === "prompt-max-tokens") assert.deepEqual(parseCodexQualificationReport(report), report)
   assert.deepEqual(productionLaunchContracts(), f.registryBefore)
   assert.throws(() => parseCodexQualificationReport({ ...report, qualified: true, failure: null }))
 })
@@ -488,6 +493,37 @@ test("source generation rejects current branch or HEAD drift before revalidation
     await assert.rejects(Reflect.apply(codexQualificationMain, undefined, [args, f.dependencies]), { code: "ADAPTER_UNQUALIFIED" })
     assert.equal(observations, 1)
   }
+})
+
+test("source generation binds report hash, candidate, and report revision before revalidation", async t => {
+  const f = await qualificationHarnessFixture(t), result = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(result.report.qualified, true, JSON.stringify(result.report))
+  const changedManifest = parseCodexQualificationManifest({ ...structuredClone(f.candidate.manifest), adapterEntrypoint: { ...f.candidate.manifest.adapterEntrypoint, sha256: "0".repeat(64) } })
+  const changedCandidate = { version: 3 as const, manifest: changedManifest, fingerprint: qualificationFingerprint(changedManifest) }
+  const changedCandidatePath = join(f.root, "changed-candidate.json")
+  await writeFile(changedCandidatePath, JSON.stringify(changedCandidate), { mode: 0o600 })
+  const cases = [
+    { name: "hash", candidatePath: f.request.candidatePath, reportSha256: "0".repeat(64), revision: reviewedRevision, code: "EVIDENCE_PUBLICATION_FAILED" },
+    { name: "candidate", candidatePath: changedCandidatePath, reportSha256: result.reportSha256!, revision: reviewedRevision, code: "ADAPTER_UNQUALIFIED" },
+    { name: "revision", candidatePath: f.request.candidatePath, reportSha256: result.reportSha256!, revision: { ...reviewedRevision, reviewedCommit: "b".repeat(40) }, code: "ADAPTER_UNQUALIFIED" },
+  ]
+  for (const item of cases) await t.test(item.name, async () => {
+    const revalidators: string[] = [], platform = f.dependencies.adapter, verify = f.dependencies.verify
+    const dependencies = {
+      ...f.dependencies,
+      async currentRevision() { revalidators.push("revision"); return { branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit } },
+      async verify(manifest: Parameters<QualificationDependencies["verify"]>[0]) { revalidators.push("artifact"); return verify(manifest) },
+      adapter: {
+        ...platform,
+        async readProcess(pid: number) { revalidators.push("process"); return platform.readProcess(pid) },
+        async readGroup(group: number) { revalidators.push("group"); return platform.readGroup(group) },
+      },
+    } as QualificationDependencies
+    Object.defineProperty(dependencies, "normalStatePaths", { enumerable: true, get() { revalidators.push("normal"); return f.dependencies.normalStatePaths } })
+    const args = ["--stage", "source", "--candidate", item.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", result.reportPath!, "--report-sha256", item.reportSha256, "--reviewed-branch", item.revision.reviewedBranch, "--reviewed-commit", item.revision.reviewedCommit]
+    await assert.rejects(Reflect.apply(codexQualificationMain, undefined, [args, dependencies]), { code: item.code })
+    assert.deepEqual(revalidators, [])
+  })
 })
 
 test("failed secondary publication returns only the durable failure report and hash", async t => {
@@ -696,6 +732,34 @@ test("report parser rejects contradictory prompt receipt evidence", async t => {
     mutate(report)
     assert.throws(() => parseCodexQualificationReport(report), { code: "REPORT_INVALID" })
   })
+})
+
+test("report parser derives prompt deadline outcome from authoritative receipt prompt evidence", async t => {
+  const f = await qualificationHarnessFixture(t)
+  const { report: baseline } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(baseline.qualified, true, JSON.stringify(baseline))
+  const failed = (prompt: any, outcome: string) => {
+    const report: any = structuredClone(baseline)
+    report.qualified = false; report.failure = "STARTUP_FAILED"; report.prompt = structuredClone(prompt); report.observation.receipt!.prompt = structuredClone(prompt); report.deadlines.prompt.outcome = outcome
+    if (prompt.state === "not_started") {
+      report.protocol.methods.pop(); report.observation.receipt!.methods.pop(); delete report.observation.receipt!.durations.prompt
+    } else if (prompt.state === "completed") report.observation.receipt!.durations.prompt = prompt.durationMs
+    else delete report.observation.receipt!.durations.prompt
+    return report
+  }
+  const empty = { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null }
+  const inFlight = { ...structuredClone(baseline.prompt), state: "in_flight_failed", answer: "", normalizedAnswer: null, stopReason: null, durationMs: 1 }
+  const completed = structuredClone(baseline.prompt)
+  const timedOut = { ...inFlight, durationMs: baseline.deadlines.prompt.limitMs + 1 }
+  const completedTimedOut = { ...completed, durationMs: baseline.deadlines.prompt.limitMs }
+  const cases = [failed(empty, "not_reached"), failed(inFlight, "failed"), failed(completed, "completed"), failed(timedOut, "timed_out"), failed(completedTimedOut, "timed_out")]
+  for (const report of cases) {
+    assert.deepEqual(parseCodexQualificationReport(report), report)
+    for (const outcome of ["not_reached", "failed", "completed", "timed_out"]) if (outcome !== report.deadlines.prompt.outcome) {
+      const contradictory: any = structuredClone(report); contradictory.deadlines.prompt.outcome = outcome
+      assert.throws(() => parseCodexQualificationReport(contradictory), { code: "REPORT_INVALID" })
+    }
+  }
 })
 
 test("two-child qualification requires exact retained descriptor identities", async t => {

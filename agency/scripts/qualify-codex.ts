@@ -95,9 +95,9 @@ function reviewedRevision(value: { reviewedBranch: unknown; reviewedCommit: unkn
   if (value?.reviewedBranch !== "moon/agency-agent-lifecycle" || typeof value.reviewedCommit !== "string" || !/^[0-9a-f]{40}$/.test(value.reviewedCommit) || value.reviewedCommit === "0".repeat(40)) fail("ADAPTER_UNQUALIFIED")
   return { branch: "moon/agency-agent-lifecycle", commit: value.reviewedCommit }
 }
-type RevisionCommand = (file: string, args: readonly string[], options: { cwd: string; encoding: "utf8"; timeout: number; maxBuffer: number }) => Promise<{ stdout: string; stderr: string }>
+type RevisionCommand = (file: string, args: readonly string[], options: { cwd: string; encoding: "utf8"; timeout: number; maxBuffer: number; env: NodeJS.ProcessEnv }) => Promise<{ stdout: string; stderr: string }>
 export async function observeCurrentRevision(execute: RevisionCommand = promisify(execFile) as RevisionCommand): Promise<{ branch: string; commit: string }> {
-  const options = { cwd: "/Users/moon/.dotfiles/.worktrees/agency-agent-lifecycle", encoding: "utf8" as const, timeout: 5000, maxBuffer: 4096 }
+  const options = { cwd: "/Users/moon/.dotfiles/.worktrees/agency-agent-lifecycle", encoding: "utf8" as const, timeout: 5000, maxBuffer: 4096, env: { HOME: "/var/empty", LC_ALL: "C", PATH: "/usr/bin:/bin" } }
   const branchResult = await execute("/usr/bin/git", ["branch", "--show-current"], options)
   const commitResult = await execute("/usr/bin/git", ["rev-parse", "--verify", "HEAD"], options)
   if (branchResult.stderr !== "" || commitResult.stderr !== "" || !/^[^\0\r\n]+\n$/.test(branchResult.stdout) || !/^[0-9a-f]{40}\n$/.test(commitResult.stdout) || commitResult.stdout === "0".repeat(40) + "\n") fail("ADAPTER_UNQUALIFIED")
@@ -218,6 +218,11 @@ function parsePromptAttempt(value: unknown, manifest: CodexQualificationManifest
   }
   return structuredClone(p) as PromptAttempt
 }
+function promptDeadlineOutcome(prompt: PromptAttempt, limitMs: number): Outcome {
+  if (prompt.state === "not_started") return "not_reached"
+  if (prompt.durationMs >= limitMs) return "timed_out"
+  return prompt.state === "completed" ? "completed" : "failed"
+}
 export function parseCodexQualificationReport(value: unknown): CodexQualificationReport {
   if (Buffer.byteLength(JSON.stringify(value)) > 1048576) fail("REPORT_INVALID")
   const r = object(value, ["version", "manifestFingerprint", "branch", "commit", "startedAt", "endedAt", "qualified", "failure", "observation", "protocol", "prompt", "selection", "session", "authentication", "ownership", "deadlines", "postconditions"])
@@ -274,8 +279,10 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
     equal(receipt.prompt, prompt, "REPORT_INVALID")
     const receiptPrompt = receipt.methods.at(-1) === "session/prompt"
     if (receiptPrompt !== promptAttempted) fail("REPORT_INVALID")
-    if (promptAttempted) {
+    if (prompt.state === "completed") {
       if (receipt.durations.prompt !== prompt.durationMs) fail("REPORT_INVALID")
+    } else if (prompt.state === "in_flight_failed") {
+      if (receipt.durations.prompt !== undefined && receipt.durations.prompt !== prompt.durationMs) fail("REPORT_INVALID")
     } else if (Object.hasOwn(receipt.durations, "prompt")) fail("REPORT_INVALID")
   }
   equal(r.selection, { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only" }, "REPORT_INVALID")
@@ -285,6 +292,7 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
   if (!["ambient_accepted", "auth_required", "failed", "unknown"].includes(String(r.authentication))) fail("REPORT_INVALID")
   const deadlines = object(r.deadlines, PHASES), expectedLimits = limits(candidate.manifest)
   for (const name of PHASES) { const d = object(deadlines[name], ["limitMs", "outcome"]); if (d.limitMs !== expectedLimits[name] || !["completed", "timed_out", "failed", "not_reached"].includes(String(d.outcome))) fail("REPORT_INVALID") }
+  if ((deadlines.prompt as { outcome: unknown }).outcome !== promptDeadlineOutcome(receipt?.prompt ?? prompt, expectedLimits.prompt)) fail("REPORT_INVALID")
   const post = object(r.postconditions, Object.keys(success))
   const opposites = { transport: "open", directChild: "live", processGroup: "present", reservation: "retained", providerState: "present", qualificationCwd: "present", executionRoot: "present", lifecycleOperation: "in_flight", ownedHandles: "open", handler: "present", catalogProfile: "present", normalAgencyState: "changed" }
   for (const key of Object.keys(success) as Array<keyof typeof success>) if (![success[key], opposites[key], "unknown"].includes(String(post[key]))) fail("REPORT_INVALID")
@@ -752,7 +760,8 @@ export async function runCodexQualification(request: QualificationRequest, depen
           report.protocol.methods = receipt.methods
           report.postconditions.directChild = receipt.terminal ? "terminal" : "unknown"
           report.postconditions.transport = receipt.transportClosed ? "closed" : "open"; report.postconditions.ownedHandles = receipt.handlesClosed ? "closed" : "open"
-          for (const [name, duration] of Object.entries(receipt.durations) as Array<[Phase, number]>) if (name !== "absence") report.deadlines[name].outcome = duration < report.deadlines[name].limitMs ? "completed" : "timed_out"
+          for (const [name, duration] of Object.entries(receipt.durations) as Array<[Phase, number]>) if (name !== "absence" && name !== "prompt") report.deadlines[name].outcome = duration < report.deadlines[name].limitMs ? "completed" : "timed_out"
+          report.deadlines.prompt.outcome = promptDeadlineOutcome(receipt.prompt, candidate.manifest.deadlines.promptMs)
           if (receipt.failure) {
             if (report.failure === "ADMISSION_UNAVAILABLE" || report.failure === "INCOMPLETE") report.failure = receipt.failure
             else setFailure(new QualificationError(receipt.failure), receipt.failure)
@@ -850,6 +859,7 @@ export async function codexQualificationMain(argv: readonly string[], dependenci
   if (stage === "source") {
     const path = args.get("--report"), supplied = args.get("--report-sha256"); if (!path || !supplied) fail("USAGE")
     const reportBytes = await readPrivateJsonWithDigest(path, 1048576), report = parseCodexQualificationReport(reportBytes.value), candidate = parseQualificationCandidate(await readPrivateJson(candidatePath!))
+    const source = renderPublishedQualificationSource(candidate, report, supplied, reportBytes.sha256, reviewed)
     const deps = dependencies ?? await defaultDependencies()
     await requireCurrentRevision(deps, revision)
     const verification = await deps.verify(candidate.manifest)
@@ -857,7 +867,7 @@ export async function codexQualificationMain(argv: readonly string[], dependenci
     equal(await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true))), report.observation.normalAgencyState.after, "ADAPTER_UNQUALIFIED")
     const absence = await verifyQualificationAbsence(deps.adapter, report.ownership.handlers.map(h => h.process), report.ownership.providerProcessGroup, report.observation.descriptors?.processes.map(p => p.process) ?? [], candidate.manifest.deadlines.absenceMs)
     if (absence.outcome !== "completed") fail("PROCESS_SURVIVED")
-    process.stdout.write(renderPublishedQualificationSource(candidate, report, supplied, reportBytes.sha256, reviewed) + "\n"); return 0
+    process.stdout.write(source + "\n"); return 0
   }
   const { report, reportPath, reportSha256 } = await runCodexQualification({ candidatePath: candidatePath!, evidenceParent: evidenceParent!, ...reviewed, ...(args.has("--report") ? { reportPath: args.get("--report")! } : {}) }, dependencies)
   process.stdout.write(JSON.stringify({ qualified: report.qualified, failure: report.failure, reportPath, reportSha256 }) + "\n"); return report.qualified ? 0 : 1
