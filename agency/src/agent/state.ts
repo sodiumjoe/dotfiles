@@ -79,7 +79,8 @@ export function resolvedLaunchEnvironment(root: string, policy: LaunchEnvironmen
   const environment: NodeJS.ProcessEnv = {}
   for (const [key, value] of Object.entries(policy.fixed)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== "string" || value.includes("\0")) failure()
-    if (blockedKey(key)) continue
+    if (key === "GIT_CONFIG_NOSYSTEM") { if (value !== "1") failure() }
+    else if (blockedKey(key)) continue
     environment[key] = value
   }
   for (const [key, value] of Object.entries(policy.private)) {

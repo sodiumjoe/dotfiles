@@ -39,12 +39,28 @@ async function qualificationFixture(t: TestContext) {
     selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" },
     optionIds: { model: "model", reasoning: "reasoning_effort", mode: "mode" },
     environment: {
-      fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) },
+      fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", GIT_CONFIG_NOSYSTEM: "1", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) },
       private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" },
     },
   }
   return { root, manifest, packageJson, entrypoint, codex, async replaceSameBytes(path: string) { const content = await readFile(path); await rename(path, `${path}.old`); await writeFile(path, content, { mode: path === codex ? 0o700 : 0o600 }) } }
 }
+
+test("qualification requires the fixed Git system-config exclusion without adapting old evidence", async t => {
+  const { manifest } = await qualificationFixture(t)
+  assert.equal(parseCodexQualificationManifest(manifest).environment.fixed.GIT_CONFIG_NOSYSTEM, "1")
+  for (const value of [undefined, "", "0", "true", "01", "1 "]) {
+    const changed = structuredClone(manifest)
+    if (value === undefined) delete (changed.environment.fixed as Record<string, string>).GIT_CONFIG_NOSYSTEM
+    else changed.environment.fixed.GIT_CONFIG_NOSYSTEM = value
+    assert.throws(() => parseCodexQualificationManifest(changed), { code: "ADAPTER_UNQUALIFIED" })
+  }
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG", "GIT_EXEC_PATH"]) {
+    const changed = structuredClone(manifest)
+    Object.assign(changed.environment.fixed, { [key]: "1" })
+    assert.throws(() => parseCodexQualificationManifest(changed), { code: "ADAPTER_UNQUALIFIED" })
+  }
+})
 
 test("qualification binds executable paths, identities, bytes, version and selections", { skip: !canVerify }, async t => {
   const f = await qualificationFixture(t)

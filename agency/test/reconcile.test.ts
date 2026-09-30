@@ -108,6 +108,30 @@ async function assertOutcome(t: test.TestContext, starting: LaunchRecord, adapte
   assert.equal(result.record.phase, expected.disposition === "quarantined" ? "quarantined" : "cleanup_verified")
 }
 
+test("late detached group members retain quarantine after every recorded process exits", async t => {
+  const leader = identity(), codex = identity({ pid: 102, birth: "102:unmarked:/managed/codex", parentPid: leader.pid })
+  const detached = identity({ pid: 103, birth: "103:unmarked:/managed/git", parentPid: 1 })
+  const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, codex] } } })
+  const adapter = new FakeAdapter({ leader: null, group: [detached] })
+  const path = await recordFixture(t, starting)
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "quarantined")
+  assert.equal(result.record.phase, "quarantined")
+  assert.deepEqual(result.record.provider, starting.provider)
+  assert.deepEqual(result.record, await readLaunchRecord(path))
+  assert.deepEqual(adapter.signals, [])
+  assert.deepEqual(adapter.group, [detached])
+})
+
+test("late detached group members cannot authorize escalation after SIGTERM", async t => {
+  const adapter = new FakeAdapter({ onSignal: (signal, state) => {
+    assert.equal(signal, "SIGTERM")
+    state.leader = null
+    state.group = [identity({ pid: 103, birth: "103:unmarked:/managed/git", parentPid: 1 })]
+  } })
+  await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: ["SIGTERM"] })
+})
+
 test("expected inventory rejects a replaced record before any write or signal", async t => {
   const expected = record()
   const actual = { ...expected, checkoutId: "replacement" }

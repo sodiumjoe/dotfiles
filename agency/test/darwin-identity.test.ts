@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
-import { spawn, type ChildProcess } from "node:child_process"
-import { lstat, mkdtemp, realpath, rm } from "node:fs/promises"
+import { execFile, spawn, type ChildProcess } from "node:child_process"
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Readable } from "node:stream"
 import test, { type TestContext } from "node:test"
 import { pathToFileURL } from "node:url"
+import { promisify } from "node:util"
+import { resolvedLaunchEnvironment } from "../src/agent/state.js"
 import {
   createDarwinAdapter,
   DarwinObservationUnavailable,
@@ -144,6 +146,34 @@ darwinTest("qualifies fixed root-owned system tools", async () => {
     assert.equal(stats.mode & 0o022, 0)
     assert.equal(await realpath(path), path)
   }
+})
+
+darwinTest("isolated provider environment prevents system Git fsmonitor activation", async t => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), "agency-darwin-git-config-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const environment = resolvedLaunchEnvironment(root, {
+    fixed: { PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1" },
+    private: { HOME: "home", XDG_CONFIG_HOME: "xdg/config" },
+  })
+  const checkout = join(root, "checkout"), systemConfig = join(root, "system.gitconfig")
+  for (const path of [environment.HOME!, environment.XDG_CONFIG_HOME!, join(checkout, ".git/objects"), join(checkout, ".git/refs")]) await mkdir(path, { mode: 0o700, recursive: true })
+  await writeFile(join(checkout, ".git/HEAD"), "ref: refs/heads/qualification\n", { mode: 0o600 })
+  await writeFile(join(checkout, ".git/config"), "[core]\nrepositoryformatversion = 0\nbare = false\n", { mode: 0o600 })
+  await writeFile(systemConfig, "[core]\nfsmonitor = true\n", { mode: 0o600 })
+  const args = ["config", "--show-origin", "--get", "core.fsmonitor"]
+  const control: NodeJS.ProcessEnv = { ...environment, GIT_CONFIG_SYSTEM: systemConfig }
+  delete control.GIT_CONFIG_NOSYSTEM
+  const git = promisify(execFile)
+  const inherited = await git("/usr/bin/git", args, { cwd: checkout, env: control, encoding: "utf8", timeout: 5000, maxBuffer: 4096 })
+  assert.equal(inherited.stdout, `file:${systemConfig}\ttrue\n`)
+  assert.equal(inherited.stderr, "")
+  await assert.rejects(git("/usr/bin/git", args, { cwd: checkout, env: { ...environment, GIT_CONFIG_SYSTEM: systemConfig }, encoding: "utf8", timeout: 5000, maxBuffer: 4096 }), error => {
+    const result = error as Error & { code: number; stdout: string; stderr: string }
+    assert.equal(result.code, 1)
+    assert.equal(result.stdout, "")
+    assert.equal(result.stderr, "")
+    return true
+  })
 })
 
 darwinTest("reads a stable lowercase boot session UUID through the qualified sysctl", async () => {

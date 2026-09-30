@@ -202,7 +202,7 @@ export function sampleQualifiedContract(): LaunchContract {
     prompt: { challengePrefix: "AGENCY_CODEX_SMOKE_", challengeBytes: 16, answerBytes: 4096 },
     deadlines: { commandMs: 5000, reservationMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
     selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" }, optionIds: { model: "model", reasoning: "reasoning_effort", mode: "mode" },
-    environment: { fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) }, private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" } },
+    environment: { fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", GIT_CONFIG_NOSYSTEM: "1", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) }, private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" } },
   }
   return contractFromQualifiedCandidate({ version: 3, manifest, fingerprint: qualificationFingerprint(manifest) })
 }

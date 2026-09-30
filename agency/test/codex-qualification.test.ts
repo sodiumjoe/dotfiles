@@ -96,7 +96,9 @@ test("offline prompt-v3 candidate reuses all old candidate pins and emits only c
   assert.equal(candidate.manifest.contractId, "codex-darwin-arm64-agency-prompt-smoke-v3")
   assert.equal(candidate.manifest.protocolVersion, 1)
   for (const name of artifactNames) assert.deepEqual(candidate.manifest[name], f.old.manifest[name])
-  for (const name of ["selection", "optionIds", "environment"]) assert.deepEqual(candidate.manifest[name as keyof typeof candidate.manifest], f.old.manifest[name])
+  for (const name of ["selection", "optionIds"]) assert.deepEqual(candidate.manifest[name as keyof typeof candidate.manifest], f.old.manifest[name])
+  const oldEnvironment = f.old.manifest.environment as { fixed: Record<string, string>; private: Record<string, string> }
+  assert.deepEqual(candidate.manifest.environment, { fixed: { ...oldEnvironment.fixed, GIT_CONFIG_NOSYSTEM: "1" }, private: oldEnvironment.private })
   assert.deepEqual(candidate.manifest.prompt, { challengePrefix: "AGENCY_CODEX_SMOKE_", challengeBytes: 16, answerBytes: 4096 })
   assert.deepEqual(candidate.manifest.deadlines, { ...f.old.manifest.deadlines as object, promptMs: 90000, overallMs: 150000 })
   assert.equal(Object.hasOwn(candidate.manifest, "userSecurityState"), false)

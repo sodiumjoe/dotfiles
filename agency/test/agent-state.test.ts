@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { chmod, lstat, mkdir, readFile, rename, readdir, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test, { type TestContext } from "node:test"
-import { prepareProviderState, providerStatePath, removeProviderState } from "../src/agent/state.js"
+import { prepareProviderState, providerStatePath, removeProviderState, resolvedLaunchEnvironment } from "../src/agent/state.js"
 import type { LaunchEnvironmentPolicy } from "../src/agent/qualification.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord } from "../src/platform/types.js"
@@ -11,7 +11,7 @@ import { sampleSpec } from "./agent-support.js"
 import { privateRoot } from "./control-support.js"
 
 const policy: LaunchEnvironmentPolicy = {
-  fixed: { CODEX_CONFIG: "{}", CODEX_PATH: "/managed/codex", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/bin:/bin" },
+  fixed: { CODEX_CONFIG: "{}", CODEX_PATH: "/managed/codex", GIT_CONFIG_NOSYSTEM: "1", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/bin:/bin" },
   private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" },
 }
 
@@ -31,11 +31,12 @@ test("private launch environment contains only qualified keys", async t => {
   const prepared = await prepareProviderState(f.root, f.launchAttemptId, f.policy)
   assert.equal(prepared.root, providerStatePath(f.root, f.launchAttemptId))
   assert.deepEqual(Object.keys(prepared.environment).sort(), [
-    "CODEX_CONFIG", "CODEX_HOME", "CODEX_PATH", "HOME", "INITIAL_AGENT_MODE",
+    "CODEX_CONFIG", "CODEX_HOME", "CODEX_PATH", "GIT_CONFIG_NOSYSTEM", "HOME", "INITIAL_AGENT_MODE",
     "MODEL_PROVIDER", "PATH", "TMPDIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME",
   ])
   assert.equal(prepared.environment.HOME, join(prepared.root, "home"))
   assert.equal(prepared.environment.CODEX_HOME, join(prepared.root, "home/codex"))
+  assert.equal(prepared.environment.GIT_CONFIG_NOSYSTEM, "1")
   for (const relative of ["", "home", "home/codex", "xdg", "xdg/config", "xdg/cache", "xdg/state", "tmp"]) {
     const stat = await lstat(join(prepared.root, relative))
     assert.equal(stat.mode & 0o777, 0o700)
@@ -43,6 +44,18 @@ test("private launch environment contains only qualified keys", async t => {
   }
   await f.verified(); await removeProviderState(f.root, f.launchAttemptId)
   await assert.rejects(lstat(prepared.root), { code: "ENOENT" })
+})
+
+test("launch environment preserves only the exact fixed Git system-config exclusion", () => {
+  const fixed = { ...policy.fixed, GIT_DIR: "/unrelated", GIT_WORK_TREE: "/unrelated", GIT_CONFIG_SYSTEM: "/unrelated", GIT_CONFIG_GLOBAL: "/unrelated", GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "true", GIT_CONFIG: "/unrelated", GIT_EXEC_PATH: "/unrelated", NODE_OPTIONS: "--inspect", NODE_PATH: "/unrelated", AGENCY_TEST: "1" }
+  const environment = resolvedLaunchEnvironment("/private/attempt", { ...policy, fixed })
+  assert.deepEqual(Object.keys(environment).filter(key => key.startsWith("GIT_")), ["GIT_CONFIG_NOSYSTEM"])
+  assert.equal(environment.GIT_CONFIG_NOSYSTEM, "1")
+  assert.equal(environment.HOME, "/private/attempt/home")
+  for (const key of ["NODE_OPTIONS", "NODE_PATH", "AGENCY_TEST"]) assert.equal(Object.hasOwn(environment, key), false)
+  for (const value of ["", "0", "true", "01", "1 "]) {
+    assert.throws(() => resolvedLaunchEnvironment("/private/attempt", { ...policy, fixed: { ...policy.fixed, GIT_CONFIG_NOSYSTEM: value } }), { code: "CLEANUP_UNVERIFIED" })
+  }
 })
 
 test("cleanup refuses a substituted state root", async t => {
@@ -102,7 +115,7 @@ test("state path rejects noncanonical attempt IDs", async t => {
 
 test("private mappings cannot reintroduce blocked process-control keys", async t => {
   const f = await stateFixture(t)
-  for (const key of ["NODE_OPTIONS", "NODE_PATH", "AGENCY_TEST", "GIT_DIR"]) {
+  for (const key of ["NODE_OPTIONS", "NODE_PATH", "AGENCY_TEST", "GIT_DIR", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT"]) {
     await assert.rejects(prepareProviderState(f.root, f.launchAttemptId, { fixed: {}, private: { [key]: "tmp" } }), { code: "CLEANUP_UNVERIFIED" })
   }
 })

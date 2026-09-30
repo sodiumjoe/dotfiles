@@ -834,6 +834,7 @@ export async function offlineCandidate(candidatePath: string, evidenceParent: st
   }
   const manifest = parseCodexQualificationManifest({
     ...legacyManifest, version: 3, policy: "agency-codex-prompt-smoke-v3", contractId: "codex-darwin-arm64-agency-prompt-smoke-v3",
+    environment: { ...legacyManifest.environment as object, fixed: { ...(legacyManifest.environment as { fixed: Record<string, string> }).fixed, GIT_CONFIG_NOSYSTEM: "1" } },
     prompt: { challengePrefix: "AGENCY_CODEX_SMOKE_", challengeBytes: 16, answerBytes: 4096 },
     deadlines: { ...legacyManifest.deadlines as object, promptMs: 90000, overallMs: 150000 },
   })

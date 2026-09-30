@@ -65,6 +65,7 @@ export type CodexQualificationObservation = CodexQualificationCandidate & {
 const MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 const fixed = {
   CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin",
+  GIT_CONFIG_NOSYSTEM: "1",
   INITIAL_AGENT_MODE: "read-only",
   MODEL_PROVIDER: "litellm",
   PATH: "/usr/local/bin:/usr/bin:/bin",
