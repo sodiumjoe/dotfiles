@@ -23,7 +23,7 @@ import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerGene
 import { PROTOCOL, uuid } from "../src/control/protocol.js"
 import { exchange } from "../src/control/wire.js"
 import type { PlatformPaths } from "../src/platform/paths.js"
-import { observeQualificationDescriptors, QualificationObservationError, verifyQualificationAbsence, type DescriptorCommand, type DescriptorObservation, type ParentAbsence } from "./qualification-observation.js"
+import { descriptorLimits, descriptorPurposeValid, observeQualificationDescriptors, QualificationObservationError, verifyQualificationAbsence, type DescriptorCommand, type DescriptorEvidence, type DescriptorObservation, type ParentAbsence } from "./qualification-observation.js"
 
 const METHODS = ["initialize", "session/new", "session/set_config_option:model", "session/set_config_option:reasoning_effort", "session/set_config_option:mode", "session/prompt"] as const
 const PHASES = ["commandStart", "reservation", "spawn", "initialize", "session", "model", "reasoning", "mode", "prompt", "transportClose", "processTerminate", "absence", "overall"] as const
@@ -185,7 +185,7 @@ export function parseQualificationReceipt(value: unknown, manifest: CodexQualifi
   if (r.version !== 1 || !Array.isArray(r.methods) || r.methods.length > 6 || r.methods.some((m, i) => m !== METHODS[i])) fail("REPORT_INVALID")
   uuid(r.handlerGeneration); uuid(r.launchAttemptId)
   for (const name of ["terminal", "transportClosed", "handlesClosed"]) if (typeof r[name] !== "boolean") fail("REPORT_INVALID")
-  if (!r.durations || typeof r.durations !== "object" || Array.isArray(r.durations) || Object.entries(r.durations).some(([key, value]) => !PHASES.includes(key as Phase) || typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > (key === "overall" ? manifest.deadlines.overallMs : key === "prompt" ? manifest.deadlines.promptMs : 120000))) fail("REPORT_INVALID")
+  if (!r.durations || typeof r.durations !== "object" || Array.isArray(r.durations) || Object.entries(r.durations).some(([key, value]) => !PHASES.includes(key as Phase) || typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > (key === "overall" || key === "prompt" ? manifest.deadlines.overallMs : 120000))) fail("REPORT_INVALID")
   parsePromptAttempt(r.prompt, manifest)
   if (r.failure !== null && !FAILURES.includes(r.failure as Failure)) fail("REPORT_INVALID")
   return structuredClone(r) as QualificationReceipt
@@ -222,6 +222,21 @@ function promptDeadlineOutcome(prompt: PromptAttempt, limitMs: number): Outcome 
   if (prompt.state === "not_started") return "not_reached"
   if (prompt.durationMs >= limitMs) return "timed_out"
   return prompt.state === "completed" ? "completed" : "failed"
+}
+function retainedPrivatePaths(report: CodexQualificationReport): string[] {
+  const spec = report.observation.retained.agent?.spec
+  if (!spec || !report.ownership.launchAttemptId || !report.observation.retained.handlers.length) fail("REPORT_INVALID")
+  const cwd = canonical(spec.checkout.root.path), root = canonical(dirname(cwd))
+  if (join(root, report.observation.candidate.manifest.qualificationCwd.relative) !== cwd) fail("REPORT_INVALID")
+  const paths = qualificationPaths(root, spec.hostId)
+  if (report.observation.retained.handlers.some(handler => handler.socketPath !== paths.handlerSocketPath)) fail("REPORT_INVALID")
+  return [root, cwd, providerStatePath(paths.persistentRoot, report.ownership.launchAttemptId), join(paths.persistentRoot, "catalog/providers.json")]
+}
+async function requirePrivateAbsence(paths: readonly string[]): Promise<void> {
+  try {
+    if (await realpath(dirname(paths[0]!)) !== dirname(paths[0]!)) fail("CLEANUP_UNVERIFIED")
+    for (const path of paths) if (await exists(path)) fail("CLEANUP_UNVERIFIED")
+  } catch { fail("CLEANUP_UNVERIFIED") }
 }
 export function parseCodexQualificationReport(value: unknown): CodexQualificationReport {
   if (Buffer.byteLength(JSON.stringify(value)) > 1048576) fail("REPORT_INVALID")
@@ -326,12 +341,13 @@ function validateDescriptorObservation(value: unknown, ownership: QualifiedOwner
     const p = object(raw, ["process", "role", "descriptors"]), process = identity(p.process)
     if (!["handler", "adapter", "child"].includes(String(p.role)) || !Array.isArray(p.descriptors) || p.descriptors.length < 3 || p.descriptors.length > 256) fail("REPORT_INVALID")
     const descriptors = p.descriptors.map(raw => {
-      const fd = object(raw, ["fd", "type", "allowed"])
+      const fd = object(raw, ["fd", "type", "allowed", "purpose"])
       if (!Number.isSafeInteger(fd.fd) || (fd.fd as number) < 0 || (fd.fd as number) > 999999 || !["REG", "DIR", "PIPE", "unix", "CHR", "KQUEUE", "IPv4", "IPv6", "PSXSEM", "PSXSHM"].includes(String(fd.type)) || typeof fd.allowed !== "boolean") fail("REPORT_INVALID")
-      if (fd.allowed && !((fd.fd as number) <= 2 && (["PIPE", "unix"].includes(String(fd.type)) || p.role === "handler" && fd.type === "CHR") || p.role === "handler" && (fd.fd as number) <= 4 && ["PIPE", "unix"].includes(String(fd.type)))) fail("REPORT_INVALID")
+      if (typeof fd.type !== "string" || typeof fd.purpose !== "string" || !descriptorPurposeValid(fd.fd as number, fd.type, fd.purpose, p.role as DescriptorEvidence["role"]) || fd.allowed !== (fd.purpose !== "unexpected")) fail("REPORT_INVALID")
       return fd
     })
     if (new Set(descriptors.map(d => d.fd)).size !== descriptors.length || [0, 1, 2].some(fd => !descriptors.some(d => d.fd === fd))) fail("REPORT_INVALID")
+    for (const [purpose, maximum] of Object.entries(descriptorLimits(p.role as DescriptorEvidence["role"]))) if (descriptors.filter(fd => fd.purpose === purpose).length > maximum) fail("REPORT_INVALID")
     if (p.role === "handler") { if (!ownership.handlers.some(h => isDeepStrictEqual(h.process, process))) fail("REPORT_INVALID") }
     else {
       const group = ownership.providerProcessGroup
@@ -693,7 +709,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
     equal(await createAgentStore(paths.persistentRoot).readCommand(commandId), retained.command)
     equal(await createAgentStore(paths.persistentRoot).readAgent(target.agentId), retained.agent)
     correlate(report)
-    report.observation.descriptors = await observeQualificationDescriptors(deps.adapter, handlerOwners.map(h => h.process!), report.ownership.providerProcessGroup!, budget(), deps.descriptorCommand)
+    report.observation.descriptors = await observeQualificationDescriptors(deps.adapter, handlerOwners.map(h => h.process!), report.ownership.providerProcessGroup!, budget(), deps.descriptorCommand, { handlerSocketPath: paths.handlerSocketPath, providerStateRoot: providerStatePath(paths.persistentRoot, report.ownership.launchAttemptId!) })
     if (report.observation.descriptors.outcome !== "verified") fail("DESCRIPTOR_LEAK")
     stopSent = true
     const stopping = await requestAgent({ op: "agent_stop", input: { ...target, commandId: randomUUID() } })
@@ -764,6 +780,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
           report.postconditions.transport = receipt.transportClosed ? "closed" : "open"; report.postconditions.ownedHandles = receipt.handlesClosed ? "closed" : "open"
           for (const [name, duration] of Object.entries(receipt.durations) as Array<[Phase, number]>) if (name !== "absence" && name !== "prompt") report.deadlines[name].outcome = duration < report.deadlines[name].limitMs ? "completed" : "timed_out"
           report.deadlines.prompt.outcome = promptDeadlineOutcome(receipt.prompt, candidate.manifest.deadlines.promptMs)
+          if (report.deadlines.prompt.outcome === "timed_out") setFailure(new AgentError("STARTUP_TIMEOUT"), "STARTUP_TIMEOUT")
           if (receipt.failure) {
             if (report.failure === "ADMISSION_UNAVAILABLE" || report.failure === "INCOMPLETE") report.failure = receipt.failure
             else setFailure(new QualificationError(receipt.failure), receipt.failure)
@@ -862,6 +879,8 @@ export async function codexQualificationMain(argv: readonly string[], dependenci
     const path = args.get("--report"), supplied = args.get("--report-sha256"); if (!path || !supplied) fail("USAGE")
     const reportBytes = await readPrivateJsonWithDigest(path, 1048576), report = parseCodexQualificationReport(reportBytes.value), candidate = parseQualificationCandidate(await readPrivateJson(candidatePath!))
     const source = renderPublishedQualificationSource(candidate, report, supplied, reportBytes.sha256, reviewed)
+    const privatePaths = retainedPrivatePaths(report)
+    await requirePrivateAbsence(privatePaths)
     const deps = dependencies ?? await defaultDependencies()
     await requireCurrentRevision(deps, revision)
     const verification = await deps.verify(candidate.manifest)
@@ -869,7 +888,8 @@ export async function codexQualificationMain(argv: readonly string[], dependenci
     equal(await Promise.all(deps.normalStatePaths.map(path => snapshotTree(path, true))), report.observation.normalAgencyState.after, "ADAPTER_UNQUALIFIED")
     const absence = await verifyQualificationAbsence(deps.adapter, report.ownership.handlers.map(h => h.process), report.ownership.providerProcessGroup, report.observation.descriptors?.processes.map(p => p.process) ?? [], candidate.manifest.deadlines.absenceMs)
     if (absence.outcome !== "completed") fail("PROCESS_SURVIVED")
-    process.stdout.write(source + "\n"); return 0
+    await requirePrivateAbsence(privatePaths)
+    process.stdout.write(source); return 0
   }
   const { report, reportPath, reportSha256 } = await runCodexQualification({ candidatePath: candidatePath!, evidenceParent: evidenceParent!, ...reviewed, ...(args.has("--report") ? { reportPath: args.get("--report")! } : {}) }, dependencies)
   process.stdout.write(JSON.stringify({ qualified: report.qualified, failure: report.failure, reportPath, reportSha256 }) + "\n"); return report.qualified ? 0 : 1

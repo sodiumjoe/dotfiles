@@ -206,6 +206,74 @@ test("ACP applies the 90 second prompt deadline", async t => {
   await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
 })
 
+for (const qualified of [false, true]) test(`ACP starts a fresh prompt deadline after startup expiry with qualified=${qualified}`, async t => {
+  let now = 0
+  const peer = scriptedAcp(t, "exact", { qualified, prompt() {} })
+  peer.connection.close()
+  const connection = createAcpConnection({ readable: peer.readable, writable: peer.writable, limits: sampleSpec().limits, deadline: 100, now: () => now })
+  t.after(() => connection.close())
+  await connection.initialize(qualified ? sampleQualifiedSpec() : sampleSpec(), qualified ? sampleQualifiedContract() : sampleContract(), new AbortController().signal)
+  now = 101
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let settled = false
+  const pending = connection.prompt("challenge", new AbortController().signal)
+  void pending.then(() => { settled = true }, () => { settled = true })
+  await new Promise(resolve => setImmediate(resolve))
+  now += 89999; t.mock.timers.tick(89999)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+  now++; t.mock.timers.tick(1)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+})
+
+test("ACP qualification overall deadline still caps a fresh prompt deadline", async t => {
+  let now = 0
+  const peer = scriptedAcp(t, "exact", { qualified: true, prompt() {} })
+  peer.connection.close()
+  const options = { readable: peer.readable, writable: peer.writable, limits: sampleSpec().limits, deadline: 100, overallDeadline: 200, now: () => now }
+  const connection = createAcpConnection(options)
+  t.after(() => connection.close())
+  await connection.initialize(sampleQualifiedSpec(), sampleQualifiedContract(), new AbortController().signal)
+  now = 101
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let settled = false
+  const pending = connection.prompt("challenge", new AbortController().signal)
+  void pending.then(() => { settled = true }, () => { settled = true })
+  await new Promise(resolve => setImmediate(resolve))
+  now = 199; t.mock.timers.tick(98)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+  now = 200; t.mock.timers.tick(1)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+})
+
+test("ACP refuses an expired qualification prompt before writing", async t => {
+  let now = 0
+  const peer = scriptedAcp(t, "exact", { qualified: true, prompt() {} })
+  peer.connection.close()
+  const connection = createAcpConnection({ readable: peer.readable, writable: peer.writable, limits: sampleSpec().limits, deadline: 100, overallDeadline: 200, now: () => now })
+  t.after(() => connection.close())
+  await connection.initialize(sampleQualifiedSpec(), sampleQualifiedContract(), new AbortController().signal)
+  now = 201
+  await assert.rejects(connection.prompt("challenge", new AbortController().signal), { code: "STARTUP_TIMEOUT" })
+  assert.equal(peer.sent.some(request => request.method === "session/prompt"), false)
+})
+
+for (const field of ["kind", "status", "optionKind", "priority", "planStatus"] as const) for (const shape of ["array", "object"] as const) test(`ACP rejects ${shape} substitution for ${field}`, async t => {
+  const valid = { kind: "read", status: "pending", optionKind: "allow_once", priority: "high", planStatus: "pending" }[field]
+  const value = shape === "array" ? [valid] : { value: valid }
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+    if (field === "priority" || field === "planStatus") {
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "plan", entries: [{ content: "Answer", priority: field === "priority" ? value : "high", status: field === "planStatus" ? value : "pending" }] } } })
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } } } })
+      send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+    } else send({ jsonrpc: "2.0", id: "permission", method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "tool", kind: field === "kind" ? value : "read", status: field === "status" ? value : "pending" }, options: [{ optionId: "once", name: "Once", kind: field === "optionKind" ? value : "allow_once" }] } })
+  } })
+  await peer.connection.initialize(sampleSpec(), sampleContract(), new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+  assert.deepEqual(peer.permissionReplies, [])
+})
+
 test("qualified ACP uses promptMs without widening to overallMs", async t => {
   let now = 0
   const contract = sampleQualifiedContract()

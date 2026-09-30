@@ -208,6 +208,15 @@ test("a ready provider receives fresh cleanup budgets after the startup envelope
   assert.deepEqual(f.signals, ["SIGTERM"])
 })
 
+test("a ready provider prompts after the startup deadline with a fresh prompt budget", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  t.mock.timers.tick(45001)
+  assert.deepEqual(await f.owner.prompt("after startup", new AbortController().signal), { stopReason: "end_turn", text: "after startup" })
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
 test("expired cleanup budgets cannot begin another platform observation or signal", async t => {
   const f = await syntheticAgentProcess(t, "normal")
   await f.owner.initialize(new AbortController().signal)

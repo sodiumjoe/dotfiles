@@ -25,6 +25,13 @@ import * as qualificationScript from "../scripts/qualify-codex.js"
 
 const reviewedRevision = { reviewedBranch: "moon/agency-agent-lifecycle", reviewedCommit: "1234567890abcdef1234567890abcdef12345678" }
 const revisionArgs = ["--reviewed-branch", reviewedRevision.reviewedBranch, "--reviewed-commit", reviewedRevision.reviewedCommit]
+const registryBaseline = Object.freeze({ production: JSON.stringify(productionLaunchContracts()), qualified: JSON.stringify(qualifiedLaunchContracts()) })
+function assertRegistriesUnchanged(): void {
+  assert.equal(JSON.stringify(productionLaunchContracts()), registryBaseline.production)
+  assert.equal(JSON.stringify(qualifiedLaunchContracts()), registryBaseline.qualified)
+  assert.equal(Object.isFrozen(productionLaunchContracts()), true)
+  assert.equal(Object.isFrozen(qualifiedLaunchContracts()), true)
+}
 
 const preservedCandidatePath = fileURLToPath(new URL("../../qualification/codex-darwin-arm64.candidate.json", import.meta.url))
 const preservedCandidateDigest = "73e440d1698f3e689f12b5dab74b3b9af3316ab9ab826d1c15a3029d3d909270"
@@ -105,8 +112,7 @@ test("offline prompt-v3 candidate reuses all old candidate pins and emits only c
   assert.equal(reportBytes.includes("userSecurityState"), false)
   assert.throws(() => parseCodexQualificationReport(report), { code: "REPORT_INVALID" })
   await assert.rejects(codexQualificationMain(["--stage", "source", "--candidate", f.candidatePath, "--evidence-parent", f.evidenceParent, "--report", join(directory, "report.json"), "--report-sha256", digest(reportBytes), ...revisionArgs]), { code: "REPORT_INVALID" })
-  assert.deepEqual(productionLaunchContracts(), [])
-  assert.deepEqual(qualifiedLaunchContracts(), [])
+  assertRegistriesUnchanged()
   assert.equal(digest(await readFile(preservedCandidatePath)), preservedCandidateDigest)
 })
 
@@ -236,7 +242,7 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     verify: async () => ({ ...candidate, nodeVersion: "24.13.0", selection: manifest.selection, artifacts: { adapterPackageJson: manifest.adapterPackageJson, adapterEntrypoint: manifest.adapterEntrypoint, codexExecutable: manifest.codexExecutable, nodeExecutable: manifest.nodeExecutable } }),
     handler: (path, execution) => ({ file: process.execPath, args: [fileURLToPath(new URL("./fixtures/qualification-handler.js", import.meta.url)), path, execution, scenario] }),
     async descriptorCommand(file, args, options) {
-      assert.equal(file, "/usr/sbin/lsof"); assert.deepEqual(args.slice(0, 3), ["-nP", "-a", "-p"]); assert.equal(args[4], "-F0pftn"); assert.ok(options.timeout > 0 && options.timeout <= 5000)
+      assert.equal(file, "/usr/sbin/lsof"); assert.deepEqual(args.slice(0, 3), ["-nP", "-a", "-p"]); assert.equal(args[4], "-F0pftndGPT"); assert.ok(options.timeout > 0 && options.timeout <= 5000)
       const pid = Number(args[3]), process = await platform.readProcess(pid)
       assert.ok(process)
       const handler = process.birth.includes("agy-handler:"), adapter = process.birth.includes("agy-provider:")
@@ -246,13 +252,15 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
         assert.equal(audit.inheritedDirectory, true)
         extra = "f3\0tDIR\0nevidence-directory\0\n"
       }
-      return { stdout: `p${pid}\0\nf0\0tPIPE\0npipe0\0\nf1\0tPIPE\0npipe1\0\nf2\0tPIPE\0npipe2\0\n${handler ? "f3\0tunix\0nstatus\0\nf4\0tunix\0ngate\0\n" : ""}${extra}`, stderr: "" }
+      const runtime = "f10\0tKQUEUE\0G0x3;0x2\0ncount=0, state=0x8\0\nf11\0tPIPE\0d0xaaa\0n->0xbbb\0\nf12\0tPIPE\0d0xbbb\0n->0xaaa\0\nf13\0tDIR\0G0x1;0x2\0n/\0\nf14\0tCHR\0G0x1;0x2\0n/dev/null\0\n"
+      return { stdout: `p${pid}\0\nf0\0tPIPE\0npipe0\0\nf1\0tPIPE\0npipe1\0\nf2\0tPIPE\0npipe2\0\n${handler ? `f3\0tunix\0n->0xabc\0\nf4\0tunix\0n${join(executionRoots.at(-1)!, "runtime/handler.sock")}\0\n` : ""}${runtime}${extra}`, stderr: "" }
     },
     normalStatePaths: [normal],
     async createExecutionRoot() { const execution = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqx-" : "/tmp/agyqx-"); executionRoots.push(execution); return execution },
   }
   ;(dependencies as any).currentRevision = async () => ({ branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit })
   t.after(async () => {
+    assertRegistriesUnchanged()
     assert.deepEqual(productionLaunchContracts(), registryBefore)
     for (const execution of executionRoots) {
       const h = await readHandlerRecord(join(execution, "runtime/handler.json")).catch(() => null)
@@ -312,8 +320,7 @@ async function assertClosedQualificationFailure(f: Awaited<ReturnType<typeof qua
   assert.equal(report.postconditions.normalAgencyState, "unchanged")
   assert.deepEqual(report.observation.normalAgencyState.after, report.observation.normalAgencyState.before)
   for (const executionRoot of f.executionRoots) await assert.rejects(lstat(executionRoot), { code: "ENOENT" })
-  assert.deepEqual(productionLaunchContracts(), [])
-  assert.deepEqual(qualifiedLaunchContracts(), [])
+  assertRegistriesUnchanged()
   assert.ok(Object.isFrozen(productionLaunchContracts()))
   assert.ok(Object.isFrozen(qualifiedLaunchContracts()))
 }
@@ -607,8 +614,7 @@ test("Handler death during prompt recovers from prompt evidence published before
   assert.equal(report.observation.absence!.handler, "absent")
   assert.equal(report.observation.absence!.provider, "absent")
   for (const executionRoot of f.executionRoots) await assert.rejects(lstat(executionRoot), { code: "ENOENT" })
-  assert.deepEqual(productionLaunchContracts(), [])
-  assert.deepEqual(qualifiedLaunchContracts(), [])
+  assertRegistriesUnchanged()
 })
 
 for (const [scenario, failure, promptState] of [["adapter-exit", "STARTUP_FAILED", "not_started"], ["codex-exit", "STARTUP_FAILED", "not_started"], ["prompt-exit", "STARTUP_FAILED", "in_flight_failed"]] as const) test(`${scenario} retains failure evidence and completes owned cleanup`, async t => {
@@ -1014,7 +1020,7 @@ test("report parser derives prompt deadline outcome from authoritative receipt p
   const inFlight = { ...structuredClone(baseline.prompt), state: "in_flight_failed", answer: "", normalizedAnswer: null, stopReason: null, durationMs: 1 }
   const completed = structuredClone(baseline.prompt)
   const timedOut = { ...inFlight, durationMs: baseline.deadlines.prompt.limitMs + 1 }
-  const completedTimedOut = { ...completed, durationMs: baseline.deadlines.prompt.limitMs }
+  const completedTimedOut = { ...completed, durationMs: baseline.deadlines.prompt.limitMs + 1 }
   const cases = [failed(empty, "not_reached"), failed(inFlight, "failed"), failed(completed, "completed"), failed(timedOut, "timed_out"), failed(completedTimedOut, "timed_out")]
   for (const report of cases) {
     assert.deepEqual(parseCodexQualificationReport(report), report)
@@ -1023,6 +1029,89 @@ test("report parser derives prompt deadline outcome from authoritative receipt p
       assert.throws(() => parseCodexQualificationReport(contradictory), { code: "REPORT_INVALID" })
     }
   }
+  for (const durationMs of [150001, Infinity, NaN, -1]) {
+    const unbounded = failed({ ...completed, durationMs }, "timed_out")
+    assert.throws(() => parseCodexQualificationReport(unbounded), { code: "REPORT_INVALID" })
+  }
+})
+
+test("completed over-deadline receipts retain prompt and method evidence after root removal", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-over-deadline-receipt")
+  const result = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(result.report.qualified, false)
+  assert.equal(result.report.prompt.state, "completed")
+  assert.equal(result.report.prompt.durationMs, 90001)
+  assert.equal(result.report.prompt.answer, result.report.prompt.challenge)
+  assert.equal(result.report.deadlines.prompt.outcome, "timed_out")
+  assert.equal(result.report.protocol.methods.at(-1), "session/prompt")
+  assert.equal(result.report.postconditions.executionRoot, "absent")
+  assert.deepEqual(parseCodexQualificationReport(JSON.parse(await readFile(result.reportPath!, "utf8"))), result.report)
+})
+
+test("source generation rechecks authenticated private paths and emits exact source bytes", async t => {
+  const f = await qualificationHarnessFixture(t), result = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(result.report.qualified, true, JSON.stringify(result.report))
+  const root = f.executionRoots[0]!, cwd = result.report.observation.retained.agent!.spec.checkout.root.path
+  const privatePaths = [root, cwd, join(root, "state/agents/provider-state", result.report.ownership.launchAttemptId!), join(root, "state/catalog/providers.json")]
+  const args = ["--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", result.reportPath!, "--report-sha256", result.reportSha256!, ...revisionArgs]
+  let stdout = ""
+  t.mock.method(process.stdout, "write", ((chunk: string | Uint8Array) => { stdout += chunk.toString(); return true }) as typeof process.stdout.write)
+  assert.equal(await codexQualificationMain(args, f.dependencies), 0)
+  const expected = renderPublishedQualificationSource(f.candidate, result.report, result.reportSha256!, result.reportSha256!, reviewedRevision)
+  await t.test("exact bytes", () => { assert.equal(stdout, expected); assert.equal(stdout.endsWith("\n"), false) })
+  for (const recreated of privatePaths) {
+    await t.test(`recreated ${recreated.slice(root.length) || "execution root"}`, async () => {
+    await mkdir(dirname(recreated), { recursive: true, mode: 0o700 })
+    if (recreated.endsWith(".json")) await writeFile(recreated, "{}", { mode: 0o600 })
+    else await mkdir(recreated, { recursive: true, mode: 0o700 })
+    let revalidated = 0
+    stdout = ""
+    const dependencies = { ...f.dependencies, async currentRevision() { revalidated++; return { branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit } } }
+    try {
+      await assert.rejects(codexQualificationMain(args, dependencies), { code: "CLEANUP_UNVERIFIED" })
+      assert.equal(revalidated, 0)
+      assert.equal(stdout, "")
+    } finally { await rm(root, { recursive: true }) }
+    })
+  }
+  await symlink(f.user, root)
+  await assert.rejects(codexQualificationMain(args, f.dependencies), { code: "CLEANUP_UNVERIFIED" })
+  await rm(root)
+  const dependencies = { ...f.dependencies, async verify(manifest: Parameters<QualificationDependencies["verify"]>[0]) { await mkdir(root, { mode: 0o700 }); return f.dependencies.verify(manifest) } }
+  stdout = ""
+  await assert.rejects(codexQualificationMain(args, dependencies), { code: "CLEANUP_UNVERIFIED" })
+  assert.equal(stdout, "")
+  await rm(root, { recursive: true })
+})
+
+for (const scenario of ["normal", "descriptor-leak", "child-descriptor-leak"]) test(`Darwin runtime descriptors classify live fixture tree: ${scenario}`, { skip: process.platform !== "darwin" }, async t => {
+  const f = await qualificationHarnessFixture(t, scenario), observations: string[] = []
+  f.dependencies.descriptorCommand = async (file, args, options) => {
+    const result = await promisify(execFile)(file, args, { ...options, encoding: "utf8" })
+    observations.push(result.stdout.replaceAll("\0", "|"))
+    return result
+  }
+  const result = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(result.report.qualified, scenario === "normal", result.report.failure + "\n" + observations.join("\n"))
+  if (scenario !== "normal") {
+    assert.equal(result.report.failure, "DESCRIPTOR_LEAK")
+    const role = scenario === "descriptor-leak" ? "adapter" : "child"
+    assert.equal(result.report.observation.descriptors!.processes.find(p => p.role === role)!.descriptors.find(d => d.fd === 3)!.allowed, false)
+  }
+  assert.ok(result.report.observation.descriptors!.processes.every(p => p.descriptors.some(d => d.fd > 4)))
+})
+
+test("source rejects retained private path substitution before mutable observations", async t => {
+  const f = await qualificationHarnessFixture(t), result = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(result.report.qualified, true, JSON.stringify(result.report))
+  const changed = structuredClone(result.report)
+  changed.observation.retained.handlers[0]!.socketPath = join(f.user, "handler.sock")
+  const reportPath = join(f.root, "changed-private-path.json"), bytes = JSON.stringify(changed)
+  await writeFile(reportPath, bytes, { mode: 0o600 })
+  let revalidated = 0
+  const dependencies = { ...f.dependencies, async currentRevision() { revalidated++; return { branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit } } }
+  await assert.rejects(codexQualificationMain(["--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", reportPath, "--report-sha256", digest(Buffer.from(bytes)), ...revisionArgs], dependencies), { code: "REPORT_INVALID" })
+  assert.equal(revalidated, 0)
 })
 
 test("two-child qualification requires exact retained descriptor identities", async t => {

@@ -15,7 +15,7 @@ import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type Prom
 
 export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 
-export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; deadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; removeProviderState?: typeof removeProviderState } = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; removeProviderState?: typeof removeProviderState } = {}): OwnedAgentProcess {
   const { context, spec, contract } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.qualification?.deadlines
   let overallDeadline = input.deadline ?? Infinity, spawnDeadline = Infinity
@@ -189,7 +189,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
         try {
           await bounded(() => preparation!, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
-          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, now })
+          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(input.overallDeadline === undefined ? {} : { overallDeadline: input.overallDeadline }), now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
           const session = await connection.initialize(spec, contract, controller.signal)
           check(); initialized = true; if (!input.isReady) overallDeadline = Infinity; return session

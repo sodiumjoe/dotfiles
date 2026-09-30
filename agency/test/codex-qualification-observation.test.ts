@@ -9,15 +9,56 @@ const child: ProcessIdentity = { ...leader, pid: 201, birth: "3:child", parentPi
 const group = { leader, observed: [leader] }
 const processes = [handler, leader, child]
 const live: PlatformAdapter = { platform: "darwin", async bootId() { return "boot" }, async readProcess(pid) { return processes.find(p => p.pid === pid) ?? null }, async readGroup(pid) { return processes.filter(p => p.processGroupId === pid) }, async signalGroup() { throw new Error("no signals authorized") } }
-const output = (pid: number, extra = ""): string => `p${pid}\0\nf0\0tPIPE\0npipe0\0\nf1\0tPIPE\0npipe1\0\nf2\0tPIPE\0npipe2\0\n${pid === handler.pid ? "f3\0tunix\0nchannel3\0\nf4\0tunix\0nchannel4\0\n" : ""}${extra}`
+const output = (pid: number, extra = ""): string => `p${pid}\0\nf0\0tPIPE\0npipe0\0\nf1\0tPIPE\0npipe1\0\nf2\0tPIPE\0npipe2\0\n${pid === handler.pid ? "f3\0tunix\0n->0xabcd\0\nf4\0tunix\0n->0xdcba\0\n" : ""}${extra}`
 const command: DescriptorCommand = async (file, args, options) => {
   assert.equal(file, "/usr/sbin/lsof")
   assert.deepEqual(args.slice(0, 3), ["-nP", "-a", "-p"])
-  assert.equal(args[4], "-F0pftn")
+  assert.equal(args[4], "-F0pftndGPT")
   assert.ok(options.timeout > 0 && options.timeout <= 2000)
   assert.equal(options.maxBuffer, 65536)
   return { stdout: output(Number(args[3])), stderr: "" }
 }
+
+const runtime = (pid: number, extra = ""): string => {
+  const prefix = pid === handler.pid ? "100" : pid === leader.pid ? "200" : "300"
+  const stdio = [0, 1, 2].map(fd => `f${fd}\0tunix\0d0x${prefix}${fd}\0n->0x${pid === child.pid ? "200" : "100"}${fd + 4}\0\n`).join("")
+  const pipes = `f10\0tPIPE\0d0x${prefix}a\0n->0x${prefix}b\0\nf11\0tPIPE\0d0x${prefix}b\0n->0x${prefix}a\0\n`
+  const local = `f12\0tKQUEUE\0G0x3;0x2\0ncount=0, state=0x8\0\nf13\0tDIR\0G0x1;0x2\0n/\0\nf14\0tCHR\0G0x1;0x2\0n/dev/null\0\n`
+  const childPipes = pid === handler.pid || pid === leader.pid ? [0, 1, 2].map(fd => `f${fd + 4}\0tunix\0d0x${prefix}${fd + 4}\0n->0x${pid === handler.pid ? "200" : "300"}${fd}\0\n`).join("") : ""
+  const socket = pid === handler.pid ? "f15\0tunix\0n/private/tmp/agyq-fixture/runtime/handler.sock\0\n" : ""
+  return `p${pid}\0\n${stdio}${pipes}${local}${childPipes}${socket}${extra}`
+}
+
+test("descriptor policy accepts owned runtime handles and connected provider stdio", async () => {
+  const result = await observeQualificationDescriptors(live, [handler], group, 2000, async (_file, args) => ({ stdout: runtime(Number(args[3])), stderr: "" }), { handlerSocketPath: "/private/tmp/agyq-fixture/runtime/handler.sock", providerStateRoot: "/private/tmp/agyq-fixture/state/agents/provider-state/attempt" })
+  assert.equal(result.outcome, "verified")
+  assert.ok(!JSON.stringify(result).includes("0x"))
+  assert.ok(!JSON.stringify(result).includes("handler.sock"))
+})
+
+for (const [name, extra] of [
+  ["unpaired pipe", "f30\0tPIPE\0d0xff\0n->0xee\0\n"],
+  ["unowned socket", "f30\0tunix\0d0xff\0n->0xee\0\n"],
+  ["evidence directory", "f30\0tDIR\0G0x1;0x2\0n/private/evidence\0\n"],
+  ["inherited root directory", "f30\0tDIR\0G0x1;0x3\0n/\0\n"],
+  ["inherited queue", "f30\0tKQUEUE\0G0x3;0x3\0ncount=0, state=0x8\0\n"],
+  ["inherited pipe pair", "f30\0tPIPE\0d0xff\0n->0xee\0\nf31\0tPIPE\0d0xee\0n->0xff\0\n"],
+  ["other listener", "f30\0tunix\0n/private/tmp/other.sock\0\n"],
+] as const) test(`descriptor policy rejects ${name} among legitimate runtime handles`, async () => {
+  const result = await observeQualificationDescriptors(live, [handler], group, 2000, async (_file, args) => ({ stdout: runtime(Number(args[3]), Number(args[3]) === leader.pid ? extra : ""), stderr: "" }), { handlerSocketPath: "/private/tmp/agyq-fixture/runtime/handler.sock", providerStateRoot: "/private/tmp/agyq-fixture/state/agents/provider-state/attempt" })
+  assert.equal(result.outcome, "leaked")
+  assert.equal(result.processes.find(p => p.role === "adapter")!.descriptors.find(d => d.fd === 30)!.allowed, false)
+})
+
+for (const [name, extra, allowed] of [
+  ["established child TLS", "f30\0tIPv4\0G0x3;0x2\0PTCP\0TST=ESTABLISHED\0n127.0.0.1:51000->127.0.0.1:443\0\n", true],
+  ["inherited child socket", "f30\0tIPv4\0G0x3;0x3\0PTCP\0TST=ESTABLISHED\0n127.0.0.1:51000->127.0.0.1:443\0\n", false],
+  ["TCP listener", "f30\0tIPv4\0G0x3;0x2\0PTCP\0TST=LISTEN\0n127.0.0.1:51000\0\n", false],
+] as const) test(`descriptor policy classifies ${name}`, async () => {
+  const result = await observeQualificationDescriptors(live, [handler], group, 2000, async (_file, args) => ({ stdout: runtime(Number(args[3]), Number(args[3]) === child.pid ? extra : ""), stderr: "" }), { handlerSocketPath: "/private/tmp/agyq-fixture/runtime/handler.sock", providerStateRoot: "/private/tmp/agyq-fixture/state/agents/provider-state/attempt" })
+  assert.equal(result.outcome, allowed ? "verified" : "leaked")
+  assert.equal(result.processes.find(p => p.role === "child")!.descriptors.find(d => d.fd === 30)!.allowed, allowed)
+})
 
 test("descriptor observations bind Handler, adapter, and newly observed child identities", async () => {
   const inspected: number[] = []

@@ -32,8 +32,8 @@ function permissionToolCall(value: unknown): void {
   const toolCall = object(value)
   knownKeys(toolCall, ["toolCallId"], ["toolCallId", "kind", "status", "title", "name", "content", "locations", "rawInput", "rawOutput", "_meta"])
   agentText(toolCall.toolCallId)
-  if (Object.hasOwn(toolCall, "kind") && toolCall.kind !== null && !["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"].includes(String(toolCall.kind))) invalid()
-  if (Object.hasOwn(toolCall, "status") && toolCall.status !== null && !["pending", "in_progress", "completed", "failed"].includes(String(toolCall.status))) invalid()
+  if (Object.hasOwn(toolCall, "kind") && toolCall.kind !== null && (typeof toolCall.kind !== "string" || !["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"].includes(toolCall.kind))) invalid()
+  if (Object.hasOwn(toolCall, "status") && toolCall.status !== null && (typeof toolCall.status !== "string" || !["pending", "in_progress", "completed", "failed"].includes(toolCall.status))) invalid()
   for (const name of ["title", "name"] as const) if (Object.hasOwn(toolCall, name) && toolCall[name] !== null) boundedText(toolCall[name], 1024)
   if (Object.hasOwn(toolCall, "content") && toolCall.content !== null) {
     if (!Array.isArray(toolCall.content) || toolCall.content.length > 32) invalid()
@@ -79,7 +79,7 @@ function informational(update: Record<string, unknown>, kind: string): boolean {
     if (!Array.isArray(update.entries) || update.entries.length > 32 || Buffer.byteLength(JSON.stringify(update.entries)) > 65536) invalid()
     for (const raw of update.entries) {
       const entry = object(raw); knownKeys(entry, ["content", "priority", "status"], ["content", "priority", "status", "_meta"]); boundedText(entry.content, 4096)
-      if (!["high", "medium", "low"].includes(String(entry.priority)) || !["pending", "in_progress", "completed"].includes(String(entry.status))) invalid()
+      if (typeof entry.priority !== "string" || !["high", "medium", "low"].includes(entry.priority) || typeof entry.status !== "string" || !["pending", "in_progress", "completed"].includes(entry.status)) invalid()
       if (Object.hasOwn(entry, "_meta")) metadata(entry._meta)
     }
     return true
@@ -184,7 +184,7 @@ function exactPrefix(options: ConfigOption[], desired: readonly [string, string]
   }
 }
 
-export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number }): AcpConnection {
+export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number; overallDeadline?: number }): AcpConnection {
   const { readable, writable, limits } = input, now = input.now ?? (() => performance.now())
   const decoder = new TextDecoder("utf-8", { fatal: true }), pending = new Map<number, Pending>()
   const writes = new Set<(error?: Error | null) => void>()
@@ -207,7 +207,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     if (failure) throw failure
     if (!receiving && violation) throw violation
     if (closed) throw new AgentError("STARTUP_FAILED")
-    if (!ready && now() >= deadline) throw new AgentError("STARTUP_TIMEOUT")
+    if (now() >= deadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   const budget = (bytes: number, frames: number): void => {
     if (!ready) { startupBytes += bytes; if (startupBytes > limits.startupBytes) invalid(); return }
@@ -268,7 +268,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         for (const rawOption of params.options) {
           const option = object(rawOption); knownKeys(option, ["optionId", "name", "kind"], ["optionId", "name", "kind", "_meta"])
           optionIds.push(agentText(option.optionId)); agentText(option.name, 1024)
-          if (!["allow_once", "allow_always", "reject_once", "reject_always"].includes(String(option.kind))) invalid()
+          if (typeof option.kind !== "string" || !["allow_once", "allow_always", "reject_once", "reject_always"].includes(option.kind)) invalid()
           if (Object.hasOwn(option, "_meta")) metadata(option._meta)
         }
         if (new Set(optionIds).size !== optionIds.length) invalid()
@@ -369,7 +369,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         let timer: NodeJS.Timeout | undefined
         try {
           spec = parseLaunchSpec(inputSpec); contract = parseLaunchContract(inputContract)
-          deadline = Math.min(input.deadline ?? Infinity, now() + (contract.qualification?.deadlines.overallMs ?? limits.startupMs))
+          deadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity, now() + (contract.qualification?.deadlines.overallMs ?? limits.startupMs))
           timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, deadline - now()))
           signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort()
           check()
@@ -384,7 +384,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
             exactPrefix(options, desired, index + 1)
           }
           check(); exact(options, spec, contract); ready = true
-          if (contract.qualification === null && input.deadline === undefined) deadline = Infinity
+          deadline = input.overallDeadline ?? Infinity
           return { sessionId: sessionId!, sessionGeneration: randomUUID(), protocolVersion: 1 as const, modelId: spec.selection.modelId, reasoning: structuredClone(spec.selection.reasoning), mode: spec.selection.mode, permissionProfile: spec.selection.permissionProfile, permissionEvidence: contract.permissionEvidence }
         } catch (error) { await denial?.catch(() => undefined); fail(error); throw failure! }
         finally { clearTimeout(timer); signal.removeEventListener("abort", abort) }

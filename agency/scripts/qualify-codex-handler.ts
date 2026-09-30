@@ -51,7 +51,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
     let promptForward: { state: "publishing" | "forwarded" | "settled"; completion: Promise<void>; settle(error?: Error | null): void } | undefined
     const releasePrompt = (error = new AgentError("STARTUP_FAILED")): void => { promptForward?.settle(error) }
     const adapter = input.context.adapter
-    const observedInput = { ...input, context: { ...input.context, adapter: { ...adapter,
+    const observedInput = { ...input, ...(input.deadline === undefined ? {} : { overallDeadline: input.deadline }), context: { ...input.context, adapter: { ...adapter,
       async readGroup(group: number) { const result = await adapter.readGroup(group); if (closeStart && !result.length) { absenceStart ||= performance.now(); receipt.durations.absence = performance.now() - absenceStart }; return result },
       async readProcess(pid: number) { const result = await adapter.readProcess(pid); if (absenceStart) receipt.durations.absence = performance.now() - absenceStart; return result },
     } } }

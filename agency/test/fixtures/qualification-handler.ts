@@ -56,6 +56,11 @@ try {
         }) as typeof spawn,
         ...(scenario === "state-removal" ? { removeProviderState: async () => { throw new AgentError("CLEANUP_UNVERIFIED") } } : {}),
         publish: async (path, value) => {
+          if (scenario === "prompt-over-deadline-receipt" && !path.endsWith(".prompt.json")) {
+            const receipt = structuredClone(value) as { durations: { prompt: number }; prompt: { durationMs: number } }
+            receipt.prompt.durationMs = 90001; receipt.durations.prompt = 90001
+            value = receipt
+          }
           if (scenario !== "missing-evidence") await durableQualificationWrite(path, value)
           if (path.endsWith(".prompt.json") && scenario.startsWith("prompt-forward-")) {
             await durableQualificationWrite(join(root, "receipts/prompt-publication-held.json"), { held: true })
