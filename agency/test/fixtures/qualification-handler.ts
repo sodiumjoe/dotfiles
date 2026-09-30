@@ -15,6 +15,18 @@ const [candidatePath, root, scenario] = process.argv.slice(2) as [string, string
 try {
   const options = await qualificationHandlerOptions(candidatePath, root, "a".repeat(64))
   if (scenario === "survivor") options.adapter = { ...options.adapter, async signalGroup() {} }
+  if (scenario === "prompt-forward-abort-gap") {
+    const adapter = options.adapter
+    options.adapter = { ...adapter, async signalGroup(group, signal) {
+      const parent = dirname(candidatePath)
+      await durableQualificationWrite(join(parent, "provider-cleanup-blocked.json"), { blocked: true })
+      for (let attempt = 0; attempt < 500; attempt++) {
+        if (await readFile(join(parent, "release-provider-cleanup")).then(() => true, () => false)) break
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      await adapter.signalGroup(group, signal)
+    } }
+  }
   if (scenario === "handler-startup") options.onPhase = async () => { throw new Error("fixture startup failure") }
   const candidate = parseQualificationCandidate(await readPrivateJson(candidatePath)), evidence = launchEvidenceFromQualifiedCandidate(candidate, options.generation, Date.now())
   options.launchContracts = [contractFromQualifiedCandidate(candidate)]
@@ -47,7 +59,13 @@ try {
           if (scenario !== "missing-evidence") await durableQualificationWrite(path, value)
           if (path.endsWith(".prompt.json") && scenario.startsWith("prompt-forward-")) {
             await durableQualificationWrite(join(root, "receipts/prompt-publication-held.json"), { held: true })
-            await new Promise(resolve => setTimeout(resolve, scenario === "prompt-forward-timeout" ? 5500 : scenario === "prompt-forward-success" ? 100 : 3000))
+            if (scenario === "prompt-forward-abort-gap") {
+              const release = join(dirname(candidatePath), "release-prompt-publication")
+              for (let attempt = 0; attempt < 500; attempt++) {
+                if (await readFile(release).then(() => true, () => false)) break
+                await new Promise(resolve => setTimeout(resolve, 10))
+              }
+            } else await new Promise(resolve => setTimeout(resolve, scenario === "prompt-forward-timeout" ? 5500 : scenario === "prompt-forward-success" ? 100 : 3000))
           }
         },
         })(options)

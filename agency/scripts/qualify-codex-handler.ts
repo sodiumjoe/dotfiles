@@ -138,6 +138,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
       child.once("close", () => { releasePrompt(); closedAt = performance.now() })
       return child
     }) as typeof spawn })
+    void owner.fault.then(() => releasePrompt())
     let cleanup: ReturnType<typeof owner.cleanup> | undefined
     return {
       ...owner,
@@ -172,6 +173,13 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
           })
           check(); return session
         } catch (error) { if (error instanceof AgentError) receipt.failure = error.code; throw error }
+      },
+      prompt(text, signal) {
+        const abort = (): void => releasePrompt()
+        signal.addEventListener("abort", abort, { once: true })
+        if (signal.aborted) abort()
+        const pending = owner.prompt(text, signal)
+        return pending.finally(() => signal.removeEventListener("abort", abort))
       },
       cleanup() {
         if (cleanup) return cleanup

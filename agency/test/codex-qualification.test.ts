@@ -542,6 +542,34 @@ test("prompt abort releases held publication without forwarding and completes cl
   assert.deepEqual(await f.providerAudit(), null)
 })
 
+test("prompt abort revokes forwarding before delayed wrapper cleanup", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-forward-abort-gap")
+  ;(f.dependencies as any).exchangeAgent = (socket: Parameters<typeof exchangeAgentProtocol>[0], request: Parameters<typeof exchangeAgentProtocol>[1], timeout: number) => {
+    const result = exchangeAgentProtocol(socket, request, timeout)
+    if (request.op === "agent_prompt") void (async () => {
+      const waitFor = async (path: string) => {
+        for (let attempt = 0; attempt < 500; attempt++) {
+          if (await readFile(path).then(() => true, () => false)) return
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        assert.fail(`timed out waiting for ${path}`)
+      }
+      await waitFor(join(f.executionRoots.at(-1)!, "receipts/prompt-publication-held.json"))
+      socket.destroy()
+      await waitFor(join(f.root, "provider-cleanup-blocked.json"))
+      await writeFile(join(f.root, "release-prompt-publication"), "release", { mode: 0o600 })
+      await new Promise(resolve => setTimeout(resolve, 100))
+      await writeFile(join(f.root, "release-provider-cleanup"), "release", { mode: 0o600 })
+    })()
+    return result
+  }
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, "UNAVAILABLE")
+  assert.deepEqual(await f.forwardAudit(), null)
+  assert.deepEqual(await f.providerAudit(), null)
+  assert.equal(result.report.prompt.state, "in_flight_failed")
+})
+
 test("Handler death during prompt recovers from prompt evidence published before provider forwarding", async t => {
   const f = await qualificationHarnessFixture(t, "handler-death")
   const result = await runCodexQualification(f.request, f.dependencies)
