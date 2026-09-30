@@ -48,6 +48,8 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
     const reservation = reservationTimes.get(input.spec.launchAttemptId)
     if (reservation !== undefined) receipt.durations.reservation = reservation
     let child: ChildProcess | undefined, started = performance.now(), phaseStart = 0, pendingId: unknown, phase: "initialize" | "session" | "model" | "reasoning" | "mode" | "prompt" | undefined, sessionId: string | undefined, buffer = "", closeStart = 0, terminalAt = 0, closedAt = 0, absenceStart = 0, promptEvidence: Promise<void> | undefined
+    let promptForward: { state: "publishing" | "forwarded" | "settled"; completion: Promise<void>; settle(error?: Error | null): void } | undefined
+    const releasePrompt = (error = new AgentError("STARTUP_FAILED")): void => { promptForward?.settle(error) }
     const adapter = input.context.adapter
     const observedInput = { ...input, context: { ...input.context, adapter: { ...adapter,
       async readGroup(group: number) { const result = await adapter.readGroup(group); if (closeStart && !result.length) { absenceStart ||= performance.now(); receipt.durations.absence = performance.now() - absenceStart }; return result },
@@ -78,10 +80,30 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
         } catch { receipt.failure = "INVALID_PROTOCOL" }
         if (publishPrompt) {
           const callback = rest.find(value => typeof value === "function") as ((error?: Error | null) => void) | undefined
+          let resolve!: () => void, timer: NodeJS.Timeout | undefined
+          const forward: NonNullable<typeof promptForward> = {
+            state: "publishing",
+            completion: new Promise<void>(done => { resolve = done }),
+            settle(error) {
+              if (forward.state === "settled") return
+              forward.state = "settled"; clearTimeout(timer); callback?.(error); resolve()
+            },
+          }
+          promptForward = forward
+          timer = setTimeout(() => forward.settle(new AgentError("STARTUP_TIMEOUT")), input.spec.limits.rpcMs)
           promptEvidence = (options.publish ?? durableQualificationWrite)(join(root, "receipts", input.spec.launchAttemptId + ".prompt.json"), receipt)
-          void promptEvidence.then(() => { (original as (...args: unknown[]) => boolean)(chunk, ...rest) }, error => {
+          void promptEvidence.then(() => {
+            if (promptForward !== forward || forward.state !== "publishing") return
+            forward.state = "forwarded"
+            const forwarded = [...rest], callbackIndex = forwarded.findIndex(value => typeof value === "function")
+            const settled = (error?: Error | null): void => forward.settle(error)
+            if (callbackIndex >= 0) forwarded[callbackIndex] = settled
+            else forwarded.push(settled)
+            try { (original as (...args: unknown[]) => boolean)(chunk, ...forwarded) }
+            catch (error) { forward.settle(error instanceof Error ? error : new Error("prompt forwarding failed")) }
+          }, error => {
             receipt.failure = "EVIDENCE_PUBLICATION_FAILED"
-            callback?.(error instanceof Error ? error : new Error("prompt evidence publication failed"))
+            forward.settle(error instanceof Error ? error : new Error("prompt evidence publication failed"))
           })
           return false
         }
@@ -112,8 +134,8 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
           } catch { receipt.failure = "INVALID_PROTOCOL" }
         }
       })
-      child.once("exit", () => { receipt.terminal = true; terminalAt = performance.now(); if (closeStart) receipt.durations.processTerminate = terminalAt - closeStart })
-      child.once("close", () => { closedAt = performance.now() })
+      child.once("exit", () => { releasePrompt(); receipt.terminal = true; terminalAt = performance.now(); if (closeStart) receipt.durations.processTerminate = terminalAt - closeStart })
+      child.once("close", () => { releasePrompt(); closedAt = performance.now() })
       return child
     }) as typeof spawn })
     let cleanup: ReturnType<typeof owner.cleanup> | undefined
@@ -154,12 +176,13 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
       cleanup() {
         if (cleanup) return cleanup
         closeStart = performance.now()
+        releasePrompt()
         cleanup = (async () => {
           let result
           try { result = await owner.cleanup() }
           catch (error) { receipt.failure = "CLEANUP_UNVERIFIED"; throw error }
           finally {
-            await promptEvidence?.catch(() => undefined)
+            await promptForward?.completion
             await new Promise<void>(resolve => setImmediate(resolve))
             receipt.transportClosed = child === undefined || closedAt > 0 && !!child.stdin?.destroyed && !!child.stdout?.destroyed && !!child.stderr?.destroyed
             receipt.handlesClosed = receipt.transportClosed
@@ -172,6 +195,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
         })()
         return cleanup
       },
+      dispose() { releasePrompt(); owner.dispose() },
     }
   }
 }

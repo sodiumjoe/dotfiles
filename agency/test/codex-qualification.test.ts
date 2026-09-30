@@ -230,7 +230,6 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
   const candidatePath = join(root, "candidate.json")
   await writeFile(candidatePath, JSON.stringify(candidate), { mode: 0o600 })
   const executionRoots: string[] = []
-  let providerAudit: unknown = null
   const platform = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   const dependencies: QualificationDependencies = {
     adapter: platform, hostKey: "a".repeat(64),
@@ -251,7 +250,6 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     },
     normalStatePaths: [normal],
     async createExecutionRoot() { const execution = await mkdtemp(process.platform === "darwin" ? "/private/tmp/agyqx-" : "/tmp/agyqx-"); executionRoots.push(execution); return execution },
-    async beforeCleanup(root) { providerAudit = await readFile(join(root, "receipts/provider-audit.json"), "utf8").then(JSON.parse).catch(() => null) },
   }
   ;(dependencies as any).currentRevision = async () => ({ branch: reviewedRevision.reviewedBranch, commit: reviewedRevision.reviewedCommit })
   t.after(async () => {
@@ -279,7 +277,8 @@ async function qualificationHarnessFixture(t: TestContext, scenario = "normal") 
     }
     await rm(root, { recursive: true, force: true })
   })
-  return { root, user, normal, candidate, registryBefore, executionRoots, providerAudit: () => providerAudit, request: { candidatePath, evidenceParent, ...reviewedRevision }, dependencies }
+  const audit = (name: string) => readFile(join(root, name), "utf8").then(JSON.parse).catch(() => null)
+  return { root, user, normal, candidate, registryBefore, executionRoots, providerAudit: () => audit("provider-audit.json"), forwardAudit: () => audit("prompt-forward-audit.json"), request: { candidatePath, evidenceParent, ...reviewedRevision }, dependencies }
 }
 
 async function assertClosedQualificationFailure(f: Awaited<ReturnType<typeof qualificationHarnessFixture>>, result: Awaited<ReturnType<typeof runCodexQualification>>, failure: string) {
@@ -466,7 +465,7 @@ for (const scenario of ["prompt-fragmented", "prompt-multiple"] as const) test(`
   assert.equal(report.prompt.answer, report.prompt.challenge)
   assert.equal(report.prompt.normalizedAnswer, report.prompt.challenge)
   assert.deepEqual(report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
-  assert.deepEqual(f.providerAudit(), { scenario, chunks: scenario === "prompt-fragmented" ? 2 : 3 })
+  assert.deepEqual(await f.providerAudit(), { scenario, chunks: scenario === "prompt-fragmented" ? 2 : 3 })
 })
 
 for (const [scenario, failure] of [
@@ -486,6 +485,61 @@ for (const [scenario, failure] of [
   await assertClosedQualificationFailure(f, result, failure)
   assert.notEqual(result.report.prompt.state, "not_started")
   assert.deepEqual(result.report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
+  if (scenario === "prompt-tool-call" || scenario === "prompt-tool-call-update") assert.deepEqual(await f.providerAudit(), { scenario, updateKind: scenario === "prompt-tool-call" ? "tool_call" : "tool_call_update" })
+  if (scenario === "prompt-late-result") {
+    assert.deepEqual(result.report.prompt, { state: "completed", challenge: result.report.prompt.challenge, prompt: result.report.prompt.prompt, answer: result.report.prompt.challenge, normalizedAnswer: result.report.prompt.challenge, stopReason: "end_turn", durationMs: result.report.prompt.durationMs })
+    assert.deepEqual(await f.providerAudit(), { scenario, events: ["answer", "result", "late-update"], childAlive: true })
+  }
+})
+
+test("owned Codex child death after prompt authority retains attempted-prompt evidence and completes cleanup", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-child-death")
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, "STARTUP_FAILED")
+  assert.deepEqual(result.report.protocol.methods.filter(method => method === "session/prompt"), ["session/prompt"])
+  assert.equal(result.report.prompt.state, "in_flight_failed")
+  assert.equal(result.report.prompt.answer, "")
+  assert.equal(result.report.prompt.normalizedAnswer, null)
+  assert.equal(result.report.prompt.stopReason, null)
+  assert.deepEqual(await f.providerAudit(), { scenario: "prompt-child-death", childKilled: true })
+})
+
+test("successful prompt publication forwards exactly once", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-forward-success")
+  const { report } = await runCodexQualification(f.request, f.dependencies)
+  assert.equal(report.qualified, true, JSON.stringify(report))
+  assert.deepEqual(await f.forwardAudit(), { promptWrites: 1 })
+  assert.deepEqual(await f.providerAudit(), { scenario: "prompt-forward-success", promptRequests: 1 })
+})
+
+for (const [scenario, failure] of [["prompt-forward-timeout", "STARTUP_TIMEOUT"], ["prompt-forward-stop", "STARTUP_FAILED"]] as const) test(`${scenario} releases held publication without forwarding and completes cleanup`, async t => {
+  const f = await qualificationHarnessFixture(t, scenario)
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, failure)
+  assert.equal(result.report.prompt.state, "in_flight_failed")
+  assert.deepEqual(await f.forwardAudit(), null)
+  assert.deepEqual(await f.providerAudit(), null)
+})
+
+test("prompt abort releases held publication without forwarding and completes cleanup", async t => {
+  const f = await qualificationHarnessFixture(t, "prompt-forward-abort")
+  ;(f.dependencies as any).exchangeAgent = (socket: Parameters<typeof exchangeAgentProtocol>[0], request: Parameters<typeof exchangeAgentProtocol>[1], timeout: number) => {
+    const result = exchangeAgentProtocol(socket, request, timeout)
+    if (request.op === "agent_prompt") void (async () => {
+      const receipt = join(f.executionRoots.at(-1)!, "receipts", "prompt-publication-held.json")
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (await readFile(receipt).then(() => true, () => false)) { socket.destroy(); return }
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      socket.destroy()
+    })()
+    return result
+  }
+  const result = await runCodexQualification(f.request, f.dependencies)
+  await assertClosedQualificationFailure(f, result, "UNAVAILABLE")
+  assert.equal(result.report.prompt.state, "in_flight_failed")
+  assert.deepEqual(await f.forwardAudit(), null)
+  assert.deepEqual(await f.providerAudit(), null)
 })
 
 test("Handler death during prompt recovers from prompt evidence published before provider forwarding", async t => {

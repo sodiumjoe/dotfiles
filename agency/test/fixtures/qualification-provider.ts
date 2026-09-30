@@ -19,7 +19,7 @@ if (scenario === "child") {
   ]
   const send = (value: unknown): void => { process.stdout.write(JSON.stringify(value) + "\n") }
   const update = (value: unknown, sessionId = "fixture-session"): void => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: value } })
-  const audit = (value: unknown): void => writeFileSync(join(process.argv[3]!, "receipts/provider-audit.json"), JSON.stringify(value), { mode: 0o600 })
+  const audit = (value: unknown): void => writeFileSync(join(process.argv[4] ?? process.argv[3]!, "provider-audit.json"), JSON.stringify(value), { mode: 0o600 })
   let buffer = ""
   process.stdin.on("data", (chunk: Buffer) => {
     buffer += chunk.toString("utf8")
@@ -73,9 +73,13 @@ if (scenario === "child") {
         const token = match[1]!
         const answer = scenario === "prompt-whitespace" ? ` \n${token}\n ` : token
         if (scenario === "handler-death") { process.kill(process.ppid, "SIGKILL"); continue }
+        if (scenario === "prompt-child-death") { audit({ scenario, childKilled: true }); child!.kill("SIGKILL"); continue }
         if (scenario === "prompt-abort" || scenario === "prompt-deadline") continue
         if (scenario === "prompt-non-text") { update({ sessionUpdate: "agent_message_chunk", content: { type: "image", data: "x", mimeType: "image/png" } }); continue }
-        if (scenario === "prompt-tool-call" || scenario === "prompt-tool-call-update") { update({ sessionUpdate: scenario.slice(7), toolCallId: "tool" }); continue }
+        if (scenario === "prompt-tool-call" || scenario === "prompt-tool-call-update") {
+          const updateKind = scenario === "prompt-tool-call" ? "tool_call" : "tool_call_update"
+          audit({ scenario, updateKind }); update({ sessionUpdate: updateKind, toolCallId: "tool", title: "fixture" }); continue
+        }
         if (scenario === "prompt-permission" || scenario === "prompt-permission-malformed") {
           const options = scenario.endsWith("malformed") ? [{ optionId: "same", name: "One", kind: "allow_once" }, { optionId: "same", name: "Two", kind: "reject_once" }] : [{ optionId: "cancel", name: "Cancel", kind: "reject_once" }]
           send({ jsonrpc: "2.0", id: "prompt-permission", method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "tool", title: "fixture" }, options } }); continue
@@ -93,8 +97,13 @@ if (scenario === "child") {
         }
         const chunks = scenario === "prompt-fragmented" ? [answer.slice(0, 1), answer.slice(1)] : scenario === "prompt-multiple" ? [answer.slice(0, 7), answer.slice(7, 23), answer.slice(23)] : [scenario === "prompt-extra-content" ? answer + "extra" : answer]
         if (scenario === "prompt-late-result") {
-          send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
-          update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } })
+          const values = [
+            { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } },
+            { jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } },
+            { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "late" } } } },
+          ]
+          audit({ scenario, events: ["answer", "result", "late-update"], childAlive: child!.exitCode === null })
+          process.stdout.write(values.map(value => JSON.stringify(value)).join("\n") + "\n")
           continue
         }
         for (const text of chunks) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } }, scenario === "prompt-wrong-session-id" ? "wrong-session" : "fixture-session")
@@ -107,6 +116,7 @@ if (scenario === "child") {
           continue
         }
         const stopReason = new Map([["prompt-max-tokens", "max_tokens"], ["prompt-max-turn-requests", "max_turn_requests"], ["prompt-refusal", "refusal"], ["prompt-cancelled", "cancelled"]]).get(scenario) ?? "end_turn"
+        if (scenario === "prompt-forward-success") audit({ scenario, promptRequests: 1 })
         if (scenario === "prompt-fragmented" || scenario === "prompt-multiple" || scenario === "prompt-whitespace") audit({ scenario, chunks: chunks.length })
         result = { stopReason }
       } else process.exit(5)
