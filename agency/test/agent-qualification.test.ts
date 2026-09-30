@@ -189,38 +189,63 @@ test("production registry cannot acquire a candidate implicitly", () => {
   assert.ok(Object.isFrozen(productionLaunchContracts()))
 })
 
-test("isolated registration rollback removes generated source and restores frozen empty registries at every gate", async t => {
+test("isolated registration rollback removes source and compiled artifacts and restores frozen empty registries at every gate", async t => {
   for (const boundary of ["source-generation", "qualified-insertion", "production-insertion", "focused-test", "full-test", "post-registration"] as const) await t.test(boundary, async t => {
-    const root = await privateRoot(t), generated = join(root, "generated.mts"), qualified = join(root, "qualified.mts"), production = join(root, "production.mts")
-    await symlink(fileURLToPath(new URL("../src/agent/qualification.js", import.meta.url)), join(root, "qualification.js"))
+    const root = await privateRoot(t), sourceRoot = join(root, "src/agent"), compiledRoot = join(root, "dist/src/agent")
+    const generated = join(sourceRoot, "codex-darwin-arm64-prompt-v3-contract.ts"), qualified = join(sourceRoot, "qualified-contracts.ts"), production = join(sourceRoot, "contracts.ts")
+    const compiledGenerated = join(compiledRoot, "codex-darwin-arm64-prompt-v3-contract.js"), compiledDeclaration = join(compiledRoot, "codex-darwin-arm64-prompt-v3-contract.d.ts")
+    const compiledQualified = join(compiledRoot, "qualified-contracts.js"), compiledProduction = join(compiledRoot, "contracts.js")
+    await mkdir(sourceRoot, { recursive: true })
+    await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }))
+    await writeFile(join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "ES2024", module: "NodeNext", rootDir: ".", outDir: "dist", declaration: true, strict: true, types: [] }, include: ["src/**/*.ts"] }))
     const emptyQualified = `export function qualifiedLaunchContracts() { return Object.freeze([]) }`
-    const emptyProduction = `export function productionLaunchContracts() { return Object.freeze([]) }`
+    const contractType = `export type LaunchContract = Readonly<Record<string, unknown>>\n`
+    const emptyProduction = contractType + `export function productionLaunchContracts() { return Object.freeze([]) }`
     await writeFile(qualified, emptyQualified)
     await writeFile(production, emptyProduction)
+    const build = () => promisify(execFile)(process.execPath, [fileURLToPath(new URL("../../node_modules/typescript/bin/tsc", import.meta.url)), "-p", root], { timeout: 10000, maxBuffer: 65536 })
     const load = async (path: string) => import(pathToFileURL(path).href + `?fixture=${Math.random()}`)
+    const compiledViews = async () => {
+      const script = `import { qualifiedLaunchContracts } from ${JSON.stringify(pathToFileURL(compiledQualified).href)}; import { productionLaunchContracts } from ${JSON.stringify(pathToFileURL(compiledProduction).href)}; const qualified = qualifiedLaunchContracts(), production = productionLaunchContracts(); process.stdout.write(JSON.stringify({ qualified, production, qualifiedFrozen: Object.isFrozen(qualified), productionFrozen: Object.isFrozen(production) }))`
+      const { stdout } = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], { timeout: 10000, maxBuffer: 65536 })
+      return JSON.parse(stdout) as { qualified: unknown[]; production: unknown[]; qualifiedFrozen: boolean; productionFrozen: boolean }
+    }
+    await build()
+    assert.deepEqual(await compiledViews(), { qualified: [], production: [], qualifiedFrozen: true, productionFrozen: true })
     try {
       if (boundary === "source-generation") throw new Error(boundary)
       const f = await qualificationFixture(t), manifest = parseCodexQualificationManifest(f.manifest)
       const candidate = { version: 3 as const, manifest, fingerprint: qualificationFingerprint(manifest) }
       await writeFile(generated, renderQualifiedContractSource(candidate, { qualified: true, manifestFingerprint: candidate.fingerprint }))
+      await build()
+      assert.ok((await lstat(compiledGenerated)).isFile()); assert.ok((await lstat(compiledDeclaration)).isFile())
       if (boundary === "qualified-insertion") throw new Error(boundary)
-      await writeFile(qualified, `import { codexDarwinArm64QualifiedContract } from "./generated.mts"\nexport function qualifiedLaunchContracts() { return Object.freeze([codexDarwinArm64QualifiedContract]) }`)
+      await writeFile(qualified, `import { codexDarwinArm64QualifiedContract } from "./codex-darwin-arm64-prompt-v3-contract.js"\nexport function qualifiedLaunchContracts() { return Object.freeze([codexDarwinArm64QualifiedContract]) }`)
+      await build()
+      const qualifiedOnly = await compiledViews()
+      assert.equal(qualifiedOnly.qualified.length, 1); assert.deepEqual(qualifiedOnly.production, [])
+      assert.ok(qualifiedOnly.qualifiedFrozen); assert.ok(qualifiedOnly.productionFrozen)
       if (boundary === "production-insertion") throw new Error(boundary)
-      await writeFile(production, `import { qualifiedLaunchContracts } from "./qualified.mts"\nexport function productionLaunchContracts() { return Object.freeze([...qualifiedLaunchContracts()]) }`)
-      const beforeQualified = (await load(qualified)).qualifiedLaunchContracts(), beforeProduction = (await load(production)).productionLaunchContracts()
-      assert.equal(beforeQualified.length, 1); assert.equal(beforeProduction.length, 1)
-      assert.ok(Object.isFrozen(beforeQualified)); assert.ok(Object.isFrozen(beforeProduction))
+      await writeFile(production, contractType + `import { qualifiedLaunchContracts } from "./qualified-contracts.js"\nexport function productionLaunchContracts() { return Object.freeze([...qualifiedLaunchContracts()]) }`)
+      await build()
+      const before = await compiledViews()
+      assert.equal(before.qualified.length, 1); assert.equal(before.production.length, 1)
+      assert.ok(before.qualifiedFrozen); assert.ok(before.productionFrozen)
       throw new Error(boundary)
     } catch (error) {
       assert.equal((error as Error).message, boundary)
       await writeFile(qualified, emptyQualified)
       await writeFile(production, emptyProduction)
       await rm(generated, { force: true })
+      await rm(compiledGenerated, { force: true })
+      await rm(compiledDeclaration, { force: true })
+      await build()
     }
     const afterQualified = (await load(qualified)).qualifiedLaunchContracts(), afterProduction = (await load(production)).productionLaunchContracts()
     assert.deepEqual(afterQualified, []); assert.deepEqual(afterProduction, [])
     assert.ok(Object.isFrozen(afterQualified)); assert.ok(Object.isFrozen(afterProduction))
-    await assert.rejects(lstat(generated), { code: "ENOENT" })
+    assert.deepEqual(await compiledViews(), { qualified: [], production: [], qualifiedFrozen: true, productionFrozen: true })
+    for (const path of [generated, compiledGenerated, compiledDeclaration]) await assert.rejects(lstat(path), { code: "ENOENT" })
   })
 })
 
