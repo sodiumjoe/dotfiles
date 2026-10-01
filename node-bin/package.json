@@ -13,7 +13,7 @@
     "@vtsls/language-server": "0.3.0",
     "defuddle-cli": "0.7.0",
     "mcp-neovim-server": "0.5.5",
-    "prettier": "^3.9.5",
+    "prettier": "^3.9.9",
     "typescript": "^7.0.2",
     "typescript-language-server": "^6.0.0",
     "vscode-langservers-extracted": "4.10.0",
