@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { unlink, writeFile } from "node:fs/promises"
+import { mkdir, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
 import { createCatalogService, type CatalogClock } from "../src/catalog/service.js"
@@ -165,6 +165,24 @@ test("uncertain probe cleanup leaves verified evidence and unrelated provider la
   assert.deepEqual((await f.service.launchEvidence("claude-agent-acp")).provider, prior.provider)
   assert.deepEqual((await f.service.launchEvidence("codex-acp")).provider.models.map(model => model.modelId), ["new"])
   await assert.rejects(f.service.verifyDischarged())
+})
+
+test("orphan malformed probe evidence is reported without blocking verified starts", async t => {
+  const f = await fixture(t), first = randomUUID(), orphan = randomUUID()
+  await f.service.initialize(); await f.service.refresh(first, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(first)
+  const prior = await f.service.launchEvidence("claude-agent-acp")
+  await mkdir(join(f.root, "catalog/probe-meta"), { mode: 0o700 })
+  await writeFile(join(f.root, "catalog/probe-meta", orphan + ".json"), "{", { mode: 0o600 })
+  await writeFile(join(f.root, "catalog/probe-meta/unknown.json"), "{", { mode: 0o600 })
+  await writeFile(join(f.root, "catalog/probe-meta/line\nbreak.json"), "{", { mode: 0o600 })
+  const status = await f.service.list()
+  assert.equal(status.discovery.state, "idle")
+  assert.deepEqual((status.discovery as typeof status.discovery & { issues?: string[] }).issues, ["probe evidence entry has an unprintable or oversized name", `probe-meta/${orphan}.json`, "probe-meta/unknown.json"])
+  assert.deepEqual(await f.service.launchEvidence("claude-agent-acp"), prior)
+  const second = randomUUID()
+  await f.service.refresh(second, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(second)
 })
 
 test("freeze permits queued terminal writes and interrupts accepted commands", async t => {

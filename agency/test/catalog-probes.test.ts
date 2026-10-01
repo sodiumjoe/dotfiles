@@ -151,6 +151,50 @@ test("attempted provider-null recovery quarantines only catalog ownership", asyn
   await assert.rejects(f.runtime.run(f.request, new AbortController().signal))
 })
 
+test("historical version-one probe records are reconciled during recovery", async t => {
+  const f = await syntheticProbeFixture(t), m = f.request.meta, agentId = randomUUID(), leaseId = randomUUID()
+  await mkdir(join(f.root, "catalog/probe-meta"), { mode: 0o700 })
+  await writeFile(join(f.root, "catalog/probe-meta", m.attemptId + ".json"), JSON.stringify({ ...m, version: 1, agentId, leaseId }), { mode: 0o600 })
+  await mkdir(join(f.root, "catalog/probe-launches"), { mode: 0o700 })
+  const leader = { bootId: "boot", pid: 10001, birth: `100:agy-provider:${m.attemptId}`, parentPid: process.pid, processGroupId: 10001, sessionId: 10001, uid: process.getuid!(), gid: process.getgid!() }
+  f.processes.set(leader.pid, leader)
+  await writeLaunchRecord(f.path, { version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, agentId, leaseId, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: true, phase: "active", provider: { kind: "process-group", group: { leader, observed: [leader] } }, reason: null })
+  assert.deepEqual((await f.store.inventory()).issues, [])
+  await f.runtime.recover()
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  const recovered = await readLaunchRecordForReconciliation(f.path)
+  assert.equal(recovered.version, 1)
+  assert.equal(recovered.phase, "cleanup_verified")
+  await f.runtime.verifyDischarged()
+})
+
+test("orphan malformed probe evidence remains diagnostic without stopping new probes", async t => {
+  const f = await syntheticProbeFixture(t), orphan = randomUUID()
+  await mkdir(join(f.root, "catalog/probe-meta"), { mode: 0o700 })
+  await writeFile(join(f.root, "catalog/probe-meta", orphan + ".json"), "{", { mode: 0o600 })
+  await writeFile(join(f.root, "catalog/probe-meta/unknown.json"), "{", { mode: 0o600 })
+  assert.deepEqual((await f.store.inventory()).issues, [`probe-meta/${orphan}.json`, "probe-meta/unknown.json"])
+  await f.runtime.recover()
+  f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(outcome.error, null)
+  await assert.rejects(f.runtime.verifyDischarged())
+})
+
+test("a replaced accepted probe launch is attributed to its original provider", async t => {
+  const f = await syntheticProbeFixture(t), m = f.request.meta
+  await f.store.writeProbeMeta(m)
+  await mkdir(join(f.root, "catalog/probe-launches"), { mode: 0o700 })
+  await writeLaunchRecord(f.path, { version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "launch_pending", provider: null, reason: null })
+  await f.runtime.recover()
+  const original = await readLaunchRecordForReconciliation(f.path)
+  if (original.version !== 2 || original.owner.kind !== "catalog-probe") throw new Error("expected catalog probe launch")
+  await writeLaunchRecord(f.path, { ...original, owner: { ...original.owner, providerId: "codex-acp" } })
+  await assert.rejects(f.runtime.verifyDischarged())
+  assert.equal(f.runtime.issues?.().get(m.providerId)?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(f.runtime.issues?.().has("codex-acp"), false)
+})
+
 test("worker environment removes preload and inherited launcher authority", () => {
   assert.deepEqual(cleanProbeEnvironment({ NODE_OPTIONS: "--require secret", NODE_PATH: "/secret", AGENCY_SOCKET: "secret", GIT_DIR: "secret", HOME: "/fixture", PATH: "/bin" }), { HOME: "/fixture", PATH: "/bin" })
 })

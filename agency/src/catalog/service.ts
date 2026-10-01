@@ -10,7 +10,7 @@ import { CatalogError, failure, id, isFresh, PROVIDERS, type CatalogFailure, typ
 
 export type RefreshView = Pick<RefreshCommand, "commandId" | "handlerGeneration" | "state" | "snapshotId">
 export type ProviderView = ProviderSnapshot & { state: "unconfigured" | "ready" | "unavailable" | "blocked"; freshness: "fresh" | "stale" | "unverified"; refreshIssue?: CatalogFailure | null }
-export type CatalogView = { state: "catalog"; hostId: string; handlerGeneration: string; observedAt: number; launchAuthorized: false; providers: ProviderView[]; refresh: RefreshView | null; discovery: { state: "idle" | "refreshing" | "blocked"; error: CatalogFailure | null } }
+export type CatalogView = { state: "catalog"; hostId: string; handlerGeneration: string; observedAt: number; launchAuthorized: false; providers: ProviderView[]; refresh: RefreshView | null; discovery: { state: "idle" | "refreshing" | "blocked"; error: CatalogFailure | null; issues?: string[] } }
 export type RefreshResult = { state: "refresh"; command: RefreshView; snapshot: CatalogSnapshot | null }
 export type LaunchEvidence = { snapshotId: string; provider: ProviderSnapshot; profile: ProviderProfile; configuration: ConfigEvidence }
 export type CatalogService = { initialize(): Promise<void>; startScheduling(): void; list(): Promise<CatalogView>; launchEvidence(providerId: ProviderId): Promise<LaunchEvidence>; refresh(commandId: string, generation: string): Promise<RefreshResult>; freezeAndDrain(): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
@@ -19,6 +19,7 @@ type Config = { profiles: ProviderProfile[]; evidence: Map<ProviderId, ConfigEvi
 type Batch = { id: string; config: Config; requests: ProbeRequest[]; commands: string[]; controller: AbortController; operation: Promise<void> | null; snapshot: CatalogSnapshot | null; finished: boolean; started: boolean; outcomes: Map<ProviderId, ProbeOutcome> }
 const empty = (providerId: ProviderId): ProviderSnapshot => ({ providerId, fingerprint: null, verifiedAt: null, verifiedHandlerGeneration: null, providerVersion: null, providerVersionSource: "unknown", adapterVersion: null, sdkVersion: null, models: [], error: null })
 const view = ({ commandId, handlerGeneration, state, snapshotId }: RefreshCommand): RefreshView => ({ commandId, handlerGeneration, state, snapshotId })
+const diagnostic = (issue: string): string => /^[\x20-\x7e]{1,480}$/.test(issue) ? issue : "probe evidence entry has an unprintable or oversized name"
 const systemClock: CatalogClock = { now: Date.now, every(ms, tick) { const timer = setInterval(tick, ms); timer.unref(); return () => clearInterval(timer) } }
 
 export function createCatalogService(options: { paths: PlatformPaths; generation: string; queue: MutationQueue; store: CatalogStore; probes: ProbeRuntime; isReady(): boolean; shutdownPending(): boolean; readProfiles?: typeof readProfiles; observeConfig?: typeof observeConfig; clock?: CatalogClock }): CatalogService {
@@ -26,16 +27,18 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   let current: CatalogSnapshot | null = null, diskCurrent: CatalogSnapshot | null = null, initialized = false, closed = false, frozen = false, scheduling = false, nextAutomatic = 0
   let blocked: CatalogFailure | null = null, inventoryBlocked = false, active: Batch | null = null, latest: RefreshCommand | null = null, cancelTimer: (() => void) | undefined
   const probeIssues = new Map<ProviderId, CatalogFailure>()
+  const unscopedIssues = new Set<string>()
   const commands = new Map<string, RefreshCommand>()
   function latch(error: unknown, inventory = false): void { blocked ??= failure(error); inventoryBlocked ||= inventory }
   function scopeProbeIssues(inventory: CatalogInventory): void {
+    unscopedIssues.clear()
     for (const issue of inventory.issues) {
       const match = /^probe-(?:meta|launches)\/([0-9a-f-]+)\.json$/.exec(issue)
       const attempt = match?.[1]
-      const providerId = inventory.metadata.find(meta => meta.attemptId === attempt)?.providerId
+      const providerId = inventory.commands.flatMap(command => command.attempts).find(value => value.attemptId === attempt)?.providerId
+        ?? inventory.metadata.find(meta => meta.attemptId === attempt)?.providerId
         ?? inventory.launches.flatMap(entry => entry.record.version === 2 && entry.record.owner.kind === "catalog-probe" ? [{ attemptId: entry.record.launchAttemptId, providerId: entry.record.owner.providerId }] : []).find(value => value.attemptId === attempt)?.providerId
-        ?? inventory.commands.flatMap(command => command.attempts).find(value => value.attemptId === attempt)?.providerId
-      if (!providerId) throw new CatalogError("CATALOG_UNAVAILABLE")
+      if (!providerId) { if (issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/")) unscopedIssues.add(issue); continue }
       probeIssues.set(providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
     }
   }
@@ -215,7 +218,8 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
         const fresh = configured && !error && snapshot.verifiedHandlerGeneration === generation && snapshot.fingerprint === observed.evidence.get(providerId)?.fingerprint && isFresh(snapshot.verifiedAt, now)
         return { ...snapshot, error, state: !configured ? "unconfigured" : error?.code === "PROBE_CLEANUP_UNVERIFIED" ? "blocked" : error || snapshot.verifiedAt === null ? "unavailable" : "ready", freshness: snapshot.verifiedAt === null ? "unverified" : fresh ? "fresh" : "stale", ...(probeIssues.has(providerId) ? { refreshIssue: probeIssues.get(providerId)! } : {}) }
       })
-      return { state: "catalog" as const, hostId: paths.hostKey, handlerGeneration: generation, observedAt: now, launchAuthorized: false as const, providers, refresh: latest === null ? null : view(latest), discovery: { state: blocked ? "blocked" as const : active ? "refreshing" as const : "idle" as const, error: blocked } }
+      const issues = [...new Set([...unscopedIssues, ...(probes.diagnostics?.() ?? [])].map(diagnostic))].sort().slice(0, 32)
+      return { state: "catalog" as const, hostId: paths.hostKey, handlerGeneration: generation, observedAt: now, launchAuthorized: false as const, providers, refresh: latest === null ? null : view(latest), discovery: { state: blocked ? "blocked" as const : active ? "refreshing" as const : "idle" as const, error: blocked, ...(issues.length ? { issues } : {}) } }
     })
     void automatic()
     return result

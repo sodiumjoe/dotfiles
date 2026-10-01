@@ -33,11 +33,12 @@ function catalogView(input: unknown): CatalogView {
     return { ...snapshot, state, freshness, ...(refreshIssue === undefined ? {} : { refreshIssue: refreshIssue === null ? null : parseFailure(refreshIssue) }) }
   })
   if (new Set(providers.map(p => p.providerId)).size !== 2) invalid()
-  const discovery = object(v.discovery)
-  keys(discovery, ["state", "error"])
+  const discovery = object(v.discovery), { issues, ...fields } = discovery
+  keys(fields, ["state", "error"])
   if (discovery.state !== "idle" && discovery.state !== "refreshing" && discovery.state !== "blocked") invalid()
   if ((discovery.state === "blocked") !== (discovery.error !== null)) invalid()
-  return { state: "catalog", hostId: hash(v.hostId), handlerGeneration, observedAt, launchAuthorized: false, providers, refresh: v.refresh === null ? null : refreshView(v.refresh), discovery: { state: discovery.state, error: discovery.error === null ? null : parseFailure(discovery.error) } }
+  if (issues !== undefined && (!Array.isArray(issues) || issues.length > 32)) invalid()
+  return { state: "catalog", hostId: hash(v.hostId), handlerGeneration, observedAt, launchAuthorized: false, providers, refresh: v.refresh === null ? null : refreshView(v.refresh), discovery: { state: discovery.state, error: discovery.error === null ? null : parseFailure(discovery.error), ...(issues === undefined ? {} : { issues: issues.map(value => text(value, 512)) }) } }
 }
 export function parseCatalogRequest(input: unknown): CatalogRequest {
   try {

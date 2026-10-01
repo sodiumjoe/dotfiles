@@ -29,7 +29,7 @@ test("catalog and legacy control schemas remain strictly separate", () => {
 test("catalog response preserves a provider-scoped refresh issue", () => {
   const provider = (providerId: "claude-agent-acp" | "codex-acp") => ({ providerId, fingerprint: null, verifiedAt: null, verifiedHandlerGeneration: null, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: null, sdkVersion: null, models: [], error: null, state: "unconfigured" as const, freshness: "unverified" as const })
   const issue = { code: "PROBE_CLEANUP_UNVERIFIED" as const, message: "Discovery process cleanup is unverified" }
-  const reply: CatalogReply = { protocol: CATALOG_PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, ok: true, result: { state: "catalog", hostId: "a".repeat(64), handlerGeneration: generation, observedAt: 100, launchAuthorized: false, providers: [{ ...provider("claude-agent-acp"), refreshIssue: issue }, provider("codex-acp")], refresh: null, discovery: { state: "idle", error: null } } }
+  const reply: CatalogReply = { protocol: CATALOG_PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, ok: true, result: { state: "catalog", hostId: "a".repeat(64), handlerGeneration: generation, observedAt: 100, launchAuthorized: false, providers: [{ ...provider("claude-agent-acp"), refreshIssue: issue }, provider("codex-acp")], refresh: null, discovery: { state: "idle", error: null, issues: ["probe-meta/unknown.json"] } } }
   assert.deepEqual(parseCatalogReply(reply), reply)
 })
 

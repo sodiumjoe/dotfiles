@@ -164,6 +164,21 @@ test("one probe metadata issue does not prevent an unrelated command write", asy
   assert.deepEqual((await store.inventory()).issues, [`probe-meta/${m.attemptId}.json`, `probe-launches/${m.attemptId}.json`])
 })
 
+test("historical probe identities remain unique while new metadata writes require version two", async t => {
+  const root = await privateRoot(t), store = createCatalogStore(root), first = command(), second = command(), a = meta(root, first), b = meta(root, second)
+  const agentId = randomUUID(), leaseId = randomUUID()
+  await store.writeCommand(first, null); await store.writeCommand(second, null)
+  await mkdir(join(root, "catalog/probe-meta"), { mode: 0o700 })
+  await mkdir(join(root, "catalog/probe-launches"), { mode: 0o700 })
+  for (const m of [a, b]) {
+    const legacy = { ...m, version: 1, agentId, leaseId }
+    await assert.rejects(store.writeProbeMeta(legacy as unknown as ProbeMeta), { code: "INVALID_CATALOG" })
+    await writeFile(join(root, "catalog/probe-meta", m.attemptId + ".json"), JSON.stringify(legacy), { mode: 0o600 })
+    await writeFile(join(root, "catalog/probe-launches", m.attemptId + ".json"), JSON.stringify({ version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, agentId, leaseId, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null }), { mode: 0o600 })
+  }
+  assert.equal((await store.inventory()).issues.filter(issue => issue === `probe-meta/${a.attemptId}.json` || issue === `probe-meta/${b.attemptId}.json`).length, 1)
+})
+
 test("accepted command disappearance cannot be silently replaced by a later write", async t => {
   const root = await privateRoot(t), store = createCatalogStore(root), c = command()
   await store.writeCommand(c, null)
