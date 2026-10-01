@@ -46,7 +46,7 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
   }
   await verifyInventory(directory, entries)
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
-  context.state.reconciliation = { classified: entries.length, total: entries.length, quarantined: entries.filter(entry => entry.record.phase === "quarantined").length }
+  context.state.reconciliation = { classified: entries.length, total: entries.length, uncertain: entries.filter(entry => entry.record.phase === "quarantined").length }
   if (entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "checkout cleanup remains unverified")
   if (context.record.process === null) throw new ControlError("INCOMPLETE", "Handler identity unavailable")
   await context.catalog?.verifyDischarged()

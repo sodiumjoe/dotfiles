@@ -429,7 +429,7 @@ test("direct Node fixture stays idle after exact ACP setup and leaves no survivo
   })
   await mkdir(directory, { mode: 0o700 }); await writeLaunchRecord(path, launch)
   const owner = createAgentProcess({
-    context: { paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, mutations: { queue: new MutationQueue(), accepted: [{ path, record: launch }], unavailable: null }, shutdownPending: () => false, state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] } },
+    context: { paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, mutations: { queue: new MutationQueue(), accepted: [{ path, record: launch }], unavailable: null }, shutdownPending: () => false, state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] } },
     spec, contract: { ...sampleContract(), entrypoint, environment: { fixed: { HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, FIXTURE_ROOT: root }, private: {} } }, reservation: { launch, admission: { version: 1, checkout: spec.checkout, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, handlerGeneration: spec.handlerGeneration } }, revalidate: async () => undefined,
   }, { spawn: ((...args: Parameters<typeof spawn>) => { child = spawn(...args); return child }) as typeof spawn })
   const startup = owner.initialize(new AbortController().signal)

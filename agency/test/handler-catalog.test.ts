@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { createConnection } from "node:net"
-import { readFile, rm, stat, writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import test, { type TestContext } from "node:test"
+import test from "node:test"
 import { catalogHandlerFixture } from "./catalog-support.js"
-import { controlFixture, until } from "./control-support.js"
+import { until } from "./control-support.js"
 import { gitFixture } from "./checkout-support.js"
 import { CATALOG_PROTOCOL } from "../src/catalog/protocol.js"
 import { createCatalogStore } from "../src/catalog/store.js"
@@ -73,7 +73,7 @@ test("client disconnect leaves a durable refresh with exact retry and responsive
 test("ordinary shutdown cancels a registered discovery group without agent flags", { timeout: 60000 }, async t => {
   const f = await catalogHandlerFixture(t, { enabled: ["codex-acp"], wait: true }), handler = await f.start(), commandId = randomUUID()
   await f.refresh(commandId); const active = await f.waitNative("codex-acp")
-  const reply = await f.call({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
   assert.ok(reply.ok)
   await until(async () => await f.observe(handler.record.process!.pid) === null ? true : undefined)
   assert.equal((await createCatalogStore(f.paths.persistentRoot).readCommand(commandId))!.state, "interrupted")
@@ -87,7 +87,7 @@ test("checkout admission remains responsive and refused shutdown resumes discove
   await f.list()
   const status = await f.call()
   assert.ok(status.ok && "launches" in status.result && status.result.launches.some(l => l.launchAttemptId === operation.launchAttemptId))
-  const reply = await f.call({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
   assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS")
   const resumed = await f.waitNative("codex-acp")
   assert.notEqual(resumed.record.launchAttemptId, first.record.launchAttemptId)
@@ -122,27 +122,17 @@ test("restart cleans the exact old probe and interrupts its command before new w
   assert.equal((await f.list()).providers[1]!.verifiedHandlerGeneration, replacement.record.generation)
 })
 
-test("synthetic cross-process probe uncertainty preserves roots and stops the fixture batch", { timeout: 60000 }, async t => {
-  const cleanup: Array<() => Promise<void>> = []
-  const context = { after: (fn: () => Promise<void>) => cleanup.push(fn) } as unknown as TestContext
-  const f = await catalogHandlerFixture(context, { scenario: "uncertain" })
-  try {
-    await assert.rejects(f.start(), /unverified Handler catalog cleanup/)
-    const evidence = JSON.parse(await readFile(join(f.root, "catalog-cleanup-failure.json"), "utf8"))
-    assert.deepEqual(evidence.child, { pid: null, exited: false, closed: false })
-    for (const fn of cleanup) await assert.rejects(fn(), /unverified Handler catalog cleanup/)
-    assert.equal((await stat(f.root)).isDirectory(), true)
-    await assert.rejects(controlFixture(context), /unverified Handler catalog cleanup/)
-    await assert.rejects(f.start(), /unverified Handler catalog cleanup/)
-  } finally {
-    for (const fn of cleanup) await fn().catch(() => undefined)
-    const evidence = JSON.parse(await readFile(join(f.root, "catalog-cleanup-failure.json"), "utf8"))
-    assert.equal(evidence.child.pid, null)
-    await until(async () => await f.observe(evidence.handlerPid) === null ? true : undefined)
-    assert.deepEqual(await f.adapter.readGroup(evidence.handlerPid), [])
-    assert.equal(await f.observe(evidence.handlerPid), null)
-    const inventory = await createCatalogStore(f.paths.persistentRoot).inventory()
-    assert.ok(inventory.launches.every(entry => entry.record.provider === null))
-    await rm(f.root, { recursive: true })
-  }
+test("synthetic cross-process probe uncertainty leaves Handler ready and reports one provider issue", { timeout: 60000 }, async t => {
+  const f = await catalogHandlerFixture(t, { scenario: "uncertain", enabled: [] })
+  const handler = await f.start()
+  assert.equal(handler.record.phase, "ready")
+  const view = await f.list()
+  assert.equal(view.discovery.state, "idle")
+  assert.equal(view.providers.find(provider => provider.providerId === "claude-agent-acp")?.refreshIssue?.code, "PROBE_CLEANUP_UNVERIFIED")
+  const status = await f.call()
+  assert.ok(status.ok && "phase" in status.result && status.result.phase === "ready")
+  const inventory = await createCatalogStore(f.paths.persistentRoot).inventory()
+  assert.deepEqual(inventory.issues, [])
+  assert.equal(inventory.launches[0]?.record.phase, "quarantined")
+  assert.equal(inventory.launches[0]?.record.provider, null)
 })

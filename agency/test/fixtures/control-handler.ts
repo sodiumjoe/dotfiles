@@ -51,16 +51,15 @@ try {
     return { ...service, async list() { if (config.catalog!.admissionOnList && admission) await admit(admission); return service.list() }, async initialize() {
       if (config.catalog!.scenario === "uncertain") {
         const profile = config.catalog!.profiles[0]!, evidence = await observeConfig(profile), attemptId = randomUUID(), commandId = randomUUID()
-        const meta = { version: 1 as const, hostId: context.paths.hostKey, handlerGeneration: context.generation, commandId, providerId: profile.id, attemptId, agentId: randomUUID(), leaseId: randomUUID(), fingerprint: evidence.fingerprint, workPath: join(context.paths.persistentRoot, "catalog/work", attemptId) }
+        const meta = { version: 2 as const, hostId: context.paths.hostKey, handlerGeneration: context.generation, commandId, providerId: profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(context.paths.persistentRoot, "catalog/work", attemptId) }
         await store.writeCommand({ version: 1, commandId, hostId: meta.hostId, handlerGeneration: context.generation, batchId: randomUUID(), fingerprints: [{ providerId: profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: profile.id, attemptId }], state: "pending", snapshotId: null }, null)
         await store.writeProbeMeta(meta)
         await mkdir(join(context.paths.persistentRoot, "catalog/probe-launches"), { mode: 0o700 })
-        await writeLaunchRecord(join(context.paths.persistentRoot, "catalog/probe-launches", attemptId + ".json"), { version: 1, checkoutId: `catalog-v1:${profile.id}:${evidence.fingerprint}`, leaseId: meta.leaseId, agentId: meta.agentId, handlerGeneration: context.generation, launchAttemptId: attemptId, launchBootId: await adapter.bootId(), launchAttempted: true, phase: "launch_pending", provider: null, reason: null })
+        await writeLaunchRecord(join(context.paths.persistentRoot, "catalog/probe-launches", attemptId + ".json"), { version: 2, owner: { kind: "catalog-probe", providerId: profile.id, commandId }, handlerGeneration: context.generation, launchAttemptId: attemptId, launchBootId: await adapter.bootId(), launchAttempted: true, phase: "launch_pending", provider: null, reason: null })
         await service.initialize()
-        if ((await service.list()).discovery.state !== "blocked") throw new Error("synthetic probe was not quarantined")
-        const child = new ChildProcess()
-        await writeFile(join(root, "catalog-cleanup-failure.json"), JSON.stringify({ handlerPid: process.pid, child: { pid: child.pid ?? null, exited: false, closed: false } }), { mode: 0o600 })
-        throw new Error("unverified Handler catalog cleanup")
+        const view = await service.list()
+        if (view.discovery.state !== "idle" || view.providers.find(provider => provider.providerId === profile.id)?.refreshIssue?.code !== "PROBE_CLEANUP_UNVERIFIED") throw new Error("synthetic probe issue was not scoped")
+        return
       }
       await service.initialize()
     } }

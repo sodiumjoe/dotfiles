@@ -126,7 +126,8 @@ test("unknown legacy evidence, orphan metadata, and external replacement never f
   await assert.rejects(f.controller.reserve(f.request()), { code: "ADMISSION_UNAVAILABLE" })
   await rm(path)
   await assert.rejects(f.controller.reserve(f.request()), { code: "ADMISSION_UNAVAILABLE" })
-  assert.notEqual(f.context.mutations.unavailable, null)
+  assert.equal(f.context.mutations.unavailable, null)
+  assert.equal(f.context.mutations.issues?.[0]?.path, path)
   await writeLaunchRecord(path, record)
   await assert.rejects(f.controller.reserve(f.request()), { code: "ADMISSION_UNAVAILABLE" })
 })
@@ -166,7 +167,7 @@ test("a final refresh detecting changed inventory cannot return reservation succ
     }
   } })
   await assert.rejects(f.controller.reserve(request), { code: "ADMISSION_UNAVAILABLE" })
-  assert.notEqual(f.context.mutations.unavailable, null)
+  assert.equal(f.context.mutations.unavailable, null)
 })
 
 test("malformed retry evidence and orphan metadata cannot be repaired by a new reservation", { timeout: 20000 }, async t => {

@@ -7,10 +7,11 @@ import {
   assertPrivateDirectory,
   readHandlerRecord,
   readLaunchRecord,
+  readLaunchRecordForReconciliation,
   writeHandlerRecord,
   writeLaunchRecord,
 } from "../src/platform/private-state.js"
-import { RUNTIME_RECORD_VERSION, type HandlerGenerationRecord, type LaunchRecord, type ProcessIdentity } from "../src/platform/types.js"
+import { RUNTIME_RECORD_VERSION, launchOwner, type HandlerGenerationRecord, type LegacyLaunchRecord, type ManagedLaunchRecord, type ProcessIdentity } from "../src/platform/types.js"
 
 const processIdentity = {
   bootId: "boot-1",
@@ -23,7 +24,7 @@ const processIdentity = {
   gid: process.getgid!(),
 } satisfies ProcessIdentity
 
-function launchRecord(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
+function launchRecord(overrides: Partial<LegacyLaunchRecord> = {}): LegacyLaunchRecord {
   return {
     version: RUNTIME_RECORD_VERSION,
     checkoutId: "checkout-1",
@@ -73,6 +74,28 @@ test("accepts a private directory owned by the current uid", async t => {
   await assertPrivateDirectory(directory)
 })
 
+test("managed launch records preserve typed ownership and reject mixed legacy fields", async t => {
+  const { directory, launchPath } = await createFixture()
+  t.after(async () => (await import("node:fs/promises")).rm(directory, { recursive: true, force: true }))
+  const agentId = crypto.randomUUID(), providerGeneration = crypto.randomUUID()
+  const managed: ManagedLaunchRecord = { version: 2, owner: { kind: "agent", agentId, providerGeneration }, handlerGeneration: crypto.randomUUID(), launchAttemptId: crypto.randomUUID(), launchBootId: "boot-a", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
+  await writeLaunchRecord(launchPath, managed)
+  assert.deepEqual(await readLaunchRecord(launchPath), managed)
+  assert.deepEqual(launchOwner(managed), { kind: "agent", id: agentId, generation: providerGeneration })
+  assert.equal("checkoutId" in managed, false)
+  assert.equal("leaseId" in managed, false)
+  await writeFile(launchPath, JSON.stringify({ ...managed, leaseId: crypto.randomUUID() }), { mode: 0o600 })
+  await assert.rejects(readLaunchRecordForReconciliation(launchPath))
+  await writeFile(launchPath, JSON.stringify({ ...managed, provider: { kind: "process-group", group: { leader: processIdentity, observed: [processIdentity], leaseId: "foreign" } } }), { mode: 0o600 })
+  await assert.rejects(readLaunchRecordForReconciliation(launchPath))
+  const probe = { ...managed, owner: { kind: "catalog-probe" as const, providerId: "codex-acp" as const, commandId: crypto.randomUUID() } }
+  await writeLaunchRecord(launchPath, probe)
+  assert.deepEqual(await readLaunchRecord(launchPath), probe)
+  const legacy = launchRecord()
+  await writeFile(launchPath, JSON.stringify(legacy), { mode: 0o600 })
+  assert.deepEqual(await readLaunchRecordForReconciliation(launchPath), legacy)
+})
+
 test("rejects group or world permissions and symlink roots", async t => {
   const { directory } = await createFixture()
   const link = `${directory}-link`
@@ -98,7 +121,7 @@ test("rejects unsafe record storage and malformed records", async t => {
   await assert.rejects(readLaunchRecord(launchPath), /1 MiB|size/i)
   await writeFile(launchPath, "{", { mode: 0o600 })
   await assert.rejects(readLaunchRecord(launchPath), /JSON|parse/i)
-  await writeFile(launchPath, JSON.stringify({ ...launchRecord(), version: 2 }), { mode: 0o600 })
+  await writeFile(launchPath, JSON.stringify({ ...launchRecord(), version: 3 }), { mode: 0o600 })
   await assert.rejects(readLaunchRecord(launchPath), /version/i)
 })
 
@@ -113,7 +136,7 @@ test("publishes complete launch records atomically with private file mode", asyn
   const reader = (async () => {
     while (replacing) {
       try {
-        observations.push((await readLaunchRecord(launchPath)).checkoutId)
+        observations.push((await readLaunchRecord(launchPath)).checkoutId!)
       } catch (error) {
         assert.fail(`reader observed invalid replacement: ${String(error)}`)
       }

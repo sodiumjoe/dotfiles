@@ -45,6 +45,7 @@ export function gate<T = void>() {
 export async function catalogHandlerFixture(t: TestContext, options: { enabled?: ProviderId[]; wait?: boolean; admissionOperations?: AdmissionFixtureOperation[]; scenario?: "uncertain" } = {}, checkout?: Parameters<typeof controlFixture>[2]) {
   const f = await controlFixture(t, options.admissionOperations ? { admissionOperations: options.admissionOperations } : {}, checkout)
   f.beforeCleanup(async () => {
+    if (options.scenario === "uncertain") return
     let handler
     try { handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")) }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
@@ -120,7 +121,7 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
 export async function syntheticProbeFixture(t: TestContext, scenario = "success") {
   const f = await profileFixture(t), store = createCatalogStore(f.root), generation = randomUUID(), attemptId = randomUUID(), commandId = randomUUID(), batchId = randomUUID()
   const evidence = await observeConfig(f.profile), queue = new MutationQueue()
-  const request: ProbeRequest = { profile: f.profile, evidence, meta: { version: 1, hostId: "a".repeat(64), handlerGeneration: generation, commandId, providerId: f.profile.id, attemptId, agentId: randomUUID(), leaseId: randomUUID(), fingerprint: evidence.fingerprint, workPath: join(f.root, "catalog/work", attemptId) } }
+  const request: ProbeRequest = { profile: f.profile, evidence, meta: { version: 2, hostId: "a".repeat(64), handlerGeneration: generation, commandId, providerId: f.profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(f.root, "catalog/work", attemptId) } }
   await store.writeCommand({ version: 1, commandId, hostId: request.meta.hostId, handlerGeneration: generation, batchId, fingerprints: [{ providerId: f.profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: f.profile.id, attemptId }], state: "pending", snapshotId: null }, null)
   const path = join(f.root, "catalog/probe-launches", attemptId + ".json"), workerObserved = gate(), workerGate = gate(), nativeRegistered = gate(), spawnObserved = gate(), nativeGate = gate(), attemptedPublication = gate(), attemptedGate = gate()
   const child = new ChildProcess(), processes = new Map<number, ProcessIdentity>(), signals: string[] = []

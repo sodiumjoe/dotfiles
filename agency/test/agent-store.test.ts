@@ -166,7 +166,7 @@ test("launch publication is inventory-bound and uninvoked restoration uses separ
   await assert.rejects(commitLaunchTransition(f.context, attempted, reserved.launch))
   const restored = await f.context.mutations.queue.run(() => restoreUninvokedLaunch(f.context, attempted, { spawnInvoked: false }))
   assert.deepEqual(restored, reserved.launch)
-  const foreign = { ...restored, leaseId: agentId(55) }, path = f.context.mutations.accepted[0]!.path
+  const foreign = { ...restored, leaseId: agentId(55) } as import("../src/platform/types.js").LegacyLaunchRecord, path = f.context.mutations.accepted[0]!.path
   await writeLaunchRecord(path, foreign)
   await assert.rejects(commitLaunchTransition(f.context, restored, attempted), { code: "ADMISSION_UNAVAILABLE" })
   assert.deepEqual(await readLaunchRecordForReconciliation(path), foreign)

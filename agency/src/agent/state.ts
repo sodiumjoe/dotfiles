@@ -6,13 +6,13 @@ import { isDeepStrictEqual } from "node:util"
 import { UUID } from "../control/protocol.js"
 import { ensurePrivateChild } from "../handler/environment.js"
 import { assertPrivateDirectory, readLaunchRecordForReconciliation } from "../platform/private-state.js"
-import type { LaunchRecord } from "../platform/types.js"
+import type { LaunchRecord, LegacyLaunchRecord } from "../platform/types.js"
 import type { LaunchEnvironmentPolicy } from "./qualification.js"
 import { AgentError } from "./types.js"
 
 export type PreparedProviderState = { root: string; environment: NodeJS.ProcessEnv }
 type RootIdentity = { dev: string; ino: string; uid: string; gid: string; mode: string }
-type LaunchIdentity = Pick<LaunchRecord, "agentId" | "leaseId" | "handlerGeneration" | "launchAttemptId" | "checkoutId" | "launchBootId">
+type LaunchIdentity = Pick<LegacyLaunchRecord, "agentId" | "leaseId" | "handlerGeneration" | "launchAttemptId" | "checkoutId" | "launchBootId">
 type Marker = { version: 1; launchAttemptId: string; launch: LaunchIdentity; root: RootIdentity }
 type RemovalDependencies = { beforeQuarantineRename?: () => Promise<void>; afterQuarantineRemoval?: () => Promise<void> }
 type RemovalReceipt = Marker & { status: "pending" | "complete" }
@@ -58,8 +58,11 @@ async function makeDirectory(path: string): Promise<RootIdentity> {
 }
 
 function launchIdentity(record: LaunchRecord): LaunchIdentity {
-  const { agentId, leaseId, handlerGeneration, launchAttemptId, checkoutId, launchBootId } = record
-  return { agentId, leaseId, handlerGeneration, launchAttemptId, checkoutId, launchBootId }
+  if (record.version === 1) {
+    const { agentId, leaseId, handlerGeneration, launchAttemptId, checkoutId, launchBootId } = record
+    return { agentId, leaseId, handlerGeneration, launchAttemptId, checkoutId, launchBootId }
+  }
+  return failure()
 }
 
 async function retainedLaunch(persistentRoot: string, launchAttemptId: string): Promise<LaunchRecord> {

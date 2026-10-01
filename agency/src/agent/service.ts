@@ -75,6 +75,8 @@ export function createAgentService(input: { context: AdmissionContext; admission
       await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
       const inventory = await store.inventory()
       inventoryEmpty = emptyLifecycle(inventory)
+      const ownedAttempts = new Set(inventory.agents.map(agent => agent.spec.launchAttemptId))
+      if (context.mutations.issues?.some(issue => issue.launchAttemptId !== null && ownedAttempts.has(issue.launchAttemptId))) throw new AgentError("INVALID_AGENT_STATE")
       crossCheckAgents(context, inventory, await inventoryAdmissions(root))
       if (context.mutations.unavailable) throw new AgentError("ADMISSION_UNAVAILABLE")
       return inventory
@@ -405,7 +407,7 @@ export function createAgentService(input: { context: AdmissionContext; admission
     return { record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !blocked && !closed && record.spec.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "stopping"].includes(record.phase), cleanup: launch === null ? blocked ? "unknown" : "not_reserved" : launch.phase === "cleanup_verified" ? blocked && (!op || blocked.code === "CLEANUP_UNVERIFIED") ? "unknown" : op && !op.cleanupVerified ? "unverified" : "verified" : launch.phase === "quarantined" ? "unknown" : "unverified" }
   }
   const ordinary = (): void => {
-    if (!initialized || blocked && !inventoryEmpty || accepting || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => records.has(e.record.agentId) && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
+    if (!initialized || blocked && !inventoryEmpty || accepting || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 1 && records.has(e.record.agentId) && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
   }
   return {
     start, stop, prompt, command,

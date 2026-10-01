@@ -92,7 +92,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
-  const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
+  const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject })
   void closed.catch(() => undefined)
@@ -166,7 +166,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     state.phase = "reconciling"
     state.reconciliation.total = entries.length
     state.launches = summarizeLaunches(entries.map(entry => entry.record))
-    current = { ...published, writer: "handler", phase: "reconciling", reconciliation: { ...state.reconciliation } }
+    current = { ...published, writer: "handler", phase: "reconciling", reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
     await writeHandlerRecord(options.recordPath, current)
     await options.onPhase?.("reconciling")
     for (const entry of entries) {
@@ -174,9 +174,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
       entry.record = result.record
       state.reconciliation.classified++
-      if (result.disposition === "quarantined") state.reconciliation.quarantined++
+      if (result.disposition === "quarantined") state.reconciliation.uncertain++
       state.launches = summarizeLaunches(entries.map(item => item.record))
-      current = { ...current, reconciliation: { ...state.reconciliation } }
+      current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
       await writeHandlerRecord(options.recordPath, current)
     }
     await options.onPhase?.("ready")

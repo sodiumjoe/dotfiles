@@ -14,15 +14,17 @@ import { privateRoot, until } from "./control-support.js"
 const result = (providerId: ProviderId, modelId = "a"): ProbeResult => ({ models: [{ providerId, modelId, resolvedModelId: null, displayName: "Model", reasoning: { state: "unknown" }, modes: { state: "unknown" }, availability: "advertised" }], providerVersion: null, providerVersionSource: "unknown" })
 async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: string) {
   const root = retainedRoot ?? await privateRoot(t)
-  let now = 1000000, tick: (() => void) | undefined, blocked = false, ready = true, shutdown = false
+  let now = 1000000, tick: (() => void) | undefined, ready = true, shutdown = false
+  const blocked = new Set<ProviderId>()
   const profiles: ProviderProfile[] = ["claude-agent-acp", "codex-acp"].map(id => ({ id: id as ProviderId, enabled: true, executable: "/fixture/native", adapterPackageJson: "/fixture/package.json", sdkPackageJson: id === "codex-acp" ? null : "/fixture/sdk.json", configurationFiles: [] }))
   const evidence = new Map(profiles.map(p => [p.id, { providerId: p.id, scope: "declared-config-v1" as const, fingerprint: (p.id === "codex-acp" ? "b" : "a").repeat(64), adapterVersion: "1", sdkVersion: p.id === "codex-acp" ? null : "0.3.232" }]))
   const queue = new MutationQueue(), store = createCatalogStore(root), generation = randomUUID(), paths = { hostKey: "c".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "socket") }
   const started: ProbeRequest[] = [], pending: Array<{ request: ProbeRequest; gate: ReturnType<typeof gate<ProbeOutcome>> }> = []
   const probes: ProbeRuntime = {
-    recover: async () => { if (blocked) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
-    verifyDischarged: async () => { if (blocked || pending.length) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
+    recover: async () => undefined,
+    verifyDischarged: async () => { if (blocked.size || pending.length) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
     async run(request, signal) {
+      if (blocked.has(request.meta.providerId)) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
       started.push(request)
       const done = gate<ProbeOutcome>(), entry = { request, gate: done }
       pending.push(entry)
@@ -36,9 +38,9 @@ async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: stri
     const index = pending.indexOf(entry)
     if (index < 0) return
     pending.splice(index, 1)
-    if (code === "PROBE_CLEANUP_UNVERIFIED") blocked = true
+    if (code === "PROBE_CLEANUP_UNVERIFIED") blocked.add(entry.request.meta.providerId)
     const m = entry.request.meta
-    entry.gate.resolve({ request: entry.request, record: { version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, leaseId: m.leaseId, agentId: m.agentId, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "fixture", launchAttempted: false, provider: null, phase: blocked ? "quarantined" : "cleanup_verified", reason: blocked ? "fixture" : null }, result: value, error: code ? failure(new CatalogError(code)) : null })
+    entry.gate.resolve({ request: entry.request, record: { version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "fixture", launchAttempted: false, provider: null, phase: blocked.has(m.providerId) ? "quarantined" : "cleanup_verified", reason: blocked.has(m.providerId) ? "fixture" : null }, result: value, error: code ? failure(new CatalogError(code)) : null })
   }
   const clock: CatalogClock = { now: () => now, every: (ms, callback) => { assert.equal(ms, 30000); tick = callback; return () => { tick = undefined } } }
   const options = { paths, generation, queue, store, probes, isReady: () => ready, shutdownPending: () => shutdown, readProfiles: async () => structuredClone(profiles), observeConfig: async (p: ProviderProfile) => structuredClone(evidence.get(p.id)!), clock }
@@ -148,17 +150,21 @@ test("verified query failure retains stale data while the other provider succeed
   assert.equal(view.providers[1]!.freshness, "fresh")
 })
 
-test("unverified probe ownership blocks all new probes but retains readable history", async t => {
-  const f = await fixture(t), command = randomUUID()
-  await f.service.initialize(); await f.service.refresh(command, f.generation)
+test("uncertain probe cleanup leaves verified evidence and unrelated provider launches usable", async t => {
+  const f = await fixture(t), first = randomUUID(), second = randomUUID()
+  await f.service.initialize(); await f.service.refresh(first, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(first)
+  const prior = await f.service.launchEvidence("claude-agent-acp")
+  await f.service.refresh(second, f.generation)
   await f.completeProbe("claude-agent-acp", null, "PROBE_CLEANUP_UNVERIFIED")
-  await f.finish(command)
-  assert.equal(f.started.length, 1)
-  assert.equal((await f.service.list()).discovery.state, "blocked")
-  await assert.rejects(f.service.refresh(randomUUID(), f.generation))
+  await f.completeProbe("codex-acp", result("codex-acp", "new"))
+  await f.finish(second)
+  const status = await f.service.list()
+  assert.equal(status.discovery.state, "idle")
+  assert.equal(status.providers[0]!.refreshIssue?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.deepEqual((await f.service.launchEvidence("claude-agent-acp")).provider, prior.provider)
+  assert.deepEqual((await f.service.launchEvidence("codex-acp")).provider.models.map(model => model.modelId), ["new"])
   await assert.rejects(f.service.verifyDischarged())
-  await f.service.freezeAndDrain(); f.service.resume()
-  assert.equal((await f.service.list()).discovery.state, "blocked")
 })
 
 test("freeze permits queued terminal writes and interrupts accepted commands", async t => {

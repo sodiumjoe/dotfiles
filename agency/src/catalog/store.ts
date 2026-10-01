@@ -53,8 +53,14 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > byteLimit(path)) invalid()
     for (const [knownPath, knownBytes] of accepted) {
-      const current = await read(knownPath)
-      if (current === null || !current.equals(knownBytes)) throw new CatalogError("CATALOG_UNAVAILABLE")
+      const probeMeta = dirname(knownPath) === join(catalog, "probe-meta")
+      let current: Buffer | null
+      try { current = await read(knownPath) }
+      catch (error) { if (probeMeta) continue; throw error }
+      if (current === null || !current.equals(knownBytes)) {
+        if (probeMeta) continue
+        throw new CatalogError("CATALOG_UNAVAILABLE")
+      }
     }
     const previous = await read(path)
     if (previous !== null && previous.equals(bytes)) { }
@@ -152,8 +158,13 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
             }
             if (kind === "probe-launches") {
               const v = object(raw)
-              keys(v, ["version", "checkoutId", "leaseId", "agentId", "handlerGeneration", "launchAttemptId", "launchBootId", "launchAttempted", "phase", "provider", "reason"])
-              for (const field of ["leaseId", "agentId", "handlerGeneration", "launchAttemptId"]) id(v[field])
+              keys(v, ["version", "owner", "handlerGeneration", "launchAttemptId", "launchBootId", "launchAttempted", "phase", "provider", "reason"])
+              if (v.version !== 2) invalid()
+              const owner = object(v.owner)
+              keys(owner, ["kind", "providerId", "commandId"])
+              if (owner.kind !== "catalog-probe") invalid()
+              id(owner.commandId)
+              for (const field of ["handlerGeneration", "launchAttemptId"]) id(v[field])
               if (v.provider !== null) {
                 const p = object(v.provider); keys(p, ["kind", "group"])
                 const g = object(p.group); keys(g, ["leader", "observed"])
@@ -167,20 +178,19 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
           } catch { result.issues.push(`${kind}/${name}`) }
         }
       }
-      const hosts = new Set([...result.commands, ...result.metadata].map(v => v.hostId))
+      const hosts = new Set(result.commands.map(v => v.hostId))
       if (hosts.size > 1) invalid()
-      const agents = new Set<string>(), leases = new Set<string>()
+      for (const meta of result.metadata) if (hosts.size && !hosts.has(meta.hostId)) result.issues.push(`probe-meta/${meta.attemptId}.json`)
       for (const m of result.metadata) {
         const c = result.commands.find(c => c.commandId === m.commandId)
         const entry = result.launches.find(l => l.record.launchAttemptId === m.attemptId)
-        if (!c || c.hostId !== m.hostId || c.handlerGeneration !== m.handlerGeneration || !c.attempts.some(a => a.attemptId === m.attemptId && a.providerId === m.providerId) || !c.fingerprints.some(f => f.providerId === m.providerId && f.fingerprint === m.fingerprint) || !entry || entry.record.agentId !== m.agentId || entry.record.leaseId !== m.leaseId || entry.record.handlerGeneration !== m.handlerGeneration || entry.record.checkoutId !== `catalog-v1:${m.providerId}:${m.fingerprint}` || agents.has(m.agentId) || leases.has(m.leaseId)) result.issues.push(`probe-meta/${m.attemptId}`)
-        agents.add(m.agentId); leases.add(m.leaseId)
+        if (!c || c.hostId !== m.hostId || c.handlerGeneration !== m.handlerGeneration || !c.attempts.some(a => a.attemptId === m.attemptId && a.providerId === m.providerId) || !c.fingerprints.some(f => f.providerId === m.providerId && f.fingerprint === m.fingerprint) || !entry || entry.record.version !== 2 || entry.record.owner.kind !== "catalog-probe" || entry.record.owner.providerId !== m.providerId || entry.record.owner.commandId !== m.commandId || entry.record.handlerGeneration !== m.handlerGeneration) result.issues.push(`probe-meta/${m.attemptId}.json`)
       }
-      for (const entry of result.launches) if (!result.metadata.some(m => m.attemptId === entry.record.launchAttemptId)) result.issues.push(`probe-launches/${entry.record.launchAttemptId}`)
+      for (const entry of result.launches) if (!result.metadata.some(m => m.attemptId === entry.record.launchAttemptId)) result.issues.push(`probe-launches/${entry.record.launchAttemptId}.json`)
       for (const c of result.commands) if (c.snapshotId !== null) { const s = await readSnapshot(c.snapshotId); if (!s || s.hostId !== c.hostId || s.handlerGeneration !== c.handlerGeneration) invalid() }
       await readCurrent()
       if (snapshots !== null && [...snapshots.keys()].some(path => !observedSnapshots.has(path))) invalid()
-      if (result.issues.length === 0) {
+      if (result.issues.every(issue => issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/"))) {
         snapshots = observedSnapshots
         for (const [path, bytes] of snapshots) accepted.set(path, bytes)
       }

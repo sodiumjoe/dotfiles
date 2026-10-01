@@ -1,6 +1,6 @@
 import type { LaunchRecord } from "../platform/types.js"
 
-export const PROTOCOL = "agency-control/1" as const
+export const PROTOCOL = "agency-control/2" as const
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export type ControlRequest = { protocol: typeof PROTOCOL; requestId: string; handlerGeneration: string } & (
@@ -8,12 +8,12 @@ export type ControlRequest = { protocol: typeof PROTOCOL; requestId: string; han
   | { op: "shutdown"; commandId: string; stopAgents: boolean }
 )
 export type ControlErrorCode = "USAGE" | "INVALID_PROTOCOL" | "STALE_HANDLER" | "UNAVAILABLE" | "INTERNAL" | "INCOMPLETE" | "ACTIVE_AGENTS" | "COMMAND_CONFLICT"
-export type LaunchSummary = Pick<LaunchRecord, "launchAttemptId" | "agentId" | "checkoutId" | "phase" | "reason">
+export type LaunchSummary = { launchAttemptId: string; owner: { kind: "agent"; id: string; generation: string } | { kind: "legacy-agent"; id: string; handlerGeneration: string } | { kind: "catalog-probe"; id: string; providerId: "claude-agent-acp" | "codex-acp" }; phase: LaunchRecord["phase"]; reason: string | null }
 export type HandlerStatus = {
   hostId: string
   handlerGeneration: string
   phase: "starting" | "reconciling" | "ready" | "draining"
-  reconciliation: { classified: number; total: number; quarantined: number }
+  reconciliation: { classified: number; total: number; uncertain: number }
   launches: LaunchSummary[]
   capabilities: ["status", "doctor", "shutdown"]
 }
@@ -84,9 +84,21 @@ export function parseRequest(value: unknown): ControlRequest {
 
 function summary(value: unknown): LaunchSummary {
   const v = object(value)
-  exactKeys(v, ["launchAttemptId", "agentId", "checkoutId", "phase", "reason"])
+  exactKeys(v, ["launchAttemptId", "owner", "phase", "reason"])
   if (typeof v.phase !== "string" || !phases.has(v.phase) || !(v.reason === null || typeof v.reason === "string")) return invalid()
-  return { launchAttemptId: string(v.launchAttemptId), agentId: string(v.agentId), checkoutId: string(v.checkoutId), phase: v.phase as LaunchRecord["phase"], reason: v.reason }
+  const owner = object(v.owner)
+  if (owner.kind === "catalog-probe") {
+    exactKeys(owner, ["kind", "id", "providerId"])
+    if (owner.providerId !== "claude-agent-acp" && owner.providerId !== "codex-acp") invalid()
+    return { launchAttemptId: string(v.launchAttemptId), owner: { kind: "catalog-probe", id: string(owner.id), providerId: owner.providerId }, phase: v.phase as LaunchRecord["phase"], reason: v.reason }
+  }
+  if (owner.kind === "legacy-agent") {
+    exactKeys(owner, ["kind", "id", "handlerGeneration"])
+    return { launchAttemptId: string(v.launchAttemptId), owner: { kind: "legacy-agent", id: string(owner.id), handlerGeneration: string(owner.handlerGeneration) }, phase: v.phase as LaunchRecord["phase"], reason: v.reason }
+  }
+  exactKeys(owner, ["kind", "id", "generation"])
+  if (owner.kind !== "agent") invalid()
+  return { launchAttemptId: string(v.launchAttemptId), owner: { kind: "agent", id: string(owner.id), generation: string(owner.generation) }, phase: v.phase as LaunchRecord["phase"], reason: v.reason }
 }
 
 function result(value: unknown): ControlResult {
@@ -98,9 +110,9 @@ function result(value: unknown): ControlResult {
   exactKeys(v, ["hostId", "handlerGeneration", "phase", "reconciliation", "launches", "capabilities"])
   if (!(v.phase === "starting" || v.phase === "reconciling" || v.phase === "ready" || v.phase === "draining")) return invalid()
   const r = object(v.reconciliation)
-  exactKeys(r, ["classified", "total", "quarantined"])
-  const reconciliation = { classified: integer(r.classified), total: integer(r.total), quarantined: integer(r.quarantined) }
-  if (reconciliation.classified > reconciliation.total || reconciliation.quarantined > reconciliation.classified) invalid()
+  exactKeys(r, ["classified", "total", "uncertain"])
+  const reconciliation = { classified: integer(r.classified), total: integer(r.total), uncertain: integer(r.uncertain) }
+  if (reconciliation.classified > reconciliation.total || reconciliation.uncertain > reconciliation.classified) invalid()
   if (v.phase === "ready" && reconciliation.classified !== reconciliation.total) invalid()
   if (!Array.isArray(v.launches) || !Array.isArray(v.capabilities) || v.capabilities.length !== 3 || v.capabilities.join(",") !== "status,doctor,shutdown") return invalid()
   return { hostId: hostId(v.hostId), handlerGeneration: generation, phase: v.phase, reconciliation, launches: v.launches.map(summary), capabilities: ["status", "doctor", "shutdown"] }

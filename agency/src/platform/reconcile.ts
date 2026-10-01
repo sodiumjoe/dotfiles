@@ -5,6 +5,7 @@ import { readLaunchRecordForReconciliation, writeLaunchRecord } from "./private-
 import { DarwinObservationUnavailable } from "./darwin.js"
 import {
   processBirthStart,
+  sameProcessGeneration,
   sameProcess,
   type LaunchRecord,
   type PlatformAdapter,
@@ -27,7 +28,7 @@ type Continuity =
   | { state: "authorized"; observation: GroupObservation }
   | { state: "mismatch" }
 
-function clone(record: LaunchRecord, changes: Partial<LaunchRecord>): LaunchRecord {
+function clone<R extends LaunchRecord>(record: R, changes: Partial<Pick<LaunchRecord, "phase" | "provider" | "reason" | "launchAttempted">>): R {
   return { ...record, ...changes }
 }
 
@@ -156,28 +157,35 @@ function sameMembers(first: ProcessIdentity[], second: ProcessIdentity[]): boole
   return first.length === second.length && first.every(member => second.some(other => sameProcess(member, other)))
 }
 
-async function retainedState(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity): Promise<"absent" | "live" | "ambiguous"> {
+async function retainedState(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity, groupAbsent = false): Promise<{ state: "absent" | "live" | "ambiguous"; detached: ProcessIdentity[] }> {
   let live = false
+  const detached: ProcessIdentity[] = []
   for (const retained of unionMembers([provider.group.leader], provider.group.observed)) {
     let current: ProcessIdentity | null
-    try { current = await adapter.readProcess(retained.pid) } catch { return "ambiguous" }
+    try { current = await adapter.readProcess(retained.pid) } catch { if (groupAbsent) continue; return { state: "ambiguous", detached } }
     if (current === null) continue
     if (current.pid !== retained.pid || current.bootId !== retained.bootId) continue
+    if (current.processGroupId !== provider.group.leader.processGroupId) {
+      if (sameProcessGeneration(retained, current) && current.birth === retained.birth && current.uid === retained.uid && current.gid === retained.gid) detached.push(current)
+      continue
+    }
     const expectedStart = processBirthStart(retained.birth)
     const currentStart = processBirthStart(current.birth)
-    if (expectedStart === null || currentStart === null) return "ambiguous"
+    if (expectedStart === null || currentStart === null) return { state: "ambiguous", detached }
     if (expectedStart !== currentStart) continue
-    if (!sameProcess(retained, current)) return "ambiguous"
+    if (!sameProcess(retained, current)) return { state: "ambiguous", detached }
     live = true
   }
-  return live ? "live" : "absent"
+  return { state: live ? "live" : "absent", detached }
 }
 
 async function discharge(path: string, adapter: PlatformAdapter, record: LaunchRecord, disposition: "released" | "cleaned"): Promise<ReconcileResult> {
   if (record.provider === null) return quarantine(path, record, "attempted launch has no retained provider")
-  const state = await retainedState(adapter, record.provider)
-  if (state !== "absent") return quarantine(path, record, state === "ambiguous" ? "retained member observation is ambiguous or escaped" : "retained member survived cleanup")
-  return disposition === "cleaned" ? cleaned(path, record) : release(path, record)
+  if ((await adapter.readGroup(record.provider.group.leader.processGroupId)).length > 0) return quarantine(path, record, "recorded process group survived cleanup")
+  const { state, detached } = await retainedState(adapter, record.provider, true)
+  if (state !== "absent") return quarantine(path, record, state === "ambiguous" ? "retained member observation is ambiguous" : "retained group member survived cleanup")
+  const result = disposition === "cleaned" ? await cleaned(path, record) : await release(path, record)
+  return detached.length ? { ...result, diagnostics: detached.map(identity => ({ kind: "detached-helper" as const, identity })) } : result
 }
 
 async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapter, record: LaunchRecord, pendingRecord: (record: LaunchRecord) => void): Promise<ReconcileResult> {
@@ -192,10 +200,10 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   const providerIssue = processGroupIssue(record, record.provider)
   if (providerIssue !== null) return quarantine(path, record, providerIssue)
   if (record.phase === "cleanup_verified") return discharge(path, adapter, record, "released")
-  if (await retainedState(adapter, record.provider) === "ambiguous") return quarantine(path, record, "retained member observation is ambiguous or escaped")
   const initial = (record.phase === "cleanup_pending" ? continuedContinuity : initialContinuity)(record.provider, await observeGroup(adapter, record.provider))
   if (initial.state === "empty") return discharge(path, adapter, record, "released")
   if (initial.state === "mismatch") return quarantine(path, record, "process-group identity is ambiguous")
+  if ((await retainedState(adapter, record.provider)).state === "ambiguous") return quarantine(path, record, "retained member observation is ambiguous")
   const verifiedLeader = record.provider.group.leader
   const pendingProvider: ProcessGroupProviderIdentity = {
     kind: "process-group",
@@ -214,7 +222,7 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
     await writeLaunchRecord(path, pending)
     pendingRecord(pending)
   }
-  if (await retainedState(adapter, pendingProvider) === "ambiguous") return quarantine(path, pending, "retained member changed before SIGTERM")
+  if ((await retainedState(adapter, pendingProvider)).state === "ambiguous") return quarantine(path, pending, "retained member changed before SIGTERM")
   const authorization = (record.phase === "cleanup_pending" ? continuedContinuity : initialContinuity)(pendingProvider, await observeGroup(adapter, pendingProvider))
   if (authorization.state === "empty") return discharge(path, adapter, pending, "released")
   if (authorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGTERM")
@@ -231,7 +239,7 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   if (killAuthorization.state !== "authorized" || !sameMembers(afterTerm.observation.members, killAuthorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
   pendingProvider.group.observed = unionMembers(pendingProvider.group.observed, killAuthorization.observation.members)
   await writeLaunchRecord(path, pending)
-  if (await retainedState(adapter, pendingProvider) === "ambiguous") return quarantine(path, pending, "retained member changed before SIGKILL")
+  if ((await retainedState(adapter, pendingProvider)).state === "ambiguous") return quarantine(path, pending, "retained member changed before SIGKILL")
   const finalKill = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
   if (finalKill.state === "empty") return discharge(path, adapter, pending, "cleaned")
   if (finalKill.state === "authorized") await retain(finalKill.observation)

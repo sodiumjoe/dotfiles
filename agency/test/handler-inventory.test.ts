@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
-import { inventoryLaunches, summarizeLaunches, verifyInventory } from "../src/handler/inventory.js"
+import { inventoryLaunches, inventoryLaunchState, summarizeLaunches, verifyInventory } from "../src/handler/inventory.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import { privateRoot, launch } from "./control-support.js"
 
@@ -13,7 +13,7 @@ test("inventory preserves incomplete and semantically invalid launch evidence", 
   await writeFile(join(root, `${second.launchAttemptId}.json`), JSON.stringify(second), { mode: 0o600 })
   const entries = await inventoryLaunches(root)
   assert.deepEqual(entries.map(e => e.record).sort((a, b) => a.launchAttemptId.localeCompare(b.launchAttemptId)), [first, second].sort((a, b) => a.launchAttemptId.localeCompare(b.launchAttemptId)))
-  assert.equal(summarizeLaunches(entries.map(e => e.record))[0]!.checkoutId, "checkout-a")
+  assert.deepEqual(summarizeLaunches(entries.map(e => e.record)).find(e => e.launchAttemptId === first.launchAttemptId)?.owner, { kind: "legacy-agent", id: "agent-a", handlerGeneration: first.handlerGeneration })
   await verifyInventory(root, entries)
   await writeLaunchRecord(join(root, `${first.launchAttemptId}.json`), { ...first, checkoutId: "changed" })
   await assert.rejects(verifyInventory(root, entries), /RETAINED_INVENTORY_CHANGED/)
@@ -46,4 +46,14 @@ test("verification detects a new launch after classification", async t => {
   const root = await privateRoot(t), record = launch()
   await writeLaunchRecord(join(root, `${record.launchAttemptId}.json`), record)
   await assert.rejects(verifyInventory(root, []), /RETAINED_INVENTORY_CHANGED/)
+})
+
+test("inventory reports a malformed UUID entry beside a valid launch", async t => {
+  const root = await privateRoot(t), record = launch(), malformedAttemptId = randomUUID()
+  await writeLaunchRecord(join(root, `${record.launchAttemptId}.json`), record)
+  await writeFile(join(root, `${malformedAttemptId}.json`), "{", { mode: 0o600 })
+  const inventory = await inventoryLaunchState(root)
+  assert.equal(inventory.records.length, 1)
+  assert.equal(inventory.issues.length, 1)
+  assert.equal(inventory.issues[0]!.launchAttemptId, malformedAttemptId)
 })

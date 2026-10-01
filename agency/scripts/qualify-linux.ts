@@ -978,7 +978,8 @@ async function executeRealCase(index:number):Promise<Record<string,unknown>>{
         await writeLaunchRecord(recordPath,altered)
         const ambiguous=await reconcileRecord(recordPath,production)
         const unrelatedPath=join(directory,"unrelated.json")
-        await writeLaunchRecord(unrelatedPath,{...retained,checkoutId:"unrelated",launchAttempted:false,provider:null,phase:"launch_pending"})
+        if (retained.version === 1) await writeLaunchRecord(unrelatedPath,{...retained,checkoutId:"unrelated",launchAttempted:false,provider:null,phase:"launch_pending"})
+        else await writeLaunchRecord(unrelatedPath,{...retained,launchAttempted:false,provider:null,phase:"launch_pending"})
         const unrelated=await reconcileRecord(unrelatedPath,production)
         result={ambiguous:ambiguous.disposition,unrelated:unrelated.disposition,productionSignals}
       }else if(index===0){

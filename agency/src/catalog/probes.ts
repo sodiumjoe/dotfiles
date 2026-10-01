@@ -18,7 +18,7 @@ import { CatalogError, failure, invalid, keys, object, parseModels, parseProbeMe
 export type ProbeResult = { models: Model[]; providerVersion: string | null; providerVersionSource: "reported" | "unknown" }
 export type ProbeRequest = { meta: ProbeMeta; profile: ProviderProfile; evidence: ConfigEvidence }
 export type ProbeOutcome = { request: ProbeRequest; record: LaunchRecord; result: ProbeResult | null; error: CatalogFailure | null }
-export type ProbeRuntime = { run(request: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome>; recover(): Promise<void>; verifyDischarged(): Promise<void> }
+export type ProbeRuntime = { run(request: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome>; recover(): Promise<void>; verifyDischarged(): Promise<void>; issues?(): Map<ProviderId, CatalogFailure> }
 export type ProbeDependencies = { spawn?: typeof spawn; publish?: typeof writeLaunchRecord; timeoutMs?: number; closeMs?: number; env?: NodeJS.ProcessEnv }
 export function cleanProbeEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([key]) => key !== "NODE_OPTIONS" && key !== "NODE_PATH" && !key.startsWith("AGENCY_") && !key.startsWith("GIT_")))
@@ -42,32 +42,56 @@ export async function privateProbeDirectory(parent: string, name: string, requir
 export function createProbeRuntime(options: { paths: PlatformPaths; adapter: PlatformAdapter; queue: MutationQueue; store: CatalogStore; generation: string; canStart(): boolean; workerFile?: string; dependencies?: ProbeDependencies }): ProbeRuntime {
   const { paths, adapter, queue, store, generation } = options, deps = options.dependencies ?? {}, publish = deps.publish ?? writeLaunchRecord
   let accepted: InventoryEntry[] = [], metadata: ProbeMeta[] = [], initialized = false, blocked = false, running = false
+  const blockedProviders = new Map<ProviderId, CatalogFailure>()
   const terminal = new Map<string, { child: ChildProcess; exit: boolean; close: boolean }>()
   const unavailable = (): never => { blocked = true; throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
+  const scopedUnavailable = (providerId: ProviderId): never => { blockedProviders.set(providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))); throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
+  const unavailableFor = (entry: InventoryEntry): never => entry.record.version === 2 && entry.record.owner.kind === "catalog-probe" ? scopedUnavailable(entry.record.owner.providerId) : unavailable()
   async function verify(): Promise<void> {
     const inventory = await store.inventory()
-    if (inventory.issues.length || !isDeepStrictEqual(inventory.launches, accepted) || !isDeepStrictEqual(inventory.metadata, metadata) || inventory.metadata.some(m => m.hostId !== paths.hostKey)) unavailable()
+    for (const issue of inventory.issues) {
+      const match = /^probe-(?:meta|launches)\/([0-9a-f-]+)\.json$/.exec(issue)
+      const providerId = match ? [...metadata, ...inventory.metadata].find(meta => meta.attemptId === match[1])?.providerId ?? inventory.commands.flatMap(command => command.attempts).find(attempt => attempt.attemptId === match[1])?.providerId : undefined
+      if (!providerId) return unavailable()
+      blockedProviders.set(providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+    }
+    const markLaunch = (entry: InventoryEntry): void => {
+      if (entry.record.version === 2 && entry.record.owner.kind === "catalog-probe") blockedProviders.set(entry.record.owner.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+      else unavailable()
+    }
+    const launchesByPath = new Map(inventory.launches.map(entry => [entry.path, entry]))
+    const acceptedByPath = new Map(accepted.map(entry => [entry.path, entry]))
+    for (const entry of inventory.launches) if (!isDeepStrictEqual(entry, acceptedByPath.get(entry.path))) markLaunch(entry)
+    for (const entry of accepted) if (!isDeepStrictEqual(entry, launchesByPath.get(entry.path))) markLaunch(entry)
+    const metadataByAttempt = new Map(inventory.metadata.map(entry => [entry.attemptId, entry]))
+    const acceptedMetaByAttempt = new Map(metadata.map(entry => [entry.attemptId, entry]))
+    for (const entry of inventory.metadata) if (entry.hostId !== paths.hostKey) blockedProviders.set(entry.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+    for (const entry of inventory.metadata) if (!isDeepStrictEqual(entry, acceptedMetaByAttempt.get(entry.attemptId))) blockedProviders.set(entry.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+    for (const entry of metadata) if (!isDeepStrictEqual(entry, metadataByAttempt.get(entry.attemptId))) blockedProviders.set(entry.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+    const permitted = (entry: InventoryEntry) => entry.record.version !== 2 || entry.record.owner.kind !== "catalog-probe" || !blockedProviders.has(entry.record.owner.providerId)
+    const permittedMeta = (entry: ProbeMeta) => !blockedProviders.has(entry.providerId)
+    if (!isDeepStrictEqual(inventory.launches.filter(permitted), accepted.filter(permitted)) || !isDeepStrictEqual(inventory.metadata.filter(permittedMeta), metadata.filter(permittedMeta))) unavailable()
   }
   function accept(path: string, record: LaunchRecord): void {
     accepted = [...accepted.filter(e => e.path !== path), { path, record: structuredClone(record) }].sort((a, b) => a.path < b.path ? -1 : 1)
   }
   async function update(path: string, record: LaunchRecord): Promise<void> {
     await publish(path, record)
-    if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(path), record)) unavailable()
+    if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(path), record)) return record.version === 2 && record.owner.kind === "catalog-probe" ? scopedUnavailable(record.owner.providerId) : unavailable()
     accept(path, record)
   }
   async function discharge(entry: InventoryEntry): Promise<LaunchRecord> {
     const result = await reconcileRecord(entry.path, adapter, entry.record)
-    if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) unavailable()
+    if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) return unavailableFor(entry)
     accept(entry.path, result.record)
-    if (result.record.phase !== "cleanup_verified") unavailable()
+    if (result.record.phase !== "cleanup_verified") return unavailableFor(entry)
     if (result.record.provider !== null && result.record.launchBootId === await adapter.bootId()) {
       for (let n = 0; n < 2; n++) {
         for (const retained of result.record.provider.group.observed) {
           const current = await adapter.readProcess(retained.pid)
-          if (current !== null && sameProcessGeneration(retained, current)) unavailable()
+          if (current !== null && current.processGroupId === result.record.provider.group.leader.pid && sameProcessGeneration(retained, current)) return unavailableFor(entry)
         }
-        if ((await adapter.readGroup(result.record.provider.group.leader.pid)).some(p => p.bootId === result.record.launchBootId)) unavailable()
+        if ((await adapter.readGroup(result.record.provider.group.leader.pid)).some(p => p.bootId === result.record.launchBootId)) return unavailableFor(entry)
       }
     }
     return result.record
@@ -77,22 +101,30 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
       if (running) unavailable()
       const inventory = await store.inventory()
       accepted = inventory.launches; metadata = inventory.metadata; initialized = true
-      if (inventory.issues.length || metadata.some(m => m.hostId !== paths.hostKey)) blocked = true
-      for (const entry of [...accepted]) { try { await discharge(entry) } catch { blocked = true } }
+      if (inventory.issues.some(issue => !issue.startsWith("probe-meta/") && !issue.startsWith("probe-launches/"))) blocked = true
+      for (const meta of metadata) if (meta.hostId !== paths.hostKey) blockedProviders.set(meta.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+      for (const entry of [...accepted]) {
+        try { await discharge(entry) }
+        catch {
+          if (entry.record.version === 2 && entry.record.owner.kind === "catalog-probe") blockedProviders.set(entry.record.owner.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+          else blocked = true
+        }
+      }
       await verify()
       if (blocked) unavailable()
     })
   }
   async function verifyDischarged(): Promise<void> {
     await verify()
-    if (blocked || running || accepted.some(e => e.record.phase !== "cleanup_verified") || [...terminal.values()].some(t => !t.exit || !t.close)) unavailable()
+    if (blocked || running) unavailable()
+    if (blockedProviders.size || accepted.some(e => e.record.phase !== "cleanup_verified") || [...terminal.values()].some(t => !t.exit || !t.close)) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
     for (const entry of [...accepted]) await discharge(entry)
   }
   async function run(input: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome> {
     const request = structuredClone(input), m = parseProbeMeta(request.meta), path = join(paths.persistentRoot, "catalog/probe-launches", m.attemptId + ".json")
-    if (!initialized || blocked || running || m.handlerGeneration !== generation || m.hostId !== paths.hostKey) throw new CatalogError("CATALOG_UNAVAILABLE")
+    if (!initialized || blocked || blockedProviders.has(m.providerId) || running || m.handlerGeneration !== generation || m.hostId !== paths.hostKey) throw new CatalogError(blockedProviders.has(m.providerId) ? "PROBE_CLEANUP_UNVERIFIED" : "CATALOG_UNAVAILABLE")
     running = true
-    let record: LaunchRecord = { version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, leaseId: m.leaseId, agentId: m.agentId, handlerGeneration: generation, launchAttemptId: m.attemptId, launchBootId: await adapter.bootId(), launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
+    let record: LaunchRecord = { version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: generation, launchAttemptId: m.attemptId, launchBootId: await adapter.bootId(), launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
     let result: ProbeResult | null = null, error: CatalogFailure | null = null, child: ChildProcess | undefined, registered = false, messages = 0, candidates = 0, finished = false, spawnInvoked = false
     let finish!: () => void
     const completed = new Promise<void>(resolve => { finish = () => { finished = true; resolve() } })
@@ -190,7 +222,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
           entry = accepted.find(e => e.path === path)
         }
         if (entry) record = await discharge(entry)
-        else if (child !== undefined || record.launchAttempted) unavailable()
+        else if (child !== undefined || record.launchAttempted) scopedUnavailable(m.providerId)
       })
       const facts = terminal.get(m.attemptId)
       if (facts && (!facts.exit || !facts.close)) await new Promise<void>(resolve => {
@@ -198,14 +230,14 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         function done() { clearTimeout(timeout); facts!.child.off("close", done); resolve() }
         facts.child.once("close", done)
       })
-      if (facts && (!facts.exit || !facts.close)) unavailable()
+      if (facts && (!facts.exit || !facts.close)) scopedUnavailable(m.providerId)
       if (!isDeepStrictEqual(await observeConfig(request.profile), request.evidence)) throw new CatalogError("CONFIG_CHANGED")
     } catch (cause) {
-      if (!(cause instanceof CatalogError) || cause.code !== "CONFIG_CHANGED") { blocked = true; error = failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")) }
+      if (!(cause instanceof CatalogError) || cause.code !== "CONFIG_CHANGED") { blockedProviders.set(m.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))); error = failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")) }
       else error = failure(cause)
     } finally { running = false }
     if (signal.aborted) error ??= failure(new CatalogError("INCOMPLETE"))
     return { request, record, result: error === null ? result : null, error }
   }
-  return { run, recover, verifyDischarged }
+  return { run, recover, verifyDischarged, issues: () => new Map(blockedProviders) }
 }

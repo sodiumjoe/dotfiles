@@ -42,13 +42,14 @@ test("restart after exact Handler death rejects the old command target without s
 
 test("startup releases an unattempted lease and preserves attempted provider-null quarantine", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), boot = await f.adapter.bootId()
-  for (const record of [launch({ launchBootId: boot, checkoutId: "ambiguous" }), launch({ launchBootId: boot, checkoutId: "unattempted", launchAttempted: false })]) await writeLaunchRecord(join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`), record)
+  const ambiguous = launch({ launchBootId: boot, checkoutId: "ambiguous" }), unattempted = launch({ launchBootId: boot, checkoutId: "unattempted", launchAttempted: false })
+  for (const record of [ambiguous, unattempted]) await writeLaunchRecord(join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`), record)
   await f.start()
   const cli = client(f)
   assert.equal(await cli.run(["status"]), 0)
   const state = cli.result().result
-  assert.equal(state.launches.find((record: { checkoutId: string }) => record.checkoutId === "ambiguous").phase, "quarantined")
-  assert.equal(state.launches.find((record: { checkoutId: string }) => record.checkoutId === "unattempted").phase, "cleanup_verified")
+  assert.equal(state.launches.find((record: { launchAttemptId: string }) => record.launchAttemptId === ambiguous.launchAttemptId).phase, "quarantined")
+  assert.equal(state.launches.find((record: { launchAttemptId: string }) => record.launchAttemptId === unattempted.launchAttemptId).phase, "cleanup_verified")
   assert.equal(await cli.run(["shutdown", "--stop-agents"]), 75)
   assert.ok((await f.call()).ok)
 })
@@ -107,6 +108,6 @@ test("launcher readiness timeout after gate release leaves one live reconciling 
 
 test("a mismatched generation on the real socket is rejected before shutdown", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), current = await f.start()
-  await assert.rejects(f.call({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: randomUUID(), op: "shutdown", commandId: randomUUID(), stopAgents: true }), /STALE_HANDLER/)
+  await assert.rejects(f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: randomUUID(), op: "shutdown", commandId: randomUUID(), stopAgents: true }), /STALE_HANDLER/)
   assert.equal((await f.start()).record.generation, current.record.generation)
 })

@@ -26,16 +26,23 @@ test("catalog and legacy control schemas remain strictly separate", () => {
   assert.throws(() => validateCatalogReply(reply, { ...r, op: "model_list" }), { code: "INVALID_PROTOCOL" })
 })
 
+test("catalog response preserves a provider-scoped refresh issue", () => {
+  const provider = (providerId: "claude-agent-acp" | "codex-acp") => ({ providerId, fingerprint: null, verifiedAt: null, verifiedHandlerGeneration: null, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: null, sdkVersion: null, models: [], error: null, state: "unconfigured" as const, freshness: "unverified" as const })
+  const issue = { code: "PROBE_CLEANUP_UNVERIFIED" as const, message: "Discovery process cleanup is unverified" }
+  const reply: CatalogReply = { protocol: CATALOG_PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, ok: true, result: { state: "catalog", hostId: "a".repeat(64), handlerGeneration: generation, observedAt: 100, launchAuthorized: false, providers: [{ ...provider("claude-agent-acp"), refreshIssue: issue }, provider("codex-acp")], refresh: null, discovery: { state: "idle", error: null } } }
+  assert.deepEqual(parseCatalogReply(reply), reply)
+})
+
 test("one private socket dispatches catalog and unchanged control frames", async t => {
   const root = await privateRoot(t), socketPath = join(root, "socket")
-  const server = createServer({ allowHalfOpen: true }, socket => { void serveProtocols(socket, async r => ({ protocol: r.protocol, requestId: r.requestId, handlerGeneration: generation, ok: true, result: { hostId: "a".repeat(64), handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] } }), async r => response(r)) })
+  const server = createServer({ allowHalfOpen: true }, socket => { void serveProtocols(socket, async r => ({ protocol: r.protocol, requestId: r.requestId, handlerGeneration: generation, ok: true, result: { hostId: "a".repeat(64), handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] } }), async r => response(r)) })
   await new Promise<void>(resolve => server.listen(socketPath, resolve))
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
   const r = request()
   assert.deepEqual(await exchangeCatalog(createConnection(socketPath), r), response(r))
-  const old = await exchange(createConnection(socketPath), { protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: generation, op: "status" })
+  const old = await exchange(createConnection(socketPath), { protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: generation, op: "status" })
   assert.ok(old.ok)
-  assert.deepEqual((old as ControlReply & { ok: true }).result, { hostId: "a".repeat(64), handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] })
+  assert.deepEqual((old as ControlReply & { ok: true }).result, { hostId: "a".repeat(64), handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] })
 })
 
 for (const corrupt of [false, true]) test(`real Handler keeps legacy status healthy with catalog corruption=${corrupt}`, { timeout: 60000 }, async t => {
@@ -56,7 +63,7 @@ for (const corrupt of [false, true]) test(`real Handler keeps legacy status heal
   assert.ok(status.ok && "phase" in status.result && status.result.phase === "ready")
   if (!corrupt) assert.equal((await readdir(f.paths.persistentRoot)).includes("catalog"), false)
   else {
-    const refused = await f.call({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+    const refused = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
     assert.ok(!refused.ok && refused.error.code === "INCOMPLETE")
   }
 })

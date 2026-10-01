@@ -403,7 +403,7 @@ class FixtureScope {
   }
 }
 
-function baseRecord(launchAttemptId: string, bootId: string, overrides: Partial<LaunchRecord> = {}): LaunchRecord {
+function baseRecord(launchAttemptId: string, bootId: string, overrides: Partial<import("../src/platform/types.js").LegacyLaunchRecord> = {}): import("../src/platform/types.js").LegacyLaunchRecord {
   return {
     version: RUNTIME_RECORD_VERSION,
     checkoutId: `checkout-${launchAttemptId}`,

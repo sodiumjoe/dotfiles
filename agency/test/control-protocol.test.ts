@@ -8,8 +8,8 @@ import { parseRequest, parseReply, validateReplyForRequest, exitCode, type Contr
 import { exchange, receiveFrame, serveControl, sendReply } from "../src/control/wire.js"
 import { privateRoot } from "./control-support.js"
 
-const request = (): ControlRequest => ({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: randomUUID(), op: "status" })
-const response = (r: ControlRequest): ControlReply => ({ protocol: r.protocol, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { hostId: "a".repeat(64), handlerGeneration: r.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, quarantined: 1 }, launches: [{ launchAttemptId: "historical", agentId: "agent-a", checkoutId: "checkout-a", phase: "quarantined", reason: "ambiguous" }], capabilities: ["status", "doctor", "shutdown"] } })
+const request = (): ControlRequest => ({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: randomUUID(), op: "status" })
+const response = (r: ControlRequest): ControlReply => ({ protocol: r.protocol, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { hostId: "a".repeat(64), handlerGeneration: r.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 1 }, launches: [{ launchAttemptId: "historical", owner: { kind: "legacy-agent", id: "agent-a", handlerGeneration: r.handlerGeneration }, phase: "quarantined", reason: "ambiguous" }], capabilities: ["status", "doctor", "shutdown"] } })
 
 test("reply write failure remains handled through callback-before-error closure", async () => {
   const socket = new Duplex({ read() {}, write(_bytes, _encoding, callback) { callback(new Error("synthetic EPIPE")) } })
@@ -64,7 +64,7 @@ test("replies preserve historical IDs but bind request, operation and both gener
   const raw = JSON.parse(JSON.stringify(reply))
   raw.result.handlerGeneration = randomUUID()
   assert.throws(() => validateReplyForRequest(parseReply(raw), r), /STALE_HANDLER/)
-  for (const change of [{ phase: "active" }, { reconciliation: { classified: 3, total: 1, quarantined: 0 } }, { hostId: "bad" }, { capabilities: ["status", "shell"] }]) assert.throws(() => parseReply({ ...raw, result: { ...raw.result, ...change } }), /INVALID_PROTOCOL/)
+  for (const change of [{ phase: "active" }, { reconciliation: { classified: 3, total: 1, uncertain: 0 } }, { hostId: "bad" }, { capabilities: ["status", "shell"] }]) assert.throws(() => parseReply({ ...raw, result: { ...raw.result, ...change } }), /INVALID_PROTOCOL/)
   assert.deepEqual(["USAGE", "INVALID_PROTOCOL", "STALE_HANDLER", "UNAVAILABLE", "INTERNAL", "INCOMPLETE", "ACTIVE_AGENTS", "COMMAND_CONFLICT"].map(code => exitCode(code as Parameters<typeof exitCode>[0])), [64, 65, 69, 69, 70, 75, 75, 75])
 })
 

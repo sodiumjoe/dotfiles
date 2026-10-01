@@ -28,6 +28,7 @@ export function admissionInventoryIssues(hostId: string, launches: readonly Inve
   }
   const seen = { launchAttemptId: new Set<string>(), agentId: new Set<string>(), leaseId: new Set<string>() }
   for (const { record } of launches) {
+    if (record.version !== 1) continue
     for (const key of ["launchAttemptId", "agentId", "leaseId"] as const) {
       if (seen[key].has(record[key])) reasons.push(`duplicate retained ${key}`)
       seen[key].add(record[key])
@@ -78,9 +79,18 @@ export function createAdmissionController(context: AdmissionContext, dependencie
     if (request.checkout.hostId !== context.paths.hostKey) throw new AdmissionError("IDENTITY_CONFLICT", "checkout belongs to another host")
     if (context.mutations.unavailable !== null) throw new AdmissionError("ADMISSION_UNAVAILABLE", context.mutations.unavailable)
   }
-  const trusted = async (): Promise<void> => {
+  const trusted = async (launchAttemptId: string): Promise<void> => {
     await refreshLaunchState(context.state, context.mutations, directory)
     if (context.mutations.unavailable !== null) throw new AdmissionError("ADMISSION_UNAVAILABLE", context.mutations.unavailable)
+    const path = join(directory, `${launchAttemptId}.json`)
+    if (context.mutations.issues?.some(issue => issue.path === path)) throw new AdmissionError("ADMISSION_UNAVAILABLE", "launch inventory changed")
+    const entry = context.mutations.accepted.find(value => value.path === path)
+    if (entry) {
+      let visible: LaunchRecord
+      try { visible = await readLaunchRecordForReconciliation(path) }
+      catch { throw new AdmissionError("ADMISSION_UNAVAILABLE", "launch readback unavailable") }
+      if (!isDeepStrictEqual(visible, entry.record)) throw new AdmissionError("ADMISSION_UNAVAILABLE", "launch readback mismatch")
+    }
   }
   const accept = async (path: string, record: LaunchRecord): Promise<void> => {
     if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(path), record)) throw new AdmissionError("ADMISSION_UNAVAILABLE", "launch readback mismatch")
@@ -97,10 +107,10 @@ export function createAdmissionController(context: AdmissionContext, dependencie
     return context.mutations.queue.run(async () => {
       try {
         ready(request, true)
-        await trusted()
+        await trusted(request.launchAttemptId)
         const result = await operation(request)
         ready(request, false)
-        await trusted()
+        await trusted(request.launchAttemptId)
         return structuredClone(result)
       } catch (error) {
         if (error instanceof AdmissionError) throw error
@@ -131,7 +141,7 @@ export function createAdmissionController(context: AdmissionContext, dependencie
       const boot = await context.adapter.bootId()
       const record: LaunchRecord = existing?.record ?? { version: 1, checkoutId: request.checkout.checkoutId, agentId: request.agentId, leaseId: request.leaseId, handlerGeneration: request.handlerGeneration, launchAttemptId: request.launchAttemptId, launchBootId: boot, launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
       if (record.launchBootId !== boot) throw new AdmissionError("ADMISSION_UNAVAILABLE", "launch boot changed")
-      await trusted()
+      await trusted(request.launchAttemptId)
       if (!isDeepStrictEqual(await inventoryAdmissions(root), admissions)) throw new AdmissionError("ADMISSION_UNAVAILABLE", "admission inventory changed")
       const path = join(directory, `${record.launchAttemptId}.json`)
       try { await dependencies.publishLaunch(path, record) }

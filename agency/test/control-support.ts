@@ -2,7 +2,7 @@ import { mkdtemp, realpath, rm, mkdir, readFile, writeFile, chown } from "node:f
 import { join } from "node:path"
 import type { TestContext } from "node:test"
 import { randomUUID } from "node:crypto"
-import type { LaunchRecord } from "../src/platform/types.js"
+import type { LaunchRecord, LegacyLaunchRecord } from "../src/platform/types.js"
 import assert from "node:assert/strict"
 import { createConnection } from "node:net"
 import { fileURLToPath } from "node:url"
@@ -230,6 +230,6 @@ export async function privateRoot(t: TestContext): Promise<string> {
   return root
 }
 
-export function launch(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
+export function launch(overrides: Partial<LegacyLaunchRecord> = {}): LegacyLaunchRecord {
   return { version: 1, checkoutId: "checkout-a", leaseId: randomUUID(), agentId: "agent-a", handlerGeneration: randomUUID(), launchAttemptId: randomUUID(), launchBootId: "boot-a", launchAttempted: true, phase: "launch_pending", provider: null, reason: null, ...overrides }
 }

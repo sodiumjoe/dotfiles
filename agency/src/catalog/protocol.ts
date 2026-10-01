@@ -25,12 +25,12 @@ function catalogView(input: unknown): CatalogView {
   if (v.state !== "catalog" || v.launchAuthorized !== false || !Array.isArray(v.providers) || v.providers.length !== 2) invalid()
   const handlerGeneration = id(v.handlerGeneration), observedAt = timestamp(v.observedAt)
   const providers = v.providers.map((input): ProviderView => {
-    const { state, freshness, ...raw } = object(input), snapshot = parseProviderSnapshot(raw)
+    const { state, freshness, refreshIssue, ...raw } = object(input), snapshot = parseProviderSnapshot(raw)
     if (state !== "unconfigured" && state !== "ready" && state !== "unavailable" && state !== "blocked") invalid()
     if (freshness !== "fresh" && freshness !== "stale" && freshness !== "unverified") invalid()
     if (freshness === "fresh" && (state !== "ready" || snapshot.error !== null || snapshot.verifiedHandlerGeneration !== handlerGeneration || !isFresh(snapshot.verifiedAt, observedAt))) invalid()
     if ((freshness === "unverified") !== (snapshot.verifiedAt === null)) invalid()
-    return { ...snapshot, state, freshness }
+    return { ...snapshot, state, freshness, ...(refreshIssue === undefined ? {} : { refreshIssue: refreshIssue === null ? null : parseFailure(refreshIssue) }) }
   })
   if (new Set(providers.map(p => p.providerId)).size !== 2) invalid()
   const discovery = object(v.discovery)

@@ -22,13 +22,13 @@ import { until } from "./control-support.js"
 const generation = randomUUID(), marker = randomUUID()
 const identity = { bootId: "boot-a", pid: 101, birth: `1:agy-handler:${marker}`, parentPid: 1, processGroupId: 101, sessionId: 101, uid: process.getuid!(), gid: process.getgid!() }
 const receipt = (): ShutdownReceipt => ({ version: 1, commandId: randomUUID(), hostId: "a".repeat(64), handlerGeneration: generation, handlerIdentity: identity, stopAgents: false, state: "accepted" })
-const request = (commandId = randomUUID()): ControlRequest & { op: "shutdown" } => ({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId, stopAgents: false })
+const request = (commandId = randomUUID()): ControlRequest & { op: "shutdown" } => ({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId, stopAgents: false })
 
 async function context(t: test.TestContext): Promise<ShutdownContext> {
   const root = await privateRoot(t)
   await mkdir(join(root, "launches"), { mode: 0o700 })
   const record: HandlerGenerationRecord = { version: 1, hostId: "a".repeat(64), launchBootId: "boot-a", generation, launchAttemptId: marker, launchAttempted: true, phase: "ready", process: identity, socketPath: join(root, "handler.sock"), writer: "handler", reconciliation: { classified: 0, total: 0, quarantined: 0 }, reason: null }
-  const state: HandlerStatus = { hostId: record.hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
+  const state: HandlerStatus = { hostId: record.hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const adapter: PlatformAdapter = { platform: "linux", bootId: async () => "boot-a", readProcess: async () => { throw new Error("unexpected process observation") }, readGroup: async () => { throw new Error("unexpected group observation") }, signalGroup: async () => { throw new Error("unauthorized signal") } }
   return { record, state, paths: { hostKey: record.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: record.socketPath }, adapter, mutations: { queue: new MutationQueue(), accepted: [], unavailable: null }, closeAfterReply: async () => undefined }
 }

@@ -15,6 +15,10 @@ async function publish(context: AdmissionContext, expected: LaunchRecord, next: 
   if (context.mutations.unavailable !== null) throw new AgentError("ADMISSION_UNAVAILABLE")
   const entry = context.mutations.accepted.find(value => value.record.launchAttemptId === expected.launchAttemptId)
   if (!entry || !isDeepStrictEqual(entry.record, expected) || expected.handlerGeneration !== context.state.handlerGeneration) throw new AgentError("INVALID_AGENT_STATE")
+  if (context.mutations.issues?.some(issue => issue.path === entry.path)) throw new AgentError("ADMISSION_UNAVAILABLE")
+  try {
+    if (!isDeepStrictEqual(await io.read(entry.path), expected)) throw new AgentError("ADMISSION_UNAVAILABLE")
+  } catch { throw new AgentError("ADMISSION_UNAVAILABLE") }
   try { await io.publish(entry.path, next) }
   finally {
     try {
@@ -25,6 +29,7 @@ async function publish(context: AdmissionContext, expected: LaunchRecord, next: 
     await refreshLaunchState(context.state, context.mutations, directory)
   }
   if (context.mutations.unavailable !== null) throw new AgentError("ADMISSION_UNAVAILABLE")
+  if (context.mutations.issues?.some(issue => issue.path === entry.path)) throw new AgentError("ADMISSION_UNAVAILABLE")
   if (!isDeepStrictEqual(entry.record, next)) throw new AgentError("INVALID_AGENT_STATE")
 }
 
