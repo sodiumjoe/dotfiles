@@ -19,6 +19,14 @@ process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as ControlFixtureConfig
 const root = dirname(config.paths.runtimeRoot)
 const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
+if (config.failBootIdOnce) {
+  const bootId = adapter.bootId.bind(adapter)
+  adapter.bootId = async () => { adapter.bootId = bootId; throw new Error("injected retained boot observation failure") }
+}
+if (config.failSignalGroup !== undefined) {
+  const signalGroup = adapter.signalGroup.bind(adapter)
+  adapter.signalGroup = async (group, signal) => { if (group === config.failSignalGroup) throw new Error("injected retained cleanup failure"); await signalGroup(group, signal) }
+}
 let admission: AdmissionController | undefined, admissionDone = false
 const admit = async (controller: AdmissionController): Promise<void> => {
   if (admissionDone || config.admissionOperations === undefined) return

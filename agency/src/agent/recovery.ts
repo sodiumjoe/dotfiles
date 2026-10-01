@@ -2,23 +2,32 @@ import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import type { LaunchContext } from "../handler/launch-transitions.js"
 import { refreshLaunchState } from "../handler/mutations.js"
-import { writeLaunchRecord } from "../platform/private-state.js"
+import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../platform/private-state.js"
 import type { ManagedLaunchRecord } from "../platform/types.js"
 import type { AgentInventory, AgentStateIssue, AgentStore } from "./store.js"
-import { AgentError, agentFailure, tupleOfRecord, type AgentRecord, type AgentTuple, type StartCommandInput } from "./types.js"
+import { AgentError, agentFailure, tupleOfRecord, type AgentCommand, type AgentRecord, type AgentTuple, type StartCommandInput } from "./types.js"
 
 export const agentTuple = (record: AgentRecord): AgentTuple => tupleOfRecord(record)
 
 export async function retainUnspawnedRestore(context: LaunchContext, agent: AgentRecord): Promise<void> {
-  if (agent.phase !== "restoring" || context.mutations.accepted.some(entry => entry.record.launchAttemptId === agent.launch.launchAttemptId)) return
+  if (agent.phase !== "restoring") return
   const path = join(context.paths.persistentRoot, "launches", agent.launch.launchAttemptId + ".json")
+  await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches"))
+  const accepted = context.mutations.accepted.find(entry => entry.record.launchAttemptId === agent.launch.launchAttemptId)
+  if (accepted) {
+    if (accepted.path !== path || accepted.record.version !== 2 || accepted.record.owner.kind !== "agent" || accepted.record.owner.agentId !== agent.definition.agentId || accepted.record.owner.providerGeneration !== agent.launch.providerGeneration || accepted.record.handlerGeneration !== agent.launch.handlerGeneration || context.mutations.issues?.some(issue => issue.path === path)) throw new AgentError("CLEANUP_UNVERIFIED")
+    return
+  }
   const record: ManagedLaunchRecord = { version: 2, owner: { kind: "agent", agentId: agent.definition.agentId, providerGeneration: agent.launch.providerGeneration }, handlerGeneration: agent.launch.handlerGeneration, launchAttemptId: agent.launch.launchAttemptId, launchBootId: await context.adapter.bootId(), launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null }
+  try { if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(path), record)) throw new AgentError("CLEANUP_UNVERIFIED") }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
   await writeLaunchRecord(path, record)
   context.mutations.accepted.push({ path, record })
   await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches"))
 }
 
 export type AgentAssessment = { unavailable: Map<string, AgentStateIssue>; issues: AgentStateIssue[] }
+export type AgentRecoveryRepair = { kind: "agent"; issue: AgentStateIssue; expected: AgentRecord; next: AgentRecord } | { kind: "launch"; issue: AgentStateIssue; expected: AgentRecord; next: AgentRecord } | { kind: "command"; issue: AgentStateIssue; expected: AgentCommand; next: AgentCommand }
 
 export function crossCheckAgents(context: LaunchContext, inventory: AgentInventory): AgentAssessment {
   const unavailable = new Map<string, AgentStateIssue>(), issues: AgentStateIssue[] = []
@@ -86,35 +95,41 @@ export function crossCheckAgents(context: LaunchContext, inventory: AgentInvento
   return { unavailable, issues }
 }
 
-export async function recoverAgents(input: { context: LaunchContext; store: AgentStore }): Promise<{ inventory: AgentInventory; assessment: AgentAssessment }> {
+export async function recoverAgents(input: { context: LaunchContext; store: AgentStore }): Promise<{ inventory: AgentInventory; assessment: AgentAssessment; repairs: AgentRecoveryRepair[] }> {
   const { context, store } = input
   let inventory: AgentInventory = { agents: [], legacyAgents: [], commands: [], issues: [] }
-  const failed: AgentStateIssue[] = []
+  const repairs: AgentRecoveryRepair[] = []
   await context.mutations.queue.run(async () => {
     await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches"))
     inventory = await store.inventory()
     const initial = crossCheckAgents(context, inventory)
     for (const agent of inventory.agents) {
       if (initial.unavailable.has(agent.definition.agentId)) continue
-      try {
-        await retainUnspawnedRestore(context, agent)
-        const verified = context.mutations.accepted.some(entry => entry.record.launchAttemptId === agent.launch.launchAttemptId && entry.record.phase === "cleanup_verified")
-        const next = ["starting", "ready", "restoring", "stopping"].includes(agent.phase) ? { ...agent, phase: agent.session && verified ? "recoverable" as const : "interrupted" as const, failure: agentFailure(new AgentError("INCOMPLETE")) } : agent
-        await store.writeAgent(next, agent)
-      } catch (error) { failed.push({ kind: "agent", id: agent.definition.agentId, path: join(context.paths.persistentRoot, "agents", "records", agent.definition.agentId + ".json"), message: String(error).slice(0, 512) }) }
+      const launchPath = join(context.paths.persistentRoot, "launches", agent.launch.launchAttemptId + ".json")
+      const recoveryRecord = (verified: boolean): AgentRecord => ["starting", "ready", "restoring", "stopping"].includes(agent.phase) ? { ...agent, phase: agent.session && verified ? "recoverable" : "interrupted", failure: agentFailure(new AgentError("INCOMPLETE")) } : agent
+      try { await retainUnspawnedRestore(context, agent) }
+      catch (error) {
+        repairs.push({ kind: "launch", expected: agent, next: recoveryRecord(true), issue: { kind: "agent", id: agent.definition.agentId, path: launchPath, message: String(error).slice(0, 512) } })
+        continue
+      }
+      const verified = context.mutations.accepted.some(entry => entry.record.launchAttemptId === agent.launch.launchAttemptId && entry.record.phase === "cleanup_verified")
+      const next = recoveryRecord(verified)
+      try { await store.writeAgent(next, agent) }
+      catch (error) { repairs.push({ kind: "agent", expected: agent, next, issue: { kind: "agent", id: agent.definition.agentId, path: join(context.paths.persistentRoot, "agents", "records", agent.definition.agentId + ".json"), message: String(error).slice(0, 512) } }) }
     }
     for (const command of inventory.commands) {
       const next = command.state === "pending" ? { ...command, state: "interrupted" as const, result: { outcome: "interrupted" as const, target: command.target, failure: agentFailure(new AgentError("INCOMPLETE")), session: null } } : command
-      try { await store.writeCommand(next, command) } catch (error) { failed.push({ kind: "command", id: command.commandId, path: join(context.paths.persistentRoot, "agents", "commands", command.commandId + ".json"), message: String(error).slice(0, 512) }) }
+      try { await store.writeCommand(next, command) } catch (error) { repairs.push({ kind: "command", expected: command, next, issue: { kind: "command", id: command.commandId, path: join(context.paths.persistentRoot, "agents", "commands", command.commandId + ".json"), message: String(error).slice(0, 512) } }) }
     }
     inventory = await store.inventory()
   })
   const assessment = crossCheckAgents(context, inventory)
-  for (const issue of failed) {
-    const agentId = issue.kind === "agent" ? issue.id : inventory.commands.find(command => command.commandId === issue.id)?.target?.agentId
+  for (const repair of repairs) {
+    const issue = repair.issue
+    const agentId = repair.kind === "command" ? inventory.commands.find(command => command.commandId === issue.id)?.target?.agentId : issue.id
     const owner = inventory.agents.find(agent => agent.definition.agentId === agentId)
     if (owner) assessment.unavailable.set(owner.definition.agentId, issue)
     else assessment.issues.push(issue)
   }
-  return { inventory, assessment }
+  return { inventory, assessment, repairs }
 }

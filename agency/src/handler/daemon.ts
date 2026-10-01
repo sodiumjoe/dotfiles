@@ -21,7 +21,7 @@ import { reconcileRecord } from "../platform/reconcile.js"
 import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
-import { inventoryLaunchState, summarizeLaunches, type InventoryEntry } from "./inventory.js"
+import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type LaunchIssue } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
 import { createAdmissionController, type AdmissionController } from "../checkout/admission.js"
@@ -170,21 +170,40 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     current = { ...published, writer: "handler", phase: "reconciling", reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
     await writeHandlerRecord(options.recordPath, current)
     await options.onPhase?.("reconciling")
+    const reconciliationIssues: LaunchIssue[] = [], successful = new Map<string, InventoryEntry["record"]>()
     for (const entry of entries) {
-      const result = await reconcileRecord(entry.path, options.adapter, entry.record)
-      if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
-      entry.record = result.record
+      try {
+        const result = await reconcileRecord(entry.path, options.adapter, entry.record)
+        if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
+        entry.record = result.record
+        successful.set(entry.path, result.record)
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("RETAINED_INVENTORY_CHANGED")) throw error
+        reconciliationIssues.push({ path: entry.path, launchAttemptId: entry.record.launchAttemptId, message: String(error).slice(0, 512) })
+      }
       state.reconciliation.classified++
-      if (result.disposition === "quarantined") state.reconciliation.uncertain++
+      if (entry.record.phase === "quarantined") state.reconciliation.uncertain++
       state.launches = summarizeLaunches(entries.map(item => item.record))
       current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
       await writeHandlerRecord(options.recordPath, current)
     }
     await options.onPhase?.("ready")
     const checkedInventory = await inventoryLaunchState(directory)
-    if (!isDeepStrictEqual(checkedInventory.records, entries)) throw new Error("RETAINED_INVENTORY_CHANGED")
-    state.issues = checkedInventory.issues
-    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(entries) }
+    const initialPaths = new Set(entries.map(entry => entry.path))
+    if (checkedInventory.records.some(entry => !initialPaths.has(entry.path))) throw new Error("RETAINED_INVENTORY_CHANGED")
+    for (const [path, expected] of successful) if (!isDeepStrictEqual(checkedInventory.records.find(entry => entry.path === path)?.record, expected)) throw new Error("RETAINED_INVENTORY_CHANGED")
+    const trusted = checkedInventory.records.filter(entry => {
+      const original = entries.find(value => value.path === entry.path)?.record
+      if (!original) return false
+      if (successful.has(entry.path)) return true
+      return original.version === entry.record.version && original.launchAttemptId === entry.record.launchAttemptId && original.handlerGeneration === entry.record.handlerGeneration && original.launchBootId === entry.record.launchBootId && (original.version === 2 && entry.record.version === 2 ? isDeepStrictEqual(original.owner, entry.record.owner) : original.version === 1 && entry.record.version === 1 && original.checkoutId === entry.record.checkoutId && original.agentId === entry.record.agentId && original.leaseId === entry.record.leaseId) && isDeepStrictEqual(original.provider?.group.leader, entry.record.provider?.group.leader)
+    })
+    state.launches = summarizeLaunches(checkedInventory.records.map(entry => entry.record))
+    state.reconciliation = { classified: checkedInventory.records.length, total: checkedInventory.records.length, uncertain: checkedInventory.records.filter(entry => entry.record.phase === "quarantined").length }
+    state.issues = [...checkedInventory.issues, ...reconciliationIssues]
+    current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
+    await writeHandlerRecord(options.recordPath, current)
+    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(trusted), reconciliationIssues }
     const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
     else {

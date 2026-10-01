@@ -19,7 +19,7 @@ import type { AdmissionContext } from "../src/checkout/admission.js"
 import { readHandlerRecord, readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord, ProcessIdentity } from "../src/platform/types.js"
 import { createAgentService, type AgentService } from "../src/agent/service.js"
-import { createAgentStore } from "../src/agent/store.js"
+import { createAgentStore, type AgentStore } from "../src/agent/store.js"
 import { createCatalogStore } from "../src/catalog/store.js"
 import { observeConfig } from "../src/catalog/config.js"
 import { isFresh, type CatalogSnapshot, type ProviderProfile } from "../src/catalog/types.js"
@@ -506,7 +506,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
       if (kind === "missing") snapshot.providers[0]!.models = []
       await saveCatalog()
     },
-    async restart(unresolvedAgent?: string) {
+    async restart(unresolvedAgent?: string, replacementStore?: AgentStore) {
       service.close(); released.resolve(); restoreReleased.resolve(); restorePause = ""
       await Promise.allSettled(owners.map(owner => owner.cleanup()))
       await f.context.mutations.queue.run(async () => {
@@ -519,7 +519,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
       f.context.state.handlerGeneration = randomUUID()
       snapshot = { ...snapshot, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, providers: snapshot.providers.map(provider => ({ ...provider, verifiedHandlerGeneration: f.context.state.handlerGeneration, verifiedAt: Date.now() })) }
       await saveCatalog()
-      service = track(createAgentService({ ...composition, store: createAgentStore(root) }, dependencies)); await service.initialize(); return service
+      service = track(createAgentService({ ...composition, store: replacementStore ?? createAgentStore(root) }, dependencies)); await service.initialize(); return service
     },
   }
 }

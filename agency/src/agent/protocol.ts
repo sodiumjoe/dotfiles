@@ -52,11 +52,14 @@ function agentView(input: unknown, generation: string | null): AgentView | Legac
     return { record, launch, live: false, cleanup: v.cleanup as LegacyAgentView["cleanup"] }
   }
   const record = parseAgentRecord(v.record)
+  const unavailable = v.unavailable === null ? null : stateIssue(v.unavailable)
   if (typeof v.live !== "boolean" || !["not_launched", "verified", "unverified", "unknown"].includes(String(v.cleanup))) invalid()
-  if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.launchAttemptId !== record.launch.launchAttemptId || launch.handlerGeneration !== record.launch.handlerGeneration)) invalid()
+  if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.launchAttemptId !== record.launch.launchAttemptId || launch.handlerGeneration !== record.launch.handlerGeneration)) {
+    if (!unavailable || v.live !== false || !unavailable.path.endsWith("/" + record.launch.launchAttemptId + ".json")) invalid()
+    return { record, launch: null, live: false, cleanup: "unknown", unavailable }
+  }
   if (v.cleanup === "verified" && launch?.phase !== "cleanup_verified" || v.cleanup === "not_launched" && launch !== null) invalid()
   if (v.live && (record.launch.handlerGeneration !== generation || !["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase) || !launch && !["starting", "restoring"].includes(record.phase) || launch?.phase === "cleanup_verified" || launch?.phase === "quarantined")) invalid()
-  const unavailable = v.unavailable === null ? null : stateIssue(v.unavailable)
   return { record, launch, live: v.live as boolean, cleanup: v.cleanup as AgentView["cleanup"], unavailable }
 }
 function stateIssue(input: unknown): AgentStateIssue {

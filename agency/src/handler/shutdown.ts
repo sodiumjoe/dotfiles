@@ -9,7 +9,7 @@ import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
 import { inventoryLaunchState, summarizeLaunches } from "./inventory.js"
 import { assertSameShutdown, readShutdownReceipt, writeShutdownReceipt, type ShutdownReceipt } from "./receipt.js"
-import { refreshLaunchState, type HandlerMutations } from "./mutations.js"
+import { confirmReconciledLaunch, refreshLaunchState, type HandlerMutations } from "./mutations.js"
 
 type ShutdownRequest = ControlRequest & { op: "shutdown" }
 export type ShutdownContext = {
@@ -35,8 +35,8 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
   const directory = join(context.paths.persistentRoot, "launches")
   const inventory = await inventoryLaunchState(directory), entries = inventory.records
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
-  context.state.issues = inventory.issues
-  if (!request.stopAgents && (inventory.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified"))) throw new ControlError("ACTIVE_AGENTS", "unverified launches or quarantined checkouts remain; inspect status")
+  context.state.issues = [...inventory.issues, ...(context.mutations.reconciliationIssues ?? [])]
+  if (!request.stopAgents && (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified"))) throw new ControlError("ACTIVE_AGENTS", "unverified launches or quarantined checkouts remain; inspect status")
   if (request.stopAgents) {
     const failures: unknown[] = []
     for (const entry of entries) {
@@ -45,16 +45,17 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
         if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
         entry.record = result.record
         context.mutations.accepted = [...context.mutations.accepted.filter(value => value.path !== entry.path), structuredClone(entry)].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+        if (result.record.phase === "cleanup_verified") confirmReconciledLaunch(context.mutations, entry.path)
       } catch (error) { failures.push(error) }
     }
     if (failures.length) throw new ControlError("INCOMPLETE", "one or more launch cleanups remain unverified")
   }
   const checked = await inventoryLaunchState(directory)
   if (!isDeepStrictEqual(checked.records, entries)) throw new ControlError("INCOMPLETE", "retained inventory changed")
-  context.state.issues = checked.issues
+  context.state.issues = [...checked.issues, ...(context.mutations.reconciliationIssues ?? [])]
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
   context.state.reconciliation = { classified: entries.length, total: entries.length, uncertain: entries.filter(entry => entry.record.phase === "quarantined").length }
-  if (checked.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "checkout cleanup remains unverified")
+  if (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "checkout cleanup remains unverified")
   if (context.record.process === null) throw new ControlError("INCOMPLETE", "Handler identity unavailable")
   await context.catalog?.verifyDischarged()
   const receipt: ShutdownReceipt = { version: 1, commandId: request.commandId, handlerGeneration: context.record.generation, hostId: context.record.hostId, handlerIdentity: context.record.process, stopAgents: request.stopAgents, state: "accepted" }

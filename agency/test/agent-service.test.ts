@@ -3,8 +3,11 @@ import test from "node:test"
 import { randomUUID } from "node:crypto"
 import { lstat, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { recoverAgents } from "../src/agent/recovery.js"
+import { agentTuple, recoverAgents } from "../src/agent/recovery.js"
 import { createAgentStore } from "../src/agent/store.js"
+import { AGENT_PROTOCOL, parseAgentReply } from "../src/agent/protocol.js"
+import { projectRestoreInput } from "../src/agent/types.js"
+import { writeLaunchRecord } from "../src/platform/private-state.js"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 import type { AgentService } from "../src/agent/service.js"
@@ -149,6 +152,28 @@ test("missing related command is unavailable only on its agent view until repair
   assert.equal((await completed(f.service, unrelatedStop)).command.result?.outcome, "stopped")
   await writeFile(commandPath, saved)
   const repaired = (await f.service.list()).agents.find(agent => agent.record.version === 2 && agent.record.definition.agentId === ready.command.target!.agentId)
+  assert.equal(repaired && "unavailable" in repaired ? repaired.unavailable : undefined, null)
+})
+
+test("list frames a mismatched owned launch beside a healthy agent and clears it on repair", async t => {
+  const f = await agentServiceFixture(t)
+  const damaged = await completed(f.service, (await f.service.start(f.input)).command)
+  const healthy = await completed(f.service, (await f.service.start({ ...f.input, commandId: randomUUID() })).command)
+  const record = await f.store.readAgent(damaged.command.target!.agentId)
+  const entry = f.context.mutations.accepted.find(value => value.record.launchAttemptId === record?.launch.launchAttemptId)
+  if (!entry || entry.record.version !== 2 || entry.record.owner.kind !== "agent") throw new Error("missing owned launch")
+  const original = structuredClone(entry.record), mismatched = { ...entry.record, owner: { ...entry.record.owner, agentId: randomUUID() } }
+  await writeLaunchRecord(entry.path, mismatched); entry.record = mismatched
+  const listed = await f.service.list()
+  const parsed = parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: f.input.handlerGeneration, ok: true, result: listed })
+  assert.ok(parsed.ok && parsed.result.state === "agents")
+  const affected = parsed.result.agents.find(view => view.record.version === 2 && view.record.definition.agentId === damaged.command.target!.agentId)
+  const independent = parsed.result.agents.find(view => view.record.version === 2 && view.record.definition.agentId === healthy.command.target!.agentId)
+  assert.equal(affected?.launch, null)
+  assert.equal(affected && "unavailable" in affected ? affected.unavailable?.path : null, entry.path)
+  assert.equal(independent?.launch?.phase, "active")
+  await writeLaunchRecord(entry.path, original); entry.record = original
+  const repaired = (await f.service.list()).agents.find(view => view.record.version === 2 && view.record.definition.agentId === damaged.command.target!.agentId)
   assert.equal(repaired && "unavailable" in repaired ? repaired.unavailable : undefined, null)
 })
 
@@ -302,6 +327,72 @@ test("restart repairs terminal agent durability before reporting availability", 
   assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 1)
   rejectSync = false
   assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 0)
+})
+
+for (const kind of ["agent", "command"] as const) test(`service retains ${kind} recovery publication failure until exact retry`, async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await completed(f.service, stop)
+  const base = createAgentStore(f.root)
+  let reject = true, retries = 0
+  const store = { ...base,
+    async writeAgent(value: Parameters<typeof base.writeAgent>[0], expected: Parameters<typeof base.writeAgent>[1]) {
+      if (kind === "agent" && value.definition.agentId === stop.agentId) { retries++; if (reject) throw new Error("injected recovery agent sync failure") }
+      await base.writeAgent(value, expected)
+    },
+    async writeCommand(value: Parameters<typeof base.writeCommand>[0], expected: Parameters<typeof base.writeCommand>[1]) {
+      if (kind === "command" && value.commandId === stop.commandId) { retries++; if (reject) throw new Error("injected recovery command sync failure") }
+      await base.writeCommand(value, expected)
+    },
+  }
+  const service = await f.restart(undefined, store)
+  const issue = (await service.list()).agents.find(view => view.record.version === 2 && view.record.definition.agentId === stop.agentId)
+  assert.ok(issue && "unavailable" in issue && issue.unavailable)
+  const restore = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, agentId: stop.agentId, environment: {} }
+  await assert.rejects(service.restore(restore), { code: "INVALID_AGENT_STATE" })
+  const pending = await service.command(stop.commandId, stop.handlerGeneration)
+  assert.equal(pending.durability, "unverified")
+  assert.ok(retries >= 2)
+  reject = false
+  assert.equal((await service.command(stop.commandId, stop.handlerGeneration)).durability, "verified")
+  const repaired = (await service.list()).agents.find(view => view.record.version === 2 && view.record.definition.agentId === stop.agentId)
+  assert.ok(repaired && "unavailable" in repaired && repaired.unavailable === null)
+  await service.restore(restore)
+  assert.equal((await completed(service, restore)).command.result?.outcome, "restored")
+})
+
+test("failed unspawned restore launch publication remains unavailable through an agent-record retry", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await completed(f.service, stop)
+  const previous = await f.store.readAgent(stop.agentId)
+  if (!previous) throw new Error("missing stopped agent")
+  const request = { commandId: randomUUID(), handlerGeneration: previous.launch.handlerGeneration, agentId: stop.agentId, environment: {} }
+  const restoring = { ...previous, phase: "restoring" as const, launch: { ...previous.launch, providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId }, failure: null }
+  await f.store.writeCommand({ version: 2, hostId: f.context.paths.hostKey, commandId: request.commandId, handlerGeneration: request.handlerGeneration, op: "restore", input: projectRestoreInput(request), target: agentTuple(restoring), state: "pending", result: null }, null)
+  await f.store.writeAgent(restoring, previous)
+  const launchPath = join(f.root, "launches", restoring.launch.launchAttemptId + ".json")
+  const bootId = f.context.adapter.bootId.bind(f.context.adapter), originalGeneration = f.context.state.handlerGeneration
+  f.context.adapter.bootId = async () => { if (f.context.state.handlerGeneration !== originalGeneration) throw new Error("injected launch publication failure"); return bootId() }
+  const service = await f.restart()
+  const before = (await service.list()).agents.find(view => view.record.version === 2 && view.record.definition.agentId === stop.agentId)
+  assert.equal(before && "unavailable" in before ? before.unavailable?.path : null, launchPath)
+  assert.equal((await service.command(request.commandId, request.handlerGeneration)).durability, "unverified")
+  const stillUnavailable = (await service.list()).agents.find(view => view.record.version === 2 && view.record.definition.agentId === stop.agentId)
+  assert.equal(stillUnavailable && "unavailable" in stillUnavailable ? stillUnavailable.unavailable?.path : null, launchPath)
+  f.context.adapter.bootId = bootId
+  const conflictingOwner = randomUUID()
+  await writeLaunchRecord(launchPath, { version: 2, owner: { kind: "agent", agentId: conflictingOwner, providerGeneration: restoring.launch.providerGeneration }, handlerGeneration: restoring.launch.handlerGeneration, launchAttemptId: restoring.launch.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
+  assert.equal((await service.command(request.commandId, request.handlerGeneration)).durability, "unverified")
+  assert.equal(JSON.parse(await readFile(launchPath, "utf8")).owner.agentId, conflictingOwner)
+  await rm(launchPath)
+  assert.equal((await service.command(request.commandId, request.handlerGeneration)).durability, "verified")
+  const repaired = (await service.list()).agents.find(view => view.record.version === 2 && view.record.definition.agentId === stop.agentId)
+  assert.equal(repaired && "unavailable" in repaired ? repaired.unavailable : undefined, null)
 })
 
 test("twenty independent starts have no admission or capacity limit and current uses exact cwd strings", async t => {

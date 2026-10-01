@@ -32,6 +32,17 @@ test("current can frame a restoring session before its new process launch is pub
   assert.doesNotThrow(() => parseAgentReply(reply))
 })
 
+test("agent list frames a mismatched launch as a scoped diagnostic beside a healthy agent", () => {
+  const damaged = sampleAgent(), healthy = { ...sampleAgent(), definition: { ...sampleAgent().definition, agentId: agentId(61) }, launch: { ...sampleAgent().launch, providerGeneration: agentId(62), launchAttemptId: agentId(63), commandId: agentId(64) } }
+  const launch = { version: 2 as const, owner: { kind: "agent" as const, agentId: agentId(65), providerGeneration: damaged.launch.providerGeneration }, handlerGeneration: damaged.launch.handlerGeneration, launchAttemptId: damaged.launch.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, phase: "launch_pending" as const, provider: null, reason: null }
+  const issue = { kind: "agent" as const, id: damaged.definition.agentId, path: `/state/launches/${damaged.launch.launchAttemptId}.json`, message: "launch ownership mismatch" }
+  const reply = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "agents", agents: [{ record: healthy, launch: null, live: false, cleanup: "not_launched", unavailable: null }, { record: damaged, launch, live: false, cleanup: "unverified", unavailable: issue }], issues: [] } }
+  const parsed = parseAgentReply(reply)
+  assert.ok(parsed.ok && parsed.result.state === "agents")
+  assert.equal(parsed.result.agents.length, 2)
+  assert.deepEqual(parsed.result.agents[1] && "unavailable" in parsed.result.agents[1] ? parsed.result.agents[1].unavailable : null, issue)
+})
+
 test("agent framing preserves strict independent envelopes and command identity", () => {
   const r = request(), reply = response(r)
   assert.deepEqual(parseAgentRequest(r), r); assert.deepEqual(parseAgentReply(reply), reply)
