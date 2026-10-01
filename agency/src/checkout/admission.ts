@@ -77,11 +77,9 @@ export function createAdmissionController(context: AdmissionContext, dependencie
     if (request.handlerGeneration !== context.state.handlerGeneration) throw new AdmissionError("STALE_HANDLER")
     if (context.state.phase !== "ready" || (checkPending && context.shutdownPending())) throw new AdmissionError("NOT_READY")
     if (request.checkout.hostId !== context.paths.hostKey) throw new AdmissionError("IDENTITY_CONFLICT", "checkout belongs to another host")
-    if (context.mutations.unavailable !== null) throw new AdmissionError("ADMISSION_UNAVAILABLE", context.mutations.unavailable)
   }
   const trusted = async (launchAttemptId: string): Promise<void> => {
     await refreshLaunchState(context.state, context.mutations, directory)
-    if (context.mutations.unavailable !== null) throw new AdmissionError("ADMISSION_UNAVAILABLE", context.mutations.unavailable)
     const path = join(directory, `${launchAttemptId}.json`)
     if (context.mutations.issues?.some(issue => issue.path === path)) throw new AdmissionError("ADMISSION_UNAVAILABLE", "launch inventory changed")
     const entry = context.mutations.accepted.find(value => value.path === path)
@@ -117,7 +115,6 @@ export function createAdmissionController(context: AdmissionContext, dependencie
         throw new AdmissionError("ADMISSION_UNAVAILABLE", String(error).slice(0, 512))
       } finally {
         await refreshLaunchState(context.state, context.mutations, directory)
-        if (context.mutations.unavailable !== null) throw new AdmissionError("ADMISSION_UNAVAILABLE", context.mutations.unavailable)
       }
     })
   }
@@ -147,9 +144,7 @@ export function createAdmissionController(context: AdmissionContext, dependencie
       try { await dependencies.publishLaunch(path, record) }
       catch (error) {
         try { await accept(path, record) }
-        catch (observation) {
-          if ((observation as NodeJS.ErrnoException).code !== "ENOENT" || existing !== undefined) context.mutations.unavailable ??= "uncertain launch publication changed inventory"
-        }
+        catch { }
         throw error
       }
       await accept(path, record)

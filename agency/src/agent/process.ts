@@ -36,7 +36,6 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
     if (stopping || controller.signal.aborted || terminal) throw new AgentError("STARTUP_FAILED")
     if (context.state.handlerGeneration !== spec.handlerGeneration) throw new AgentError("STALE_HANDLER")
     if (context.state.phase !== "ready") throw new AgentError("NOT_READY")
-    if (mutations.unavailable !== null) throw new AgentError("UNAVAILABLE")
     if (now() >= overallDeadline || !connection && now() >= spawnDeadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   const bounded = async <T>(operation: () => Promise<T>, deadline: number, code: "STARTUP_TIMEOUT" | "CLEANUP_UNVERIFIED"): Promise<T> => {
@@ -145,13 +144,19 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
           checkCleanup()
           if (child) { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() }
         } catch {
-          mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`
+          try {
+            const visible = await readLaunchRecordForReconciliation(path)
+            if (visible?.version === 2 && visible.owner.kind === "agent" && visible.owner.agentId === spec.agentId && visible.owner.providerGeneration === spec.providerGeneration && visible.handlerGeneration === spec.handlerGeneration && visible.launchAttemptId === spec.launchAttemptId && visible.launchBootId === current.launchBootId && visible.launchAttempted === current.launchAttempted && visible.phase === "cleanup_pending" && visible.reason === null && isDeepStrictEqual(visible.provider?.group.leader, current.provider?.group.leader) && current.provider?.group.observed.every(retained => visible.provider?.group.observed.some(other => sameProcess(retained, other)))) {
+              const entry = mutations.accepted.find(entry => entry.path === path)
+              if (entry) { entry.record = structuredClone(visible); current = visible }
+            }
+          } catch { }
           throw new AgentError("CLEANUP_UNVERIFIED")
         }
       })
       checkCleanup()
       return structuredClone(current)
-    }, overallDeadline, "CLEANUP_UNVERIFIED").catch(() => { expired = true; mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`; throw new AgentError("CLEANUP_UNVERIFIED") })
+    }, overallDeadline, "CLEANUP_UNVERIFIED").catch(() => { expired = true; cleaning = undefined; throw new AgentError("CLEANUP_UNVERIFIED") })
     return cleaning
   }
   return {
@@ -184,11 +189,11 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
             if (isDeepStrictEqual(visible, current)) {
               mutations.accepted.push({ path, record: structuredClone(current) })
               published = true
-            } else mutations.unavailable ??= `agent launch publication changed: ${spec.launchAttemptId}`
-          } catch { mutations.unavailable ??= `agent launch publication uncertain: ${spec.launchAttemptId}` }
+            }
+          } catch { }
           await refreshLaunchState(context.state, mutations, directory)
         }
-        if (!published || mutations.unavailable) throw new AgentError("UNAVAILABLE")
+        if (!published || mutations.issues?.some(issue => issue.path === path)) throw new AgentError("UNAVAILABLE")
         check()
         await transition({ ...current, launchAttempted: true })
         await input.revalidate(); check()

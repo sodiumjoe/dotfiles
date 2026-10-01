@@ -9,12 +9,14 @@ export type ControlRequest = { protocol: typeof PROTOCOL; requestId: string; han
 )
 export type ControlErrorCode = "USAGE" | "INVALID_PROTOCOL" | "STALE_HANDLER" | "UNAVAILABLE" | "INTERNAL" | "INCOMPLETE" | "ACTIVE_AGENTS" | "COMMAND_CONFLICT"
 export type LaunchSummary = { launchAttemptId: string; owner: { kind: "agent"; id: string; generation: string } | { kind: "legacy-agent"; id: string; handlerGeneration: string } | { kind: "catalog-probe"; id: string; providerId: "claude-agent-acp" | "codex-acp" }; phase: LaunchRecord["phase"]; reason: string | null }
+export type StatusIssue = { path: string; launchAttemptId: string | null; message: string }
 export type HandlerStatus = {
   hostId: string
   handlerGeneration: string
   phase: "starting" | "reconciling" | "ready" | "draining"
   reconciliation: { classified: number; total: number; uncertain: number }
   launches: LaunchSummary[]
+  issues?: StatusIssue[]
   capabilities: ["status", "doctor", "shutdown"]
 }
 export type ControlResult = HandlerStatus | { state: "shutdown_accepted"; commandId: string; handlerGeneration: string }
@@ -107,7 +109,7 @@ function result(value: unknown): ControlResult {
     exactKeys(v, ["state", "commandId", "handlerGeneration"])
     return { state: "shutdown_accepted", commandId: uuid(v.commandId), handlerGeneration: generation }
   }
-  exactKeys(v, ["hostId", "handlerGeneration", "phase", "reconciliation", "launches", "capabilities"])
+  exactKeys(v, ["hostId", "handlerGeneration", "phase", "reconciliation", "launches", "capabilities", ...(Object.hasOwn(v, "issues") ? ["issues"] : [])])
   if (!(v.phase === "starting" || v.phase === "reconciling" || v.phase === "ready" || v.phase === "draining")) return invalid()
   const r = object(v.reconciliation)
   exactKeys(r, ["classified", "total", "uncertain"])
@@ -115,7 +117,8 @@ function result(value: unknown): ControlResult {
   if (reconciliation.classified > reconciliation.total || reconciliation.uncertain > reconciliation.classified) invalid()
   if (v.phase === "ready" && reconciliation.classified !== reconciliation.total) invalid()
   if (!Array.isArray(v.launches) || !Array.isArray(v.capabilities) || v.capabilities.length !== 3 || v.capabilities.join(",") !== "status,doctor,shutdown") return invalid()
-  return { hostId: hostId(v.hostId), handlerGeneration: generation, phase: v.phase, reconciliation, launches: v.launches.map(summary), capabilities: ["status", "doctor", "shutdown"] }
+  const issues = Object.hasOwn(v, "issues") ? (Array.isArray(v.issues) && v.issues.length <= 4096 ? v.issues.map(value => { const issue = object(value); exactKeys(issue, ["path", "launchAttemptId", "message"]); if (typeof issue.path !== "string" || !issue.path.startsWith("/") || issue.launchAttemptId !== null && !UUID.test(String(issue.launchAttemptId)) || typeof issue.message !== "string") invalid(); return { path: issue.path, launchAttemptId: issue.launchAttemptId as string | null, message: issue.message } }) : invalid()) : undefined
+  return { hostId: hostId(v.hostId), handlerGeneration: generation, phase: v.phase, reconciliation, launches: v.launches.map(summary), ...(issues === undefined ? {} : { issues }), capabilities: ["status", "doctor", "shutdown"] }
 }
 
 export function parseReply(value: unknown): ControlReply {

@@ -248,7 +248,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   const context: AdmissionContext = {
     paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
     state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
-    mutations: { queue: new MutationQueue(), accepted: [], unavailable: null }, shutdownPending: () => false,
+    mutations: { queue: new MutationQueue(), accepted: [] }, shutdownPending: () => false,
     adapter: { platform: "linux", bootId: async () => {
       if (scenario === "cleanup-boot-hang" && ++bootCalls === 3) { cleanupObservation.resolve(); return new Promise<string>(() => undefined) }
       return "boot-a"

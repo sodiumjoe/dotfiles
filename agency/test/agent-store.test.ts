@@ -80,8 +80,26 @@ test("command intent and completed result are immutable across exact retries", a
   assert.deepEqual(await store.readCommand(initial.commandId), completed)
 })
 
+test("agent inventory retains healthy records beside malformed entries and clears repaired issues", async t => {
+  const root = await privateRoot(t), store = createAgentStore(root), healthy = sampleAgent()
+  const damaged = { ...sampleAgent(), definition: { ...sampleAgent().definition, agentId: agentId(61) }, launch: { ...sampleAgent().launch, providerGeneration: agentId(62), launchAttemptId: agentId(63), commandId: agentId(64) } }
+  await store.writeAgent(healthy, null); await store.writeAgent(damaged, null)
+  const damagedPath = join(root, "agents/records", damaged.definition.agentId + ".json"), unknownPath = join(root, "agents/records/unknown.json")
+  const bytes = await readFile(damagedPath)
+  await writeFile(damagedPath, "{}", { mode: 0o600 }); await writeFile(unknownPath, "{}", { mode: 0o600 })
+  const inventory = await store.inventory()
+  assert.deepEqual(inventory.agents, [healthy])
+  assert.deepEqual(inventory.issues.map(issue => issue.path), [damagedPath, unknownPath])
+  assert.deepEqual(inventory.issues.map(issue => issue.kind), ["agent", "unknown"])
+  await store.writeCommand(sampleCommand(), null)
+  await writeFile(damagedPath, bytes)
+  await rm(unknownPath)
+  assert.deepEqual((await store.inventory()).issues, [])
+  assert.deepEqual((await store.inventory()).agents, [healthy, damaged])
+})
+
 for (const kind of ["mode", "hardlink", "symlink", "utf8", "oversized", "wrong-name", "unknown", "deleted", "replaced"] as const) {
-  test(`unsafe or changed agent evidence is retained and blocks writes: ${kind}`, async t => {
+  test(`unsafe or changed agent evidence is local to its path: ${kind}`, async t => {
     const root = await privateRoot(t), store = createAgentStore(root), value = sampleAgent(), directory = join(root, "agents/records"), path = join(directory, value.definition.agentId + ".json")
     await store.writeAgent(value, null)
     const bytes = await readFile(path)
@@ -94,8 +112,8 @@ for (const kind of ["mode", "hardlink", "symlink", "utf8", "oversized", "wrong-n
     if (kind === "unknown") await writeFile(join(directory, "unknown"), "retained", { mode: 0o600 })
     if (kind === "deleted") await rm(path)
     if (kind === "replaced") { await rename(path, join(root, "original")); await writeFile(path, bytes, { mode: 0o600 }) }
-    assert.ok((await store.inventory()).issues.length > 0)
-    await assert.rejects(store.writeCommand(sampleCommand(), null))
+    assert.equal((await store.inventory()).issues.length > 0, kind !== "replaced")
+    await store.writeCommand(sampleCommand(), null)
     if (kind === "unknown") assert.equal(await readFile(join(directory, "unknown"), "utf8"), "retained")
   })
 }
@@ -127,7 +145,7 @@ test("private provider-state coexists with record and command evidence without e
 })
 
 for (const defect of ["symlink", "wrong-mode", "non-directory", "other-child"] as const) {
-  test(`unsafe agents directory child latches inventory and blocks writes: ${defect}`, async t => {
+  test(`unsafe agent storage structure reports current issues: ${defect}`, async t => {
     const root = await privateRoot(t), store = createAgentStore(root), agent = sampleAgent()
     await store.writeAgent(agent, null)
     const state = join(root, "agents/provider-state")
@@ -136,12 +154,13 @@ for (const defect of ["symlink", "wrong-mode", "non-directory", "other-child"] a
     if (defect === "non-directory") await writeFile(state, "state", { mode: 0o600 })
     if (defect === "other-child") await mkdir(join(root, "agents/other"), { mode: 0o700 })
     assert.ok((await store.inventory()).issues.length)
-    await assert.rejects(store.writeCommand(sampleCommand(), null), { code: "INVALID_AGENT_STATE" })
+    if (defect === "other-child") await store.writeCommand(sampleCommand(), null)
+    else await assert.rejects(store.writeCommand(sampleCommand(), null), { code: "INVALID_AGENT_STATE" })
     if (defect === "wrong-mode") await chmod(state, 0o700)
     if (defect === "symlink") await rm(state)
     if (defect === "non-directory") await rm(state)
     if (defect === "other-child") await rm(join(root, "agents/other"), { recursive: true })
-    assert.ok((await store.inventory()).issues.length)
+    assert.deepEqual((await store.inventory()).issues, [])
   })
 }
 

@@ -16,7 +16,6 @@ const defaults: LaunchTransitionIO = { publish: writeLaunchRecord, read: readLau
 async function publish(context: LaunchContext, expected: LaunchRecord, next: LaunchRecord, io: LaunchTransitionIO): Promise<void> {
   const directory = join(context.paths.persistentRoot, "launches")
   await refreshLaunchState(context.state, context.mutations, directory)
-  if (context.mutations.unavailable !== null) throw new AgentError("UNAVAILABLE")
   const entry = context.mutations.accepted.find(value => value.record.launchAttemptId === expected.launchAttemptId)
   if (!entry || !isDeepStrictEqual(entry.record, expected) || expected.handlerGeneration !== context.state.handlerGeneration) throw new AgentError("INVALID_AGENT_STATE")
   if (context.mutations.issues?.some(issue => issue.path === entry.path)) throw new AgentError("UNAVAILABLE")
@@ -28,11 +27,9 @@ async function publish(context: LaunchContext, expected: LaunchRecord, next: Lau
     try {
       const visible = await io.read(entry.path)
       if (isDeepStrictEqual(visible, next)) entry.record = structuredClone(next)
-      else if (!isDeepStrictEqual(visible, expected)) context.mutations.unavailable ??= "unattributed launch transition"
-    } catch { context.mutations.unavailable ??= "uncertain launch transition" }
+    } catch { }
     await refreshLaunchState(context.state, context.mutations, directory)
   }
-  if (context.mutations.unavailable !== null) throw new AgentError("UNAVAILABLE")
   if (context.mutations.issues?.some(issue => issue.path === entry.path)) throw new AgentError("UNAVAILABLE")
   if (!isDeepStrictEqual(entry.record, next)) throw new AgentError("INVALID_AGENT_STATE")
 }

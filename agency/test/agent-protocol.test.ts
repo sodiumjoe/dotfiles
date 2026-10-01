@@ -28,7 +28,7 @@ test("restore framing projects secrets to a digest and rejects cwd or authority 
 
 test("current can frame a restoring session before its new process launch is published", () => {
   const record = { ...sampleAgent(), phase: "restoring", session: sampleSession() }
-  const reply = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/workspace/a", agents: [{ record, live: true, launch: null, cleanup: "not_launched" }] } }
+  const reply = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/workspace/a", agents: [{ record, live: true, launch: null, cleanup: "not_launched", unavailable: null }] } }
   assert.doesNotThrow(() => parseAgentReply(reply))
 })
 
@@ -104,7 +104,7 @@ test("current outside a Git checkout is an empty exact-directory result", () => 
 })
 
 test("current reply rejects duplicate or mismatched directory entries", () => {
-  const view = { record: sampleAgent(), launch: null, live: true, cleanup: "not_launched" }
+  const view = { record: sampleAgent(), launch: null, live: true, cleanup: "not_launched", unavailable: null }
   const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/workspace/a", agents: [view] } }
   assert.doesNotThrow(() => parseAgentReply(base))
   assert.throws(() => parseAgentReply({ ...base, result: { ...base.result, agents: [view, view] } }), { code: "INVALID_PROTOCOL" })
@@ -113,7 +113,7 @@ test("current reply rejects duplicate or mismatched directory entries", () => {
 
 test("oversized agent history returns explicit incomplete instead of truncation", async t => {
   const root = await privateRoot(t), path = join(root, "socket")
-  const server = createServer({ allowHalfOpen: true }, socket => { void serveProtocols(socket, async () => { throw new Error() }, async () => { throw new Error() }, 5000, async request => ({ protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ok: true, result: { state: "agents", agents: [], unavailable: { code: "INCOMPLETE", message: "x".repeat(9 * 1024 * 1024) } } })) })
+  const server = createServer({ allowHalfOpen: true }, socket => { void serveProtocols(socket, async () => { throw new Error() }, async () => { throw new Error() }, 5000, async request => ({ protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ok: true, result: { state: "agents", agents: [], issues: [{ kind: "unknown", id: null, path: "/fixture/unknown", message: "x".repeat(9 * 1024 * 1024) }] } })) })
   await new Promise<void>(resolve => server.listen(path, resolve))
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
   const reply = await exchangeAgent(createConnection(path), { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_list" })

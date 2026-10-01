@@ -14,7 +14,7 @@ function fixture() {
   const inspection: HandlerInspection = { disposition: "live", record: { version: 1, hostId: command.hostId, generation: command.handlerGeneration, launchBootId: "boot-a", launchAttemptId: agentId(50), launchAttempted: true, phase: "ready", process: { bootId: "boot-a", pid: 100, birth: `1:agy-handler:${agentId(50)}`, parentPid: 1, processGroupId: 100, sessionId: 100, uid: 1, gid: 1 }, socketPath: "/fixture/socket", writer: "handler", reconciliation: { classified: 0, total: 0, quarantined: 0 }, reason: null } }
   const unsupported = async (): Promise<never> => { throw new Error("unexpected store mutation") }
   const reply = (r: AgentRequest): AgentReply => {
-    if (r.op === "agent_list") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "agents", agents: [], unavailable: null } }
+    if (r.op === "agent_list") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "agents", agents: [], issues: [] } }
     if (r.op === "agent_current") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "current", cwd: r.cwd, agents: [] } }
     if (r.op === "agent_start") retained = { ...retained, commandId: r.input.commandId, handlerGeneration: r.input.handlerGeneration, input: projectStartInput(r.input) }
     if (r.op === "agent_restore") retained = { ...retained, op: "restore", commandId: r.input.commandId, handlerGeneration: r.input.handlerGeneration, input: projectRestoreInput(r.input), result: { outcome: "restored", target: retained.target, session: sampleSession(), failure: null } }

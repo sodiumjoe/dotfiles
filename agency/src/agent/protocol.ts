@@ -1,10 +1,11 @@
 import type { Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
 import { absolutePath, id, keys, object } from "../catalog/types.js"
-import { ControlError } from "../control/protocol.js"
+import { ControlError, UUID } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
 import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentFailure, parseAgentRecord, parseLegacyAgentRecord, parsePromptInput, parsePromptView, parseStartInput, parseStopInput, projectStartInput, type AgentFailure, type AgentList, type AgentView, type LegacyAgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput } from "./types.js"
+import type { AgentStateIssue } from "./store.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
 
 export const AGENT_PROTOCOL = "agency-agent/2" as const
@@ -42,7 +43,8 @@ function launchRecord(input: unknown): LaunchRecord {
   return { version: 2, owner: { kind: "catalog-probe", providerId: agentText(owner.providerId) as import("../catalog/types.js").ProviderId, commandId: id(owner.commandId) }, ...fields }
 }
 function agentView(input: unknown, generation: string | null): AgentView | LegacyAgentView {
-  const v = object(input); keys(v, ["record", "launch", "live", "cleanup"])
+  const v = object(input), current = object(v.record)
+  keys(v, current.version === 1 ? ["record", "launch", "live", "cleanup"] : ["record", "launch", "live", "cleanup", "unavailable"])
   const recordValue = object(v.record), launch = v.launch === null ? null : launchRecord(v.launch)
   if (recordValue.version === 1) {
     const record = parseLegacyAgentRecord(v.record)
@@ -54,7 +56,14 @@ function agentView(input: unknown, generation: string | null): AgentView | Legac
   if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.launchAttemptId !== record.launch.launchAttemptId || launch.handlerGeneration !== record.launch.handlerGeneration)) invalid()
   if (v.cleanup === "verified" && launch?.phase !== "cleanup_verified" || v.cleanup === "not_launched" && launch !== null) invalid()
   if (v.live && (record.launch.handlerGeneration !== generation || !["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase) || !launch && !["starting", "restoring"].includes(record.phase) || launch?.phase === "cleanup_verified" || launch?.phase === "quarantined")) invalid()
-  return { record, launch, live: v.live as boolean, cleanup: v.cleanup as AgentView["cleanup"] }
+  const unavailable = v.unavailable === null ? null : stateIssue(v.unavailable)
+  return { record, launch, live: v.live as boolean, cleanup: v.cleanup as AgentView["cleanup"], unavailable }
+}
+function stateIssue(input: unknown): AgentStateIssue {
+  const v = object(input)
+  keys(v, ["kind", "id", "path", "message"])
+  if (!["agent", "command", "unknown"].includes(String(v.kind)) || v.id !== null && !UUID.test(String(v.id)) || typeof v.path !== "string" || !v.path.startsWith("/") || typeof v.message !== "string" || Buffer.byteLength(v.message) > 512) invalid()
+  return { kind: v.kind as AgentStateIssue["kind"], id: v.id as string | null, path: v.path, message: v.message }
 }
 export function parseAgentRequest(input: unknown): AgentRequest {
   try {
@@ -89,12 +98,11 @@ export function parseAgentReply(input: unknown): AgentReply {
     if (common.commandId) invalid()
     if (r.state === "prompt") return { ...common, ok: true, result: parsePromptView(r) }
     if (r.state === "agents") {
-      keys(r, ["state", "agents", "unavailable"])
-      const unavailable = r.unavailable === null ? null : parseAgentFailure(r.unavailable)
-      if (!Array.isArray(r.agents) || r.agents.length > 4096) invalid()
+      keys(r, ["state", "agents", "issues"])
+      if (!Array.isArray(r.agents) || r.agents.length > 4096 || !Array.isArray(r.issues) || r.issues.length > 4096) invalid()
       const agents = (r.agents as unknown[]).map(a => agentView(a, common.handlerGeneration))
-      if (new Set(agents.map(a => a.record.version === 2 ? a.record.definition.agentId : a.record.spec.agentId)).size !== agents.length || unavailable && agents.some(a => a.live)) invalid()
-      return { ...common, ok: true, result: { state: "agents", agents, unavailable } }
+      if (new Set(agents.map(a => a.record.version === 2 ? a.record.definition.agentId : a.record.spec.agentId)).size !== agents.length) invalid()
+      return { ...common, ok: true, result: { state: "agents", agents, issues: (r.issues as unknown[]).map(stateIssue) } }
     }
     if (r.state !== "current") invalid()
     keys(r, ["state", "cwd", "agents"])

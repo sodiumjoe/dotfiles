@@ -30,7 +30,7 @@ async function context(t: test.TestContext): Promise<ShutdownContext> {
   const record: HandlerGenerationRecord = { version: 1, hostId: "a".repeat(64), launchBootId: "boot-a", generation, launchAttemptId: marker, launchAttempted: true, phase: "ready", process: identity, socketPath: join(root, "handler.sock"), writer: "handler", reconciliation: { classified: 0, total: 0, quarantined: 0 }, reason: null }
   const state: HandlerStatus = { hostId: record.hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const adapter: PlatformAdapter = { platform: "linux", bootId: async () => "boot-a", readProcess: async () => { throw new Error("unexpected process observation") }, readGroup: async () => { throw new Error("unexpected group observation") }, signalGroup: async () => { throw new Error("unauthorized signal") } }
-  return { record, state, paths: { hostKey: record.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: record.socketPath }, adapter, mutations: { queue: new MutationQueue(), accepted: [], unavailable: null }, closeAfterReply: async () => undefined }
+  return { record, state, paths: { hostKey: record.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: record.socketPath }, adapter, mutations: { queue: new MutationQueue(), accepted: [] }, closeAfterReply: async () => undefined }
 }
 
 test("receipts preserve exact identity and reject changed fields or unsafe storage", async t => {
@@ -224,4 +224,7 @@ test("incomplete forced lifecycle cleanup leaves Handler status and quarantine r
   assert.equal(ctx.pending, undefined); assert.equal(ctx.state.phase, "ready")
   assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
   assert.equal((await f.service.list()).agents[0]!.cleanup, "unknown")
+  f.context.adapter.readProcess = read
+  const unrelated = { ...f.input, commandId: randomUUID() }
+  assert.equal((await f.service.start(unrelated)).command.state, "pending")
 })

@@ -73,7 +73,7 @@ export async function admissionFixture(t: TestContext) {
     paths: { hostKey: testHostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
     adapter: { platform: "linux", bootId: async () => "boot-a", readProcess: forbidden, readGroup: forbidden, signalGroup: forbidden },
     state: { hostId: testHostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
-    mutations: { queue: new MutationQueue(), accepted: [], unavailable: null },
+    mutations: { queue: new MutationQueue(), accepted: [] },
     shutdownPending: () => false,
   }
   const request = (): ReservationRequest => ({ checkout: structuredClone(checkout), handlerGeneration: generation, agentId: randomUUID(), leaseId: randomUUID(), launchAttemptId: randomUUID() })

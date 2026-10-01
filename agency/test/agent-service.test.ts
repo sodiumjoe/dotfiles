@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { lstat } from "node:fs/promises"
+import { lstat, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { recoverAgents } from "../src/agent/recovery.js"
 import { createAgentStore } from "../src/agent/store.js"
@@ -77,7 +77,7 @@ for (const [behavior, code, phase] of [["unsupported", "RESTORE_UNSUPPORTED", "r
   await f.service.restore(request)
   assert.equal((await completed(f.service, request)).command.result?.failure?.code, code)
   const list = await f.service.list(), agent = list.agents[0]!
-  assert.equal(list.unavailable, null)
+  assert.deepEqual(list.issues, [])
   assert.equal(agent.record.phase, phase)
   assert.equal(agent.cleanup, "verified")
   if (agent.record.version !== 2) throw new Error()
@@ -104,6 +104,71 @@ test("sequential prompts work while concurrent prompts remain rejected", async t
   await until(async () => f.methodHistory.filter(method => method === "session/prompt").length === 2 ? true : undefined)
   f.completePrompt(target.agentId, "second answer")
   assert.equal((await second).text, "second answer")
+})
+
+test("healthy agents continue beside corrupt agent and unknown files, then issues clear after repair", async t => {
+  const f = await agentServiceFixture(t)
+  const healthy = await completed(f.service, (await f.service.start(f.input)).command)
+  const damagedRequest = { ...f.input, commandId: randomUUID() }
+  const damaged = await completed(f.service, (await f.service.start(damagedRequest)).command)
+  const damagedPath = join(f.root, "agents/records", damaged.command.target!.agentId + ".json")
+  const unknownPath = join(f.root, "agents/records/unknown.json"), saved = await readFile(damagedPath)
+  await writeFile(damagedPath, "{}", { mode: 0o600 }); await writeFile(unknownPath, "{}", { mode: 0o600 })
+  assert.equal((await f.service.prompt({ ...healthy.command.target!, text: "continue" })).stopReason, "end_turn")
+  const stop = { ...healthy.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  const thirdRequest = { ...f.input, commandId: randomUUID() }
+  assert.equal((await completed(f.service, (await f.service.start(thirdRequest)).command)).command.result?.outcome, "started")
+  const restore = { commandId: randomUUID(), handlerGeneration: healthy.command.handlerGeneration, agentId: healthy.command.target!.agentId, environment: {} }
+  assert.equal((await completed(f.service, (await f.service.restore(restore)).command)).command.result?.outcome, "restored")
+  const listed = await f.service.list()
+  assert.equal(listed.agents.some(view => view.record.version === 2 && view.record.definition.agentId === healthy.command.target!.agentId), true)
+  assert.deepEqual(listed.issues.map(issue => issue.path), [damagedPath, unknownPath])
+  await writeFile(damagedPath, saved); await rm(unknownPath)
+  assert.deepEqual((await f.service.list()).issues, [])
+})
+
+test("missing related command is unavailable only on its agent view until repaired", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const commandPath = join(f.root, "agents/commands", f.input.commandId + ".json"), saved = await readFile(commandPath)
+  await writeFile(commandPath, "{}", { mode: 0o600 })
+  const listed = await f.service.list(), view = listed.agents.find(agent => agent.record.version === 2 && agent.record.definition.agentId === ready.command.target!.agentId)
+  assert.deepEqual(listed.issues, [])
+  assert.equal(view?.record.version, 2)
+  if (view?.record.version !== 2) throw new Error("missing agent view")
+  assert.equal(view && "unavailable" in view ? view.unavailable?.path : null, commandPath)
+  await assert.rejects(f.service.prompt({ ...ready.command.target!, text: "blocked" }), { code: "INVALID_AGENT_STATE" })
+  const unrelated = { ...f.input, commandId: randomUUID() }
+  const started = await completed(f.service, (await f.service.start(unrelated)).command)
+  assert.equal(started.command.result?.outcome, "started")
+  assert.equal((await f.service.prompt({ ...started.command.target!, text: "healthy" })).stopReason, "end_turn")
+  const unrelatedStop = { ...started.command.target!, commandId: randomUUID() }
+  await f.service.stop(unrelatedStop)
+  assert.equal((await completed(f.service, unrelatedStop)).command.result?.outcome, "stopped")
+  await writeFile(commandPath, saved)
+  const repaired = (await f.service.list()).agents.find(agent => agent.record.version === 2 && agent.record.definition.agentId === ready.command.target!.agentId)
+  assert.equal(repaired && "unavailable" in repaired ? repaired.unavailable : undefined, null)
+})
+
+test("exact cleanup retry repairs one agent while unrelated starts continue", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const launch = (await f.service.list()).agents[0]!.launch
+  if (!launch?.provider) throw new Error("missing process owner")
+  const group = launch.provider.group.leader.processGroupId, signal = f.context.adapter.signalGroup
+  f.context.adapter.signalGroup = async (id, value) => { if (id === group) throw new Error("injected signal failure"); return signal(id, value) }
+  const stop = { ...target, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await until(async () => { const view = (await f.service.list()).agents[0]; return view && "unavailable" in view && view.unavailable ? true : undefined })
+  await assert.rejects(f.service.restore({ commandId: randomUUID(), handlerGeneration: target.handlerGeneration, agentId: target.agentId, environment: {} }), { code: "CLEANUP_UNVERIFIED" })
+  const unrelated = { ...f.input, commandId: randomUUID() }
+  assert.equal((await completed(f.service, (await f.service.start(unrelated)).command)).command.result?.outcome, "started")
+  f.context.adapter.signalGroup = signal
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  const repaired = (await f.service.list()).agents.find(agent => agent.record.version === 2 && agent.record.definition.agentId === target.agentId)
+  assert.equal(repaired && "unavailable" in repaired ? repaired.unavailable : undefined, null)
 })
 
 for (const boundary of ["spawn", "spawned", "ready"]) test(`Handler death while restoring at ${boundary} interrupts the command and retains the session`, async t => {
@@ -134,7 +199,7 @@ test("an unresolved same-boot process prevents only its agent from restoring", a
   const second = await completed(f.service, (await f.service.start({ ...f.input, commandId: randomUUID() })).command)
   const restarted = await f.restart(first.command.target!.agentId)
   const list = await restarted.list()
-  assert.equal(list.unavailable, null)
+  assert.deepEqual(list.issues, [])
   assert.equal(list.agents.find(agent => agent.record.version === 2 && agent.record.definition.agentId === first.command.target!.agentId)!.record.phase, "interrupted")
   const request = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, agentId: first.command.target!.agentId, environment: {} }
   await assert.rejects(restarted.restore(request), { code: "NOT_READY" })
@@ -217,9 +282,9 @@ test("restart repairs completed command durability before reporting availability
     if (rejectSync && value.state === "completed") throw new Error("receipt durability unavailable")
     await base.writeCommand(value, expected)
   } }
-  assert.notEqual((await recoverAgents({ context: f.context, store })).unavailable, null)
+  assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 1)
   rejectSync = false
-  assert.equal((await recoverAgents({ context: f.context, store })).unavailable, null)
+  assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 0)
 })
 
 test("restart repairs terminal agent durability before reporting availability", async t => {
@@ -234,9 +299,9 @@ test("restart repairs terminal agent durability before reporting availability", 
     if (rejectSync && value.phase === "stopped") throw new Error("terminal durability unavailable")
     await base.writeAgent(value, expected)
   } }
-  assert.notEqual((await recoverAgents({ context: f.context, store })).unavailable, null)
+  assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 1)
   rejectSync = false
-  assert.equal((await recoverAgents({ context: f.context, store })).unavailable, null)
+  assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 0)
 })
 
 test("twenty independent starts have no admission or capacity limit and current uses exact cwd strings", async t => {

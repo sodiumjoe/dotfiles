@@ -21,7 +21,7 @@ import { reconcileRecord } from "../platform/reconcile.js"
 import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
-import { inventoryLaunches, summarizeLaunches, verifyInventory, type InventoryEntry } from "./inventory.js"
+import { inventoryLaunchState, summarizeLaunches, type InventoryEntry } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
 import { createAdmissionController, type AdmissionController } from "../checkout/admission.js"
@@ -161,7 +161,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     current = { ...published, writer: "handler", phase: "socket_bound" }
     await writeHandlerRecord(options.recordPath, current)
     const directory = join(options.paths.persistentRoot, "launches")
-    entries = await inventoryLaunches(directory)
+    const initialInventory = await inventoryLaunchState(directory)
+    entries = initialInventory.records
+    state.issues = initialInventory.issues
     state.phase = "reconciling"
     state.reconciliation.total = entries.length
     state.launches = summarizeLaunches(entries.map(entry => entry.record))
@@ -179,8 +181,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       await writeHandlerRecord(options.recordPath, current)
     }
     await options.onPhase?.("ready")
-    await verifyInventory(directory, entries)
-    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(entries), unavailable: null }
+    const checkedInventory = await inventoryLaunchState(directory)
+    if (!isDeepStrictEqual(checkedInventory.records, entries)) throw new Error("RETAINED_INVENTORY_CHANGED")
+    state.issues = checkedInventory.issues
+    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(entries) }
     const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
     else {

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util"
 import { absolutePath, hash, id, keys, object, parseProviderSnapshot, providerId, text, type ConfigEvidence, type ProviderId, type ProviderSnapshot } from "../catalog/types.js"
 import type { LaunchRecord } from "../platform/types.js"
 import { launchEnvironmentDigest, parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
+import type { AgentStateIssue } from "./store.js"
 
 export type Reasoning = { kind: "none" } | { kind: "value"; value: string }
 export type PermissionEvidence = "fixture-contract-v1" | "agency-deny-all-v1"
@@ -29,10 +30,10 @@ export type PromptInput = AgentTuple & { text: string }
 export type PromptView = { state: "prompt"; target: AgentTuple; stopReason: "end_turn"; text: string }
 export type AgentCommand = { version: 2; hostId: string; commandId: string; handlerGeneration: string; input: StartCommandInput | RestoreCommandInput | StopInput; op: "start" | "restore" | "stop"; target: AgentTuple | null; state: "pending" | "completed" | "interrupted"; result: CommandResult | null }
 export type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: SessionEvidence | null }
-export type AgentView = { record: AgentRecord; launch: LaunchRecord | null; live: boolean; cleanup: "not_launched" | "unverified" | "verified" | "unknown" }
+export type AgentView = { record: AgentRecord; launch: LaunchRecord | null; live: boolean; cleanup: "not_launched" | "unverified" | "verified" | "unknown"; unavailable: AgentStateIssue | null }
 export type LegacyAgentView = { record: LegacyAgentRecord; launch: LaunchRecord | null; live: false; cleanup: "unknown" | "verified" }
 export type CommandView = { state: "command"; command: AgentCommand; durability: "verified" | "unverified" }
-export type AgentList = { state: "agents"; agents: Array<AgentView | LegacyAgentView>; unavailable: AgentFailure | null }
+export type AgentList = { state: "agents"; agents: Array<AgentView | LegacyAgentView>; issues: AgentStateIssue[] }
 export type CurrentAgents = { state: "current"; cwd: string; agents: AgentView[] }
 export const AGENT_CODES = ["USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "RESTORE_UNSUPPORTED", "SESSION_UNAVAILABLE", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL"] as const
 export type AgentErrorCode = typeof AGENT_CODES[number]

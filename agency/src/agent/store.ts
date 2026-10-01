@@ -10,7 +10,8 @@ import { UUID } from "../control/protocol.js"
 import { assertPrivateDirectory, readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { AgentError, parseAgentCommand, parseAgentRecord, parseLegacyAgentRecord, type AgentCommand, type AgentPhase, type AgentRecord, type LegacyAgentRecord } from "./types.js"
 
-export type AgentInventory = { agents: AgentRecord[]; legacyAgents: LegacyAgentRecord[]; commands: AgentCommand[]; issues: string[] }
+export type AgentStateIssue = { kind: "agent" | "command" | "unknown"; id: string | null; path: string; message: string }
+export type AgentInventory = { agents: AgentRecord[]; legacyAgents: LegacyAgentRecord[]; commands: AgentCommand[]; issues: AgentStateIssue[] }
 export type AgentStore = {
   readAgent(id: string): Promise<AgentRecord | null>
   readCommand(id: string): Promise<AgentCommand | null>
@@ -26,7 +27,7 @@ const edges: Record<AgentPhase, AgentPhase[]> = { starting: ["ready", "stopping"
 
 export function createAgentStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): AgentStore {
   const directory = join(root, "agents")
-  let accepted: Map<string, FileEvidence> | null = null, blocked = false
+  const known = new Map<string, "agent" | "command">()
   async function checkDirectory(path: string): Promise<boolean> {
     await assertPrivateDirectory(root)
     try { await assertPrivateDirectory(directory); if (path !== directory) await assertPrivateDirectory(path); return true }
@@ -66,11 +67,11 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     return result.sort()
   }
   async function inventory(): Promise<AgentInventory> {
-    const result: AgentInventory = { agents: [], legacyAgents: [], commands: [], issues: [] }, observed = new Map<string, FileEvidence>()
+    const result: AgentInventory = { agents: [], legacyAgents: [], commands: [], issues: [] }, seen = new Set<string>()
     try {
       for (const name of await names(directory)) {
         if (name === "records" || name === "commands") continue
-        if (name !== "provider-state") unavailable()
+        if (name !== "provider-state") { result.issues.push({ kind: "unknown", id: null, path: join(directory, name), message: "unknown agent state entry" }); continue }
         const state = join(directory, name)
         await assertPrivateDirectory(state)
         const stat = await lstat(state)
@@ -79,6 +80,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
       for (const kind of ["records", "commands"] as const) {
         for (const name of await names(join(directory, kind))) {
           const path = join(directory, kind, name)
+          seen.add(path)
           try {
             const stat = await lstat(path)
             if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0) unavailable()
@@ -93,15 +95,15 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
               else { const value = parseAgentRecord(raw); if (value.definition.agentId !== recordId) unavailable(); result.agents.push(value) }
             } else if ((raw as { version?: unknown }).version === 1) { if (id((raw as { commandId?: unknown }).commandId) !== recordId) unavailable() }
             else { const value = parseAgentCommand(raw); if (value.commandId !== recordId) unavailable(); result.commands.push(value) }
-            observed.set(path, file)
-          } catch { result.issues.push(`${kind}/${name}`) }
+            known.set(path, kind === "records" ? "agent" : "command")
+          } catch (error) {
+            const recordId = name.endsWith(".json") ? name.slice(0, -5) : ""
+            result.issues.push({ kind: UUID.test(recordId) ? kind === "records" ? "agent" : "command" : "unknown", id: UUID.test(recordId) ? recordId : null, path, message: String(error).slice(0, 512) })
+          }
         }
       }
-      if (accepted !== null && !isDeepStrictEqual(observed, accepted)) unavailable()
-      if (!result.issues.length && !blocked) accepted = observed
-    } catch { result.issues.push("inventory") }
-    if (result.issues.length) blocked = true
-    if (blocked && !result.issues.length) result.issues.push("previous inventory failure")
+      for (const [path, kind] of known) if (!seen.has(path)) result.issues.push({ kind, id: basename(path, ".json"), path, message: "missing agent state entry" })
+    } catch (error) { result.issues.push({ kind: "unknown", id: null, path: directory, message: String(error).slice(0, 512) }) }
     return result
   }
   async function sync(path: string): Promise<void> {
@@ -116,7 +118,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     }
   }
   async function publish(path: string, value: unknown, expected: unknown): Promise<void> {
-    if ((await inventory()).issues.length) unavailable()
+    if ((await inventory()).issues.some(issue => issue.path === directory || issue.path === join(directory, "provider-state"))) unavailable()
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > 1048576) throw new AgentError("INCOMPLETE")
     const before = await evidence(path)
@@ -127,21 +129,13 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     try {
       handle = await filesystem.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = undefined
-      if (!isDeepStrictEqual(await evidence(path), before)) { blocked = true; unavailable() }
+      if (!isDeepStrictEqual(await evidence(path), before)) unavailable()
       await filesystem.rename(temporary, path); renamed = true
       const visible = await evidence(path)
-      if (!visible?.bytes.equals(bytes)) { blocked = true; unavailable() }
-      accepted!.set(path, visible)
+      if (!visible?.bytes.equals(bytes)) unavailable()
       await sync(dirname(path))
-      if (!isDeepStrictEqual(await evidence(path), visible)) { blocked = true; unavailable() }
-      if ((await inventory()).issues.length) unavailable()
-    } catch (error) {
-      try {
-        const visible = await evidence(path)
-        if (visible?.bytes.equals(bytes)) accepted!.set(path, visible)
-        else if (!isDeepStrictEqual(visible, before)) blocked = true
-      } catch { blocked = true }
-      throw error
+      if (!isDeepStrictEqual(await evidence(path), visible)) unavailable()
+      known.set(path, path.includes("/records/") ? "agent" : "command")
     } finally { await handle?.close(); if (!renamed) await filesystem.rm(temporary, { force: true }) }
   }
   return {

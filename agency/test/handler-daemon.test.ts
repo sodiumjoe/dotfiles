@@ -68,10 +68,14 @@ for (const [phase, mutation] of [["reconciling", "replace"], ["ready", "add"], [
   assert.notEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase, "ready")
 })
 
-test("malformed retained evidence prevents readiness and is preserved", { timeout: 20000 }, async t => {
+test("malformed retained evidence appears in status while valid readiness proceeds", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), path = join(f.paths.persistentRoot, "launches", `${randomUUID()}.json`)
   await writeFile(path, "{", { mode: 0o600 })
-  await assert.rejects(f.start())
+  const started = await f.start()
+  assert.equal(started.record.phase, "ready")
+  const reply = await f.call()
+  assert.ok(reply.ok && "issues" in reply.result)
+  assert.equal(reply.result.issues?.[0]?.path, path)
   assert.equal(await readFile(path, "utf8"), "{")
 })
 

@@ -11,18 +11,16 @@ export class MutationQueue {
   }
 }
 
-export type HandlerMutations = { queue: MutationQueue; accepted: InventoryEntry[]; unavailable: string | null; issues?: LaunchIssue[] }
+export type HandlerMutations = { queue: MutationQueue; accepted: InventoryEntry[]; issues?: LaunchIssue[] }
 
 export async function refreshLaunchState(state: HandlerStatus, mutations: HandlerMutations, directory: string): Promise<void> {
-  try {
-    const current = await inventoryLaunchState(directory)
-    const expected = new Map(mutations.accepted.map(entry => [entry.path, entry.record]))
-    const observed = new Map(current.records.map(entry => [entry.path, entry.record]))
-    mutations.issues = [...current.issues]
-    for (const [path, record] of observed) if (!isDeepStrictEqual(record, expected.get(path))) mutations.issues.push({ path, launchAttemptId: record.launchAttemptId, message: "RETAINED_INVENTORY_CHANGED" })
-    for (const [path, record] of expected) if (!observed.has(path)) mutations.issues.push({ path, launchAttemptId: record.launchAttemptId, message: "RETAINED_INVENTORY_CHANGED" })
-    const accepted = current.records.filter(entry => isDeepStrictEqual(expected.get(entry.path), entry.record))
-    state.launches = summarizeLaunches(accepted.map(entry => entry.record))
-    state.reconciliation = { classified: accepted.length, total: accepted.length, uncertain: accepted.filter(entry => entry.record.phase === "quarantined").length }
-  } catch (error) { mutations.unavailable ??= String(error).slice(0, 512) }
+  const current = await inventoryLaunchState(directory)
+  const expected = new Map(mutations.accepted.map(entry => [entry.path, entry.record]))
+  const observed = new Map(current.records.map(entry => [entry.path, entry.record]))
+  mutations.issues = [...current.issues]
+  for (const [path, record] of observed) if (!isDeepStrictEqual(record, expected.get(path))) mutations.issues.push({ path, launchAttemptId: record.launchAttemptId, message: "RETAINED_INVENTORY_CHANGED" })
+  for (const [path, record] of expected) if (!observed.has(path)) mutations.issues.push({ path, launchAttemptId: record.launchAttemptId, message: "RETAINED_INVENTORY_CHANGED" })
+  state.issues = [...mutations.issues]
+  state.launches = summarizeLaunches(current.records.map(entry => entry.record))
+  state.reconciliation = { classified: current.records.length, total: current.records.length, uncertain: current.records.filter(entry => entry.record.phase === "quarantined").length }
 }

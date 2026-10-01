@@ -7,7 +7,7 @@ import type { PlatformPaths } from "../platform/paths.js"
 import type { HandlerGenerationRecord, PlatformAdapter } from "../platform/types.js"
 import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
-import { inventoryLaunches, summarizeLaunches, verifyInventory } from "./inventory.js"
+import { inventoryLaunchState, summarizeLaunches } from "./inventory.js"
 import { assertSameShutdown, readShutdownReceipt, writeShutdownReceipt, type ShutdownReceipt } from "./receipt.js"
 import { refreshLaunchState, type HandlerMutations } from "./mutations.js"
 
@@ -33,21 +33,28 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
     if (previous.hostId !== context.record.hostId || !isDeepStrictEqual(previous.handlerIdentity, context.record.process)) throw new ControlError("COMMAND_CONFLICT")
   }
   const directory = join(context.paths.persistentRoot, "launches")
-  const entries = await inventoryLaunches(directory)
+  const inventory = await inventoryLaunchState(directory), entries = inventory.records
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
-  if (!request.stopAgents && entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS", "unverified launches or quarantined checkouts remain; inspect status")
+  context.state.issues = inventory.issues
+  if (!request.stopAgents && (inventory.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified"))) throw new ControlError("ACTIVE_AGENTS", "unverified launches or quarantined checkouts remain; inspect status")
   if (request.stopAgents) {
+    const failures: unknown[] = []
     for (const entry of entries) {
-      const result = await reconcileRecord(entry.path, context.adapter, entry.record)
-      if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
-      entry.record = result.record
-      context.mutations.accepted = [...context.mutations.accepted.filter(value => value.path !== entry.path), structuredClone(entry)].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+      try {
+        const result = await reconcileRecord(entry.path, context.adapter, entry.record)
+        if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
+        entry.record = result.record
+        context.mutations.accepted = [...context.mutations.accepted.filter(value => value.path !== entry.path), structuredClone(entry)].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+      } catch (error) { failures.push(error) }
     }
+    if (failures.length) throw new ControlError("INCOMPLETE", "one or more launch cleanups remain unverified")
   }
-  await verifyInventory(directory, entries)
+  const checked = await inventoryLaunchState(directory)
+  if (!isDeepStrictEqual(checked.records, entries)) throw new ControlError("INCOMPLETE", "retained inventory changed")
+  context.state.issues = checked.issues
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
   context.state.reconciliation = { classified: entries.length, total: entries.length, uncertain: entries.filter(entry => entry.record.phase === "quarantined").length }
-  if (entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "checkout cleanup remains unverified")
+  if (checked.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "checkout cleanup remains unverified")
   if (context.record.process === null) throw new ControlError("INCOMPLETE", "Handler identity unavailable")
   await context.catalog?.verifyDischarged()
   const receipt: ShutdownReceipt = { version: 1, commandId: request.commandId, handlerGeneration: context.record.generation, hostId: context.record.hostId, handlerIdentity: context.record.process, stopAgents: request.stopAgents, state: "accepted" }
@@ -76,12 +83,12 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
         await context.agents?.freezeAndDrain(request.stopAgents)
         await context.catalog?.freezeAndDrain()
         return context.mutations.queue.run(async () => {
-        try {
-          if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
-          if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler is not ready")
-          try { await context.agents?.verifyDischarged() } catch { throw new ControlError("INCOMPLETE", "agent cleanup or command durability remains unverified") }
-          return await admit(request, context)
-        } finally { await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches")) }
+          try {
+            if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
+            if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler is not ready")
+            try { await context.agents?.verifyDischarged() } catch { throw new ControlError("INCOMPLETE", "agent cleanup or command durability remains unverified") }
+            return await admit(request, context)
+          } finally { await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches")) }
         })
       })
       context.pending = { request, operation }
