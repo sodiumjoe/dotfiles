@@ -18,7 +18,7 @@ function captureThrownMessage(operation: () => unknown): string {
 }
 
 async function readChildDigest(environment: LaunchEnvironment): Promise<{ code: number | null; output: string; error: string }> {
-  const childSource = "const {createHash}=require('node:crypto');process.stdout.write(createHash('sha256').update(JSON.stringify(['BOUNDARY',process.env.BOUNDARY])).digest('hex'))"
+  const childSource = "const {createHash}=require('node:crypto');process.stdout.write(createHash('sha256').update(JSON.stringify([['BOUNDARY_A',process.env.BOUNDARY_A],['BOUNDARY_B',process.env.BOUNDARY_B]])).digest('hex'))"
   const child = spawn(process.execPath, ["-e", childSource], { env: environment, stdio: ["ignore", "pipe", "pipe"] })
   let output = "", error = ""
   child.stdout.setEncoding("utf8").on("data", chunk => { output += chunk })
@@ -99,11 +99,14 @@ test("oversized environments are rejected before the process spawn boundary", ()
 })
 
 test("near-limit accepted values cross the operating system process boundary byte-exactly", async () => {
-  const value = "λ".repeat(120 * 1024)
-  const environment = parseLaunchEnvironment({ BOUNDARY: value, SECRET_TOKEN: secret })
+  const value = "λ".repeat(60 * 1024)
+  const environment = parseLaunchEnvironment({ BOUNDARY_A: value, BOUNDARY_B: value, SECRET_TOKEN: secret })
+  assert.ok(Buffer.byteLength(value, "utf8") < 128 * 1024, "an environment value exceeds the portable per-string size")
+  const aggregateBytes = Object.entries(environment).reduce((total, [key, item]) => total + Buffer.byteLength(key, "utf8") + Buffer.byteLength(item, "utf8") + 2, 0)
+  assert.ok(aggregateBytes >= 240 * 1024 && aggregateBytes < MAX_ENVIRONMENT_BYTES, "aggregate environment payload is not near the parser limit")
   const childResult = await readChildDigest(environment)
   assert.equal(childResult.code, 0, "boundary child exited unsuccessfully")
-  assert.equal(childResult.output, digest(["BOUNDARY", value]), "child observed a changed environment value")
+  assert.equal(childResult.output, digest([["BOUNDARY_A", value], ["BOUNDARY_B", value]]), "child observed a changed environment value")
   assert.equal(childResult.output.includes(secret), false, "child diagnostics contain the secret sentinel")
   assert.equal(childResult.error.includes(secret), false, "child diagnostics contain the secret sentinel")
 })
