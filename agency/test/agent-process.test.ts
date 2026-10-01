@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { lstat } from "node:fs/promises"
 import { join } from "node:path"
+import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { syntheticAgentProcess } from "./agent-support.js"
 
 test("agent process publishes a managed launch and spawns in the exact caller directory and environment", async t => {
@@ -60,6 +61,34 @@ test("provider exit fails the owned process and cleanup targets its retained gro
   assert.equal(result.phase, "cleanup_verified")
   assert.deepEqual(f.signals, ["SIGTERM"])
   assert.equal(f.owner.record().provider?.group.leader.pid, 12345)
+})
+
+test("provider identity publication retries a transient platform observation", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  const readGroup = f.context.adapter.readGroup
+  let reads = 0
+  f.context.adapter.readGroup = async group => {
+    if (++reads === 1) throw new DarwinObservationUnavailable("transient fixture observation")
+    return readGroup(group)
+  }
+  assert.equal((await f.owner.initialize(new AbortController().signal)).sessionId, "fixture-session")
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
+test("provider identity publication waits for consecutive matching group snapshots", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  const readGroup = f.context.adapter.readGroup
+  const leader = { bootId: "boot-a", pid: 12345, birth: `100:agy-provider:${f.spec.launchAttemptId}`, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
+  const child = { ...leader, pid: 12346, birth: "101:unmarked:/fixture-child", parentPid: leader.pid }
+  let reads = 0
+  f.context.adapter.readGroup = async group => {
+    const current = await readGroup(group)
+    if (!current.length) return current
+    return ++reads === 1 ? current : [...current, child]
+  }
+  assert.equal((await f.owner.initialize(new AbortController().signal)).sessionId, "fixture-session")
+  assert.equal(f.owner.record().provider?.group.observed.length, 2)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
 })
 
 test("spawn identity observation times out without publishing a late process identity", async t => {

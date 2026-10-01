@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from "node:util"
 import { commitLaunchTransition, restoreUninvokedLaunch, type LaunchContext, type LaunchTransitionIO } from "../handler/launch-transitions.js"
 import { refreshLaunchState } from "../handler/mutations.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
+import { DarwinObservationUnavailable } from "../platform/darwin.js"
+import { LinuxObservationUnavailable } from "../platform/linux.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
 import { sameProcess, sameProcessGeneration, type LaunchRecord, type ManagedLaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
@@ -74,6 +76,21 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
       || new Set(members.map(member => member.pid)).size !== members.length || !members.some(member => sameProcess(leader, member))
       || members.some(member => member.bootId !== leader.bootId || member.processGroupId !== leader.pid || member.sessionId !== leader.pid || member.uid !== leader.uid || member.gid !== leader.gid)) throw new AgentError("STARTUP_FAILED")
     return { leader, observed: members }
+  }
+  const stableObservation = async (): Promise<{ leader: ProcessIdentity; observed: ProcessIdentity[] }> => {
+    let prior: { leader: ProcessIdentity; observed: ProcessIdentity[] } | null = null
+    while (true) {
+      let current: { leader: ProcessIdentity; observed: ProcessIdentity[] }
+      try { current = await bounded(observe, spawnDeadline, "STARTUP_TIMEOUT") }
+      catch (error) {
+        if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable)) throw error
+        await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 25)), spawnDeadline, "STARTUP_TIMEOUT")
+        continue
+      }
+      if (prior && sameProcess(prior.leader, current.leader) && prior.observed.length === current.observed.length && prior.observed.every(member => current.observed.some(other => sameProcess(member, other)))) return current
+      prior = current
+      await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 25)), spawnDeadline, "STARTUP_TIMEOUT")
+    }
   }
   const waitForCloseOrGrace = async (ms: number): Promise<void> => {
     let timer: NodeJS.Timeout | undefined
@@ -201,10 +218,9 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
         check(); spawnInvoked = true
         child = (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint], spawnOptions)
         registerChildObservers(child)
-        const first = await bounded(observe, spawnDeadline, "STARTUP_TIMEOUT"), second = await bounded(observe, spawnDeadline, "STARTUP_TIMEOUT")
+        const stable = await stableObservation()
         check()
-        if (!sameProcess(first.leader, second.leader) || first.observed.length !== second.observed.length || first.observed.some(member => !second.observed.some(other => sameProcess(member, other)))) throw new AgentError("STARTUP_FAILED")
-        await transition({ ...current, phase: "readiness", provider: { kind: "process-group", group: second } })
+        await transition({ ...current, phase: "readiness", provider: { kind: "process-group", group: stable } })
       })
       initialization = (async () => {
         try {
