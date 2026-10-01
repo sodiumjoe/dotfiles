@@ -18,6 +18,13 @@ import {
 
 const MAX_RECORD_BYTES = 1024 * 1024
 
+export class PrivateStatePublicationError extends Error {
+  constructor(cause: unknown) {
+    super(`private state publication failed: ${String(cause)}`, { cause })
+    this.name = "PrivateStatePublicationError"
+  }
+}
+
 type UnknownRecord = Record<string, unknown>
 
 function isUnknownRecord(value: unknown): value is UnknownRecord {
@@ -231,10 +238,10 @@ async function publish(path: string, value: unknown): Promise<void> {
   if (serialized === undefined) throw new Error("record cannot be serialized as JSON")
   if (Buffer.byteLength(serialized, "utf8") > MAX_RECORD_BYTES) throw new Error(`${path} exceeds the 1 MiB size limit`)
   const parent = dirname(path)
-  await assertPrivateDirectory(parent)
   const temporary = join(parent, `.${basename(path)}.${randomUUID()}.tmp`)
   let handle: FileHandle | undefined
   try {
+    await assertPrivateDirectory(parent)
     handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     await handle.writeFile(serialized, { encoding: "utf8" })
     await handle.sync()
@@ -248,9 +255,9 @@ async function publish(path: string, value: unknown): Promise<void> {
       await parentHandle.close()
     }
   } catch (error) {
-    await handle?.close()
-    await rm(temporary, { force: true })
-    throw error
+    try { await handle?.close() } catch {}
+    try { await rm(temporary, { force: true }) } catch {}
+    throw new PrivateStatePublicationError(error)
   }
 }
 

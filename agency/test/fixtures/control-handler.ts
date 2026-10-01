@@ -25,7 +25,7 @@ if (config.failBootIdOnce) {
 }
 if (config.failSignalGroup !== undefined) {
   const signalGroup = adapter.signalGroup.bind(adapter)
-  adapter.signalGroup = async (group, signal) => { if (group === config.failSignalGroup) throw new Error("injected retained cleanup failure"); await signalGroup(group, signal) }
+  adapter.signalGroup = async (group, signal) => { if (group === config.failSignalGroup) throw new Error(config.failSignalMessage ?? "injected retained cleanup failure"); await signalGroup(group, signal) }
 }
 let admission: AdmissionController | undefined, admissionDone = false
 const admit = async (controller: AdmissionController): Promise<void> => {

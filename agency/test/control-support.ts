@@ -44,7 +44,7 @@ export async function fileExists(path: string): Promise<boolean> {
 }
 
 export type AdmissionFixtureOperation = { checkoutPath: string; action: "reserve" | "reserve_cancel"; agentId: string; leaseId: string; launchAttemptId: string }
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failBootIdOnce?: boolean; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain"; admissionOnList: boolean } }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain"; admissionOnList: boolean } }
 type CheckoutFixtureCleanup = { root: string; verifyCleanup: () => void; beforeCleanup: (verify: () => Promise<void>) => void }
 
 let fixtureBatchFailure: Error | undefined

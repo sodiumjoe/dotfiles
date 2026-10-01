@@ -14,6 +14,10 @@ import {
   type ReconcileResult,
 } from "./types.js"
 
+export class RetainedInventoryChangedError extends Error {
+  constructor() { super("RETAINED_INVENTORY_CHANGED") }
+}
+
 const POLL_INTERVAL_MS = 25
 const TERM_DEADLINE_MS = 1000
 const KILL_DEADLINE_MS = 3000
@@ -252,7 +256,7 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
 
 export async function reconcileRecord(path: string, adapter: PlatformAdapter, expectedRecord?: LaunchRecord): Promise<ReconcileResult> {
   const record = await readLaunchRecordForReconciliation(path)
-  if (expectedRecord !== undefined && !isDeepStrictEqual(record, expectedRecord)) throw new Error("RETAINED_INVENTORY_CHANGED")
+  if (expectedRecord !== undefined && !isDeepStrictEqual(record, expectedRecord)) throw new RetainedInventoryChangedError()
   let affected = record
   try {
     return await reconcileProcessGroupRecord(path, adapter, record, pending => affected = pending)

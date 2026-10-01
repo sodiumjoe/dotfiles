@@ -5,6 +5,7 @@ import { join } from "node:path"
 import test from "node:test"
 import {
   assertPrivateDirectory,
+  PrivateStatePublicationError,
   readHandlerRecord,
   readLaunchRecord,
   readLaunchRecordForReconciliation,
@@ -149,6 +150,22 @@ test("publishes complete launch records atomically with private file mode", asyn
   assert.ok(observations.every(value => value === "old" || value === "new"))
   assert.equal((await lstat(launchPath)).mode & 0o777, 0o600)
   assert.deepEqual(await readdir(directory), ["launch.json"])
+})
+
+test("failed launch publication has a typed private-state boundary", async t => {
+  const { directory, launchPath } = await createFixture()
+  t.after(async () => (await import("node:fs/promises")).rm(directory, { recursive: true, force: true }))
+  const previous = launchRecord({ checkoutId: "previous" })
+  await writeLaunchRecord(launchPath, previous)
+  await chmod(directory, 0o500)
+  try {
+    await assert.rejects(writeLaunchRecord(launchPath, launchRecord({ checkoutId: "next" })), error => {
+      assert.ok(error instanceof PrivateStatePublicationError)
+      assert.equal((error.cause as NodeJS.ErrnoException).code, "EACCES")
+      return true
+    })
+  } finally { await chmod(directory, 0o700) }
+  assert.deepEqual(await readLaunchRecord(launchPath), previous)
 })
 
 test("rejects oversized serialized records without replacing the previous record", async t => {

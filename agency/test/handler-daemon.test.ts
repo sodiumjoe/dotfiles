@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readFile, writeFile } from "node:fs/promises"
+import { chmod, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import test from "node:test"
@@ -85,7 +85,7 @@ test("startup retains one failed exact cleanup and reconciles an independent lau
   const failedPath = join(f.paths.persistentRoot, "launches", `${failed.launchAttemptId}.json`), healthyPath = join(f.paths.persistentRoot, "launches", `${healthy.launchAttemptId}.json`)
   await writeLaunchRecord(failedPath, failed); await writeLaunchRecord(healthyPath, healthy)
   const config = JSON.parse(await readFile(f.configPath, "utf8"))
-  await writeFile(f.configPath, JSON.stringify({ ...config, failSignalGroup: failed.provider.group.leader.processGroupId }), { mode: 0o600 })
+  await writeFile(f.configPath, JSON.stringify({ ...config, failSignalGroup: failed.provider.group.leader.processGroupId, failSignalMessage: "RETAINED_INVENTORY_CHANGED from target signal" }), { mode: 0o600 })
   const started = await f.start()
   assert.equal(started.record.phase, "ready")
   const reply = await f.call()
@@ -93,6 +93,19 @@ test("startup retains one failed exact cleanup and reconciles an independent lau
   assert.equal(reply.result.issues?.some(issue => issue.path === failedPath), true)
   assert.equal(reply.result.launches.find(item => item.launchAttemptId === healthy.launchAttemptId)?.phase, "cleanup_verified")
   assert.equal(JSON.parse(await readFile(healthyPath, "utf8")).phase, "cleanup_verified")
+})
+
+test("startup fails when the shared launch directory cannot publish reconciliation", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t), directory = join(f.paths.persistentRoot, "launches")
+  const record = launch({ launchBootId: await f.adapter.bootId(), launchAttempted: false })
+  await writeLaunchRecord(join(directory, `${record.launchAttemptId}.json`), record)
+  await chmod(directory, 0o500)
+  try {
+    await assert.rejects(f.start())
+    const failure = await until(async () => await fileExists(join(f.root, "failure")) ? readFile(join(f.root, "failure"), "utf8") : undefined)
+    assert.match(failure, /publication/i)
+    assert.notEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase, "ready")
+  } finally { await chmod(directory, 0o700) }
 })
 
 test("failed retained observation does not certify an existing cleanup-verified record", { timeout: 30000 }, async t => {

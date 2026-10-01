@@ -16,8 +16,8 @@ import { createCatalogStore } from "../catalog/store.js"
 import { createProbeRuntime } from "../catalog/probes.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
-import { readHandlerRecord, readLaunchRecordForReconciliation, writeHandlerRecord } from "../platform/private-state.js"
-import { reconcileRecord } from "../platform/reconcile.js"
+import { PrivateStatePublicationError, readHandlerRecord, readLaunchRecordForReconciliation, writeHandlerRecord } from "../platform/private-state.js"
+import { reconcileRecord, RetainedInventoryChangedError } from "../platform/reconcile.js"
 import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
@@ -174,11 +174,11 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     for (const entry of entries) {
       try {
         const result = await reconcileRecord(entry.path, options.adapter, entry.record)
-        if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new Error("RETAINED_INVENTORY_CHANGED")
+        if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new RetainedInventoryChangedError()
         entry.record = result.record
         successful.set(entry.path, result.record)
       } catch (error) {
-        if (error instanceof Error && error.message.includes("RETAINED_INVENTORY_CHANGED")) throw error
+        if (error instanceof RetainedInventoryChangedError || error instanceof PrivateStatePublicationError) throw error
         reconciliationIssues.push({ path: entry.path, launchAttemptId: entry.record.launchAttemptId, message: String(error).slice(0, 512) })
       }
       state.reconciliation.classified++
