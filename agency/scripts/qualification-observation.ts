@@ -31,7 +31,8 @@ export function parseGroupIdentity(value: unknown): ProcessGroupIdentity {
   if (observed.some(p => p.bootId !== leader.bootId || p.processGroupId !== leader.pid || p.sessionId !== leader.pid || p.uid !== leader.uid || p.gid !== leader.gid)) throw new Error("invalid group")
   return { leader, observed }
 }
-export function parseAbsence(value: unknown, expected: ProcessGroupIdentity): QualificationAbsence {
+export function parseAbsence(value: unknown, expected: ProcessGroupIdentity, limitMs = 2000): QualificationAbsence {
+  if (!Number.isFinite(limitMs) || limitMs <= 0) throw new Error("invalid absence budget")
   const v = exactKeys(value, ["first", "second"])
   const pass = (value: unknown): ProcessAbsenceEvidence | null => {
     if (value === null) return null
@@ -42,6 +43,7 @@ export function parseAbsence(value: unknown, expected: ProcessGroupIdentity): Qu
     const processes = p.processes.map((entry, index) => {
       const item = exactKeys(entry, ["identity", "observed"]), identity = parseProcessIdentity(item.identity), observed = item.observed === null ? null : parseProcessIdentity(item.observed)
       if (!isDeepStrictEqual(identity, expected.observed[index])) throw new Error("missing or substituted target")
+      if (observed !== null && observed.pid !== identity.pid) throw new Error("unrelated process observation")
       return { identity, observed }
     })
     if (p.group !== null && (!Array.isArray(p.group) || p.group.length > 4096)) throw new Error("invalid group observation")
@@ -51,16 +53,22 @@ export function parseAbsence(value: unknown, expected: ProcessGroupIdentity): Qu
   }
   const first = pass(v.first), second = pass(v.second)
   if (second && (!first || second.startedAt < first.endedAt + ABSENCE_SEPARATION_MS)) throw new Error("unseparated observations")
+  if (first && [first, second].some(pass => pass?.outcome === "absent" && pass.endedAt - first.startedAt > limitMs)) throw new Error("absence evidence exceeded budget")
   return { first, second }
 }
 export async function verifyQualificationAbsence(adapter: Pick<PlatformAdapter, "readProcess" | "readGroup">, input: ProcessGroupIdentity, limitMs: number): Promise<QualificationAbsence> {
+  if (!Number.isFinite(limitMs) || limitMs <= 0) throw new Error("invalid absence budget")
   const identity = parseGroupIdentity(input), deadline = performance.now() + limitMs
   const result: QualificationAbsence = { first: null, second: null }
   async function bounded<T>(operation: () => Promise<T>): Promise<T> {
     const remaining = deadline - performance.now()
     if (remaining <= 0) throw new Error("absence timeout")
     let timer: NodeJS.Timeout | undefined
-    try { return await Promise.race([operation(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("absence timeout")), remaining) })]) }
+    try {
+      const value = await Promise.race([operation(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("absence timeout")), remaining) })])
+      if (performance.now() >= deadline) throw new Error("absence timeout")
+      return value
+    }
     finally { clearTimeout(timer) }
   }
   for (const key of ["first", "second"] as const) {
@@ -68,7 +76,12 @@ export async function verifyQualificationAbsence(adapter: Pick<PlatformAdapter, 
     const evidence: ProcessAbsenceEvidence = { identity: structuredClone(identity), startedAt: Date.now(), endedAt: Date.now(), outcome: "unavailable", group: null, processes: [] }
     try {
       evidence.group = await bounded(() => adapter.readGroup(identity.leader.pid))
-      for (const target of identity.observed) evidence.processes.push({ identity: structuredClone(target), observed: await bounded(() => adapter.readProcess(target.pid)) })
+      for (const target of identity.observed) {
+        const value = await bounded(() => adapter.readProcess(target.pid)), observed = value === null ? null : parseProcessIdentity(value)
+        if (observed !== null && observed.pid !== target.pid) throw new Error("unrelated process observation")
+        evidence.processes.push({ identity: structuredClone(target), observed })
+      }
+      if (performance.now() >= deadline) throw new Error("absence timeout")
       evidence.outcome = evidence.group.length || evidence.processes.some(p => p.observed !== null && sameProcessGeneration(p.identity, p.observed)) ? "present" : "absent"
     } catch {}
     evidence.endedAt = Date.now(); result[key] = evidence

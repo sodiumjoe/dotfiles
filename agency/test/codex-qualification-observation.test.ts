@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { verifyQualificationAbsence } from "../scripts/qualification-observation.js"
+import { parseAbsence, verifyQualificationAbsence } from "../scripts/qualification-observation.js"
 import type { ProcessIdentity } from "../src/platform/types.js"
 
 const leader: ProcessIdentity = { bootId: "boot", pid: 200, birth: "2:provider", parentPid: 100, processGroupId: 200, sessionId: 200, uid: 501, gid: 20 }
@@ -29,4 +29,38 @@ test("never settling observations remain bounded and retain missing proof", asyn
   const started = performance.now()
   const result = await verifyQualificationAbsence({ ...absent, readProcess: () => new Promise(() => undefined) }, group, 60)
   assert.notEqual(result.first?.outcome, "absent"); assert.equal(result.second, null); assert.ok(performance.now() - started < 500)
+})
+
+test("absence rejects a process observation for an unrelated PID", async () => {
+  const proof = await verifyQualificationAbsence({ ...absent, async readProcess(pid) { return { ...leader, pid: pid + 1000, birth: "99:unrelated" } } }, group, 1000)
+  assert.notEqual(proof.first?.outcome, "absent"); assert.notEqual(proof.second?.outcome, "absent")
+})
+
+test("offline absence rejects a process observation for an unrelated PID", async () => {
+  const proof = await verifyQualificationAbsence(absent, group, 1000)
+  proof.first!.processes[0]!.observed = { ...leader, pid: 900, birth: "99:unrelated" }
+  assert.throws(() => parseAbsence(proof, group))
+})
+
+for (const pass of [1, 2]) test(`absence rejects pass ${pass} resolving after the absolute deadline`, async () => {
+  const start = performance.now(), limit = 80
+  let calls = 0
+  const proof = await verifyQualificationAbsence({ ...absent, async readProcess() {
+    if (++calls === pass) while (performance.now() < start + limit + 20) {}
+    return null
+  } }, { leader, observed: [leader] }, limit)
+  assert.notEqual(proof[pass === 1 ? "first" : "second"]?.outcome, "absent")
+})
+
+test("offline absence rejects a pair extending beyond the supplied budget", async () => {
+  const proof = await verifyQualificationAbsence(absent, group, 1000)
+  proof.second!.endedAt = proof.first!.startedAt + 2001
+  assert.throws(() => Reflect.apply(parseAbsence, undefined, [proof, group, 2000]))
+})
+
+test("offline absence retains unavailable evidence after an expired budget", async () => {
+  const proof = await verifyQualificationAbsence(absent, group, 1000)
+  proof.second!.endedAt = proof.first!.startedAt + 2001
+  proof.second!.outcome = "unavailable"
+  assert.deepEqual(parseAbsence(proof, group, 2000), proof)
 })

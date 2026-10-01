@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
+import { execFileSync } from "node:child_process"
 import { mkdir, mkdtemp, realpath, readFile, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -11,6 +12,9 @@ import { createDarwinAdapter } from "../src/platform/darwin.js"
 import { createLinuxAdapter } from "../src/platform/linux.js"
 import { inspectHandlerGeneration } from "../src/platform/singleton.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
+import { readHandlerRecord } from "../src/platform/private-state.js"
+import { sameProcess } from "../src/platform/types.js"
+import { verifyQualificationAbsence } from "../scripts/qualification-observation.js"
 import { qualifiedLaunchContracts } from "../src/agent/qualified-contracts.js"
 import { privateRoot } from "./control-support.js"
 import { sampleQualifiedContract } from "./agent-support.js"
@@ -102,7 +106,9 @@ test("report parser rejects incomplete, substituted, excessive, or leaking evide
     r => { r.ownedGroups[index].absence[pass].identity.leader.birth = "999:changed" }, r => { r.ownedGroups[index].absence[pass].processes.pop() },
     r => { r.ownedGroups[index].absence[pass].group = [r.ownedGroups[index].identity.leader] },
     r => { r.ownedGroups[index].absence[pass].processes[0].observed = r.ownedGroups[index].identity.leader },
+    r => { r.ownedGroups[index].absence[pass].processes[0].observed = { ...r.ownedGroups[index].identity.leader, pid: 999999, birth: "999:unrelated" } },
   )
+  for (const index of [0, 1]) mutations.push(r => { r.ownedGroups[index].absence.second.endedAt = r.ownedGroups[index].absence.first.startedAt + r.candidate.manifest.deadlines.absenceMs + 1 })
   mutations.push(r => { r.ownedGroups[0].absence.second.startedAt = r.ownedGroups[0].absence.first.endedAt })
   for (const mutate of mutations) { const report = structuredClone(result.report); mutate(report); assert.throws(() => parseCodexQualificationReport(report)) }
   assert.throws(() => renderPublishedQualificationSource(f.candidate, result.report, "0".repeat(64), result.reportSha256!, revision))
@@ -159,4 +165,57 @@ test("qualification waits through disappearing Handler metadata before absence p
   } }
   const { report } = await runCodexQualification(f.request, f.dependencies)
   assert.equal(injected, true); assert.equal(report.failure, null); assert.equal(report.qualified, true)
+})
+
+async function cleanFixtureHandler(f: Awaited<ReturnType<typeof fixture>>): Promise<void> {
+  const current = await inspectHandlerGeneration(f.paths.runtimeRoot, f.dependencies.adapter)
+  if (current?.disposition !== "live" || !current.record.process) return
+  const process = current.record.process
+  const observed = await f.dependencies.adapter.readProcess(process.pid)
+  assert.ok(observed && sameProcess(process, observed))
+  await f.dependencies.adapter.signalGroup(process.pid, "SIGKILL")
+  for (let attempt = 0; attempt < 100 && await f.dependencies.adapter.readProcess(process.pid); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
+  const proof = await verifyQualificationAbsence(f.dependencies.adapter, { leader: process, observed: [process] }, 2000)
+  assert.equal(proof.first?.outcome, "absent"); assert.equal(proof.second?.outcome, "absent")
+}
+
+test("qualification cannot claim or shut down a Handler that wins the startup race", async t => {
+  const f = await fixture(t), handler = f.dependencies.handler
+  let ordinaryGeneration: string | undefined
+  f.dependencies.handler = (path, receipts) => {
+    const command = handler(path, receipts)
+    const source = `import {startOrConnect} from ${JSON.stringify(new URL("../src/platform/singleton.js", import.meta.url).href)}; import {createDarwinAdapter} from ${JSON.stringify(new URL("../src/platform/darwin.js", import.meta.url).href)}; import {createLinuxAdapter} from ${JSON.stringify(new URL("../src/platform/linux.js", import.meta.url).href)}; const result = await startOrConnect({root:${JSON.stringify(f.paths.runtimeRoot)},hostId:${JSON.stringify(f.paths.hostKey)},handler:JSON.parse(process.argv[1]),adapter:process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(),timeoutMs:15000}); console.log(result.record.generation)`
+    ordinaryGeneration = execFileSync(process.execPath, ["--input-type=module", "-e", source, JSON.stringify({ file: command.file, args: command.args })], { encoding: "utf8", timeout: 20000 }).trim()
+    return command
+  }
+  try {
+    const { report } = await runCodexQualification(f.request, f.dependencies)
+    assert.equal(report.qualified, false); assert.equal(report.failure, "HANDLER_ACTIVE"); assert.equal(report.protocol.promptCount, 0)
+    const current = await inspectHandlerGeneration(f.paths.runtimeRoot, f.dependencies.adapter)
+    assert.equal(current?.disposition, "live"); assert.equal(current?.record.generation, ordinaryGeneration)
+    await assert.rejects(readFile(join(f.root, "requests.jsonl")), { code: "ENOENT" })
+  } finally { await cleanFixtureHandler(f) }
+})
+
+test("qualification retains ownership and cleans a Handler after readiness timeout", async t => {
+  const f = await fixture(t), handler = f.dependencies.handler
+  f.dependencies.handler = (path, receipts) => { const command = handler(path, receipts); return { ...command, args: [...command.args, "readiness-timeout"] } }
+  try {
+    const { report } = await runCodexQualification(f.request, f.dependencies)
+    assert.equal(report.qualified, false); assert.equal(report.protocol.promptCount, 0)
+    const retained = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+    assert.ok(retained.process)
+    const proof = await verifyQualificationAbsence(f.dependencies.adapter, { leader: retained.process, observed: [retained.process] }, 2000)
+    assert.equal(proof.first?.outcome, "absent"); assert.equal(proof.second?.outcome, "absent")
+  } finally { await cleanFixtureHandler(f) }
+})
+
+test("revision verification ignores ambient Git metadata redirects", async t => {
+  const root = await privateRoot(t)
+  execFileSync("/usr/bin/git", ["init", "-q", "--initial-branch", "redirected", root])
+  execFileSync("/usr/bin/git", ["-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "fixture"])
+  const expected = { branch: execFileSync("/usr/bin/git", ["branch", "--show-current"], { encoding: "utf8" }).trim(), commit: execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim() }
+  const source = `import {observeCurrentRevision} from ${JSON.stringify(new URL("../scripts/qualify-codex.js", import.meta.url).href)}; console.log(JSON.stringify(await observeCurrentRevision()))`
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", source], { encoding: "utf8", env: { ...process.env, GIT_DIR: join(root, ".git"), GIT_WORK_TREE: root, GIT_COMMON_DIR: join(root, ".git") } })
+  assert.deepEqual(JSON.parse(output), expected)
 })

@@ -11,11 +11,12 @@ import { AGENT_CODES, AgentError, type AgentTuple, type CommandView } from "../s
 import { launchEnvironmentDigest, snapshotLaunchEnvironment, type LaunchEnvironment } from "../src/agent/environment.js"
 import { AGENT_PROTOCOL, exchangeAgent, type AgentRequest } from "../src/agent/protocol.js"
 import { createAgentStore } from "../src/agent/store.js"
-import { readLaunchRecordForReconciliation, assertPrivateDirectory } from "../src/platform/private-state.js"
+import { readHandlerRecord, readLaunchRecordForReconciliation, assertPrivateDirectory } from "../src/platform/private-state.js"
 import { createDarwinAdapter } from "../src/platform/darwin.js"
 import { readHostId } from "../src/platform/host-id.js"
 import { startOrConnect, inspectHandlerGeneration, type HandlerCommand } from "../src/platform/singleton.js"
-import type { PlatformAdapter, ProcessGroupIdentity, ProcessIdentity } from "../src/platform/types.js"
+import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessGroupIdentity, type ProcessIdentity } from "../src/platform/types.js"
+import { agencyLaunchMarker, exactAgencyBirth } from "../src/platform/launch-marker.js"
 import { PROTOCOL } from "../src/control/protocol.js"
 import { exchange } from "../src/control/wire.js"
 import { resolvePlatformPaths, type PlatformPaths } from "../src/platform/paths.js"
@@ -74,7 +75,7 @@ export function parseCodexQualificationReport(value: unknown): AmbientQualificat
     if (Buffer.byteLength(JSON.stringify(value)) > 1048576) fail("REPORT_INVALID")
     const r = exactKeys(value, ["version", "policy", "candidate", "branch", "commit", "cwd", "startEnvironmentDigest", "restoreEnvironmentDigest", "challenge", "protocol", "first", "restored", "ownedGroups", "receipts", "qualified", "failure"])
     if (r.version !== 4 || r.policy !== "agency-codex-ambient-restore-v4" || typeof r.qualified !== "boolean" || (r.failure !== null && !FAILURES.includes(r.failure as QualificationFailure)) || r.qualified !== (r.failure === null)) fail("REPORT_INVALID")
-    parseQualificationCandidate(r.candidate); reviewed({ reviewedBranch: r.branch as string, reviewedCommit: r.commit as string }); canonical(r.cwd)
+    const candidate = parseQualificationCandidate(r.candidate); reviewed({ reviewedBranch: r.branch as string, reviewedCommit: r.commit as string }); canonical(r.cwd)
     hash(r.startEnvironmentDigest); if (r.restoreEnvironmentDigest !== null) hash(r.restoreEnvironmentDigest)
     if (typeof r.challenge !== "string" || !/^AGENCY_CODEX_RESTORE_[0-9a-f]{32}$/.test(r.challenge)) fail("REPORT_INVALID")
     const protocol = exactKeys(r.protocol, ["methods", "promptCount"])
@@ -94,7 +95,7 @@ export function parseCodexQualificationReport(value: unknown): AmbientQualificat
     const groups = r.ownedGroups.map((value, index) => {
       const g = exactKeys(value, ["stage", "identity", "absence"])
       if (g.stage !== ["initial-stop", "restored-stop"][index]) fail("REPORT_INVALID")
-      const identity = parseGroupIdentity(g.identity), absence = parseAbsence(g.absence, identity)
+      const identity = parseGroupIdentity(g.identity), absence = parseAbsence(g.absence, identity, candidate.manifest.deadlines.absenceMs)
       const retained = index === 0 ? first : restored
       if (retained && !identity.leader.birth.endsWith(":agy-provider:" + retained.launchAttemptId)) fail("REPORT_INVALID")
       return { identity, absence }
@@ -150,7 +151,7 @@ export async function readPrivateJsonWithDigest(path: string, maxBytes = 1048576
 }
 export async function readPrivateJson(path: string): Promise<unknown> { return (await readPrivateJsonWithDigest(path)).value }
 export async function observeCurrentRevision(): Promise<{ branch: string; commit: string }> {
-  const execute = promisify(execFile), options = { cwd: fileURLToPath(new URL("../../..", import.meta.url)), encoding: "utf8" as const, timeout: 5000, maxBuffer: 4096 }
+  const execute = promisify(execFile), options = { cwd: fileURLToPath(new URL("../../..", import.meta.url)), encoding: "utf8" as const, timeout: 5000, maxBuffer: 4096, env: { PATH: "/usr/bin:/bin", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_OPTIONAL_LOCKS: "0" } }
   const branch = await execute("/usr/bin/git", ["branch", "--show-current"], options), commit = await execute("/usr/bin/git", ["rev-parse", "HEAD"], options)
   if (branch.stderr || commit.stderr) fail("ADAPTER_UNQUALIFIED")
   return { branch: branch.stdout.trim(), commit: commit.stdout.trim() }
@@ -177,6 +178,9 @@ export async function runCodexQualification(request: QualificationRequest, depen
   validateEnvironment(startEnvironment)
   const report: AmbientQualificationReport = { version: 4, policy: "agency-codex-ambient-restore-v4", candidate, ...revision, cwd: canonical(deps.cwd()), startEnvironmentDigest: launchEnvironmentDigest(startEnvironment), restoreEnvironmentDigest: null, challenge: "AGENCY_CODEX_RESTORE_" + randomBytes(16).toString("hex"), protocol: { methods: [], promptCount: 0 }, first: null, restored: null, ownedGroups: [], receipts: [], qualified: false, failure: null }
   let handler: ProcessIdentity | null = null, generation = "", target: AgentTuple | null = null
+  const ownership: { record: HandlerGenerationRecord | null; pid: number | null; ready: boolean } = { record: null, pid: null, ready: false }
+  const ownedIdentity = (identity: ProcessIdentity): boolean => ownership.record !== null && identity.pid === ownership.pid && identity.bootId === ownership.record.launchBootId && identity.pid === identity.processGroupId && identity.pid === identity.sessionId && identity.uid === process.getuid!() && identity.gid === process.getgid!() && exactAgencyBirth(identity.birth, agencyLaunchMarker("handler", ownership.record.launchAttemptId))
+  const sameOwnedRecord = (record: HandlerGenerationRecord): boolean => ownership.record !== null && record.generation === ownership.record.generation && record.launchAttemptId === ownership.record.launchAttemptId && record.hostId === deps.paths.hostKey && record.socketPath === deps.paths.handlerSocketPath
   const attempts: Array<{ launchAttemptId: string; stage: "initial-stop" | "restored-stop" }> = []
   const failure = (error: unknown): void => { report.failure ??= error instanceof AgentError || error instanceof QualificationError ? error.code : "REPORT_INVALID" }
   type Operation = AgentRequest extends infer R ? R extends AgentRequest ? Omit<R, "protocol" | "requestId" | "handlerGeneration"> : never : never
@@ -215,9 +219,26 @@ export async function runCodexQualification(request: QualificationRequest, depen
     if (absence.first?.outcome !== "absent" || absence.second?.outcome !== "absent") fail("ABSENCE_UNVERIFIED")
   }
   try {
-    const started = await startOrConnect({ root: deps.paths.runtimeRoot, hostId: deps.paths.hostKey, adapter: deps.adapter, handler: deps.handler(request.candidatePath, receiptsPath), timeoutMs: 15000 })
-    handler = started.record.process; generation = started.record.generation
-    if (!handler || started.disposition !== "live" || generation === old?.record.generation) fail("HANDLER_STARTUP_FAILED")
+    const started = await startOrConnect({ root: deps.paths.runtimeRoot, hostId: deps.paths.hostKey, adapter: deps.adapter, handler: deps.handler(request.candidatePath, receiptsPath), timeoutMs: 15000,
+      async onTransition(phase, pid) {
+        if (phase === "launch_pending_written") {
+          const record = await readHandlerRecord(join(deps.paths.runtimeRoot, "handler.json"))
+          if (record.phase !== "launch_pending" || record.launchAttempted || record.process !== null || record.hostId !== deps.paths.hostKey || record.socketPath !== deps.paths.handlerSocketPath || record.writer !== "launcher") fail("HANDLER_STARTUP_FAILED")
+          ownership.record = record; generation = record.generation
+        } else if (phase === "handler_spawned") {
+          if (!ownership.record || !Number.isSafeInteger(pid) || pid! <= 1) fail("HANDLER_STARTUP_FAILED")
+          ownership.pid = pid!
+        } else if (phase === "identity_published") {
+          const record = await readHandlerRecord(join(deps.paths.runtimeRoot, "handler.json"))
+          if (!sameOwnedRecord(record) || !record.process || !ownedIdentity(record.process)) fail("HANDLER_STARTUP_FAILED")
+          handler = structuredClone(record.process)
+        }
+      },
+    })
+    const retainedHandler = handler as ProcessIdentity | null
+    if (!ownership.record) fail("HANDLER_ACTIVE")
+    if (!retainedHandler || !started.record.process || !sameOwnedRecord(started.record) || !sameProcess(retainedHandler, started.record.process) || started.disposition !== "live" || generation === old?.record.generation) fail("HANDLER_STARTUP_FAILED")
+    ownership.ready = true
     const selection = candidate.manifest.selection
     await command({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: generation, cwd: report.cwd, environment: startEnvironment, selection: { providerId: candidate.manifest.providerId, ...selection, reasoning: { kind: "value", value: selection.reasoning } } } })
     report.first = await retain("initial-stop")
@@ -253,10 +274,34 @@ export async function runCodexQualification(request: QualificationRequest, depen
     }
     report.protocol.methods = report.receipts.flatMap(receipt => receipt.methods)
     report.protocol.promptCount = report.protocol.methods.filter(method => method === "session/prompt").length
+    if (!handler && ownership.record && ownership.pid !== null) {
+      try {
+        const observed = await deps.adapter.readProcess(ownership.pid)
+        if (observed && ownedIdentity(observed)) handler = observed
+        else if (observed) fail("HANDLER_STARTUP_FAILED")
+      } catch (error) { failure(error) }
+    }
     if (handler) {
       try {
-        const reply = await exchange(createConnection(deps.paths.handlerSocketPath), { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }, 15000)
-        if (!reply.ok) fail("CLEANUP_UNVERIFIED")
+        const identity = handler
+        const current = await deps.adapter.readProcess(identity.pid)
+        if (current !== null) {
+          if (!ownedIdentity(current) || !sameProcess(identity, current)) fail("CLEANUP_UNVERIFIED")
+          let stopped = false
+          const record = await readHandlerRecord(join(deps.paths.runtimeRoot, "handler.json"))
+          if (sameOwnedRecord(record) && record.process && sameProcess(identity, record.process)) {
+            try {
+              const reply = await exchange(createConnection(deps.paths.handlerSocketPath), { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }, ownership.ready ? 15000 : 5000)
+              stopped = reply.ok
+            } catch {}
+          }
+          if (!stopped) {
+            if (ownership.ready || record.phase === "ready") fail("CLEANUP_UNVERIFIED")
+            const first = await deps.adapter.readGroup(identity.pid), second = await deps.adapter.readGroup(identity.pid), observed = await deps.adapter.readProcess(identity.pid)
+            if (!observed || !sameProcess(identity, observed) || first.length !== 1 || second.length !== 1 || !sameProcess(identity, first[0]!) || !sameProcess(identity, second[0]!)) fail("CLEANUP_UNVERIFIED")
+            await deps.adapter.signalGroup(identity.pid, "SIGKILL")
+          }
+        }
         const deadline = performance.now() + 5000
         while (true) {
           const remaining = deadline - performance.now()

@@ -17,6 +17,7 @@ const options = qualificationHandlerOptions(candidate, receipts, {
   adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(),
   status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }),
 }, async () => ({ ...candidate, nodeVersion: candidate.manifest.nodeVersion, selection: candidate.manifest.selection, artifacts: { adapterPackageJson: candidate.manifest.adapterPackageJson, adapterEntrypoint: candidate.manifest.adapterEntrypoint, codexExecutable: candidate.manifest.codexExecutable, nodeExecutable: candidate.manifest.nodeExecutable } }))
+if (process.argv[5] === "readiness-timeout") options.onPhase = async phase => { if (phase === "ready") await new Promise<void>(() => undefined) }
 const contract: LaunchContract = { ...options.launchContracts![0]!, permissionEvidence: "fixture-contract-v1", qualification: null }
 contract.fingerprint = await observeLaunchContract(contract)
 options.launchContracts = [contract]
