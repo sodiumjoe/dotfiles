@@ -52,3 +52,72 @@ test("provider exit fails the owned process and cleanup targets its retained gro
   assert.deepEqual(f.signals, ["SIGTERM"])
   assert.equal(f.owner.record().provider?.group.leader.pid, 12345)
 })
+
+test("spawn identity observation times out without publishing a late process identity", async t => {
+  const f = await syntheticAgentProcess(t, "identity-hang")
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const pending = f.owner.initialize(new AbortController().signal)
+  void pending.catch(() => undefined)
+  await f.spawned
+  t.mock.timers.tick(5000)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  assert.equal(f.owner.record().provider, null)
+  assert.equal(f.writesBeforeIdentity(), 0)
+  assert.deepEqual(f.signals, [])
+})
+
+test("attempted launch publication cannot spawn after the startup deadline", async t => {
+  const f = await syntheticAgentProcess(t, "publication-paused")
+  t.after(() => f.releasePublication())
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const pending = f.owner.initialize(new AbortController().signal)
+  void pending.catch(() => undefined)
+  await f.beforeSpawn.promise
+  t.mock.timers.tick(5000)
+  await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+  f.releasePublication()
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.equal(f.spawnCount(), 0)
+})
+
+test("disposal while launch preparation is queued prevents a provider spawn", async t => {
+  const f = await syntheticAgentProcess(t, "queued-preparation")
+  const pending = f.owner.initialize(new AbortController().signal)
+  await f.beforeSpawn.promise
+  f.owner.dispose()
+  f.releasePublication()
+  await assert.rejects(pending)
+  assert.equal(f.spawnCount(), 0)
+  await assert.rejects(f.record(), { code: "ENOENT" })
+  assert.deepEqual(f.signals, [])
+})
+
+test("cancellation during attempted publication prevents a provider spawn", async t => {
+  const f = await syntheticAgentProcess(t, "publication-paused")
+  const controller = new AbortController(), pending = f.owner.initialize(controller.signal)
+  await f.beforeSpawn.promise
+  controller.abort()
+  f.releasePublication()
+  await assert.rejects(pending)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.equal(f.spawnCount(), 0)
+})
+
+test("ready provider prompt and cleanup use fresh budgets after startup", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  t.mock.timers.tick(45001)
+  assert.deepEqual(await f.owner.prompt("after startup", new AbortController().signal), { stopReason: "end_turn", text: "after startup" })
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("changed process generation does not acquire signal authority", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  f.replaceIdentity()
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  assert.deepEqual(f.signals, [])
+})

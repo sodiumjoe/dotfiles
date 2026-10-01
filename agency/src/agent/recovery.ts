@@ -45,12 +45,12 @@ export async function recoverAgents(input: { context: LaunchContext; store: Agen
       inventory = await store.inventory()
       crossCheckAgents(context, inventory)
       for (const agent of inventory.agents) {
-        if (!["starting", "ready", "restoring", "stopping"].includes(agent.phase)) continue
-        await store.writeAgent({ ...agent, phase: "interrupted", failure: agentFailure(new AgentError("INCOMPLETE")) }, agent)
+        const next = ["starting", "ready", "restoring", "stopping"].includes(agent.phase) ? { ...agent, phase: "interrupted" as const, failure: agentFailure(new AgentError("INCOMPLETE")) } : agent
+        await store.writeAgent(next, agent)
       }
       for (const command of inventory.commands) {
-        if (command.state !== "pending") continue
-        await store.writeCommand({ ...command, state: "interrupted", result: { outcome: "interrupted", target: command.target, failure: agentFailure(new AgentError("INCOMPLETE")), session: null } }, command)
+        const next = command.state === "pending" ? { ...command, state: "interrupted" as const, result: { outcome: "interrupted" as const, target: command.target, failure: agentFailure(new AgentError("INCOMPLETE")), session: null } } : command
+        await store.writeCommand(next, command)
       }
       inventory = await store.inventory()
       crossCheckAgents(context, inventory)

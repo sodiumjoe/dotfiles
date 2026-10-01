@@ -3,6 +3,8 @@ import test from "node:test"
 import { randomUUID } from "node:crypto"
 import { lstat } from "node:fs/promises"
 import { join } from "node:path"
+import { recoverAgents } from "../src/agent/recovery.js"
+import { createAgentStore } from "../src/agent/store.js"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 import type { AgentService } from "../src/agent/service.js"
@@ -42,6 +44,55 @@ test("same command retries compare the environment digest before accepting", asy
   f.release()
   assert.equal((await completed(f.service, f.input)).command.result?.outcome, "started")
   await f.service.freezeAndDrain(true)
+})
+
+test("an identical start retries an unpublished command without replacing its agent", async t => {
+  const f = await agentServiceFixture(t)
+  f.failInitialCommand(true)
+  await assert.rejects(f.service.start(f.input), { code: "INCOMPLETE" })
+  assert.equal(await f.store.readCommand(f.input.commandId), null)
+  await assert.rejects(f.service.start({ ...f.input, environment: { ...f.input.environment, CHANGED: "yes" } }), { code: "COMMAND_CONFLICT" })
+  f.failInitialCommand(false)
+  const retry = await f.service.start(f.input)
+  assert.equal(retry.command.state, "pending")
+  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "started")
+  assert.equal(f.spawns(), 1)
+  assert.equal((await f.service.list()).agents.length, 1)
+  await f.service.freezeAndDrain(true)
+})
+
+test("restart repairs completed command durability before reporting availability", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  const base = createAgentStore(f.root)
+  let rejectSync = true
+  const store = { ...base, async writeCommand(value: Parameters<typeof base.writeCommand>[0], expected: Parameters<typeof base.writeCommand>[1]) {
+    if (rejectSync && value.state === "completed") throw new Error("receipt durability unavailable")
+    await base.writeCommand(value, expected)
+  } }
+  assert.notEqual((await recoverAgents({ context: f.context, store })).unavailable, null)
+  rejectSync = false
+  assert.equal((await recoverAgents({ context: f.context, store })).unavailable, null)
+})
+
+test("restart repairs terminal agent durability before reporting availability", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  const base = createAgentStore(f.root)
+  let rejectSync = true
+  const store = { ...base, async writeAgent(value: Parameters<typeof base.writeAgent>[0], expected: Parameters<typeof base.writeAgent>[1]) {
+    if (rejectSync && value.phase === "stopped") throw new Error("terminal durability unavailable")
+    await base.writeAgent(value, expected)
+  } }
+  assert.notEqual((await recoverAgents({ context: f.context, store })).unavailable, null)
+  rejectSync = false
+  assert.equal((await recoverAgents({ context: f.context, store })).unavailable, null)
 })
 
 test("twenty independent starts have no admission or capacity limit and current uses exact cwd strings", async t => {
@@ -99,5 +150,66 @@ test("startup revalidation rejects changed catalog evidence before spawn", async
   await f.changeCatalog("refresh")
   f.release()
   assert.equal((await completed(f.service, f.input)).command.result?.outcome, "failed")
+  assert.equal(f.spawns(), 0)
+})
+
+test("uncertain completed receipt is repaired without repeating a provider launch", async t => {
+  const f = await agentServiceFixture(t)
+  f.failReceipt(true)
+  await f.service.start(f.input)
+  await until(async () => (await f.store.readCommand(f.input.commandId))?.state === "completed" ? true : undefined)
+  assert.equal((await f.service.command(f.input.commandId, f.input.handlerGeneration)).durability, "unverified")
+  f.failReceipt(false)
+  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "started")
+  assert.equal(f.spawns(), 1)
+  await f.service.freezeAndDrain(true)
+})
+
+test("failed initial agent publication repairs the retained command target", async t => {
+  const f = await agentServiceFixture(t)
+  f.failInitialAgent(true)
+  await assert.rejects(f.service.start(f.input), { code: "INCOMPLETE" })
+  const intent = await f.store.readCommand(f.input.commandId)
+  assert.ok(intent?.target)
+  assert.equal(f.spawns(), 0)
+  f.failInitialAgent(false)
+  const retry = await f.service.start(f.input)
+  assert.deepEqual(retry.command.target, intent.target)
+  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "started")
+  assert.equal(f.spawns(), 1)
+  await f.service.freezeAndDrain(true)
+})
+
+test("uncertain ready publication is repaired by its live owner without another spawn", async t => {
+  const f = await agentServiceFixture(t)
+  f.failReady(true)
+  await f.service.start(f.input)
+  await until(async () => f.readyFailures() ? true : undefined)
+  f.failReady(false)
+  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "started")
+  assert.equal(f.spawns(), 1)
+  await f.service.freezeAndDrain(true)
+})
+
+test("stop aborts an active prompt before verifying process cleanup", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const pending = f.service.prompt({ ...ready.command.target!, text: "challenge" })
+  void pending.catch(() => undefined)
+  await f.promptEntered
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await assert.rejects(pending, { code: "STARTUP_FAILED" })
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
+})
+
+test("restart interrupts a pending start without replaying its transient environment", async t => {
+  const f = await agentServiceFixture(t, { pause: "spawn" })
+  await f.service.start(f.input)
+  await f.entered
+  const next = await f.restart()
+  assert.equal((await next.command(f.input.commandId, f.input.handlerGeneration)).command.state, "interrupted")
+  assert.equal((await next.list()).agents[0]!.record.phase, "interrupted")
   assert.equal(f.spawns(), 0)
 })

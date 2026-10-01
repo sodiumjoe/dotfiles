@@ -19,7 +19,7 @@ import { AgentError, agentFailure, parsePromptInput, parseStartInput, parseStopI
 
 export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
 type LivePrompt = { controller: AbortController; promise: Promise<PromptView> }
-type Live = { initial: AgentRecord; environment: LaunchEnvironment; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: AgentRecord; accepted: AgentCommand; environment: LaunchEnvironment; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
@@ -203,8 +203,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   async function repair(op: Live): Promise<void> {
     if (!op.started) {
       const command = commands.get(op.initial.definition.createdCommandId)
-      if (!command) throw new AgentError("INCOMPLETE")
-      if (dirty.has(command.commandId)) await publishCommand(command, command)
+      if (!command || dirty.has(command.commandId)) await publishCommand(command ?? op.accepted, command ?? null)
       await publishAgent(op.initial, records.get(op.initial.definition.agentId) ?? null)
       launch(op)
     } else if (op.uncertain && !op.controller.signal.aborted && !op.fault) await ready(op, op.uncertain)
@@ -242,8 +241,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         await verify()
         const command = commands.get(request.commandId), op = intents.get(request.commandId)
         if (command && (command.op !== "start" || !isDeepStrictEqual(command.input, durableInput))) throw new AgentError("COMMAND_CONFLICT")
-        if (op && !isDeepStrictEqual(commands.get(request.commandId)?.input, durableInput)) throw new AgentError("COMMAND_CONFLICT")
-        return command ?? null
+        if (op && !isDeepStrictEqual(op.accepted.input, durableInput)) throw new AgentError("COMMAND_CONFLICT")
+        if (op && !command) await repair(op)
+        return commands.get(request.commandId) ?? null
       })
       if (existing) return command(request.commandId, request.handlerGeneration)
       available()
@@ -269,8 +269,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const spec = resolveLaunchSpec({ ids: { hostId: context.paths.hostKey, handlerGeneration: generation, agentId: randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId }, cwd: request.cwd, selection: request.selection, ...evidence, contract })
         if (await observeLaunchContract(contract) !== fingerprint) throw new AgentError("CONFIG_CHANGED")
         const record: AgentRecord = { version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null }
-        const op: Live = { initial: record, environment: request.environment, contract, evidence, controller: new AbortController(), deadline: performance.now() + (contract.qualification?.deadlines.overallMs ?? spec.limits.startupMs), prompt: null, cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
         const accepted = startCommand(request, agentTuple(record), spec.hostId)
+        const op: Live = { initial: record, accepted, environment: request.environment, contract, evidence, controller: new AbortController(), deadline: performance.now() + (contract.qualification?.deadlines.overallMs ?? spec.limits.startupMs), prompt: null, cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
         checkCommandDeadline()
         acceptingOperation = op
         operations.set(spec.agentId, op); intents.set(request.commandId, op)

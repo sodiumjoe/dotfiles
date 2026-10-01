@@ -382,7 +382,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   const contract = { ...sampleContract(), entrypoint: join(root, "agent-provider.js"), environment: { fixed: { HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, FIXTURE_ROOT: root }, private: {} } }
   await writeFile(contract.entrypoint, await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 })
   contract.fingerprint = await observeLaunchContract(contract)
-  let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0
+  let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0
   const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {
     const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
     handle.sync = async () => {
@@ -402,6 +402,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     try { await base.writeAgent(value, expected) } finally { writingReady = false; writingTerminal = false }
   }, async writeCommand(value: AgentCommand, expected: AgentCommand | null) {
     publications.push(`${value.op}:${value.state}`); writingReceipt = value.state === "completed"
+    if (failInitialCommand && value.op === "start" && value.state === "pending" && expected === null) throw new Error("initial command publication")
     if (options.pauseCommand && value.op === "start" && value.state === "pending") { commandEntered.resolve(); await released.promise }
     try { await base.writeCommand(value, expected) } finally { writingReceipt = false }
   } }
@@ -468,7 +469,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   const input: StartInput = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: sampleSpec().selection, environment: { ...process.env, FIXTURE_ROOT: root } as Record<string, string> }
   return { ...f, service, input, store, catalogStore, contract, profile, configuration, config, publications, entered: entered.promise, release: released.resolve, spawns: () => spawnCount, refreshes: () => refreshes, catalogReads: () => catalogReads, readyFailures: () => readyFailures,
     evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, reservationCalls: () => reservationCalls, cleanupCalls: () => cleanupCalls, reservationEntered: reservationEntered.promise, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
-    failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value },
+    failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value }, failInitialCommand(value: boolean) { failInitialCommand = value },
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures,
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
     fault(agent: string) { peers.get(agent)!.triggerDrift() },
