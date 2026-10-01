@@ -18,13 +18,12 @@ import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.
 import { bindPrivateSocket } from "../platform/private-socket.js"
 import { PrivateStatePublicationError, readHandlerRecord, readLaunchRecordForReconciliation, writeHandlerRecord } from "../platform/private-state.js"
 import { reconcileRecord, RetainedInventoryChangedError } from "../platform/reconcile.js"
-import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
+import { sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
 import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type LaunchIssue } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
-import { createAdmissionController, type AdmissionController } from "../checkout/admission.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -34,7 +33,6 @@ export type HandlerOptions = {
   status: Duplex
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
-  onAdmissionReady?: (controller: AdmissionController) => Promise<void>
   catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
   agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
   launchContracts?: readonly LaunchContract[]
@@ -82,6 +80,11 @@ async function selfIdentity(adapter: PlatformAdapter): Promise<ProcessIdentity> 
     if (Date.now() >= deadline) throw new Error("Handler identity unavailable")
     await new Promise(resolve => setTimeout(resolve, 20))
   }
+}
+
+function retainedIdentity(record: LaunchRecord): unknown {
+  const { phase, reason, launchAttempted, provider, ...identity } = record
+  return { ...identity, leader: provider?.group.leader }
 }
 
 export async function runHandler(options: HandlerOptions): Promise<void> {
@@ -196,7 +199,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       const original = entries.find(value => value.path === entry.path)?.record
       if (!original) return false
       if (successful.has(entry.path)) return true
-      return original.version === entry.record.version && original.launchAttemptId === entry.record.launchAttemptId && original.handlerGeneration === entry.record.handlerGeneration && original.launchBootId === entry.record.launchBootId && (original.version === 2 && entry.record.version === 2 ? isDeepStrictEqual(original.owner, entry.record.owner) : original.version === 1 && entry.record.version === 1 && original.checkoutId === entry.record.checkoutId && original.agentId === entry.record.agentId && original.leaseId === entry.record.leaseId) && isDeepStrictEqual(original.provider?.group.leader, entry.record.provider?.group.leader)
+      return isDeepStrictEqual(retainedIdentity(original), retainedIdentity(entry.record))
     })
     state.launches = summarizeLaunches(checkedInventory.records.map(entry => entry.record))
     state.reconciliation = { classified: checkedInventory.records.length, total: checkedInventory.records.length, uncertain: checkedInventory.records.filter(entry => entry.record.phase === "quarantined").length }
@@ -213,14 +216,13 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     await catalog.initialize()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
-    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, candidateRestoreContracts: new Set(), contracts: options.launchContracts ?? productionLaunchContracts(), store: createAgentStore(options.paths.persistentRoot) })
+    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: createAgentStore(options.paths.persistentRoot) })
     await agents.initialize()
     current = { ...current, phase: "ready" }
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, agents }
     state.phase = "ready"
-    if (options.onAdmissionReady) await options.onAdmissionReady(createAdmissionController(launchContext))
     if (termination) await terminate()
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()

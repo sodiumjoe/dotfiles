@@ -24,7 +24,7 @@ import type { ProviderProfile } from "../src/catalog/types.js"
 
 export function unavailableControlDependencies(): ControlDependencies {
   const unavailable = async (): Promise<never> => { throw new ControlError("UNAVAILABLE") }
-  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, callCatalog: unavailable, receipt: unavailable, inventory: unavailable, cwd: () => { throw new Error("unexpected cwd lookup") }, checkout: unavailable, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
+  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, callCatalog: unavailable, receipt: unavailable, inventory: unavailable, cwd: () => { throw new Error("unexpected cwd lookup") }, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
 }
 
 export const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -44,7 +44,7 @@ export async function fileExists(path: string): Promise<boolean> {
 }
 
 export type AdmissionFixtureOperation = { checkoutPath: string; action: "reserve" | "reserve_cancel"; agentId: string; leaseId: string; launchAttemptId: string }
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain"; admissionOnList: boolean } }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
 type CheckoutFixtureCleanup = { root: string; verifyCleanup: () => void; beforeCleanup: (verify: () => Promise<void>) => void }
 
 let fixtureBatchFailure: Error | undefined
@@ -56,7 +56,7 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, checkout?: CheckoutFixtureCleanup, handlerFile?: string) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, checkout?: CheckoutFixtureCleanup, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
@@ -153,7 +153,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   const start = async (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
     assertFixtureBatchHealthy()
     let marker: string | undefined
-    const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath] }, onTransition: async (transition, pid) => {
+    const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath], ...(handlerEnv === undefined ? {} : { env: handlerEnv }) }, onTransition: async (transition, pid) => {
       if (transition === "launch_pending_written") marker = `agy-handler:${(await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))).launchAttemptId}`
       if (transition === "handler_spawned" && pid !== undefined) {
         assert.notEqual(marker, undefined)
@@ -164,7 +164,6 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       await hook?.(transition)
     } }).then(async result => { await verifyGitCleanup(); return result }, async error => {
       await verifyGitCleanup()
-      if (overrides.admissionOperations !== undefined) throw failFixtureBatch(new Error(`admission fixture startup failed; retained ${root} and ${checkout?.root ?? "checkout"}`, { cause: error }))
       throw error
     })
     starts.push(operation)

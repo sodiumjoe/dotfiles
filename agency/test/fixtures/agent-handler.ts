@@ -51,15 +51,6 @@ contract.fingerprint = await observeLaunchContract(contract)
 try {
   await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: [contract],
-    async onAdmissionReady() {
-      if (!config.fatalClose) return
-      while (true) {
-        try { await readFile(join(root, "fatal-close")); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
-        await new Promise(resolve => setTimeout(resolve, 20))
-      }
-      assertGitChildrenClosed()
-      throw new Error("fixture fatal Handler failure")
-    },
     catalogFactory(context) {
       const store = createCatalogStore(config.paths.persistentRoot)
       const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })

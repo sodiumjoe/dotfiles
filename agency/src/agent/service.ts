@@ -84,7 +84,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       if (agentId && inventory.agents.some(record => record.definition.agentId === agentId)) assessment.unavailable.set(agentId, repair.issue)
       else assessment.issues.push(repair.issue)
     }
-    if (inventory.issues.some(issue => issue.path === join(root, "agents") || issue.path === join(root, "agents", "provider-state"))) throw new AgentError("UNAVAILABLE")
+    if (inventory.issues.some(issue => issue.path === join(root, "agents"))) throw new AgentError("UNAVAILABLE")
     const agentIds = new Set(inventory.agents.map(record => record.definition.agentId)), commandIds = new Set(inventory.commands.map(command => command.commandId))
     for (const agentId of records.keys()) if (!agentIds.has(agentId) && !dirtyAgents.has(agentId)) records.delete(agentId)
     for (const commandId of commands.keys()) if (!commandIds.has(commandId) && !dirty.has(commandId)) commands.delete(commandId)

@@ -4,7 +4,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { createConnection } from "node:net"
 import type { TestContext } from "node:test"
-import { privateRoot, controlFixture, until, type AdmissionFixtureOperation } from "./control-support.js"
+import { privateRoot, controlFixture, until } from "./control-support.js"
 import { CatalogError, type ProviderProfile, type ProviderId } from "../src/catalog/types.js"
 import { randomUUID } from "node:crypto"
 import { ChildProcess } from "node:child_process"
@@ -42,8 +42,8 @@ export function gate<T = void>() {
   return { promise, resolve }
 }
 
-export async function catalogHandlerFixture(t: TestContext, options: { enabled?: ProviderId[]; wait?: boolean; admissionOperations?: AdmissionFixtureOperation[]; scenario?: "uncertain" } = {}, checkout?: Parameters<typeof controlFixture>[2]) {
-  const f = await controlFixture(t, options.admissionOperations ? { admissionOperations: options.admissionOperations } : {}, checkout)
+export async function catalogHandlerFixture(t: TestContext, options: { enabled?: ProviderId[]; wait?: boolean; scenario?: "uncertain" } = {}) {
+  const f = await controlFixture(t)
   f.beforeCleanup(async () => {
     if (options.scenario === "uncertain") return
     let handler
@@ -92,7 +92,7 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
   }
   await mkdir(join(f.paths.persistentRoot, "catalog"), { mode: 0o700 })
   if (options.enabled?.length !== 0) await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: profiles }), { mode: 0o600 })
-  await writeFile(f.configPath, JSON.stringify({ paths: f.paths, admissionOperations: options.admissionOperations, catalog: { profiles, scenario: options.scenario ?? "normal", admissionOnList: options.admissionOperations !== undefined } }), { mode: 0o600 })
+  await writeFile(f.configPath, JSON.stringify({ paths: f.paths, catalog: { profiles, scenario: options.scenario ?? "normal" } }), { mode: 0o600 })
   const inventory = () => createCatalogStore(f.paths.persistentRoot).inventory()
   const call = async (operation: { op: "model_list" } | { op: "model_refresh"; commandId: string }) => {
     const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))

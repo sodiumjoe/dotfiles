@@ -1,14 +1,35 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { lstat } from "node:fs/promises"
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { agentHandlerFixture } from "./agent-support.js"
+import { privateRoot } from "./control-support.js"
+
+test("agent lifecycle does not execute Git or inspect historical admissions", { timeout: 60000 }, async t => {
+  const trap = await privateRoot(t), marker = join(trap, "git-invoked"), admissionMarker = join(trap, "admissions-accessed"), preload = join(trap, "forbid-git.cjs")
+  await writeFile(preload, `const cp = require("node:child_process")\nconst fs = require("node:fs")\nconst fsp = require("node:fs/promises")\nfor (const name of ["execFile", "spawn"]) { const original = cp[name]; cp[name] = function(file, ...args) { if (String(file).includes("git")) { fs.writeFileSync(${JSON.stringify(marker)}, String(file)); throw new Error("Git subprocess forbidden") }; return original.call(this, file, ...args) } }\nfor (const name of ["lstat", "stat", "readdir", "opendir", "readFile", "open", "mkdir", "rm", "rename", "writeFile"]) { const original = fsp[name]; fsp[name] = function(path, ...args) { if (String(path).includes("/admissions")) { fs.writeFileSync(${JSON.stringify(admissionMarker)}, String(path)); throw new Error("admissions access forbidden") }; return original.call(this, path, ...args) } }\nrequire("node:module").syncBuiltinESMExports()`, { mode: 0o600 })
+  const f = await agentHandlerFixture(t, {}, { NODE_OPTIONS: `--require=${preload}` })
+  const admissions = join(f.paths.persistentRoot, "admissions")
+  await mkdir(admissions, { mode: 0o700 })
+  await writeFile(join(admissions, "historical.json"), "{", { mode: 0o600 })
+  const started = await f.waitCompleted(await f.startAt(f.git.root))
+  assert.equal(started.command.result?.outcome, "started")
+  assert.equal((await f.currentAt(f.git.root)).agents.length, 1)
+  await f.waitCompleted(await f.stop(started.command.target!))
+  const restored = await f.waitCompleted(await f.restore(started.command.target!.agentId))
+  assert.equal(restored.command.result?.outcome, "restored")
+  await f.waitCompleted(await f.stop(restored.command.target!))
+  assert.equal(await readFile(join(admissions, "historical.json"), "utf8"), "{")
+  await assert.rejects(lstat(marker), { code: "ENOENT" })
+  await assert.rejects(lstat(admissionMarker), { code: "ENOENT" })
+})
 
 test("Handler starts an ambient agent and publishes version-two ownership", async t => {
   const f = await agentHandlerFixture(t)
   const accepted = await f.startAt(f.git.root)
   const ready = await f.waitCompleted(accepted)
   assert.equal(ready.command.result?.outcome, "started")
+  await assert.rejects(lstat(join(f.paths.persistentRoot, "admissions")), { code: "ENOENT" })
   const current = await f.currentAt(f.git.root)
   assert.equal(current.agents.length, 1)
   const agent = current.agents[0]!

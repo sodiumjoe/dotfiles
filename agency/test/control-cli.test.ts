@@ -2,23 +2,18 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { chmod, copyFile, mkdir, symlink, writeFile, rm, stat } from "node:fs/promises"
+import { chmod, copyFile, mkdir, symlink, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import test from "node:test"
-import { runControl, diagnoseCheckout, type ControlDependencies } from "../src/cli/control.js"
+import { runControl, type ControlDependencies } from "../src/cli/control.js"
 import { ControlError, type ControlReply, type ControlRequest } from "../src/control/protocol.js"
 import type { HandlerInspection, ProcessIdentity } from "../src/platform/types.js"
 import type { ShutdownReceipt } from "../src/handler/receipt.js"
 import { privateRoot, unavailableControlDependencies } from "./control-support.js"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { LinuxObservationUnavailable } from "../src/platform/linux.js"
-import { admissionFixture } from "./checkout-support.js"
 import { launch } from "./control-support.js"
-import { resolveCheckout } from "../src/checkout/identity.js"
-import { inventoryAdmissions } from "../src/checkout/records.js"
-import { inventoryLaunches } from "../src/handler/inventory.js"
-import { writeLaunchRecord } from "../src/platform/private-state.js"
 
 function model() {
   const generation = randomUUID(), attempt = randomUUID(), hostId = "a".repeat(64)
@@ -32,9 +27,8 @@ function model() {
     start: async () => { state.starts++; return inspection },
     inspect: async () => state.inspection,
     receipt: async () => state.receipt,
-    inventory: async () => [],
+    inventory: async () => ({ records: [], issues: [] }),
     cwd: () => "/test",
-    checkout: async () => ({ state: "not_checkout", reason: "fixture" }),
     call: async (_env, request) => {
       state.calls.push(request)
       if (request.op === "status") return status(request)
@@ -80,34 +74,43 @@ test("doctor inspects without starting or calling the daemon", async () => {
   assert.equal(m.state.starts, 0)
   assert.deepEqual(m.state.calls, [])
   assert.equal(m.output().result.handler.record.generation, m.generation)
-  assert.equal(m.output().result.checkout.state, "not_checkout")
+  for (const removed of ["checkout", "admission", "lease"]) assert.equal(JSON.stringify(m.output().result).includes(removed), false)
 })
 
-test("doctor checkout observations are read-only and unavailable mappings remain explicit", { timeout: 20000 }, async t => {
-  const f = await admissionFixture(t), env = { paths: f.context.paths, adapter: f.context.adapter }
-  await rm(join(f.root, "admissions"), { recursive: true })
-  const available = await diagnoseCheckout(f.git.repo, env)
-  assert.ok(available.state === "observed" && available.authoritative === false && available.admission.state === "available")
-  await assert.rejects(stat(join(f.root, "admissions")), { code: "ENOENT" })
-  assert.equal((await diagnoseCheckout(f.git.root, env)).state, "not_checkout")
-  const request = f.request(), reservation = await f.controller.reserve(request)
-  await writeLaunchRecord(join(f.root, "launches", `${request.launchAttemptId}.json`), { ...reservation.launch, launchAttempted: true, phase: "quarantined", reason: "ambiguous" })
-  const quarantined = await diagnoseCheckout(f.git.repo, env)
-  assert.ok(quarantined.state === "observed" && quarantined.admission.state === "quarantined")
-  const legacy = launch()
-  await writeLaunchRecord(join(f.root, "launches", `${legacy.launchAttemptId}.json`), legacy)
-  const unknown = await diagnoseCheckout(f.git.linked, env)
-  assert.ok(unknown.state === "observed" && unknown.admission.state === "unavailable")
+test("doctor emits launch summaries without legacy checkout fields", async () => {
+  const m = model(), record = launch()
+  m.deps.inventory = async () => ({ records: [{ path: `/state/launches/${record.launchAttemptId}.json`, record }], issues: [] })
+  assert.equal(await runControl(["doctor", "--json"], m.deps), 0)
+  const result = m.output().result
+  assert.equal(result.launches[0].launchAttemptId, record.launchAttemptId)
+  for (const removed of ["checkoutId", "leaseId", "agentId"]) assert.equal(Object.hasOwn(result.launches[0], removed), false)
 })
 
-test("doctor rejects inventory changes observed during checkout resolution", { timeout: 20000 }, async t => {
-  const f = await admissionFixture(t), env = { paths: f.context.paths, adapter: f.context.adapter }
-  const result = await diagnoseCheckout(f.git.repo, env, { inventory: inventoryLaunches, admissions: inventoryAdmissions, resolve: async (cwd, host) => {
-    const checkout = await resolveCheckout(cwd, host), record = launch()
-    await writeLaunchRecord(join(f.root, "launches", `${record.launchAttemptId}.json`), record)
-    return checkout
-  } })
-  assert.equal(result.state, "unavailable")
+test("doctor reports agent, catalog, and retained state issues", async t => {
+  const root = await privateRoot(t), m = model(), environment = m.deps.environment
+  m.deps.environment = async () => { const env = await environment(); return { ...env, paths: { ...env.paths, persistentRoot: root } } }
+  m.deps.inventory = async () => ({ records: [], issues: [{ path: join(root, "launches/bad.json"), launchAttemptId: null, message: "invalid launch record" }] })
+  assert.equal(await runControl(["doctor", "--json"], m.deps), 0)
+  assert.deepEqual(m.output().result.agents, { records: [], commands: [], issues: [] })
+  assert.deepEqual(m.output().result.catalog, { probes: [], commands: [], issues: [] })
+  assert.deepEqual(m.output().result.issues, [{ source: "launch", path: join(root, "launches/bad.json"), message: "invalid launch record" }])
+})
+
+test("doctor identifies a damaged catalog root by its actual path", async t => {
+  const root = await privateRoot(t), m = model(), environment = m.deps.environment
+  await writeFile(join(root, "catalog"), "damaged", { mode: 0o600 })
+  m.deps.environment = async () => { const env = await environment(); return { ...env, paths: { ...env.paths, persistentRoot: root } } }
+  assert.equal(await runControl(["doctor", "--json"], m.deps), 0)
+  assert.deepEqual(m.output().result.catalog.issues, ["catalog"])
+  assert.deepEqual(m.output().result.issues, [{ source: "catalog", path: join(root, "catalog"), message: "catalog" }])
+})
+
+test("help documents restore and list-valued current", async () => {
+  const m = model()
+  assert.equal(await runControl(["help", "--json"], m.deps), 0)
+  const commands: string[] = m.output().result.commands
+  assert.ok(commands.some(command => command.startsWith("agent restore ")))
+  assert.ok(commands.some(command => command.startsWith("agent current") && command.includes("list")))
 })
 
 test("shutdown success requires a receipt and independent absence, including a lost reply", async () => {

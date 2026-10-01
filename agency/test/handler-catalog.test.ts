@@ -6,10 +6,10 @@ import { join } from "node:path"
 import test from "node:test"
 import { catalogHandlerFixture } from "./catalog-support.js"
 import { until } from "./control-support.js"
-import { gitFixture } from "./checkout-support.js"
 import { CATALOG_PROTOCOL } from "../src/catalog/protocol.js"
 import { createCatalogStore } from "../src/catalog/store.js"
 import { sameProcess } from "../src/platform/types.js"
+import { writeLaunchRecord } from "../src/platform/private-state.js"
 
 test("empty catalog configuration starts no probes", { timeout: 60000 }, async t => {
   const f = await catalogHandlerFixture(t, { enabled: [] })
@@ -80,13 +80,11 @@ test("ordinary shutdown cancels a registered discovery group without agent flags
   for (const identity of active.record.provider!.group.observed) assert.equal(await f.adapter.readProcess(identity.pid), null)
 })
 
-test("checkout admission remains responsive and refused shutdown resumes discovery", { timeout: 60000 }, async t => {
-  const git = await gitFixture(t), operation = { checkoutPath: git.repo, action: "reserve" as const, agentId: randomUUID(), leaseId: randomUUID(), launchAttemptId: randomUUID() }
-  const f = await catalogHandlerFixture(t, { enabled: ["codex-acp"], wait: true, admissionOperations: [operation] }, git), handler = await f.start()
+test("refused shutdown resumes discovery without an admission dependency", { timeout: 60000 }, async t => {
+  const f = await catalogHandlerFixture(t, { enabled: ["codex-acp"], wait: true }), handler = await f.start()
   const first = await f.waitNative("codex-acp")
-  await f.list()
-  const status = await f.call()
-  assert.ok(status.ok && "launches" in status.result && status.result.launches.some(l => l.launchAttemptId === operation.launchAttemptId))
+  const stale = await f.spawnProvider()
+  await writeLaunchRecord(join(f.paths.persistentRoot, "launches", `${stale.launchAttemptId}.json`), stale)
   const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
   assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS")
   const resumed = await f.waitNative("codex-acp")

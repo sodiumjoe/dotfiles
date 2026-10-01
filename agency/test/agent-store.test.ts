@@ -4,13 +4,14 @@ import { constants } from "node:fs"
 import { chmod, link, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { createAgentStore } from "../src/agent/store.js"
-import { commitLaunchTransition, restoreUninvokedLaunch } from "../src/handler/launch-transitions.js"
+import { commitLaunchTransition, restoreUninvokedLaunch, type LaunchContext } from "../src/handler/launch-transitions.js"
+import { MutationQueue } from "../src/handler/mutations.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
+import type { LaunchRecord } from "../src/platform/types.js"
 import type { CatalogFileSystem } from "../src/catalog/store.js"
 import { agentFailure, AgentError, type AgentCommand } from "../src/agent/types.js"
 import { agentId, sampleAgent, sampleCommand, sampleSession } from "./agent-support.js"
 import { privateRoot } from "./control-support.js"
-import { admissionFixture } from "./checkout-support.js"
 
 const filesystem = { open, rename, rm, mkdir }
 
@@ -144,25 +145,29 @@ test("private provider-state coexists with record and command evidence without e
   assert.deepEqual(await store.readCommand(command.commandId), command)
 })
 
-for (const defect of ["symlink", "wrong-mode", "non-directory", "other-child"] as const) {
-  test(`unsafe agent storage structure reports current issues: ${defect}`, async t => {
+test("historical provider-state entries are ignored regardless of shape", async t => {
+  for (const kind of ["symlink", "wrong-mode", "non-directory"] as const) {
     const root = await privateRoot(t), store = createAgentStore(root), agent = sampleAgent()
     await store.writeAgent(agent, null)
     const state = join(root, "agents/provider-state")
-    if (defect === "symlink") await symlink(root, state)
-    if (defect === "wrong-mode") { await mkdir(state, { mode: 0o700 }); await chmod(state, 0o750) }
-    if (defect === "non-directory") await writeFile(state, "state", { mode: 0o600 })
-    if (defect === "other-child") await mkdir(join(root, "agents/other"), { mode: 0o700 })
-    assert.ok((await store.inventory()).issues.length)
-    if (defect === "other-child") await store.writeCommand(sampleCommand(), null)
-    else await assert.rejects(store.writeCommand(sampleCommand(), null), { code: "INVALID_AGENT_STATE" })
-    if (defect === "wrong-mode") await chmod(state, 0o700)
-    if (defect === "symlink") await rm(state)
-    if (defect === "non-directory") await rm(state)
-    if (defect === "other-child") await rm(join(root, "agents/other"), { recursive: true })
+    if (kind === "symlink") await symlink(root, state)
+    if (kind === "wrong-mode") { await mkdir(state, { mode: 0o700 }); await chmod(state, 0o750) }
+    if (kind === "non-directory") await writeFile(state, "historical", { mode: 0o600 })
     assert.deepEqual((await store.inventory()).issues, [])
-  })
-}
+    await store.writeCommand(sampleCommand(), null)
+    assert.deepEqual((await store.inventory()).issues, [])
+  }
+})
+
+test("unknown agent storage entry reports an issue without blocking an independent command", async t => {
+  const root = await privateRoot(t), store = createAgentStore(root), agent = sampleAgent()
+  await store.writeAgent(agent, null)
+  await mkdir(join(root, "agents/other"), { mode: 0o700 })
+  assert.ok((await store.inventory()).issues.length)
+  await store.writeCommand(sampleCommand(), null)
+  await rm(join(root, "agents/other"), { recursive: true })
+  assert.deepEqual((await store.inventory()).issues, [])
+})
 
 for (const failure of ["file-sync", "rename", "directory-sync", "readback"] as const) {
   test(`publication ${failure} failure retains evidence and exact retry repeats durability`, async t => {
@@ -216,22 +221,31 @@ test("completed receipt visibility is not proof that its directory fsync succeed
   assert.deepEqual(await store.readCommand(pending.commandId), completed)
 })
 
+async function transitionContext(t: test.TestContext) {
+  const root = await privateRoot(t), agent = sampleAgent(), path = join(root, "launches", `${agent.launch.launchAttemptId}.json`)
+  await mkdir(join(root, "launches"), { mode: 0o700 })
+  const record: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: agent.definition.agentId, providerGeneration: agent.launch.providerGeneration }, handlerGeneration: agent.launch.handlerGeneration, launchAttemptId: agent.launch.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
+  await writeLaunchRecord(path, record)
+  const context: LaunchContext = { paths: { hostKey: agent.definition.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter: { platform: "linux", bootId: async () => "boot-a", readProcess: async () => null, readGroup: async () => [], signalGroup: async () => undefined }, state: { hostId: agent.definition.hostId, handlerGeneration: agent.launch.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }, mutations: { queue: new MutationQueue(), accepted: [{ path, record }] }, shutdownPending: () => false }
+  return { context, record, path }
+}
+
 test("launch publication is inventory-bound and uninvoked restoration uses separate authority", async t => {
-  const f = await admissionFixture(t), reserved = await f.controller.reserve(f.request()), attempted = { ...reserved.launch, launchAttempted: true }
-  await f.context.mutations.queue.run(() => commitLaunchTransition(f.context, reserved.launch, attempted))
-  await assert.rejects(commitLaunchTransition(f.context, attempted, reserved.launch))
+  const f = await transitionContext(t), attempted: LaunchRecord = { ...f.record, launchAttempted: true }
+  await f.context.mutations.queue.run(() => commitLaunchTransition(f.context, f.record, attempted))
+  await assert.rejects(commitLaunchTransition(f.context, attempted, f.record))
   const restored = await f.context.mutations.queue.run(() => restoreUninvokedLaunch(f.context, attempted, { spawnInvoked: false }))
-  assert.deepEqual(restored, reserved.launch)
-  const foreign = { ...restored, leaseId: agentId(55) } as import("../src/platform/types.js").LegacyLaunchRecord, path = f.context.mutations.accepted[0]!.path
+  assert.deepEqual(restored, f.record)
+  const foreign: LaunchRecord = { ...restored, owner: { kind: "agent", agentId: agentId(55), providerGeneration: agentId(56) } }, path = f.path
   await writeLaunchRecord(path, foreign)
   await assert.rejects(commitLaunchTransition(f.context, restored, attempted), { code: "UNAVAILABLE" })
   assert.deepEqual(await readLaunchRecordForReconciliation(path), foreign)
 })
 
 test("visible launch publication failure updates attribution without authorizing the next stage", async t => {
-  const f = await admissionFixture(t), reserved = await f.controller.reserve(f.request()), attempted = { ...reserved.launch, launchAttempted: true }
-  const io = { read: readLaunchRecordForReconciliation, async publish(path: string, record: typeof attempted) { await writeLaunchRecord(path, record); throw new Error("after publication") } }
-  await assert.rejects(f.context.mutations.queue.run(() => commitLaunchTransition(f.context, reserved.launch, attempted, io)), /after publication/)
+  const f = await transitionContext(t), attempted: LaunchRecord = { ...f.record, launchAttempted: true }
+  const io = { read: readLaunchRecordForReconciliation, async publish(path: string, record: LaunchRecord) { await writeLaunchRecord(path, record); throw new Error("after publication") } }
+  await assert.rejects(f.context.mutations.queue.run(() => commitLaunchTransition(f.context, f.record, attempted, io)), /after publication/)
   assert.deepEqual(f.context.mutations.accepted[0]!.record, attempted)
   await assert.rejects(restoreUninvokedLaunch(f.context, attempted, { spawnInvoked: false }, io))
   assert.equal(f.context.mutations.accepted[0]!.record.launchAttempted, false)

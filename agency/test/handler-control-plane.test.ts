@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readFile, writeFile } from "node:fs/promises"
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import test from "node:test"
@@ -8,7 +8,7 @@ import { runControl, productionControlDependencies } from "../src/cli/control.js
 import { ControlError } from "../src/control/protocol.js"
 import { readHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import { readShutdownReceipt } from "../src/handler/receipt.js"
-import { controlFixture, until, launch, delay } from "./control-support.js"
+import { controlFixture, until, launch, delay, privateRoot } from "./control-support.js"
 
 function client(f: Awaited<ReturnType<typeof controlFixture>>) {
   const out: string[] = []
@@ -27,6 +27,26 @@ test("32 concurrent clients select one real generation and observe the same read
   const status = await f.call()
   assert.ok(status.ok && "reconciliation" in status.result)
   assert.equal(status.result.reconciliation.classified, status.result.reconciliation.total)
+})
+
+test("historical admission state does not participate in Handler lifecycle", { timeout: 20000 }, async t => {
+  const trap = await privateRoot(t), marker = join(trap, "admissions-accessed"), gitMarker = join(trap, "git-invoked"), preload = join(trap, "forbid-admissions.cjs")
+  await writeFile(preload, `const fs = require("node:fs")\nconst fsp = require("node:fs/promises")\nconst cp = require("node:child_process")\nfor (const name of ["lstat", "stat", "readdir", "opendir", "readFile", "open", "mkdir", "rm", "rename", "writeFile"]) { const original = fsp[name]; fsp[name] = function(path, ...args) { if (String(path).includes("/admissions")) { fs.writeFileSync(${JSON.stringify(marker)}, String(path)); throw new Error("admissions access forbidden") }; return original.call(this, path, ...args) } }\nfor (const name of ["execFile", "spawn"]) { const original = cp[name]; cp[name] = function(file, ...args) { if (String(file).includes("git")) { fs.writeFileSync(${JSON.stringify(gitMarker)}, String(file)); throw new Error("Git subprocess forbidden") }; return original.call(this, file, ...args) } }\nrequire("node:module").syncBuiltinESMExports()`, { mode: 0o600 })
+  const f = await controlFixture(t, {}, undefined, undefined, { NODE_OPTIONS: `--require=${preload}` }), directory = join(f.paths.persistentRoot, "admissions")
+  await mkdir(directory, { mode: 0o700 })
+  await writeFile(join(directory, "historical.json"), "{", { mode: 0o600 })
+  const before = await lstat(directory)
+  const handler = await f.start()
+  const cli = client(f)
+  assert.equal(await cli.run(["status"]), 0)
+  assert.equal(await cli.run(["doctor"]), 0)
+  assert.equal(JSON.stringify(cli.result()).includes("admission"), false)
+  assert.equal((await lstat(directory)).ino, before.ino)
+  assert.equal(await readFile(join(directory, "historical.json"), "utf8"), "{")
+  await assert.rejects(lstat(marker), { code: "ENOENT" })
+  await assert.rejects(lstat(gitMarker), { code: "ENOENT" })
+  assert.equal(await cli.run(["shutdown"]), 0)
+  assert.equal(handler.record.phase, "ready")
 })
 
 test("restart after exact Handler death rejects the old command target without stopping replacement", { timeout: 20000 }, async t => {

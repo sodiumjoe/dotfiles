@@ -36,7 +36,7 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
   const inventory = await inventoryLaunchState(directory), entries = inventory.records
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
   context.state.issues = [...inventory.issues, ...(context.mutations.reconciliationIssues ?? [])]
-  if (!request.stopAgents && (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified"))) throw new ControlError("ACTIVE_AGENTS", "unverified launches or quarantined checkouts remain; inspect status")
+  if (!request.stopAgents && (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified"))) throw new ControlError("ACTIVE_AGENTS", "unverified launches remain; inspect status")
   if (request.stopAgents) {
     const failures: unknown[] = []
     for (const entry of entries) {
@@ -55,7 +55,7 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
   context.state.issues = [...checked.issues, ...(context.mutations.reconciliationIssues ?? [])]
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
   context.state.reconciliation = { classified: entries.length, total: entries.length, uncertain: entries.filter(entry => entry.record.phase === "quarantined").length }
-  if (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "checkout cleanup remains unverified")
+  if (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "launch cleanup remains unverified")
   if (context.record.process === null) throw new ControlError("INCOMPLETE", "Handler identity unavailable")
   await context.catalog?.verifyDischarged()
   const receipt: ShutdownReceipt = { version: 1, commandId: request.commandId, handlerGeneration: context.record.generation, hostId: context.record.hostId, handlerIdentity: context.record.process, stopAgents: request.stopAgents, state: "accepted" }

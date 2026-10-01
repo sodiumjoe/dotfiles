@@ -11,11 +11,6 @@ import { privateRoot, launch } from "./control-support.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import type { HandlerGenerationRecord, PlatformAdapter } from "../src/platform/types.js"
 import { MutationQueue } from "../src/handler/mutations.js"
-import { createAdmissionController } from "../src/checkout/admission.js"
-import { resolveCheckout } from "../src/checkout/identity.js"
-import { writeAdmission } from "../src/checkout/records.js"
-import { reconcileRecord } from "../src/platform/reconcile.js"
-import { admissionFixture } from "./checkout-support.js"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 
@@ -68,7 +63,7 @@ test("pre-rename failure leaves no receipt and post-rename directory failure pre
   assert.deepEqual(await readShutdownReceipt(root, value.commandId), value)
 })
 
-test("shutdown serializes admission, persists before draining, and deduplicates accepted commands", async t => {
+test("shutdown serializes receipt publication, persists before draining, and deduplicates accepted commands", async t => {
   const ctx = await context(t), first = request()
   const replies = await Promise.all([shutdownHandler(first, ctx), shutdownHandler({ ...first, requestId: randomUUID() }, ctx)])
   assert.ok(replies.every(reply => reply.ok))
@@ -142,47 +137,6 @@ test("uncertain receipt publication remains serviceable and retries the same pin
   ctx.publishReceipt = writeShutdownReceipt
   assert.ok((await shutdownHandler(command, ctx)).ok)
   assert.equal(ctx.state.phase, "draining")
-})
-
-async function checkoutContext(t: test.TestContext) {
-  const f = await admissionFixture(t), base = await context(t)
-  const ctx: ShutdownContext = { ...base, paths: f.context.paths, adapter: f.context.adapter, state: f.context.state, mutations: f.context.mutations, record: { ...base.record, generation: f.context.state.handlerGeneration } }
-  f.context.shutdownPending = () => ctx.pending !== undefined || ctx.accepted !== undefined
-  const command = { ...request(), handlerGeneration: ctx.record.generation }
-  return { f, ctx, command }
-}
-
-test("shutdown waits for an executing reservation before checking active leases", { timeout: 20000 }, async t => {
-  const { f, ctx, command } = await checkoutContext(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const controller = createAdmissionController(f.context, { resolve: resolveCheckout, publishAdmission: writeAdmission, reconcile: reconcileRecord, publishLaunch: async (path, value) => { entered.resolve(); await release.promise; await writeLaunchRecord(path, value) } })
-  const reservation = controller.reserve(f.request())
-  await entered.promise
-  const shutdown = shutdownHandler(command, ctx)
-  assert.notEqual(ctx.pending, undefined)
-  assert.equal(ctx.state.phase, "ready")
-  release.resolve()
-  assert.equal((await reservation).launch.phase, "launch_pending")
-  const reply = await shutdown
-  assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS")
-  assert.equal(ctx.state.launches.length, 1)
-  assert.equal(ctx.state.reconciliation.total, 1)
-})
-
-test("a pending shutdown coalesces retries and prevents queued reservations", { timeout: 20000 }, async t => {
-  const { f, ctx, command } = await checkoutContext(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  let publications = 0
-  ctx.publishReceipt = async (root, value) => { publications++; entered.resolve(); await release.promise; await writeShutdownReceipt(root, value) }
-  const first = shutdownHandler(command, ctx)
-  await entered.promise
-  const second = shutdownHandler({ ...command, requestId: randomUUID() }, ctx)
-  const reservation = assert.rejects(f.controller.reserve(f.request()), { code: "NOT_READY" })
-  release.resolve()
-  assert.ok((await first).ok)
-  assert.ok((await second).ok)
-  await reservation
-  assert.equal(publications, 1)
-  assert.equal(ctx.state.phase, "draining")
-  assert.equal(ctx.state.launches.length, 0)
 })
 
 for (const pause of ["spawn", "ready"] as const) test(`ordinary lifecycle shutdown refuses synchronously without cancelling ${pause}`, async t => {

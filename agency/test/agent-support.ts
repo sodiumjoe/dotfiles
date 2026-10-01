@@ -27,7 +27,6 @@ import type { CatalogService } from "../src/catalog/service.js"
 import { observeLaunchContract } from "../src/agent/contracts.js"
 import { contractFromQualifiedCandidate, qualificationFingerprint, type CodexQualificationManifest } from "../src/agent/qualification.js"
 import { admissionFixture, gitFixture } from "./checkout-support.js"
-import { inventoryAdmissions } from "../src/checkout/records.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import { AGENT_PROTOCOL, exchangeAgent, type AgentRequest } from "../src/agent/protocol.js"
 import { PROTOCOL } from "../src/control/protocol.js"
@@ -37,10 +36,10 @@ import { createAcpConnection } from "../src/agent/acp.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; reservationHang?: "before" | "launch" | "admission"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; fatalClose?: boolean }
+export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; reservationHang?: "before" | "launch" | "admission"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean }
 
-export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}) {
-  const git = await gitFixture(t), f = await controlFixture(t, {}, git, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)))
+export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
+  const git = await gitFixture(t), f = await controlFixture(t, {}, git, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
   const owned = new Map<string, LaunchRecord>(), seen = new Set<string>(), requests: Promise<unknown>[] = []
   const inventory = async () => ({ ...await createAgentStore(f.paths.persistentRoot).inventory(), launches: await inventoryLaunches(join(f.paths.persistentRoot, "launches")) })
   async function trackProviders(): Promise<void> {
@@ -83,8 +82,8 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
       await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process)
     }
     await trackProviders()
-    const agents = await inventory(), launches = await inventoryLaunches(join(f.paths.persistentRoot, "launches")), admissions = await inventoryAdmissions(f.paths.persistentRoot), probes = await createCatalogStore(f.paths.persistentRoot).inventory()
-    assert.deepEqual(agents.issues, []); assert.deepEqual(admissions.issues, []); assert.deepEqual(probes.issues, [])
+    const agents = await inventory(), launches = await inventoryLaunches(join(f.paths.persistentRoot, "launches")), probes = await createCatalogStore(f.paths.persistentRoot).inventory()
+    assert.deepEqual(agents.issues, []); assert.deepEqual(probes.issues, [])
     assert.deepEqual(probes.launches, [])
     for (const record of owned.values()) {
       const path = join(f.root, `${record.launchAttemptId}-supervisor-cleanup.json`)
@@ -95,7 +94,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     for (const entry of launches) if (entry.record.provider) for (const identity of entry.record.provider.group.observed) await proveAbsent(identity)
     for (const identity of f.owned) await proveAbsent(identity)
     assertGitChildrenClosed(); git.verifyCleanup()
-    const evidence = { handlers: f.owned, providers: [...owned.values()], launches, admissions, agents, probes, survivors: [] }
+    const evidence = { handlers: f.owned, providers: [...owned.values()], launches, agents, probes, survivors: [] }
     await writeFile(join(f.root, "agent-cleanup.json"), JSON.stringify(evidence), { mode: 0o600 })
     t.diagnostic("agent cleanup verified: " + JSON.stringify(evidence))
   })().catch(error => { throw failFixtureBatch(new Error(`agent fixture cleanup incomplete; retained ${f.root} and ${git.root}`, { cause: error })) })
@@ -110,11 +109,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   await configure(options)
   if (options.pauseAt === "session") await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 })
   if (options.pauseAt === "prompt") await writeFile(join(f.root, "pause-prompt"), "pause", { mode: 0o600 })
-  const starting = f.start(15000)
-  if (options.fatalClose) {
-    void starting.catch(() => undefined)
-    await until(async () => { try { return (await handler()).phase === "ready" ? true : undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return undefined } }, 10000)
-  } else await starting
+  await f.start(15000)
   async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_restore" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_prompt" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
     const current = await handler()
     const operationPromise = exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, ...operation }, 15000)
@@ -143,7 +138,6 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); assertGitChildrenClosed(); await trackProviders() },
     async waitPrompt() { await until(async () => await fileExists(join(f.root, "at-prompt")) ? true : undefined, 35000); await trackProviders() },
     async crashHandler() { await trackProviders(); const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process) },
-    async failHandler() { await trackProviders(); await writeFile(join(f.root, "fatal-close"), "fail", { mode: 0o600 }); await until(async () => await fileExists(join(f.root, "failure")) ? true : undefined) },
     async waitHandlerExit(timeout?: number) { const current = await handler(); assert.ok(current.process); await proveAbsent(current.process, timeout); await trackProviders() },
     async reservationTimeoutEvidence() { return JSON.parse(await readFile(join(f.root, "reservation-timeout.json"), "utf8")) as { pid: number; signal: string; attempt: string } },
     async restart() { await configure({}); await releaseBarrier(); await f.start(15000) },

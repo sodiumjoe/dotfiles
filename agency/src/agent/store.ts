@@ -71,11 +71,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     try {
       for (const name of await names(directory)) {
         if (name === "records" || name === "commands") continue
-        if (name !== "provider-state") { result.issues.push({ kind: "unknown", id: null, path: join(directory, name), message: "unknown agent state entry" }); continue }
-        const state = join(directory, name)
-        await assertPrivateDirectory(state)
-        const stat = await lstat(state)
-        if (!stat.isDirectory() || stat.uid !== process.getuid!() || (stat.mode & 0o777) !== 0o700) unavailable()
+        if (name !== "provider-state") result.issues.push({ kind: "unknown", id: null, path: join(directory, name), message: "unknown agent state entry" })
       }
       for (const kind of ["records", "commands"] as const) {
         for (const name of await names(join(directory, kind))) {
@@ -118,7 +114,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     }
   }
   async function publish(path: string, value: unknown, expected: unknown): Promise<void> {
-    if ((await inventory()).issues.some(issue => issue.path === directory || issue.path === join(directory, "provider-state"))) unavailable()
+    if ((await inventory()).issues.some(issue => issue.path === directory)) unavailable()
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > 1048576) throw new AgentError("INCOMPLETE")
     const before = await evidence(path)

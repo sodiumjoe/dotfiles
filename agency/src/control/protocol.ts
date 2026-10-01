@@ -1,4 +1,6 @@
 import type { LaunchRecord } from "../platform/types.js"
+import type { HandlerInspection } from "../platform/types.js"
+import type { PlatformPaths } from "../platform/paths.js"
 
 export const PROTOCOL = "agency-control/2" as const
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024
@@ -18,6 +20,17 @@ export type HandlerStatus = {
   launches: LaunchSummary[]
   issues?: StatusIssue[]
   capabilities: ["status", "doctor", "shutdown"]
+}
+export type DoctorDiagnostic = {
+  node: string
+  platform: "darwin" | "linux"
+  hostId: string
+  paths: PlatformPaths
+  handler: HandlerInspection | null
+  launches: LaunchSummary[]
+  agents: { records: Array<{ id: string; phase: string }>; commands: Array<{ id: string; op: string; state: string }>; issues: Array<{ path: string; message: string }> }
+  catalog: { probes: LaunchSummary[]; commands: Array<{ id: string; state: string }>; issues: string[] }
+  issues: Array<{ source: "launch" | "agent" | "catalog"; path: string; message: string }>
 }
 export type ControlResult = HandlerStatus | { state: "shutdown_accepted"; commandId: string; handlerGeneration: string }
 export type ControlReply = { protocol: typeof PROTOCOL; requestId: string; handlerGeneration: string } & (
