@@ -295,7 +295,7 @@ async function qualifiedResolveInput(t: TestContext) {
   const candidate = { version: 3 as const, manifest: observation.manifest, fingerprint: observation.fingerprint }
   const spec = sampleSpec()
   const evidence = launchEvidenceFromQualifiedCandidate(candidate, spec.handlerGeneration, 1000)
-  return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, startCommandId: spec.startCommandId }, selection: { providerId: "codex-acp" as const, modelId: "gpt-5.6-sol", reasoning: { kind: "value" as const, value: "high" }, mode: "read-only", permissionProfile: "deny-all" }, checkout: spec.checkout, ...evidence, contract: contractFromQualifiedCandidate(candidate) }
+  return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, launchAttemptId: spec.launchAttemptId, commandId: spec.commandId }, selection: { providerId: "codex-acp" as const, modelId: "gpt-5.6-sol", reasoning: { kind: "value" as const, value: "high" }, mode: "read-only", permissionProfile: "deny-all" }, cwd: spec.cwd, ...evidence, contract: contractFromQualifiedCandidate(candidate) }
 }
 
 test("production contract rejects catalog evidence from a different executable", { skip: !canVerify }, async t => {

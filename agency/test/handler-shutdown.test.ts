@@ -185,7 +185,7 @@ test("a pending shutdown coalesces retries and prevents queued reservations", { 
   assert.equal(ctx.state.launches.length, 0)
 })
 
-for (const pause of ["reservation", "ready"] as const) test(`ordinary lifecycle shutdown refuses synchronously without cancelling ${pause}`, async t => {
+for (const pause of ["spawn", "ready"] as const) test(`ordinary lifecycle shutdown refuses synchronously without cancelling ${pause}`, async t => {
   const f = await agentServiceFixture(t, { pause }), base = await context(t)
   const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
   f.context.shutdownPending = () => ctx.pending !== undefined

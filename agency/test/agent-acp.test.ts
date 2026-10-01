@@ -573,7 +573,7 @@ for (const scenario of ["exact", "fragmented", "grouped"]) test(`ACP confirms ex
   assert.equal(session.permissionEvidence, "fixture-contract-v1")
   assert.deepEqual(peer.sent.map(request => request.method), ["initialize", "session/new", "session/set_config_option", "session/set_config_option", "session/set_config_option"])
   assert.deepEqual(peer.sent[0]!.params, { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
-  assert.deepEqual(peer.sent[1]!.params, { cwd: "/checkout", mcpServers: [] })
+  assert.deepEqual(peer.sent[1]!.params, { cwd: spec.cwd, mcpServers: [] })
   assert.deepEqual(peer.sent.slice(2).map(request => [request.params.configId, request.params.value]), [["model", "model-a"], ["reasoning", "high"], ["mode", "review"]])
 })
 

@@ -7,10 +7,10 @@ import { execFile } from "node:child_process"
 import { isDeepStrictEqual, promisify } from "node:util"
 import { fileURLToPath } from "node:url"
 import { observeArtifact, parseCodexQualificationManifest, qualificationFingerprint, renderQualifiedContractSource, verifyCodexQualification, type ArtifactPin, type CodexQualificationCandidate, type CodexQualificationManifest, type CodexQualificationObservation } from "../src/agent/qualification.js"
-import { AGENT_CODES, AgentError, parseAgentCommand, parseAgentRecord, parseSession, tupleOf, type AgentCommand, type AgentRecord, type AgentTuple, type SessionEvidence } from "../src/agent/types.js"
+import { AGENT_CODES, AgentError, parseAgentCommand, parseAgentRecord, parseSession, specOf, tupleOf, type AgentCommand, type AgentRecord, type AgentTuple, type SessionEvidence, type StartCommandInput } from "../src/agent/types.js"
+import { snapshotLaunchEnvironment } from "../src/agent/environment.js"
 import { AGENT_PROTOCOL, exchangeAgent, parseAgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { createAgentStore } from "../src/agent/store.js"
-import { providerStatePath } from "../src/agent/state.js"
 import { inventoryAdmissions, parseAdmissionRecord, readAdmission, type AdmissionRecord } from "../src/checkout/records.js"
 import { admissionInventoryIssues } from "../src/checkout/admission.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
@@ -160,15 +160,17 @@ const limits = (m: CodexQualificationManifest): Record<Phase, number> => ({ comm
 const success = { transport: "closed", directChild: "terminal", processGroup: "absent", reservation: "released", providerState: "absent", qualificationCwd: "absent", executionRoot: "absent", lifecycleOperation: "terminal", ownedStreams: "closed", handler: "absent", catalogProfile: "absent", normalAgencyState: "unchanged" } as const
 function correlate(report: CodexQualificationReport): void {
   const { ownership: own, session, observation: { retained: e } } = report
-  if (!e.command || !e.agent || !e.admission || !e.launch || !session) fail("OWNERSHIP_INVALID")
-  const c = parseAgentCommand(e.command!), a = parseAgentRecord(e.agent!), d = parseAdmissionRecord(e.admission!), s = a.spec, l = e.launch!
+  if (!e.command || !e.agent || !e.launch || !session) fail("OWNERSHIP_INVALID")
+  const c = parseAgentCommand(e.command), a = parseAgentRecord(e.agent), s = specOf(a), l = e.launch
   const selected = { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" }
-  equal(s.selection, selected); equal(c.input, { commandId: s.startCommandId, handlerGeneration: s.handlerGeneration, cwd: s.checkout.root.path, selection: selected })
-  if (a.phase !== "ready" || c.state !== "completed" || c.result?.outcome !== "started" || c.commandId !== s.startCommandId || c.hostId !== s.hostId) fail("OWNERSHIP_INVALID")
+  equal(s.selection, selected)
+  const durable = c.input as StartCommandInput
+  if (c.op !== "start" || durable.cwd !== s.cwd || durable.environmentDigest === undefined || durable.commandId !== s.commandId || durable.handlerGeneration !== s.handlerGeneration) fail("OWNERSHIP_INVALID")
+  if (a.phase !== "ready" || c.state !== "completed" || c.result?.outcome !== "started" || c.commandId !== s.commandId || c.hostId !== s.hostId) fail("OWNERSHIP_INVALID")
   equal(c.target, tupleOf(s)); equal(c.result!.target, tupleOf(s)); equal(c.result!.session, session); equal(a.session, session)
-  equal(d, { version: 1, checkout: s.checkout, agentId: s.agentId, handlerGeneration: s.handlerGeneration, leaseId: s.leaseId, launchAttemptId: s.launchAttemptId })
-  for (const key of ["agentId", "handlerGeneration", "leaseId", "launchAttemptId"] as const) if (own[key] !== s[key] || l[key] !== s[key]) fail("OWNERSHIP_INVALID")
-  if (own.providerGeneration !== s.providerGeneration || own.sessionId !== session!.sessionId || l.checkoutId !== s.checkout.checkoutId || !l.launchAttempted || l.phase !== "active") fail("OWNERSHIP_INVALID")
+  if (l.version !== 2 || l.owner.kind !== "agent") fail("OWNERSHIP_INVALID")
+  if (own.agentId !== s.agentId || own.handlerGeneration !== s.handlerGeneration || own.launchAttemptId !== s.launchAttemptId || l.owner.agentId !== s.agentId || l.handlerGeneration !== s.handlerGeneration || l.launchAttemptId !== s.launchAttemptId) fail("OWNERSHIP_INVALID")
+  if (own.providerGeneration !== s.providerGeneration || own.sessionId !== session.sessionId || l.owner.providerGeneration !== s.providerGeneration || !l.launchAttempted || l.phase !== "active") fail("OWNERSHIP_INVALID")
   equal(own.providerProcessGroup, l.provider?.group)
   equal(own.handlers, e.handlers.map(h => ({ generation: h.generation, launchAttemptId: h.launchAttemptId, process: h.process })))
   if (l.launchBootId !== own.providerProcessGroup?.leader.bootId || e.handlers.some(h => h.hostId !== s.hostId || h.launchBootId !== h.process?.bootId)) fail("OWNERSHIP_INVALID")
@@ -223,13 +225,13 @@ function promptDeadlineOutcome(prompt: PromptAttempt, limitMs: number): Outcome 
   return prompt.state === "completed" ? "completed" : "failed"
 }
 function retainedPrivatePaths(report: CodexQualificationReport): string[] {
-  const spec = report.observation.retained.agent?.spec
+  const spec = report.observation.retained.agent ? specOf(report.observation.retained.agent) : null
   if (!spec || !report.ownership.launchAttemptId || !report.observation.retained.handlers.length) fail("REPORT_INVALID")
-  const cwd = canonical(spec.checkout.root.path), root = canonical(dirname(cwd))
+  const cwd = canonical(spec.cwd), root = canonical(dirname(cwd))
   if (join(root, report.observation.candidate.manifest.qualificationCwd.relative) !== cwd) fail("REPORT_INVALID")
   const paths = qualificationPaths(root, spec.hostId)
   if (report.observation.retained.handlers.some(handler => handler.socketPath !== paths.handlerSocketPath)) fail("REPORT_INVALID")
-  return [root, cwd, providerStatePath(paths.persistentRoot, report.ownership.launchAttemptId), join(paths.persistentRoot, "catalog/providers.json")]
+  return [root, cwd, join(paths.persistentRoot, "catalog/providers.json")]
 }
 async function requirePrivateAbsence(paths: readonly string[]): Promise<void> {
   try {
@@ -262,7 +264,7 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
   if (retained.launch !== null) {
     if (retained.agent === null) fail("REPORT_INVALID")
     const agent = parseAgentRecord(retained.agent)
-    parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: agent.spec.startCommandId, handlerGeneration: agent.spec.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record: agent, launch: retained.launch, live: false, cleanup: "unverified" }], unavailable: null } })
+    parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: agent.definition.createdCommandId, handlerGeneration: agent.launch.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record: agent, launch: retained.launch, live: false, cleanup: "unverified" }], unavailable: null } })
   }
   if (retained.recovery !== null) {
     const recovery = object(retained.recovery, ["command", "agent", "launch", "admission", "consistent"])
@@ -273,7 +275,7 @@ export function parseCodexQualificationReport(value: unknown): CodexQualificatio
     if (recovery.launch !== null) {
       if (recovery.agent === null) fail("REPORT_INVALID")
       const agent = parseAgentRecord(recovery.agent)
-      parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: agent.spec.startCommandId, handlerGeneration: agent.spec.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record: agent, launch: recovery.launch, live: false, cleanup: "unverified" }], unavailable: null } })
+      parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: agent.definition.createdCommandId, handlerGeneration: agent.launch.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record: agent, launch: recovery.launch, live: false, cleanup: "unverified" }], unavailable: null } })
     }
   }
   const receipt = o.receipt === null ? null : parseQualificationReceipt(o.receipt, candidate.manifest)
@@ -562,20 +564,19 @@ export async function runCodexQualification(request: QualificationRequest, depen
     if (!paths) return
     const store = createAgentStore(paths.persistentRoot), inv = await store.inventory()
     if (inv.issues.length || inv.agents.length > 1 || inv.commands.filter(c => c.op === "start").length > 1) fail("OWNERSHIP_INVALID")
-    const agent = target ? inv.agents.find(a => a.spec.agentId === target!.agentId) : inv.agents[0]
+    const agent = target ? inv.agents.find(a => a.definition.agentId === target!.agentId) : inv.agents[0]
     if (!agent) return
-    const s = agent.spec
-    if (s.handlerGeneration !== report.ownership.handlerGeneration || s.hostId !== deps.hostKey || s.checkout.root.path !== join(root!, candidate.manifest.qualificationCwd.relative)) fail("OWNERSHIP_INVALID")
+    const s = specOf(agent)
+    if (s.handlerGeneration !== report.ownership.handlerGeneration || s.hostId !== deps.hostKey || s.cwd !== join(root!, candidate.manifest.qualificationCwd.relative)) fail("OWNERSHIP_INVALID")
     if (target) equal(target, tupleOf(s))
-    target ??= tupleOf(s); commandId ??= s.startCommandId
-    for (const key of ["agentId", "providerGeneration", "leaseId", "launchAttemptId"] as const) {
+    target ??= tupleOf(s); commandId ??= s.commandId
+    for (const key of ["agentId", "providerGeneration", "launchAttemptId"] as const) {
       if (report.ownership[key] !== null && report.ownership[key] !== s[key]) fail("OWNERSHIP_INVALID")
       report.ownership[key] = s[key]
     }
     const launch = await readLaunchRecordForReconciliation(join(paths.persistentRoot, "launches", `${s.launchAttemptId}.json`)).catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error })
     if (launch) {
-      for (const key of ["agentId", "leaseId", "handlerGeneration", "launchAttemptId"] as const) if (launch[key] !== s[key]) fail("OWNERSHIP_INVALID")
-      if (launch.checkoutId !== s.checkout.checkoutId) fail("OWNERSHIP_INVALID")
+      if (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== s.agentId || launch.owner.providerGeneration !== s.providerGeneration || launch.handlerGeneration !== s.handlerGeneration || launch.launchAttemptId !== s.launchAttemptId) fail("OWNERSHIP_INVALID")
       if (report.deadlines.reservation.outcome !== "timed_out") report.deadlines.reservation.outcome = "completed"
       if (launch.provider !== null) {
         if (report.ownership.providerProcessGroup !== null) {
@@ -638,7 +639,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
     const launch = launches.find(e => e.record.launchAttemptId === report.ownership.launchAttemptId)?.record
     const command = inv.commands.find(c => c.commandId === commandId)
     const consistent = !inv.issues.length && !admissionInventoryIssues(deps.hostKey, launches, admissions).length
-    retained.recovery = { command: command ?? null, agent: inv.agents.find(a => a.spec.agentId === report.ownership.agentId) ?? null, launch: launch ?? null, admission: admissions.records.find(a => a.launchAttemptId === report.ownership.launchAttemptId) ?? null, consistent }
+    retained.recovery = { command: command ?? null, agent: inv.agents.find(a => a.definition.agentId === report.ownership.agentId) ?? null, launch: launch ?? null, admission: null, consistent }
     if (consistent && launch?.phase === "cleanup_verified" && command && command.state !== "pending") report.postconditions.reservation = "released"
     else report.postconditions.reservation = launch ? "retained" : "unknown"
     if (launch && !launch.launchAttempted && performance.now() - overallStart >= candidate.manifest.deadlines.reservationMs && report.failure === "HANDLER_TERMINATED") { report.deadlines.reservation.outcome = "timed_out"; report.failure = "STARTUP_TIMEOUT" }
@@ -662,7 +663,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
     commandId = randomUUID(); startSent = true
     let pending
     const started = performance.now()
-    try { pending = await within(requestAgent({ op: "agent_start", input: { commandId, handlerGeneration: current!.generation, cwd, selection: { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" } } }), candidate.manifest.deadlines.commandMs, "COMMAND_START_TIMEOUT") }
+    try { pending = await within(requestAgent({ op: "agent_start", input: { commandId, handlerGeneration: current!.generation, cwd, selection: { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" }, environment: snapshotLaunchEnvironment(process.env) } }), candidate.manifest.deadlines.commandMs, "COMMAND_START_TIMEOUT") }
     catch (error) {
       const timeout = performance.now() - started >= candidate.manifest.deadlines.commandMs || error instanceof AgentError && ["INCOMPLETE", "STARTUP_TIMEOUT"].includes(error.code)
       report.deadlines.commandStart.outcome = timeout ? "timed_out" : "failed"
@@ -673,10 +674,10 @@ export async function runCodexQualification(request: QualificationRequest, depen
     report.deadlines.commandStart.outcome = "completed"; parentDurations.commandStart = performance.now() - started; target = pending.command.target
     const complete = await waitCommand(commandId, current!.generation)
     if (complete.command.result?.outcome !== "started") throw new AgentError(complete.command.result?.failure?.code ?? "STARTUP_FAILED")
-    const ready = complete.list.agents.find(a => a.record.spec.agentId === target!.agentId)
-    if (!ready || ready.record.phase !== "ready" || ready.launch?.phase !== "active") fail("OWNERSHIP_INVALID")
+    const ready = complete.list.agents.find(a => a.record.version === 2 && a.record.definition.agentId === target!.agentId)
+    if (!ready || ready.record.version !== 2 || ready.record.phase !== "ready" || ready.launch?.phase !== "active") fail("OWNERSHIP_INVALID")
     retained.command = complete.command; retained.agent = ready.record; retained.launch = ready.launch
-    retained.admission = await readAdmission(paths.persistentRoot, ready.record.spec.launchAttemptId)
+    retained.admission = null
     report.session = parseSession(complete.command.result.session); report.ownership.sessionId = report.session.sessionId
     report.selection = { modelId: report.session.modelId as "gpt-5.6-sol", reasoning: report.session.reasoning.kind === "value" ? report.session.reasoning.value as "high" : fail("SELECTION_UNSUPPORTED"), mode: report.session.mode as "read-only" }
     report.authentication = "ambient_accepted"
@@ -689,7 +690,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
     if (promptResult.stopReason !== "end_turn" || promptResult.text.trim() !== challenge) fail("ADAPTER_UNQUALIFIED")
     await deps.beforeCleanup?.(root, report)
     equal(await readHandlerRecord(join(paths.runtimeRoot, "handler.json")), retained.handlers[0])
-    equal(await readLaunchRecordForReconciliation(join(paths.persistentRoot, "launches", ready.record.spec.launchAttemptId + ".json")), retained.launch)
+    equal(await readLaunchRecordForReconciliation(join(paths.persistentRoot, "launches", ready.record.launch.launchAttemptId + ".json")), retained.launch)
     equal(await createAgentStore(paths.persistentRoot).readCommand(commandId), retained.command)
     equal(await createAgentStore(paths.persistentRoot).readAgent(target.agentId), retained.agent)
     correlate(report)
@@ -701,7 +702,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
     budget(); report.deadlines.overall.outcome = "completed"; parentDurations.overall = performance.now() - overallStart
     })(), candidate.manifest.deadlines.overallMs, "OVERALL_TIMEOUT")
   } catch (error) {
-    if (stopSent && report.session !== null && error instanceof AgentError && ["ADMISSION_UNAVAILABLE", "INCOMPLETE"].includes(error.code)) setFailure(new QualificationError("CLEANUP_UNVERIFIED"), "CLEANUP_UNVERIFIED")
+    if (stopSent && report.session !== null && error instanceof AgentError && ["UNAVAILABLE", "INCOMPLETE"].includes(error.code)) setFailure(new QualificationError("CLEANUP_UNVERIFIED"), "CLEANUP_UNVERIFIED")
     else setFailure(error, "STARTUP_FAILED")
     if (report.failure === "AUTH_REQUIRED") report.authentication = "auth_required"
     else if (startSent && report.authentication !== "ambient_accepted") report.authentication = "failed"
@@ -729,7 +730,11 @@ export async function runCodexQualification(request: QualificationRequest, depen
       try {
         if (cleanupLaunch?.provider && !await absentGroup(deps.adapter, cleanupLaunch.provider.group)) {
           const path = join(paths.persistentRoot, "launches", cleanupLaunch.launchAttemptId + ".json"), currentLaunch = await readLaunchRecordForReconciliation(path)
-          for (const key of ["agentId", "leaseId", "handlerGeneration", "launchAttemptId", "checkoutId"] as const) equal(currentLaunch[key], cleanupLaunch[key])
+          equal(currentLaunch.version, cleanupLaunch.version)
+          if (currentLaunch.version !== 2 || cleanupLaunch.version !== 2) fail("OWNERSHIP_INVALID")
+          equal(currentLaunch.owner, cleanupLaunch.owner)
+          equal(currentLaunch.handlerGeneration, cleanupLaunch.handlerGeneration)
+          equal(currentLaunch.launchAttemptId, cleanupLaunch.launchAttemptId)
           equal(currentLaunch.provider, cleanupLaunch.provider)
           const result = await reconcileRecord(path, deps.adapter, currentLaunch)
           cleanupLaunch = result.record
@@ -747,7 +752,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
         if (!recovered) report.postconditions.reservation = verified ? "released" : "retained"
         else if (!verified && report.postconditions.reservation === "released") report.postconditions.reservation = "retained"
         report.postconditions.lifecycleOperation = verified ? "terminal" : "in_flight"
-        report.postconditions.providerState = report.ownership.launchAttemptId && await exists(providerStatePath(paths.persistentRoot, report.ownership.launchAttemptId)) ? "present" : "absent"
+        report.postconditions.providerState = "absent"
         report.postconditions.catalogProfile = await exists(join(paths.persistentRoot, "catalog/providers.json")) ? "present" : "absent"
         if (report.ownership.launchAttemptId) {
           const receiptPath = join(root!, "receipts", report.ownership.launchAttemptId + ".json")
@@ -764,7 +769,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
           report.deadlines.prompt.outcome = promptDeadlineOutcome(receipt.prompt, candidate.manifest.deadlines.promptMs)
           if (report.deadlines.prompt.outcome === "timed_out") setFailure(new AgentError("STARTUP_TIMEOUT"), "STARTUP_TIMEOUT")
           if (receipt.failure) {
-            if (report.failure === "ADMISSION_UNAVAILABLE" || report.failure === "INCOMPLETE") report.failure = receipt.failure
+            if (report.failure === "UNAVAILABLE" || report.failure === "INCOMPLETE") report.failure = receipt.failure
             else setFailure(new QualificationError(receipt.failure), receipt.failure)
           }
         } else { report.postconditions.directChild = "terminal"; report.postconditions.transport = "closed"; report.postconditions.ownedStreams = "closed" }

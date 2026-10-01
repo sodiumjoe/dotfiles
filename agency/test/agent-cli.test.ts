@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { runControl, type ControlDependencies } from "../src/cli/control.js"
 import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../src/agent/protocol.js"
-import { AgentError, type AgentCommand, type AgentErrorCode } from "../src/agent/types.js"
+import { AgentError, projectStartInput, type AgentCommand, type AgentErrorCode } from "../src/agent/types.js"
 import { unavailableControlDependencies, until } from "./control-support.js"
 import { agentId, agentServiceFixture, sampleAgent, sampleCommand, sampleSession } from "./agent-support.js"
 import type { HandlerInspection } from "../src/platform/types.js"
@@ -15,8 +15,8 @@ function fixture() {
   const unsupported = async (): Promise<never> => { throw new Error("unexpected store mutation") }
   const reply = (r: AgentRequest): AgentReply => {
     if (r.op === "agent_list") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "agents", agents: [], unavailable: null } }
-    if (r.op === "agent_current") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "current", checkout: sampleAgent().spec.checkout, agent: null, blockers: [agentId(77)], unavailable: null } }
-    if (r.op === "agent_start") retained = { ...retained, commandId: r.input.commandId, handlerGeneration: r.input.handlerGeneration, input: r.input }
+    if (r.op === "agent_current") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "current", cwd: r.cwd, agents: [] } }
+    if (r.op === "agent_start") retained = { ...retained, commandId: r.input.commandId, handlerGeneration: r.input.handlerGeneration, input: projectStartInput(r.input) }
     return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: retained.commandId, ok: true, result: { state: "command", command: retained, durability: "verified" } }
   }
   const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: command.hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/socket" }, adapter: { platform: "darwin", bootId: async () => "boot-a", readProcess: unsupported, readGroup: unsupported, signalGroup: unsupported } }), start: async () => { starts++; return inspection }, inspect: async () => inspection, cwd: () => "/checkout", now: () => now, sleep: async ms => { now += ms }, stdout: value => out.push(value), stderr: value => err.push(value), callAgent: async (_env, r) => { calls.push(r); return reply(r) }, agentStore: () => ({ readCommand: async id => id === retained.commandId ? structuredClone(retained) : null, readAgent: unsupported, inventory: unsupported, writeAgent: unsupported, writeCommand: unsupported }) }
@@ -29,6 +29,36 @@ test("new agent start emits one envelope and explicit effective selections", asy
   assert.equal(f.out.length, 1); assert.equal(f.output().protocol, AGENT_PROTOCOL)
   assert.equal(f.output().result.command.result.session.mode, "review")
   assert.equal(f.starts(), 1)
+})
+
+test("client sends its complete ambient environment only on initial start", async () => {
+  const previous = process.env.AGENCY_TEST_SECRET
+  process.env.AGENCY_TEST_SECRET = "not-for-state"
+  try {
+    const f = fixture()
+    assert.equal(await runControl(["agent", "start", ...flags], f.deps), 0)
+    assert.equal(f.calls[0]?.op, "agent_start")
+    if (f.calls[0]?.op !== "agent_start") throw new Error("start was not sent")
+    assert.equal(f.calls[0].input.environment.AGENCY_TEST_SECRET, "not-for-state")
+    assert.equal(f.calls.slice(1).every(call => call.op === "agent_command"), true)
+    assert.equal(JSON.stringify(f.output()).includes("not-for-state"), false)
+  } finally {
+    if (previous === undefined) delete process.env.AGENCY_TEST_SECRET
+    else process.env.AGENCY_TEST_SECRET = previous
+  }
+})
+
+test("list does not require a start-sized ambient environment", async () => {
+  const previous = process.env.AGENCY_TEST_OVERSIZED
+  process.env.AGENCY_TEST_OVERSIZED = "x".repeat(256 * 1024)
+  try {
+    const f = fixture()
+    assert.equal(await runControl(["agent", "list", "--json"], f.deps), 0)
+    assert.equal(f.output().result.state, "agents")
+  } finally {
+    if (previous === undefined) delete process.env.AGENCY_TEST_OVERSIZED
+    else process.env.AGENCY_TEST_OVERSIZED = previous
+  }
 })
 
 for (const args of [["agent", "start"], ["agent", "start", ...flags.filter((_, i) => i !== 8 && i !== 9)], ["agent", "start", ...flags, "--model", "b"], ["agent", "start", ...flags, "--reasoning", ""], ["agent", "list", "--mode", "review"], ["agent", "stop", agentId(1)]]) test(`invalid agent arguments fail before environment access: ${args.join(" ")}`, async () => {
@@ -75,11 +105,11 @@ test("a lost start response is reconciled using the original command identity", 
   assert.deepEqual(f.calls.map(r => r.op), ["agent_start", "agent_command"])
 })
 
-test("current forwards only its normalized cwd and preserves nested blockers", async () => {
+test("current forwards only its normalized cwd and returns an agent list", async () => {
   const f = fixture(); f.deps.cwd = () => "/checkout/nested/.."
   assert.equal(await runControl(["agent", "current", "--json"], f.deps), 0)
   assert.equal((f.calls[0] as AgentRequest & { op: "agent_current" }).cwd, "/checkout")
-  assert.deepEqual(f.output().result.blockers, [agentId(77)])
+  assert.deepEqual(f.output().result.agents, [])
 })
 
 test("mismatched response identities never become successful output", async () => {

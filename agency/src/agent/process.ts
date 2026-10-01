@@ -1,27 +1,27 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
-import type { AdmissionContext, Reservation } from "../checkout/admission.js"
-import { commitLaunchTransition, restoreUninvokedLaunch, type LaunchTransitionIO } from "../handler/launch-transitions.js"
+import { commitLaunchTransition, restoreUninvokedLaunch, type LaunchContext, type LaunchTransitionIO } from "../handler/launch-transitions.js"
 import { refreshLaunchState } from "../handler/mutations.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
-import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
+import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
-import { sameProcess, sameProcessGeneration, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
+import { sameProcess, sameProcessGeneration, type LaunchRecord, type ManagedLaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { createAcpConnection, type AcpConnection } from "./acp.js"
-import { prepareProviderState, removeProviderState } from "./state.js"
 import type { LaunchContract } from "./contracts.js"
+import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
 import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
 export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 
-export function createAgentProcess(input: { context: AdmissionContext; reservation: Reservation; spec: LaunchSpec; contract: LaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; removeProviderState?: typeof removeProviderState } = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; environment: LaunchEnvironment; contract: LaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number } = {}): OwnedAgentProcess {
   const { context, spec, contract } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.qualification?.deadlines
   let overallDeadline = input.deadline ?? Infinity, spawnDeadline = Infinity
   const directory = join(context.paths.persistentRoot, "launches"), path = join(directory, spec.launchAttemptId + ".json")
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
-  let current = structuredClone(input.reservation.launch), spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
+  let current: ManagedLaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "pending", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
+  let published = false, spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
   let initialization: Promise<SessionEvidence> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<LaunchRecord> | undefined
   let terminal = false, closed = false, stopping = false, disposed = false, initialized = false, failure: AgentFailure | undefined
   let resolveFault!: (value: AgentFailure) => void, resolveTerminal!: () => void, resolveClose!: () => void
@@ -36,7 +36,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
     if (stopping || controller.signal.aborted || terminal) throw new AgentError("STARTUP_FAILED")
     if (context.state.handlerGeneration !== spec.handlerGeneration) throw new AgentError("STALE_HANDLER")
     if (context.state.phase !== "ready") throw new AgentError("NOT_READY")
-    if (mutations.unavailable !== null) throw new AgentError("ADMISSION_UNAVAILABLE")
+    if (mutations.unavailable !== null) throw new AgentError("UNAVAILABLE")
     if (now() >= overallDeadline || !connection && now() >= spawnDeadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   const bounded = async <T>(operation: () => Promise<T>, deadline: number, code: "STARTUP_TIMEOUT" | "CLEANUP_UNVERIFIED"): Promise<T> => {
@@ -49,8 +49,8 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
       return value
     } finally { clearTimeout(timer) }
   }
-  const snapshot = (): LaunchRecord => structuredClone(mutations.accepted.find(entry => entry.record.launchAttemptId === spec.launchAttemptId)?.record ?? current)
-  const transition = async (next: LaunchRecord): Promise<void> => {
+  const snapshot = (): ManagedLaunchRecord => structuredClone(mutations.accepted.find(entry => entry.record.launchAttemptId === spec.launchAttemptId)?.record as ManagedLaunchRecord ?? current)
+  const transition = async (next: ManagedLaunchRecord): Promise<void> => {
     try { await commitLaunchTransition(context, current, next, dependencies.transitionIO) }
     finally { current = snapshot() }
   }
@@ -63,8 +63,8 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
     for (const stream of [value.stdin, value.stdout, value.stderr]) stream?.on("error", () => { if (!stopping) fail(new AgentError("STARTUP_FAILED")) })
   }
   const spawnOptions: SpawnOptions = {
-    argv0: marker, detached: true, shell: false, cwd: spec.checkout.root.path, stdio: ["pipe", "pipe", "pipe"],
-    env: {},
+    argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
+    env: { ...parseLaunchEnvironment(input.environment) },
   }
   const observe = async (): Promise<{ leader: ProcessIdentity; observed: ProcessIdentity[] }> => {
     if (!child?.pid) throw new AgentError("STARTUP_FAILED")
@@ -103,6 +103,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
     cleaning = bounded(async () => {
       await preparation?.catch(() => undefined)
       checkCleanup()
+      if (!published) return structuredClone(current)
       await mutations.queue.run(async () => {
         try {
           checkCleanup()
@@ -110,7 +111,11 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
           checkCleanup()
           current = snapshot()
           if (!spawnInvoked && current.launchAttempted && current.provider === null) {
-            try { current = await restoreUninvokedLaunch(context, current, { spawnInvoked: false }, dependencies.transitionIO) }
+            try {
+              const restored = await restoreUninvokedLaunch(context, current, { spawnInvoked: false }, dependencies.transitionIO)
+              if (restored.version !== 2 || restored.owner.kind !== "agent") throw new AgentError("CLEANUP_UNVERIFIED")
+              current = restored
+            }
             catch { current = snapshot() }
           }
           checkCleanup()
@@ -124,6 +129,7 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
           }
           try {
             const result = await reconcileRecord(path, cleanupAdapter, current)
+            if (result.record.version !== 2 || result.record.owner.kind !== "agent") throw new AgentError("CLEANUP_UNVERIFIED")
             current = result.record
             if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(path), current)) throw new AgentError("CLEANUP_UNVERIFIED")
             const entry = mutations.accepted.find(entry => entry.path === path)
@@ -138,8 +144,6 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
           if (child && !closed) await waitForCloseOrGrace(phases?.transportCloseMs ?? 1000)
           checkCleanup()
           if (child) { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() }
-          await (dependencies.removeProviderState ?? removeProviderState)(context.paths.persistentRoot, spec.launchAttemptId)
-          checkCleanup()
         } catch {
           mutations.unavailable ??= `provider cleanup unverified: ${spec.launchAttemptId}`
           throw new AgentError("CLEANUP_UNVERIFIED")
@@ -170,9 +174,21 @@ export function createAgentProcess(input: { context: AdmissionContext; reservati
       spawnDeadline = Math.min(overallDeadline, now() + (phases?.spawnMs ?? 5000))
       preparation = mutations.queue.run(async () => {
         check(); await input.revalidate(); check()
-        if (await adapter.bootId() !== current.launchBootId) throw new AgentError("CONFIG_CHANGED")
-        const prepared = await prepareProviderState(context.paths.persistentRoot, spec.launchAttemptId, contract.environment)
-        spawnOptions.env = prepared.environment
+        current = { ...current, launchBootId: await adapter.bootId() }
+        await refreshLaunchState(context.state, mutations, directory)
+        if (mutations.accepted.some(entry => entry.record.launchAttemptId === spec.launchAttemptId) || mutations.issues?.some(issue => issue.launchAttemptId === spec.launchAttemptId)) throw new AgentError("INVALID_AGENT_STATE")
+        try { await writeLaunchRecord(path, current) }
+        finally {
+          try {
+            const visible = await readLaunchRecordForReconciliation(path)
+            if (isDeepStrictEqual(visible, current)) {
+              mutations.accepted.push({ path, record: structuredClone(current) })
+              published = true
+            } else mutations.unavailable ??= `agent launch publication changed: ${spec.launchAttemptId}`
+          } catch { mutations.unavailable ??= `agent launch publication uncertain: ${spec.launchAttemptId}` }
+          await refreshLaunchState(context.state, mutations, directory)
+        }
+        if (!published || mutations.unavailable) throw new AgentError("UNAVAILABLE")
         check()
         await transition({ ...current, launchAttempted: true })
         await input.revalidate(); check()

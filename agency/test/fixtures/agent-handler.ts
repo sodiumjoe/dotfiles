@@ -18,10 +18,7 @@ import { observeConfig } from "../../src/catalog/config.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../../src/platform/private-state.js"
-import { assertGitChildrenClosed, CheckoutResolutionError, resolveCheckout } from "../../src/checkout/identity.js"
-import { createAdmissionController } from "../../src/checkout/admission.js"
-import { writeAdmission } from "../../src/checkout/records.js"
-import { reconcileRecord } from "../../src/platform/reconcile.js"
+import { assertGitChildrenClosed, CheckoutResolutionError } from "../../src/checkout/identity.js"
 import type { PlatformPaths } from "../../src/platform/paths.js"
 import type { ProviderProfile } from "../../src/catalog/types.js"
 import type { AgentHandlerOptions } from "../agent-support.js"
@@ -77,14 +74,6 @@ try {
       const startupHang = async (boundary: AgentHandlerOptions["startupHang"]): Promise<void> => {
         if (config.startupHang === boundary) await new Promise<void>(() => undefined)
       }
-      const hang = async (boundary: AgentHandlerOptions["reservationHang"]): Promise<void> => {
-        if (config.reservationHang === boundary) await new Promise<void>(() => undefined)
-      }
-      const admission = config.reservationHang ? createAdmissionController(input.context, {
-        resolve: resolveCheckout, reconcile: reconcileRecord,
-        async publishLaunch(path, record) { await hang("before"); await writeLaunchRecord(path, record); await hang("launch") },
-        async publishAdmission(path, record) { await writeAdmission(path, record); await hang("admission") },
-      }) : input.admission
       const base = createAgentStore(config.paths.persistentRoot, { mkdir, rename, rm, async open(path, flags, mode) {
         const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
         handle.sync = async () => {
@@ -105,7 +94,7 @@ try {
         if (next.op === "start" && next.state === "completed") await pause("receipt")
         if (next.op === "stop" && next.state === "pending") await pause("stop-intent")
         if (next.op === "stop" && next.state === "completed") await pause("stop-receipt-after")
-      } }, admission: { ...admission, async reserve(request) { const reservation = await admission.reserve(request); await pause("reservation"); return reservation } } }, { processFactory(options) {
+      } } }, { processFactory(options) {
         const owner = createAgentProcess(options, { spawn: ((...args: Parameters<typeof spawn>) => {
           const child = spawn(...args)
           writeFileSync(join(root, `spawn-${options.spec.launchAttemptId}.json`), JSON.stringify({ pid: child.pid ?? null, agentId: options.spec.agentId, attempt: options.spec.launchAttemptId }), { mode: 0o600 })

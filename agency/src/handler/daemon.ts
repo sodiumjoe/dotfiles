@@ -24,8 +24,7 @@ import { ensurePrivateChild } from "./environment.js"
 import { inventoryLaunches, summarizeLaunches, verifyInventory, type InventoryEntry } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
-import { admissionInventoryIssues, createAdmissionController, type AdmissionController } from "../checkout/admission.js"
-import { inventoryAdmissions } from "../checkout/records.js"
+import { createAdmissionController, type AdmissionController } from "../checkout/admission.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -190,18 +189,15 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       catalog = createCatalogService({ ...catalogContext, queue: mutations.queue, store, probes })
     }
     await catalog.initialize()
-    const admissionContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
-    const admission = createAdmissionController(admissionContext)
-    agents = (options.agentFactory ?? createAgentService)({ context: admissionContext, admission, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: createAgentStore(options.paths.persistentRoot) })
+    const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
+    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: createAgentStore(options.paths.persistentRoot) })
     await agents.initialize()
     current = { ...current, phase: "ready" }
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
-    const issues = admissionInventoryIssues(options.paths.hostKey, entries, await inventoryAdmissions(options.paths.persistentRoot))
-    if (issues.length > 0) mutations.unavailable = issues.join("; ").slice(0, 512)
     shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, agents }
     state.phase = "ready"
-    await options.onAdmissionReady?.(admission)
+    if (options.onAdmissionReady) await options.onAdmissionReady(createAdmissionController(launchContext))
     if (termination) await terminate()
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()

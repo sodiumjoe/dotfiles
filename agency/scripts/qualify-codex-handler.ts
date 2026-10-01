@@ -41,7 +41,7 @@ export function fatalQualificationHandler(spec: LaunchSpec): never {
   process.kill(process.pid, "SIGKILL")
   throw new AgentError("STARTUP_TIMEOUT")
 }
-type AuditOptions = { spawn?: typeof spawn; removeProviderState?: NonNullable<Parameters<typeof createAgentProcess>[1]>["removeProviderState"]; publish?: typeof durableQualificationWrite }
+type AuditOptions = { spawn?: typeof spawn; publish?: typeof durableQualificationWrite }
 export function qualificationProcessFactory(root: string, reservationTimes: Map<string, number>, options: AuditOptions = {}): typeof createAgentProcess {
   return input => {
     const receipt: QualificationReceipt = { version: 1, handlerGeneration: input.spec.handlerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], durations: {}, prompt: { state: "not_started", challenge: null, prompt: null, answer: null, normalizedAnswer: null, stopReason: null, durationMs: null }, terminal: false, transportClosed: false, streamsClosed: false, failure: null }
@@ -56,7 +56,7 @@ export function qualificationProcessFactory(root: string, reservationTimes: Map<
       async readGroup(group: number) { const result = await adapter.readGroup(group); if (closeStart && !result.length) { absenceStart ||= performance.now(); receipt.durations.absence = performance.now() - absenceStart }; return result },
       async readProcess(pid: number) { const result = await adapter.readProcess(pid); if (absenceStart) receipt.durations.absence = performance.now() - absenceStart; return result },
     } } }
-    const owner = createAgentProcess(observedInput, { ...(options.removeProviderState ? { removeProviderState: options.removeProviderState } : {}), spawn: ((file: string, args: readonly string[], config: Parameters<typeof spawn>[2]) => {
+    const owner = createAgentProcess(observedInput, { spawn: ((file: string, args: readonly string[], config: Parameters<typeof spawn>[2]) => {
       if (!isDeepStrictEqual(config?.stdio, ["pipe", "pipe", "pipe"]) || config?.shell !== false || config?.detached !== true) throw new AgentError("STARTUP_FAILED")
       child = (options.spawn ?? spawn)(file, args, config!)
       const original = child.stdin!.write.bind(child.stdin!)
@@ -219,8 +219,7 @@ export async function qualificationHandlerOptions(candidatePath: string, root: s
   return { paths, adapter: createDarwinAdapter(), recordPath, generation, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: [contract],
     catalogFactory: context => qualificationCatalog(context, evidence),
     agentFactory(input) {
-      const admission = { ...input.admission, async reserve(request: Parameters<typeof input.admission.reserve>[0]) { const start = performance.now(); const result = await input.admission.reserve(request); reservationTimes.set(result.launch.launchAttemptId, performance.now() - start); return result } }
-      return createAgentService({ ...input, admission }, { processFactory: qualificationProcessFactory(root, reservationTimes), observeLaunchEvidence: (spec, expected) => verifyInjectedLaunchEvidence(candidate, evidence, spec, expected), fatalStartupTimeout: fatalQualificationHandler })
+      return createAgentService(input, { processFactory: qualificationProcessFactory(root, reservationTimes), observeLaunchEvidence: (spec, expected) => verifyInjectedLaunchEvidence(candidate, evidence, spec, expected), fatalStartupTimeout: fatalQualificationHandler })
     },
   }
 }

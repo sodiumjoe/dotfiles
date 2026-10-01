@@ -16,12 +16,12 @@ const filesystem = { open, rename, rm, mkdir }
 
 test("missing agent storage is read-only and valid updates cannot mutate specification or session", async t => {
   const root = await privateRoot(t), store = createAgentStore(root), initial = sampleAgent()
-  assert.deepEqual(await store.inventory(), { agents: [], commands: [], issues: [] })
-  assert.equal(await store.readAgent(initial.spec.agentId), null)
+  assert.deepEqual(await store.inventory(), { agents: [], legacyAgents: [], commands: [], issues: [] })
+  assert.equal(await store.readAgent(initial.definition.agentId), null)
   assert.deepEqual(await readdir(root), [])
   await store.writeAgent(initial, null)
   await store.writeAgent(initial, null)
-  await assert.rejects(store.writeAgent({ ...initial, spec: { ...initial.spec, contractId: "different" } }, initial))
+  await assert.rejects(store.writeAgent({ ...initial, launch: { ...initial.launch, contractId: "different" } }, initial))
   const ready = { ...initial, phase: "ready" as const, session: sampleSession() }
   await store.writeAgent(ready, initial)
   await assert.rejects(store.writeAgent(initial, ready))
@@ -29,7 +29,22 @@ test("missing agent storage is read-only and valid updates cannot mutate specifi
   const stopping = { ...ready, phase: "stopping" as const }, stopped = { ...stopping, phase: "stopped" as const }
   await store.writeAgent(stopping, ready); await store.writeAgent(stopped, stopping)
   await assert.rejects(store.writeAgent(ready, stopped))
-  assert.deepEqual(await store.readAgent(initial.spec.agentId), stopped)
+  assert.deepEqual(await store.readAgent(initial.definition.agentId), stopped)
+})
+
+test("legacy agent evidence is listed without rewriting its version-one bytes", async t => {
+  const root = await privateRoot(t), directory = join(root, "agents/records"), agentIdValue = agentId(91)
+  await mkdir(join(root, "agents"), { mode: 0o700 })
+  await mkdir(directory, { mode: 0o700 })
+  const legacy = { version: 1, spec: { agentId: agentIdValue, handlerGeneration: agentId(92), providerGeneration: agentId(93), launchAttemptId: agentId(94), checkout: { root: { path: "/legacy/checkout" } } }, phase: "stopped", session: null, failure: null }
+  const path = join(directory, agentIdValue + ".json"), bytes = JSON.stringify(legacy)
+  await writeFile(path, bytes, { mode: 0o600 })
+  const store = createAgentStore(root), inventory = await store.inventory()
+  assert.equal(inventory.issues.length, 0)
+  assert.deepEqual(inventory.agents, [])
+  assert.equal(inventory.legacyAgents[0]?.spec.agentId, agentIdValue)
+  assert.equal(await store.readAgent(agentIdValue), null)
+  assert.equal(await readFile(path, "utf8"), bytes)
 })
 
 test("command intent and completed result are immutable across exact retries", async t => {
@@ -45,7 +60,7 @@ test("command intent and completed result are immutable across exact retries", a
 
 for (const kind of ["mode", "hardlink", "symlink", "utf8", "oversized", "wrong-name", "unknown", "deleted", "replaced"] as const) {
   test(`unsafe or changed agent evidence is retained and blocks writes: ${kind}`, async t => {
-    const root = await privateRoot(t), store = createAgentStore(root), value = sampleAgent(), directory = join(root, "agents/records"), path = join(directory, value.spec.agentId + ".json")
+    const root = await privateRoot(t), store = createAgentStore(root), value = sampleAgent(), directory = join(root, "agents/records"), path = join(directory, value.definition.agentId + ".json")
     await store.writeAgent(value, null)
     const bytes = await readFile(path)
     if (kind === "mode") await chmod(path, 0o644)
@@ -81,11 +96,11 @@ test("private provider-state coexists with record and command evidence without e
   await store.writeAgent(agent, null); await store.writeCommand(command, null)
   const state = join(root, "agents/provider-state")
   await mkdir(state, { mode: 0o700 })
-  assert.deepEqual(await store.inventory(), { agents: [agent], commands: [command], issues: [] })
-  await mkdir(join(state, agent.spec.launchAttemptId), { mode: 0o700 })
-  await writeFile(join(state, agent.spec.launchAttemptId, "provider-data"), "live", { mode: 0o600 })
-  assert.deepEqual(await store.inventory(), { agents: [agent], commands: [command], issues: [] })
-  assert.deepEqual(await store.readAgent(agent.spec.agentId), agent)
+  assert.deepEqual(await store.inventory(), { agents: [agent], legacyAgents: [], commands: [command], issues: [] })
+  await mkdir(join(state, agent.launch.launchAttemptId), { mode: 0o700 })
+  await writeFile(join(state, agent.launch.launchAttemptId, "provider-data"), "live", { mode: 0o600 })
+  assert.deepEqual(await store.inventory(), { agents: [agent], legacyAgents: [], commands: [command], issues: [] })
+  assert.deepEqual(await store.readAgent(agent.definition.agentId), agent)
   assert.deepEqual(await store.readCommand(command.commandId), command)
 })
 
@@ -168,7 +183,7 @@ test("launch publication is inventory-bound and uninvoked restoration uses separ
   assert.deepEqual(restored, reserved.launch)
   const foreign = { ...restored, leaseId: agentId(55) } as import("../src/platform/types.js").LegacyLaunchRecord, path = f.context.mutations.accepted[0]!.path
   await writeLaunchRecord(path, foreign)
-  await assert.rejects(commitLaunchTransition(f.context, restored, attempted), { code: "ADMISSION_UNAVAILABLE" })
+  await assert.rejects(commitLaunchTransition(f.context, restored, attempted), { code: "UNAVAILABLE" })
   assert.deepEqual(await readLaunchRecordForReconciliation(path), foreign)
 })
 

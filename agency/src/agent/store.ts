@@ -8,9 +8,9 @@ import type { CatalogFileSystem } from "../catalog/store.js"
 import { id } from "../catalog/types.js"
 import { UUID } from "../control/protocol.js"
 import { assertPrivateDirectory } from "../platform/private-state.js"
-import { AgentError, parseAgentCommand, parseAgentRecord, type AgentCommand, type AgentPhase, type AgentRecord } from "./types.js"
+import { AgentError, parseAgentCommand, parseAgentRecord, parseLegacyAgentRecord, type AgentCommand, type AgentPhase, type AgentRecord, type LegacyAgentRecord } from "./types.js"
 
-export type AgentInventory = { agents: AgentRecord[]; commands: AgentCommand[]; issues: string[] }
+export type AgentInventory = { agents: AgentRecord[]; legacyAgents: LegacyAgentRecord[]; commands: AgentCommand[]; issues: string[] }
 export type AgentStore = {
   readAgent(id: string): Promise<AgentRecord | null>
   readCommand(id: string): Promise<AgentCommand | null>
@@ -22,7 +22,7 @@ type FileEvidence = { bytes: Buffer; identity: string }
 const absent = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
 function unavailable(): never { throw new AgentError("INVALID_AGENT_STATE") }
 const conflict = (): never => { throw new AgentError("COMMAND_CONFLICT") }
-const edges: Record<AgentPhase, AgentPhase[]> = { starting: ["ready", "stopping", "failed", "interrupted"], ready: ["stopping", "failed", "interrupted"], stopping: ["stopped", "failed", "interrupted"], stopped: [], failed: [], interrupted: [] }
+const edges: Record<AgentPhase, AgentPhase[]> = { starting: ["ready", "stopping", "failed", "interrupted"], ready: ["recoverable", "stopping", "failed", "interrupted"], recoverable: ["restoring", "stopping", "failed", "interrupted"], restoring: ["ready", "recoverable", "stopping", "failed", "interrupted"], stopping: ["stopped", "failed", "interrupted"], stopped: [], failed: [], interrupted: [] }
 
 export function createAgentStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): AgentStore {
   const directory = join(root, "agents")
@@ -44,14 +44,18 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   async function readAgent(agentId: string): Promise<AgentRecord | null> {
     const file = await evidence(join(directory, "records", id(agentId) + ".json"))
     if (!file) return null
-    const value = parseAgentRecord(decodeJson(file.bytes))
-    if (value.spec.agentId !== agentId) unavailable()
+    const raw = decodeJson(file.bytes)
+    if ((raw as { version?: unknown }).version === 1) { if (parseLegacyAgentRecord(raw).spec.agentId !== agentId) unavailable(); return null }
+    const value = parseAgentRecord(raw)
+    if (value.definition.agentId !== agentId) unavailable()
     return value
   }
   async function readCommand(commandId: string): Promise<AgentCommand | null> {
     const file = await evidence(join(directory, "commands", id(commandId) + ".json"))
     if (!file) return null
-    const value = parseAgentCommand(decodeJson(file.bytes))
+    const raw = decodeJson(file.bytes)
+    if ((raw as { version?: unknown }).version === 1) { if (id((raw as { commandId?: unknown }).commandId) !== commandId) unavailable(); return null }
+    const value = parseAgentCommand(raw)
     if (value.commandId !== commandId) unavailable()
     return value
   }
@@ -62,7 +66,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     return result.sort()
   }
   async function inventory(): Promise<AgentInventory> {
-    const result: AgentInventory = { agents: [], commands: [], issues: [] }, observed = new Map<string, FileEvidence>()
+    const result: AgentInventory = { agents: [], legacyAgents: [], commands: [], issues: [] }, observed = new Map<string, FileEvidence>()
     try {
       for (const name of await names(directory)) {
         if (name === "records" || name === "commands") continue
@@ -83,8 +87,12 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
             if (!name.endsWith(".json")) unavailable()
             const recordId = id(name.slice(0, -5)), file = await evidence(path)
             if (!file) unavailable()
-            if (kind === "records") { const value = parseAgentRecord(decodeJson(file.bytes)); if (value.spec.agentId !== recordId) unavailable(); result.agents.push(value) }
-            else { const value = parseAgentCommand(decodeJson(file.bytes)); if (value.commandId !== recordId) unavailable(); result.commands.push(value) }
+            const raw = decodeJson(file.bytes)
+            if (kind === "records") {
+              if ((raw as { version?: unknown }).version === 1) { const value = parseLegacyAgentRecord(raw); if (value.spec.agentId !== recordId) unavailable(); result.legacyAgents.push(value) }
+              else { const value = parseAgentRecord(raw); if (value.definition.agentId !== recordId) unavailable(); result.agents.push(value) }
+            } else if ((raw as { version?: unknown }).version === 1) { if (id((raw as { commandId?: unknown }).commandId) !== recordId) unavailable() }
+            else { const value = parseAgentCommand(raw); if (value.commandId !== recordId) unavailable(); result.commands.push(value) }
             observed.set(path, file)
           } catch { result.issues.push(`${kind}/${name}`) }
         }
@@ -139,13 +147,13 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   return {
     readAgent, readCommand, inventory,
     async writeAgent(input, expected) {
-      const value = parseAgentRecord(input), current = await readAgent(value.spec.agentId)
+      const value = parseAgentRecord(input), current = await readAgent(value.definition.agentId)
       if (!isDeepStrictEqual(value, current)) {
         if (!isDeepStrictEqual(current, expected)) conflict()
         if (current === null) { if (value.phase !== "starting") conflict() }
-        else if (!isDeepStrictEqual(value.spec, current.spec) || !edges[current.phase].includes(value.phase) || current.session !== null && !isDeepStrictEqual(value.session, current.session)) conflict()
+        else if (!isDeepStrictEqual(value.definition, current.definition) || !isDeepStrictEqual(value.launch, current.launch) || !edges[current.phase].includes(value.phase) || current.session !== null && !isDeepStrictEqual(value.session, current.session)) conflict()
       }
-      await publish(join(directory, "records", value.spec.agentId + ".json"), value, expected)
+      await publish(join(directory, "records", value.definition.agentId + ".json"), value, expected)
     },
     async writeCommand(input, expected) {
       const value = parseAgentCommand(input), current = await readCommand(value.commandId)

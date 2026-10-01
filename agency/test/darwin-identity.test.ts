@@ -7,7 +7,6 @@ import { type Readable } from "node:stream"
 import test, { type TestContext } from "node:test"
 import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
-import { resolvedLaunchEnvironment } from "../src/agent/state.js"
 import {
   createDarwinAdapter,
   DarwinObservationUnavailable,
@@ -151,10 +150,7 @@ darwinTest("qualifies fixed root-owned system tools", async () => {
 darwinTest("isolated provider environment prevents system Git fsmonitor activation", async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), "agency-darwin-git-config-"))
   t.after(() => rm(root, { recursive: true, force: true }))
-  const environment = resolvedLaunchEnvironment(root, {
-    fixed: { PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1" },
-    private: { HOME: "home", XDG_CONFIG_HOME: "xdg/config" },
-  })
+  const environment = { PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "xdg/config") }
   const checkout = join(root, "checkout"), systemConfig = join(root, "system.gitconfig")
   for (const path of [environment.HOME!, environment.XDG_CONFIG_HOME!, join(checkout, ".git/objects"), join(checkout, ".git/refs")]) await mkdir(path, { mode: 0o700, recursive: true })
   await writeFile(join(checkout, ".git/HEAD"), "ref: refs/heads/qualification\n", { mode: 0o600 })

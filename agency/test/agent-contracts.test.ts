@@ -8,7 +8,7 @@ import { privateRoot } from "./control-support.js"
 
 function input() {
   const spec = sampleSpec()
-  return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId, startCommandId: spec.startCommandId }, selection: spec.selection, checkout: spec.checkout, snapshotId: spec.catalogSnapshotId, provider: spec.catalogEvidence, profile: { id: "codex-acp" as const, enabled: true, executable: "/fixture-codex", adapterPackageJson: "/fixture-package.json", sdkPackageJson: null, configurationFiles: ["/fixture-config.json"] }, configuration: spec.configuration, contract: sampleContract() }
+  return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, launchAttemptId: spec.launchAttemptId, commandId: spec.commandId }, selection: spec.selection, cwd: spec.cwd, snapshotId: spec.catalogSnapshotId, provider: spec.catalogEvidence, profile: { id: "codex-acp" as const, enabled: true, executable: "/fixture-codex", adapterPackageJson: "/fixture-package.json", sdkPackageJson: null, configurationFiles: ["/fixture-config.json"] }, configuration: spec.configuration, contract: sampleContract() }
 }
 
 test("production has no qualified launch contracts", () => { assert.deepEqual(productionLaunchContracts(), []); assert.ok(Object.isFrozen(productionLaunchContracts())) })

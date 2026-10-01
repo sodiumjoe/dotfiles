@@ -944,7 +944,7 @@ for (const changed of ["handler", "provider", "command", "agent", "session"] as 
     if (changed === "handler") report.ownership.handlers[0]!.process.birth = "1:agy-handler:" + report.ownership.handlers[0]!.launchAttemptId
     if (changed === "provider") report.ownership.providerProcessGroup!.leader.parentPid++
     if (changed === "command") report.observation.retained.command!.result!.session!.sessionId = "replaced"
-    if (changed === "agent") report.observation.retained.agent!.spec.leaseId = "00000000-0000-4000-8000-999999999999"
+    if (changed === "agent") report.observation.retained.agent!.launch.launchAttemptId = "00000000-0000-4000-8000-999999999999"
     if (changed === "session") report.session!.sessionId = "replaced"
   }
   const { report } = await runCodexQualification(f.request, f.dependencies)
@@ -1088,7 +1088,7 @@ test("completed over-deadline receipts retain prompt and method evidence after r
 test("source generation rechecks authenticated private paths and emits exact source bytes", async t => {
   const f = await qualificationHarnessFixture(t), result = await runCodexQualification(f.request, f.dependencies)
   assert.equal(result.report.qualified, true, JSON.stringify(result.report))
-  const root = f.executionRoots[0]!, cwd = result.report.observation.retained.agent!.spec.checkout.root.path
+  const root = f.executionRoots[0]!, cwd = result.report.observation.retained.agent!.definition.cwd
   const privatePaths = [root, cwd, join(root, "state/agents/provider-state", result.report.ownership.launchAttemptId!), join(root, "state/catalog/providers.json")]
   const args = ["--stage", "source", "--candidate", f.request.candidatePath, "--evidence-parent", f.request.evidenceParent, "--report", result.reportPath!, "--report-sha256", result.reportSha256!, ...revisionArgs]
   let stdout = ""

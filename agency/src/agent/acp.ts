@@ -375,7 +375,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
           check()
           await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
           check()
-          await request("session/new", { cwd: spec.checkout.root.path, mcpServers: [] })
+          await request("session/new", { cwd: spec.cwd, mcpServers: [] })
           const desired = desiredOptions(spec, contract)
           for (const [index, [configId, value]] of desired.entries()) {
             check()

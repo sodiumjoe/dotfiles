@@ -33,9 +33,8 @@ try {
   options.catalogFactory = context => qualificationCatalog(context, evidence)
   options.agentFactory = input => {
     const times = new Map<string, number>()
-    const admission = { ...input.admission, async reserve(request: Parameters<typeof input.admission.reserve>[0]) { const before = performance.now(); const reserved = await input.admission.reserve(request); times.set(reserved.launch.launchAttemptId, performance.now() - before); if (scenario === "reservation-hang") await new Promise<void>(() => undefined); return reserved } }
     const store = { ...input.store, async writeCommand(next: Parameters<typeof input.store.writeCommand>[0], expected: Parameters<typeof input.store.writeCommand>[1]) { await input.store.writeCommand(next, expected); if (scenario === "command-hang" && next.op === "start" && next.state === "pending") await new Promise<void>(() => undefined) } }
-    const service = createAgentService({ ...input, admission, store }, {
+    const service = createAgentService({ ...input, store }, {
       processFactory: options => {
         const owner = qualificationProcessFactory(root, times, {
         spawn: ((file: string, args: readonly string[], config: Parameters<typeof spawn>[2]) => {

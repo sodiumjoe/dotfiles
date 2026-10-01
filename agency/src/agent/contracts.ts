@@ -2,7 +2,6 @@ import { lstat, realpath } from "node:fs/promises"
 import { isDeepStrictEqual } from "node:util"
 import { digest, readBoundedFile } from "../catalog/config.js"
 import { absolutePath, hash, keys, object, parseCapability, providerId, type Capability, type ConfigEvidence, type ProviderId, type ProviderProfile, type ProviderSnapshot } from "../catalog/types.js"
-import type { CheckoutIdentity } from "../checkout/identity.js"
 import { AGENT_LIMITS, AgentError, agentText, parseLaunchSpec, parseSelection, parsePermissionEvidence, type AgentIds, type LaunchSpec, type PermissionEvidence, type StartSelection } from "./types.js"
 import { parseCodexQualificationManifest, qualificationFingerprint, verifyCodexQualification, type CodexQualificationManifest, type LaunchEnvironmentPolicy } from "./qualification.js"
 import { qualifiedLaunchContracts } from "./qualified-contracts.js"
@@ -36,7 +35,7 @@ export function parseLaunchContract(input: unknown): LaunchContract {
     return contract
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }
-export function resolveLaunchSpec(input: { ids: AgentIds; selection: StartSelection; checkout: CheckoutIdentity; snapshotId: string; provider: ProviderSnapshot; profile: ProviderProfile; configuration: ConfigEvidence; contract: LaunchContract }): LaunchSpec {
+export function resolveLaunchSpec(input: { ids: AgentIds; selection: StartSelection; cwd: string; snapshotId: string; provider: ProviderSnapshot; profile: ProviderProfile; configuration: ConfigEvidence; contract: LaunchContract }): LaunchSpec {
   const contract = parseLaunchContract(input.contract), selection = parseSelection(input.selection)
   if (contract.qualification !== null) {
     const manifest = contract.qualification, profile = input.profile
@@ -52,7 +51,7 @@ export function resolveLaunchSpec(input: { ids: AgentIds; selection: StartSelect
   if (mode === null || (modes.state === "values" ? !modes.values.includes(mode) : mode !== contract.effectiveMode)) throw new AgentError("SELECTION_UNSUPPORTED")
   const model = input.provider.models.find(model => model.modelId === selection.modelId)
   if (!model || model.modes.state !== "unknown" && !isDeepStrictEqual(model.modes, modes)) throw new AgentError("MODEL_UNAVAILABLE")
-  return parseLaunchSpec({ version: 1, ...input.ids, selection: { ...selection, mode }, modelIdentity: "advertised", resolvedModelId: null, checkout: input.checkout, catalogSnapshotId: input.snapshotId, catalogEvidence: input.provider, configuration: input.configuration, contractId: contract.id, contractFingerprint: contract.fingerprint, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS })
+  return parseLaunchSpec({ ...input.ids, createdCommandId: input.ids.commandId, cwd: input.cwd, selection: { ...selection, mode }, catalogSnapshotId: input.snapshotId, catalogEvidence: input.provider, configuration: input.configuration, contractId: contract.id, contractFingerprint: contract.fingerprint, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS })
 }
 export async function observeLaunchContract(input: LaunchContract): Promise<string> {
   try {

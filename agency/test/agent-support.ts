@@ -1,4 +1,4 @@
-import { assertGitChildrenClosed, checkoutIdFor } from "../src/checkout/identity.js"
+import { assertGitChildrenClosed } from "../src/checkout/identity.js"
 import { PassThrough } from "node:stream"
 import { isDeepStrictEqual } from "node:util"
 import { EventEmitter } from "node:events"
@@ -10,9 +10,9 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
-import { removeProviderState } from "../src/agent/state.js"
 import type { CodexUserSecurityStatePolicy } from "../src/agent/codex-user-security.js"
 import { AgentError } from "../src/agent/types.js"
+import { splitLaunchSpec, startCommand } from "../src/agent/types.js"
 import { privateRoot, controlFixture, until, fileExists, failFixtureBatch } from "./control-support.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import type { AdmissionContext } from "../src/checkout/admission.js"
@@ -49,7 +49,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
       if (seen.has(hint.attempt)) continue
       assert.ok(Number.isSafeInteger(hint.pid) && hint.pid > 1)
       const agent = await createAgentStore(f.paths.persistentRoot).readAgent(hint.agentId)
-      assert.ok(agent); assert.equal(agent.spec.launchAttemptId, hint.attempt)
+      assert.ok(agent); assert.equal(agent.launch.launchAttemptId, hint.attempt)
       const identity = await f.observe(hint.pid)
       if (identity === null) {
         for (let n = 0; n < 2; n++) { assert.equal(await f.observe(hint.pid), null); assert.deepEqual(await f.adapter.readGroup(hint.pid), []) }
@@ -60,7 +60,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
         assert.equal(identity.uid, process.getuid!()); assert.equal(identity.gid, process.getgid!())
         const members = await f.adapter.readGroup(hint.pid)
         assert.deepEqual(await f.adapter.readGroup(hint.pid), members); assert.deepEqual(members, [identity])
-        const record: LaunchRecord = { version: 1, checkoutId: agent.spec.checkout.checkoutId, agentId: hint.agentId, leaseId: agent.spec.leaseId, handlerGeneration: agent.spec.handlerGeneration, launchAttemptId: hint.attempt, launchBootId: identity.bootId, launchAttempted: true, provider: { kind: "process-group", group: { leader: identity, observed: members } }, phase: "active", reason: null }
+        const record: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: hint.agentId, providerGeneration: agent.launch.providerGeneration }, handlerGeneration: agent.launch.handlerGeneration, launchAttemptId: hint.attempt, launchBootId: identity.bootId, launchAttempted: true, provider: { kind: "process-group", group: { leader: identity, observed: members } }, phase: "active", reason: null }
         await writeLaunchRecord(join(f.root, `owned-${hint.attempt}.json`), record)
         owned.set(hint.attempt, record)
       }
@@ -126,7 +126,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     } finally { await trackProviders() }
   }
   const commandView = (result: Awaited<ReturnType<typeof call>>): CommandView => { assert.equal(result.state, "command"); if (result.state !== "command") throw new Error("wrong reply"); return result }
-  const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection } } }))
+  const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection }, environment: { ...process.env, FIXTURE_ROOT: f.root } as Record<string, string> } }))
   const command = async (commandId: string, commandGeneration: string) => commandView(await call({ op: "agent_command", commandId, commandGeneration }))
   const currentAt = async (cwd: string) => { const result = await call({ op: "agent_current", cwd }); assert.equal(result.state, "current"); if (result.state !== "current") throw new Error("wrong reply"); return result }
   return { paths: f.paths, git, inventory, startAt, currentAt, command, releaseBarrier,
@@ -135,7 +135,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
     stop: async (target: AgentTuple, commandId = randomUUID()) => commandView(await call({ op: "agent_stop", input: { ...target, commandId } })),
     async prompt(target: AgentTuple, text: string) { const result = await call({ op: "agent_prompt", input: { ...target, text } }); assert.equal(result.state, "prompt"); if (result.state !== "prompt") throw new Error("wrong reply"); return result },
-    retry: async (value: AgentCommand) => commandView(await call({ op: "agent_start", input: value.input as StartInput })),
+    retry: async (value: AgentCommand) => command(value.commandId, value.handlerGeneration),
     waitCompleted: (value: CommandView) => until(async () => { const result = await command(value.command.commandId, value.command.handlerGeneration); return result.command.state !== "pending" ? result : undefined }, 35000),
     providerCount: () => seen.size,
     async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); assertGitChildrenClosed(); await trackProviders() },
@@ -145,16 +145,16 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     async waitHandlerExit(timeout?: number) { const current = await handler(); assert.ok(current.process); await proveAbsent(current.process, timeout); await trackProviders() },
     async reservationTimeoutEvidence() { return JSON.parse(await readFile(join(f.root, "reservation-timeout.json"), "utf8")) as { pid: number; signal: string; attempt: string } },
     async restart() { await configure({}); await releaseBarrier(); await f.start(15000) },
-    async killProvider(target: AgentTuple) { await trackProviders(); const record = [...owned.values()].find(record => record.agentId === target.agentId && record.handlerGeneration === target.handlerGeneration); assert.ok(record?.provider); await f.signal(record.provider.group.leader, "SIGKILL"); await proveAbsent(record.provider.group.leader) },
+    async killProvider(target: AgentTuple) { await trackProviders(); const record = [...owned.values()].find(record => record.version === 2 && record.owner.kind === "agent" && record.owner.agentId === target.agentId && record.handlerGeneration === target.handlerGeneration); assert.ok(record?.provider); await f.signal(record.provider.group.leader, "SIGKILL"); await proveAbsent(record.provider.group.leader) },
     async assertProviderAbsent(target: AgentTuple) {
       await trackProviders()
       const agent = await createAgentStore(f.paths.persistentRoot).readAgent(target.agentId)
       assert.ok(agent)
-      assert.equal(agent.spec.handlerGeneration, target.handlerGeneration)
-      assert.equal(agent.spec.providerGeneration, target.providerGeneration)
-      const record = owned.get(agent.spec.launchAttemptId)
+      assert.equal(agent.launch.handlerGeneration, target.handlerGeneration)
+      assert.equal(agent.launch.providerGeneration, target.providerGeneration)
+      const record = owned.get(agent.launch.launchAttemptId)
       assert.ok(record?.provider)
-      assert.equal(record.agentId, target.agentId)
+      assert.equal(record.version === 2 && record.owner.kind === "agent" ? record.owner.agentId : null, target.agentId)
       assert.equal(record.handlerGeneration, target.handlerGeneration)
       const identities = new Map([record.provider.group.leader, ...record.provider.group.observed].map(identity => [identity.pid, identity]))
       for (let pass = 0; pass < 2; pass++) {
@@ -170,12 +170,10 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
 export const agentId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 
 export function sampleSpec(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
-  const hostId = "a".repeat(64), root = { path: "/checkout", device: "1", inode: "2" }, gitDirectory = { path: "/checkout/.git", device: "1", inode: "3" }
+  const hostId = "a".repeat(64)
   return {
-    version: 1, hostId, agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3), leaseId: agentId(4), launchAttemptId: agentId(5), startCommandId: agentId(6),
+    hostId, agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3), launchAttemptId: agentId(5), commandId: agentId(6), createdCommandId: agentId(6), cwd: "/workspace/a",
     selection: { providerId: "codex-acp", modelId: "model-a", reasoning: { kind: "value", value: "high" }, mode: "review", permissionProfile: "fixture-deny-v1" },
-    modelIdentity: "advertised", resolvedModelId: null,
-    checkout: { version: 1, hostId, checkoutId: checkoutIdFor(hostId, root, gitDirectory), root, gitDirectory, commonDirectory: gitDirectory, ancestors: [{ path: "/", device: "1", inode: "1" }] },
     catalogSnapshotId: agentId(7),
     catalogEvidence: { providerId: "codex-acp", fingerprint: "b".repeat(64), verifiedAt: 1000, verifiedHandlerGeneration: agentId(2), providerVersion: null, providerVersionSource: "unknown", adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp", modelId: "model-a", resolvedModelId: null, displayName: "Model A", reasoning: { state: "values", values: ["high", "low"] }, modes: { state: "unknown" }, availability: "advertised" }] },
     configuration: { fingerprint: "b".repeat(64), scope: "declared-config-v1", providerId: "codex-acp", adapterVersion: "1.0.0", sdkVersion: null },
@@ -212,11 +210,11 @@ export function sampleQualifiedSpec(): LaunchSpec {
   return { ...spec, contractId: contract.id, contractFingerprint: contract.fingerprint, selection: { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" }, configuration: { ...spec.configuration, adapterVersion: "1.7.0" }, catalogEvidence: { ...spec.catalogEvidence, adapterVersion: "1.7.0", models: [{ ...spec.catalogEvidence.models[0]!, modelId: "gpt-5.6-sol" }] } }
 }
 
-export function sampleAgent(): AgentRecord { return { version: 1, spec: sampleSpec(), phase: "starting", session: null, failure: null } }
+export function sampleAgent(): AgentRecord { return { version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null } }
 export function sampleSession(): SessionEvidence { return { sessionId: "fixture-session", sessionGeneration: agentId(8), protocolVersion: 1, modelId: "model-a", reasoning: { kind: "value", value: "high" }, mode: "review", permissionProfile: "fixture-deny-v1", permissionEvidence: "fixture-contract-v1" } }
 export function sampleCommand(): AgentCommand {
   const spec = sampleSpec()
-  return { version: 1, hostId: spec.hostId, commandId: spec.startCommandId, handlerGeneration: spec.handlerGeneration, op: "start", input: { commandId: spec.startCommandId, handlerGeneration: spec.handlerGeneration, cwd: spec.checkout.root.path, selection: spec.selection }, target: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, state: "pending", result: null }
+  return startCommand({ commandId: spec.commandId, handlerGeneration: spec.handlerGeneration, cwd: spec.cwd, selection: spec.selection, environment: {} }, { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, spec.hostId)
 }
 
 export function agentGate() {
@@ -229,8 +227,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   const root = await privateRoot(t), spec = sampleSpec(), contract = sampleContract(), beforeSpawn = agentGate(), publication = agentGate(), spawned = agentGate(), absentEntered = agentGate(), absentReleased = agentGate(), terminated = agentGate(), cleanupObservation = agentGate(), removalEntered = agentGate(), removalReleased = agentGate()
   const path = join(root, "launches", spec.launchAttemptId + ".json")
   await mkdir(join(root, "launches"), { mode: 0o700 })
-  const launch: LaunchRecord = { version: 1, checkoutId: spec.checkout.checkoutId, agentId: spec.agentId, leaseId: spec.leaseId, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, provider: null, phase: "launch_pending", reason: null }
-  await writeLaunchRecord(path, launch)
+  const launch: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, provider: null, phase: "launch_pending", reason: null }
   const peer = scriptedAcp(t, "exact", { prompt(request, send) {
     send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: request.params.prompt[0].text } } } })
     send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
@@ -249,7 +246,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   const context: AdmissionContext = {
     paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
     state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
-    mutations: { queue: new MutationQueue(), accepted: [{ path, record: launch }], unavailable: null }, shutdownPending: () => false,
+    mutations: { queue: new MutationQueue(), accepted: [], unavailable: null }, shutdownPending: () => false,
     adapter: { platform: "linux", bootId: async () => {
       if (scenario === "cleanup-boot-hang" && ++bootCalls === 3) { cleanupObservation.resolve(); return new Promise<string>(() => undefined) }
       return "boot-a"
@@ -274,7 +271,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   }
   if (scenario === "queued-preparation") void context.mutations.queue.run(async () => { beforeSpawn.resolve(); await publication.promise })
   peer.writable.on("data", () => { if (!identityPublished) earlyWrites++ })
-  const owner = createAgentProcess({ context, spec, ...(startupEnvelope ? { isReady: () => false } : {}), contract: { ...contract, environment: { fixed: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "forbidden", NODE_PATH: "forbidden", AGENCY_TEST: "forbidden", GIT_DIR: "forbidden" }, private: {} } }, reservation: { launch, admission: { version: 1, checkout: spec.checkout, handlerGeneration: spec.handlerGeneration, agentId: spec.agentId, leaseId: spec.leaseId, launchAttemptId: spec.launchAttemptId } }, async revalidate() {
+  const owner = createAgentProcess({ context, spec, environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved" }, ...(startupEnvelope ? { isReady: () => false } : {}), contract: { ...contract, environment: { fixed: { HOME: "/contract-home", NODE_OPTIONS: "contract-value" }, private: { CODEX_HOME: "home/codex" } } }, async revalidate() {
     checks++
     if (invalidation || scenario === "restore-failure" && checks > 1) throw new AgentError("CONFIG_CHANGED")
   } }, { spawn: ((executable: string, args: string[], options: SpawnOptions) => {
@@ -296,12 +293,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
       if (scenario === "identity-publication-paused" && record.provider) { beforeSpawn.resolve(); await publication.promise }
     },
     async read(file) { if (scenario === "attempt-readback" && attemptPublished && !readbackFailed) { readbackFailed = true; throw new Error("readback failed") }; return readLaunchRecordForReconciliation(file) },
-  }, now: () => Date.now(), async removeProviderState(root, attempt) {
-    removalEntered.resolve()
-    if (scenario === "removal-never") await new Promise<void>(() => undefined)
-    if (scenario === "removal-paused") await removalReleased.promise
-    await removeProviderState(root, attempt)
-  } })
+  }, now: () => Date.now() })
   return { owner, root, spec, context, signals, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }
 
@@ -451,17 +443,12 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path: string, record: LaunchRecord) {
       await writeLaunchRecord(path, record)
       if (record.launchAttempted && record.provider === null) await pause("attempted")
-    } }, ...((options.pauseStateRemoval || options.failStateRemoval || options.failAfterStateRemoval) ? { async removeProviderState(persistentRoot: string, attempt: string) {
-      stateRemovalCalls++
-      if (options.pauseStateRemoval) await stateRemovalReleased.promise
-      if (options.failStateRemoval) throw new Error("state removal failed")
-      await removeProviderState(persistentRoot, attempt, options.failAfterStateRemoval ? { afterQuarantineRemoval: async () => { throw new Error("parent sync failed") } } : {})
-    } } : {}) }
+    } } }
     const owner = createAgentProcess(input, processDependencies)
     owners.push(owner)
     return { ...owner, cleanup() { cleanupCalls++; return owner.cleanup() }, async initialize(signal) { await pause("spawn", signal); const session = await owner.initialize(signal); await pause("ready", signal); return session } }
   }
-  const composition = { context: f.context, admission: { ...f.controller, async reserve(request: Parameters<typeof f.controller.reserve>[0]) { reservationCalls++; reservationEntered.resolve(); await pause("reservation"); publications.push("reservation"); if (options.neverReserve) return new Promise<Awaited<ReturnType<typeof f.controller.reserve>>>(() => undefined); return f.controller.reserve(request) } }, catalog, contracts: options.contract === false ? [] : [contract], store }
+  const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : [contract], store }
   const dependencies = { processFactory, async observeLaunchEvidence(spec: LaunchSpec, expected: { profile: ProviderProfile }) {
     publications.push("evidence"); evidenceCalls++; await options.observe?.(evidenceCalls, spec)
     if (snapshot.snapshotId !== spec.catalogSnapshotId || !isDeepStrictEqual(snapshot.providers[0], spec.catalogEvidence) || !isDeepStrictEqual(profile, expected.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
@@ -478,7 +465,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     for (const finish of teardown) await finish()
   })
   await service.initialize()
-  const input = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: sampleSpec().selection }
+  const input: StartInput = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: sampleSpec().selection, environment: { ...process.env, FIXTURE_ROOT: root } as Record<string, string> }
   return { ...f, service, input, store, catalogStore, contract, profile, configuration, config, publications, entered: entered.promise, release: released.resolve, spawns: () => spawnCount, refreshes: () => refreshes, catalogReads: () => catalogReads, readyFailures: () => readyFailures,
     evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, reservationCalls: () => reservationCalls, cleanupCalls: () => cleanupCalls, reservationEntered: reservationEntered.promise, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
     failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value },

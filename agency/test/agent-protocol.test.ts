@@ -5,20 +5,19 @@ import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { AGENT_PROTOCOL, agentErrorReply, exchangeAgent, parseAgentReply, parseAgentRequest, validateAgentReply, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { AgentError, parsePromptInput, type PromptView } from "../src/agent/types.js"
-import { CheckoutResolutionError } from "../src/checkout/identity.js"
 import { parseRequest, parseReply } from "../src/control/protocol.js"
 import { serveProtocols } from "../src/control/wire.js"
 import { privateRoot, controlFixture } from "./control-support.js"
-import { agentId, sampleCommand } from "./agent-support.js"
+import { agentId, sampleAgent, sampleCommand, sampleSpec } from "./agent-support.js"
 
-const request = (): AgentRequest => ({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_start", input: sampleCommand().input as import("../src/agent/types.js").StartInput })
+const request = (): AgentRequest => ({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_start", input: { commandId: agentId(6), handlerGeneration: agentId(2), cwd: "/workspace/a", selection: sampleSpec().selection, environment: {} } })
 const response = (r: AgentRequest): AgentReply => ({ protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: agentId(6), ok: true, result: { state: "command", command: sampleCommand(), durability: "verified" } })
 
 test("agent framing preserves strict independent envelopes and command identity", () => {
   const r = request(), reply = response(r)
   assert.deepEqual(parseAgentRequest(r), r); assert.deepEqual(parseAgentReply(reply), reply)
   assert.throws(() => parseRequest(r)); assert.throws(() => parseReply(reply))
-  for (const value of [{ ...r, extra: true }, { ...r, protocol: "agency-agent/2" }, { ...r, input: { ...(r as AgentRequest & { op: "agent_start" }).input, handlerGeneration: agentId(100) } }, { ...r, handlerGeneration: null }]) assert.throws(() => parseAgentRequest(value), { code: "INVALID_PROTOCOL" })
+  for (const value of [{ ...r, extra: true }, { ...r, protocol: "agency-agent/1" }, { ...r, input: { ...(r as AgentRequest & { op: "agent_start" }).input, handlerGeneration: agentId(100) } }, { ...r, handlerGeneration: null }]) assert.throws(() => parseAgentRequest(value), { code: "INVALID_PROTOCOL" })
   for (const value of [{ ...reply, extra: true }, { ...reply, commandId: agentId(55) }, { ...reply, result: { state: "command", command: sampleCommand(), durability: "claimed" } }]) assert.throws(() => parseAgentReply(value), { code: "INVALID_PROTOCOL" })
   assert.throws(() => validateAgentReply({ ...reply, requestId: agentId(100) }, r), { code: "INVALID_PROTOCOL" })
   assert.throws(() => validateAgentReply({ ...reply, handlerGeneration: agentId(100) }, r), { code: "STALE_HANDLER" })
@@ -80,10 +79,17 @@ test("agent errors preserve retry identity and discard private diagnostics", () 
   assert.doesNotThrow(() => parseAgentReply(agentErrorReply(r, new AgentError("ADAPTER_UNQUALIFIED"))))
 })
 
-test("current outside a Git checkout is unavailable rather than an internal error", () => {
-  const reply = agentErrorReply({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_current", cwd: "/outside" }, new CheckoutResolutionError("NOT_CHECKOUT", "private diagnostic"))
-  assert.ok(!reply.ok && reply.error.code === "ADMISSION_UNAVAILABLE")
-  assert.equal(JSON.stringify(reply).includes("private diagnostic"), false)
+test("current outside a Git checkout is an empty exact-directory result", () => {
+  const reply = parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/outside", agents: [] } })
+  assert.ok(reply.ok && reply.result.state === "current" && reply.result.agents.length === 0)
+})
+
+test("current reply rejects duplicate or mismatched directory entries", () => {
+  const view = { record: sampleAgent(), launch: null, live: true, cleanup: "not_launched" }
+  const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/workspace/a", agents: [view] } }
+  assert.doesNotThrow(() => parseAgentReply(base))
+  assert.throws(() => parseAgentReply({ ...base, result: { ...base.result, agents: [view, view] } }), { code: "INVALID_PROTOCOL" })
+  assert.throws(() => parseAgentReply({ ...base, result: { ...base.result, cwd: "/workspace/a-link" } }), { code: "INVALID_PROTOCOL" })
 })
 
 test("oversized agent history returns explicit incomplete instead of truncation", async t => {
@@ -96,7 +102,8 @@ test("oversized agent history returns explicit incomplete instead of truncation"
 })
 
 test("production Handler exposes agent inspection but cannot select fixture launch contracts", async t => {
-  const f = await controlFixture(t), handler = await f.start(), initial = sampleCommand().input as import("../src/agent/types.js").StartInput
+  const f = await controlFixture(t), handler = await f.start(), initial = request().op === "agent_start" ? (request() as Extract<AgentRequest, { op: "agent_start" }>).input : undefined
+  assert.ok(initial)
   const reply = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: handler.record.generation, op: "agent_start", input: { ...initial, handlerGeneration: handler.record.generation } })
   assert.ok(!reply.ok && reply.error.code === "ADAPTER_UNQUALIFIED")
   const list = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: agentId(11), handlerGeneration: handler.record.generation, op: "agent_list" })

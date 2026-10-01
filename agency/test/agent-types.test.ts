@@ -1,20 +1,43 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec, parseSession, parseAgentFailure } from "../src/agent/types.js"
+import { agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec, parseSession, parseAgentFailure, startCommand } from "../src/agent/types.js"
+import { launchEnvironmentDigest } from "../src/agent/environment.js"
 import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
 
-test("launch evidence is strict, immutable by copying, and never fabricates a resolved model", () => {
+test("version-two agent definition and launch keep ambient cwd without checkout identity", () => {
+  const record = sampleAgent()
+  assert.equal(record.version, 2)
+  assert.equal(record.definition.cwd, "/workspace/a")
+  assert.equal(record.definition.agentId, agentId(1))
+  assert.equal(record.launch.launchAttemptId, agentId(5))
+  assert.equal(JSON.stringify(record).includes("checkoutId"), false)
+  assert.equal(JSON.stringify(record).includes("leaseId"), false)
+  assert.deepEqual(parseAgentRecord(record), record)
+})
+
+test("durable start command stores an environment digest without values", () => {
+  const environment = { SECRET_TOKEN: "not-for-state", EMPTY: "", PATH: "/usr/bin" }
+  const request = { commandId: agentId(6), handlerGeneration: agentId(2), cwd: "/workspace/a", selection: sampleSpec().selection, environment }
+  const command = startCommand(request, { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3) }, "a".repeat(64))
+  assert.equal(command.version, 2)
+  assert.ok("environmentDigest" in command.input)
+  assert.equal(command.input.environmentDigest, launchEnvironmentDigest(environment))
+  assert.equal(JSON.stringify(command).includes("SECRET_TOKEN"), false)
+  assert.equal(JSON.stringify(command).includes("not-for-state"), false)
+})
+
+test("launch evidence is strict, immutable by copying, and bound to ambient cwd", () => {
   const input = sampleSpec(), parsed = parseLaunchSpec(input)
   assert.equal(parsed.selection.modelId, "model-a")
-  assert.equal(parsed.resolvedModelId, null)
+  assert.equal(parsed.cwd, "/workspace/a")
   input.selection.modelId = "replacement"
   assert.equal(parsed.selection.modelId, "model-a")
   for (const change of [
-    { version: 2 }, { extra: true }, { resolvedModelId: "replacement" }, { agentId: "../outside" }, { hostId: "wrong" }, { handlerGeneration: agentId(99) },
+    { version: 1 }, { extra: true }, { agentId: "../outside" }, { hostId: "wrong" }, { handlerGeneration: agentId(99) },
     { configuration: { ...sampleSpec().configuration, fingerprint: "d".repeat(64) } },
     { configuration: { ...sampleSpec().configuration, extra: true } },
     { limits: { ...sampleSpec().limits, startupMs: 30001 } },
-    { checkout: { ...sampleSpec().checkout, ancestors: [] } },
+    { cwd: "relative" },
     { selection: { ...sampleSpec().selection, modelId: "absent" } },
     { selection: { ...sampleSpec().selection, reasoning: { kind: "none" } } },
     { selection: { ...sampleSpec().selection, mode: null } },

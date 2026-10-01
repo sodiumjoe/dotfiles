@@ -5,11 +5,12 @@ import type { ControlDependencies } from "../cli/control.js"
 import { id } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
 import type { HandlerEnvironment } from "../handler/environment.js"
+import { snapshotLaunchEnvironment } from "./environment.js"
 import type { AgentStore } from "./store.js"
 import { AGENT_PROTOCOL, parseAgentReply, validateAgentReply, type AgentReply, type AgentRequest } from "./protocol.js"
 import { AgentError, agentFailure, parseSelection, type AgentCommand, type AgentErrorCode, type CommandView, type StartSelection } from "./types.js"
 
-const exit = (code: AgentErrorCode): number => code === "USAGE" || code === "SELECTION_UNSUPPORTED" ? 64 : code === "INVALID_PROTOCOL" ? 65 : ["UNAVAILABLE", "STALE_HANDLER", "STALE_PROVIDER", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "INVALID_AGENT_STATE", "ADMISSION_UNAVAILABLE"].includes(code) ? 69 : code === "INTERNAL" ? 70 : 75
+const exit = (code: AgentErrorCode): number => code === "USAGE" || code === "SELECTION_UNSUPPORTED" ? 64 : code === "INVALID_PROTOCOL" ? 65 : ["UNAVAILABLE", "STALE_HANDLER", "STALE_PROVIDER", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "INVALID_AGENT_STATE"].includes(code) ? 69 : code === "INTERNAL" ? 70 : 75
 export async function runAgentClient(argv: readonly string[], deps: ControlDependencies & { callAgent(env: HandlerEnvironment, request: AgentRequest, timeoutMs?: number): Promise<AgentReply>; agentStore(env: HandlerEnvironment): AgentStore }): Promise<number> {
   const requestId = randomUUID(), positional: string[] = [], flags = new Map<string, string>()
   let json = false, generation: string | null = null, commandId: string | undefined, last: CommandView | undefined
@@ -47,7 +48,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
     let retained: AgentCommand | null = null
     const validateRetained = (command: AgentCommand): void => {
       if (command.hostId !== env.paths.hostKey || command.commandId !== commandId || command.handlerGeneration !== generation || command.op !== operation) throw new AgentError("COMMAND_CONFLICT")
-      if (operation === "start" && !isDeepStrictEqual((command.input as import("./types.js").StartInput).selection, selection)) throw new AgentError("COMMAND_CONFLICT")
+      if (operation === "start" && !isDeepStrictEqual((command.input as import("./types.js").StartCommandInput).selection, selection)) throw new AgentError("COMMAND_CONFLICT")
       if (operation === "stop" && (!command.target || command.target.agentId !== positional[2] || command.target.providerGeneration !== flags.get("--provider-generation"))) throw new AgentError("COMMAND_CONFLICT")
     }
     if (pinned || operation === "stop") {
@@ -65,7 +66,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
     generation = handler.record.generation
     const base = { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: generation }
     let request: AgentRequest = retained ? { ...base, op: "agent_command", commandId: commandId!, commandGeneration }
-      : operation === "start" ? { ...base, op: "agent_start", input: { commandId: commandId!, handlerGeneration: generation, cwd: resolve(deps.cwd()), selection: selection! } }
+      : operation === "start" ? { ...base, op: "agent_start", input: { commandId: commandId!, handlerGeneration: generation, cwd: resolve(deps.cwd()), selection: selection!, environment: snapshotLaunchEnvironment(process.env) } }
       : operation === "stop" ? { ...base, op: "agent_stop", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, providerGeneration: flags.get("--provider-generation")! } }
       : operation === "current" ? { ...base, op: "agent_current", cwd: resolve(deps.cwd()) } : { ...base, op: "agent_list" }
     const deadline = deps.now() + 45000
@@ -83,7 +84,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
       if (reply) {
         if (!reply.ok) throw new AgentError(reply.error.code)
         if (reply.result.state === "prompt") throw new AgentError("INVALID_PROTOCOL")
-        if (reply.result.state !== "command") { emit(true, reply.result); return reply.result.unavailable ? 69 : 0 }
+        if (reply.result.state !== "command") { emit(true, reply.result); return reply.result.state === "agents" && reply.result.unavailable ? 69 : 0 }
         last = reply.result
         if (last.command.state !== "pending" && last.durability === "verified") { emit(true, last); return last.command.result?.outcome === "started" || last.command.result?.outcome === "stopped" ? 0 : 75 }
       }
