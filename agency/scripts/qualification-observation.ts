@@ -76,11 +76,11 @@ export async function verifyQualificationAbsence(adapter: Pick<PlatformAdapter, 
     const evidence: ProcessAbsenceEvidence = { identity: structuredClone(identity), startedAt: Date.now(), endedAt: Date.now(), outcome: "unavailable", group: null, processes: [] }
     try {
       evidence.group = await bounded(() => adapter.readGroup(identity.leader.pid))
-      for (const target of identity.observed) {
-        const value = await bounded(() => adapter.readProcess(target.pid)), observed = value === null ? null : parseProcessIdentity(value)
+      evidence.processes = await bounded(() => Promise.all(identity.observed.map(async target => {
+        const value = await adapter.readProcess(target.pid), observed = value === null ? null : parseProcessIdentity(value)
         if (observed !== null && observed.pid !== target.pid) throw new Error("unrelated process observation")
-        evidence.processes.push({ identity: structuredClone(target), observed })
-      }
+        return { identity: structuredClone(target), observed }
+      })))
       if (performance.now() >= deadline) throw new Error("absence timeout")
       evidence.outcome = evidence.group.length || evidence.processes.some(p => p.observed !== null && sameProcessGeneration(p.identity, p.observed)) ? "present" : "absent"
     } catch {}

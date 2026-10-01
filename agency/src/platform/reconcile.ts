@@ -161,6 +161,10 @@ function sameMembers(first: ProcessIdentity[], second: ProcessIdentity[]): boole
   return first.length === second.length && first.every(member => second.some(other => sameProcess(member, other)))
 }
 
+function membersRetained(first: ProcessIdentity[], second: ProcessIdentity[]): boolean {
+  return second.every(member => first.some(other => sameProcess(member, other)))
+}
+
 async function retainedState(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity, groupAbsent = false): Promise<{ state: "absent" | "live" | "ambiguous"; detached: ProcessIdentity[] }> {
   let live = false
   const detached: ProcessIdentity[] = []
@@ -231,7 +235,7 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   if (authorization.state === "empty") return discharge(path, adapter, pending, "released")
   if (authorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGTERM")
   await retain(authorization.observation)
-  if (authorization.state !== "authorized" || !sameMembers(initial.observation.members, authorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGTERM")
+  if (authorization.state !== "authorized" || !membersRetained(initial.observation.members, authorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGTERM")
   await signal(adapter, pendingProvider.group.leader.processGroupId, "SIGTERM")
   const afterTerm = await pollContinuity(adapter, pendingProvider, TERM_DEADLINE_MS, retain)
   if (afterTerm.state === "empty") return discharge(path, adapter, pending, "cleaned")
@@ -240,14 +244,14 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   if (killAuthorization.state === "empty") return discharge(path, adapter, pending, "cleaned")
   if (killAuthorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGKILL")
   await retain(killAuthorization.observation)
-  if (killAuthorization.state !== "authorized" || !sameMembers(afterTerm.observation.members, killAuthorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
+  if (killAuthorization.state !== "authorized" || !membersRetained(afterTerm.observation.members, killAuthorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
   pendingProvider.group.observed = unionMembers(pendingProvider.group.observed, killAuthorization.observation.members)
   await writeLaunchRecord(path, pending)
   if ((await retainedState(adapter, pendingProvider)).state === "ambiguous") return quarantine(path, pending, "retained member changed before SIGKILL")
   const finalKill = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
   if (finalKill.state === "empty") return discharge(path, adapter, pending, "cleaned")
   if (finalKill.state === "authorized") await retain(finalKill.observation)
-  if (finalKill.state !== "authorized" || !sameMembers(killAuthorization.observation.members, finalKill.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
+  if (finalKill.state !== "authorized" || !membersRetained(killAuthorization.observation.members, finalKill.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
   await signal(adapter, pendingProvider.group.leader.processGroupId, "SIGKILL")
   const afterKill = await pollContinuity(adapter, pendingProvider, KILL_DEADLINE_MS, retain)
   if (afterKill.state === "empty") return discharge(path, adapter, pending, "cleaned")

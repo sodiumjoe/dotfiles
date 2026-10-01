@@ -31,6 +31,15 @@ test("never settling observations remain bounded and retain missing proof", asyn
   assert.notEqual(result.first?.outcome, "absent"); assert.equal(result.second, null); assert.ok(performance.now() - started < 500)
 })
 
+test("large exited groups complete both absence passes within one bounded budget", async () => {
+  const observed = Array.from({ length: 16 }, (_, index) => ({ ...leader, pid: leader.pid + index, birth: `${index + 2}:process-${index}`, parentPid: index === 0 ? 100 : leader.pid }))
+  const result = await verifyQualificationAbsence({ async readGroup() { return [] }, async readProcess() { await new Promise(resolve => setTimeout(resolve, 20)); return null } }, { leader: observed[0]!, observed }, 200)
+  assert.equal(result.first?.outcome, "absent")
+  assert.equal(result.second?.outcome, "absent")
+  assert.equal(result.first?.processes.length, 16)
+  assert.equal(result.second?.processes.length, 16)
+})
+
 test("absence rejects a process observation for an unrelated PID", async () => {
   const proof = await verifyQualificationAbsence({ ...absent, async readProcess(pid) { return { ...leader, pid: pid + 1000, birth: "99:unrelated" } } }, group, 1000)
   assert.notEqual(proof.first?.outcome, "absent"); assert.notEqual(proof.second?.outcome, "absent")

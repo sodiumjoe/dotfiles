@@ -169,6 +169,18 @@ test("an unreadable former helper does not invalidate an empty owned group", asy
   assert.deepEqual(adapter.signals, [])
 })
 
+test("transient child exit between signal authorization snapshots retains cleanup authority", async t => {
+  const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+  const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
+  const adapter = new FakeAdapter({ group: [leader, child], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+  let reads = 0
+  adapter.readGroup = async () => adapter.signals.length ? [] : ++reads === 1 ? [leader, child] : [leader]
+  const path = await recordFixture(t, starting)
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "cleaned")
+  assert.deepEqual(adapter.signals, ["SIGTERM"])
+})
+
 test("expected inventory rejects a replaced record before any write or signal", async t => {
   const expected = record()
   const actual = { ...expected, checkoutId: "replacement" }
