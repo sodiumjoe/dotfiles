@@ -21,6 +21,15 @@ test("agent process publishes a managed launch and spawns in the exact caller di
   await assert.rejects(lstat(join(f.root, "agents/provider-state")), { code: "ENOENT" })
 })
 
+test("owned restoration initializes the recorded provider session in a fresh process", async t => {
+  const f = await syntheticAgentProcess(t, "load")
+  assert.equal((await f.owner.initialize(new AbortController().signal)).sessionId, "fixture-session")
+  assert.equal(f.spawnCount(), 1)
+  assert.deepEqual(f.requests.slice(0, 2).map(request => request.method), ["initialize", "session/load"])
+  assert.deepEqual(f.requests[1]!.params, { sessionId: "fixture-session", cwd: "/workspace/a", mcpServers: [] })
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
 test("process identity mismatch never becomes a ready launch", async t => {
   const f = await syntheticAgentProcess(t, "identity-mismatch")
   await assert.rejects(f.owner.initialize(new AbortController().signal), { code: "STARTUP_FAILED" })

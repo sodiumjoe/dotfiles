@@ -7,7 +7,7 @@ import { decodeJson, readBoundedFile } from "../catalog/config.js"
 import type { CatalogFileSystem } from "../catalog/store.js"
 import { id } from "../catalog/types.js"
 import { UUID } from "../control/protocol.js"
-import { assertPrivateDirectory } from "../platform/private-state.js"
+import { assertPrivateDirectory, readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { AgentError, parseAgentCommand, parseAgentRecord, parseLegacyAgentRecord, type AgentCommand, type AgentPhase, type AgentRecord, type LegacyAgentRecord } from "./types.js"
 
 export type AgentInventory = { agents: AgentRecord[]; legacyAgents: LegacyAgentRecord[]; commands: AgentCommand[]; issues: string[] }
@@ -22,7 +22,7 @@ type FileEvidence = { bytes: Buffer; identity: string }
 const absent = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
 function unavailable(): never { throw new AgentError("INVALID_AGENT_STATE") }
 const conflict = (): never => { throw new AgentError("COMMAND_CONFLICT") }
-const edges: Record<AgentPhase, AgentPhase[]> = { starting: ["ready", "stopping", "failed", "interrupted"], ready: ["recoverable", "stopping", "failed", "interrupted"], recoverable: ["restoring", "stopping", "failed", "interrupted"], restoring: ["ready", "recoverable", "stopping", "failed", "interrupted"], stopping: ["stopped", "failed", "interrupted"], stopped: [], failed: [], interrupted: [] }
+const edges: Record<AgentPhase, AgentPhase[]> = { starting: ["ready", "stopping", "failed", "interrupted"], ready: ["recoverable", "stopping", "failed", "interrupted"], recoverable: ["restoring", "stopping", "failed", "interrupted"], restoring: ["ready", "recoverable", "stopping", "failed", "interrupted"], stopping: ["stopped", "recoverable", "failed", "interrupted"], stopped: ["restoring"], failed: [], interrupted: [] }
 
 export function createAgentStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): AgentStore {
   const directory = join(root, "agents")
@@ -151,7 +151,22 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
       if (!isDeepStrictEqual(value, current)) {
         if (!isDeepStrictEqual(current, expected)) conflict()
         if (current === null) { if (value.phase !== "starting") conflict() }
-        else if (!isDeepStrictEqual(value.definition, current.definition) || !isDeepStrictEqual(value.launch, current.launch) || !edges[current.phase].includes(value.phase) || current.session !== null && !isDeepStrictEqual(value.session, current.session)) conflict()
+        else {
+          if (!isDeepStrictEqual(value.definition, current.definition) || !edges[current.phase].includes(value.phase)) conflict()
+          const restoring = value.phase === "restoring" && ["stopped", "recoverable"].includes(current.phase)
+          if (restoring || value.phase === "recoverable") {
+            const launch = await readLaunchRecordForReconciliation(join(root, "launches", current.launch.launchAttemptId + ".json"))
+            if (!current.session || launch?.phase !== "cleanup_verified" || launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== current.definition.agentId || launch.owner.providerGeneration !== current.launch.providerGeneration || launch.handlerGeneration !== current.launch.handlerGeneration) conflict()
+          }
+          if (restoring) {
+            if (["providerGeneration", "launchAttemptId", "commandId"].some(field => value.launch[field as keyof typeof value.launch] === current.launch[field as keyof typeof current.launch]) || !isDeepStrictEqual(value.session, current.session)) conflict()
+          } else {
+            if (!isDeepStrictEqual(value.launch, current.launch)) conflict()
+            if (current.session !== null && !isDeepStrictEqual(value.session, current.session)) {
+              if (current.phase !== "restoring" || value.phase !== "ready" || !value.session || value.session.sessionGeneration === current.session.sessionGeneration || !isDeepStrictEqual({ ...value.session, sessionGeneration: current.session.sessionGeneration }, current.session)) conflict()
+            }
+          }
+        }
       }
       await publish(join(directory, "records", value.definition.agentId + ".json"), value, expected)
     },

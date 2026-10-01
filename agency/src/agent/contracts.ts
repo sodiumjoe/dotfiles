@@ -6,12 +6,13 @@ import { AGENT_LIMITS, AgentError, agentText, parseLaunchSpec, parseSelection, p
 import { parseCodexQualificationManifest, qualificationFingerprint, verifyCodexQualification, type CodexQualificationManifest, type LaunchEnvironmentPolicy } from "./qualification.js"
 import { qualifiedLaunchContracts } from "./qualified-contracts.js"
 
-export type LaunchContract = { id: string; providerId: ProviderId; adapterVersion: string; entrypoint: string; fingerprint: string; modes: Capability; reasoning: Capability; effectiveMode: string | null; permissionProfiles: string[]; modelOption: string; reasoningOption: string | null; modeOption: string | null; environment: LaunchEnvironmentPolicy; permissionEvidence: PermissionEvidence; qualification: CodexQualificationManifest | null }
+export type LaunchContract = { id: string; sessionLoad: "unsupported" | "candidate" | "qualified"; providerId: ProviderId; adapterVersion: string; entrypoint: string; fingerprint: string; modes: Capability; reasoning: Capability; effectiveMode: string | null; permissionProfiles: string[]; modelOption: string; reasoningOption: string | null; modeOption: string | null; environment: LaunchEnvironmentPolicy; permissionEvidence: PermissionEvidence; qualification: CodexQualificationManifest | null }
 export function productionLaunchContracts(): readonly LaunchContract[] { return Object.freeze([...qualifiedLaunchContracts()]) }
 export function parseLaunchContract(input: unknown): LaunchContract {
   try {
     const v = object(input)
-    keys(v, ["id", "providerId", "adapterVersion", "entrypoint", "fingerprint", "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "environment", "permissionEvidence", "qualification"])
+    keys(v, ["id", "sessionLoad", "providerId", "adapterVersion", "entrypoint", "fingerprint", "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "environment", "permissionEvidence", "qualification"])
+    if (v.sessionLoad !== "unsupported" && v.sessionLoad !== "candidate" && v.sessionLoad !== "qualified") throw new Error()
     const permissionEvidence = parsePermissionEvidence(v.permissionEvidence)
     if (!Array.isArray(v.permissionProfiles) || v.permissionProfiles.length < 1 || v.permissionProfiles.length > 16) throw new Error()
     const modes = parseCapability(v.modes), reasoning = parseCapability(v.reasoning), environment = object(v.environment)
@@ -24,7 +25,7 @@ export function parseLaunchContract(input: unknown): LaunchContract {
     if (new Set(optionIds).size !== optionIds.length || Object.keys(fixed).length + Object.keys(privatePaths).length > 128 || Buffer.byteLength(JSON.stringify(environment)) > 65536) throw new Error()
     for (const [key, value] of [...Object.entries(fixed), ...Object.entries(privatePaths)]) if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== "string" || value.includes("\0") || !value.isWellFormed()) throw new Error()
     if (Object.keys(fixed).some(key => Object.hasOwn(privatePaths, key))) throw new Error()
-    const contract: LaunchContract = { id: agentText(v.id), providerId: providerId(v.providerId), adapterVersion: agentText(v.adapterVersion), entrypoint: absolutePath(v.entrypoint), fingerprint: hash(v.fingerprint), modes, reasoning, effectiveMode, permissionProfiles, modelOption, modeOption, reasoningOption, environment: { fixed: { ...fixed } as Record<string, string>, private: { ...privatePaths } as Record<string, string> }, permissionEvidence, qualification: null }
+    const contract: LaunchContract = { id: agentText(v.id), sessionLoad: v.sessionLoad, providerId: providerId(v.providerId), adapterVersion: agentText(v.adapterVersion), entrypoint: absolutePath(v.entrypoint), fingerprint: hash(v.fingerprint), modes, reasoning, effectiveMode, permissionProfiles, modelOption, modeOption, reasoningOption, environment: { fixed: { ...fixed } as Record<string, string>, private: { ...privatePaths } as Record<string, string> }, permissionEvidence, qualification: null }
     if (contract.permissionEvidence === "fixture-contract-v1") {
       if (v.qualification !== null) throw new Error()
     } else {

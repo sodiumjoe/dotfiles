@@ -5,13 +5,32 @@ import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { AGENT_PROTOCOL, agentErrorReply, exchangeAgent, parseAgentReply, parseAgentRequest, validateAgentReply, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { AgentError, parsePromptInput, type PromptView } from "../src/agent/types.js"
+import { projectRestoreInput } from "../src/agent/types.js"
 import { parseRequest, parseReply } from "../src/control/protocol.js"
 import { serveProtocols } from "../src/control/wire.js"
 import { privateRoot, controlFixture } from "./control-support.js"
-import { agentId, sampleAgent, sampleCommand, sampleSpec } from "./agent-support.js"
+import { agentId, sampleAgent, sampleCommand, sampleSpec, sampleSession } from "./agent-support.js"
 
 const request = (): AgentRequest => ({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_start", input: { commandId: agentId(6), handlerGeneration: agentId(2), cwd: "/workspace/a", selection: sampleSpec().selection, environment: {} } })
 const response = (r: AgentRequest): AgentReply => ({ protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: agentId(6), ok: true, result: { state: "command", command: sampleCommand(), durability: "verified" } })
+
+test("restore framing projects secrets to a digest and rejects cwd or authority injection", () => {
+  const input = { commandId: agentId(40), handlerGeneration: agentId(2), agentId: agentId(1), environment: { SECRET: "ephemeral" } }
+  const r: AgentRequest = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_restore", input }
+  assert.deepEqual(parseAgentRequest(r), r)
+  for (const extra of [{ cwd: "/caller" }, { candidateRestoreContracts: ["fixture-v1"] }, { providerGeneration: agentId(3) }]) assert.throws(() => parseAgentRequest({ ...r, input: { ...input, ...extra } }), { code: "INVALID_PROTOCOL" })
+  const command = { ...sampleCommand(), op: "restore" as const, commandId: input.commandId, input: projectRestoreInput(input) }
+  const reply: AgentReply = { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: input.commandId, ok: true, result: { state: "command", command, durability: "verified" } }
+  validateAgentReply(parseAgentReply(reply), r)
+  assert.equal(JSON.stringify(reply).includes("ephemeral"), false)
+  assert.throws(() => validateAgentReply(reply, { ...r, input: { ...input, environment: { SECRET: "different" } } }), { code: "INVALID_PROTOCOL" })
+})
+
+test("current can frame a restoring session before its new process launch is published", () => {
+  const record = { ...sampleAgent(), phase: "restoring", session: sampleSession() }
+  const reply = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/workspace/a", agents: [{ record, live: true, launch: null, cleanup: "not_launched" }] } }
+  assert.doesNotThrow(() => parseAgentReply(reply))
+})
 
 test("agent framing preserves strict independent envelopes and command identity", () => {
   const r = request(), reply = response(r)

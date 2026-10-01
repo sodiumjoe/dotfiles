@@ -15,6 +15,150 @@ const completed = (service: AgentService, request: Pick<StartRequest, "commandId
   return view.command.state !== "pending" && view.durability === "verified" ? view : undefined
 }, 10000)
 
+for (const crashed of [false, true]) test(`restore retains identity and rotates launch after ${crashed ? "crash" : "stop"}`, async t => {
+  const f = await agentServiceFixture(t)
+  const started = await completed(f.service, (await f.service.start(f.input)).command)
+  const before = (await f.service.list()).agents[0]!.record
+  assert.equal(before.version, 2)
+  if (before.version !== 2) throw new Error()
+  let service = f.service
+  if (crashed) service = await f.restart()
+  else {
+    const stop = { ...started.command.target!, commandId: randomUUID() }
+    await service.stop(stop); await completed(service, stop)
+  }
+  const recovered = (await service.list()).agents[0]!.record
+  assert.equal(recovered.phase, crashed ? "recoverable" : "stopped")
+  assert.doesNotThrow(() => service.assertOrdinaryShutdownSafe())
+  const restoringEnvironment = { PATH: "/restoring/bin", SECRET: "new-secret" }
+  const request = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, agentId: before.definition.agentId, environment: restoringEnvironment }
+  await service.restore(request)
+  const done = await completed(service, request)
+  assert.equal(done.command.result?.outcome, "restored")
+  const restored = (await service.list()).agents[0]!.record
+  if (restored.version !== 2) throw new Error()
+  assert.deepEqual(restored.definition, before.definition)
+  assert.equal(restored.session!.sessionId, before.session!.sessionId)
+  assert.notEqual(restored.session!.sessionGeneration, before.session!.sessionGeneration)
+  assert.notEqual(restored.launch.providerGeneration, before.launch.providerGeneration)
+  assert.notEqual(restored.launch.launchAttemptId, before.launch.launchAttemptId)
+  assert.notEqual(restored.launch.commandId, before.launch.commandId)
+  assert.equal(f.spawnOptions.at(-1)!.cwd, before.definition.cwd)
+  assert.deepEqual(f.spawnOptions.at(-1)!.env, restoringEnvironment)
+  assert.deepEqual(f.methodHistory.filter(method => method === "session/new" || method === "session/load"), ["session/new", "session/load"])
+  assert.equal(JSON.stringify(done).includes("new-secret"), false)
+  await assert.rejects(service.restore({ ...request, environment: { SECRET: "changed" } }), { code: "COMMAND_CONFLICT" })
+  assert.equal((await service.command(f.input.commandId, f.input.handlerGeneration)).command.result?.outcome, "started")
+  await service.freezeAndDrain(true)
+})
+
+for (const [sessionLoad, authorized, succeeds] of [["unsupported", true, false], ["candidate", false, false], ["candidate", true, true], ["qualified", false, true]] as const) test(`restore authorization is ${sessionLoad} with candidate authorization ${authorized}`, async t => {
+  const f = await agentServiceFixture(t, { sessionLoad, candidateRestoreContracts: new Set(authorized ? ["fixture-v1"] : ["another-contract"]) })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: ready.command.target!.agentId, environment: {} }
+  if (succeeds) {
+    await f.service.restore(request)
+    assert.equal((await completed(f.service, request)).command.result?.outcome, "restored")
+  } else {
+    await assert.rejects(f.service.restore(request), { code: "RESTORE_UNSUPPORTED" })
+    assert.equal(f.spawns(), 1)
+  }
+})
+
+for (const [behavior, code, phase] of [["unsupported", "RESTORE_UNSUPPORTED", "recoverable"], ["missing", "SESSION_UNAVAILABLE", "failed"], ["transport", "STARTUP_FAILED", "recoverable"]] as const) test(`restore ${behavior} retains the conversation after cleanup`, async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  f.loadBehavior(behavior)
+  const request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: ready.command.target!.agentId, environment: {} }
+  await f.service.restore(request)
+  assert.equal((await completed(f.service, request)).command.result?.failure?.code, code)
+  const list = await f.service.list(), agent = list.agents[0]!
+  assert.equal(list.unavailable, null)
+  assert.equal(agent.record.phase, phase)
+  assert.equal(agent.cleanup, "verified")
+  if (agent.record.version !== 2) throw new Error()
+  assert.equal(agent.record.session!.sessionId, ready.command.result!.session!.sessionId)
+  assert.equal(agent.record.failure?.code, code)
+  assert.equal(f.methodHistory.filter(method => method === "session/new").length, 1)
+  if (phase === "recoverable") {
+    f.loadBehavior("normal")
+    const retry = { ...request, commandId: randomUUID() }
+    await f.service.restore(retry)
+    assert.equal((await completed(f.service, retry)).command.result?.outcome, "restored")
+  }
+})
+
+test("sequential prompts work while concurrent prompts remain rejected", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const first = f.service.prompt({ ...target, text: "first" })
+  await f.promptEntered
+  await assert.rejects(f.service.prompt({ ...target, text: "concurrent" }), { code: "INCOMPLETE" })
+  f.completePrompt(target.agentId, "first answer")
+  assert.equal((await first).text, "first answer")
+  const second = f.service.prompt({ ...target, text: "second" })
+  await until(async () => f.methodHistory.filter(method => method === "session/prompt").length === 2 ? true : undefined)
+  f.completePrompt(target.agentId, "second answer")
+  assert.equal((await second).text, "second answer")
+})
+
+for (const boundary of ["spawn", "spawned", "ready"]) test(`Handler death while restoring at ${boundary} interrupts the command and retains the session`, async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const stop = { ...target, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  f.pauseRestore(boundary)
+  const request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: target.agentId, environment: {} }
+  await f.service.restore(request)
+  await f.restoreEntered
+  if (boundary === "ready") assert.equal(f.methodHistory.filter(method => method === "session/load").length, 1)
+  const restarted = await f.restart()
+  assert.equal((await restarted.command(request.commandId, request.handlerGeneration)).command.state, "interrupted")
+  const recovered = (await restarted.list()).agents[0]!
+  assert.equal(recovered.record.phase, "recoverable")
+  assert.equal(recovered.cleanup, "verified")
+  const retry = { ...request, commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration }
+  await restarted.restore(retry)
+  assert.equal((await completed(restarted, retry)).command.result?.outcome, "restored")
+  assert.equal(f.methodHistory.filter(method => method === "session/new").length, 1)
+  assert.equal(f.methodHistory.filter(method => method === "session/prompt").length, 0)
+})
+
+test("an unresolved same-boot process prevents only its agent from restoring", async t => {
+  const f = await agentServiceFixture(t)
+  const first = await completed(f.service, (await f.service.start(f.input)).command)
+  const second = await completed(f.service, (await f.service.start({ ...f.input, commandId: randomUUID() })).command)
+  const restarted = await f.restart(first.command.target!.agentId)
+  const list = await restarted.list()
+  assert.equal(list.unavailable, null)
+  assert.equal(list.agents.find(agent => agent.record.version === 2 && agent.record.definition.agentId === first.command.target!.agentId)!.record.phase, "interrupted")
+  const request = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, agentId: first.command.target!.agentId, environment: {} }
+  await assert.rejects(restarted.restore(request), { code: "NOT_READY" })
+  const healthy = { ...request, commandId: randomUUID(), agentId: second.command.target!.agentId }
+  await restarted.restore(healthy)
+  assert.equal((await completed(restarted, healthy)).command.result?.outcome, "restored")
+})
+
+test("repairing a historical stop receipt cannot stop a restored process generation", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  f.failStopReceipt(true)
+  const stop = { ...target, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await until(async () => (await f.store.readAgent(target.agentId))?.phase === "stopped" ? true : undefined)
+  const restore = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: target.agentId, environment: {} }
+  await f.service.restore(restore)
+  const restored = await completed(f.service, restore)
+  f.failStopReceipt(false)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  assert.equal((await f.service.prompt({ ...restored.command.target!, text: "still running" })).text, "answer:still running")
+  assert.equal((await f.service.list()).agents[0]!.record.phase, "ready")
+})
+
 test("start persists a version-two definition and digest without environment values", async t => {
   const f = await agentServiceFixture(t)
   const request = { ...f.input, environment: { ...f.input.environment, SECRET_TOKEN: "not-for-state" } }

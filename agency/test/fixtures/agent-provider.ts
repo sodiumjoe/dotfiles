@@ -1,4 +1,4 @@
-import { access, writeFile } from "node:fs/promises"
+import { access, appendFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 const root = process.env.FIXTURE_ROOT
@@ -27,9 +27,10 @@ process.stdin.on("data", (chunk: Buffer) => {
     serial = serial.then(async () => {
       const request = JSON.parse(line)
       if (request.method === undefined) return
+      await appendFile(join(root, "requests.jsonl"), JSON.stringify(request) + "\n", { mode: 0o600 })
       let result: unknown
-      if (request.method === "initialize") result = { protocolVersion: 1, agentCapabilities: {} }
-      else if (request.method === "session/new") {
+      if (request.method === "initialize") result = { protocolVersion: 1, agentCapabilities: { loadSession: true } }
+      else if (request.method === "session/new" || request.method === "session/load") {
         await barrier("session")
         result = { sessionId: "fixture-session", configOptions: options }
       } else if (request.method === "session/set_config_option") {

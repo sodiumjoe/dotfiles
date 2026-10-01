@@ -30,25 +30,29 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         if (!value || value.startsWith("--")) throw new Error()
         flags.set(flag, value)
       }
-      if (positional[0] !== "agent" || !["start", "stop", "current", "list"].includes(positional[1] ?? "") || positional.length !== (positional[1] === "stop" ? 3 : 2)) throw new Error()
+      if (positional[0] !== "agent" || !["start", "restore", "stop", "current", "list"].includes(positional[1] ?? "") || positional.length !== ((["stop", "restore"].includes(positional[1]!)) ? 3 : 2)) throw new Error()
       commandId = flags.has("--command-id") ? id(flags.get("--command-id")) : undefined
       generation = flags.has("--handler-generation") ? id(flags.get("--handler-generation")) : null
       if (positional[1] === "start") {
         if (flags.has("--provider-generation") || generation && !commandId) throw new Error()
         const reasoning = flags.get("--reasoning")
         selection = parseSelection({ providerId: flags.get("--provider"), modelId: flags.get("--model"), reasoning: reasoning === "none" ? { kind: "none" } : { kind: "value", value: reasoning }, mode: flags.get("--mode") ?? null, permissionProfile: flags.get("--permission-profile") })
+      } else if (positional[1] === "restore") {
+        id(positional[2])
+        if (generation && !commandId || [...flags.keys()].some(flag => !["--command-id", "--handler-generation"].includes(flag))) throw new Error()
       } else if (positional[1] === "stop") {
         id(positional[2]); id(generation); id(flags.get("--provider-generation"))
         if ([...flags.keys()].some(flag => !["--command-id", "--handler-generation", "--provider-generation"].includes(flag))) throw new Error()
       } else if (flags.size) throw new Error()
     } catch { throw new AgentError("USAGE") }
-    const operation = positional[1]!, pinned = operation === "start" && generation !== null
-    if (operation === "start" || operation === "stop") commandId ??= randomUUID()
+    const operation = positional[1]!, pinned = (operation === "start" || operation === "restore") && generation !== null
+    if (operation === "start" || operation === "restore" || operation === "stop") commandId ??= randomUUID()
     const env = await deps.environment()
     let retained: AgentCommand | null = null
     const validateRetained = (command: AgentCommand): void => {
       if (command.hostId !== env.paths.hostKey || command.commandId !== commandId || command.handlerGeneration !== generation || command.op !== operation) throw new AgentError("COMMAND_CONFLICT")
       if (operation === "start" && !isDeepStrictEqual((command.input as import("./types.js").StartCommandInput).selection, selection)) throw new AgentError("COMMAND_CONFLICT")
+      if (operation === "restore" && command.target?.agentId !== positional[2]) throw new AgentError("COMMAND_CONFLICT")
       if (operation === "stop" && (!command.target || command.target.agentId !== positional[2] || command.target.providerGeneration !== flags.get("--provider-generation"))) throw new AgentError("COMMAND_CONFLICT")
     }
     if (pinned || operation === "stop") {
@@ -67,6 +71,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
     const base = { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: generation }
     let request: AgentRequest = retained ? { ...base, op: "agent_command", commandId: commandId!, commandGeneration }
       : operation === "start" ? { ...base, op: "agent_start", input: { commandId: commandId!, handlerGeneration: generation, cwd: resolve(deps.cwd()), selection: selection!, environment: snapshotLaunchEnvironment(process.env) } }
+      : operation === "restore" ? { ...base, op: "agent_restore", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, environment: snapshotLaunchEnvironment(process.env) } }
       : operation === "stop" ? { ...base, op: "agent_stop", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, providerGeneration: flags.get("--provider-generation")! } }
       : operation === "current" ? { ...base, op: "agent_current", cwd: resolve(deps.cwd()) } : { ...base, op: "agent_list" }
     const deadline = deps.now() + 45000
@@ -86,7 +91,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         if (reply.result.state === "prompt") throw new AgentError("INVALID_PROTOCOL")
         if (reply.result.state !== "command") { emit(true, reply.result); return reply.result.state === "agents" && reply.result.unavailable ? 69 : 0 }
         last = reply.result
-        if (last.command.state !== "pending" && last.durability === "verified") { emit(true, last); return last.command.result?.outcome === "started" || last.command.result?.outcome === "stopped" ? 0 : 75 }
+        if (last.command.state !== "pending" && last.durability === "verified") { emit(true, last); return last.command.result?.outcome === "started" || last.command.result?.outcome === "restored" || last.command.result?.outcome === "stopped" ? 0 : 75 }
       }
       if (commandId) request = { ...base, requestId: randomUUID(), op: "agent_command", commandId, commandGeneration }
       if (deps.now() < deadline) await deps.sleep(Math.min(100, deadline - deps.now()))

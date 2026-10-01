@@ -173,7 +173,7 @@ export async function verifyCodexQualification(input: CodexQualificationManifest
 }
 export function contractFromQualifiedCandidate(input: CodexQualificationCandidate): LaunchContract {
   const candidate = parseCandidate(input), manifest = candidate.manifest
-  return { id: manifest.contractId, providerId: manifest.providerId, adapterVersion: manifest.adapterVersion, entrypoint: manifest.adapterEntrypoint.path, fingerprint: candidate.fingerprint, modes: { state: "values", values: [manifest.selection.mode] }, reasoning: { state: "values", values: [manifest.selection.reasoning] }, effectiveMode: null, permissionProfiles: [manifest.selection.permissionProfile], modelOption: manifest.optionIds.model, reasoningOption: manifest.optionIds.reasoning, modeOption: manifest.optionIds.mode, environment: manifest.environment, permissionEvidence: "agency-deny-all-v1", qualification: manifest }
+  return { id: manifest.contractId, sessionLoad: "candidate", providerId: manifest.providerId, adapterVersion: manifest.adapterVersion, entrypoint: manifest.adapterEntrypoint.path, fingerprint: candidate.fingerprint, modes: { state: "values", values: [manifest.selection.mode] }, reasoning: { state: "values", values: [manifest.selection.reasoning] }, effectiveMode: null, permissionProfiles: [manifest.selection.permissionProfile], modelOption: manifest.optionIds.model, reasoningOption: manifest.optionIds.reasoning, modeOption: manifest.optionIds.mode, environment: manifest.environment, permissionEvidence: "agency-deny-all-v1", qualification: manifest }
 }
 export function launchEvidenceFromQualifiedCandidate(input: CodexQualificationCandidate, handlerGeneration: string, now: number): LaunchEvidence {
   const candidate = parseCandidate(input), manifest = candidate.manifest

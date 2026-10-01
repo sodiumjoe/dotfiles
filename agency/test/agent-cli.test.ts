@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { runControl, type ControlDependencies } from "../src/cli/control.js"
 import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../src/agent/protocol.js"
-import { AgentError, projectStartInput, type AgentCommand, type AgentErrorCode } from "../src/agent/types.js"
+import { AgentError, projectStartInput, projectRestoreInput, type AgentCommand, type AgentErrorCode } from "../src/agent/types.js"
 import { unavailableControlDependencies, until } from "./control-support.js"
 import { agentId, agentServiceFixture, sampleAgent, sampleCommand, sampleSession } from "./agent-support.js"
 import type { HandlerInspection } from "../src/platform/types.js"
@@ -17,11 +17,52 @@ function fixture() {
     if (r.op === "agent_list") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "agents", agents: [], unavailable: null } }
     if (r.op === "agent_current") return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "current", cwd: r.cwd, agents: [] } }
     if (r.op === "agent_start") retained = { ...retained, commandId: r.input.commandId, handlerGeneration: r.input.handlerGeneration, input: projectStartInput(r.input) }
+    if (r.op === "agent_restore") retained = { ...retained, op: "restore", commandId: r.input.commandId, handlerGeneration: r.input.handlerGeneration, input: projectRestoreInput(r.input), result: { outcome: "restored", target: retained.target, session: sampleSession(), failure: null } }
     return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: retained.commandId, ok: true, result: { state: "command", command: retained, durability: "verified" } }
   }
   const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: command.hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/socket" }, adapter: { platform: "darwin", bootId: async () => "boot-a", readProcess: unsupported, readGroup: unsupported, signalGroup: unsupported } }), start: async () => { starts++; return inspection }, inspect: async () => inspection, cwd: () => "/checkout", now: () => now, sleep: async ms => { now += ms }, stdout: value => out.push(value), stderr: value => err.push(value), callAgent: async (_env, r) => { calls.push(r); return reply(r) }, agentStore: () => ({ readCommand: async id => id === retained.commandId ? structuredClone(retained) : null, readAgent: unsupported, inventory: unsupported, writeAgent: unsupported, writeCommand: unsupported }) }
   return { deps, out, err, calls, command, inspection, reply, starts: () => starts, output: () => JSON.parse(out.join("")), retain(value: AgentCommand) { retained = value } }
 }
+
+test("restore snapshots caller environment without accessing caller cwd", async () => {
+  const f = fixture()
+  f.deps.cwd = () => { throw new Error("restore must use recorded cwd") }
+  f.deps.callAgent = async (_env, request) => {
+    f.calls.push(request)
+    assert.equal(request.op, "agent_restore")
+    const input = (request as any).input
+    assert.equal(Object.hasOwn(input, "cwd"), false)
+    assert.deepEqual(input.environment, { ...process.env })
+    return agentErrorReply(request, new AgentError("INCOMPLETE"))
+  }
+  assert.equal(await runControl(["agent", "restore", agentId(1), "--json"], f.deps), 75)
+  assert.equal(f.calls.length, 1)
+})
+
+test("a lost restore receipt polls the original command without sending environment again", async () => {
+  const f = fixture()
+  f.deps.cwd = () => { throw new Error("restore must use recorded cwd") }
+  f.deps.callAgent = async (_env, request) => { f.calls.push(request); const reply = f.reply(request); if (request.op === "agent_restore") throw new AgentError("UNAVAILABLE"); return reply }
+  assert.equal(await runControl(["agent", "restore", agentId(1), "--json"], f.deps), 0)
+  assert.deepEqual(f.calls.map(call => call.op), ["agent_restore", "agent_command"])
+  assert.equal(f.output().result.command.result.outcome, "restored")
+})
+
+test("a pinned restore uses only its retained receipt across Handler replacement", async () => {
+  const f = fixture(), input = { commandId: f.command.commandId, handlerGeneration: f.command.handlerGeneration, agentId: agentId(1), environment: {} }
+  f.retain({ ...f.command, op: "restore", input: projectRestoreInput(input), state: "completed", result: { outcome: "restored", target: f.command.target, session: sampleSession(), failure: null } })
+  f.inspection.record.generation = agentId(99)
+  f.deps.cwd = () => { throw new Error("restore retry must not read cwd") }
+  assert.equal(await runControl(["agent", "restore", agentId(1), "--command-id", input.commandId, "--handler-generation", input.handlerGeneration, "--json"], f.deps), 0)
+  assert.equal(f.starts(), 0)
+  assert.equal(f.calls[0]?.op, "agent_command")
+})
+
+for (const flags of [["--cwd", "/caller"], ["--candidate-restore-contract", "fixture-v1"], ["--provider-generation", agentId(3)], ["--model", "alias"]]) test(`restore rejects alternate scope or authority: ${flags[0]}`, async () => {
+  const f = fixture()
+  assert.equal(await runControl(["agent", "restore", agentId(1), ...flags], f.deps), 64)
+  assert.equal(f.calls.length, 0)
+})
 
 test("new agent start emits one envelope and explicit effective selections", async () => {
   const f = fixture()

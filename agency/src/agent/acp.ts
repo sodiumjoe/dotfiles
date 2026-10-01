@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto"
 import type { Readable, Writable } from "node:stream"
 import { object } from "../catalog/types.js"
 import { parseLaunchContract, type LaunchContract } from "./contracts.js"
-import { AgentError, agentFailure, agentText, parseLaunchSpec, type AgentFailure, type AgentLimits, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
+import { AgentError, agentFailure, agentText, specOf, type AgentRecord, type SessionStart, type AgentFailure, type AgentLimits, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
-export type AcpConnection = { initialize(spec: LaunchSpec, contract: LaunchContract, signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; fault: Promise<AgentFailure>; close(): void }
+export type AcpConnection = { initialize(record: AgentRecord, contract: LaunchContract, session: SessionStart, signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; fault: Promise<AgentFailure>; close(): void }
 type ConfigOption = { id: string; currentValue: string; values: string[] }
 type Pending = { method: string; prefix: number; deadline: number; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
 type PromptState = { requestId: number; text: string; bytes: number; chunks: number; responseReceived: boolean }
@@ -192,7 +192,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   let buffer = "", frameBytes = 0, startupBytes = 0, nextId = 0, queuedBytes = 0, closed = false, ready = false
   let failure: AgentError | null = null, sessionId: string | null = null, options: ConfigOption[] = [], deadline = Infinity
   let violation: AgentError | null = null, denial: Promise<void> | undefined
-  let spec: LaunchSpec | undefined, contract: LaunchContract | undefined, initialization: Promise<SessionEvidence> | undefined, promptState: PromptState | null = null, promptUsed = false
+  let spec: LaunchSpec | undefined, contract: LaunchContract | undefined, initialization: Promise<SessionEvidence> | undefined, promptState: PromptState | null = null, loading = false, loadSession = false
   let resolveFault!: (value: AgentFailure) => void
   const fault = new Promise<AgentFailure>(resolve => { resolveFault = resolve })
   const fail = (error: unknown): void => {
@@ -241,7 +241,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     const id = ++nextId
     return new Promise((resolve, reject) => {
       const phases = contract?.qualification?.deadlines
-      const phaseMs = method === "session/prompt" ? phases?.promptMs ?? 90000 : phases ? method === "initialize" ? phases.initializeMs : method === "session/new" ? phases.sessionMs : phases.optionMs : limits.rpcMs
+      const phaseMs = method === "session/prompt" ? phases?.promptMs ?? 90000 : phases ? method === "initialize" ? phases.initializeMs : method === "session/new" || method === "session/load" ? phases.sessionMs : phases.optionMs : limits.rpcMs
       const requestDeadline = Math.min(deadline, now() + phaseMs)
       const timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, requestDeadline - now()))
       pending.set(id, { method, prefix, deadline: requestDeadline, resolve, reject, timer })
@@ -288,7 +288,9 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (sessionId === null || params.sessionId !== sessionId) invalid()
       const update = object(params.update), kind = agentText(update.sessionUpdate)
       if (promptState?.responseReceived) invalid()
+      if (loading && kind === "user_message_chunk") { contentChunk(update); return }
       if (kind === "agent_message_chunk") {
+        if (loading) { contentChunk(update); return }
         if (!ready || !promptState) invalid()
         const text = contentChunk(update)
         promptState.chunks++
@@ -303,11 +305,12 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       else if (kind === "current_mode_update") {
         knownKeys(update, ["sessionUpdate", "currentModeId"], ["sessionUpdate", "currentModeId", "_meta"])
         if (Object.hasOwn(update, "_meta")) metadata(update._meta)
+        if (loading) { agentText(update.currentModeId); return }
         if (!contract?.modeOption) throw new AgentError("SELECTION_UNSUPPORTED")
         const option = options.find(option => option.id === contract!.modeOption)
         if (!option) invalid()
         option.currentValue = agentText(update.currentModeId)
-      } else if (ready && promptState ? !informational(update, kind) : !["available_commands_update", "usage_update", "session_info_update"].includes(kind)) invalid()
+      } else if (loading ? !informational(update, kind) && kind !== "available_commands_update" : ready && promptState ? !informational(update, kind) : !["available_commands_update", "usage_update", "session_info_update"].includes(kind)) invalid()
       if (ready) exact(options, spec!, contract!)
       return
     }
@@ -321,11 +324,19 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (Object.keys(error).length !== 2 || !Object.hasOwn(error, "code") || !Object.hasOwn(error, "message") || !Number.isSafeInteger(error.code)) invalid()
       const message = agentText(error.message)
       if (waiter.method === "session/new" && error.code === -32000 && message === "Authentication required") throw new AgentError("AUTH_REQUIRED")
+      if (waiter.method === "session/load" && error.code === -32000 && message === "Authentication required") throw new AgentError("AUTH_REQUIRED")
+      if (waiter.method === "session/load" && error.code === -32602) throw new AgentError("SESSION_UNAVAILABLE")
       throw new AgentError("STARTUP_FAILED")
     }
     const response = object(v.result)
-    if (waiter.method === "initialize") { if (response.protocolVersion !== 1) invalid() }
+    if (waiter.method === "initialize") {
+      if (response.protocolVersion !== 1) invalid()
+      const capabilities = object(response.agentCapabilities)
+      if (Object.hasOwn(capabilities, "loadSession") && typeof capabilities.loadSession !== "boolean") invalid()
+      loadSession = capabilities.loadSession === true
+    }
     else if (waiter.method === "session/new") { sessionId = agentText(response.sessionId, 1024); options = parseOptions(response.configOptions) }
+    else if (waiter.method === "session/load") { if (Object.hasOwn(response, "sessionId") && response.sessionId !== sessionId) invalid(); options = parseOptions(response.configOptions); loading = false }
     else if (waiter.method === "session/prompt") {
       if (!promptState || promptState.requestId !== v.id) invalid()
       promptResponse(response)
@@ -362,20 +373,24 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   readable.on("data", data); readable.on("end", ended); readable.on("close", ended); readable.on("error", streamError); writable.on("error", streamError); writable.on("close", ended)
   return {
     fault,
-    initialize(inputSpec, inputContract, signal) {
+    initialize(record, inputContract, session, signal) {
       if (initialization) return initialization
       initialization = (async () => {
         const abort = (): void => fail(new AgentError("STARTUP_FAILED"))
         let timer: NodeJS.Timeout | undefined
         try {
-          spec = parseLaunchSpec(inputSpec); contract = parseLaunchContract(inputContract)
+          spec = specOf(record); contract = parseLaunchContract(inputContract)
           deadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity, now() + (contract.qualification?.deadlines.overallMs ?? limits.startupMs))
           timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, deadline - now()))
           signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort()
           check()
           await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false } })
           check()
-          await request("session/new", { cwd: spec.cwd, mcpServers: [] })
+          if (session.kind === "load") {
+            if (!loadSession) throw new AgentError("RESTORE_UNSUPPORTED")
+            sessionId = agentText(session.sessionId, 1024); loading = true
+            await request("session/load", { sessionId, cwd: spec.cwd, mcpServers: [] })
+          } else await request("session/new", { cwd: spec.cwd, mcpServers: [] })
           const desired = desiredOptions(spec, contract)
           for (const [index, [configId, value]] of desired.entries()) {
             check()
@@ -392,11 +407,9 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       return initialization
     },
     async prompt(text, signal) {
-      if (promptUsed) throw new AgentError("INVALID_AGENT_STATE")
       check()
       if (!ready || promptState || typeof text !== "string" || text.length === 0 || Buffer.byteLength(text) > 4096 || !text.isWellFormed()) throw new AgentError("INVALID_AGENT_STATE")
       const abort = (): void => fail(new AgentError("STARTUP_FAILED"))
-      promptUsed = true
       promptState = { requestId: 0, text: "", bytes: 0, chunks: 0, responseReceived: false }
       try {
         signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort()

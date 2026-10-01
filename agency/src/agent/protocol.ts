@@ -5,14 +5,15 @@ import { ControlError } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
 import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentFailure, parseAgentRecord, parseLegacyAgentRecord, parsePromptInput, parsePromptView, parseStartInput, parseStopInput, projectStartInput, type AgentFailure, type AgentList, type AgentView, type LegacyAgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput } from "./types.js"
+import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
 
 export const AGENT_PROTOCOL = "agency-agent/2" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (
-  | { op: "agent_start"; input: StartInput } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
+  | { op: "agent_start"; input: StartInput } | { op: "agent_restore"; input: RestoreRequest } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
 )
 export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgents | PromptView } | { ok: false; error: AgentFailure })
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
-const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_stop" ? request.input.commandId : undefined
+const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" ? request.input.commandId : undefined
 function identity(input: unknown): ProcessIdentity {
   const v = object(input)
   keys(v, ["bootId", "pid", "birth", "parentPid", "processGroupId", "sessionId", "uid", "gid"])
@@ -52,7 +53,7 @@ function agentView(input: unknown, generation: string | null): AgentView | Legac
   if (typeof v.live !== "boolean" || !["not_launched", "verified", "unverified", "unknown"].includes(String(v.cleanup))) invalid()
   if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.launchAttemptId !== record.launch.launchAttemptId || launch.handlerGeneration !== record.launch.handlerGeneration)) invalid()
   if (v.cleanup === "verified" && launch?.phase !== "cleanup_verified" || v.cleanup === "not_launched" && launch !== null) invalid()
-  if (v.live && (record.launch.handlerGeneration !== generation || !["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase) || !launch && record.phase !== "starting" || launch?.phase === "cleanup_verified" || launch?.phase === "quarantined")) invalid()
+  if (v.live && (record.launch.handlerGeneration !== generation || !["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase) || !launch && !["starting", "restoring"].includes(record.phase) || launch?.phase === "cleanup_verified" || launch?.phase === "quarantined")) invalid()
   return { record, launch, live: v.live as boolean, cleanup: v.cleanup as AgentView["cleanup"] }
 }
 export function parseAgentRequest(input: unknown): AgentRequest {
@@ -65,6 +66,7 @@ export function parseAgentRequest(input: unknown): AgentRequest {
     if (v.op === "agent_command") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "commandGeneration"]); return { ...common, op: "agent_command", commandId: id(v.commandId), commandGeneration: id(v.commandGeneration) } }
     keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"])
     if (v.op === "agent_start") { const input = parseStartInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_start", input } }
+    if (v.op === "agent_restore") { const input = parseRestoreRequest(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_restore", input } }
     if (v.op === "agent_stop") { const input = parseStopInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_stop", input } }
     if (v.op === "agent_prompt") { const input = parsePromptInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_prompt", input } }
     return invalid()
@@ -112,7 +114,7 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   if (request.op === "agent_prompt") { if (result.state !== "prompt" || !isDeepStrictEqual(result.target, { agentId: request.input.agentId, handlerGeneration: request.input.handlerGeneration, providerGeneration: request.input.providerGeneration })) invalid(); return }
   if (result.state !== "command") return invalid()
   if (request.op === "agent_command") { if (result.command.handlerGeneration !== request.commandGeneration) invalid(); return }
-  if (result.command.op !== (request.op === "agent_start" ? "start" : "stop") || !isDeepStrictEqual(result.command.input, request.op === "agent_start" ? projectStartInput(request.input) : request.input)) invalid()
+  if (result.command.op !== (request.op === "agent_start" ? "start" : request.op === "agent_restore" ? "restore" : "stop") || !isDeepStrictEqual(result.command.input, request.op === "agent_start" ? projectStartInput(request.input) : request.op === "agent_restore" ? projectRestoreInput(request.input) : request.input)) invalid()
 }
 export function agentErrorReply(request: AgentRequest | Pick<AgentReply, "requestId" | "handlerGeneration" | "commandId">, error: unknown): AgentReply {
   const commandId = "op" in request ? commandIdFor(request) : request.commandId

@@ -10,11 +10,11 @@ import { sameProcess, sameProcessGeneration, type LaunchRecord, type ManagedLaun
 import { createAcpConnection, type AcpConnection } from "./acp.js"
 import type { LaunchContract } from "./contracts.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
-import { AgentError, agentFailure, type AgentFailure, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
+import { AgentError, agentFailure, splitLaunchSpec, type SessionStart, type AgentFailure, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
 export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 
-export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; environment: LaunchEnvironment; contract: LaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number } = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; session?: SessionStart; environment: LaunchEnvironment; contract: LaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number } = {}): OwnedAgentProcess {
   const { context, spec, contract } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.qualification?.deadlines
   let overallDeadline = input.deadline ?? Infinity, spawnDeadline = Infinity
@@ -207,7 +207,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
           connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(input.overallDeadline === undefined ? {} : { overallDeadline: input.overallDeadline }), now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
-          const session = await connection.initialize(spec, contract, controller.signal)
+          const session = await connection.initialize({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null }, contract, input.session ?? { kind: "new" }, controller.signal)
           check(); initialized = true; if (!input.isReady) overallDeadline = Infinity; return session
         } catch (error) { fail(error); throw error }
         finally { signal.removeEventListener("abort", abort) }

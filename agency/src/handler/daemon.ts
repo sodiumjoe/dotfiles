@@ -148,8 +148,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       if (request.handlerGeneration !== options.generation) return agentErrorReply(bound, new AgentError("STALE_HANDLER"))
       if (!agents || state.phase !== "ready") return agentErrorReply(bound, new AgentError("NOT_READY"))
       try {
-        const result = request.op === "agent_start" ? await agents.start(request.input) : request.op === "agent_stop" ? await agents.stop(request.input) : request.op === "agent_prompt" ? await agents.prompt(request.input) : request.op === "agent_command" ? await agents.command(request.commandId, request.commandGeneration) : request.op === "agent_current" ? await agents.current(request.cwd) : await agents.list()
-        return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ...(request.op === "agent_command" ? { commandId: request.commandId } : request.op === "agent_start" || request.op === "agent_stop" ? { commandId: request.input.commandId } : {}), ok: true, result }
+        const result = request.op === "agent_start" ? await agents.start(request.input) : request.op === "agent_restore" ? await agents.restore(request.input) : request.op === "agent_stop" ? await agents.stop(request.input) : request.op === "agent_prompt" ? await agents.prompt(request.input) : request.op === "agent_command" ? await agents.command(request.commandId, request.commandGeneration) : request.op === "agent_current" ? await agents.current(request.cwd) : await agents.list()
+        return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ...(request.op === "agent_command" ? { commandId: request.commandId } : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" ? { commandId: request.input.commandId } : {}), ok: true, result }
       } catch (error) { return agentErrorReply(bound, error) }
     }
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
@@ -190,7 +190,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     await catalog.initialize()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
-    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: createAgentStore(options.paths.persistentRoot) })
+    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, candidateRestoreContracts: new Set(), contracts: options.launchContracts ?? productionLaunchContracts(), store: createAgentStore(options.paths.persistentRoot) })
     await agents.initialize()
     current = { ...current, phase: "ready" }
     await writeHandlerRecord(options.recordPath, current)

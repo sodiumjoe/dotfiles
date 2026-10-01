@@ -32,6 +32,28 @@ test("missing agent storage is read-only and valid updates cannot mutate specifi
   assert.deepEqual(await store.readAgent(initial.definition.agentId), stopped)
 })
 
+test("stopped restore requires verified cleanup and preserves the stable session while rotating generations", async t => {
+  const root = await privateRoot(t), store = createAgentStore(root), initial = sampleAgent()
+  await store.writeAgent(initial, null)
+  const ready = { ...initial, phase: "ready" as const, session: sampleSession() }
+  const stopping = { ...ready, phase: "stopping" as const }, stopped = { ...ready, phase: "stopped" as const }
+  await store.writeAgent(ready, initial); await store.writeAgent(stopping, ready); await store.writeAgent(stopped, stopping)
+  const restoring = { ...stopped, phase: "restoring" as const, launch: { ...stopped.launch, commandId: agentId(40), launchAttemptId: agentId(41), providerGeneration: agentId(42) } }
+  await assert.rejects(store.writeAgent(restoring, stopped))
+  const path = join(root, "launches", stopped.launch.launchAttemptId + ".json")
+  await mkdir(join(root, "launches"), { mode: 0o700 })
+  const launch = { version: 2 as const, owner: { kind: "agent" as const, agentId: stopped.definition.agentId, providerGeneration: stopped.launch.providerGeneration }, handlerGeneration: stopped.launch.handlerGeneration, launchAttemptId: stopped.launch.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, phase: "launch_pending" as const, provider: null, reason: null }
+  await writeLaunchRecord(path, launch)
+  await assert.rejects(store.writeAgent(restoring, stopped), { code: "COMMAND_CONFLICT" })
+  await writeLaunchRecord(path, { ...launch, phase: "cleanup_verified" })
+  await assert.rejects(store.writeAgent({ ...restoring, session: { ...restoring.session, sessionId: "another" } }, stopped), { code: "COMMAND_CONFLICT" })
+  await store.writeAgent(restoring, stopped)
+  const restored = { ...restoring, phase: "ready" as const, session: { ...restoring.session, sessionGeneration: agentId(43) } }
+  await store.writeAgent(restored, restoring)
+  assert.deepEqual((await store.readAgent(initial.definition.agentId))!.definition, initial.definition)
+  assert.equal((await store.readAgent(initial.definition.agentId))!.session!.sessionId, "fixture-session")
+})
+
 test("legacy agent evidence is listed without rewriting its version-one bytes", async t => {
   const root = await privateRoot(t), directory = join(root, "agents/records"), agentIdValue = agentId(91)
   await mkdir(join(root, "agents"), { mode: 0o700 })

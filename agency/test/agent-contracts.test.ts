@@ -13,6 +13,16 @@ function input() {
 
 test("production has no qualified launch contracts", () => { assert.deepEqual(productionLaunchContracts(), []); assert.ok(Object.isFrozen(productionLaunchContracts())) })
 
+test("session load qualification is explicit while all supplied contracts permit ordinary start", () => {
+  for (const sessionLoad of ["unsupported", "candidate", "qualified"] as const) {
+    const value = input()
+    value.contract.sessionLoad = sessionLoad
+    assert.equal(parseLaunchContract(value.contract).sessionLoad, sessionLoad)
+    assert.equal(resolveLaunchSpec(value).contractId, "fixture-v1")
+  }
+  for (const sessionLoad of [undefined, null, true, "true", "enabled"]) assert.throws(() => parseLaunchContract({ ...sampleContract(), sessionLoad }), { code: "ADAPTER_UNQUALIFIED" })
+})
+
 test("qualified contracts cannot substitute fixture or arbitrary permission evidence", () => {
   const contract = sampleQualifiedContract()
   assert.equal(parseLaunchContract(contract).permissionEvidence, "agency-deny-all-v1")
