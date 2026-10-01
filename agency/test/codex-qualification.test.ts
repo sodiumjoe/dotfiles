@@ -197,17 +197,64 @@ test("qualification cannot claim or shut down a Handler that wins the startup ra
   } finally { await cleanFixtureHandler(f) }
 })
 
-test("qualification retains ownership and cleans a Handler after readiness timeout", async t => {
-  const f = await fixture(t), handler = f.dependencies.handler
+test("qualification retains uncertainty without signaling after readiness timeout", async t => {
+  const f = await fixture(t), handler = f.dependencies.handler, adapter = f.dependencies.adapter
+  let signals = 0
+  f.dependencies.adapter = { ...adapter, async signalGroup() { signals++; throw new Error("unexpected forced cleanup") } }
   f.dependencies.handler = (path, receipts) => { const command = handler(path, receipts); return { ...command, args: [...command.args, "readiness-timeout"] } }
   try {
     const { report } = await runCodexQualification(f.request, f.dependencies)
-    assert.equal(report.qualified, false); assert.equal(report.protocol.promptCount, 0)
+    assert.equal(report.qualified, false); assert.equal(report.protocol.promptCount, 0); assert.equal(report.failure, "CLEANUP_UNVERIFIED")
+    assert.equal(signals, 0)
     const retained = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
     assert.ok(retained.process)
-    const proof = await verifyQualificationAbsence(f.dependencies.adapter, { leader: retained.process, observed: [retained.process] }, 2000)
+    assert.ok(await adapter.readProcess(retained.process.pid))
+  } finally { f.dependencies.adapter = adapter; await cleanFixtureHandler(f) }
+})
+
+test("qualification cannot force cleanup when readiness advances after failed shutdown", async t => {
+  const f = await fixture(t), handler = f.dependencies.handler, adapter = f.dependencies.adapter
+  let observations = 0, advanced = false, signals = 0
+  f.dependencies.handler = (path, receipts) => { const command = handler(path, receipts); return { ...command, args: [...command.args, "readiness-race"] } }
+  f.dependencies.adapter = { ...adapter, async readProcess(pid) {
+    const observed = await adapter.readProcess(pid)
+    if (observed?.birth.includes(":agy-handler:") && ++observations === 3) {
+      await writeFile(join(f.paths.runtimeRoot, "release-ready"), "ready", { mode: 0o600 })
+      const deadline = performance.now() + 3000
+      while ((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase !== "ready") {
+        assert.ok(performance.now() < deadline, "fixture must advance readiness")
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      advanced = true
+    }
+    return observed
+  }, async signalGroup() { signals++; throw new Error("unexpected forced cleanup") } }
+  try {
+    const { report } = await runCodexQualification(f.request, f.dependencies)
+    assert.equal(report.qualified, false); assert.equal(report.protocol.promptCount, 0)
+    assert.equal(advanced, true); assert.equal(signals, 0)
+    const retained = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+    assert.ok(retained.process)
+    const proof = await verifyQualificationAbsence(adapter, { leader: retained.process, observed: [retained.process] }, 2000)
     assert.equal(proof.first?.outcome, "absent"); assert.equal(proof.second?.outcome, "absent")
-  } finally { await cleanFixtureHandler(f) }
+  } finally { f.dependencies.adapter = adapter; await cleanFixtureHandler(f) }
+})
+
+test("qualification safely cleans its exact Handler after a pre-gate failure", async t => {
+  const f = await fixture(t), handler = f.dependencies.handler, adapter = f.dependencies.adapter
+  let injected = false, signals = 0
+  f.dependencies.handler = (path, receipts) => { const command = handler(path, receipts); return { ...command, args: [...command.args, "pre-gate-failure"] } }
+  f.dependencies.adapter = { ...adapter, async readProcess(pid) {
+    const observed = await adapter.readProcess(pid)
+    if (observed?.birth.includes(":agy-handler:") && !injected) { injected = true; throw new Error("injected pre-gate failure") }
+    return observed
+  }, async signalGroup(pid, signal) { signals++; await adapter.signalGroup(pid, signal) } }
+  try {
+    const { report } = await runCodexQualification(f.request, f.dependencies)
+    assert.equal(report.qualified, false); assert.equal(report.protocol.promptCount, 0)
+    assert.equal(injected, true); assert.equal(signals, 1)
+    assert.notEqual((await inspectHandlerGeneration(f.paths.runtimeRoot, adapter))?.disposition, "live")
+  } finally { f.dependencies.adapter = adapter; await cleanFixtureHandler(f) }
 })
 
 test("revision verification ignores ambient Git metadata redirects", async t => {

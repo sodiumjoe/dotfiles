@@ -178,7 +178,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
   validateEnvironment(startEnvironment)
   const report: AmbientQualificationReport = { version: 4, policy: "agency-codex-ambient-restore-v4", candidate, ...revision, cwd: canonical(deps.cwd()), startEnvironmentDigest: launchEnvironmentDigest(startEnvironment), restoreEnvironmentDigest: null, challenge: "AGENCY_CODEX_RESTORE_" + randomBytes(16).toString("hex"), protocol: { methods: [], promptCount: 0 }, first: null, restored: null, ownedGroups: [], receipts: [], qualified: false, failure: null }
   let handler: ProcessIdentity | null = null, generation = "", target: AgentTuple | null = null
-  const ownership: { record: HandlerGenerationRecord | null; pid: number | null; ready: boolean } = { record: null, pid: null, ready: false }
+  const ownership: { record: HandlerGenerationRecord | null; pid: number | null; gateMayOpen: boolean; ready: boolean } = { record: null, pid: null, gateMayOpen: false, ready: false }
   const ownedIdentity = (identity: ProcessIdentity): boolean => ownership.record !== null && identity.pid === ownership.pid && identity.bootId === ownership.record.launchBootId && identity.pid === identity.processGroupId && identity.pid === identity.sessionId && identity.uid === process.getuid!() && identity.gid === process.getgid!() && exactAgencyBirth(identity.birth, agencyLaunchMarker("handler", ownership.record.launchAttemptId))
   const sameOwnedRecord = (record: HandlerGenerationRecord): boolean => ownership.record !== null && record.generation === ownership.record.generation && record.launchAttemptId === ownership.record.launchAttemptId && record.hostId === deps.paths.hostKey && record.socketPath === deps.paths.handlerSocketPath
   const attempts: Array<{ launchAttemptId: string; stage: "initial-stop" | "restored-stop" }> = []
@@ -232,6 +232,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
           const record = await readHandlerRecord(join(deps.paths.runtimeRoot, "handler.json"))
           if (!sameOwnedRecord(record) || !record.process || !ownedIdentity(record.process)) fail("HANDLER_STARTUP_FAILED")
           handler = structuredClone(record.process)
+          ownership.gateMayOpen = true
         }
       },
     })
@@ -288,15 +289,24 @@ export async function runCodexQualification(request: QualificationRequest, depen
         if (current !== null) {
           if (!ownedIdentity(current) || !sameProcess(identity, current)) fail("CLEANUP_UNVERIFIED")
           let stopped = false
-          const record = await readHandlerRecord(join(deps.paths.runtimeRoot, "handler.json"))
-          if (sameOwnedRecord(record) && record.process && sameProcess(identity, record.process)) {
+          const shutdownDeadline = performance.now() + (ownership.ready ? 15000 : 5000)
+          while (ownership.gateMayOpen && performance.now() < shutdownDeadline) {
+            const record = await readHandlerRecord(join(deps.paths.runtimeRoot, "handler.json"))
+            if (!sameOwnedRecord(record) || !record.process || !sameProcess(identity, record.process)) fail("CLEANUP_UNVERIFIED")
+            const remaining = shutdownDeadline - performance.now()
+            if (remaining <= 0) break
             try {
-              const reply = await exchange(createConnection(deps.paths.handlerSocketPath), { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }, ownership.ready ? 15000 : 5000)
+              const reply = await exchange(createConnection(deps.paths.handlerSocketPath), { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }, remaining)
               stopped = reply.ok
             } catch {}
+            if (stopped || performance.now() >= shutdownDeadline) break
+            await new Promise(resolve => setTimeout(resolve, Math.min(25, shutdownDeadline - performance.now())))
+            const observed = await deps.adapter.readProcess(identity.pid)
+            if (observed === null) { stopped = true; break }
+            if (!ownedIdentity(observed) || !sameProcess(identity, observed)) fail("CLEANUP_UNVERIFIED")
           }
           if (!stopped) {
-            if (ownership.ready || record.phase === "ready") fail("CLEANUP_UNVERIFIED")
+            if (ownership.gateMayOpen) fail("CLEANUP_UNVERIFIED")
             const first = await deps.adapter.readGroup(identity.pid), second = await deps.adapter.readGroup(identity.pid), observed = await deps.adapter.readProcess(identity.pid)
             if (!observed || !sameProcess(identity, observed) || first.length !== 1 || second.length !== 1 || !sameProcess(identity, first[0]!) || !sameProcess(identity, second[0]!)) fail("CLEANUP_UNVERIFIED")
             await deps.adapter.signalGroup(identity.pid, "SIGKILL")
@@ -317,7 +327,7 @@ export async function runCodexQualification(request: QualificationRequest, depen
         }
         const proof = await verifyQualificationAbsence(deps.adapter, { leader: handler, observed: [handler] }, 2000)
         if (proof.first?.outcome !== "absent" || proof.second?.outcome !== "absent") fail("ABSENCE_UNVERIFIED")
-      } catch (error) { failure(error) }
+      } catch { report.failure = "CLEANUP_UNVERIFIED" }
     }
   }
   if (!report.failure) { report.qualified = true; try { parseCodexQualificationReport(report) } catch (error) { report.qualified = false; failure(error) } }
