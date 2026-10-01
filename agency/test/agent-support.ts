@@ -10,7 +10,6 @@ import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
-import type { CodexUserSecurityStatePolicy } from "../src/agent/codex-user-security.js"
 import { AgentError } from "../src/agent/types.js"
 import { splitLaunchSpec, startCommand } from "../src/agent/types.js"
 import { privateRoot, controlFixture, until, fileExists, failFixtureBatch } from "./control-support.js"
@@ -179,26 +178,19 @@ export function sampleSpec(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
 }
 
 export function sampleContract(): LaunchContract {
-  return { id: "fixture-v1", sessionLoad: "qualified", providerId: "codex-acp", adapterVersion: "1.0.0", entrypoint: "/fixture.mjs", fingerprint: "c".repeat(64), modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode", environment: { fixed: {}, private: {} }, permissionEvidence: "fixture-contract-v1", qualification: null }
-}
-
-export function sampleSecurityPolicy(): CodexUserSecurityStatePolicy {
-  const identity = ["1", "2", "3", "4", "5", "448", "501", "20", "1"] as const
-  return { version: 1, root: { path: "/Users/moon/.codex", identity }, config: { path: "/Users/moon/.codex/config.toml", identity, linkTarget: "../.dotfiles/home/.codex/config.toml", target: { path: "/Users/moon/.dotfiles/home/.codex/config.toml", sha256: "a".repeat(64), identity } }, absent: ["/Users/moon/.codex/auth.json", "/Users/moon/.codex/requirements.toml"] }
+  return { id: "fixture-v1", sessionLoad: "qualified", providerId: "codex-acp", adapterVersion: "1.0.0", entrypoint: "/fixture.mjs", fingerprint: "c".repeat(64), modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode", permissionEvidence: "fixture-contract-v1", qualification: null }
 }
 
 export function sampleQualifiedContract(): LaunchContract {
   const pin = (path: string) => ({ path, sha256: "a".repeat(64), identity: ["1", "2", "3", "4", "5", "448", "501", "20", "1"] as const })
   const manifest: CodexQualificationManifest = {
-    version: 3, policy: "agency-codex-prompt-smoke-v3", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-agency-prompt-smoke-v3", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0",
+    version: 4, policy: "agency-codex-ambient-restore-v4", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-ambient-restore-v4", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0",
     adapterPackageJson: pin("/fixture/package.json"), adapterEntrypoint: pin("/fixture/adapter.mjs"), codexExecutable: pin("/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin"), nodeExecutable: pin(process.execPath), nodeVersion: "24.13.0", protocolVersion: 1,
-    qualificationCwd: { source: "attempt-root", relative: "checkout" },
-    prompt: { challengePrefix: "AGENCY_CODEX_SMOKE_", challengeBytes: 16, answerBytes: 4096 },
-    deadlines: { commandMs: 5000, reservationMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
+    prompt: { challengePrefix: "AGENCY_CODEX_RESTORE_", challengeBytes: 16, answerBytes: 4096 },
+    deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
     selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" }, optionIds: { model: "model", reasoning: "reasoning_effort", mode: "mode" },
-    environment: { fixed: { CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin", GIT_CONFIG_NOSYSTEM: "1", INITIAL_AGENT_MODE: "read-only", MODEL_PROVIDER: "litellm", PATH: "/usr/local/bin:/usr/bin:/bin", CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }) }, private: { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" } },
   }
-  return contractFromQualifiedCandidate({ version: 3, manifest, fingerprint: qualificationFingerprint(manifest) })
+  return contractFromQualifiedCandidate({ version: 4, manifest, fingerprint: qualificationFingerprint(manifest) })
 }
 
 export function sampleQualifiedSpec(): LaunchSpec {
@@ -267,7 +259,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   }
   if (scenario === "queued-preparation") void context.mutations.queue.run(async () => { beforeSpawn.resolve(); await publication.promise })
   peer.writable.on("data", () => { if (!identityPublished) earlyWrites++ })
-  const owner = createAgentProcess({ context, spec, ...(scenario === "load" ? { session: { kind: "load" as const, sessionId: "fixture-session" } } : {}), environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved" }, ...(startupEnvelope ? { isReady: () => false } : {}), contract: { ...contract, environment: { fixed: { HOME: "/contract-home", NODE_OPTIONS: "contract-value" }, private: { CODEX_HOME: "home/codex" } } }, async revalidate() {
+  const owner = createAgentProcess({ context, spec, ...(scenario === "load" ? { session: { kind: "load" as const, sessionId: "fixture-session" } } : {}), environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved" }, ...(startupEnvelope ? { isReady: () => false } : {}), contract, async revalidate() {
     checks++
     if (invalidation || scenario === "restore-failure" && checks > 1) throw new AgentError("CONFIG_CHANGED")
   } }, { spawn: ((executable: string, args: string[], options: SpawnOptions) => {
@@ -375,7 +367,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   let snapshot: CatalogSnapshot = { version: 1, hostId: f.context.paths.hostKey, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, createdAt: Date.now(), providers: [{ ...sampleSpec().catalogEvidence, fingerprint: configuration.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: f.context.state.handlerGeneration }] }
   const saveCatalog = async () => { if (!options.injectedOnly) { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) } }
   await saveCatalog()
-  const contract = { ...sampleContract(), sessionLoad: options.sessionLoad ?? "qualified", entrypoint: join(root, "agent-provider.js"), environment: { fixed: { HOME: root, XDG_CONFIG_HOME: root, TMPDIR: root, FIXTURE_ROOT: root }, private: {} } }
+  const contract = { ...sampleContract(), sessionLoad: options.sessionLoad ?? "qualified", entrypoint: join(root, "agent-provider.js") }
   await writeFile(contract.entrypoint, await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 })
   contract.fingerprint = await observeLaunchContract(contract)
   let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0

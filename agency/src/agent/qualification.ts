@@ -15,18 +15,13 @@ export type ArtifactPin = {
   identity: readonly [dev: string, ino: string, size: string, mtimeNs: string, ctimeNs: string, mode: string, uid: string, gid: string, nlink: "1"]
 }
 
-export type LaunchEnvironmentPolicy = {
-  fixed: Readonly<Record<string, string>>
-  private: Readonly<Record<string, string>>
-}
-
 export type CodexQualificationManifest = {
-  version: 3
-  policy: "agency-codex-prompt-smoke-v3"
+  version: 4
+  policy: "agency-codex-ambient-restore-v4"
   platform: "darwin"
   architecture: "arm64"
   providerId: "codex-acp"
-  contractId: "codex-darwin-arm64-agency-prompt-smoke-v3"
+  contractId: "codex-darwin-arm64-ambient-restore-v4"
   adapterPackage: "@agentclientprotocol/codex-acp"
   adapterVersion: "1.7.0"
   adapterPackageJson: ArtifactPin
@@ -35,11 +30,9 @@ export type CodexQualificationManifest = {
   nodeExecutable: ArtifactPin
   nodeVersion: "24.13.0"
   protocolVersion: 1
-  qualificationCwd: { source: "attempt-root"; relative: "checkout" }
-  prompt: { challengePrefix: "AGENCY_CODEX_SMOKE_"; challengeBytes: 16; answerBytes: 4096 }
+  prompt: { challengePrefix: "AGENCY_CODEX_RESTORE_"; challengeBytes: 16; answerBytes: 4096 }
   deadlines: {
     commandMs: 5_000
-    reservationMs: 5_000
     spawnMs: 5_000
     initializeMs: 15_000
     sessionMs: 15_000
@@ -52,10 +45,9 @@ export type CodexQualificationManifest = {
   }
   selection: { modelId: "gpt-5.6-sol"; reasoning: "high"; mode: "read-only"; permissionProfile: "deny-all" }
   optionIds: { model: "model"; reasoning: "reasoning_effort"; mode: "mode" }
-  environment: LaunchEnvironmentPolicy
 }
 
-export type CodexQualificationCandidate = { version: 3; manifest: CodexQualificationManifest; fingerprint: string }
+export type CodexQualificationCandidate = { version: 4; manifest: CodexQualificationManifest; fingerprint: string }
 export type CodexQualificationObservation = CodexQualificationCandidate & {
   nodeVersion: "24.13.0"
   selection: CodexQualificationManifest["selection"]
@@ -63,17 +55,8 @@ export type CodexQualificationObservation = CodexQualificationCandidate & {
 }
 
 const MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
-const fixed = {
-  CODEX_PATH: "/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin",
-  GIT_CONFIG_NOSYSTEM: "1",
-  INITIAL_AGENT_MODE: "read-only",
-  MODEL_PROVIDER: "litellm",
-  PATH: "/usr/local/bin:/usr/bin:/bin",
-  CODEX_CONFIG: JSON.stringify({ approval_policy: "on-request", approvals_reviewer: "user", sandbox_mode: "workspace-write", mcp_servers: {} }),
-}
-const privatePaths = { HOME: "home", CODEX_HOME: "home/codex", XDG_CONFIG_HOME: "xdg/config", XDG_CACHE_HOME: "xdg/cache", XDG_STATE_HOME: "xdg/state", TMPDIR: "tmp" }
-const prompt = { challengePrefix: "AGENCY_CODEX_SMOKE_", challengeBytes: 16, answerBytes: 4096 } as const
-const deadlines = { commandMs: 5000, reservationMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 }
+const prompt = { challengePrefix: "AGENCY_CODEX_RESTORE_", challengeBytes: 16, answerBytes: 4096 } as const
+const deadlines = { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 }
 const selection = { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" }
 const optionIds = { model: "model", reasoning: "reasoning_effort", mode: "mode" }
 
@@ -97,35 +80,29 @@ function parsePin(value: unknown): ArtifactPin {
   return { path, sha256: v.sha256, identity: [...v.identity] as unknown as ArtifactPin["identity"] }
 }
 function parseManifest(value: unknown): CodexQualificationManifest {
-  const v = record(value, ["version", "policy", "platform", "architecture", "providerId", "contractId", "adapterPackage", "adapterVersion", "adapterPackageJson", "adapterEntrypoint", "codexExecutable", "nodeExecutable", "nodeVersion", "protocolVersion", "qualificationCwd", "prompt", "deadlines", "selection", "optionIds", "environment"])
-  if (v.version !== 3 || v.policy !== "agency-codex-prompt-smoke-v3" || v.platform !== "darwin" || v.architecture !== "arm64" || v.providerId !== "codex-acp" || v.contractId !== "codex-darwin-arm64-agency-prompt-smoke-v3" || v.adapterPackage !== "@agentclientprotocol/codex-acp" || v.adapterVersion !== "1.7.0" || v.nodeVersion !== "24.13.0" || v.protocolVersion !== 1) invalid()
-  exact(v.qualificationCwd, { source: "attempt-root", relative: "checkout" })
+  const v = record(value, ["version", "policy", "platform", "architecture", "providerId", "contractId", "adapterPackage", "adapterVersion", "adapterPackageJson", "adapterEntrypoint", "codexExecutable", "nodeExecutable", "nodeVersion", "protocolVersion", "prompt", "deadlines", "selection", "optionIds"])
+  if (v.version !== 4 || v.policy !== "agency-codex-ambient-restore-v4" || v.platform !== "darwin" || v.architecture !== "arm64" || v.providerId !== "codex-acp" || v.contractId !== "codex-darwin-arm64-ambient-restore-v4" || v.adapterPackage !== "@agentclientprotocol/codex-acp" || v.adapterVersion !== "1.7.0" || v.nodeVersion !== "24.13.0" || v.protocolVersion !== 1) invalid()
   exact(v.prompt, prompt)
   exact(v.deadlines, deadlines)
   exact(v.selection, selection)
   exact(v.optionIds, optionIds)
-  const environment = record(v.environment, ["fixed", "private"])
-  exact(environment.fixed, fixed)
-  exact(environment.private, privatePaths)
-  if (Object.keys(fixed).some(key => Object.hasOwn(privatePaths, key))) invalid()
   const adapterPackageJson = parsePin(v.adapterPackageJson), adapterEntrypoint = parsePin(v.adapterEntrypoint), codexExecutable = parsePin(v.codexExecutable), nodeExecutable = parsePin(v.nodeExecutable)
-  if (new Set([adapterPackageJson.path, adapterEntrypoint.path, codexExecutable.path, nodeExecutable.path]).size !== 4 || codexExecutable.path !== fixed.CODEX_PATH) invalid()
+  if (new Set([adapterPackageJson.path, adapterEntrypoint.path, codexExecutable.path, nodeExecutable.path]).size !== 4) invalid()
   return {
-    version: 3, policy: "agency-codex-prompt-smoke-v3", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-agency-prompt-smoke-v3", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0", adapterPackageJson, adapterEntrypoint, codexExecutable, nodeExecutable, nodeVersion: "24.13.0", protocolVersion: 1,
-    qualificationCwd: { source: "attempt-root", relative: "checkout" }, prompt: { ...prompt }, deadlines: { ...deadlines } as CodexQualificationManifest["deadlines"], selection: { ...selection } as CodexQualificationManifest["selection"], optionIds: { ...optionIds } as CodexQualificationManifest["optionIds"],
-    environment: { fixed: { ...fixed }, private: { ...privatePaths } },
+    version: 4, policy: "agency-codex-ambient-restore-v4", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-ambient-restore-v4", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0", adapterPackageJson, adapterEntrypoint, codexExecutable, nodeExecutable, nodeVersion: "24.13.0", protocolVersion: 1,
+    prompt: { ...prompt }, deadlines: { ...deadlines } as CodexQualificationManifest["deadlines"], selection: { ...selection } as CodexQualificationManifest["selection"], optionIds: { ...optionIds } as CodexQualificationManifest["optionIds"],
   }
 }
 export function parseCodexQualificationManifest(value: unknown): CodexQualificationManifest {
   try { return parseManifest(value) } catch { return invalid() }
 }
 export function qualificationFingerprint(manifest: CodexQualificationManifest): string { return createHash("sha256").update(JSON.stringify(manifest)).digest("hex") }
-function parseCandidate(value: CodexQualificationCandidate): CodexQualificationCandidate {
+export function parseCodexQualificationCandidate(value: unknown): CodexQualificationCandidate {
   try {
     const v = record(value, ["version", "manifest", "fingerprint"])
     const manifest = parseManifest(v.manifest)
-    if (v.version !== 3 || v.fingerprint !== qualificationFingerprint(manifest)) invalid()
-    return { version: 3, manifest, fingerprint: v.fingerprint }
+    if (v.version !== 4 || v.fingerprint !== qualificationFingerprint(manifest)) invalid()
+    return { version: 4, manifest, fingerprint: v.fingerprint }
   } catch { return invalid() }
 }
 function identity(stat: BigIntStats): ArtifactPin["identity"] {
@@ -169,14 +146,14 @@ export async function verifyCodexQualification(input: CodexQualificationManifest
     if (typeof packageJson !== "object" || packageJson === null || Array.isArray(packageJson) || (packageJson as Record<string, unknown>).name !== manifest.adapterPackage || (packageJson as Record<string, unknown>).version !== manifest.adapterVersion) invalid()
     await observeArtifact(manifest.adapterPackageJson)
   } catch { return invalid() }
-  return { version: 3, manifest, fingerprint: qualificationFingerprint(manifest), nodeVersion: manifest.nodeVersion, selection: manifest.selection, artifacts }
+  return { version: 4, manifest, fingerprint: qualificationFingerprint(manifest), nodeVersion: manifest.nodeVersion, selection: manifest.selection, artifacts }
 }
 export function contractFromQualifiedCandidate(input: CodexQualificationCandidate): LaunchContract {
-  const candidate = parseCandidate(input), manifest = candidate.manifest
-  return { id: manifest.contractId, sessionLoad: "candidate", providerId: manifest.providerId, adapterVersion: manifest.adapterVersion, entrypoint: manifest.adapterEntrypoint.path, fingerprint: candidate.fingerprint, modes: { state: "values", values: [manifest.selection.mode] }, reasoning: { state: "values", values: [manifest.selection.reasoning] }, effectiveMode: null, permissionProfiles: [manifest.selection.permissionProfile], modelOption: manifest.optionIds.model, reasoningOption: manifest.optionIds.reasoning, modeOption: manifest.optionIds.mode, environment: manifest.environment, permissionEvidence: "agency-deny-all-v1", qualification: manifest }
+  const candidate = parseCodexQualificationCandidate(input), manifest = candidate.manifest
+  return { id: manifest.contractId, sessionLoad: "candidate", providerId: manifest.providerId, adapterVersion: manifest.adapterVersion, entrypoint: manifest.adapterEntrypoint.path, fingerprint: candidate.fingerprint, modes: { state: "values", values: [manifest.selection.mode] }, reasoning: { state: "values", values: [manifest.selection.reasoning] }, effectiveMode: null, permissionProfiles: [manifest.selection.permissionProfile], modelOption: manifest.optionIds.model, reasoningOption: manifest.optionIds.reasoning, modeOption: manifest.optionIds.mode, permissionEvidence: "agency-deny-all-v1", qualification: manifest }
 }
 export function launchEvidenceFromQualifiedCandidate(input: CodexQualificationCandidate, handlerGeneration: string, now: number): LaunchEvidence {
-  const candidate = parseCandidate(input), manifest = candidate.manifest
+  const candidate = parseCodexQualificationCandidate(input), manifest = candidate.manifest
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(handlerGeneration) || !Number.isSafeInteger(now) || now < 0) invalid()
   const profile: ProviderProfile = { id: manifest.providerId, enabled: true, executable: manifest.codexExecutable.path, adapterPackageJson: manifest.adapterPackageJson.path, sdkPackageJson: null, configurationFiles: [] }
   const configuration: ConfigEvidence = { fingerprint: candidate.fingerprint, scope: "declared-config-v1", providerId: manifest.providerId, adapterVersion: manifest.adapterVersion, sdkVersion: null }
@@ -184,7 +161,7 @@ export function launchEvidenceFromQualifiedCandidate(input: CodexQualificationCa
   return { snapshotId: randomUUID(), profile, provider, configuration }
 }
 export function renderQualifiedContractSource(input: CodexQualificationCandidate, evidence: { qualified: true; manifestFingerprint: string }): string {
-  const candidate = parseCandidate(input)
+  const candidate = parseCodexQualificationCandidate(input)
   if (evidence.qualified !== true || evidence.manifestFingerprint !== candidate.fingerprint) invalid()
-  return `import type { LaunchContract } from "./contracts.js"\n\nexport const codexDarwinArm64QualifiedContract: LaunchContract = ${JSON.stringify(contractFromQualifiedCandidate(candidate), null, 2)}`
+  return `import type { LaunchContract } from "./contracts.js"\n\nexport const codexDarwinArm64QualifiedContract: LaunchContract = ${JSON.stringify({ ...contractFromQualifiedCandidate(candidate), sessionLoad: "qualified" }, null, 2)}`
 }

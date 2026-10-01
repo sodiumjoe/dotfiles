@@ -72,6 +72,34 @@ function contentChunk(update: Record<string, unknown>): string {
   return contentText(update.content)
 }
 function informational(update: Record<string, unknown>, kind: string): boolean {
+  if (kind === "tool_call" || kind === "tool_call_update") {
+    knownKeys(update, kind === "tool_call" ? ["sessionUpdate", "toolCallId", "title"] : ["sessionUpdate", "toolCallId"], ["sessionUpdate", "toolCallId", "title", "kind", "status", "content", "locations", "rawInput", "rawOutput", "_meta"])
+    if (Buffer.byteLength(JSON.stringify(update)) > 65536) invalid()
+    agentText(update.toolCallId, 1024)
+    if (update.title !== undefined && update.title !== null) boundedText(update.title, 4096)
+    if (update.kind !== undefined && update.kind !== null && !["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"].includes(update.kind as string)) invalid()
+    if (update.status !== undefined && update.status !== null && !["pending", "in_progress", "completed", "failed"].includes(update.status as string)) invalid()
+    if (update.content !== undefined && update.content !== null) {
+      if (!Array.isArray(update.content) || update.content.length > 32) invalid()
+      for (const raw of update.content) {
+        const item = object(raw)
+        knownKeys(item, ["type", "content"], ["type", "content", "_meta"])
+        if (item.type !== "content") invalid()
+        contentText(item.content)
+        if (Object.hasOwn(item, "_meta")) metadata(item._meta)
+      }
+    }
+    if (update.locations !== undefined && update.locations !== null) {
+      if (!Array.isArray(update.locations) || update.locations.length > 64) invalid()
+      for (const raw of update.locations) {
+        const location = object(raw); knownKeys(location, ["path"], ["path", "line", "_meta"]); boundedText(location.path, 4096)
+        if (location.line !== undefined && location.line !== null && (!Number.isSafeInteger(location.line) || Number(location.line) < 0)) invalid()
+        if (Object.hasOwn(location, "_meta")) metadata(location._meta)
+      }
+    }
+    if (Object.hasOwn(update, "_meta")) metadata(update._meta)
+    return true
+  }
   if (kind === "agent_thought_chunk") { contentChunk(update); return true }
   if (kind === "plan") {
     knownKeys(update, ["sessionUpdate", "entries"], ["sessionUpdate", "entries", "_meta"])

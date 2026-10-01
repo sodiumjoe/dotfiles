@@ -409,10 +409,24 @@ test("ACP rejects configuration drift during a prompt", async t => {
   await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
 })
 
-for (const sessionUpdate of ["tool_call", "tool_call_update"]) test(`ACP rejects ${sessionUpdate} during a prompt`, async t => {
-  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate, toolCallId: "tool-1", title: "fixture" } } }) } })
+for (const sessionUpdate of ["tool_call", "tool_call_update"]) test(`ACP rejects oversized ${sessionUpdate} during a prompt`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate, toolCallId: "tool-1", title: "x".repeat(4097) } } }) } })
   await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
   await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+})
+
+test("ACP accepts bounded provider tool notifications while retaining only answer text", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+    for (const update of [
+      { sessionUpdate: "tool_call", toolCallId: "read-1", title: "Read package", kind: "read", status: "in_progress", rawInput: { path: "agency/package.json" } },
+      { sessionUpdate: "tool_call_update", toolCallId: "read-1", status: "completed", content: [{ type: "content", content: { type: "text", text: "file data" } }] },
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } },
+    ]) send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update } })
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  assert.deepEqual(await peer.connection.prompt("read package", new AbortController().signal), { stopReason: "end_turn", text: "answer" })
+  assert.deepEqual(peer.permissionReplies, [])
 })
 
 for (const method of ["fs/read_text_file", "fs/write_text_file", "terminal/create", "terminal/output", "terminal/release", "terminal/wait_for_exit", "terminal/kill", "fixture/unknown"]) test(`ACP rejects forbidden client request ${method}`, async t => {

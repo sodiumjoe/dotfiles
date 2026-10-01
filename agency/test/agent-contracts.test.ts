@@ -76,13 +76,12 @@ test("contract and evidence disagreement cannot authorize a launch", () => {
   ]) { const value = input(); mutate(value); assert.throws(() => resolveLaunchSpec(value)) }
 })
 
-test("launch fingerprints bind code, physical identity, policy and environment without importing", async t => {
+test("launch fingerprints bind code, physical identity and policy without importing", async t => {
   const root = await privateRoot(t), entrypoint = join(root, "fixture.mjs")
   await writeFile(entrypoint, "throw new Error('must not import')", { mode: 0o600 })
-  const contract = { ...sampleContract(), entrypoint, environment: { fixed: { Z: "last", A: "first" }, private: {} } }
+  const contract = { ...sampleContract(), entrypoint }
   const first = await observeLaunchContract(contract)
-  assert.equal(first, await observeLaunchContract({ ...contract, environment: { fixed: { A: "first", Z: "last" }, private: {} } }))
-  assert.notEqual(first, await observeLaunchContract({ ...contract, environment: { fixed: { A: "changed", Z: "last" }, private: {} } }))
+  assert.equal(first, await observeLaunchContract(contract))
   assert.notEqual(first, await observeLaunchContract({ ...contract, permissionProfiles: ["other"] }))
   await rename(entrypoint, entrypoint + "-old")
   await writeFile(entrypoint, "throw new Error('must not import')", { mode: 0o600 })
