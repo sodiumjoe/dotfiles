@@ -439,7 +439,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     const peer = scriptedAcp(t, "exact", { hold: input.session?.kind === "load" && restorePause === "spawned" ? 1 : Infinity, response(request, reply) {
       methodHistory.push(request.method)
       if (input.session?.kind === "load" && request.method === "initialize" && loadBehavior === "unsupported") reply.result.agentCapabilities.loadSession = false
-      if (request.method === "session/load" && loadBehavior !== "normal") return { jsonrpc: "2.0", id: request.id, error: { code: loadBehavior === "missing" ? -32602 : -32603, message: "fixture failure" } }
+      if (request.method === "session/load" && loadBehavior !== "normal") return { jsonrpc: "2.0", id: request.id, error: { code: ["missing", "invalid-params", "cwd"].includes(loadBehavior) ? -32602 : -32603, message: loadBehavior === "missing" ? "Session not found" : loadBehavior === "invalid-params" ? "Invalid params" : loadBehavior === "cwd" ? "Invalid params: cwd must refer to an accessible directory" : "fixture failure" } }
       return reply
     }, prompt(request, send) {
       methodHistory.push(request.method)

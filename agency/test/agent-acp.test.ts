@@ -85,6 +85,20 @@ test("ACP load accepts historical user messages and mode updates before configur
   assert.equal((await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "load", sessionId: "fixture-session" }, new AbortController().signal)).sessionId, "fixture-session")
 })
 
+for (const [code, message, expected] of [
+  [-32602, "Session not found", "SESSION_UNAVAILABLE"],
+  [-32602, "Invalid params", "STARTUP_FAILED"],
+  [-32602, "Invalid params: cwd must refer to an accessible directory", "STARTUP_FAILED"],
+  [-32602, "Session not found in the inaccessible cwd", "STARTUP_FAILED"],
+  [-32603, "Session not found", "STARTUP_FAILED"],
+] as const) test(`ACP load error classification requires exact missing-session evidence: ${code} ${message}`, async t => {
+  const peer = scriptedAcp(t, "exact", { response(request, reply) {
+    return request.method === "session/load" ? { jsonrpc: "2.0", id: request.id, error: { code, message } } : reply
+  } })
+  await assert.rejects(peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "load", sessionId: "fixture-session" }, new AbortController().signal), { code: expected })
+  assert.equal(peer.sent.some(request => request.method === "session/new"), false)
+})
+
 type MetadataLayer = "session params" | "config update" | "current mode" | "option" | "group" | "choice"
 function metadataNotification(layer: MetadataLayer, value: unknown) {
   if (layer === "session params") return { jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thought" } }, _meta: value } }

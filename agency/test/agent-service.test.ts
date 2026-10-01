@@ -67,7 +67,7 @@ for (const [sessionLoad, authorized, succeeds] of [["unsupported", true, false],
   }
 })
 
-for (const [behavior, code, phase] of [["unsupported", "RESTORE_UNSUPPORTED", "recoverable"], ["missing", "SESSION_UNAVAILABLE", "failed"], ["transport", "STARTUP_FAILED", "recoverable"]] as const) test(`restore ${behavior} retains the conversation after cleanup`, async t => {
+for (const [behavior, code, phase] of [["unsupported", "RESTORE_UNSUPPORTED", "recoverable"], ["missing", "SESSION_UNAVAILABLE", "failed"], ["invalid-params", "STARTUP_FAILED", "recoverable"], ["cwd", "STARTUP_FAILED", "recoverable"], ["transport", "STARTUP_FAILED", "recoverable"]] as const) test(`restore ${behavior} retains the conversation after cleanup`, async t => {
   const f = await agentServiceFixture(t)
   const ready = await completed(f.service, (await f.service.start(f.input)).command)
   const stop = { ...ready.command.target!, commandId: randomUUID() }

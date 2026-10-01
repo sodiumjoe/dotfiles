@@ -325,7 +325,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       const message = agentText(error.message)
       if (waiter.method === "session/new" && error.code === -32000 && message === "Authentication required") throw new AgentError("AUTH_REQUIRED")
       if (waiter.method === "session/load" && error.code === -32000 && message === "Authentication required") throw new AgentError("AUTH_REQUIRED")
-      if (waiter.method === "session/load" && error.code === -32602) throw new AgentError("SESSION_UNAVAILABLE")
+      if (waiter.method === "session/load" && error.code === -32602 && message === "Session not found") throw new AgentError("SESSION_UNAVAILABLE")
       throw new AgentError("STARTUP_FAILED")
     }
     const response = object(v.result)
