@@ -72,28 +72,44 @@ local function moveToSlot(slot, win)
     end
 end
 
+local function focusCandidates()
+    local currentSpaceIds = {}
+    for _, win in ipairs(hs.window.filter.defaultCurrentSpace:getWindows()) do
+        currentSpaceIds[win:id()] = true
+    end
+
+    local windows = {}
+    for _, win in ipairs(hs.window.orderedWindows()) do
+        local app = win:application()
+        local frame = win:frame()
+        local isZoomBackground = app
+            and (app:name() == "Zoom" or app:name() == "zoom.us")
+            and win:title() == "Zoom Workplace"
+        if currentSpaceIds[win:id()] and win:isStandard() and frame.w > 0 and frame.h > 0 and not isZoomBackground then
+            table.insert(windows, win)
+        end
+    end
+    return windows
+end
+
 local function focusLeft()
     local focusedWindow = hs.window.frontmostWindow()
-    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-    focusedWindow:focusWindowWest(windows, true, true)
+    focusedWindow:focusWindowWest(focusCandidates(), true, true)
 end
 
 local function focusRight()
     local focusedWindow = hs.window.frontmostWindow()
-    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-    focusedWindow:focusWindowEast(windows, true, true)
+    focusedWindow:focusWindowEast(focusCandidates(), true, true)
 end
 
 local function focusUp()
     local focusedWindow = hs.window.frontmostWindow()
-    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-    focusedWindow:focusWindowNorth(windows, true)
+    focusedWindow:focusWindowNorth(focusCandidates(), true)
 end
 
 local function focusDown()
     local focusedWindow = hs.window.frontmostWindow()
-    local windows = hs.window.filter.defaultCurrentSpace:getWindows()
-    focusedWindow:focusWindowSouth(windows, true)
+    focusedWindow:focusWindowSouth(focusCandidates(), true)
 end
 
 local function pushLeft()
