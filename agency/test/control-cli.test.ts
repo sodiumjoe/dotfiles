@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { chmod, copyFile, mkdir, symlink, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import test from "node:test"
@@ -14,6 +14,7 @@ import { privateRoot, unavailableControlDependencies } from "./control-support.j
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { LinuxObservationUnavailable } from "../src/platform/linux.js"
 import { launch } from "./control-support.js"
+import { inventoryLaunchState } from "../src/handler/inventory.js"
 
 function model() {
   const generation = randomUUID(), attempt = randomUUID(), hostId = "a".repeat(64)
@@ -94,6 +95,25 @@ test("doctor reports agent, catalog, and retained state issues", async t => {
   assert.deepEqual(m.output().result.agents, { records: [], commands: [], issues: [] })
   assert.deepEqual(m.output().result.catalog, { probes: [], commands: [], issues: [] })
   assert.deepEqual(m.output().result.issues, [{ source: "launch", path: join(root, "launches/bad.json"), message: "invalid launch record" }])
+})
+
+test("doctor does not expose legacy parser terminology for malformed launch records", async t => {
+  const root = await privateRoot(t), m = model(), environment = m.deps.environment
+  const record = launch({ checkoutId: "" }), directory = join(root, "launches"), path = join(directory, `${record.launchAttemptId}.json`)
+  await mkdir(directory, { mode: 0o700 })
+  const before = Buffer.from(JSON.stringify(record))
+  await writeFile(path, before, { mode: 0o600 })
+  const inventory = await inventoryLaunchState(directory)
+  assert.deepEqual(inventory.records, [])
+  assert.equal(inventory.issues.length, 1)
+  assert.equal(inventory.issues[0]!.path, path)
+  assert.match(inventory.issues[0]!.message, /checkoutId/)
+  m.deps.environment = async () => { const env = await environment(); return { ...env, paths: { ...env.paths, persistentRoot: root } } }
+  m.deps.inventory = inventoryLaunchState
+  assert.equal(await runControl(["doctor", "--json"], m.deps), 0)
+  assert.deepEqual(m.output().result.issues, [{ source: "launch", path, message: "invalid launch record" }])
+  assert.doesNotMatch(JSON.stringify(m.output()), /checkout|admission|lease|\bGit\b/i)
+  assert.deepEqual(await readFile(path), before)
 })
 
 test("doctor identifies a damaged catalog root by its actual path", async t => {

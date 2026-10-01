@@ -137,7 +137,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
         launches: summarizeLaunches(launches.records.map(entry => entry.record)),
         agents: { records: [...agents.agents.map(record => ({ id: record.definition.agentId, phase: record.phase })), ...agents.legacyAgents.map(record => ({ id: record.spec.agentId, phase: record.phase }))], commands: agents.commands.map(command => ({ id: command.commandId, op: command.op, state: command.state })), issues: agents.issues.map(issue => ({ path: issue.path, message: issue.message })) },
         catalog: { probes: summarizeLaunches(catalog.launches.map(entry => entry.record)), commands: catalog.commands.map(command => ({ id: command.commandId, state: command.state })), issues: catalog.issues },
-        issues: [...launches.issues.map(issue => ({ source: "launch" as const, path: issue.path, message: issue.message })), ...agents.issues.map(issue => ({ source: "agent" as const, path: issue.path, message: issue.message })), ...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
+        issues: [...launches.issues.map(issue => ({ source: "launch" as const, path: issue.path, message: "invalid launch record" })), ...agents.issues.map(issue => ({ source: "agent" as const, path: issue.path, message: issue.message })), ...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
       }
       emit(true, result)
       return 0
