@@ -220,7 +220,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   const child = new EventEmitter() as ChildProcess
   let unrefs = 0
   Object.assign(child, { pid: 12345, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() { unrefs++ } })
-  let live = false, count = 0, bootCalls = 0, absentGroups = 0, lateAbsenceReads = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, attemptPublished = false, readbackFailed = false, earlyWrites = 0, invalidation = "", checks = 0
+  let live = false, count = 0, bootCalls = 0, absentGroups = 0, lateAbsenceReads = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, attemptPublished = false, readbackFailed = false, earlyWrites = 0, invalidation = "", checks = 0, spawnInputReleases = 0, releasesAtSpawn = -1
   const signals: NodeJS.Signals[] = []
   let identity: ProcessIdentity = { pid: 12345, bootId: "boot-a", birth: `100:agy-provider:${spec.launchAttemptId}`, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
   if (scenario === "identity-mismatch") identity.birth = "100:other"
@@ -260,13 +260,13 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
     checks++
     if (invalidation || scenario === "restore-failure" && checks > 1) throw new AgentError("CONFIG_CHANGED")
   } }, { spawn: ((executable: string, args: string[], options: SpawnOptions) => {
-    count++; observedOptions = options; spawned.resolve()
+    count++; observedOptions = options; releasesAtSpawn = spawnInputReleases; spawned.resolve()
     if (executable !== process.execPath || JSON.stringify(args) !== '["/fixture.mjs"]') throw new Error("wrong executable")
     if (scenario === "spawn-throws") throw new Error("spawn invocation failed")
     live = scenario !== "child-exit"
     if (!live) queueMicrotask(() => child.emit("exit", 1, null))
     return child
-  }) as typeof spawn, transitionIO: {
+  }) as typeof spawn, onSpawnInputReleased() { spawnInputReleases++ }, transitionIO: {
     async publish(file, record) {
       if (scenario === "attempt-write" && record.launchAttempted && !record.provider) throw new Error("attempt write failed")
       if (scenario === "restore-failure" && !record.launchAttempted) throw new Error("restore failed")
@@ -279,7 +279,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
     },
     async read(file) { if (scenario === "attempt-readback" && attemptPublished && !readbackFailed) { readbackFailed = true; throw new Error("readback failed") }; return readLaunchRecordForReconciliation(file) },
   }, now: () => Date.now() })
-  return { owner, root, spec, context, signals, requests: peer.sent, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
+  return { owner, root, spec, context, signals, requests: peer.sent, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, spawnInputReleases: () => spawnInputReleases, releasesAtSpawn: () => releasesAtSpawn, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }
 
 const NO_ACP_RESPONSE = Symbol("no-acp-response")
@@ -379,7 +379,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   const saveCatalog = async () => { if (!options.injectedOnly) { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) } }
   await saveCatalog()
   const contract = { ...(options.productionContract ? productionLaunchContracts()[0]! : sampleStaticContract()), sessionLoad: options.sessionLoad ?? true }
-  let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0
+  let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failTerminalBeforeRename = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0, terminalWriteFailures = 0
   const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {
     const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
     handle.sync = async () => {
@@ -394,8 +394,9 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   const store = { ...base, async writeAgent(value: AgentRecord, expected: AgentRecord | null) {
     publications.push("agent:" + value.phase)
     if (failInitialAgent && expected === null) throw new Error("initial agent publication")
+    if (failTerminalBeforeRename && ["failed", "recoverable", "stopped"].includes(value.phase)) { terminalWriteFailures++; throw new Error("terminal publication before rename") }
     writingReady = value.phase === "ready"
-    writingTerminal = value.phase === "stopped"
+    writingTerminal = ["failed", "recoverable", "stopped"].includes(value.phase)
     try { await base.writeAgent(value, expected) } finally { writingReady = false; writingTerminal = false }
   }, async writeCommand(value: AgentCommand, expected: AgentCommand | null) {
     publications.push(`${value.op}:${value.state}`); writingReceipt = value.state === "completed"
@@ -468,7 +469,8 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     } }
   }
   const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : [contract], store }
-  const dependencies = { processFactory, async observeLaunchEvidence(spec: LaunchSpec, expected: { profile: ProviderProfile }) {
+  const retired: Array<{ agentId: string; commandId: string }> = []
+  const dependencies = { processFactory, onOperationRetired(agentId: string, commandId: string) { retired.push({ agentId, commandId }) }, async observeLaunchEvidence(spec: LaunchSpec, expected: { profile: ProviderProfile }) {
     publications.push("evidence"); evidenceCalls++; await options.observe?.(evidenceCalls, spec)
     if (snapshot.snapshotId !== spec.catalogSnapshotId || !isDeepStrictEqual(snapshot.providers[0], spec.catalogEvidence) || !isDeepStrictEqual(profile, expected.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
   }, fatalStartupTimeout(): never { fatalCalls++; throw new Error("fixture Handler fail-stop") } }
@@ -489,7 +491,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     pauseRestore(value: string) { restorePause = value }, restoreEntered: restoreEntered.promise,
     evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, cleanupCalls: () => cleanupCalls, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
     failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value }, failInitialCommand(value: boolean) { failInitialCommand = value },
-    failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures,
+    failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures, failTerminalBeforeRename(value: boolean) { failTerminalBeforeRename = value }, terminalWriteFailures: () => terminalWriteFailures, retired: () => structuredClone(retired),
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
     fault(agent: string) { peers.get(agent)!.triggerDrift() },
     completePrompt(agent: string, answer = "answer:challenge") { const pending = pendingPrompts.get(agent); if (!pending) throw new Error("prompt not pending"); pending.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } }); pending.send({ jsonrpc: "2.0", id: pending.request.id, result: { stopReason: "end_turn" } }) },

@@ -256,13 +256,114 @@ test("repairing a historical stop receipt cannot stop a restored process generat
   const stop = { ...target, commandId: randomUUID() }
   await f.service.stop(stop)
   await until(async () => (await f.store.readAgent(target.agentId))?.phase === "stopped" ? true : undefined)
+  assert.deepEqual(f.retired(), [])
   const restore = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: target.agentId, environment: {} }
   await f.service.restore(restore)
   const restored = await completed(f.service, restore)
+  assert.deepEqual(f.retired(), [])
   f.failStopReceipt(false)
   assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  assert.deepEqual(f.retired(), [{ agentId: target.agentId, commandId: f.input.commandId }])
   assert.equal((await f.service.prompt({ ...restored.command.target!, text: "still running" })).text, "answer:still running")
   assert.equal((await f.service.list()).agents[0]!.record.phase, "ready")
+})
+
+test("terminal lifecycle releases its transient operation after durable cleanup", async t => {
+  const f = await agentServiceFixture(t), request = { ...f.input, environment: { PATH: "/bin", SECRET_TOKEN: "ephemeral" } }
+  const started = await completed(f.service, (await f.service.start(request)).command)
+  assert.deepEqual(f.retired(), [])
+  const before = f.spawns(), stop = { ...started.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  assert.deepEqual(f.retired(), [{ agentId: started.command.target!.agentId, commandId: f.input.commandId }])
+  assert.equal((await f.service.start(request)).command.state, "completed")
+  assert.equal(f.spawns(), before)
+})
+
+test("failed pre-ready lifecycle releases its transient operation after cleanup and receipt durability", async t => {
+  const f = await agentServiceFixture(t, { pause: "spawn" })
+  const accepted = await f.service.start(f.input)
+  await f.entered
+  await f.changeCatalog("missing")
+  f.release()
+  const failed = await completed(f.service, accepted.command)
+  assert.equal(failed.command.result?.outcome, "failed")
+  assert.deepEqual(f.retired(), [{ agentId: failed.command.target!.agentId, commandId: f.input.commandId }])
+})
+
+test("terminal record directory durability blocks retirement until exact retry", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  f.failTerminal(true)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await until(async () => f.terminalFailures() ? true : undefined)
+  assert.deepEqual(f.retired(), [])
+  f.failTerminal(false)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  assert.equal(f.retired().length, 1)
+})
+
+test("terminal stop receipt durability blocks retirement until exact retry", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  f.failStopReceipt(true)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await until(async () => (await f.store.readAgent(stop.agentId))?.phase === "stopped" ? true : undefined)
+  assert.deepEqual(f.retired(), [])
+  f.failStopReceipt(false)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  assert.equal(f.retired().length, 1)
+})
+
+test("failed start receipt durability blocks retirement until exact retry", async t => {
+  const f = await agentServiceFixture(t, { pause: "spawn" })
+  f.failReceipt(true)
+  await f.service.start(f.input)
+  await f.entered
+  await f.changeCatalog("missing")
+  f.release()
+  await until(async () => (await f.store.readCommand(f.input.commandId))?.state === "completed" ? true : undefined)
+  assert.deepEqual(f.retired(), [])
+  f.failReceipt(false)
+  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "failed")
+  assert.equal(f.retired().length, 1)
+})
+
+for (const kind of ["failed start", "recoverable restore"] as const) test(`${kind} terminal publication before rename is repaired by exact retry`, async t => {
+  const f = await agentServiceFixture(t, kind === "failed start" ? { pause: "spawn" } : {})
+  let request: Pick<StartRequest, "commandId" | "handlerGeneration">
+  let predecessor: "starting" | "restoring"
+  if (kind === "failed start") {
+    f.failTerminalBeforeRename(true)
+    request = (await f.service.start(f.input)).command
+    predecessor = "starting"
+    await f.entered
+    await f.changeCatalog("missing")
+    f.release()
+  } else {
+    const ready = await completed(f.service, (await f.service.start(f.input)).command)
+    const stop = { ...ready.command.target!, commandId: randomUUID() }
+    await f.service.stop(stop)
+    await completed(f.service, stop)
+    f.loadBehavior("invalid-params")
+    f.failTerminalBeforeRename(true)
+    request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration }
+    await f.service.restore({ ...request, agentId: stop.agentId, environment: {} })
+    predecessor = "restoring"
+  }
+  await until(async () => f.terminalWriteFailures() ? true : undefined)
+  const target = (await f.service.command(request.commandId, request.handlerGeneration)).command.target!
+  assert.equal((await f.store.readAgent(target.agentId))?.phase, predecessor)
+  assert.equal((await f.service.command(request.commandId, request.handlerGeneration)).durability, "unverified")
+  const retiredBeforeRepair = kind === "failed start" ? 0 : 1
+  assert.equal(f.retired().length, retiredBeforeRepair)
+  f.failTerminalBeforeRename(false)
+  const repaired = await completed(f.service, request)
+  assert.equal(repaired.command.result?.outcome, "failed")
+  assert.equal((await f.store.readAgent(target.agentId))?.phase, kind === "failed start" ? "failed" : "recoverable")
+  assert.equal(f.retired().length, retiredBeforeRepair + 1)
 })
 
 test("start persists a version-two definition and digest without environment values", async t => {

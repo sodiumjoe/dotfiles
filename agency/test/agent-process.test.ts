@@ -9,6 +9,8 @@ test("agent process publishes a managed launch and spawns in the exact caller di
   const f = await syntheticAgentProcess(t, "normal")
   const session = await f.owner.initialize(new AbortController().signal)
   assert.equal(session.sessionId, "fixture-session")
+  assert.equal(f.spawnInputReleases(), 1)
+  assert.equal(f.releasesAtSpawn(), 1)
   const options = f.options()!
   assert.equal(options.cwd, f.spec.cwd)
   assert.deepEqual(options.env, { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved", CODEX_PATH: "/fixture/codex" })
@@ -42,6 +44,8 @@ test("process identity mismatch never becomes a ready launch", async t => {
 test("spawn failure retains exact launch attribution and verifies cleanup", async t => {
   const f = await syntheticAgentProcess(t, "spawn-throws")
   await assert.rejects(f.owner.initialize(new AbortController().signal))
+  assert.equal(f.spawnInputReleases(), 1)
+  assert.equal(f.releasesAtSpawn(), 1)
   await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
   assert.equal(f.owner.record().launchAttemptId, f.spec.launchAttemptId)
   assert.equal(f.spawnCount(), 1)

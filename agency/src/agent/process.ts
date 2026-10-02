@@ -15,11 +15,12 @@ import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js
 import { AgentError, agentFailure, splitLaunchSpec, type SessionStart, type AgentFailure, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
 export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
+export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
 
-export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number } = {}): OwnedAgentProcess {
-  const { context, spec, contract } = input, { adapter, mutations } = context
+export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
+  const { context, spec, contract, session, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.deadlines
-  let overallDeadline = input.deadline ?? Infinity, spawnDeadline = Infinity
+  let overallDeadline = deadline ?? Infinity, spawnDeadline = Infinity
   const directory = join(context.paths.persistentRoot, "launches"), path = join(directory, spec.launchAttemptId + ".json")
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
   let current: ManagedLaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "pending", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
@@ -63,7 +64,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
     value.stderr?.on("data", (bytes: Buffer) => { stderrBytes += bytes.length; if (stderrBytes > spec.limits.stderrBytes && !stopping) fail(new AgentError("STARTUP_FAILED")) })
     for (const stream of [value.stdin, value.stdout, value.stderr]) stream?.on("error", () => { if (!stopping) fail(new AgentError("STARTUP_FAILED")) })
   }
-  const spawnOptions: SpawnOptions = {
+  let spawnOptions: SpawnOptions | undefined = {
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
     env: { ...parseLaunchEnvironment(input.environment), CODEX_PATH: contract.executable },
   }
@@ -109,7 +110,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
   }
   function cleanup(): Promise<LaunchRecord> {
     if (cleaning) return cleaning
-    if (input.isReady?.()) overallDeadline = Infinity
+    if (isReady?.()) overallDeadline = Infinity
     stopping = true; controller.abort(); connection?.close()
     child?.stdout?.resume(); child?.stderr?.resume()
     let expired = false
@@ -195,7 +196,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
       overallDeadline = Math.min(overallDeadline, now() + (phases?.overallMs ?? spec.limits.startupMs))
       spawnDeadline = Math.min(overallDeadline, now() + (phases?.spawnMs ?? 5000))
       preparation = mutations.queue.run(async () => {
-        check(); await input.revalidate(); check()
+        check(); await revalidate(); check()
         current = { ...current, launchBootId: await adapter.bootId() }
         await refreshLaunchState(context.state, mutations, directory)
         if (mutations.accepted.some(entry => entry.record.launchAttemptId === spec.launchAttemptId) || mutations.issues?.some(issue => issue.launchAttemptId === spec.launchAttemptId)) throw new AgentError("INVALID_AGENT_STATE")
@@ -213,10 +214,14 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
         if (!published || mutations.issues?.some(issue => issue.path === path)) throw new AgentError("UNAVAILABLE")
         check()
         await transition({ ...current, launchAttempted: true })
-        await input.revalidate(); check()
+        await revalidate(); check()
         if (await adapter.bootId() !== current.launchBootId) throw new AgentError("CONFIG_CHANGED")
         check(); spawnInvoked = true
-        child = (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint], spawnOptions)
+        const options = spawnOptions
+        if (!options) throw new AgentError("STARTUP_FAILED")
+        spawnOptions = undefined
+        dependencies.onSpawnInputReleased?.()
+        child = (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint], options)
         registerChildObservers(child)
         const stable = await stableObservation()
         check()
@@ -226,10 +231,10 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
         try {
           await bounded(() => preparation!, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
-          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(input.overallDeadline === undefined ? {} : { overallDeadline: input.overallDeadline }), now })
+          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
-          const session = await connection.initialize({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null }, contract, input.session ?? { kind: "new" }, controller.signal)
-          check(); initialized = true; if (!input.isReady) overallDeadline = Infinity; return session
+          const evidence = await connection.initialize({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null }, contract, session ?? { kind: "new" }, controller.signal)
+          check(); initialized = true; if (!isReady) overallDeadline = Infinity; return evidence
         } catch (error) { fail(error); throw error }
         finally { signal.removeEventListener("abort", abort) }
       })()
