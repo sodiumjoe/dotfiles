@@ -17,6 +17,7 @@ export type AgentStore = {
   readCommand(id: string): Promise<AgentCommand | null>
   writeAgent(next: AgentRecord, expected: AgentRecord | null): Promise<void>
   writeCommand(next: AgentCommand, expected: AgentCommand | null): Promise<void>
+  verifyDurability(kind: "agent" | "command"): Promise<void>
   inventory(): Promise<AgentInventory>
 }
 type FileEvidence = { bytes: Buffer; identity: string }
@@ -114,7 +115,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     }
   }
   async function publish(path: string, value: unknown, expected: unknown): Promise<void> {
-    if ((await inventory()).issues.some(issue => issue.path === directory)) unavailable()
+    try { await names(directory) } catch { unavailable() }
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > 1048576) throw new AgentError("INCOMPLETE")
     const before = await evidence(path)
@@ -136,6 +137,11 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   }
   return {
     readAgent, readCommand, inventory,
+    async verifyDurability(kind) {
+      const path = join(directory, kind === "agent" ? "records" : "commands")
+      if (!await checkDirectory(path)) return
+      await sync(path); await sync(directory); await sync(root)
+    },
     async writeAgent(input, expected) {
       const value = parseAgentRecord(input), current = await readAgent(value.definition.agentId)
       if (!isDeepStrictEqual(value, current)) {

@@ -125,6 +125,27 @@ test("sequential prompts work while concurrent prompts remain rejected", async t
   assert.equal((await second).text, "second answer")
 })
 
+test("catalog refresh during a prompt does not invalidate its live session", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const pending = f.service.prompt({ ...target, text: "continue" })
+  await f.promptEntered
+  await f.changeCatalog("refresh")
+  f.completePrompt(target.agentId, "retained answer")
+  assert.equal((await pending).text, "retained answer")
+  const record = (await f.service.list()).agents[0]!.record
+  assert.equal(record.version === 2 && record.phase, "ready")
+})
+
+test("catalog refresh before a prompt does not invalidate its live session", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  await f.changeCatalog("refresh")
+  assert.equal((await f.service.prompt({ ...target, text: "continue" })).text, "answer:continue")
+  const record = (await f.service.list()).agents[0]!.record
+  assert.equal(record.version === 2 && record.phase, "ready")
+})
+
 test("healthy agents continue beside corrupt agent and unknown files, then issues clear after repair", async t => {
   const f = await agentServiceFixture(t)
   const healthy = await completed(f.service, (await f.service.start(f.input)).command)
@@ -366,6 +387,27 @@ for (const kind of ["failed start", "recoverable restore"] as const) test(`${kin
   assert.equal(f.retired().length, retiredBeforeRepair + 1)
 })
 
+test("stop repairs a retained terminal transition before changing its predecessor", async t => {
+  const f = await agentServiceFixture(t, { pause: "spawn" })
+  f.failTerminalBeforeRename(true)
+  const accepted = await f.service.start(f.input)
+  await f.entered
+  await f.changeCatalog("missing")
+  f.release()
+  await until(async () => f.terminalWriteFailures() ? true : undefined)
+  const target = accepted.command.target!, stop = { ...target, commandId: randomUUID() }
+  f.failTerminalBeforeRename(false)
+  await f.service.stop(stop)
+  const observed = await until(async () => {
+    const command = await f.service.command(stop.commandId, stop.handlerGeneration), record = await f.store.readAgent(target.agentId)
+    return command.command.state === "completed" || record?.phase === "stopping" ? { command, record } : undefined
+  })
+  assert.equal(observed.command.command.result?.outcome, "stopped")
+  assert.equal(observed.record?.phase, "failed")
+  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "failed")
+  assert.deepEqual(f.retired(), [{ agentId: target.agentId, commandId: f.input.commandId }])
+})
+
 test("start persists a version-two definition and digest without environment values", async t => {
   const f = await agentServiceFixture(t)
   const request = { ...f.input, environment: { ...f.input.environment, SECRET_TOKEN: "not-for-state" } }
@@ -423,6 +465,9 @@ test("restart repairs completed command durability before reporting availability
   const store = { ...base, async writeCommand(value: Parameters<typeof base.writeCommand>[0], expected: Parameters<typeof base.writeCommand>[1]) {
     if (rejectSync && value.state === "completed") throw new Error("receipt durability unavailable")
     await base.writeCommand(value, expected)
+  }, async verifyDurability(kind: Parameters<typeof base.verifyDurability>[0]) {
+    if (rejectSync && kind === "command") throw new Error("receipt durability unavailable")
+    await base.verifyDurability(kind)
   } }
   assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 1)
   rejectSync = false
@@ -440,10 +485,37 @@ test("restart repairs terminal agent durability before reporting availability", 
   const store = { ...base, async writeAgent(value: Parameters<typeof base.writeAgent>[0], expected: Parameters<typeof base.writeAgent>[1]) {
     if (rejectSync && value.phase === "stopped") throw new Error("terminal durability unavailable")
     await base.writeAgent(value, expected)
+  }, async verifyDurability(kind: Parameters<typeof base.verifyDurability>[0]) {
+    if (rejectSync && kind === "agent") throw new Error("terminal durability unavailable")
+    await base.verifyDurability(kind)
   } }
   assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 1)
   rejectSync = false
   assert.equal((await recoverAgents({ context: f.context, store })).assessment.unavailable.size, 0)
+})
+
+test("recovery does not rewrite unchanged completed history", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  await completed(f.service, stop)
+  const retained = await f.store.readCommand(stop.commandId)
+  if (!retained || retained.state !== "completed") throw new Error("missing completed command")
+  await Promise.all(Array.from({ length: 258 }, async () => {
+    const commandId = randomUUID(), command = { ...retained, commandId, input: { ...retained.input, commandId } }
+    await writeFile(join(f.root, "agents/commands", commandId + ".json"), JSON.stringify(command), { mode: 0o600 })
+  }))
+  let agentWrites = 0, commandWrites = 0
+  const base = createAgentStore(f.root), store = { ...base,
+    async writeAgent(value: Parameters<typeof base.writeAgent>[0], expected: Parameters<typeof base.writeAgent>[1]) { agentWrites++; await base.writeAgent(value, expected) },
+    async writeCommand(value: Parameters<typeof base.writeCommand>[0], expected: Parameters<typeof base.writeCommand>[1]) { commandWrites++; await base.writeCommand(value, expected) },
+  }
+  const recovered = await recoverAgents({ context: f.context, store })
+  assert.deepEqual(recovered.assessment.issues, [])
+  assert.equal(recovered.assessment.unavailable.size, 0)
+  assert.equal(agentWrites, 0)
+  assert.equal(commandWrites, 0)
 })
 
 for (const kind of ["agent", "command"] as const) test(`service retains ${kind} recovery publication failure until exact retry`, async t => {
@@ -455,6 +527,10 @@ for (const kind of ["agent", "command"] as const) test(`service retains ${kind} 
   const base = createAgentStore(f.root)
   let reject = true, retries = 0
   const store = { ...base,
+    async verifyDurability(target: Parameters<typeof base.verifyDurability>[0]) {
+      if (target === kind) { retries++; if (reject) throw new Error(`injected recovery ${kind} sync failure`) }
+      await base.verifyDurability(target)
+    },
     async writeAgent(value: Parameters<typeof base.writeAgent>[0], expected: Parameters<typeof base.writeAgent>[1]) {
       if (kind === "agent" && value.definition.agentId === stop.agentId) { retries++; if (reject) throw new Error("injected recovery agent sync failure") }
       await base.writeAgent(value, expected)

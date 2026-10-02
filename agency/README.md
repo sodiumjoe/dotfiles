@@ -72,7 +72,7 @@ This command starts the real provider and submits two paid prompts. It must not 
 
 The check starts an agent in the actual invocation directory with a fresh ambient environment, asks it to read that directory's `package.json`, stops it with verified owned-process cleanup, snapshots a second fresh environment, restores the same provider session, asks it to recall the prior nonce, and stops it again. It uses the configured profile and the normal production contract registry. It does not stop or replace an unrelated Handler.
 
-The private `agency-codex-acceptance/1` report contains the working directory, environment digests, lifecycle steps, prompt answers, logical and provider generations, session continuity, launch-attempt identities, and verified owned-process cleanup. It does not contain environment values and cannot authorize, revoke, register, or otherwise modify production launch behavior. A failed check retains its diagnostic report and attempts an ordinary targeted stop when an agent is still active.
+The private `agency-codex-acceptance/1` report contains the working directory, environment digests, lifecycle steps, prompt answers, logical and provider generations, session continuity, launch-attempt identities, and verified owned-process cleanup. It does not contain environment values and cannot authorize, revoke, register, or otherwise modify production launch behavior. A failed check retains its diagnostic report, attempts an ordinary targeted stop when an agent is still active, and records the exact unresolved target when cleanup cannot be verified.
 
 `npm run test:codex-acceptance` uses deterministic local providers and isolated private control roots. It submits no paid prompt and does not run the native Codex executable.
 

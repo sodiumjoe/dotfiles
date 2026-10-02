@@ -39,6 +39,17 @@ test("production acceptance retries a timed-out mutation through its exact comma
   assert.equal(requests[1]!.op === "agent_command" && requests[1]!.commandId, spec.commandId)
 })
 
+test("production acceptance permits startup completion after the old polling deadline", async () => {
+  const spec = sampleSpec(), pending = sampleCommand(), completed = { ...pending, state: "completed" as const, result: { outcome: "started" as const, target: pending.target, failure: null, session: sampleSession() } }
+  const request = { protocol: AGENT_PROTOCOL, requestId: spec.commandId, handlerGeneration: spec.handlerGeneration, op: "agent_start" as const, input: { commandId: spec.commandId, handlerGeneration: spec.handlerGeneration, cwd: spec.cwd, selection: spec.selection, environment: {} } }
+  let calls = 0, now = 0
+  const observed: string[] = []
+  const result = await completeAcceptanceCommand(request, spec.handlerGeneration, async current => ({ protocol: AGENT_PROTOCOL, requestId: current.requestId, handlerGeneration: spec.handlerGeneration, commandId: spec.commandId, ok: true, result: { state: "command", command: ++calls === 1 ? pending : completed, durability: "verified" } }), { now: () => now, sleep: async () => { now += 50000 } }, view => observed.push(view.command.state))
+  assert.equal(result.command.state, "completed")
+  assert.equal(calls, 2)
+  assert.deepEqual(observed, ["pending", "completed"])
+})
+
 test("production acceptance permits the configured prompt deadline across the socket", async () => {
   const spec = sampleSpec(), request = { protocol: AGENT_PROTOCOL, requestId: spec.commandId, handlerGeneration: spec.handlerGeneration, op: "agent_prompt" as const, input: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, text: "fixture" } }
   const expected = { state: "prompt" as const, target: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, stopReason: "end_turn" as const, text: "answer" }
@@ -66,11 +77,43 @@ test("diagnostic acceptance uses the ordinary lifecycle without creating authori
   assert.equal(report.restoreEnvironmentDigest, launchEnvironmentDigest(f.environments[1]!))
   assert.equal(JSON.stringify(report).includes("must-not-appear"), false)
   assert.equal(report.cleanup.length, 2)
+  assert.deepEqual(report.unresolved, [])
   assert.ok(report.cleanup.every(entry => entry.cleanup === "verified" && entry.processGroupId > 1))
   for (const key of ["candidate", "manifest", "promotion", "registration", "sourceContract", "transientAuthorization"]) assert.equal(Object.hasOwn(report, key), false)
   assert.equal(JSON.stringify(productionLaunchContracts()), contracts)
   assert.deepEqual(await readFile(f.handler.configPath), config)
   assert.deepEqual(JSON.parse(await readFile(result.reportPath, "utf8")), report)
+})
+
+test("diagnostic acceptance cleans a launch accepted before command polling expires", async t => {
+  const f = await fixture(t), start = f.lifecycle.start
+  f.lifecycle.start = async (cwd, environment, accepted?: (view: Awaited<ReturnType<AcceptanceLifecycle["start"]>>) => void) => {
+    const completed = await start(cwd, environment)
+    accepted?.({ ...completed, command: { ...completed.command, state: "pending", result: null } })
+    throw new AgentError("INCOMPLETE")
+  }
+  const result = await runCodexAcceptance({ evidenceParent: f.handler.root }, f.lifecycle)
+  assert.equal(result.report.failure, "INCOMPLETE")
+  assert.equal(result.report.cleanup.length, 1)
+  assert.deepEqual(result.report.unresolved, [])
+  assert.deepEqual(f.steps.slice(-1), ["stop"])
+  assert.equal((await f.lifecycle.list()).agents[0]!.live, false)
+})
+
+test("diagnostic acceptance records an accepted launch whose cleanup remains unresolved", async t => {
+  const f = await fixture(t), start = f.lifecycle.start
+  f.lifecycle.start = async (cwd, environment, accepted?: (view: Awaited<ReturnType<AcceptanceLifecycle["start"]>>) => void) => {
+    const completed = await start(cwd, environment)
+    accepted?.({ ...completed, command: { ...completed.command, state: "pending", result: null } })
+    throw new AgentError("INCOMPLETE")
+  }
+  f.lifecycle.stop = async () => { throw new AgentError("CLEANUP_UNVERIFIED") }
+  const result = await runCodexAcceptance({ evidenceParent: f.handler.root }, f.lifecycle)
+  assert.equal(result.report.failure, "INCOMPLETE")
+  assert.equal(result.report.cleanup.length, 0)
+  const record = (await f.lifecycle.list()).agents[0]!.record
+  if (record.version !== 2) throw new Error("missing accepted agent")
+  assert.deepEqual(parseCodexAcceptanceReport(result.report).unresolved, [{ stage: "initial", target: { agentId: record.definition.agentId, handlerGeneration: record.launch.handlerGeneration, providerGeneration: record.launch.providerGeneration } }])
 })
 
 test("diagnostic acceptance rejects restored session discontinuity", async t => {

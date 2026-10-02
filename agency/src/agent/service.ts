@@ -164,7 +164,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     await verify()
     for (const op of new Set(intents.values())) retire(op)
   }
-  async function revalidate(op: Live): Promise<void> {
+  async function validateLiveOperation(op: Live): Promise<void> {
     if (closed || op.controller.signal.aborted || op.fault) throw new AgentError("STARTUP_FAILED")
     if (context.state.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
     if (context.state.phase !== "ready") throw new AgentError("NOT_READY")
@@ -172,6 +172,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (assessment.unavailable.has(op.initial.definition.agentId) || runtimeIssues.has(op.initial.definition.agentId)) throw new AgentError("INVALID_AGENT_STATE")
     const observed = records.get(op.initial.definition.agentId)
     if (!observed || !isDeepStrictEqual(observed.definition, op.initial.definition) || !isDeepStrictEqual(observed.launch, op.initial.launch)) throw new AgentError("INVALID_AGENT_STATE")
+  }
+  async function revalidate(op: Live): Promise<void> {
+    await validateLiveOperation(op)
     const spec = specOf(op.initial)
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
     if (!isFresh(spec.catalogEvidence.verifiedAt, Date.now())) throw new AgentError("MODEL_UNAVAILABLE")
@@ -440,10 +443,10 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       if (op.controller.signal.aborted) controller.abort()
       pending = Promise.resolve().then(async () => {
         try {
-          await revalidate(op)
+          await validateLiveOperation(op)
           if (controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
           const result = await op.owner!.prompt(request.text, controller.signal)
-          await revalidate(op)
+          await validateLiveOperation(op)
           return { state: "prompt", target: agentTuple(record), stopReason: result.stopReason, text: result.text }
         } catch (error) {
           const failure = errorFor(error)
@@ -471,6 +474,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         await activePrompt?.catch(() => undefined)
         await queue.run(async () => {
           if (closed) throw new AgentError("NOT_READY")
+          if (op?.terminalAgent && !op.terminalAgentDurable) await publishTerminalAgent(op, op.terminalAgent.next, op.terminalAgent.expected)
           const record = records.get(command.target!.agentId)!
           if (!isDeepStrictEqual(agentTuple(record), command.target)) return
           if (["starting", "restoring", "ready"].includes(record.phase)) await publishAgent({ ...record, phase: "stopping" }, record)

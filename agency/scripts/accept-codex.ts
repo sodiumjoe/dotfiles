@@ -4,6 +4,7 @@ import { mkdir, open } from "node:fs/promises"
 import { isAbsolute, join, normalize, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
+import { PRODUCTION_MUTATION_TRANSPORT_MS } from "../src/agent/production-contracts.js"
 import { launchEnvironmentDigest, snapshotLaunchEnvironment, type LaunchEnvironment } from "../src/agent/environment.js"
 import { AGENT_PROTOCOL, agentExchangeTimeout, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { AgentError, type AgentList, type AgentTuple, type CommandView, type PromptView, type SessionEvidence } from "../src/agent/types.js"
@@ -14,14 +15,15 @@ import { assertPrivateDirectory } from "../src/platform/private-state.js"
 export type AcceptanceLifecycle = {
   cwd(): string
   snapshot(): LaunchEnvironment
-  start(cwd: string, environment: LaunchEnvironment): Promise<CommandView>
+  start(cwd: string, environment: LaunchEnvironment, observed?: (view: CommandView) => void): Promise<CommandView>
   prompt(target: AgentTuple, text: string): Promise<PromptView>
   stop(target: AgentTuple): Promise<CommandView>
-  restore(agentId: string, environment: LaunchEnvironment): Promise<CommandView>
+  restore(agentId: string, environment: LaunchEnvironment, observed?: (view: CommandView) => void): Promise<CommandView>
   list(): Promise<AgentList>
 }
 export type AcceptanceGeneration = { agentId: string; providerGeneration: string; launchAttemptId: string; sessionId: string; sessionGeneration: string; answer: string }
 export type AcceptanceCleanup = { stage: "initial" | "restored"; launchAttemptId: string; processGroupId: number; cleanup: "verified" }
+export type AcceptanceUnresolved = { stage: "initial" | "restored"; target: AgentTuple }
 export type CodexAcceptanceReport = {
   protocol: "agency-codex-acceptance/1"
   cwd: string
@@ -32,6 +34,7 @@ export type CodexAcceptanceReport = {
   first: AcceptanceGeneration | null
   restored: AcceptanceGeneration | null
   cleanup: AcceptanceCleanup[]
+  unresolved: AcceptanceUnresolved[]
   success: boolean
   failure: string | null
 }
@@ -53,12 +56,17 @@ function cleanup(value: unknown): AcceptanceCleanup {
   if (v.stage !== "initial" && v.stage !== "restored" || v.cleanup !== "verified" || typeof v.processGroupId !== "number" || !Number.isSafeInteger(v.processGroupId) || v.processGroupId <= 1) throw new AgentError("INVALID_PROTOCOL")
   return { stage: v.stage, launchAttemptId: id(v.launchAttemptId), processGroupId: v.processGroupId, cleanup: "verified" }
 }
+function unresolved(value: unknown): AcceptanceUnresolved {
+  const v = object(value), target = object(v.target); keys(v, ["stage", "target"]); keys(target, ["agentId", "handlerGeneration", "providerGeneration"])
+  if (v.stage !== "initial" && v.stage !== "restored") throw new AgentError("INVALID_PROTOCOL")
+  return { stage: v.stage, target: { agentId: id(target.agentId), handlerGeneration: id(target.handlerGeneration), providerGeneration: id(target.providerGeneration) } }
+}
 export function parseCodexAcceptanceReport(input: unknown): CodexAcceptanceReport {
   try {
-    const v = object(input); keys(v, ["protocol", "cwd", "challenge", "startEnvironmentDigest", "restoreEnvironmentDigest", "steps", "first", "restored", "cleanup", "success", "failure"])
-    if (v.protocol !== "agency-codex-acceptance/1" || typeof v.success !== "boolean" || v.failure !== null && typeof v.failure !== "string" || !Array.isArray(v.steps) || v.steps.some(step => !["start", "prompt", "stop", "restore"].includes(String(step))) || !Array.isArray(v.cleanup) || v.cleanup.length > 2) throw new Error()
-    const report = { protocol: "agency-codex-acceptance/1" as const, cwd: canonical(v.cwd), challenge: text(v.challenge), startEnvironmentDigest: hash(v.startEnvironmentDigest), restoreEnvironmentDigest: v.restoreEnvironmentDigest === null ? null : hash(v.restoreEnvironmentDigest), steps: [...v.steps] as CodexAcceptanceReport["steps"], first: v.first === null ? null : generation(v.first), restored: v.restored === null ? null : generation(v.restored), cleanup: v.cleanup.map(cleanup), success: v.success, failure: v.failure === null ? null : text(v.failure) }
-    if (report.success !== (report.failure === null) || report.success && (report.steps.join(",") !== "start,prompt,stop,restore,prompt,stop" || !report.first || !report.restored || report.cleanup.length !== 2 || report.restoreEnvironmentDigest === null || report.first.agentId !== report.restored.agentId || report.first.sessionId !== report.restored.sessionId || report.first.providerGeneration === report.restored.providerGeneration || report.first.launchAttemptId === report.restored.launchAttemptId)) throw new Error()
+    const v = object(input); keys(v, ["protocol", "cwd", "challenge", "startEnvironmentDigest", "restoreEnvironmentDigest", "steps", "first", "restored", "cleanup", "unresolved", "success", "failure"])
+    if (v.protocol !== "agency-codex-acceptance/1" || typeof v.success !== "boolean" || v.failure !== null && typeof v.failure !== "string" || !Array.isArray(v.steps) || v.steps.some(step => !["start", "prompt", "stop", "restore"].includes(String(step))) || !Array.isArray(v.cleanup) || v.cleanup.length > 2 || !Array.isArray(v.unresolved) || v.unresolved.length > 1) throw new Error()
+    const report = { protocol: "agency-codex-acceptance/1" as const, cwd: canonical(v.cwd), challenge: text(v.challenge), startEnvironmentDigest: hash(v.startEnvironmentDigest), restoreEnvironmentDigest: v.restoreEnvironmentDigest === null ? null : hash(v.restoreEnvironmentDigest), steps: [...v.steps] as CodexAcceptanceReport["steps"], first: v.first === null ? null : generation(v.first), restored: v.restored === null ? null : generation(v.restored), cleanup: v.cleanup.map(cleanup), unresolved: v.unresolved.map(unresolved), success: v.success, failure: v.failure === null ? null : text(v.failure) }
+    if (report.success !== (report.failure === null) || report.success && (report.steps.join(",") !== "start,prompt,stop,restore,prompt,stop" || !report.first || !report.restored || report.cleanup.length !== 2 || report.unresolved.length || report.restoreEnvironmentDigest === null || report.first.agentId !== report.restored.agentId || report.first.sessionId !== report.restored.sessionId || report.first.providerGeneration === report.restored.providerGeneration || report.first.launchAttemptId === report.restored.launchAttemptId)) throw new Error()
     return report
   } catch { throw new AgentError("INVALID_PROTOCOL") }
 }
@@ -83,8 +91,8 @@ function generationFrom(view: CommandView, session: SessionEvidence, launchAttem
   const target = view.command.target!
   return { agentId: target.agentId, providerGeneration: target.providerGeneration, launchAttemptId, sessionId: session.sessionId, sessionGeneration: session.sessionGeneration, answer }
 }
-export async function completeAcceptanceCommand(request: MutationRequest, handlerGeneration: string, call: (request: AgentRequest) => Promise<AgentReply>, polling: AcceptancePolling = { now: () => performance.now(), sleep: ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms)) }): Promise<CommandView> {
-  const deadline = polling.now() + 45000
+export async function completeAcceptanceCommand(request: MutationRequest, handlerGeneration: string, call: (request: AgentRequest) => Promise<AgentReply>, polling: AcceptancePolling = { now: () => performance.now(), sleep: ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms)) }, observed?: (view: CommandView) => void): Promise<CommandView> {
+  const deadline = polling.now() + PRODUCTION_MUTATION_TRANSPORT_MS
   let current: AgentRequest = request
   while (polling.now() < deadline) {
     let reply: AgentReply | undefined
@@ -95,6 +103,7 @@ export async function completeAcceptanceCommand(request: MutationRequest, handle
     if (reply) {
       if (!reply.ok) throw new AgentError(reply.error.code)
       if (reply.result.state !== "command") throw new AgentError("INVALID_PROTOCOL")
+      observed?.(reply.result)
       if (reply.result.command.state !== "pending" && reply.result.durability === "verified") return reply.result
     }
     current = { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_command", commandId: request.input.commandId, commandGeneration: handlerGeneration }
@@ -117,11 +126,11 @@ async function cleanupEvidence(lifecycle: AcceptanceLifecycle, stage: Acceptance
 
 export async function runCodexAcceptance(input: { evidenceParent: string }, lifecycle: AcceptanceLifecycle): Promise<AcceptanceResult> {
   const evidenceParent = canonical(input.evidenceParent), cwd = canonical(lifecycle.cwd()), challenge = randomBytes(16).toString("hex"), startEnvironment = lifecycle.snapshot()
-  const report: CodexAcceptanceReport = { protocol: "agency-codex-acceptance/1", cwd, challenge, startEnvironmentDigest: launchEnvironmentDigest(startEnvironment), restoreEnvironmentDigest: null, steps: [], first: null, restored: null, cleanup: [], success: false, failure: null }
+  const report: CodexAcceptanceReport = { protocol: "agency-codex-acceptance/1", cwd, challenge, startEnvironmentDigest: launchEnvironmentDigest(startEnvironment), restoreEnvironmentDigest: null, steps: [], first: null, restored: null, cleanup: [], unresolved: [], success: false, failure: null }
   let active: AgentTuple | null = null
   try {
     report.steps.push("start")
-    const started = commandResult(await lifecycle.start(cwd, startEnvironment), "started"), initialSession = started.command.result!.session!, initialTarget = started.command.target!
+    const started = commandResult(await lifecycle.start(cwd, startEnvironment, view => { if (view.command.target) active = view.command.target }), "started"), initialSession = started.command.result!.session!, initialTarget = started.command.target!
     active = initialTarget
     report.steps.push("prompt")
     const firstPrompt = `AGENCY_ACCEPTANCE_READ ${challenge}: read package.json in the current working directory and return exactly ${challenge} @moon/agency 24.13.0; remember the nonce.`
@@ -133,7 +142,7 @@ export async function runCodexAcceptance(input: { evidenceParent: string }, life
     report.first = generationFrom(started, initialSession, initialView.record.launch.launchAttemptId, firstAnswer)
     const restoreEnvironment = lifecycle.snapshot(); report.restoreEnvironmentDigest = launchEnvironmentDigest(restoreEnvironment)
     report.steps.push("restore")
-    const restored = commandResult(await lifecycle.restore(initialTarget.agentId, restoreEnvironment), "restored"), restoredSession = restored.command.result!.session!, restoredTarget = restored.command.target!
+    const restored = commandResult(await lifecycle.restore(initialTarget.agentId, restoreEnvironment, view => { if (view.command.target) active = view.command.target }), "restored"), restoredSession = restored.command.result!.session!, restoredTarget = restored.command.target!
     active = restoredTarget
     report.steps.push("prompt")
     const restoredAnswer = (await lifecycle.prompt(restoredTarget, "AGENCY_ACCEPTANCE_RECALL: return exactly the nonce from the previous turn without reading files.")).text
@@ -146,7 +155,10 @@ export async function runCodexAcceptance(input: { evidenceParent: string }, life
     report.success = true
   } catch (error) {
     report.failure = error instanceof AgentError ? error.code : "ACCEPTANCE_FAILED"
-    if (active) await cleanupEvidence(lifecycle, report.cleanup.length ? "restored" : "initial", active).then(value => { if (!report.cleanup.some(entry => entry.stage === value.stage)) report.cleanup.push(value) }, () => undefined)
+    if (active) {
+      const stage = report.cleanup.length ? "restored" : "initial"
+      await cleanupEvidence(lifecycle, stage, active).then(value => { if (!report.cleanup.some(entry => entry.stage === value.stage)) report.cleanup.push(value) }, () => { report.unresolved.push({ stage, target: active! }) })
+    }
   }
   return { report, reportPath: await publish(evidenceParent, report) }
 }
@@ -160,12 +172,12 @@ async function productionLifecycle(): Promise<AcceptanceLifecycle> {
     if (!reply.ok) throw new AgentError(reply.error.code)
     return reply
   }
-  const complete = (request: MutationRequest): Promise<CommandView> => completeAcceptanceCommand(request, handlerGeneration, call)
+  const complete = (request: MutationRequest, observed?: (view: CommandView) => void): Promise<CommandView> => completeAcceptanceCommand(request, handlerGeneration, call, undefined, observed)
   const selection = { providerId: "codex-acp" as const, modelId: "gpt-5.6-sol", reasoning: { kind: "value" as const, value: "high" }, mode: "read-only", permissionProfile: "deny-all" }
   return {
     cwd: () => resolve(process.cwd()), snapshot: () => snapshotLaunchEnvironment(process.env),
-    start: (cwd, launchEnvironment) => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_start", input: { commandId: randomUUID(), handlerGeneration, cwd, selection, environment: launchEnvironment } }),
-    restore: (agentId, launchEnvironment) => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_restore", input: { commandId: randomUUID(), handlerGeneration, agentId, environment: launchEnvironment } }),
+    start: (cwd, launchEnvironment, observed) => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_start", input: { commandId: randomUUID(), handlerGeneration, cwd, selection, environment: launchEnvironment } }, observed),
+    restore: (agentId, launchEnvironment, observed) => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_restore", input: { commandId: randomUUID(), handlerGeneration, agentId, environment: launchEnvironment } }, observed),
     stop: target => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_stop", input: { ...target, commandId: randomUUID() } }),
     prompt: (target, prompt) => completeAcceptancePrompt({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_prompt", input: { ...target, text: prompt } }, call),
     async list() { const reply = await call({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_list" }); if (!reply.ok || reply.result.state !== "agents") throw new AgentError("INVALID_PROTOCOL"); return reply.result },

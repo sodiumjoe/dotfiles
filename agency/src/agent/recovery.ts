@@ -103,6 +103,9 @@ export async function recoverAgents(input: { context: LaunchContext; store: Agen
     await refreshLaunchState(context.state, context.mutations, join(context.paths.persistentRoot, "launches"))
     inventory = await store.inventory()
     const initial = crossCheckAgents(context, inventory)
+    let agentDurability: unknown = null, commandDurability: unknown = null
+    try { await store.verifyDurability("agent") } catch (error) { agentDurability = error }
+    try { await store.verifyDurability("command") } catch (error) { commandDurability = error }
     for (const agent of inventory.agents) {
       if (initial.unavailable.has(agent.definition.agentId)) continue
       const launchPath = join(context.paths.persistentRoot, "launches", agent.launch.launchAttemptId + ".json")
@@ -114,11 +117,19 @@ export async function recoverAgents(input: { context: LaunchContext; store: Agen
       }
       const verified = context.mutations.accepted.some(entry => entry.record.launchAttemptId === agent.launch.launchAttemptId && entry.record.phase === "cleanup_verified")
       const next = recoveryRecord(verified)
+      if (isDeepStrictEqual(next, agent)) {
+        if (agentDurability) repairs.push({ kind: "agent", expected: agent, next, issue: { kind: "agent", id: agent.definition.agentId, path: join(context.paths.persistentRoot, "agents", "records", agent.definition.agentId + ".json"), message: String(agentDurability).slice(0, 512) } })
+        continue
+      }
       try { await store.writeAgent(next, agent) }
       catch (error) { repairs.push({ kind: "agent", expected: agent, next, issue: { kind: "agent", id: agent.definition.agentId, path: join(context.paths.persistentRoot, "agents", "records", agent.definition.agentId + ".json"), message: String(error).slice(0, 512) } }) }
     }
     for (const command of inventory.commands) {
       const next = command.state === "pending" ? { ...command, state: "interrupted" as const, result: { outcome: "interrupted" as const, target: command.target, failure: agentFailure(new AgentError("INCOMPLETE")), session: null } } : command
+      if (isDeepStrictEqual(next, command)) {
+        if (commandDurability) repairs.push({ kind: "command", expected: command, next, issue: { kind: "command", id: command.commandId, path: join(context.paths.persistentRoot, "agents", "commands", command.commandId + ".json"), message: String(commandDurability).slice(0, 512) } })
+        continue
+      }
       try { await store.writeCommand(next, command) } catch (error) { repairs.push({ kind: "command", expected: command, next, issue: { kind: "command", id: command.commandId, path: join(context.paths.persistentRoot, "agents", "commands", command.commandId + ".json"), message: String(error).slice(0, 512) } }) }
     }
     inventory = await store.inventory()
