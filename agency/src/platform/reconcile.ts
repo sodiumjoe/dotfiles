@@ -19,6 +19,7 @@ export class RetainedInventoryChangedError extends Error {
 }
 
 const POLL_INTERVAL_MS = 25
+const OBSERVATION_DEADLINE_MS = 1000
 const TERM_DEADLINE_MS = 1000
 const KILL_DEADLINE_MS = 3000
 
@@ -95,9 +96,17 @@ function recordIssue(record: LaunchRecord): string | null {
 }
 
 async function observeGroup(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity): Promise<GroupObservation> {
-  const leader = await adapter.readProcess(provider.group.leader.pid)
-  const members = await adapter.readGroup(provider.group.leader.processGroupId)
-  return { leader, members }
+  const deadline = Date.now() + OBSERVATION_DEADLINE_MS
+  while (true) {
+    try {
+      const leader = await adapter.readProcess(provider.group.leader.pid)
+      const members = await adapter.readGroup(provider.group.leader.processGroupId)
+      return { leader, members }
+    } catch (error) {
+      if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable) || Date.now() >= deadline) throw error
+      await sleep()
+    }
+  }
 }
 
 function groupMembersAuthorized(provider: ProcessGroupProviderIdentity, members: ProcessIdentity[]): boolean {

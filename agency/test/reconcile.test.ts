@@ -193,6 +193,20 @@ test("an exact live leader authorizes a new same-session child before SIGTERM", 
   assert.ok(result.record.provider?.group.observed.some(member => member.pid === child.pid))
 })
 
+test("transient Darwin group observation churn stabilizes before SIGTERM", async t => {
+  const adapter = new FakeAdapter({ onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+  const readGroup = adapter.readGroup.bind(adapter)
+  let reads = 0
+  adapter.readGroup = async () => {
+    if (++reads < 3) throw new DarwinObservationUnavailable("transient group churn")
+    return readGroup()
+  }
+  const path = await recordFixture(t, record())
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "cleaned")
+  assert.deepEqual(adapter.signals, ["SIGTERM"])
+})
+
 test("expected inventory rejects a replaced record before any write or signal", async t => {
   const expected = record()
   const actual = { ...expected, checkoutId: "replacement" }
