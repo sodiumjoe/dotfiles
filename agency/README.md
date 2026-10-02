@@ -1,12 +1,12 @@
 # Agency
 
-Agency provides a host Handler control plane over its qualified Darwin and Linux platform layer. It implements lazy daemon startup, retained-launch reconciliation, checkout admission, model discovery, root-agent lifecycle, status, diagnostics, and guarded shutdown. Platform records retain exact process identity and checkout-scoped quarantine.
+Agency provides a persistent local Handler for starting, inspecting, prompting, stopping, and restoring ACP agents. A managed launch uses the caller's absolute current directory and a fresh snapshot of the caller's environment. Agency does not assign Git ownership, serialize agents by directory, manufacture a separate user environment, or impose an agent-count or concurrent-start limit.
 
-Agent lifecycle and idle ACP sessions are qualified only through deterministic fixtures. The production launch-contract registry is empty: real starts return `ADAPTER_UNQUALIFIED` before reservation or spawn, including with an enabled catalog profile. Prompts, permissions UI, attachment/roster streams, Neovim integration, the Bureau, and cross-host coordination are not implemented. Surviving sessions are never adopted. Checkout reservation/cancellation remains an internal Handler API, not a public reserve command.
+The Handler owns durable agent identity, command receipts, provider-process supervision, ACP connections, and explicit restoration. Multiple agents may run in the same directory. One agent's malformed state, failed process cleanup, or failed restoration does not prevent unrelated launches.
 
 ## Build and commands
 
-Agency requires Node 24.13.0 and the existing pinned lockfile. From `agency/`, select that Node version and run `npm ci` followed by `npm run build`. `home/bin/agy` is the repository command, deployed by the existing dotfiles workflow as `~/bin/agy`. It resolves its own symlink chain to locate this repository's build and invokes `$HOME/.nodenv/versions/24.13.0/bin/node`. Missing runtime or build produces a stderr diagnostic and exit 69; it never installs or builds implicitly.
+Agency requires Node 24.13.0 and the existing pinned lockfile. From `agency/`, run `npm ci` and `npm run build`. `home/bin/agy` is deployed by the existing dotfiles workflow as `~/bin/agy`; it resolves this repository through its symlink chain and invokes the pinned Node runtime. It never installs dependencies or builds implicitly.
 
 ```text
 agy status [--json]
@@ -15,131 +15,108 @@ agy doctor [--json]
 agy shutdown [--stop-agents] [--json]
 agy shutdown --command-id <uuid> --handler-generation <uuid> [--stop-agents] [--json]
 agy model list [--json]
-agy model refresh [--json]
-agy model refresh --command-id <uuid> --handler-generation <uuid> [--json]
+agy model refresh [--command-id <uuid>] [--handler-generation <uuid>] [--json]
 agy agent start --provider <id> --model <id> --reasoning <value|none> [--mode <id>] --permission-profile <id> [--command-id <uuid>] [--handler-generation <uuid>] [--json]
+agy agent restore <agent-uuid> [--command-id <uuid>] [--handler-generation <uuid>] [--json]
 agy agent current [--json]
 agy agent list [--json]
 agy agent stop <agent-uuid> --handler-generation <uuid> --provider-generation <uuid> [--command-id <uuid>] [--json]
 ```
 
-Status lazily starts or connects to one Handler. Doctor inspects state without starting a Handler or performing cleanup. Path resolution may create empty qualified state/runtime directories. Neither command creates a model session.
+Status lazily starts or connects to one Handler. Doctor inspects local state without starting a Handler or performing cleanup. Shutdown never starts a Handler. Ordinary shutdown refuses active lifecycle work; `--stop-agents` explicitly stops known agents before the Handler exits. A shutdown result is complete only after the CLI observes the selected Handler generation's absence.
 
-Shutdown never starts a daemon. It refuses unverified launches unless `--stop-agents` is supplied, and even that flag cannot release ambiguous cleanup. Accepted shutdown persists an exact generation-bound receipt, closes client connections, and exits. The CLI independently observes the recorded Handler generation's absence before reporting `shutdown_complete`. A receipt alone or delivery of a signal is insufficient evidence.
+Command IDs and Handler generations make mutation retries exact. After an incomplete result, retry with the original command ID, generation, and input. Completed command receipts remain immutable, while current agent liveness is reported separately.
 
-On an uncertain result, retain the command ID and Handler generation. Retry with both flags and the original `--stop-agents` setting. A retry cannot select a replacement Handler. Receipts remain under the persistent `shutdown/` directory; automatic expiry is not implemented. A failed directory fsync can leave a visible receipt without completing shutdown; an explicit matching retry revalidates cleanup and republishes it before draining. SIGTERM/SIGINT use the same guarded path and are deferred while startup classifies records. Incomplete cleanup leaves the Handler available for status.
+## Control protocols
 
-## Control protocol
+Control commands return an `agency-control/1` envelope containing the request ID, selected Handler generation, success state, and result or bounded error. Agent operations use the separate `agency-agent/2` protocol. Internal sockets accept one bounded LF-terminated JSON request and return one bounded reply. Request IDs, command IDs, Handler generations, and provider generations are validated at the boundary.
 
-JSON command output contains one `agency-control/1` envelope with `requestId`, selected `handlerGeneration` (null before selection), `ok`, and either `result` or `error`. Shutdown also returns `commandId`. Bootstrap failures before Node starts are stderr-only; subsequent diagnostics are bounded to 8 KiB on stderr. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
+Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable or stale targets, 70 for internal failure, and 75 for incomplete operations. Bootstrap failures before Node starts are stderr-only.
 
-The internal Unix-socket protocol is separate from future attachment streams. Each connection carries one LF-terminated JSON request followed by a write-half close, and one LF-terminated reply followed by EOF. Frames are bounded to 8 MiB with strict UTF-8 and matching request/generation IDs. Duplicate frames are rejected before dispatch. Oversized status returns an explicit incomplete result. Future Neovim clients use the CLI rather than private socket framing.
+## Production ACP contracts
 
-The launcher may time out while a live Handler continues reconciliation. A later client waits for that same generation through the singleton protocol. Readiness requires classification of every committed retained record and a final inventory comparison. Changed inventory or malformed/unattributable records prevent readiness and preserve evidence. Recognized private atomic-write remnants remain on disk but do not count as committed launch records.
+Production launch authority comes from static code-owned ACP capability declarations. A declaration specifies the provider ID, adapter package and supported version, ACP option IDs, selectable mode and reasoning values, permission profiles, deadlines, permission evidence, and whether `session/load` is supported. It contains no executable path, generated evidence, or mutable runtime authorization.
 
-## Verification scope
+The Codex declaration supports `@agentclientprotocol/codex-acp` 1.7.0, model option `model`, reasoning option `reasoning_effort`, mode option `mode`, `high`, `read-only`, `deny-all`, and `session/load`. Start and restore use this same declaration.
 
-Run `npm run test:unit`, `npm run test:darwin`, `AGENCY_LINUX_PROCFS_UNIT=1 node --test --test-concurrency=1 dist/test/linux-platform.test.js`, `npm run test:control`, `npm run test:control-integration`, `npm run test:checkout`, `npm run test:checkout-integration`, `npm run test:catalog`, `npm run test:catalog-integration`, `npm run test:agent`, and `npm run test:agent-integration` sequentially with Node 24.13.0. Integration tests exercise production daemon/client modules with private fixture roots and owned local process identities. They launch no real provider or model prompt and perform no remote operation or production deployment. The lifecycle crash matrix covers command intent, reservation, attempted publication before spawn, exact identity, ACP session creation, readiness, receipt visibility/durability, and five stop-publication boundaries. Independent fixture ownership and repeated absence observations precede root deletion; incomplete cleanup retains roots and stops the process-bearing batch.
+The configured provider profile supplies the ambient native executable, adapter package metadata, and declared configuration paths. Agency requires the adapter package name and version to match the declaration, resolves the package's relative `main`, and observes one stable canonical regular entrypoint. The configuration fingerprint includes that entrypoint's physical identity and bounded bytes. Missing, escaping, absolute, symlinked, or replaced entrypoints fail the affected launch before provider startup.
 
-The Handler composition is qualified locally on Darwin. Real Linux Handler execution remains unqualified until a separately bounded remote increment. The platform layer's retained Linux qualification remains valid; synthetic Linux tests do not substitute for a real Linux Handler trial.
+A currently valid profile, catalog snapshot, and matching static declaration are sufficient to attempt a launch. Runtime failures do not revoke or mutate the declaration. Unsupported selections, unavailable profiles, and configuration drift fail only the command that encountered them.
 
-## Qualified contract
+## Agent lifecycle
 
-### Ambient Codex restore qualification
+`agent start` snapshots the invoking CLI's environment and passes it to the provider unchanged. This includes `HOME`, XDG paths, credentials, cache paths, Git variables, and provider-specific configuration. Agency does not merge the long-running Handler's environment into the request. Durable state stores only a deterministic environment digest, so exact retries can reject changed input without retaining environment values.
 
-The production qualified registry remains empty. Version 4 qualifies an ambient start → prompt → stop → restore → prompt → stop lifecycle with the pinned selection `gpt-5.6-sol`, `high`, `read-only`, `deny-all`. Historical version-1, version-2, and version-3 candidate and report files remain immutable evidence and cannot authorize registration.
+The working directory is persisted as launch metadata but is not an ownership boundary. `agent current` returns every live agent whose stored directory string exactly equals the invoking CLI's absolute directory. `agent list` includes stopped, failed, interrupted, recoverable, cleanup-uncertain, and legacy records.
 
-After separate live authorization, `node agency/dist/scripts/qualify-codex.js --stage candidate --manifest MANIFEST --candidate NEW_CANDIDATE --reviewed-branch moon/agency-agent-lifecycle --reviewed-commit COMMIT` validates a reviewed version-4 manifest and its four artifact pins, then exclusively creates the new candidate. The manifest pins the adapter package and entrypoint, Codex executable, Node 24.13.0 executable, protocol, selections, and deadlines. It contains no launch environment or state directory mapping. Candidate creation never overwrites existing evidence. Preparing the reviewed manifest and observing the installed artifacts are part of the separately authorized live batch.
+A successful start records the logical `agentId`, provider session ID, provider generation, launch-attempt ID, selection, contract fingerprint, and exact owned process identity. A client disconnect does not terminate a ready agent. Prompts are serialized per agent, bounded, and never replayed automatically.
 
-Run the live command from the repository directory, where `agency/package.json` exists: `node agency/dist/scripts/qualify-codex.js --stage live --candidate NEW_CANDIDATE --evidence-parent EVIDENCE_DIRECTORY --reviewed-branch moon/agency-agent-lifecycle --reviewed-commit COMMIT`. All commands require Node 24.13.0 and the reviewed branch and commit. Stop the ordinary Handler before the batch; the qualifier refuses an active or ambiguous Handler. Its candidate Handler uses the normal Agency state directories and transient authorization for exactly one candidate contract.
+`agent stop` targets an exact agent, Handler generation, and provider generation. Agency cancels active work, revalidates the recorded process group, signals only that owned group, verifies absence, and retains the logical definition and provider session ID. Ambiguous identity or surviving owned processes leave that agent cleanup-uncertain.
 
-The first prompt reads `agency/package.json` and returns a random 128-bit nonce, the package name, and Node engine. The second prompt asks for the prior nonce without repeating it. Each prompt has a 90-second bound and a 4-KiB answer limit. The qualifier takes fresh ambient environment snapshots for start and restore and stores only their digests. It uses the actual invocation directory. The caller's ambient `CODEX_PATH` must already equal the pinned executable path in both snapshots; missing or mismatched values fail closed. The qualifier never injects or rewrites it. Ambient Codex configuration, authentication, sessions, caches, and helper processes may change according to the normal provider behavior.
+`agent restore` is explicit. It uses the stored working directory and a fresh environment snapshot from the restoring CLI, starts a new provider process, verifies ACP `session/load`, and loads the recorded provider session ID. The logical agent ID and provider session ID remain stable, while provider generation and launch-attempt ID rotate. Authentication failure, missing session state, protocol failure, timeout, or configuration drift remains visible on that agent and does not block another start.
 
-The retained version-4 report binds the candidate, reviewed revision, exact answers, session and process generations, complete ordered ACP request methods, and exactly two prompts. Each Agency-owned provider process group requires two separated absence observations over the same complete retained identities. A missing observation, reappearing member, unknown identity, extra prompt, changed session, or repeated provider generation prevents qualification. Detached ambient helpers are diagnostic and are not inventoried or removed.
+After a Handler or devbox restart, a previously ready agent with an absent provider and recorded session ID becomes recoverable. Agency does not resurrect processes, adopt orphaned ACP streams, persist old environments, or replay in-flight prompts. Legacy version-1 records are retained for historical reconciliation but do not authorize new launches.
 
-On failure, the qualifier requests normal stop and shuts down its candidate Handler, retains evidence, and performs no automatic paid retry or registration. Uncertain cleanup retains normal Agency lifecycle records for diagnosis. It does not restore provider caches or session state. Successful cleanup proves the owned process groups and streams, not unchanged user state or operating-system sandboxing.
+## Optional Codex acceptance
 
-Independent verification uses `node agency/dist/scripts/qualify-codex.js --stage source --candidate NEW_CANDIDATE --report REPORT --report-sha256 SHA256 --reviewed-branch moon/agency-agent-lifecycle --reviewed-commit COMMIT`. It reads bounded private report bytes, checks their exact digest, validates the full report and candidate binding, rechecks artifact pins and both absence passes, and prints a literal contract with only `sessionLoad` promoted from `candidate` to `qualified`. Registration remains a separate reviewed source change.
+The live Codex acceptance command exercises the ordinary production Handler and public lifecycle. Run it from `agency/` only after obtaining separate authorization:
 
-`npm run test:codex-qualification` runs local deterministic providers through the actual Handler, agent service, ACP, stop, and cleanup paths. Fixture contracts use transient candidate authorization and local fixture state. No real provider or paid prompt runs in these tests.
+```text
+npm run accept:codex -- --evidence-parent /absolute/private/directory
+```
 
-### Agent lifecycle
+This command starts the real provider and submits two paid prompts. It must not be run as part of deterministic testing or without explicit authorization for that live execution.
 
-The Handler directly owns one detached provider process and its ACP connection per root agent. A client disconnect does not terminate a ready idle session. Each accepted start retains an immutable launch specification and separate agent, provider, lease, launch-attempt, command, and session generations. The model token remains advertised identity, not a claim of resolved model execution. There are at most 16 live root agents per Handler, and overlapping checkouts cannot acquire another write-capable lease.
+The check starts an agent in the actual invocation directory with a fresh ambient environment, asks it to read that directory's `package.json`, stops it with verified owned-process cleanup, snapshots a second fresh environment, restores the same provider session, asks it to recall the prior nonce, and stops it again. It uses the configured profile and the normal production contract registry. It does not stop or replace an unrelated Handler.
 
-Launch requires fresh, current-generation catalog evidence and a separately qualified code-owned launch contract. It never triggers discovery. Provider, model, reasoning, and permission profile are explicit. `none` requires evidence of absent reasoning; unknown is insufficient. Mode omission is legal only when the contract establishes one effective value. Configuration, checkout identity, and the contract fingerprint are revalidated before spawn and readiness. ACP v1 initialization, session creation, and settings readback must confirm exact values; aliases, clamping, missing evidence, and unsupported callbacks fail closed. No prompt is submitted. Unexpected permission requests receive `cancelled`; filesystem and terminal requests are rejected. Fixture permission evidence is not proof of a native provider policy or a sandbox.
+The private `agency-codex-acceptance/1` report contains the working directory, environment digests, lifecycle steps, prompt answers, logical and provider generations, session continuity, launch-attempt identities, and verified owned-process cleanup. It does not contain environment values and cannot authorize, revoke, register, or otherwise modify production launch behavior. A failed check retains its diagnostic report and attempts an ordinary targeted stop when an agent is still active.
 
-Agent JSON uses the separate `agency-agent/1` envelope. Start/stop polling is bounded; retain the command ID and original Handler generation after exit 75. A pinned start retry uses retained input rather than ambient cwd and never spawns again. Completed start and stop receipts remain immutable historical outcomes, even after failure, stop, or Handler replacement. Current/list report present liveness separately. Offline receipt reads report `durability: "unverified"` with exit 75, even when a completed receipt is visible. Only live qualified publication can repair durability; a replacement Handler can verify historical results without adopting sessions or replaying commands. An older Handler without agent protocol support requires explicit shutdown/restart.
+`npm run test:codex-acceptance` uses deterministic local providers and isolated private control roots. It submits no paid prompt and does not run the native Codex executable.
 
-Successful durable ready-record publication linearizes startup success. Explicit stop first persists its exact target and intent, then cancels startup, performs qualified cleanup, publishes terminal state, and completes its receipt. Ordinary shutdown refuses starting, ready, stopping, or unresolved agents before installing shutdown state. `--stop-agents` drains lifecycle operations outside the shared mutation queue. Unverified cleanup returns incomplete and preserves Handler readiness and checkout quarantine.
+## Model catalog
 
-Fatal Handler closure disposes ACP and local child/pipe references without claiming provider absence or releasing a lease. This permits the failed Handler to exit naturally; a replacement still reconciles the exact retained provider group or quarantines it. Disposal prevents queued or in-progress startup from spawning or publishing readiness after closure.
+The catalog is configured through `persistentRoot/catalog/providers.json`, a user-owned private regular file with shape `{ "version": 1, "providers": [...] }`. An absent file configures no providers. Agency does not search `PATH` or infer provider configuration.
 
-Records live under `agents/records` and `agents/commands`, with private atomic publication, file/directory fsync, exact readback, immutable identities, and inventory-change detection. Each directory is limited to 4096 entries, including retained history; automatic pruning is absent. A restart interrupts pending commands and starting/ready/stopping records after platform reconciliation. Independently verified cleanup may release the lease while the historical stop remains interrupted. Attempted-but-unattributed launches remain quarantined. Real-provider permission/selection/process compatibility and real Linux Handler composition require separate qualification before production contracts can be registered.
+Each profile declares `id`, `enabled`, `executable`, `adapterPackageJson`, `sdkPackageJson`, and `configurationFiles`. Codex uses its configured executable for bounded model discovery and requires no SDK package. Claude discovery loads the explicitly configured SDK inside an owned worker. Discovery does not submit a model prompt, but native startup may still exercise authentication or provider-specific side effects.
 
-### Model catalog
+Catalog evidence is current-generation and time-bounded. Successful refresh replaces a provider's advertised model set. Failed refresh preserves prior data as stale. A launch revalidates the profile, configuration evidence, selected model and options, and configured contract before provider spawn and before readiness.
 
-The catalog is opt-in through `persistentRoot/catalog/providers.json`, a user-owned private regular file with one link and exact shape `{ "version": 1, "providers": [...] }`. An absent manifest configures no providers and launches no discovery. Agency does not create this file, search PATH, or discover provider settings automatically. Each profile has exactly `id`, `enabled`, `executable`, `adapterPackageJson`, `sdkPackageJson`, and `configurationFiles`. Paths are canonical absolute paths. IDs are `claude-agent-acp` and `codex-acp`; Claude requires SDK package metadata, while Codex requires `sdkPackageJson: null`. Configuration files are an ordered, duplicate-free list of at most 16 declared paths.
+## Process ownership and persistent state
 
-Enabling a live profile causes discovery subprocesses on Handler startup, cache expiry, configuration changes, and explicit refresh, even without a model prompt. Do not enable live profiles before separately qualifying the executable, dependency versions, authentication surface, and managed-policy behavior. Local qualification uses only deterministic fake SDKs and native executables. Real-provider discovery and real Linux Handler/catalog composition remain unqualified.
+Agency stores Handler, command, agent, catalog, and launch records beneath a canonical user-owned mode-0700 state root. Records use bounded strict schemas and private atomic publication with file and directory durability barriers. Runtime sockets live in a user-owned mode-0700 temporary root and have mode 0600.
 
-Claude discovery loads the explicitly configured `@anthropic-ai/claude-agent-sdk` version `0.3.232` only inside an owned worker, calls `supportedModels()` with an empty prompt stream, disables setting sources, tools, MCP servers, and session persistence, and routes native spawning through the registration gate. Other SDK versions are rejected. Codex uses only `initialize`, `initialized`, and bounded `model/list` pagination. Adapter versions come from the declared `@agentclientprotocol/<provider-id>` package metadata, not the native binary. A native version is reported only when supplied by native discovery; otherwise it is unknown. These restrictions do not establish that native startup has no authentication or other side effects.
+Handler and provider leaders are detached direct children whose PID equals their process-group and session IDs. Records bind the boot identity, PID generation, parent, group, session, UID, GID, and an exact per-launch marker. Reconciliation revalidates that evidence before signaling. A missing or replaced process is not signaled.
 
-`agy model list` reads the cache and reports provider state, freshness, discovery status, and `launchAuthorized: false`. Model IDs retain advertised alias semantics; resolved model IDs and ACP modes remain unknown. Reasoning capabilities distinguish unknown evidence, explicit absence, and advertised values. Every later agent launch must revalidate model, mode, reasoning, permissions, checkout, and effective configuration.
+On restart, Agency classifies each retained launch independently. Exact owned process groups are cleaned and verified absent; ambiguous records remain visible without creating a Handler-wide launch latch. Pending commands become interrupted because their transient environments are intentionally unavailable.
 
-Freshness requires the current Handler's per-provider verification, unchanged declared-input fingerprint, successful cleanup/publication, and an age below ten minutes. The fingerprint binds profile values, executable and SDK entry filesystem identity, declared package metadata, and declared configuration contents, including missing files. It does not cover undeclared settings, environment changes, credentials, or arbitrary files imported by the SDK. Configuration is polled every 30 seconds; failed automatic refreshes back off for 60 seconds. Failures preserve previously verified models as stale. Successful refresh replaces a provider's complete advertised set, including removals. A wall-clock rollback preserves historical verification timestamps; future-dated evidence is not fresh.
+## Verification
 
-Refresh IDs are durable and generation-bound. Concurrent callers coalesce bounded work; an exact completed retry returns its original immutable snapshot even after newer refreshes. A disconnected CLI does not cancel discovery. JSON output uses `agency-catalog/1` and includes retry IDs for refresh. Polling is bounded to 60 seconds; on incomplete output retain both IDs and retry with the original generation. A restarted Handler interrupts pending commands and refuses new work under old IDs. A running pre-catalog Handler is not automatically restarted or replaced by a catalog client.
+Use Node 24.13.0 and run the package scripts sequentially:
 
-Each probe uses a fresh private non-Git scratch directory, one detached gated Node worker, and at most one non-detached native child. Independent platform observation and durable registration precede native protocol work. Discovery is bounded to 20 seconds per provider, followed by qualified TERM/KILL cleanup and direct-worker terminal observation. Probe records live under `catalog/probe-launches` with separate metadata, commands, snapshots, and a hash-bound current pointer. They never acquire checkout leases. Snapshots support two bounded 1-MiB provider payloads plus a bounded envelope; command and metadata files retain their 1-MiB limit. Retained evidence is not automatically pruned. If cancellation occurs before the live owner invokes spawn, it can durably restore provably unattempted evidence before normal reconciliation. A crash before that restoration or any uncertainty after spawn invocation retains the conservative cleanup boundary.
+```text
+npm run test:agent
+npm run test:agent-integration
+npm run test:unit
+npm run test:darwin
+npm run test:catalog
+npm run test:catalog-integration
+npm run test:control
+npm run test:control-integration
+npm run test:codex-acceptance
+```
 
-Ordinary shutdown cancels and drains discovery without `--stop-agents`. Checkout-related refusal resumes healthy discovery. Unverified probe cleanup blocks all new discovery and successful shutdown while preserving readable historical catalog data and independent checkout admission. A restart reconciles the exact retained probe groups before starting replacements; an attempted launch without attributable identity remains quarantined. PID alone, worker messages, EOF, a missing record, or a valid model response never authorize cleanup or fresh publication. No force-cleanup operation is provided.
-
-### Checkout admission
-
-Checkout identity binds the host, canonical root, device/inode strings, common Git directory, worktree-specific Git directory, and physical ancestors. The stable ID hashes the host and root/worktree-Git-directory physical identities. Symlink and case aliases converge, while separate non-overlapping linked worktrees remain independent despite sharing a common Git directory. Nested repositories and submodules conflict with a leased parent. Dirty files are neither reset nor deleted.
-
-The resolver uses `/usr/bin/git rev-parse` with argument vectors, neutralized inherited Git redirection, bounded output, and repeated snapshots. Each direct Git child has a two-second execution limit and SIGKILL timeout/overflow policy; cleanup requires observed terminal state. Missing Git, unsupported paths, bare repositories, unstable filesystem mappings, and unverified subprocess cleanup fail closed. These observations are not a filesystem lock against hostile same-user mutation. Lifecycle startup renews checkout validation before spawn and readiness.
-
-Only the qualified Handler creates leases. Reservation, unattempted cancellation, and shutdown share one mutation queue. Generation and readiness checks run inside it; pending shutdown prevents new reservations, and duplicate shutdown requests retain their existing coalescing behavior. Internal retries carry immutable agent, lease, attempt, Handler-generation, and checkout identities. A released attempt can never be revived; a new reservation needs fresh IDs.
-
-Reservation first publishes the unchanged version-1 unattempted LaunchRecord, then immutable `admissions/<launchAttemptId>.json` checkout evidence. Success requires both durable publications, exact readback, complete inventory checks, and renewed checkout validation. Every metadata retry repeats file and directory durability barriers, including the persistent parent. A failed publication may leave visible blocking records. Exact matching unattempted retries may complete publication; uncertain evidence is never deleted to free a checkout. Cancellation uses qualified reconciliation only for a pinned, provably unattempted record. Metadata remains after verified release.
-
-Mapped unresolved launches block overlapping checkouts. Unmapped legacy launches, orphan or malformed metadata, inconsistent identities, or unexpected changes to the accepted launch inventory make admission globally unavailable while status and guarded shutdown remain usable. Every unresolved retained checkout mapping is checked before and after new publication. A moved/replaced mapping also blocks all new reservations because historical paths cannot locate arbitrary relocation. Exact unattempted cancellation or qualified restart/shutdown cleanup can discharge the affected launch; metadata alone is never release authority. Unexpected launch-inventory changes latch admission unavailable until a new qualified Handler generation.
-
-`agy doctor` adds a current-checkout diagnostic without starting the Handler, reserving a lease, reconciling processes, or creating admission metadata. It reports observed identity/occupancy with `authoritative: false`, or an explicit not-checkout/unavailable condition. The observation cannot authorize a writer and may become stale immediately after it returns. Existing environment initialization may still create empty state/runtime directories. The strict socket protocol and status capabilities remain unchanged.
-
-### Platform records
-
-Agency stores versioned Handler and launch records below a canonical user-owned 0700 persistent root. Records are validated before use and published through a 0600 temporary file, file `fsync`, atomic rename, and parent-directory `fsync`. Invalid, oversized, symlinked, non-private, or semantically inconsistent records fail closed.
-
-The persistent root is `${XDG_STATE_HOME:-realpath(HOME)/.local/state}/agency/hosts/<host-key>`. The runtime root is `/private/tmp/agy-<uid>-<host-prefix>` on Darwin and `/tmp/agy-<uid>-<host-prefix>` on Linux. Runtime roots are user-owned mode 0700, and `handler.sock` must remain below the 100-byte Unix-socket path limit and have mode 0600.
-
-Lazy startup uses the qualified system `lockf` on Darwin or `flock` on Linux. A launcher publishes a pending Handler generation, starts one detached marker-bound Handler, publishes its exact identity, releases the launch gate, and waits for readiness. The Handler binds the private socket, inventories every retained launch record, publishes a complete reconciliation summary, and becomes ready only when every record has been classified. A restarted Handler never adopts or restores a surviving provider.
-
-Each Handler or provider leader is detached with PID equal to process-group ID and session ID and with an exact per-launch `argv[0]` marker: `agy-handler:<uuid>` or `agy-provider:<uuid>`. Group signals reject numeric targets less than or equal to one.
-
-Darwin identity combines the Apple boot-session UUID, PID, second-resolution UTC start time, exact marker, process group, parent, UID, and GID. Reads use only canonical root-owned `/usr/sbin/sysctl` and `/bin/ps`, by absolute path without a shell under `LANG=C` and `TZ=UTC`. Process and group observations require stable repeated complete snapshots.
-
-Linux identity combines the procfs boot ID, PID, starttime tick, exact byte-zero `argv[0]`, process group, session, parent, UID, and GID. Process observations repeat stat, status, and cmdline reads. Group observations require two equal complete `/proc` scans. A zombie is not absence until procfs confirms reaping.
-
-Restart reconciliation persists `cleanup_pending` before signaling and immediately revalidates exact boot, leader generation, marker, group, session, ownership, and retained-member evidence. It sends SIGTERM, polls for at most one second, reauthorizes continuity, sends SIGKILL if required, polls for at most three seconds, and requires independent empty-group and recorded-generation absence evidence before `cleanup_verified`. Missing, unstable, changed, or incomplete evidence quarantines only the affected checkout.
-
-## Crash classification
-
-- Before provider spawn: release the provably unattempted launch without signaling.
-- After spawn was attempted but before identity publication: quarantine without production signaling.
-- After identity publication, during readiness, or while active: clean only the exact verified process group; otherwise quarantine.
-- Prior boot or conclusive PID-generation replacement: release without signaling the replacement.
+These suites use deterministic fixtures, private temporary roots, and owned local process groups. They do not run `accept:codex`, invoke a real model, submit a paid prompt, or deploy production state.
 
 ## Limits
 
-Darwin start time is second-resolution. Marker visibility and same-user observation are trusted. Session identity is derived from detached PID/process-group ownership, and a numeric `ps`-snapshot-to-`killpg` reuse race remains.
+Providers run with the normal devbox user's filesystem and socket access. The `deny-all` permission profile governs ACP permission callbacks; it is not an operating-system sandbox. Provider helpers that detach from the recorded process group are outside Agency's cleanup ownership.
 
-Linux retains a numeric procfs-read-to-`killpg` reuse race because this increment adds no pidfd or native helper. `argv[0]` is visible and may be mutable by the process. A same-boot provider-null record can correspond to an unmanaged provider and remains quarantined until manual cleanup or a verified boot transition.
+Agency does not impose an artificial launch limit. Resource exhaustion is reported as an operating-system or provider failure. Durable histories are bounded per directory but are not automatically pruned.
 
-Neither platform has automatic provider death coupling. Providers have the normal devbox user's filesystem and socket access. Cleanup covers exact recorded process-group members; a descendant that deliberately creates a new session and escapes before observation is outside the guarantee. Provider compatibility must be qualified separately before a provider can rely on this contract.
+Provider restoration depends on native persisted session state and ACP `session/load`. It cannot restore an in-flight RPC, repair deleted provider state, or guarantee that a provider version can read state created by another version.
 
-## Handler-plan gate
+Darwin process identity remains subject to second-resolution start-time and numeric process-group reuse constraints. Linux retains a procfs-read-to-`killpg` reuse window because it uses no pidfd helper.
 
-Darwin: qualified. Linux: qualified. The subsequent Handler plan may consume this platform contract without expanding it. The qualification report is retained at `~/stripe/work/projects/devbox-agent-orchestration/agency-platform-foundation-20260923/report.md`.
+## Historical evidence
+
+Historical design plans and retained evidence describe earlier architectures and remain immutable; they are not production inputs. The platform foundation report remains at `~/stripe/work/projects/devbox-agent-orchestration/agency-platform-foundation-20260923/report.md`.
