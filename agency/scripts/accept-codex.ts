@@ -36,6 +36,9 @@ export type CodexAcceptanceReport = {
   failure: string | null
 }
 export type AcceptanceResult = { report: CodexAcceptanceReport; reportPath: string }
+type MutationRequest = Extract<AgentRequest, { op: "agent_start" | "agent_restore" | "agent_stop" }>
+type PromptRequest = Extract<AgentRequest, { op: "agent_prompt" }>
+type AcceptancePolling = { now(): number; sleep(ms: number): Promise<void> }
 
 function canonical(value: unknown): string {
   if (typeof value !== "string" || !isAbsolute(value) || normalize(value) !== value || value.length > 4096 || /[\x00-\x1f]/u.test(value)) throw new AgentError("INVALID_PROTOCOL")
@@ -79,6 +82,31 @@ function commandResult(view: CommandView, outcome: "started" | "restored" | "sto
 function generationFrom(view: CommandView, session: SessionEvidence, launchAttemptId: string, answer: string): AcceptanceGeneration {
   const target = view.command.target!
   return { agentId: target.agentId, providerGeneration: target.providerGeneration, launchAttemptId, sessionId: session.sessionId, sessionGeneration: session.sessionGeneration, answer }
+}
+export async function completeAcceptanceCommand(request: MutationRequest, handlerGeneration: string, call: (request: AgentRequest) => Promise<AgentReply>, polling: AcceptancePolling = { now: () => performance.now(), sleep: ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms)) }): Promise<CommandView> {
+  const deadline = polling.now() + 45000
+  let current: AgentRequest = request
+  while (polling.now() < deadline) {
+    let reply: AgentReply | undefined
+    try { reply = await call(current) }
+    catch (error) {
+      if (!(error instanceof AgentError) || error.code !== "INCOMPLETE" && error.code !== "UNAVAILABLE") throw error
+    }
+    if (reply) {
+      if (!reply.ok) throw new AgentError(reply.error.code)
+      if (reply.result.state !== "command") throw new AgentError("INVALID_PROTOCOL")
+      if (reply.result.command.state !== "pending" && reply.result.durability === "verified") return reply.result
+    }
+    current = { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_command", commandId: request.input.commandId, commandGeneration: handlerGeneration }
+    if (polling.now() < deadline) await polling.sleep(Math.min(100, deadline - polling.now()))
+  }
+  throw new AgentError("INCOMPLETE")
+}
+export async function completeAcceptancePrompt(request: PromptRequest, call: (request: AgentRequest, timeoutMs: number) => Promise<AgentReply>): Promise<PromptView> {
+  const reply = await call(request, 95000)
+  if (!reply.ok) throw new AgentError(reply.error.code)
+  if (reply.result.state !== "prompt") throw new AgentError("INVALID_PROTOCOL")
+  return reply.result
 }
 async function cleanupEvidence(lifecycle: AcceptanceLifecycle, stage: AcceptanceCleanup["stage"], target: AgentTuple): Promise<AcceptanceCleanup> {
   commandResult(await lifecycle.stop(target), "stopped")
@@ -127,28 +155,19 @@ async function productionLifecycle(): Promise<AcceptanceLifecycle> {
   const dependencies = productionControlDependencies(), environment = await dependencies.environment(), inspection = await dependencies.start(environment)
   if (inspection.disposition !== "live" || inspection.record.phase !== "ready" || !dependencies.callAgent) throw new AgentError("UNAVAILABLE")
   const handlerGeneration = inspection.record.generation
-  const call = async (request: AgentRequest): Promise<AgentReply> => {
-    const reply = await dependencies.callAgent!(environment, request, 5000)
+  const call = async (request: AgentRequest, timeoutMs = 5000): Promise<AgentReply> => {
+    const reply = await dependencies.callAgent!(environment, request, timeoutMs)
     if (!reply.ok) throw new AgentError(reply.error.code)
     return reply
   }
-  const complete = async (request: Extract<AgentRequest, { op: "agent_start" | "agent_restore" | "agent_stop" }>): Promise<CommandView> => {
-    let reply = await call(request), deadline = performance.now() + 45000
-    while (reply.ok && reply.result.state === "command" && (reply.result.command.state === "pending" || reply.result.durability !== "verified")) {
-      if (performance.now() >= deadline) throw new AgentError("INCOMPLETE")
-      await new Promise(resolveDelay => setTimeout(resolveDelay, 100))
-      reply = await call({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_command", commandId: request.input.commandId, commandGeneration: handlerGeneration })
-    }
-    if (!reply.ok || reply.result.state !== "command") throw new AgentError("INVALID_PROTOCOL")
-    return reply.result
-  }
+  const complete = (request: MutationRequest): Promise<CommandView> => completeAcceptanceCommand(request, handlerGeneration, call)
   const selection = { providerId: "codex-acp" as const, modelId: "gpt-5.6-sol", reasoning: { kind: "value" as const, value: "high" }, mode: "read-only", permissionProfile: "deny-all" }
   return {
     cwd: () => resolve(process.cwd()), snapshot: () => snapshotLaunchEnvironment(process.env),
     start: (cwd, launchEnvironment) => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_start", input: { commandId: randomUUID(), handlerGeneration, cwd, selection, environment: launchEnvironment } }),
     restore: (agentId, launchEnvironment) => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_restore", input: { commandId: randomUUID(), handlerGeneration, agentId, environment: launchEnvironment } }),
     stop: target => complete({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_stop", input: { ...target, commandId: randomUUID() } }),
-    async prompt(target, prompt) { const reply = await call({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_prompt", input: { ...target, text: prompt } }); if (!reply.ok || reply.result.state !== "prompt") throw new AgentError("INVALID_PROTOCOL"); return reply.result },
+    prompt: (target, prompt) => completeAcceptancePrompt({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_prompt", input: { ...target, text: prompt } }, call),
     async list() { const reply = await call({ protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration, op: "agent_list" }); if (!reply.ok || reply.result.state !== "agents") throw new AgentError("INVALID_PROTOCOL"); return reply.result },
   }
 }

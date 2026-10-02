@@ -2,10 +2,12 @@ import assert from "node:assert/strict"
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
-import { parseCodexAcceptanceReport, runCodexAcceptance, type AcceptanceLifecycle } from "../scripts/accept-codex.js"
+import { completeAcceptanceCommand, completeAcceptancePrompt, parseCodexAcceptanceReport, runCodexAcceptance, type AcceptanceLifecycle } from "../scripts/accept-codex.js"
+import { AGENT_PROTOCOL, type AgentRequest } from "../src/agent/protocol.js"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
 import { launchEnvironmentDigest } from "../src/agent/environment.js"
-import { agentHandlerFixture } from "./agent-support.js"
+import { AgentError } from "../src/agent/types.js"
+import { agentHandlerFixture, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
 
 async function fixture(t: Parameters<typeof agentHandlerFixture>[0], failure = "") {
   const handler = await agentHandlerFixture(t), environments: Record<string, string>[] = [], steps: string[] = []
@@ -22,6 +24,30 @@ async function fixture(t: Parameters<typeof agentHandlerFixture>[0], failure = "
   }
   return { handler, lifecycle, environments, steps }
 }
+
+test("production acceptance retries a timed-out mutation through its exact command identity", async () => {
+  const spec = sampleSpec(), pending = sampleCommand(), requests: AgentRequest[] = []
+  const completed = { ...pending, state: "completed" as const, result: { outcome: "started" as const, target: pending.target, failure: null, session: sampleSession() } }
+  const request = { protocol: AGENT_PROTOCOL, requestId: spec.commandId, handlerGeneration: spec.handlerGeneration, op: "agent_start" as const, input: { commandId: spec.commandId, handlerGeneration: spec.handlerGeneration, cwd: spec.cwd, selection: spec.selection, environment: {} } }
+  const result = await completeAcceptanceCommand(request, spec.handlerGeneration, async current => {
+    requests.push(current)
+    if (requests.length === 1) throw new AgentError("INCOMPLETE")
+    return { protocol: AGENT_PROTOCOL, requestId: current.requestId, handlerGeneration: spec.handlerGeneration, commandId: spec.commandId, ok: true, result: { state: "command", command: completed, durability: "verified" } }
+  }, { now: () => 0, sleep: async () => undefined })
+  assert.deepEqual(result.command, completed)
+  assert.deepEqual(requests.map(value => value.op), ["agent_start", "agent_command"])
+  assert.equal(requests[1]!.op === "agent_command" && requests[1]!.commandId, spec.commandId)
+})
+
+test("production acceptance permits the configured prompt deadline across the socket", async () => {
+  const spec = sampleSpec(), request = { protocol: AGENT_PROTOCOL, requestId: spec.commandId, handlerGeneration: spec.handlerGeneration, op: "agent_prompt" as const, input: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, text: "fixture" } }
+  const expected = { state: "prompt" as const, target: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, stopReason: "end_turn" as const, text: "answer" }
+  const result = await completeAcceptancePrompt(request, async (current, timeoutMs) => {
+    if (timeoutMs < 90000) throw new AgentError("INCOMPLETE")
+    return { protocol: AGENT_PROTOCOL, requestId: current.requestId, handlerGeneration: spec.handlerGeneration, ok: true, result: expected }
+  })
+  assert.deepEqual(result, expected)
+})
 
 test("diagnostic acceptance uses the ordinary lifecycle without creating authority", async t => {
   const f = await fixture(t), contracts = JSON.stringify(productionLaunchContracts()), config = await readFile(f.handler.configPath)
