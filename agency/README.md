@@ -20,6 +20,7 @@ agy agent start --provider <id> --model <id> --reasoning <value|none> [--mode <i
 agy agent restore <agent-uuid> [--command-id <uuid>] [--handler-generation <uuid>] [--json]
 agy agent current [--json]
 agy agent list [--json]
+agy agent prompt <agent-uuid> --text <text> --handler-generation <uuid> --provider-generation <uuid> [--json]
 agy agent stop <agent-uuid> --handler-generation <uuid> --provider-generation <uuid> [--command-id <uuid>] [--json]
 ```
 
@@ -27,9 +28,11 @@ Status lazily starts or connects to one Handler. Doctor inspects local state wit
 
 Command IDs and Handler generations make mutation retries exact. After an incomplete result, retry with the original command ID, generation, and input. Completed command receipts remain immutable, while current agent liveness is reported separately.
 
+Prompt submission is single-delivery because an ambiguous disconnect can occur after the Handler accepted the turn. `agent prompt` therefore reports the transport failure without resubmitting. The current Codex prompt transport window is 95 seconds: the 90-second provider prompt deadline, one second for transport closure, and four seconds of client transport grace.
+
 ## Control protocols
 
-Control commands return an `agency-control/1` envelope containing the request ID, selected Handler generation, success state, and result or bounded error. Agent operations use the separate `agency-agent/2` protocol. Internal sockets accept one bounded LF-terminated JSON request and return one bounded reply. Request IDs, command IDs, Handler generations, and provider generations are validated at the boundary.
+Control commands return an `agency-control/2` envelope containing the request ID, selected Handler generation, success state, and result or bounded error. Agent operations use the separate `agency-agent/2` protocol. Internal sockets accept one bounded LF-terminated JSON request and return one bounded reply. Request IDs, command IDs, Handler generations, and provider generations are validated at the boundary.
 
 Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable or stale targets, 70 for internal failure, and 75 for incomplete operations. Bootstrap failures before Node starts are stderr-only.
 
@@ -111,7 +114,7 @@ These suites use deterministic fixtures, private temporary roots, and owned loca
 
 Providers run with the normal devbox user's filesystem and socket access. The `deny-all` permission profile governs ACP permission callbacks; it is not an operating-system sandbox. Provider helpers that detach from the recorded process group are outside Agency's cleanup ownership.
 
-Agency does not impose an artificial launch limit. Resource exhaustion is reported as an operating-system or provider failure. Durable histories are bounded per directory but are not automatically pruned.
+Agency does not impose an agent-count or launch-count admission limit. Agent record and command inventory has no fixed entry-count limit, but other protocol and catalog payloads remain bounded. Durable histories are not automatically pruned; agent inventory cost and storage grow with retained history, and operating-system resource exhaustion is reported explicitly.
 
 Provider restoration depends on native persisted session state and ACP `session/load`. It cannot restore an in-flight RPC, repair deleted provider state, or guarantee that a provider version can read state created by another version.
 
