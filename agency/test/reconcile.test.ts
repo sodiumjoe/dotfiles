@@ -181,6 +181,18 @@ test("transient child exit between signal authorization snapshots retains cleanu
   assert.deepEqual(adapter.signals, ["SIGTERM"])
 })
 
+test("an exact live leader authorizes a new same-session child before SIGTERM", async t => {
+  const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+  const adapter = new FakeAdapter({ group: [leader], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+  let reads = 0
+  adapter.readGroup = async () => adapter.signals.length ? [] : ++reads === 1 ? [leader] : [leader, child]
+  const path = await recordFixture(t, record())
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "cleaned")
+  assert.deepEqual(adapter.signals, ["SIGTERM"])
+  assert.ok(result.record.provider?.group.observed.some(member => member.pid === child.pid))
+})
+
 test("expected inventory rejects a replaced record before any write or signal", async t => {
   const expected = record()
   const actual = { ...expected, checkoutId: "replacement" }

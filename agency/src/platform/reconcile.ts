@@ -235,7 +235,6 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   if (authorization.state === "empty") return discharge(path, adapter, pending, "released")
   if (authorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGTERM")
   await retain(authorization.observation)
-  if (authorization.state !== "authorized" || !membersRetained(initial.observation.members, authorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGTERM")
   await signal(adapter, pendingProvider.group.leader.processGroupId, "SIGTERM")
   const afterTerm = await pollContinuity(adapter, pendingProvider, TERM_DEADLINE_MS, retain)
   if (afterTerm.state === "empty") return discharge(path, adapter, pending, "cleaned")
