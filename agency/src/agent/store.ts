@@ -63,7 +63,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   async function names(path: string): Promise<string[]> {
     if (!await checkDirectory(path)) return []
     const result: string[] = []
-    for await (const entry of await opendir(path)) { if (result.length >= 4096) unavailable(); result.push(entry.name) }
+    for await (const entry of await opendir(path)) result.push(entry.name)
     return result.sort()
   }
   async function inventory(): Promise<AgentInventory> {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { chmod, link, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -9,8 +10,8 @@ import { MutationQueue } from "../src/handler/mutations.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord } from "../src/platform/types.js"
 import type { CatalogFileSystem } from "../src/catalog/store.js"
-import { agentFailure, AgentError, type AgentCommand } from "../src/agent/types.js"
-import { agentId, sampleAgent, sampleCommand, sampleSession } from "./agent-support.js"
+import { agentFailure, AgentError, splitLaunchSpec, type AgentCommand, type AgentRecord } from "../src/agent/types.js"
+import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
 import { privateRoot } from "./control-support.js"
 
 const filesystem = { open, rename, rm, mkdir }
@@ -79,6 +80,39 @@ test("command intent and completed result are immutable across exact retries", a
   await assert.rejects(store.writeCommand(initial, completed))
   await assert.rejects(store.writeCommand({ ...completed, result: { ...completed.result!, outcome: "failed", failure: agentFailure(new AgentError("STARTUP_FAILED")) } }, completed))
   assert.deepEqual(await store.readCommand(initial.commandId), completed)
+})
+
+for (const kind of ["commands", "records"] as const) test(`retained ${kind} history above 4096 entries remains serviceable`, async t => {
+  const root = await privateRoot(t), directory = join(root, `agents/${kind}`)
+  await mkdir(join(root, "agents"), { mode: 0o700 })
+  await mkdir(directory, { mode: 0o700 })
+  const commandWithId = (commandId: string, completed: boolean): AgentCommand => {
+    const command = sampleCommand(), input = { ...command.input, commandId }
+    return completed ? { ...command, commandId, input, state: "completed", result: { outcome: "started", target: command.target, failure: null, session: sampleSession() } } : { ...command, commandId, input }
+  }
+  const record = (): AgentRecord => {
+    const commandId = randomUUID()
+    return { version: 2, ...splitLaunchSpec(sampleSpec({ agentId: randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId, createdCommandId: commandId })), phase: "starting", session: null, failure: null }
+  }
+  const retained = Array.from({ length: 4097 }, () => kind === "commands" ? commandWithId(randomUUID(), true) : record())
+  for (const value of retained) {
+    const id = kind === "commands" ? (value as AgentCommand).commandId : (value as AgentRecord).definition.agentId
+    await writeFile(join(directory, id + ".json"), JSON.stringify(value), { mode: 0o600 })
+  }
+  const malformed = join(directory, "malformed")
+  await writeFile(malformed, "retained", { mode: 0o600 })
+  const store = createAgentStore(root), inventory = await store.inventory()
+  assert.equal(kind === "commands" ? inventory.commands.length : inventory.agents.length, 4097)
+  assert.deepEqual(inventory.issues.map(issue => issue.path), [malformed])
+  if (kind === "commands") {
+    const next = commandWithId(randomUUID(), false)
+    await store.writeCommand(next, null)
+    assert.deepEqual(await store.readCommand(next.commandId), next)
+  } else {
+    const next = record()
+    await store.writeAgent(next, null)
+    assert.deepEqual(await store.readAgent(next.definition.agentId), next)
+  }
 })
 
 test("agent inventory retains healthy records beside malformed entries and clears repaired issues", async t => {
