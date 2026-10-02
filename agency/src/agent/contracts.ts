@@ -6,7 +6,7 @@ import { staticProductionContracts } from "./production-contracts.js"
 
 export type ContractDeadlines = { commandMs: number; spawnMs: number; initializeMs: number; sessionMs: number; optionMs: number; promptMs: number; transportCloseMs: number; processTerminateMs: number; absenceMs: number; overallMs: number }
 export type LaunchContract = { id: string; providerId: ProviderId; adapterPackage: string; adapterVersion: string; sessionLoad: boolean; modes: Capability; reasoning: Capability; effectiveMode: string | null; permissionProfiles: string[]; modelOption: string; reasoningOption: string | null; modeOption: string | null; permissionEvidence: PermissionEvidence; deadlines: ContractDeadlines }
-export type ConfiguredLaunchContract = LaunchContract & { entrypoint: string; fingerprint: string }
+export type ConfiguredLaunchContract = LaunchContract & { entrypoint: string; executable: string; fingerprint: string }
 
 const deadlineKeys = ["commandMs", "spawnMs", "initializeMs", "sessionMs", "optionMs", "promptMs", "transportCloseMs", "processTerminateMs", "absenceMs", "overallMs"] as const
 function parseDeadlines(input: unknown): ContractDeadlines {
@@ -35,18 +35,18 @@ export function parseLaunchContract(input: unknown): LaunchContract {
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }
 
-export function launchContractFingerprint(input: LaunchContract & { entrypoint: string }, configurationFingerprint: string): string {
-  const { entrypoint, ...candidate } = input as ConfiguredLaunchContract
+export function launchContractFingerprint(input: LaunchContract & { entrypoint: string; executable: string }, configurationFingerprint: string): string {
+  const { entrypoint, executable, ...candidate } = input as ConfiguredLaunchContract
   delete (candidate as Partial<ConfiguredLaunchContract>).fingerprint
-  return digest(JSON.stringify([parseLaunchContract(candidate), hash(configurationFingerprint), absolutePath(entrypoint)]))
+  return digest(JSON.stringify([parseLaunchContract(candidate), hash(configurationFingerprint), absolutePath(entrypoint), absolutePath(executable)]))
 }
 
 export function parseConfiguredLaunchContract(input: unknown): ConfiguredLaunchContract {
   try {
     const v = object(input)
-    keys(v, ["id", "providerId", "adapterPackage", "adapterVersion", "sessionLoad", "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "permissionEvidence", "deadlines", "entrypoint", "fingerprint"])
-    const contract = parseLaunchContract(Object.fromEntries(Object.entries(v).filter(([key]) => key !== "entrypoint" && key !== "fingerprint")))
-    return { ...contract, entrypoint: absolutePath(v.entrypoint), fingerprint: hash(v.fingerprint) }
+    keys(v, ["id", "providerId", "adapterPackage", "adapterVersion", "sessionLoad", "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "permissionEvidence", "deadlines", "entrypoint", "executable", "fingerprint"])
+    const contract = parseLaunchContract(Object.fromEntries(Object.entries(v).filter(([key]) => !["entrypoint", "executable", "fingerprint"].includes(key))))
+    return { ...contract, entrypoint: absolutePath(v.entrypoint), executable: absolutePath(v.executable), fingerprint: hash(v.fingerprint) }
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }
 
@@ -54,7 +54,7 @@ export async function configureLaunchContract(input: LaunchContract, profile: Pr
   try {
     const contract = parseLaunchContract(input)
     if (!profile.enabled || profile.id !== contract.providerId || configuration.providerId !== contract.providerId || configuration.adapterVersion !== contract.adapterVersion || configuration.sdkVersion !== null || contract.adapterPackage !== `@agentclientprotocol/${profile.id}`) throw new Error()
-    const configured = { ...contract, entrypoint: await adapterEntry(profile) }
+    const configured = { ...contract, entrypoint: await adapterEntry(profile), executable: absolutePath(profile.executable) }
     return { ...configured, fingerprint: launchContractFingerprint(configured, configuration.fingerprint) }
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }

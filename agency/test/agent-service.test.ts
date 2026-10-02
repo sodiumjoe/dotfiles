@@ -47,7 +47,7 @@ for (const crashed of [false, true]) test(`restore retains identity and rotates 
   assert.notEqual(restored.launch.launchAttemptId, before.launch.launchAttemptId)
   assert.notEqual(restored.launch.commandId, before.launch.commandId)
   assert.equal(f.spawnOptions.at(-1)!.cwd, before.definition.cwd)
-  assert.deepEqual(f.spawnOptions.at(-1)!.env, restoringEnvironment)
+  assert.deepEqual(f.spawnOptions.at(-1)!.env, { ...restoringEnvironment, CODEX_PATH: f.profile.executable })
   assert.deepEqual(f.methodHistory.filter(method => method === "session/new" || method === "session/load"), ["session/new", "session/load"])
   assert.equal(JSON.stringify(done).includes("new-secret"), false)
   await assert.rejects(service.restore({ ...request, environment: { SECRET: "changed" } }), { code: "COMMAND_CONFLICT" })

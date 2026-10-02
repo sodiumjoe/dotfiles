@@ -5,13 +5,13 @@ import { join } from "node:path"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { syntheticAgentProcess } from "./agent-support.js"
 
-test("agent process publishes a managed launch and spawns in the exact caller directory and environment", async t => {
+test("agent process publishes a managed launch and spawns in the exact caller directory with profile-derived adapter routing", async t => {
   const f = await syntheticAgentProcess(t, "normal")
   const session = await f.owner.initialize(new AbortController().signal)
   assert.equal(session.sessionId, "fixture-session")
   const options = f.options()!
   assert.equal(options.cwd, f.spec.cwd)
-  assert.deepEqual(options.env, { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved" })
+  assert.deepEqual(options.env, { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved", CODEX_PATH: "/fixture/codex" })
   const launch = await f.record()
   assert.equal(launch.version, 2)
   if (launch.version !== 2 || launch.owner.kind !== "agent") throw new Error("wrong launch owner")

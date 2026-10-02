@@ -31,6 +31,7 @@ test("session load support is a static boolean capability", () => {
 test("configured contracts resolve the declared package entry without qualification evidence", async t => {
   const f = await configured(t), contract = await configureLaunchContract(sampleStaticContract(), f.profile, f.configuration)
   assert.equal(contract.entrypoint, join(f.directory, "dist/index.js"))
+  assert.equal(contract.executable, f.profile.executable)
   assert.match(contract.fingerprint, /^[0-9a-f]{64}$/)
   assert.equal(await observeLaunchContract(contract, f.configuration.fingerprint), contract.fingerprint)
   const json = JSON.stringify(contract)
@@ -94,10 +95,11 @@ test("contract and evidence disagreement cannot authorize a launch", () => {
   ]) { const value = input(); mutate(value); assert.throws(() => resolveLaunchSpec(value)) }
 })
 
-test("launch fingerprints bind static policy and configured entrypoint", async t => {
+test("launch fingerprints bind static policy, configured entrypoint, and executable", async t => {
   const f = await configured(t), contract = await configureLaunchContract(sampleStaticContract(), f.profile, f.configuration)
   assert.equal(contract.fingerprint, await observeLaunchContract(contract, f.configuration.fingerprint))
   assert.notEqual(contract.fingerprint, await observeLaunchContract({ ...contract, permissionProfiles: ["other"] }, f.configuration.fingerprint))
+  assert.notEqual(contract.fingerprint, await observeLaunchContract({ ...contract, executable: join(f.directory, "other-codex") }, f.configuration.fingerprint))
   await rename(contract.entrypoint, contract.entrypoint + "-old")
   await writeFile(contract.entrypoint, "throw new Error('must not import')", { mode: 0o600 })
   assert.equal(contract.fingerprint, await observeLaunchContract(contract, f.configuration.fingerprint))

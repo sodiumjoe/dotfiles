@@ -65,7 +65,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
   }
   const spawnOptions: SpawnOptions = {
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
-    env: { ...parseLaunchEnvironment(input.environment) },
+    env: { ...parseLaunchEnvironment(input.environment), CODEX_PATH: contract.executable },
   }
   const observe = async (): Promise<{ leader: ProcessIdentity; observed: ProcessIdentity[] }> => {
     if (!child?.pid) throw new AgentError("STARTUP_FAILED")

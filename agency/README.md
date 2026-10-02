@@ -39,13 +39,13 @@ Production launch authority comes from static code-owned ACP capability declarat
 
 The Codex declaration supports `@agentclientprotocol/codex-acp` 1.7.0, model option `model`, reasoning option `reasoning_effort`, mode option `mode`, `high`, `read-only`, `deny-all`, and `session/load`. Start and restore use this same declaration.
 
-The configured provider profile supplies the ambient native executable, adapter package metadata, and declared configuration paths. Agency requires the adapter package name and version to match the declaration, resolves the package's relative `main`, and observes one stable canonical regular entrypoint. The configuration fingerprint includes that entrypoint's physical identity and bounded bytes. Missing, escaping, absolute, symlinked, or replaced entrypoints fail the affected launch before provider startup.
+The configured provider profile supplies the ambient native executable, adapter package metadata, and declared configuration paths. Agency requires the adapter package name and version to match the declaration, resolves the package's relative `main`, and observes one stable canonical regular entrypoint. The configured launch contract and its fingerprint bind both the adapter entrypoint and the profile's native executable. Missing, escaping, absolute, symlinked, or replaced entrypoints fail the affected launch before provider startup.
 
 A currently valid profile, catalog snapshot, and matching static declaration are sufficient to attempt a launch. Runtime failures do not revoke or mutate the declaration. Unsupported selections, unavailable profiles, and configuration drift fail only the command that encountered them.
 
 ## Agent lifecycle
 
-`agent start` snapshots the invoking CLI's environment and passes it to the provider unchanged. This includes `HOME`, XDG paths, credentials, cache paths, Git variables, and provider-specific configuration. Agency does not merge the long-running Handler's environment into the request. Durable state stores only a deterministic environment digest, so exact retries can reject changed input without retaining environment values.
+`agent start` snapshots the invoking CLI's environment and passes it to the provider without merging the long-running Handler's environment. This includes `HOME`, XDG paths, credentials, cache paths, Git variables, and provider-specific configuration. At adapter spawn, Agency sets `CODEX_PATH` to the selected profile's native executable so `codex-acp` uses the same authenticated executable as catalog discovery; every other caller environment value remains unchanged. Durable state stores only a deterministic environment digest, so exact retries can reject changed input without retaining environment values.
 
 The working directory is persisted as launch metadata but is not an ownership boundary. `agent current` returns every live agent whose stored directory string exactly equals the invoking CLI's absolute directory. `agent list` includes stopped, failed, interrupted, recoverable, cleanup-uncertain, and legacy records.
 
