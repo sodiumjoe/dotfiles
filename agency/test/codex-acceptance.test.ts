@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
 import { completeAcceptanceCommand, completeAcceptancePrompt, parseCodexAcceptanceReport, runCodexAcceptance, type AcceptanceLifecycle } from "../scripts/accept-codex.js"
-import { AGENT_PROTOCOL, type AgentRequest } from "../src/agent/protocol.js"
+import { AGENT_PROTOCOL, agentExchangeTimeout, type AgentRequest } from "../src/agent/protocol.js"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
 import { launchEnvironmentDigest } from "../src/agent/environment.js"
 import { AgentError } from "../src/agent/types.js"
@@ -42,11 +42,13 @@ test("production acceptance retries a timed-out mutation through its exact comma
 test("production acceptance permits the configured prompt deadline across the socket", async () => {
   const spec = sampleSpec(), request = { protocol: AGENT_PROTOCOL, requestId: spec.commandId, handlerGeneration: spec.handlerGeneration, op: "agent_prompt" as const, input: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, text: "fixture" } }
   const expected = { state: "prompt" as const, target: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, stopReason: "end_turn" as const, text: "answer" }
+  let timeout = 0
   const result = await completeAcceptancePrompt(request, async (current, timeoutMs) => {
-    if (timeoutMs < 90000) throw new AgentError("INCOMPLETE")
+    timeout = timeoutMs
     return { protocol: AGENT_PROTOCOL, requestId: current.requestId, handlerGeneration: spec.handlerGeneration, ok: true, result: expected }
   })
   assert.deepEqual(result, expected)
+  assert.equal(timeout, agentExchangeTimeout(request))
 })
 
 test("diagnostic acceptance uses the ordinary lifecycle without creating authority", async t => {

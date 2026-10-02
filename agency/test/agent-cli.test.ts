@@ -179,6 +179,44 @@ test("stop dispatch pins the exact provider tuple without lazy startup or cwd ac
   assert.equal(f.starts(), 0); assert.equal(f.calls.length, 1)
 })
 
+test("agent prompt sends one pinned turn with the production deadline", async () => {
+  const f = fixture(), target = sampleAgent().launch, calls: AgentRequest[] = [], timeouts: number[] = []
+  f.deps.start = async () => { throw new Error("prompt must not start a Handler") }
+  f.deps.cwd = () => { throw new Error("prompt must not read cwd") }
+  f.deps.callAgent = async (_environment, request, timeoutMs) => {
+    calls.push(request); timeouts.push(timeoutMs!)
+    if (request.op !== "agent_prompt") throw new Error("unexpected request")
+    return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ok: true, result: { state: "prompt", target: { agentId: request.input.agentId, handlerGeneration: request.input.handlerGeneration, providerGeneration: request.input.providerGeneration }, stopReason: "end_turn", text: "answer" } }
+  }
+  assert.equal(await runControl(["agent", "prompt", agentId(1), "--text", "--literal\nline two", "--handler-generation", target.handlerGeneration, "--provider-generation", target.providerGeneration, "--json"], f.deps), 0)
+  assert.deepEqual(calls.map(call => call.op), ["agent_prompt"])
+  assert.deepEqual(timeouts, [95000])
+  assert.equal(f.starts(), 0)
+  assert.deepEqual(f.output().result, { state: "prompt", target: { agentId: agentId(1), handlerGeneration: target.handlerGeneration, providerGeneration: target.providerGeneration }, stopReason: "end_turn", text: "answer" })
+})
+
+test("agent prompt does not retry an ambiguous transport failure", async () => {
+  const f = fixture(), target = sampleAgent().launch
+  f.deps.callAgent = async (_environment, request) => { f.calls.push(request); throw new AgentError("INCOMPLETE") }
+  assert.equal(await runControl(["agent", "prompt", agentId(1), "--text", "challenge", "--handler-generation", target.handlerGeneration, "--provider-generation", target.providerGeneration, "--json"], f.deps), 75)
+  assert.deepEqual(f.calls.map(call => call.op), ["agent_prompt"])
+  assert.equal(f.output().error.code, "INCOMPLETE")
+  assert.equal(f.starts(), 0)
+})
+
+for (const args of [
+  ["agent", "prompt", agentId(1), "--handler-generation", agentId(2), "--provider-generation", agentId(3)],
+  ["agent", "prompt", agentId(1), "--text", "", "--handler-generation", agentId(2), "--provider-generation", agentId(3)],
+  ["agent", "prompt", agentId(1), "--text", "challenge", "--handler-generation", agentId(2)],
+  ["agent", "prompt", agentId(1), "--text", "challenge", "--provider-generation", agentId(3)],
+  ["agent", "prompt", agentId(1), "--text", "challenge", "--handler-generation", agentId(2), "--provider-generation", agentId(3), "--command-id", agentId(6)],
+  ["agent", "prompt", agentId(1), "--text", "challenge", "--handler-generation", agentId(2), "--provider-generation", agentId(3), "--model", "model-a"],
+] as const) test(`agent prompt rejects incomplete or extra authority: ${args.join(" ")}`, async () => {
+  const f = fixture()
+  assert.equal(await runControl(args, f.deps), 64)
+  assert.deepEqual(f.calls, [])
+})
+
 test("a pinned lookup cannot create an unknown command or change retained selections", async () => {
   const f = fixture()
   assert.equal(await runControl(["agent", "start", ...flags, "--command-id", agentId(91), "--handler-generation", agentId(2)], f.deps), 69)

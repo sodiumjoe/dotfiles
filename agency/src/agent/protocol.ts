@@ -7,6 +7,7 @@ import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
 import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentFailure, parseAgentRecord, parseLegacyAgentRecord, parsePromptInput, parsePromptView, parseStartInput, parseStopInput, projectStartInput, type AgentFailure, type AgentList, type AgentView, type LegacyAgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput } from "./types.js"
 import type { AgentStateIssue } from "./store.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
+import { PRODUCTION_PROMPT_TRANSPORT_MS } from "./production-contracts.js"
 
 export const AGENT_PROTOCOL = "agency-agent/2" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (
@@ -132,7 +133,8 @@ export function agentErrorReply(request: AgentRequest | Pick<AgentReply, "reques
   if (error instanceof ControlError) error = new AgentError(error.code === "ACTIVE_AGENTS" ? "INCOMPLETE" : error.code)
   return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ...(commandId ? { commandId } : {}), ok: false, error: agentFailure(error) }
 }
-export async function exchangeAgent(socket: Socket, request: AgentRequest, timeoutMs = 5000): Promise<AgentReply> {
+export function agentExchangeTimeout(request: AgentRequest): number { return request.op === "agent_prompt" ? PRODUCTION_PROMPT_TRANSPORT_MS : 5000 }
+export async function exchangeAgent(socket: Socket, request: AgentRequest, timeoutMs = agentExchangeTimeout(request)): Promise<AgentReply> {
   try {
     const frame = encodeFrame(parseAgentRequest(request)), incoming = receiveFrame(socket, timeoutMs)
     socket.end(frame)

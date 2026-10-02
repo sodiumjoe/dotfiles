@@ -5,7 +5,7 @@ import { isAbsolute, join, normalize, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
 import { launchEnvironmentDigest, snapshotLaunchEnvironment, type LaunchEnvironment } from "../src/agent/environment.js"
-import { AGENT_PROTOCOL, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
+import { AGENT_PROTOCOL, agentExchangeTimeout, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { AgentError, type AgentList, type AgentTuple, type CommandView, type PromptView, type SessionEvidence } from "../src/agent/types.js"
 import { hash, id, keys, object, text } from "../src/catalog/types.js"
 import { productionControlDependencies } from "../src/cli/control.js"
@@ -103,7 +103,7 @@ export async function completeAcceptanceCommand(request: MutationRequest, handle
   throw new AgentError("INCOMPLETE")
 }
 export async function completeAcceptancePrompt(request: PromptRequest, call: (request: AgentRequest, timeoutMs: number) => Promise<AgentReply>): Promise<PromptView> {
-  const reply = await call(request, 95000)
+  const reply = await call(request, agentExchangeTimeout(request))
   if (!reply.ok) throw new AgentError(reply.error.code)
   if (reply.result.state !== "prompt") throw new AgentError("INVALID_PROTOCOL")
   return reply.result

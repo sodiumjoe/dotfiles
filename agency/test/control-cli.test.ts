@@ -125,11 +125,12 @@ test("doctor identifies a damaged catalog root by its actual path", async t => {
   assert.deepEqual(m.output().result.issues, [{ source: "catalog", path: join(root, "catalog"), message: "catalog" }])
 })
 
-test("help documents restore and list-valued current", async () => {
+test("help documents restore, prompt, and list-valued current", async () => {
   const m = model()
   assert.equal(await runControl(["help", "--json"], m.deps), 0)
   const commands: string[] = m.output().result.commands
   assert.ok(commands.some(command => command.startsWith("agent restore ")))
+  assert.ok(commands.includes("agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]"))
   assert.ok(commands.some(command => command.startsWith("agent current") && command.includes("list")))
 })
 

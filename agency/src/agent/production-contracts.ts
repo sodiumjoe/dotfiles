@@ -17,5 +17,6 @@ const codex: LaunchContract = Object.freeze({
   deadlines: Object.freeze({ commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 }),
 })
 const contracts = Object.freeze([codex])
+export const PRODUCTION_PROMPT_TRANSPORT_MS = Math.max(...contracts.map(contract => contract.deadlines.promptMs + contract.deadlines.transportCloseMs + 4000))
 
 export function staticProductionContracts(): readonly LaunchContract[] { return contracts }

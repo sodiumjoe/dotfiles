@@ -3,7 +3,8 @@ import test from "node:test"
 import { createConnection, createServer } from "node:net"
 import { join } from "node:path"
 import { readdir } from "node:fs/promises"
-import { AGENT_PROTOCOL, agentErrorReply, exchangeAgent, parseAgentReply, parseAgentRequest, validateAgentReply, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
+import { AGENT_PROTOCOL, agentErrorReply, agentExchangeTimeout, exchangeAgent, parseAgentReply, parseAgentRequest, validateAgentReply, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
+import { PRODUCTION_PROMPT_TRANSPORT_MS } from "../src/agent/production-contracts.js"
 import { AgentError, parsePromptInput, type PromptView } from "../src/agent/types.js"
 import { projectRestoreInput } from "../src/agent/types.js"
 import { parseRequest, parseReply } from "../src/control/protocol.js"
@@ -13,6 +14,13 @@ import { agentId, sampleAgent, sampleCommand, sampleSpec, sampleSession } from "
 
 const request = (): AgentRequest => ({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_start", input: { commandId: agentId(6), handlerGeneration: agentId(2), cwd: "/workspace/a", selection: sampleSpec().selection, environment: {} } })
 const response = (r: AgentRequest): AgentReply => ({ protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: agentId(6), ok: true, result: { state: "command", command: sampleCommand(), durability: "verified" } })
+
+test("agent prompt transport uses the production contract deadline plus close grace", () => {
+  const spec = sampleSpec(), prompt: AgentRequest = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: spec.handlerGeneration, op: "agent_prompt", input: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, text: "challenge" } }
+  assert.equal(PRODUCTION_PROMPT_TRANSPORT_MS, 95000)
+  assert.equal(agentExchangeTimeout(prompt), 95000)
+  assert.equal(agentExchangeTimeout(request()), 5000)
+})
 
 test("restore framing projects secrets to a digest and rejects cwd or authority injection", () => {
   const input = { commandId: agentId(40), handlerGeneration: agentId(2), agentId: agentId(1), environment: { SECRET: "ephemeral" } }
