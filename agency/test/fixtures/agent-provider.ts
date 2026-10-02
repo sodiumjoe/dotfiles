@@ -1,4 +1,4 @@
-import { access, appendFile, writeFile } from "node:fs/promises"
+import { access, appendFile, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 const root = process.env.FIXTURE_ROOT
@@ -48,7 +48,14 @@ process.stdin.on("data", (chunk: Buffer) => {
       } else if (request.method === "session/prompt") {
         if (request.params.sessionId !== "fixture-session" || request.params.prompt?.length !== 1 || request.params.prompt[0]?.type !== "text") throw new Error("wrong prompt")
         await barrier("prompt")
-        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${request.params.prompt[0].text}` } } } })
+        const prompt = request.params.prompt[0].text as string
+        let answer = `answer:${prompt}`
+        if (prompt.startsWith("AGENCY_ACCEPTANCE_READ ")) {
+          const challenge = prompt.slice("AGENCY_ACCEPTANCE_READ ".length).split(":", 1)[0]!
+          await writeFile(join(root, "acceptance-session"), challenge, { mode: 0o600 })
+          answer = `${challenge} @moon/agency 24.13.0`
+        } else if (prompt.startsWith("AGENCY_ACCEPTANCE_RECALL:")) answer = await readFile(join(root, "acceptance-session"), "utf8")
+        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } })
         result = { stopReason: "end_turn" }
       } else throw new Error("unexpected fixture request")
       send({ jsonrpc: "2.0", id: request.id, result })

@@ -4,7 +4,7 @@ import { PassThrough, Writable } from "node:stream"
 import { createAcpConnection } from "../src/agent/acp.js"
 import type { PromptResult } from "../src/agent/types.js"
 import { splitLaunchSpec } from "../src/agent/types.js"
-import { sampleAgent, sampleContract, sampleSpec, sampleQualifiedContract, sampleQualifiedSpec, scriptedAcp } from "./agent-support.js"
+import { sampleAgent, sampleContract, sampleSpec, sampleProductionContract, sampleProductionSpec, scriptedAcp } from "./agent-support.js"
 
 test("ACP returns the bounded text answer from one successful prompt turn", async t => {
   const peer = scriptedAcp(t, "fragmented", { prompt(request, send) {
@@ -266,13 +266,13 @@ test("ACP applies the 90 second prompt deadline", async t => {
   await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
 })
 
-for (const qualified of [false, true]) test(`ACP starts a fresh prompt deadline after startup expiry with qualified=${qualified}`, async t => {
+for (const production of [false, true]) test(`ACP starts a fresh prompt deadline after startup expiry with production=${production}`, async t => {
   let now = 0
-  const peer = scriptedAcp(t, "exact", { qualified, prompt() {} })
+  const peer = scriptedAcp(t, "exact", { productionContract: production, prompt() {} })
   peer.connection.close()
   const connection = createAcpConnection({ readable: peer.readable, writable: peer.writable, limits: sampleSpec().limits, deadline: 100, now: () => now })
   t.after(() => connection.close())
-  await connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(qualified ? sampleQualifiedSpec() : sampleSpec()) }, qualified ? sampleQualifiedContract() : sampleContract(), { kind: "new" }, new AbortController().signal)
+  await connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(production ? sampleProductionSpec() : sampleSpec()) }, production ? sampleProductionContract() : sampleContract(), { kind: "new" }, new AbortController().signal)
   now = 101
   t.mock.timers.enable({ apis: ["setTimeout"] })
   let settled = false
@@ -286,14 +286,14 @@ for (const qualified of [false, true]) test(`ACP starts a fresh prompt deadline 
   await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
 })
 
-test("ACP qualification overall deadline still caps a fresh prompt deadline", async t => {
+test("ACP configured-contract overall deadline still caps a fresh prompt deadline", async t => {
   let now = 0
-  const peer = scriptedAcp(t, "exact", { qualified: true, prompt() {} })
+  const peer = scriptedAcp(t, "exact", { productionContract: true, prompt() {} })
   peer.connection.close()
   const options = { readable: peer.readable, writable: peer.writable, limits: sampleSpec().limits, deadline: 100, overallDeadline: 200, now: () => now }
   const connection = createAcpConnection(options)
   t.after(() => connection.close())
-  await connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal)
+  await connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal)
   now = 101
   t.mock.timers.enable({ apis: ["setTimeout"] })
   let settled = false
@@ -307,13 +307,13 @@ test("ACP qualification overall deadline still caps a fresh prompt deadline", as
   await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
 })
 
-test("ACP refuses an expired qualification prompt before writing", async t => {
+test("ACP refuses an expired configured-contract prompt before writing", async t => {
   let now = 0
-  const peer = scriptedAcp(t, "exact", { qualified: true, prompt() {} })
+  const peer = scriptedAcp(t, "exact", { productionContract: true, prompt() {} })
   peer.connection.close()
   const connection = createAcpConnection({ readable: peer.readable, writable: peer.writable, limits: sampleSpec().limits, deadline: 100, overallDeadline: 200, now: () => now })
   t.after(() => connection.close())
-  await connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal)
+  await connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal)
   now = 201
   await assert.rejects(connection.prompt("challenge", new AbortController().signal), { code: "STARTUP_TIMEOUT" })
   assert.equal(peer.sent.some(request => request.method === "session/prompt"), false)
@@ -336,11 +336,11 @@ for (const field of ["kind", "status", "optionKind", "priority", "planStatus"] a
 
 test("configured ACP uses promptMs without widening to overallMs", async t => {
   let now = 0
-  const contract = sampleQualifiedContract()
+  const contract = sampleProductionContract()
   assert.equal(contract.deadlines.promptMs, 90000)
   assert.equal(contract.deadlines.overallMs, 150000)
-  const peer = scriptedAcp(t, "exact", { qualified: true, prompt() {}, now: () => now })
-  await peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, contract, { kind: "new" }, new AbortController().signal)
+  const peer = scriptedAcp(t, "exact", { productionContract: true, prompt() {}, now: () => now })
+  await peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, contract, { kind: "new" }, new AbortController().signal)
   t.mock.timers.enable({ apis: ["setTimeout"] })
   let settled = false
   const pending = peer.connection.prompt("challenge", new AbortController().signal)
@@ -484,9 +484,9 @@ test("ACP cancels the pinned adapter permission shape before failing the prompt"
   assert.deepEqual(peer.permissionReplies, [{ jsonrpc: "2.0", id: "permission-1", result: { outcome: { outcome: "cancelled" } } }])
 })
 
-test("production evidence follows the qualified contract without widening ACP", async t => {
-  const peer = scriptedAcp(t, "exact", { qualified: true })
-  const session = await peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal)
+test("production evidence follows the production contract without widening ACP", async t => {
+  const peer = scriptedAcp(t, "exact", { productionContract: true })
+  const session = await peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal)
   assert.equal(session.permissionProfile, "deny-all")
   assert.equal(session.permissionEvidence, "agency-deny-all-v1")
   assert.deepEqual(peer.sent.map(value => value.method), ["initialize", "session/new", "session/set_config_option", "session/set_config_option", "session/set_config_option"])
@@ -497,21 +497,21 @@ test("production evidence follows the qualified contract without widening ACP", 
   ])
 })
 
-test("qualified permission callback is cancelled before startup fails", async t => {
-  const peer = scriptedAcp(t, "permission", { qualified: true })
-  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal), { code: "PERMISSION_UNSUPPORTED" })
+test("production permission callback is cancelled before startup fails", async t => {
+  const peer = scriptedAcp(t, "permission", { productionContract: true })
+  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal), { code: "PERMISSION_UNSUPPORTED" })
   assert.deepEqual(peer.permissionReplies, [{ jsonrpc: "2.0", id: "request-1", result: { outcome: { outcome: "cancelled" } } }])
   assert.deepEqual(peer.sent.map(value => value.method), ["initialize", "session/new", "session/set_config_option"])
 })
 
-test("the remaining overall budget only tightens qualified RPC deadlines", async t => {
+test("the remaining overall budget only tightens production RPC deadlines", async t => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 0 })
-  const peer = scriptedAcp(t, "hang", { qualified: true })
+  const peer = scriptedAcp(t, "hang", { productionContract: true })
   peer.connection.close()
   const connection = createAcpConnection({ readable: peer.readable, writable: peer.writable, limits: sampleSpec().limits, deadline: 2000, now: () => Date.now() })
   t.after(() => connection.close())
   let settled = false
-  const pending = connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal)
+  const pending = connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal)
   void pending.then(() => { settled = true }, () => { settled = true })
   t.mock.timers.tick(1999)
   await new Promise(resolve => setImmediate(resolve))
@@ -525,8 +525,8 @@ test("the remaining overall budget only tightens qualified RPC deadlines", async
 test("a session response after its deadline cannot win before the timer callback runs", async t => {
   let now = performance.now()
   t.mock.method(performance, "now", () => now)
-  const peer = scriptedAcp(t, "exact", { qualified: true, hold: 2 })
-  const pending = peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal)
+  const peer = scriptedAcp(t, "exact", { productionContract: true, hold: 2 })
+  const pending = peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal)
   await new Promise(resolve => setImmediate(resolve))
   now += 15000
   peer.send({ jsonrpc: "2.0", id: 2, result: { sessionId: "fixture-session", configOptions: [
@@ -539,17 +539,17 @@ test("a session response after its deadline cannot win before the timer callback
 })
 
 for (const [boundary, changed] of [[3, "model"], [4, "reasoning_effort"], [4, "model"], [5, "mode"], [5, "model"], [5, "reasoning_effort"]] as const) test(`ACP rejects substituted selected prefix at ${boundary}: ${changed}`, async t => {
-  const peer = scriptedAcp(t, "exact", { qualified: true, response(request, reply) {
+  const peer = scriptedAcp(t, "exact", { productionContract: true, response(request, reply) {
     if (request.id === boundary) reply.result.configOptions = reply.result.configOptions.map((option: any) => option.id === changed ? { ...option, currentValue: "substitute" } : option)
     return reply
   } })
-  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
+  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
   assert.equal(peer.sent.length, boundary)
 })
 
 for (const boundary of [3, 4, 5]) test(`unsolicited options cannot repair a substituted response at ${boundary}`, async t => {
   let correct: unknown
-  const peer = scriptedAcp(t, "exact", { qualified: true, response(request, reply) {
+  const peer = scriptedAcp(t, "exact", { productionContract: true, response(request, reply) {
     if (request.id === boundary) {
       correct = structuredClone(reply.result.configOptions)
       reply.result.configOptions = reply.result.configOptions.map((option: any) => option.id === "model" ? { ...option, currentValue: "substitute" } : option)
@@ -559,12 +559,12 @@ for (const boundary of [3, 4, 5]) test(`unsolicited options cannot repair a subs
   peer.writable.on("data", (bytes: Buffer) => {
     if (JSON.parse(bytes.toString()).id === boundary) peer.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "config_option_update", configOptions: correct } } })
   })
-  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
+  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
   assert.equal(peer.sent.length, boundary)
 })
 
 for (const boundary of [2, 3, 4, 5]) for (const defect of ["missing-array", "missing-id", "duplicate-id", "duplicate-value", "malformed-group", "missing-group-id"] as const) test(`ACP validates option structure at ${boundary}: ${defect}`, async t => {
-  const peer = scriptedAcp(t, "exact", { qualified: true, response(request, reply) {
+  const peer = scriptedAcp(t, "exact", { productionContract: true, response(request, reply) {
     if (request.id !== boundary) return reply
     const values = reply.result.configOptions
     if (defect === "missing-array") delete reply.result.configOptions
@@ -575,7 +575,7 @@ for (const boundary of [2, 3, 4, 5]) for (const defect of ["missing-array", "mis
     if (defect === "missing-group-id") values[0].options = [{ options: values[0].options }]
     return reply
   } })
-  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal))
+  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal))
   assert.equal(peer.sent.length, boundary)
 })
 
@@ -605,11 +605,11 @@ for (const defect of ["exact", "initialize", "option", "data", "extra", "missing
   assert.equal(peer.sent.length, boundary)
 })
 
-for (const [boundary, deadline] of [[1, 15000], [2, 15000], [3, 5000], [4, 5000], [5, 5000]] as const) test(`qualified ACP phase ${boundary} observes its own deadline`, async t => {
+for (const [boundary, deadline] of [[1, 15000], [2, 15000], [3, 5000], [4, 5000], [5, 5000]] as const) test(`production ACP phase ${boundary} observes its own deadline`, async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] })
-  const peer = scriptedAcp(t, "exact", { qualified: true, hold: boundary })
+  const peer = scriptedAcp(t, "exact", { productionContract: true, hold: boundary })
   let settled = false
-  const pending = peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal)
+  const pending = peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal)
   void pending.then(() => { settled = true }, () => { settled = true })
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(peer.sent.length, boundary)
@@ -620,15 +620,15 @@ for (const [boundary, deadline] of [[1, 15000], [2, 15000], [3, 5000], [4, 5000]
   await assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
 })
 
-for (const protocolVersion of [undefined, null, "1", 0, 2]) test(`qualified ACP rejects unsupported protocol version ${protocolVersion}`, async t => {
-  const peer = scriptedAcp(t, "exact", { qualified: true, response(request, reply) { if (request.method === "initialize") reply.result.protocolVersion = protocolVersion; return reply } })
-  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal), { code: "INVALID_PROTOCOL" })
+for (const protocolVersion of [undefined, null, "1", 0, 2]) test(`production ACP rejects unsupported protocol version ${protocolVersion}`, async t => {
+  const peer = scriptedAcp(t, "exact", { productionContract: true, response(request, reply) { if (request.method === "initialize") reply.result.protocolVersion = protocolVersion; return reply } })
+  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal), { code: "INVALID_PROTOCOL" })
   assert.equal(peer.sent.length, 1)
 })
 
-for (const boundary of [2, 3, 4, 5]) test(`qualified ACP rejects a missing required option at response ${boundary}`, async t => {
-  const peer = scriptedAcp(t, "exact", { qualified: true, response(request, reply) { if (request.id === boundary) reply.result.configOptions = reply.result.configOptions.filter((option: any) => option.id !== "model"); return reply } })
-  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, sampleQualifiedContract(), { kind: "new" }, new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
+for (const boundary of [2, 3, 4, 5]) test(`production ACP rejects a missing required option at response ${boundary}`, async t => {
+  const peer = scriptedAcp(t, "exact", { productionContract: true, response(request, reply) { if (request.id === boundary) reply.result.configOptions = reply.result.configOptions.filter((option: any) => option.id !== "model"); return reply } })
+  await assert.rejects(peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleProductionSpec()) }, sampleProductionContract(), { kind: "new" }, new AbortController().signal), { code: "SELECTION_UNSUPPORTED" })
   assert.equal(peer.sent.length, boundary)
 })
 

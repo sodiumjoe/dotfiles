@@ -6,10 +6,10 @@
     "node": "24.13.0"
   },
   "scripts": {
-    "qualify:codex": "npm run build && node dist/scripts/qualify-codex.js",
-    "test:codex-qualification": "npm run build && node --test --test-concurrency=1 dist/test/codex-qualification-observation.test.js dist/test/codex-qualification.test.js",
+    "accept:codex": "npm run build && node dist/scripts/accept-codex.js",
+    "test:codex-acceptance": "npm run build && node --test --test-concurrency=1 dist/test/codex-acceptance.test.js",
     "test:agent-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-agents.test.js",
-    "test:agent": "npm run build && node --test --test-concurrency=1 dist/test/agent-types.test.js dist/test/agent-contracts.test.js dist/test/agent-environment.test.js dist/test/agent-qualification.test.js dist/test/agent-store.test.js dist/test/agent-acp.test.js dist/test/agent-process.test.js dist/test/agent-service.test.js dist/test/agent-protocol.test.js dist/test/agent-cli.test.js",
+    "test:agent": "npm run build && node --test --test-concurrency=1 dist/test/agent-types.test.js dist/test/agent-contracts.test.js dist/test/agent-environment.test.js dist/test/agent-production-contracts.test.js dist/test/agent-store.test.js dist/test/agent-acp.test.js dist/test/agent-process.test.js dist/test/agent-service.test.js dist/test/agent-protocol.test.js dist/test/agent-cli.test.js",
     "test:catalog-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-catalog.test.js",
     "test:catalog": "npm run build && node --test --test-concurrency=1 dist/test/catalog-types.test.js dist/test/catalog-config.test.js dist/test/catalog-store.test.js dist/test/catalog-probes.test.js dist/test/catalog-drivers.test.js dist/test/catalog-service.test.js dist/test/catalog-protocol.test.js dist/test/catalog-cli.test.js",
     "build": "tsc -p tsconfig.json",

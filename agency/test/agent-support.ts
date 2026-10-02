@@ -122,7 +122,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection }, environment: { ...process.env, FIXTURE_ROOT: f.root } as Record<string, string> } }))
   const command = async (commandId: string, commandGeneration: string) => commandView(await call({ op: "agent_command", commandId, commandGeneration }))
   const currentAt = async (cwd: string) => { const result = await call({ op: "agent_current", cwd }); assert.equal(result.state, "current"); if (result.state !== "current") throw new Error("wrong reply"); return result }
-  return { paths: f.paths, git, inventory, startAt, currentAt, command, releaseBarrier,
+  return { root: f.root, configPath: f.configPath, paths: f.paths, git, inventory, startAt, currentAt, command, releaseBarrier,
     start: (selection?: Partial<StartSelection>) => startAt(git.repo, selection),
     current: () => currentAt(git.repo),
     async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
@@ -192,14 +192,10 @@ export function sampleProductionContract(): ConfiguredLaunchContract {
   return { ...contract, fingerprint: launchContractFingerprint(contract) }
 }
 
-export const sampleQualifiedContract: () => any = sampleProductionContract
-
 export function sampleProductionSpec(): LaunchSpec {
   const spec = sampleSpec(), contract = sampleProductionContract()
   return { ...spec, contractId: contract.id, contractFingerprint: contract.fingerprint, selection: { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" }, configuration: { ...spec.configuration, adapterVersion: "1.7.0" }, catalogEvidence: { ...spec.catalogEvidence, adapterVersion: "1.7.0", models: [{ ...spec.catalogEvidence.models[0]!, modelId: "gpt-5.6-sol" }] } }
 }
-
-export const sampleQualifiedSpec = sampleProductionSpec
 
 export function sampleAgent(): AgentRecord { return { version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null } }
 export function sampleSession(): SessionEvidence { return { sessionId: "fixture-session", sessionGeneration: agentId(8), protocolVersion: 1, modelId: "model-a", reasoning: { kind: "value", value: "high" }, mode: "review", permissionProfile: "fixture-deny-v1", permissionEvidence: "fixture-contract-v1" } }
@@ -289,14 +285,14 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
 }
 
 const NO_ACP_RESPONSE = Symbol("no-acp-response")
-export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qualified?: boolean; response?: (request: any, reply: any) => unknown | typeof NO_ACP_RESPONSE; prompt?: (request: any, send: (value: unknown) => void) => void; hold?: number; now?: () => number } = {}) {
+export function scriptedAcp(t: TestContext, scenario = "exact", settings: { productionContract?: boolean; response?: (request: any, reply: any) => unknown | typeof NO_ACP_RESPONSE; prompt?: (request: any, send: (value: unknown) => void) => void; hold?: number; now?: () => number } = {}) {
   const readable = new PassThrough(), writable = new PassThrough(), sent: Array<{ jsonrpc: "2.0"; id: number; method: string; params: any }> = [], permissionReplies: unknown[] = []
   const options = [
     { id: "model", type: "select", name: "Model", currentValue: "model-a", options: [{ value: "model-a", name: "Model α" }] },
     { id: "reasoning", type: "select", name: "Reasoning", currentValue: "low", options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
     { id: "mode", type: "select", name: "Mode", currentValue: "plan", options: [{ value: "plan", name: "Plan" }, { value: "review", name: "Review" }] },
   ]
-  if (settings.qualified) {
+  if (settings.productionContract) {
     options[0]!.currentValue = "gpt-5.6-sol"; options[0]!.options = [{ value: "gpt-5.6-sol", name: "Model" }]
     options[1]!.id = "reasoning_effort"; options[2]!.options.push({ value: "read-only", name: "Read only" })
   }
@@ -427,7 +423,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     try { await Promise.race([released.promise, cancelled]) } finally { signal.removeEventListener("abort", aborted) }
   }
   const processFactory: typeof createAgentProcess = input => {
-    const peer = scriptedAcp(t, "exact", { qualified: options.productionContract === true, hold: input.session?.kind === "load" && restorePause === "spawned" ? 1 : Infinity, response(request, reply) {
+    const peer = scriptedAcp(t, "exact", { productionContract: options.productionContract === true, hold: input.session?.kind === "load" && restorePause === "spawned" ? 1 : Infinity, response(request, reply) {
       methodHistory.push(request.method)
       if (input.session?.kind === "load" && request.method === "initialize" && loadBehavior === "unsupported") reply.result.agentCapabilities.loadSession = false
       if (request.method === "session/load" && loadBehavior === "timeout") return NO_ACP_RESPONSE
