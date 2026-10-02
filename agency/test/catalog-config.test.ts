@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { chmod, link, mkdir, readFile, readdir, rename, symlink, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { observeConfig, readProfiles } from "../src/catalog/config.js"
+import { adapterEntry, observeConfig, readProfiles } from "../src/catalog/config.js"
 import { profileFixture } from "./catalog-support.js"
 import { privateRoot } from "./control-support.js"
 
@@ -21,6 +21,13 @@ test("declared fingerprints track presence, content, and physical executable ide
   assert.equal(first.adapterVersion, "0.70.0")
   assert.match(first.fingerprint, /^[0-9a-f]{64}$/)
   assert.deepEqual(await observeConfig(f.profile), first)
+  assert.equal(await adapterEntry(f.profile), join(f.adapter, "index.mjs"))
+  await writeFile(join(f.adapter, "index.mjs"), "changed adapter bytes", { mode: 0o600 })
+  const adapterChanged = await observeConfig(f.profile)
+  assert.notEqual(adapterChanged.fingerprint, first.fingerprint)
+  await rename(join(f.adapter, "index.mjs"), join(f.adapter, "index-old.mjs"))
+  await writeFile(join(f.adapter, "index.mjs"), "changed adapter bytes", { mode: 0o600 })
+  assert.notEqual((await observeConfig(f.profile)).fingerprint, adapterChanged.fingerprint)
   await writeFile(f.config, "")
   const empty = await observeConfig(f.profile)
   assert.notEqual(empty.fingerprint, first.fingerprint)
@@ -39,6 +46,20 @@ test("declared fingerprints track presence, content, and physical executable ide
     await writeFile(path, bytes, { mode: 0o600 })
     assert.notEqual((await observeConfig(f.profile)).fingerprint, prior.fingerprint)
   }
+})
+
+test("adapter entries reject escape, missing, symlink, and nonregular targets", async t => {
+  const f = await profileFixture(t), packageJson = f.profile.adapterPackageJson
+  for (const main of ["/absolute.mjs", "../escape.mjs", "missing.mjs", "./index.mjs", "dist//index.mjs"]) {
+    await writeFile(packageJson, JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "0.70.0", main }), { mode: 0o600 })
+    await assert.rejects(adapterEntry(f.profile), { code: "INVALID_CATALOG" })
+  }
+  await writeFile(packageJson, JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "0.70.0", main: "linked.mjs" }), { mode: 0o600 })
+  await symlink(join(f.adapter, "index.mjs"), join(f.adapter, "linked.mjs"))
+  await assert.rejects(adapterEntry(f.profile), { code: "INVALID_CATALOG" })
+  await writeFile(packageJson, JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "0.70.0", main: "directory" }), { mode: 0o600 })
+  await mkdir(join(f.adapter, "directory"))
+  await assert.rejects(adapterEntry(f.profile), { code: "INVALID_CATALOG" })
 })
 
 test("unsafe manifests fail without changing evidence", async t => {

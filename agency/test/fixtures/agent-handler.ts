@@ -5,13 +5,12 @@ import { readFile, writeFile, mkdir, open, rename, rm } from "node:fs/promises"
 import { writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Socket } from "node:net"
-import { fileURLToPath } from "node:url"
 import { runHandler } from "../../src/handler/daemon.js"
 import { createAgentService } from "../../src/agent/service.js"
 import { createAgentProcess } from "../../src/agent/process.js"
 import { AgentError } from "../../src/agent/types.js"
 import { createAgentStore } from "../../src/agent/store.js"
-import { observeLaunchContract, type LaunchContract } from "../../src/agent/contracts.js"
+import type { LaunchContract } from "../../src/agent/contracts.js"
 import { createCatalogService } from "../../src/catalog/service.js"
 import { createCatalogStore } from "../../src/catalog/store.js"
 import { observeConfig } from "../../src/catalog/config.js"
@@ -43,11 +42,10 @@ async function pause(name: string): Promise<void> {
   }
 }
 const contract: LaunchContract = {
-  id: "fixture-v1", sessionLoad: "qualified", providerId: "codex-acp", adapterVersion: "1.0.0", entrypoint: fileURLToPath(new URL("./agent-provider.js", import.meta.url)), fingerprint: "0".repeat(64),
+  id: "fixture-v1", sessionLoad: true, providerId: "codex-acp", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.0.0",
   modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode",
-  permissionEvidence: "fixture-contract-v1", qualification: null,
+  permissionEvidence: "fixture-contract-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
 }
-contract.fingerprint = await observeLaunchContract(contract)
 try {
   await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: [contract],

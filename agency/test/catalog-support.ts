@@ -27,7 +27,8 @@ export async function profileFixture(t: TestContext) {
   for (const directory of [catalog, sdk, adapter]) await mkdir(directory, { mode: 0o700 })
   const executable = join(root, "native"), config = join(root, "declared-config.json")
   await writeFile(executable, "fixture executable", { mode: 0o700 })
-  await writeFile(join(adapter, "package.json"), JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "0.70.0" }), { mode: 0o600 })
+  await writeFile(join(adapter, "package.json"), JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "0.70.0", main: "index.mjs" }), { mode: 0o600 })
+  await writeFile(join(adapter, "index.mjs"), "throw new Error('adapter must not be imported during configuration discovery')", { mode: 0o600 })
   await writeFile(join(sdk, "package.json"), JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.232", main: "sdk.mjs" }), { mode: 0o600 })
   await writeFile(join(sdk, "sdk.mjs"), "throw new Error('SDK must not be imported during configuration discovery')", { mode: 0o600 })
   const profile: ProviderProfile = { id: "claude-agent-acp", enabled: true, executable, adapterPackageJson: join(adapter, "package.json"), sdkPackageJson: join(sdk, "package.json"), configurationFiles: [config] }
@@ -79,7 +80,8 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
   for (const id of ["claude-agent-acp", "codex-acp"] as const) {
     const directory = join(f.root, id), executable = join(directory, "native.mjs"), adapterPackageJson = join(directory, "adapter.json"), configuration = join(directory, "declared.json")
     await writeFile(executable, `#!${process.execPath}\n${await readFile(fileURLToPath(new URL("./fixtures/catalog-native.js", import.meta.url)), "utf8")}`, { mode: 0o700 })
-    await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/" + id, version: "1.0.0" }), { mode: 0o600 })
+    await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/" + id, version: "1.0.0", main: "adapter.mjs" }), { mode: 0o600 })
+    await writeFile(join(directory, "adapter.mjs"), "throw new Error('adapter fixture metadata only')", { mode: 0o600 })
     await writeFile(configuration, "{}", { mode: 0o600 })
     await writeFile(join(directory, "scenario.json"), JSON.stringify({ wait: options.wait ?? false }), { mode: 0o600 })
     let sdkPackageJson: string | null = null

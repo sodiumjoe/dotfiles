@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto"
 import type { Readable, Writable } from "node:stream"
 import { object } from "../catalog/types.js"
-import { parseLaunchContract, type LaunchContract } from "./contracts.js"
+import { parseConfiguredLaunchContract, type ConfiguredLaunchContract } from "./contracts.js"
 import { AgentError, agentFailure, agentText, specOf, type AgentRecord, type SessionStart, type AgentFailure, type AgentLimits, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
-export type AcpConnection = { initialize(record: AgentRecord, contract: LaunchContract, session: SessionStart, signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; fault: Promise<AgentFailure>; close(): void }
+export type AcpConnection = { initialize(record: AgentRecord, contract: ConfiguredLaunchContract, session: SessionStart, signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; fault: Promise<AgentFailure>; close(): void }
 type ConfigOption = { id: string; currentValue: string; values: string[] }
 type Pending = { method: string; prefix: number; deadline: number; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
 type PromptState = { requestId: number; text: string; bytes: number; chunks: number; responseReceived: boolean }
@@ -192,13 +192,13 @@ function parseOptions(value: unknown): ConfigOption[] {
   if (new Set(result.map(option => option.id)).size !== result.length) invalid()
   return result
 }
-function desiredOptions(spec: LaunchSpec, contract: LaunchContract): Array<[string, string]> {
+function desiredOptions(spec: LaunchSpec, contract: ConfiguredLaunchContract): Array<[string, string]> {
   const result: Array<[string, string]> = [[contract.modelOption, spec.selection.modelId]]
   if (contract.reasoningOption && spec.selection.reasoning.kind === "value") result.push([contract.reasoningOption, spec.selection.reasoning.value])
   if (contract.modeOption) result.push([contract.modeOption, spec.selection.mode])
   return result
 }
-function exact(options: ConfigOption[], spec: LaunchSpec, contract: LaunchContract): void {
+function exact(options: ConfigOption[], spec: LaunchSpec, contract: ConfiguredLaunchContract): void {
   const desired = desiredOptions(spec, contract)
   exactPrefix(options, desired, desired.length)
   if (contract.reasoningOption === null && options.some(option => ["reasoning", "reasoning_effort", "effort"].includes(option.id))) throw new AgentError("SELECTION_UNSUPPORTED")
@@ -220,7 +220,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   let buffer = "", frameBytes = 0, startupBytes = 0, nextId = 0, queuedBytes = 0, closed = false, ready = false
   let failure: AgentError | null = null, sessionId: string | null = null, options: ConfigOption[] = [], deadline = Infinity
   let violation: AgentError | null = null, denial: Promise<void> | undefined
-  let spec: LaunchSpec | undefined, contract: LaunchContract | undefined, initialization: Promise<SessionEvidence> | undefined, promptState: PromptState | null = null, loading = false, loadSession = false
+  let spec: LaunchSpec | undefined, contract: ConfiguredLaunchContract | undefined, initialization: Promise<SessionEvidence> | undefined, promptState: PromptState | null = null, loading = false, loadSession = false
   let resolveFault!: (value: AgentFailure) => void
   const fault = new Promise<AgentFailure>(resolve => { resolveFault = resolve })
   const fail = (error: unknown): void => {
@@ -268,7 +268,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     try { check(); if (pending.size >= 8) invalid() } catch (error) { return Promise.reject(error) }
     const id = ++nextId
     return new Promise((resolve, reject) => {
-      const phases = contract?.qualification?.deadlines
+      const phases = contract?.deadlines
       const phaseMs = method === "session/prompt" ? phases?.promptMs ?? 90000 : phases ? method === "initialize" ? phases.initializeMs : method === "session/new" || method === "session/load" ? phases.sessionMs : phases.optionMs : limits.rpcMs
       const requestDeadline = Math.min(deadline, now() + phaseMs)
       const timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, requestDeadline - now()))
@@ -407,8 +407,8 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         const abort = (): void => fail(new AgentError("STARTUP_FAILED"))
         let timer: NodeJS.Timeout | undefined
         try {
-          spec = specOf(record); contract = parseLaunchContract(inputContract)
-          deadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity, now() + (contract.qualification?.deadlines.overallMs ?? limits.startupMs))
+          spec = specOf(record); contract = parseConfiguredLaunchContract(inputContract)
+          deadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity, now() + contract.deadlines.overallMs)
           timer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, deadline - now()))
           signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort()
           check()

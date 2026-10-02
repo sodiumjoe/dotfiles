@@ -334,11 +334,11 @@ for (const field of ["kind", "status", "optionKind", "priority", "planStatus"] a
   assert.deepEqual(peer.permissionReplies, [])
 })
 
-test("qualified ACP uses promptMs without widening to overallMs", async t => {
+test("configured ACP uses promptMs without widening to overallMs", async t => {
   let now = 0
   const contract = sampleQualifiedContract()
-  assert.equal(contract.qualification!.deadlines.promptMs, 90000)
-  assert.equal(contract.qualification!.deadlines.overallMs, 150000)
+  assert.equal(contract.deadlines.promptMs, 90000)
+  assert.equal(contract.deadlines.overallMs, 150000)
   const peer = scriptedAcp(t, "exact", { qualified: true, prompt() {}, now: () => now })
   await peer.connection.initialize({ ...sampleAgent(), ...splitLaunchSpec(sampleQualifiedSpec()) }, contract, { kind: "new" }, new AbortController().signal)
   t.mock.timers.enable({ apis: ["setTimeout"] })

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { constants, type BigIntStats } from "node:fs"
 import { lstat, open, realpath } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join, normalize } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { assertPrivateDirectory } from "../platform/private-state.js"
 import { absolutePath, CatalogError, invalid, keys, object, providerId, text, type ConfigEvidence, type ProviderProfile } from "./types.js"
@@ -62,6 +62,20 @@ async function fileIdentity(path: string): Promise<unknown> {
   if (!stat.isFile()) invalid()
   return [path, identity(stat)]
 }
+function adapterMain(profile: ProviderProfile, value: unknown): string {
+  const metadata = object(value), main = text(metadata.main, 4096)
+  if (metadata.name !== "@agentclientprotocol/" + profile.id || isAbsolute(main) || normalize(main) !== main || main.includes("\\") || main.split("/").some(part => part === "" || part === "." || part === "..")) invalid()
+  return join(dirname(profile.adapterPackageJson), main)
+}
+export async function adapterEntry(input: ProviderProfile): Promise<string> {
+  try {
+    const profile = parseProfile(input), bytes = await readBoundedFile(profile.adapterPackageJson, 1024 * 1024)
+    if (bytes === null) invalid()
+    const entry = adapterMain(profile, decodeJson(bytes)), before = await fileIdentity(entry), after = await fileIdentity(entry)
+    if (!isDeepStrictEqual(before, after)) throw new CatalogError("CONFIG_CHANGED")
+    return entry
+  } catch (error) { if (error instanceof CatalogError) throw error; return invalid() }
+}
 export async function sdkEntry(profile: ProviderProfile): Promise<string> {
   if (profile.sdkPackageJson === null) invalid()
   const bytes = await readBoundedFile(profile.sdkPackageJson, 1024 * 1024)
@@ -95,6 +109,7 @@ export async function observeConfig(input: ProviderProfile): Promise<ConfigEvide
     const adapter = object(decodeJson((await file(profile.adapterPackageJson))!))
     if (adapter.name !== "@agentclientprotocol/" + profile.id) invalid()
     const adapterVersion = text(adapter.version)
+    await file(adapterMain(profile, adapter))
     let sdkVersion: string | null = null
     if (profile.sdkPackageJson !== null) {
       const sdk = object(decodeJson((await file(profile.sdkPackageJson))!))

@@ -148,7 +148,7 @@ export async function verifyCodexQualification(input: CodexQualificationManifest
   } catch { return invalid() }
   return { version: 4, manifest, fingerprint: qualificationFingerprint(manifest), nodeVersion: manifest.nodeVersion, selection: manifest.selection, artifacts }
 }
-export function contractFromQualifiedCandidate(input: CodexQualificationCandidate): LaunchContract {
+export function contractFromQualifiedCandidate(input: CodexQualificationCandidate): any {
   const candidate = parseCodexQualificationCandidate(input), manifest = candidate.manifest
   return { id: manifest.contractId, sessionLoad: "candidate", providerId: manifest.providerId, adapterVersion: manifest.adapterVersion, entrypoint: manifest.adapterEntrypoint.path, fingerprint: candidate.fingerprint, modes: { state: "values", values: [manifest.selection.mode] }, reasoning: { state: "values", values: [manifest.selection.reasoning] }, effectiveMode: null, permissionProfiles: [manifest.selection.permissionProfile], modelOption: manifest.optionIds.model, reasoningOption: manifest.optionIds.reasoning, modeOption: manifest.optionIds.mode, permissionEvidence: "agency-deny-all-v1", qualification: manifest }
 }

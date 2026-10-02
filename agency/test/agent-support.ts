@@ -23,8 +23,7 @@ import { createCatalogStore } from "../src/catalog/store.js"
 import { observeConfig } from "../src/catalog/config.js"
 import { isFresh, type CatalogSnapshot, type ProviderProfile } from "../src/catalog/types.js"
 import type { CatalogService } from "../src/catalog/service.js"
-import { observeLaunchContract } from "../src/agent/contracts.js"
-import { contractFromQualifiedCandidate, qualificationFingerprint, type CodexQualificationManifest } from "../src/agent/qualification.js"
+import { launchContractFingerprint } from "../src/agent/contracts.js"
 import { admissionFixture, gitFixture } from "./checkout-support.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import { AGENT_PROTOCOL, exchangeAgent, type AgentRequest } from "../src/agent/protocol.js"
@@ -32,7 +31,7 @@ import { PROTOCOL } from "../src/control/protocol.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
 import type { TestContext } from "node:test"
 import { createAcpConnection } from "../src/agent/acp.js"
-import type { LaunchContract } from "../src/agent/contracts.js"
+import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
 export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; reservationHang?: "before" | "launch" | "admission"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean }
@@ -100,7 +99,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   f.beforeCleanup(cleanupOwned)
   for (const name of ["home", "profile"]) await mkdir(join(f.root, name), { mode: 0o700 })
   const executable = join(f.root, "profile/native"), adapterPackageJson = join(f.root, "profile/adapter.json"), configuration = join(f.root, "profile/declared.json")
-  await writeFile(executable, "fixture metadata only", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.0.0" }), { mode: 0o600 }); await writeFile(configuration, "{}", { mode: 0o600 })
+  await writeFile(executable, "fixture metadata only", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.0.0", main: "agent-provider.js" }), { mode: 0o600 }); await writeFile(join(f.root, "profile/agent-provider.js"), await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 }); await writeFile(configuration, "{}", { mode: 0o600 })
   const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable, adapterPackageJson, sdkPackageJson: null, configurationFiles: [configuration] }
   await mkdir(join(f.paths.persistentRoot, "catalog"), { mode: 0o700 })
   await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: [profile] }), { mode: 0o600 })
@@ -166,37 +165,41 @@ export const agentId = (n: number) => `00000000-0000-4000-8000-${String(n).padSt
 
 export function sampleSpec(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
   const hostId = "a".repeat(64)
+  const contract = sampleContract()
   return {
     hostId, agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3), launchAttemptId: agentId(5), commandId: agentId(6), createdCommandId: agentId(6), cwd: "/workspace/a",
     selection: { providerId: "codex-acp", modelId: "model-a", reasoning: { kind: "value", value: "high" }, mode: "review", permissionProfile: "fixture-deny-v1" },
     catalogSnapshotId: agentId(7),
     catalogEvidence: { providerId: "codex-acp", fingerprint: "b".repeat(64), verifiedAt: 1000, verifiedHandlerGeneration: agentId(2), providerVersion: null, providerVersionSource: "unknown", adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp", modelId: "model-a", resolvedModelId: null, displayName: "Model A", reasoning: { state: "values", values: ["high", "low"] }, modes: { state: "unknown" }, availability: "advertised" }] },
     configuration: { fingerprint: "b".repeat(64), scope: "declared-config-v1", providerId: "codex-acp", adapterVersion: "1.0.0", sdkVersion: null },
-    contractId: "fixture-v1", contractFingerprint: "c".repeat(64), containment: "direct-process-group-v1", authority: "normal-user",
+    contractId: contract.id, contractFingerprint: contract.fingerprint, containment: "direct-process-group-v1", authority: "normal-user",
     limits: { startupMs: 30000, rpcMs: 5000, frameBytes: 1048576, startupBytes: 8388608, writeQueueBytes: 1048576, stderrBytes: 8192 }, ...overrides,
   }
 }
 
-export function sampleContract(): LaunchContract {
-  return { id: "fixture-v1", sessionLoad: "qualified", providerId: "codex-acp", adapterVersion: "1.0.0", entrypoint: "/fixture.mjs", fingerprint: "c".repeat(64), modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode", permissionEvidence: "fixture-contract-v1", qualification: null }
+export function sampleStaticContract(): LaunchContract {
+  return { id: "fixture-v1", sessionLoad: true, providerId: "codex-acp", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.0.0", modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode", permissionEvidence: "fixture-contract-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 } }
 }
 
-export function sampleQualifiedContract(): LaunchContract {
-  const pin = (path: string) => ({ path, sha256: "a".repeat(64), identity: ["1", "2", "3", "4", "5", "448", "501", "20", "1"] as const })
-  const manifest: CodexQualificationManifest = {
-    version: 4, policy: "agency-codex-ambient-restore-v4", platform: "darwin", architecture: "arm64", providerId: "codex-acp", contractId: "codex-darwin-arm64-ambient-restore-v4", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0",
-    adapterPackageJson: pin("/fixture/package.json"), adapterEntrypoint: pin("/fixture/adapter.mjs"), codexExecutable: pin("/Users/moon/.cache/stripe/codex/0.155.1/codex-aarch64-apple-darwin"), nodeExecutable: pin(process.execPath), nodeVersion: "24.13.0", protocolVersion: 1,
-    prompt: { challengePrefix: "AGENCY_CODEX_RESTORE_", challengeBytes: 16, answerBytes: 4096 },
-    deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
-    selection: { modelId: "gpt-5.6-sol", reasoning: "high", mode: "read-only", permissionProfile: "deny-all" }, optionIds: { model: "model", reasoning: "reasoning_effort", mode: "mode" },
-  }
-  return contractFromQualifiedCandidate({ version: 4, manifest, fingerprint: qualificationFingerprint(manifest) })
+export function sampleContract(): ConfiguredLaunchContract {
+  const contract = { ...sampleStaticContract(), entrypoint: "/fixture.mjs" }
+  return { ...contract, fingerprint: launchContractFingerprint(contract) }
 }
 
-export function sampleQualifiedSpec(): LaunchSpec {
-  const spec = sampleSpec(), contract = sampleQualifiedContract()
+export function sampleProductionContract(): ConfiguredLaunchContract {
+  const base: LaunchContract = { id: "codex-acp-1.7", sessionLoad: true, providerId: "codex-acp", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0", modes: { state: "values", values: ["read-only"] }, reasoning: { state: "values", values: ["high"] }, effectiveMode: null, permissionProfiles: ["deny-all"], modelOption: "model", reasoningOption: "reasoning_effort", modeOption: "mode", permissionEvidence: "agency-deny-all-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 } }
+  const contract = { ...base, entrypoint: "/fixture/adapter.mjs" }
+  return { ...contract, fingerprint: launchContractFingerprint(contract) }
+}
+
+export const sampleQualifiedContract: () => any = sampleProductionContract
+
+export function sampleProductionSpec(): LaunchSpec {
+  const spec = sampleSpec(), contract = sampleProductionContract()
   return { ...spec, contractId: contract.id, contractFingerprint: contract.fingerprint, selection: { providerId: "codex-acp", modelId: "gpt-5.6-sol", reasoning: { kind: "value", value: "high" }, mode: "read-only", permissionProfile: "deny-all" }, configuration: { ...spec.configuration, adapterVersion: "1.7.0" }, catalogEvidence: { ...spec.catalogEvidence, adapterVersion: "1.7.0", models: [{ ...spec.catalogEvidence.models[0]!, modelId: "gpt-5.6-sol" }] } }
 }
+
+export const sampleQualifiedSpec = sampleProductionSpec
 
 export function sampleAgent(): AgentRecord { return { version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null } }
 export function sampleSession(): SessionEvidence { return { sessionId: "fixture-session", sessionGeneration: agentId(8), protocolVersion: 1, modelId: "model-a", reasoning: { kind: "value", value: "high" }, mode: "review", permissionProfile: "fixture-deny-v1", permissionEvidence: "fixture-contract-v1" } }
@@ -346,7 +349,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qual
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; sessionLoad?: LaunchContract["sessionLoad"]; candidateRestoreContracts?: ReadonlySet<string>; injectedOnly?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; neverReserve?: boolean; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; sessionLoad?: boolean | "unsupported" | "candidate" | "qualified"; candidateRestoreContracts?: ReadonlySet<string>; injectedOnly?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; neverReserve?: boolean; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
   const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), reservationEntered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), promptEntered = agentGate(), publications: string[] = []
@@ -360,16 +363,15 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   }
   const directory = join(root, "catalog"), config = join(root, "declared.json"), executable = join(root, "native"), adapterPackageJson = join(root, "adapter.json")
   if (!options.injectedOnly) await mkdir(directory, { mode: 0o700 })
-  await writeFile(config, "{}", { mode: 0o600 }); await writeFile(executable, "fixture", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.0.0" }), { mode: 0o600 })
+  const providerFile = join(root, "agent-provider.js")
+  await writeFile(config, "{}", { mode: 0o600 }); await writeFile(executable, "fixture", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.0.0", main: "agent-provider.js" }), { mode: 0o600 }); await writeFile(providerFile, await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 })
   const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable, adapterPackageJson, sdkPackageJson: null, configurationFiles: [config] }
   if (!options.injectedOnly) await writeFile(join(directory, "providers.json"), JSON.stringify({ version: 1, providers: [profile] }), { mode: 0o600 })
   const configuration = await observeConfig(profile), catalogStore = createCatalogStore(root)
   let snapshot: CatalogSnapshot = { version: 1, hostId: f.context.paths.hostKey, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, createdAt: Date.now(), providers: [{ ...sampleSpec().catalogEvidence, fingerprint: configuration.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: f.context.state.handlerGeneration }] }
   const saveCatalog = async () => { if (!options.injectedOnly) { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) } }
   await saveCatalog()
-  const contract = { ...sampleContract(), sessionLoad: options.sessionLoad ?? "qualified", entrypoint: join(root, "agent-provider.js") }
-  await writeFile(contract.entrypoint, await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 })
-  contract.fingerprint = await observeLaunchContract(contract)
+  const contract = { ...sampleStaticContract(), sessionLoad: options.sessionLoad === "unsupported" || options.sessionLoad === false ? false : true }
   let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0
   const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {
     const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)

@@ -6,7 +6,7 @@ import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
 import { qualificationHandlerOptions, qualificationProcessFactory } from "../../scripts/qualify-codex-handler.js"
 import { createAgentService } from "../../src/agent/service.js"
-import { observeLaunchContract, type LaunchContract } from "../../src/agent/contracts.js"
+import { observeLaunchContract } from "../../src/agent/contracts.js"
 import { isDeepStrictEqual } from "node:util"
 import { parseQualificationCandidate, readPrivateJson } from "../../scripts/qualify-codex.js"
 
@@ -26,7 +26,7 @@ if (process.argv[5] === "readiness-race") options.onPhase = async phase => {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
 }
-const contract: LaunchContract = { ...options.launchContracts![0]!, permissionEvidence: "fixture-contract-v1", qualification: null }
+const contract: any = { ...options.launchContracts![0]!, permissionEvidence: "fixture-contract-v1", qualification: null }
 contract.fingerprint = await observeLaunchContract(contract)
 options.launchContracts = [contract]
 options.agentFactory = input => createAgentService({ ...input, candidateRestoreContracts: new Set([contract.id]) }, {

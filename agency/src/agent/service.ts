@@ -10,7 +10,7 @@ import { commitLaunchTransition, type LaunchContext } from "../handler/launch-tr
 import { confirmReconciledLaunch, refreshLaunchState } from "../handler/mutations.js"
 import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
-import { observeLaunchContract, parseLaunchContract, resolveLaunchSpec, type LaunchContract } from "./contracts.js"
+import { configureLaunchContract, observeLaunchContract, parseLaunchContract, resolveLaunchSpec, type ConfiguredLaunchContract, type LaunchContract } from "./contracts.js"
 import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import type { LaunchEnvironment } from "./environment.js"
 import { agentTuple, crossCheckAgents, recoverAgents, retainUnspawnedRestore, type AgentAssessment, type AgentRecoveryRepair } from "./recovery.js"
@@ -20,7 +20,7 @@ import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from ".
 
 export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
 type LivePrompt = { controller: AbortController; promise: Promise<PromptView> }
-type Live = { initial: AgentRecord; accepted: AgentCommand; environment: LaunchEnvironment; contract: LaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: AgentRecord; accepted: AgentCommand; environment: LaunchEnvironment; declaration: LaunchContract; contract: ConfiguredLaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
@@ -146,7 +146,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
     if (!isFresh(spec.catalogEvidence.verifiedAt, Date.now())) throw new AgentError("MODEL_UNAVAILABLE")
     await dependencies.observeLaunchEvidence(spec, op.evidence)
-    if (await observeLaunchContract(op.contract) !== spec.contractFingerprint) throw new AgentError("CONFIG_CHANGED")
+    const configured = await configureLaunchContract(op.declaration, op.evidence.profile, op.evidence.configuration)
+    if (!isDeepStrictEqual(configured, op.contract) || await observeLaunchContract(configured) !== spec.contractFingerprint) throw new AgentError("CONFIG_CHANGED")
     if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
   }
@@ -309,13 +310,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const cwd = previousAgent?.definition.cwd ?? (request as StartInput).cwd
       const candidates = input.contracts.filter(contract => contract.providerId === selection.providerId)
       if (candidates.length !== 1) throw new AgentError("ADAPTER_UNQUALIFIED")
-      const contract = parseLaunchContract(candidates[0]), fingerprint = await observeLaunchContract(contract)
-      if (kind === "restore" && contract.sessionLoad !== "qualified" && !(contract.sessionLoad === "candidate" && candidateRestoreContracts.has(contract.id))) throw new AgentError("RESTORE_UNSUPPORTED")
-      if (fingerprint !== contract.fingerprint) throw new AgentError("CONFIG_CHANGED")
+      const declaration = parseLaunchContract(candidates[0])
+      if (kind === "restore" && !declaration.sessionLoad) throw new AgentError("RESTORE_UNSUPPORTED")
       let evidence: LaunchEvidence
       try { evidence = await catalog.launchEvidence(selection.providerId) } catch { throw new AgentError("MODEL_UNAVAILABLE") }
+      const contract = await configureLaunchContract(declaration, evidence.profile, evidence.configuration), fingerprint = await observeLaunchContract(contract)
       let timedOut = false, acceptingOperation: Live | undefined, timer: NodeJS.Timeout | undefined
-      const commandDeadline = performance.now() + (contract.qualification?.deadlines.commandMs ?? 5000)
+      const commandDeadline = performance.now() + contract.deadlines.commandMs
       const checkCommandDeadline = (): void => {
         if (timedOut || performance.now() >= commandDeadline) {
           timedOut = true; acceptingOperation?.controller.abort(); throw new AgentError("STARTUP_TIMEOUT")
@@ -327,12 +328,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const previous = commands.get(request.commandId)
         if (previous) { if (previous.op !== kind || !isDeepStrictEqual(previous.input, durableInput)) throw new AgentError("COMMAND_CONFLICT"); return view(previous) }
         checkRestorable()
-        const spec = resolveLaunchSpec({ ids: { hostId: context.paths.hostKey, handlerGeneration: generation, agentId: previousAgent?.definition.agentId ?? randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId }, cwd, selection, ...evidence, contract })
+        const spec = resolveLaunchSpec({ ids: { hostId: context.paths.hostKey, handlerGeneration: generation, agentId: previousAgent?.definition.agentId ?? randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId }, cwd, selection, snapshotId: evidence.snapshotId, provider: evidence.provider, configuration: evidence.configuration, contract })
         if (previousAgent) spec.createdCommandId = previousAgent.definition.createdCommandId
         if (await observeLaunchContract(contract) !== fingerprint) throw new AgentError("CONFIG_CHANGED")
         const record: AgentRecord = { version: 2, ...splitLaunchSpec(spec), phase: kind === "restore" ? "restoring" : "starting", session: previousAgent?.session ?? null, failure: null }
         const accepted: AgentCommand = { version: 2, hostId: spec.hostId, commandId: request.commandId, handlerGeneration: generation, op: kind, input: durableInput, target: agentTuple(record), state: "pending", result: null }
-        const op: Live = { initial: record, accepted, environment: request.environment, contract, evidence, controller: new AbortController(), deadline: performance.now() + (contract.qualification?.deadlines.overallMs ?? spec.limits.startupMs), prompt: null, cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
+        const op: Live = { initial: record, accepted, environment: request.environment, declaration, contract, evidence, controller: new AbortController(), deadline: performance.now() + contract.deadlines.overallMs, prompt: null, cleanupVerified: false, ready: false, started: false, uncertain: null, result: null, fault: null }
         checkCommandDeadline()
         acceptingOperation = op
         operations.set(spec.agentId, op); intents.set(request.commandId, op)

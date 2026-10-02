@@ -39,7 +39,8 @@ export async function verifyInjectedLaunchEvidence(candidate: CodexQualification
 }
 export function qualificationProcessFactory(receipts: string): typeof createAgentProcess {
   return input => {
-    if (input.contract.qualification && input.environment.CODEX_PATH !== input.contract.qualification.codexExecutable.path) throw new AgentError("CONFIG_CHANGED")
+    const qualification = (input.contract as any).qualification
+    if (qualification && input.environment.CODEX_PATH !== qualification.codexExecutable.path) throw new AgentError("CONFIG_CHANGED")
     const receipt: QualificationReceipt = { version: 4, handlerGeneration: input.spec.handlerGeneration, providerGeneration: input.spec.providerGeneration, launchAttemptId: input.spec.launchAttemptId, methods: [], promptCount: 0, prompts: [], terminal: false, streamsClosed: false, failure: null }
     let child: ReturnType<typeof spawn> | undefined
     const owner = createAgentProcess(input, { spawn: ((file: string, args: readonly string[], options: Parameters<typeof spawn>[2]) => {
