@@ -181,13 +181,13 @@ export function sampleStaticContract(): LaunchContract {
 
 export function sampleContract(): ConfiguredLaunchContract {
   const contract = { ...sampleStaticContract(), entrypoint: "/fixture.mjs" }
-  return { ...contract, fingerprint: launchContractFingerprint(contract) }
+  return { ...contract, fingerprint: launchContractFingerprint(contract, "b".repeat(64)) }
 }
 
 export function sampleProductionContract(): ConfiguredLaunchContract {
   const base: LaunchContract = { id: "codex-acp-1.7", sessionLoad: true, providerId: "codex-acp", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.7.0", modes: { state: "values", values: ["read-only"] }, reasoning: { state: "values", values: ["high"] }, effectiveMode: null, permissionProfiles: ["deny-all"], modelOption: "model", reasoningOption: "reasoning_effort", modeOption: "mode", permissionEvidence: "agency-deny-all-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 } }
   const contract = { ...base, entrypoint: "/fixture/adapter.mjs" }
-  return { ...contract, fingerprint: launchContractFingerprint(contract) }
+  return { ...contract, fingerprint: launchContractFingerprint(contract, "b".repeat(64)) }
 }
 
 export function sampleProductionSpec(): LaunchSpec {

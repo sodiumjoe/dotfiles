@@ -35,10 +35,10 @@ export function parseLaunchContract(input: unknown): LaunchContract {
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }
 
-export function launchContractFingerprint(input: LaunchContract & { entrypoint: string }): string {
+export function launchContractFingerprint(input: LaunchContract & { entrypoint: string }, configurationFingerprint: string): string {
   const { entrypoint, ...candidate } = input as ConfiguredLaunchContract
   delete (candidate as Partial<ConfiguredLaunchContract>).fingerprint
-  return digest(JSON.stringify([parseLaunchContract(candidate), absolutePath(entrypoint)]))
+  return digest(JSON.stringify([parseLaunchContract(candidate), hash(configurationFingerprint), absolutePath(entrypoint)]))
 }
 
 export function parseConfiguredLaunchContract(input: unknown): ConfiguredLaunchContract {
@@ -55,14 +55,14 @@ export async function configureLaunchContract(input: LaunchContract, profile: Pr
     const contract = parseLaunchContract(input)
     if (!profile.enabled || profile.id !== contract.providerId || configuration.providerId !== contract.providerId || configuration.adapterVersion !== contract.adapterVersion || configuration.sdkVersion !== null || contract.adapterPackage !== `@agentclientprotocol/${profile.id}`) throw new Error()
     const configured = { ...contract, entrypoint: await adapterEntry(profile) }
-    return { ...configured, fingerprint: launchContractFingerprint(configured) }
+    return { ...configured, fingerprint: launchContractFingerprint(configured, configuration.fingerprint) }
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }
 
 export function resolveLaunchSpec(input: { ids: AgentIds; selection: StartSelection; cwd: string; snapshotId: string; provider: ProviderSnapshot; configuration: ConfigEvidence; contract: ConfiguredLaunchContract }): LaunchSpec {
   const contract = parseConfiguredLaunchContract(input.contract), selection = parseSelection(input.selection)
   if (input.provider.error || input.provider.fingerprint !== input.configuration.fingerprint || input.provider.verifiedHandlerGeneration !== input.ids.handlerGeneration) throw new AgentError("MODEL_UNAVAILABLE")
-  if (contract.providerId !== selection.providerId || contract.adapterVersion !== input.configuration.adapterVersion) throw new AgentError("ADAPTER_UNQUALIFIED")
+  if (contract.providerId !== selection.providerId || contract.adapterVersion !== input.configuration.adapterVersion || contract.fingerprint !== launchContractFingerprint(contract, input.configuration.fingerprint)) throw new AgentError("ADAPTER_UNQUALIFIED")
   if (!contract.permissionProfiles.includes(selection.permissionProfile)) throw new AgentError("SELECTION_UNSUPPORTED")
   if (selection.reasoning.kind === "none" ? contract.reasoning.state !== "none" : contract.reasoning.state !== "values" || !contract.reasoning.values.includes(selection.reasoning.value)) throw new AgentError("SELECTION_UNSUPPORTED")
   const modes = contract.modes
@@ -73,7 +73,7 @@ export function resolveLaunchSpec(input: { ids: AgentIds; selection: StartSelect
   return parseLaunchSpec({ ...input.ids, createdCommandId: input.ids.commandId, cwd: input.cwd, selection: { ...selection, mode }, catalogSnapshotId: input.snapshotId, catalogEvidence: input.provider, configuration: input.configuration, contractId: contract.id, contractFingerprint: contract.fingerprint, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS })
 }
 
-export async function observeLaunchContract(input: ConfiguredLaunchContract): Promise<string> {
-  try { return launchContractFingerprint(parseConfiguredLaunchContract(input)) }
+export async function observeLaunchContract(input: ConfiguredLaunchContract, configurationFingerprint: string): Promise<string> {
+  try { return launchContractFingerprint(parseConfiguredLaunchContract(input), configurationFingerprint) }
   catch { throw new AgentError("CONFIG_CHANGED") }
 }

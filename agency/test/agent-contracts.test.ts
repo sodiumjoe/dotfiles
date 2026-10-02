@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { mkdir, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { configureLaunchContract, observeLaunchContract, parseLaunchContract, resolveLaunchSpec } from "../src/agent/contracts.js"
+import { configureLaunchContract, launchContractFingerprint, observeLaunchContract, parseLaunchContract, resolveLaunchSpec } from "../src/agent/contracts.js"
 import { sampleContract, sampleStaticContract, sampleSpec } from "./agent-support.js"
 import { privateRoot } from "./control-support.js"
 
@@ -10,6 +10,7 @@ function input() {
   const spec = sampleSpec()
   return { ids: { hostId: spec.hostId, agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, launchAttemptId: spec.launchAttemptId, commandId: spec.commandId }, selection: spec.selection, cwd: spec.cwd, snapshotId: spec.catalogSnapshotId, provider: spec.catalogEvidence, configuration: spec.configuration, contract: sampleContract() }
 }
+function refingerprint(value: ReturnType<typeof input>): void { value.contract.fingerprint = launchContractFingerprint(value.contract, value.configuration.fingerprint) }
 
 async function configured(t: Parameters<typeof privateRoot>[0]) {
   const root = await privateRoot(t), directory = join(root, "adapter"), executable = join(root, "codex")
@@ -31,9 +32,11 @@ test("configured contracts resolve the declared package entry without qualificat
   const f = await configured(t), contract = await configureLaunchContract(sampleStaticContract(), f.profile, f.configuration)
   assert.equal(contract.entrypoint, join(f.directory, "dist/index.js"))
   assert.match(contract.fingerprint, /^[0-9a-f]{64}$/)
-  assert.equal(await observeLaunchContract(contract), contract.fingerprint)
+  assert.equal(await observeLaunchContract(contract, f.configuration.fingerprint), contract.fingerprint)
   const json = JSON.stringify(contract)
   for (const token of ["candidate", "qualified", "manifest", "report", "artifactPin", "qualification"]) assert.equal(json.includes(token), false)
+  const changed = await configureLaunchContract(sampleStaticContract(), f.profile, { ...f.configuration, fingerprint: "c".repeat(64) })
+  assert.notEqual(changed.fingerprint, contract.fingerprint)
 })
 
 test("configured contracts reject provider, package, version, and configuration disagreement", async t => {
@@ -61,6 +64,7 @@ test("unknown reasoning cannot be treated as absence and explicit none needs bot
   value.selection.reasoning = { kind: "none" }
   value.provider.models[0]!.reasoning = { state: "unknown" }
   value.contract.reasoning = { state: "none" }; value.contract.reasoningOption = null
+  refingerprint(value)
   assert.throws(() => resolveLaunchSpec(value))
   value.provider.models[0]!.reasoning = { state: "none" }
   assert.deepEqual(resolveLaunchSpec(value).selection.reasoning, { kind: "none" })
@@ -72,8 +76,10 @@ test("sole and nonselectable modes are explicit effective selections", () => {
   const value = input()
   value.selection.mode = null!
   value.contract.modes = { state: "values", values: ["review"] }
+  refingerprint(value)
   assert.equal(resolveLaunchSpec(value).selection.mode, "review")
   value.contract.modes = { state: "none" }; value.contract.effectiveMode = "review"; value.contract.modeOption = null
+  refingerprint(value)
   assert.equal(resolveLaunchSpec(value).selection.mode, "review")
   value.provider.models[0]!.modes = { state: "values", values: ["other"] }
   assert.throws(() => resolveLaunchSpec(value))
@@ -90,9 +96,9 @@ test("contract and evidence disagreement cannot authorize a launch", () => {
 
 test("launch fingerprints bind static policy and configured entrypoint", async t => {
   const f = await configured(t), contract = await configureLaunchContract(sampleStaticContract(), f.profile, f.configuration)
-  assert.equal(contract.fingerprint, await observeLaunchContract(contract))
-  assert.notEqual(contract.fingerprint, await observeLaunchContract({ ...contract, permissionProfiles: ["other"] }))
+  assert.equal(contract.fingerprint, await observeLaunchContract(contract, f.configuration.fingerprint))
+  assert.notEqual(contract.fingerprint, await observeLaunchContract({ ...contract, permissionProfiles: ["other"] }, f.configuration.fingerprint))
   await rename(contract.entrypoint, contract.entrypoint + "-old")
   await writeFile(contract.entrypoint, "throw new Error('must not import')", { mode: 0o600 })
-  assert.equal(contract.fingerprint, await observeLaunchContract(contract))
+  assert.equal(contract.fingerprint, await observeLaunchContract(contract, f.configuration.fingerprint))
 })
