@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { readFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import test from "node:test"
 import { parseCodexAcceptanceReport, runCodexAcceptance, type AcceptanceLifecycle } from "../scripts/accept-codex.js"
 import { productionLaunchContracts } from "../src/agent/contracts.js"
@@ -8,6 +9,7 @@ import { agentHandlerFixture } from "./agent-support.js"
 
 async function fixture(t: Parameters<typeof agentHandlerFixture>[0], failure = "") {
   const handler = await agentHandlerFixture(t), environments: Record<string, string>[] = [], steps: string[] = []
+  await writeFile(join(handler.git.root, "package.json"), JSON.stringify({ name: "@moon/agency", engines: { node: "24.13.0" } }))
   let snapshots = 0, prompts = 0, stops = 0
   const lifecycle: AcceptanceLifecycle = {
     cwd: () => handler.git.root,

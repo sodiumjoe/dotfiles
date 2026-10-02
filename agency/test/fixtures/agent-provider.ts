@@ -51,7 +51,10 @@ process.stdin.on("data", (chunk: Buffer) => {
         const prompt = request.params.prompt[0].text as string
         let answer = `answer:${prompt}`
         if (prompt.startsWith("AGENCY_ACCEPTANCE_READ ")) {
+          if (!prompt.includes("read package.json in the current working directory")) throw new Error("wrong acceptance path")
           const challenge = prompt.slice("AGENCY_ACCEPTANCE_READ ".length).split(":", 1)[0]!
+          const metadata = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8"))
+          if (metadata.name !== "@moon/agency" || metadata.engines?.node !== "24.13.0") throw new Error("wrong acceptance package")
           await writeFile(join(root, "acceptance-session"), challenge, { mode: 0o600 })
           answer = `${challenge} @moon/agency 24.13.0`
         } else if (prompt.startsWith("AGENCY_ACCEPTANCE_RECALL:")) answer = await readFile(join(root, "acceptance-session"), "utf8")

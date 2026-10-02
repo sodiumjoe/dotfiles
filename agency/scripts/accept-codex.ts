@@ -96,7 +96,7 @@ export async function runCodexAcceptance(input: { evidenceParent: string }, life
     const started = commandResult(await lifecycle.start(cwd, startEnvironment), "started"), initialSession = started.command.result!.session!, initialTarget = started.command.target!
     active = initialTarget
     report.steps.push("prompt")
-    const firstPrompt = `AGENCY_ACCEPTANCE_READ ${challenge}: read agency/package.json and return exactly ${challenge} @moon/agency 24.13.0; remember the nonce.`
+    const firstPrompt = `AGENCY_ACCEPTANCE_READ ${challenge}: read package.json in the current working directory and return exactly ${challenge} @moon/agency 24.13.0; remember the nonce.`
     const firstAnswer = (await lifecycle.prompt(initialTarget, firstPrompt)).text
     if (firstAnswer !== `${challenge} @moon/agency 24.13.0`) throw new AgentError("STARTUP_FAILED")
     report.steps.push("stop"); report.cleanup.push(await cleanupEvidence(lifecycle, "initial", initialTarget)); active = null

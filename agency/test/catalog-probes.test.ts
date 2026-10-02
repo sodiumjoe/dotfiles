@@ -233,8 +233,9 @@ for (const ignoreTerm of [false, true]) test(`gated worker owns a real native fi
     } catch (cause) { catalogFixtureFailure = new Error(`unverified fixture cleanup; retained ${root}`, { cause }); throw catalogFixtureFailure }
   })
   await mkdir(join(root, "home"), { mode: 0o700 })
-  const adapterPath = join(root, "adapter.json")
-  await writeFile(adapterPath, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.7.0" }), { mode: 0o600 })
+  const adapterPath = join(root, "adapter.json"), adapterEntry = join(root, "adapter.mjs")
+  await writeFile(adapterPath, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.7.0", main: "adapter.mjs" }), { mode: 0o600 })
+  await writeFile(adapterEntry, "throw new Error('adapter fixture metadata only')", { mode: 0o600 })
   const profile = { id: "codex-acp" as const, enabled: true, executable: process.execPath, adapterPackageJson: adapterPath, sdkPackageJson: null, configurationFiles: ignoreTerm ? [adapterPath] : [] }
   const evidence = await observeConfig(profile), store = createCatalogStore(root)
   const request: ProbeRequest = { profile, evidence, meta: { version: 2, hostId, handlerGeneration: generation, commandId, providerId: profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(root, "catalog/work", attemptId) } }
