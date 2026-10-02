@@ -92,13 +92,13 @@ export async function observeConfig(input: ProviderProfile): Promise<ConfigEvide
   try {
     const profile = parseProfile(input), evidence: unknown[] = [1, "declared-config-v1", profile]
     let size = 0
-    const file = async (path: string, absent = false): Promise<Buffer | null> => {
+    const file = async (path: string, absent = false, max = 1024 * 1024): Promise<Buffer | null> => {
       let before
       try { before = await fileIdentity(path) } catch (error) {
         if (absent && missing(error)) { evidence.push([path, null]); return null }
         throw error
       }
-      const bytes = await readBoundedFile(path, 1024 * 1024)
+      const bytes = await readBoundedFile(path, max)
       if (bytes === null || !isDeepStrictEqual(before, await fileIdentity(path))) throw new CatalogError("CONFIG_CHANGED")
       size += bytes.length
       if (size > 8 * 1024 * 1024) invalid()
@@ -109,7 +109,7 @@ export async function observeConfig(input: ProviderProfile): Promise<ConfigEvide
     const adapter = object(decodeJson((await file(profile.adapterPackageJson))!))
     if (adapter.name !== "@agentclientprotocol/" + profile.id) invalid()
     const adapterVersion = text(adapter.version)
-    await file(adapterMain(profile, adapter))
+    await file(adapterMain(profile, adapter), false, 8 * 1024 * 1024)
     let sdkVersion: string | null = null
     if (profile.sdkPackageJson !== null) {
       const sdk = object(decodeJson((await file(profile.sdkPackageJson))!))

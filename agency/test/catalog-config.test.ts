@@ -48,6 +48,14 @@ test("declared fingerprints track presence, content, and physical executable ide
   }
 })
 
+test("declared fingerprints accept installed-size adapter entrypoints", async t => {
+  const f = await profileFixture(t), entrypoint = join(f.adapter, "index.mjs")
+  await writeFile(entrypoint, Buffer.alloc(1_225_880, 0x61), { mode: 0o600 })
+  const first = await observeConfig(f.profile)
+  await writeFile(entrypoint, Buffer.concat([Buffer.alloc(1_225_879, 0x61), Buffer.from("b")]), { mode: 0o600 })
+  assert.notEqual((await observeConfig(f.profile)).fingerprint, first.fingerprint)
+})
+
 test("adapter entries reject escape, missing, symlink, and nonregular targets", async t => {
   const f = await profileFixture(t), packageJson = f.profile.adapterPackageJson
   for (const main of ["/absolute.mjs", "../escape.mjs", "missing.mjs", "./index.mjs", "dist//index.mjs"]) {
