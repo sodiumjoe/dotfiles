@@ -32,7 +32,7 @@ test("32 concurrent clients select one real generation and observe the same read
 test("historical admission state does not participate in Handler lifecycle", { timeout: 20000 }, async t => {
   const trap = await privateRoot(t), marker = join(trap, "admissions-accessed"), gitMarker = join(trap, "git-invoked"), preload = join(trap, "forbid-admissions.cjs")
   await writeFile(preload, `const fs = require("node:fs")\nconst fsp = require("node:fs/promises")\nconst cp = require("node:child_process")\nfor (const name of ["lstat", "stat", "readdir", "opendir", "readFile", "open", "mkdir", "rm", "rename", "writeFile"]) { const original = fsp[name]; fsp[name] = function(path, ...args) { if (String(path).includes("/admissions")) { fs.writeFileSync(${JSON.stringify(marker)}, String(path)); throw new Error("admissions access forbidden") }; return original.call(this, path, ...args) } }\nfor (const name of ["execFile", "spawn"]) { const original = cp[name]; cp[name] = function(file, ...args) { if (String(file).includes("git")) { fs.writeFileSync(${JSON.stringify(gitMarker)}, String(file)); throw new Error("Git subprocess forbidden") }; return original.call(this, file, ...args) } }\nrequire("node:module").syncBuiltinESMExports()`, { mode: 0o600 })
-  const f = await controlFixture(t, {}, undefined, undefined, { NODE_OPTIONS: `--require=${preload}` }), directory = join(f.paths.persistentRoot, "admissions")
+  const f = await controlFixture(t, {}, undefined, { NODE_OPTIONS: `--require=${preload}` }), directory = join(f.paths.persistentRoot, "admissions")
   await mkdir(directory, { mode: 0o700 })
   await writeFile(join(directory, "historical.json"), "{", { mode: 0o600 })
   const before = await lstat(directory)

@@ -9,10 +9,10 @@ import { agentHandlerFixture } from "./agent-support.js"
 
 async function fixture(t: Parameters<typeof agentHandlerFixture>[0], failure = "") {
   const handler = await agentHandlerFixture(t), environments: Record<string, string>[] = [], steps: string[] = []
-  await writeFile(join(handler.git.root, "package.json"), JSON.stringify({ name: "@moon/agency", engines: { node: "24.13.0" } }))
+  await writeFile(join(handler.workspace, "package.json"), JSON.stringify({ name: "@moon/agency", engines: { node: "24.13.0" } }))
   let snapshots = 0, prompts = 0, stops = 0
   const lifecycle: AcceptanceLifecycle = {
-    cwd: () => handler.git.root,
+    cwd: () => handler.workspace,
     snapshot: () => { const value = { ...process.env, ACCEPTANCE_SNAPSHOT: String(++snapshots), SECRET_TOKEN: "must-not-appear" } as Record<string, string>; environments.push(value); return value },
     async start(cwd, _environment) { steps.push("start"); return handler.waitCompleted(await handler.startAt(cwd)) },
     async prompt(target, text) { steps.push("prompt"); prompts++; if (failure === `prompt-${prompts}`) throw new Error(failure); return handler.prompt(target, text) },

@@ -43,9 +43,7 @@ export async function fileExists(path: string): Promise<boolean> {
   try { await readFile(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error }
 }
 
-export type AdmissionFixtureOperation = { checkoutPath: string; action: "reserve" | "reserve_cancel"; agentId: string; leaseId: string; launchAttemptId: string }
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
-type CheckoutFixtureCleanup = { root: string; verifyCleanup: () => void; beforeCleanup: (verify: () => Promise<void>) => void }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
 
 let fixtureBatchFailure: Error | undefined
 export function assertFixtureBatchHealthy(): void {
@@ -56,7 +54,7 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, checkout?: CheckoutFixtureCleanup, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
@@ -82,16 +80,10 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   async function signal(expected: ProcessIdentity, value: NodeJS.Signals): Promise<void> {
     if (await authorize(expected) && await authorize(expected)) await adapter.signalGroup(expected.pid, value)
   }
-  const verifyGitCleanup = async (): Promise<void> => {
+  const verifyCatalogCleanup = async (): Promise<void> => {
     try {
       const evidence = JSON.parse(await readFile(join(root, "catalog-cleanup-failure.json"), "utf8"))
       throw failFixtureBatch(Object.assign(new Error(`unverified Handler catalog cleanup; retained ${root}`), { evidence }))
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw failFixtureBatch(error)
-    }
-    try {
-      const evidence = JSON.parse(await readFile(join(root, "git-cleanup-failure.json"), "utf8"))
-      throw failFixtureBatch(Object.assign(new Error(`unverified Handler Git cleanup; retained ${root} and ${checkout?.root ?? "checkout"}`), { evidence }))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw failFixtureBatch(error)
     }
@@ -99,7 +91,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   let cleanupOperation: Promise<void> | undefined
   const cleanup = (): Promise<void> => cleanupOperation ??= (async () => {
     await Promise.allSettled(starts)
-    await verifyGitCleanup()
+    await verifyCatalogCleanup()
     assertFixtureBatchHealthy()
     for (const barrier of cleanupBarriers) await barrier()
     for (const item of pending) {
@@ -138,12 +130,10 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       for (const identity of provider.record.provider!.group.observed) assert.equal(await observe(identity.pid), null)
       assert.deepEqual(await adapter.readGroup(provider.record.provider!.group.leader.pid), [])
     }
-    checkout?.verifyCleanup()
     await writeFile(join(root, "cleanup.json"), JSON.stringify({ identities: owned, survivors: [], failedStarts: failedStarts.map(String) }), { mode: 0o600 })
     await rm(root, { recursive: true })
   })().catch(error => { throw failFixtureBatch(error) })
   t.after(cleanup)
-  checkout?.beforeCleanup(cleanup)
   await chown(root, process.getuid!(), process.getgid!())
   await mkdir(paths.persistentRoot, { mode: 0o700 })
   await mkdir(paths.runtimeRoot, { mode: 0o700 })
@@ -162,8 +152,8 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
         if (identity !== null) { assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), marker); owned.push(identity) }
       }
       await hook?.(transition)
-    } }).then(async result => { await verifyGitCleanup(); return result }, async error => {
-      await verifyGitCleanup()
+    } }).then(async result => { await verifyCatalogCleanup(); return result }, async error => {
+      await verifyCatalogCleanup()
       throw error
     })
     starts.push(operation)

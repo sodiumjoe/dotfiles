@@ -1,4 +1,3 @@
-import { assertGitChildrenClosed } from "../src/checkout/identity.js"
 import { PassThrough } from "node:stream"
 import { isDeepStrictEqual } from "node:util"
 import { EventEmitter } from "node:events"
@@ -14,7 +13,7 @@ import { AgentError } from "../src/agent/types.js"
 import { splitLaunchSpec, startCommand } from "../src/agent/types.js"
 import { privateRoot, controlFixture, until, fileExists, failFixtureBatch } from "./control-support.js"
 import { MutationQueue } from "../src/handler/mutations.js"
-import type { AdmissionContext } from "../src/checkout/admission.js"
+import type { LaunchContext } from "../src/handler/launch-transitions.js"
 import { readHandlerRecord, readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord, ProcessIdentity } from "../src/platform/types.js"
 import { createAgentService, type AgentService } from "../src/agent/service.js"
@@ -24,7 +23,6 @@ import { observeConfig } from "../src/catalog/config.js"
 import { isFresh, type CatalogSnapshot, type ProviderProfile } from "../src/catalog/types.js"
 import type { CatalogService } from "../src/catalog/service.js"
 import { launchContractFingerprint, productionLaunchContracts } from "../src/agent/contracts.js"
-import { admissionFixture, gitFixture } from "./checkout-support.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import { AGENT_PROTOCOL, exchangeAgent, type AgentRequest } from "../src/agent/protocol.js"
 import { PROTOCOL } from "../src/control/protocol.js"
@@ -34,10 +32,12 @@ import { createAcpConnection } from "../src/agent/acp.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = { pauseAt?: "intent" | "reservation" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; reservationHang?: "before" | "launch" | "admission"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean }
+export type AgentHandlerOptions = { pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean }
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
-  const git = await gitFixture(t), f = await controlFixture(t, {}, git, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
+  const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
+  const workspace = join(f.root, "workspace"), otherWorkspace = join(f.root, "other-workspace")
+  await mkdir(workspace, { mode: 0o700 }); await mkdir(otherWorkspace, { mode: 0o700 })
   const owned = new Map<string, LaunchRecord>(), seen = new Set<string>(), requests: Promise<unknown>[] = []
   const inventory = async () => ({ ...await createAgentStore(f.paths.persistentRoot).inventory(), launches: await inventoryLaunches(join(f.paths.persistentRoot, "launches")) })
   async function trackProviders(): Promise<void> {
@@ -91,11 +91,10 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     }
     for (const entry of launches) if (entry.record.provider) for (const identity of entry.record.provider.group.observed) await proveAbsent(identity)
     for (const identity of f.owned) await proveAbsent(identity)
-    assertGitChildrenClosed(); git.verifyCleanup()
     const evidence = { handlers: f.owned, providers: [...owned.values()], launches, agents, probes, survivors: [] }
     await writeFile(join(f.root, "agent-cleanup.json"), JSON.stringify(evidence), { mode: 0o600 })
     t.diagnostic("agent cleanup verified: " + JSON.stringify(evidence))
-  })().catch(error => { throw failFixtureBatch(new Error(`agent fixture cleanup incomplete; retained ${f.root} and ${git.root}`, { cause: error })) })
+  })().catch(error => { throw failFixtureBatch(new Error(`agent fixture cleanup incomplete; retained ${f.root}`, { cause: error })) })
   f.beforeCleanup(cleanupOwned)
   for (const name of ["home", "profile"]) await mkdir(join(f.root, name), { mode: 0o700 })
   const executable = join(f.root, "profile/native"), adapterPackageJson = join(f.root, "profile/adapter.json"), configuration = join(f.root, "profile/declared.json")
@@ -122,9 +121,9 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection }, environment: { ...process.env, FIXTURE_ROOT: f.root } as Record<string, string> } }))
   const command = async (commandId: string, commandGeneration: string) => commandView(await call({ op: "agent_command", commandId, commandGeneration }))
   const currentAt = async (cwd: string) => { const result = await call({ op: "agent_current", cwd }); assert.equal(result.state, "current"); if (result.state !== "current") throw new Error("wrong reply"); return result }
-  return { root: f.root, configPath: f.configPath, paths: f.paths, git, inventory, startAt, currentAt, command, releaseBarrier,
-    start: (selection?: Partial<StartSelection>) => startAt(git.repo, selection),
-    current: () => currentAt(git.repo),
+  return { root: f.root, configPath: f.configPath, paths: f.paths, workspace, otherWorkspace, inventory, startAt, currentAt, command, releaseBarrier,
+    start: (selection?: Partial<StartSelection>) => startAt(workspace, selection),
+    current: () => currentAt(workspace),
     async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
     stop: async (target: AgentTuple, commandId = randomUUID()) => commandView(await call({ op: "agent_stop", input: { ...target, commandId } })),
     restore: async (agentId: string) => commandView(await call({ op: "agent_restore", input: { agentId, commandId: randomUUID(), handlerGeneration: (await handler()).generation, environment: { ...process.env, FIXTURE_ROOT: f.root } as Record<string, string> } })),
@@ -133,11 +132,10 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     retry: async (value: AgentCommand) => command(value.commandId, value.handlerGeneration),
     waitCompleted: (value: CommandView) => until(async () => { const result = await command(value.command.commandId, value.command.handlerGeneration); return result.command.state !== "pending" ? result : undefined }, 35000),
     providerCount: () => seen.size,
-    async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); assertGitChildrenClosed(); await trackProviders() },
+    async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); await trackProviders() },
     async waitPrompt() { await until(async () => await fileExists(join(f.root, "at-prompt")) ? true : undefined, 35000); await trackProviders() },
     async crashHandler() { await trackProviders(); const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process) },
     async waitHandlerExit(timeout?: number) { const current = await handler(); assert.ok(current.process); await proveAbsent(current.process, timeout); await trackProviders() },
-    async reservationTimeoutEvidence() { return JSON.parse(await readFile(join(f.root, "reservation-timeout.json"), "utf8")) as { pid: number; signal: string; attempt: string } },
     async restart() { await configure({}); await releaseBarrier(); await f.start(15000) },
     async killProvider(target: AgentTuple) { await trackProviders(); const record = [...owned.values()].find(record => record.version === 2 && record.owner.kind === "agent" && record.owner.agentId === target.agentId && record.handlerGeneration === target.handlerGeneration); assert.ok(record?.provider); await f.signal(record.provider.group.leader, "SIGKILL"); await proveAbsent(record.provider.group.leader) },
     async assertProviderAbsent(target: AgentTuple) {
@@ -230,7 +228,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   if (scenario === "wrong-boot") identity.bootId = "other-boot"
   if (scenario === "wrong-group") identity.processGroupId++
   if (scenario === "wrong-uid") identity.uid++
-  const context: AdmissionContext = {
+  const context: LaunchContext = {
     paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
     state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
     mutations: { queue: new MutationQueue(), accepted: [] }, shutdownPending: () => false,
@@ -347,11 +345,21 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { prod
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; neverReserve?: boolean; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
-  const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), reservationEntered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), promptEntered = agentGate(), publications: string[] = []
-  let stateRemovalCalls = 0, evidenceCalls = 0, fatalCalls = 0, reservationCalls = 0, cleanupCalls = 0
+  const root = await privateRoot(childContext), workspace = join(root, "workspace")
+  await mkdir(join(root, "launches"), { mode: 0o700 }); await mkdir(workspace, { mode: 0o700 })
+  const forbidden = async (): Promise<never> => { throw new Error("unexpected process operation") }
+  const context: LaunchContext = {
+    paths: { hostKey: "a".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
+    adapter: { platform: "linux", bootId: async () => "boot-a", readProcess: forbidden, readGroup: forbidden, signalGroup: forbidden },
+    state: { hostId: "a".repeat(64), handlerGeneration: randomUUID(), phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
+    mutations: { queue: new MutationQueue(), accepted: [] },
+    shutdownPending: () => false,
+  }
+  const f = { root, workspace, context }, entered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), promptEntered = agentGate(), publications: string[] = []
+  let stateRemovalCalls = 0, evidenceCalls = 0, fatalCalls = 0, cleanupCalls = 0
   const requests: Promise<unknown>[] = [], owners: OwnedAgentProcess[] = []
   const track = (service: AgentService): AgentService => {
     const start = service.start.bind(service), stop = service.stop.bind(service)
@@ -468,19 +476,18 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   t.after(async () => {
     released.resolve(); readyCommitReleased.resolve(); stateRemovalReleased.resolve(); restoreReleased.resolve()
     await Promise.allSettled(requests)
-    if (!options.neverReserve && !fatalCalls) await service.freezeAndDrain(true).catch(() => undefined)
+    if (!fatalCalls) await service.freezeAndDrain(true).catch(() => undefined)
     service.close()
     await Promise.allSettled(owners.map(owner => owner.cleanup()))
     await f.context.mutations.queue.run(async () => undefined)
-    assertGitChildrenClosed()
     for (const finish of teardown) await finish()
   })
   await service.initialize()
-  const input: StartInput = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: selectedSpec.selection, environment: { ...process.env, FIXTURE_ROOT: root } as Record<string, string> }
+  const input: StartInput = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: workspace, selection: selectedSpec.selection, environment: { ...process.env, FIXTURE_ROOT: root } as Record<string, string> }
   return { ...f, service, input, store, catalogStore, contract, profile, configuration, config, publications, spawnOptions, methodHistory, loadBehavior(value: string) { loadBehavior = value }, entered: entered.promise, release: released.resolve, spawns: () => spawnCount, refreshes: () => refreshes, catalogReads: () => catalogReads, readyFailures: () => readyFailures,
     failStopReceipt(value: boolean) { failStopReceipt = value },
     pauseRestore(value: string) { restorePause = value }, restoreEntered: restoreEntered.promise,
-    evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, reservationCalls: () => reservationCalls, cleanupCalls: () => cleanupCalls, reservationEntered: reservationEntered.promise, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
+    evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, cleanupCalls: () => cleanupCalls, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
     failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value }, failInitialCommand(value: boolean) { failInitialCommand = value },
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures,
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,

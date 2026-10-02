@@ -17,7 +17,6 @@ import { observeConfig } from "../../src/catalog/config.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../../src/platform/private-state.js"
-import { assertGitChildrenClosed, CheckoutResolutionError } from "../../src/checkout/identity.js"
 import type { PlatformPaths } from "../../src/platform/paths.js"
 import type { ProviderProfile } from "../../src/catalog/types.js"
 import type { AgentHandlerOptions } from "../agent-support.js"
@@ -31,10 +30,6 @@ let paused = false
 async function pause(name: string): Promise<void> {
   if (paused || config.pauseAt !== name) return
   paused = true
-  try { assertGitChildrenClosed() } catch (error) {
-    await writeFile(join(root, "git-cleanup-failure.json"), JSON.stringify({ handlerPid: process.pid, child: error instanceof CheckoutResolutionError ? error.child : null }), { mode: 0o600 })
-    throw error
-  }
   await writeFile(join(root, "barrier.json"), JSON.stringify({ name, generation }), { mode: 0o600 })
   while (true) {
     try { await readFile(join(root, "release-barrier")); return } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
@@ -99,9 +94,9 @@ try {
         const current = await createCatalogStore(config.paths.persistentRoot).readCurrent()
         if (!current || current.snapshotId !== spec.catalogSnapshotId || !isDeepStrictEqual(current.providers[0], spec.catalogEvidence) || !isDeepStrictEqual(config.profile, expected.profile) || !isDeepStrictEqual(await observeConfig(config.profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
       }, fatalStartupTimeout(spec): never {
-        if (!(config.reservationHang || config.startupHang) || spec.handlerGeneration !== generation) throw new Error("unexpected fixture startup timeout")
+        if (!config.startupHang || spec.handlerGeneration !== generation) throw new Error("unexpected fixture startup timeout")
         const handlerPid = process.pid
-        writeFileSync(join(root, "reservation-timeout.json"), JSON.stringify({ pid: handlerPid, signal: "SIGKILL", attempt: spec.launchAttemptId }), { mode: 0o600 })
+        writeFileSync(join(root, "startup-timeout.json"), JSON.stringify({ pid: handlerPid, signal: "SIGKILL", attempt: spec.launchAttemptId }), { mode: 0o600 })
         if (handlerPid !== process.pid) throw new Error("fixture Handler identity changed")
         process.kill(handlerPid, "SIGKILL")
         throw new Error("fixture Handler survived SIGKILL")
