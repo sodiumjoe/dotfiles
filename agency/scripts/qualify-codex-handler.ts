@@ -80,7 +80,7 @@ export function qualificationProcessFactory(receipts: string): typeof createAgen
 }
 export function qualificationHandlerOptions(candidate: CodexQualificationCandidate, receipts: string, base: HandlerOptions, verify = verifyCodexQualification): HandlerOptions {
   const contract = contractFromQualifiedCandidate(candidate), evidence = launchEvidenceFromQualifiedCandidate(candidate, base.generation, Date.now())
-  return { ...base, launchContracts: [contract], catalogFactory: context => qualificationCatalog(context, evidence), agentFactory: input => createAgentService({ ...input, candidateRestoreContracts: new Set([contract.id]) }, {
+  return { ...base, launchContracts: [contract], catalogFactory: context => qualificationCatalog(context, evidence), agentFactory: input => createAgentService(input, {
     processFactory: qualificationProcessFactory(receipts),
     observeLaunchEvidence: (spec, expected) => verifyInjectedLaunchEvidence(candidate, evidence, spec, expected, verify),
     fatalStartupTimeout(spec): never {

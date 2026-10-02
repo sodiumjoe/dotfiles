@@ -131,11 +131,11 @@ test("oversized agent history returns explicit incomplete instead of truncation"
   assert.ok(!reply.ok && reply.error.code === "INCOMPLETE")
 })
 
-test("production Handler exposes agent inspection but cannot select fixture launch contracts", async t => {
+test("production Handler uses its static registry before configured-provider evidence", async t => {
   const f = await controlFixture(t), handler = await f.start(), initial = request().op === "agent_start" ? (request() as Extract<AgentRequest, { op: "agent_start" }>).input : undefined
   assert.ok(initial)
   const reply = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: handler.record.generation, op: "agent_start", input: { ...initial, handlerGeneration: handler.record.generation } })
-  assert.ok(!reply.ok && reply.error.code === "ADAPTER_UNQUALIFIED")
+  assert.ok(!reply.ok && reply.error.code === "MODEL_UNAVAILABLE")
   const list = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: agentId(11), handlerGeneration: handler.record.generation, op: "agent_list" })
   assert.ok(list.ok && list.result.state === "agents" && list.result.agents.length === 0)
   assert.deepEqual(await readdir(join(f.paths.persistentRoot, "launches")), [])

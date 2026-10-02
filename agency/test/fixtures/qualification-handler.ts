@@ -29,7 +29,7 @@ if (process.argv[5] === "readiness-race") options.onPhase = async phase => {
 const contract: any = { ...options.launchContracts![0]!, permissionEvidence: "fixture-contract-v1", qualification: null }
 contract.fingerprint = await observeLaunchContract(contract)
 options.launchContracts = [contract]
-options.agentFactory = input => createAgentService({ ...input, candidateRestoreContracts: new Set([contract.id]) }, {
+options.agentFactory = input => createAgentService(input, {
   processFactory: qualificationProcessFactory(receipts),
   async observeLaunchEvidence(spec, expected) {
     if (spec.contractFingerprint !== contract.fingerprint || !isDeepStrictEqual(spec.catalogEvidence, expected.provider) || !isDeepStrictEqual(spec.configuration, expected.configuration)) throw new Error("fixture evidence mismatch")

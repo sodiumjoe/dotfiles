@@ -55,8 +55,21 @@ for (const crashed of [false, true]) test(`restore retains identity and rotates 
   await service.freezeAndDrain(true)
 })
 
-for (const [sessionLoad, authorized, succeeds] of [["unsupported", true, false], ["candidate", false, false], ["candidate", true, true], ["qualified", false, true]] as const) test(`restore authorization is ${sessionLoad} with candidate authorization ${authorized}`, async t => {
-  const f = await agentServiceFixture(t, { sessionLoad, candidateRestoreContracts: new Set(authorized ? ["fixture-v1"] : ["another-contract"]) })
+test("ordinary production contract starts and restores without qualification authority", async t => {
+  const f = await agentServiceFixture(t, { productionContract: true })
+  const started = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...started.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: started.command.target!.agentId, environment: { PATH: "/restore" } }
+  const restored = await completed(f.service, (await f.service.restore(request)).command)
+  assert.equal(restored.command.result?.outcome, "restored")
+  assert.equal(restored.command.target?.agentId, started.command.target?.agentId)
+  assert.equal(restored.command.result?.session?.sessionId, started.command.result?.session?.sessionId)
+  assert.notEqual(restored.command.target?.providerGeneration, started.command.target?.providerGeneration)
+})
+
+for (const [sessionLoad, succeeds] of [[false, false], [true, true]] as const) test(`restore follows static session load support ${sessionLoad}`, async t => {
+  const f = await agentServiceFixture(t, { sessionLoad })
   const ready = await completed(f.service, (await f.service.start(f.input)).command)
   const stop = { ...ready.command.target!, commandId: randomUUID() }
   await f.service.stop(stop); await completed(f.service, stop)
@@ -70,12 +83,13 @@ for (const [sessionLoad, authorized, succeeds] of [["unsupported", true, false],
   }
 })
 
-for (const [behavior, code, phase] of [["unsupported", "RESTORE_UNSUPPORTED", "recoverable"], ["missing", "SESSION_UNAVAILABLE", "failed"], ["invalid-params", "STARTUP_FAILED", "recoverable"], ["cwd", "STARTUP_FAILED", "recoverable"], ["transport", "STARTUP_FAILED", "recoverable"]] as const) test(`restore ${behavior} retains the conversation after cleanup`, async t => {
+for (const [behavior, code, phase] of [["unsupported", "RESTORE_UNSUPPORTED", "recoverable"], ["auth", "AUTH_REQUIRED", "recoverable"], ["missing", "SESSION_UNAVAILABLE", "failed"], ["invalid-params", "STARTUP_FAILED", "recoverable"], ["cwd", "STARTUP_FAILED", "recoverable"], ["transport", "STARTUP_FAILED", "recoverable"], ["invalid-protocol", "INVALID_PROTOCOL", "recoverable"], ["timeout", "STARTUP_TIMEOUT", "recoverable"]] as const) test(`restore ${behavior} retains the conversation after cleanup`, async t => {
   const f = await agentServiceFixture(t)
   const ready = await completed(f.service, (await f.service.start(f.input)).command)
   const stop = { ...ready.command.target!, commandId: randomUUID() }
   await f.service.stop(stop); await completed(f.service, stop)
   f.loadBehavior(behavior)
+  if (behavior === "timeout") f.contract.deadlines.sessionMs = 25
   const request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: ready.command.target!.agentId, environment: {} }
   await f.service.restore(request)
   assert.equal((await completed(f.service, request)).command.result?.failure?.code, code)
@@ -87,6 +101,8 @@ for (const [behavior, code, phase] of [["unsupported", "RESTORE_UNSUPPORTED", "r
   assert.equal(agent.record.session!.sessionId, ready.command.result!.session!.sessionId)
   assert.equal(agent.record.failure?.code, code)
   assert.equal(f.methodHistory.filter(method => method === "session/new").length, 1)
+  const unrelated = { ...f.input, commandId: randomUUID() }
+  assert.equal((await completed(f.service, (await f.service.start(unrelated)).command)).command.result?.outcome, "started")
   if (phase === "recoverable") {
     f.loadBehavior("normal")
     const retry = { ...request, commandId: randomUUID() }

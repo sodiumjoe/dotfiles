@@ -23,7 +23,7 @@ import { createCatalogStore } from "../src/catalog/store.js"
 import { observeConfig } from "../src/catalog/config.js"
 import { isFresh, type CatalogSnapshot, type ProviderProfile } from "../src/catalog/types.js"
 import type { CatalogService } from "../src/catalog/service.js"
-import { launchContractFingerprint } from "../src/agent/contracts.js"
+import { launchContractFingerprint, productionLaunchContracts } from "../src/agent/contracts.js"
 import { admissionFixture, gitFixture } from "./checkout-support.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import { AGENT_PROTOCOL, exchangeAgent, type AgentRequest } from "../src/agent/protocol.js"
@@ -288,7 +288,8 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   return { owner, root, spec, context, signals, requests: peer.sent, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }
 
-export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qualified?: boolean; response?: (request: any, reply: any) => unknown; prompt?: (request: any, send: (value: unknown) => void) => void; hold?: number; now?: () => number } = {}) {
+const NO_ACP_RESPONSE = Symbol("no-acp-response")
+export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qualified?: boolean; response?: (request: any, reply: any) => unknown | typeof NO_ACP_RESPONSE; prompt?: (request: any, send: (value: unknown) => void) => void; hold?: number; now?: () => number } = {}) {
   const readable = new PassThrough(), writable = new PassThrough(), sent: Array<{ jsonrpc: "2.0"; id: number; method: string; params: any }> = [], permissionReplies: unknown[] = []
   const options = [
     { id: "model", type: "select", name: "Model", currentValue: "model-a", options: [{ value: "model-a", name: "Model α" }] },
@@ -341,7 +342,8 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qual
         result = { ...result, configOptions: (result.configOptions as typeof options).map(option => ({ ...option, options: [{ group: "choices", name: "Choices", options: option.options }] })) }
       }
       const reply = { jsonrpc: "2.0", id: request.id, result }
-      send(settings.response ? settings.response(request, reply) : reply)
+      const response = settings.response ? settings.response(request, reply) : reply
+      if (response !== NO_ACP_RESPONSE) send(response)
       if (scenario === "duplicate-id") send(reply)
     }
   })
@@ -349,7 +351,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { qual
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; sessionLoad?: boolean | "unsupported" | "candidate" | "qualified"; candidateRestoreContracts?: ReadonlySet<string>; injectedOnly?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; neverReserve?: boolean; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "reservation" | "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; neverReserve?: boolean; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
   const f = await admissionFixture(childContext), root = f.root, entered = agentGate(), reservationEntered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), promptEntered = agentGate(), publications: string[] = []
@@ -364,14 +366,15 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   const directory = join(root, "catalog"), config = join(root, "declared.json"), executable = join(root, "native"), adapterPackageJson = join(root, "adapter.json")
   if (!options.injectedOnly) await mkdir(directory, { mode: 0o700 })
   const providerFile = join(root, "agent-provider.js")
-  await writeFile(config, "{}", { mode: 0o600 }); await writeFile(executable, "fixture", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.0.0", main: "agent-provider.js" }), { mode: 0o600 }); await writeFile(providerFile, await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 })
+  await writeFile(config, "{}", { mode: 0o600 }); await writeFile(executable, "fixture", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: options.productionContract ? "1.7.0" : "1.0.0", main: "agent-provider.js" }), { mode: 0o600 }); await writeFile(providerFile, await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 })
   const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable, adapterPackageJson, sdkPackageJson: null, configurationFiles: [config] }
   if (!options.injectedOnly) await writeFile(join(directory, "providers.json"), JSON.stringify({ version: 1, providers: [profile] }), { mode: 0o600 })
   const configuration = await observeConfig(profile), catalogStore = createCatalogStore(root)
-  let snapshot: CatalogSnapshot = { version: 1, hostId: f.context.paths.hostKey, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, createdAt: Date.now(), providers: [{ ...sampleSpec().catalogEvidence, fingerprint: configuration.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: f.context.state.handlerGeneration }] }
+  const selectedSpec = options.productionContract ? sampleProductionSpec() : sampleSpec()
+  let snapshot: CatalogSnapshot = { version: 1, hostId: f.context.paths.hostKey, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, createdAt: Date.now(), providers: [{ ...selectedSpec.catalogEvidence, fingerprint: configuration.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: f.context.state.handlerGeneration }] }
   const saveCatalog = async () => { if (!options.injectedOnly) { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) } }
   await saveCatalog()
-  const contract = { ...sampleStaticContract(), sessionLoad: options.sessionLoad === "unsupported" || options.sessionLoad === false ? false : true }
+  const contract = { ...(options.productionContract ? productionLaunchContracts()[0]! : sampleStaticContract()), sessionLoad: options.sessionLoad ?? true }
   let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0
   const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {
     const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
@@ -424,10 +427,12 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     try { await Promise.race([released.promise, cancelled]) } finally { signal.removeEventListener("abort", aborted) }
   }
   const processFactory: typeof createAgentProcess = input => {
-    const peer = scriptedAcp(t, "exact", { hold: input.session?.kind === "load" && restorePause === "spawned" ? 1 : Infinity, response(request, reply) {
+    const peer = scriptedAcp(t, "exact", { qualified: options.productionContract === true, hold: input.session?.kind === "load" && restorePause === "spawned" ? 1 : Infinity, response(request, reply) {
       methodHistory.push(request.method)
       if (input.session?.kind === "load" && request.method === "initialize" && loadBehavior === "unsupported") reply.result.agentCapabilities.loadSession = false
-      if (request.method === "session/load" && loadBehavior !== "normal") return { jsonrpc: "2.0", id: request.id, error: { code: ["missing", "invalid-params", "cwd"].includes(loadBehavior) ? -32602 : -32603, message: loadBehavior === "missing" ? "Session not found" : loadBehavior === "invalid-params" ? "Invalid params" : loadBehavior === "cwd" ? "Invalid params: cwd must refer to an accessible directory" : "fixture failure" } }
+      if (request.method === "session/load" && loadBehavior === "timeout") return NO_ACP_RESPONSE
+      if (request.method === "session/load" && loadBehavior === "invalid-protocol") return { jsonrpc: "2.0", id: request.id, result: { sessionId: "other", configOptions: [] } }
+      if (request.method === "session/load" && loadBehavior !== "normal") return { jsonrpc: "2.0", id: request.id, error: { code: loadBehavior === "auth" ? -32000 : ["missing", "invalid-params", "cwd"].includes(loadBehavior) ? -32602 : -32603, message: loadBehavior === "auth" ? "Authentication required" : loadBehavior === "missing" ? "Session not found" : loadBehavior === "invalid-params" ? "Invalid params" : loadBehavior === "cwd" ? "Invalid params: cwd must refer to an accessible directory" : "fixture failure" } }
       return reply
     }, prompt(request, send) {
       methodHistory.push(request.method)
@@ -458,7 +463,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
       await pause("ready", signal); return session
     } }
   }
-  const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : [contract], candidateRestoreContracts: options.candidateRestoreContracts ?? new Set<string>(), store }
+  const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : [contract], store }
   const dependencies = { processFactory, async observeLaunchEvidence(spec: LaunchSpec, expected: { profile: ProviderProfile }) {
     publications.push("evidence"); evidenceCalls++; await options.observe?.(evidenceCalls, spec)
     if (snapshot.snapshotId !== spec.catalogSnapshotId || !isDeepStrictEqual(snapshot.providers[0], spec.catalogEvidence) || !isDeepStrictEqual(profile, expected.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
@@ -475,7 +480,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     for (const finish of teardown) await finish()
   })
   await service.initialize()
-  const input: StartInput = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: sampleSpec().selection, environment: { ...process.env, FIXTURE_ROOT: root } as Record<string, string> }
+  const input: StartInput = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: f.git.repo, selection: selectedSpec.selection, environment: { ...process.env, FIXTURE_ROOT: root } as Record<string, string> }
   return { ...f, service, input, store, catalogStore, contract, profile, configuration, config, publications, spawnOptions, methodHistory, loadBehavior(value: string) { loadBehavior = value }, entered: entered.promise, release: released.resolve, spawns: () => spawnCount, refreshes: () => refreshes, catalogReads: () => catalogReads, readyFailures: () => readyFailures,
     failStopReceipt(value: boolean) { failStopReceipt = value },
     pauseRestore(value: string) { restorePause = value }, restoreEntered: restoreEntered.promise,

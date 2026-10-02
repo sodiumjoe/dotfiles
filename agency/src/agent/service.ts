@@ -48,9 +48,8 @@ function productionDependencies(root: string): AgentServiceDependencies {
   }
 }
 
-export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; candidateRestoreContracts?: ReadonlySet<string>; store: AgentStore }, dependencies: AgentServiceDependencies = productionDependencies(input.context.paths.persistentRoot)): AgentService {
+export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore }, dependencies: AgentServiceDependencies = productionDependencies(input.context.paths.persistentRoot)): AgentService {
   const { context, store, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
-  const candidateRestoreContracts = new Set(input.candidateRestoreContracts)
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const dirty = new Set<string>(), dirtyAgents = new Set<string>(), stops = new Map<string, Promise<void>>()
   const recoveryRepairs = new Map<string, AgentRecoveryRepair>()
