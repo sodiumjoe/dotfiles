@@ -15,6 +15,21 @@ import { agentId, sampleAgent, sampleCommand, sampleSpec, sampleSession } from "
 const request = (): AgentRequest => ({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_start", input: { commandId: agentId(6), handlerGeneration: agentId(2), cwd: "/workspace/a", selection: sampleSpec().selection, environment: {} } })
 const response = (r: AgentRequest): AgentReply => ({ protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: agentId(6), ok: true, result: { state: "command", command: sampleCommand(), durability: "verified" } })
 
+test("query framing strictly validates choices, pages, filters and resync errors", () => {
+  const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2) }
+  const page = { ...base, op: "agent_page", input: { limit: 100, cwd: "/workspace/a", activeOnly: true } }
+  assert.deepEqual(parseAgentRequest(page), page)
+  assert.deepEqual(parseAgentRequest({ ...base, op: "agent_choices" }), { ...base, op: "agent_choices" })
+  const reply = { ...base, ok: true, result: { state: "page", revision: agentId(80), agents: [], issues: [], nextCursor: null } }
+  assert.deepEqual(parseAgentReply(reply), reply)
+  const choices = { ...base, ok: true, result: { state: "choices", choices: [{ displayName: "Model A", selection: sampleSpec().selection, snapshotId: agentId(81), contractFingerprint: "a".repeat(64) }], unavailable: [{ providerId: "claude-agent-acp", reason: "adapter unqualified" }] } }
+  assert.deepEqual(parseAgentReply(choices), choices)
+  assert.throws(() => parseAgentReply({ ...choices, result: { ...choices.result, choices: [{ ...choices.result.choices[0], selection: { ...sampleSpec().selection, mode: null } }] } }), { code: "INVALID_PROTOCOL" })
+  for (const bad of [{ ...page, input: { limit: 101 } }, { ...page, input: { limit: 1, cursor: "!" } }, { ...page, extra: true }]) assert.throws(() => parseAgentRequest(bad), { code: "INVALID_PROTOCOL" })
+  for (const bad of [{ ...reply, result: { ...reply.result, nextCursor: "!" } }, { ...choices, result: { ...choices.result, unavailable: [{ providerId: "other", reason: "unsupported" }] } }]) assert.throws(() => parseAgentReply(bad), { code: "INVALID_PROTOCOL" })
+  assert.equal(parseAgentReply(agentErrorReply(parseAgentRequest(page), new AgentError("RESYNC_REQUIRED"))).ok, false)
+})
+
 test("agent prompt transport uses the production contract deadline plus close grace", () => {
   const spec = sampleSpec(), prompt: AgentRequest = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: spec.handlerGeneration, op: "agent_prompt", input: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, text: "challenge" } }
   assert.equal(PRODUCTION_PROMPT_TRANSPORT_MS, 95000)

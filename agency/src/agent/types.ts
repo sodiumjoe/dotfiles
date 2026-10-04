@@ -35,7 +35,7 @@ export type LegacyAgentView = { record: LegacyAgentRecord; launch: LaunchRecord 
 export type CommandView = { state: "command"; command: AgentCommand; durability: "verified" | "unverified" }
 export type AgentList = { state: "agents"; agents: Array<AgentView | LegacyAgentView>; issues: AgentStateIssue[] }
 export type CurrentAgents = { state: "current"; cwd: string; agents: AgentView[] }
-export const AGENT_CODES = ["USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "RESTORE_UNSUPPORTED", "SESSION_UNAVAILABLE", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL", "INPUT_TOO_LARGE", "OUTPUT_TOO_LARGE", "ACP_FRAME_LIMIT", "ACP_HISTORY_LIMIT"] as const
+export const AGENT_CODES = ["RESYNC_REQUIRED", "USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "RESTORE_UNSUPPORTED", "SESSION_UNAVAILABLE", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL", "INPUT_TOO_LARGE", "OUTPUT_TOO_LARGE", "ACP_FRAME_LIMIT", "ACP_HISTORY_LIMIT"] as const
 export type AgentErrorCode = typeof AGENT_CODES[number]
 export type AgentFailure = { code: AgentErrorCode; message: string }
 export class AgentError extends Error { constructor(readonly code: AgentErrorCode) { super(code.replaceAll("_", " ").toLowerCase()) } }

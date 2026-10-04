@@ -108,7 +108,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   if (options.pauseAt === "session") await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 })
   if (options.pauseAt === "prompt") await writeFile(join(f.root, "pause-prompt"), "pause", { mode: 0o600 })
   await f.start(15000)
-  async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_restore" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_prompt" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
+  async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_restore" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_prompt" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_choices" } | { op: "agent_page"; input: import("../src/agent/queries.js").PageInput } | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
     const current = await handler()
     const operationPromise = exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, ...operation }, 15000)
     requests.push(operationPromise)
@@ -123,6 +123,8 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   const command = async (commandId: string, commandGeneration: string) => commandView(await call({ op: "agent_command", commandId, commandGeneration }))
   const currentAt = async (cwd: string) => { const result = await call({ op: "agent_current", cwd }); assert.equal(result.state, "current"); if (result.state !== "current") throw new Error("wrong reply"); return result }
   return { root: f.root, configPath: f.configPath, paths: f.paths, workspace, otherWorkspace, inventory, startAt, currentAt, command, releaseBarrier,
+    async choices() { const result = await call({ op: "agent_choices" }); if (result.state !== "choices") throw new Error("wrong reply"); return result },
+    async page(input: import("../src/agent/queries.js").PageInput) { const result = await call({ op: "agent_page", input }); if (result.state !== "page") throw new Error("wrong reply"); return result },
     start: (selection?: Partial<StartSelection>) => startAt(workspace, selection),
     current: () => currentAt(workspace),
     async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
@@ -351,7 +353,8 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUp
   return { connection, sent, permissionReplies, readable, writable, send, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: LaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
+  if (options.productionCatalog) options = { ...options, productionContract: true }
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
   const root = await privateRoot(childContext), workspace = join(root, "workspace")
@@ -366,6 +369,8 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   }
   const f = { root, workspace, context }, entered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), promptEntered = agentGate(), publications: string[] = []
   let stateRemovalCalls = 0, evidenceCalls = 0, fatalCalls = 0, cleanupCalls = 0
+  let beforeOwnerPage: Promise<import("../src/agent/queries.js").AgentPage> | undefined
+  const cleanupEntered = agentGate(), cleanupReleased = agentGate()
   const requests: Promise<unknown>[] = [], owners: OwnedAgentProcess[] = []
   const track = (service: AgentService): AgentService => {
     const start = service.start.bind(service), stop = service.stop.bind(service)
@@ -382,6 +387,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   const configuration = await observeConfig(profile), catalogStore = createCatalogStore(root)
   const selectedSpec = options.productionContract ? sampleProductionSpec() : sampleSpec()
   let snapshot: CatalogSnapshot = { version: 1, hostId: f.context.paths.hostKey, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, createdAt: Date.now(), providers: [{ ...selectedSpec.catalogEvidence, fingerprint: configuration.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: f.context.state.handlerGeneration }] }
+  if (options.advertiseUnsupportedClaude) snapshot.providers.push({ ...snapshot.providers[0]!, providerId: "claude-agent-acp", models: snapshot.providers[0]!.models.map(model => ({ ...model, providerId: "claude-agent-acp" })) })
   const saveCatalog = async () => { if (!options.injectedOnly) { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) } }
   await saveCatalog()
   const contract = { ...(options.productionContract ? productionLaunchContracts()[0]! : sampleStaticContract()), sessionLoad: options.sessionLoad ?? true }
@@ -403,7 +409,10 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     if (failTerminalBeforeRename && ["failed", "recoverable", "stopped"].includes(value.phase)) { terminalWriteFailures++; throw new Error("terminal publication before rename") }
     writingReady = value.phase === "ready"
     writingTerminal = ["failed", "recoverable", "stopped"].includes(value.phase)
-    try { await base.writeAgent(value, expected) } finally { writingReady = false; writingTerminal = false }
+    try {
+      await base.writeAgent(value, expected)
+      if (options.beforeOwnerPage && ["starting", "restoring"].includes(value.phase)) beforeOwnerPage = service.page({ limit: 100, activeOnly: true })
+    } finally { writingReady = false; writingTerminal = false }
   }, async writeCommand(value: AgentCommand, expected: AgentCommand | null) {
     publications.push(`${value.op}:${value.state}`); writingReceipt = value.state === "completed"
     if (failStopReceipt && value.op === "stop" && value.state === "completed") throw new Error("stop receipt publication")
@@ -470,7 +479,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     } } }
     const owner = createAgentProcess(input, processDependencies)
     owners.push(owner)
-    return { ...owner, cleanup() { cleanupCalls++; return owner.cleanup() }, async initialize(signal) {
+    return { ...owner, async cleanup() { cleanupCalls++; if (options.pauseCleanup) { cleanupEntered.resolve(); await cleanupReleased.promise }; return owner.cleanup() }, async initialize(signal) {
       if (input.session?.kind === "load" && restorePause === "spawn") { restoreEntered.resolve(); await restoreReleased.promise }
       await pause("spawn", signal)
       const session = await owner.initialize(signal)
@@ -478,7 +487,8 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
       await pause("ready", signal); return session
     } }
   }
-  const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : [contract], store }
+  const supplied = options.launchContracts?.map(value => Object.fromEntries(Object.entries(value).filter(([key]) => !["entrypoint", "executable", "fingerprint"].includes(key))) as LaunchContract)
+  const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : supplied ?? [contract], store }
   const retired: Array<{ agentId: string; commandId: string }> = []
   const dependencies = { processFactory, onOperationRetired(agentId: string, commandId: string) { retired.push({ agentId, commandId }) }, async observeLaunchEvidence(spec: LaunchSpec, expected: { profile: ProviderProfile }) {
     publications.push("evidence"); evidenceCalls++; await options.observe?.(evidenceCalls, spec)
@@ -486,7 +496,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   }, fatalStartupTimeout(): never { fatalCalls++; throw new Error("fixture Handler fail-stop") } }
   let service = track(createAgentService(composition, dependencies))
   t.after(async () => {
-    released.resolve(); readyCommitReleased.resolve(); stateRemovalReleased.resolve(); restoreReleased.resolve()
+    released.resolve(); readyCommitReleased.resolve(); stateRemovalReleased.resolve(); restoreReleased.resolve(); cleanupReleased.resolve()
     await Promise.allSettled(requests)
     if (!fatalCalls) await service.freezeAndDrain(true).catch(() => undefined)
     service.close()
@@ -497,6 +507,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
   await service.initialize()
   const input: StartInput = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, cwd: workspace, selection: selectedSpec.selection, environment: { ...process.env, FIXTURE_ROOT: root } as Record<string, string> }
   return { ...f, service, input, store, catalogStore, contract, profile, configuration, config, publications, spawnOptions, methodHistory, loadBehavior(value: string) { loadBehavior = value }, entered: entered.promise, release: released.resolve, spawns: () => spawnCount, refreshes: () => refreshes, catalogReads: () => catalogReads, readyFailures: () => readyFailures,
+    beforeOwnerPage: () => beforeOwnerPage, cleanupEntered: cleanupEntered.promise, releaseCleanup: cleanupReleased.resolve,
     failStopReceipt(value: boolean) { failStopReceipt = value },
     pauseRestore(value: string) { restorePause = value }, restoreEntered: restoreEntered.promise,
     evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, cleanupCalls: () => cleanupCalls, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,

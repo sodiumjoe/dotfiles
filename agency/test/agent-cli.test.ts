@@ -8,6 +8,49 @@ import { agentId, agentServiceFixture, sampleAgent, sampleCommand, sampleSession
 import type { HandlerInspection } from "../src/platform/types.js"
 
 const flags = ["--provider", "codex-acp", "--model", "model-a", "--reasoning", "high", "--mode", "review", "--permission-profile", "fixture-deny-v1", "--json"]
+test("initial expected generation permits a fresh command and lost stdout recovery only inspects it", async () => {
+  const f = fixture(), commandId = agentId(77), generation = f.inspection.record.generation
+  assert.equal(await runControl(["agent", "start", ...flags, "--command-id", commandId, "--expected-handler-generation", generation], f.deps), 0)
+  f.out.length = 0
+  f.calls.length = 0
+  f.inspection.record.generation = agentId(99)
+  f.deps.cwd = () => { throw new Error("receipt lookup cannot read cwd") }
+  assert.equal(await runControl(["agent", "command", commandId, "--handler-generation", generation, "--json"], f.deps), 0)
+  assert.deepEqual(f.calls.map(r => r.op), ["agent_command"])
+  assert.equal(f.calls[0]!.handlerGeneration, agentId(99))
+  assert.equal(f.output().result.command.handlerGeneration, generation)
+  assert.equal(f.starts(), 0)
+})
+
+test("initial generation mismatch fails before dispatch", async () => {
+  const f = fixture()
+  assert.equal(await runControl(["agent", "start", ...flags, "--command-id", agentId(77), "--expected-handler-generation", agentId(99)], f.deps), 69)
+  assert.equal(f.output().error.code, "STALE_HANDLER")
+  assert.equal(f.calls.length, 0)
+  assert.equal(f.starts(), 0)
+})
+
+test("initial restore requires the observed Handler without reading caller cwd", async () => {
+  const f = fixture()
+  f.deps.cwd = () => { throw new Error("restore cannot read caller cwd") }
+  assert.equal(await runControl(["agent", "restore", agentId(1), "--command-id", agentId(77), "--expected-handler-generation", agentId(2), "--json"], f.deps), 0)
+  assert.deepEqual(f.calls.map(r => r.op), ["agent_restore"])
+  assert.equal(f.starts(), 0)
+})
+
+test("page resynchronization remains an explicit error envelope", async () => {
+  const f = fixture()
+  f.deps.callAgent = async (_env, request) => agentErrorReply(request, new AgentError("RESYNC_REQUIRED"))
+  assert.equal(await runControl(["agent", "page", "--limit", "100", "--json"], f.deps), 75)
+  assert.equal(f.output().error.code, "RESYNC_REQUIRED")
+  assert.equal(f.starts(), 0)
+})
+
+for (const extra of [["--expected-handler-generation", agentId(2)], ["--command-id", agentId(77), "--expected-handler-generation", agentId(2), "--handler-generation", agentId(2)]]) test(`invalid initial preconditions reject ${extra.join(" ")}`, async () => {
+  const f = fixture()
+  assert.equal(await runControl(["agent", "start", ...flags, ...extra], f.deps), 64)
+  assert.equal(f.calls.length, 0)
+})
 function fixture() {
   const out: string[] = [], err: string[] = [], calls: AgentRequest[] = [], command = sampleCommand()
   let retained: AgentCommand = { ...command, state: "completed", result: { outcome: "started", target: command.target, session: sampleSession(), failure: null } }, now = 0, starts = 0
@@ -23,6 +66,56 @@ function fixture() {
   const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: command.hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/socket" }, adapter: { platform: "darwin", bootId: async () => "boot-a", readProcess: unsupported, readGroup: unsupported, signalGroup: unsupported } }), start: async () => { starts++; return inspection }, inspect: async () => inspection, cwd: () => "/checkout", now: () => now, sleep: async ms => { now += ms }, stdout: value => out.push(value), stderr: value => err.push(value), callAgent: async (_env, r) => { calls.push(r); return reply(r) }, agentStore: () => ({ readCommand: async id => id === retained.commandId ? structuredClone(retained) : null, readAgent: unsupported, inventory: unsupported, writeAgent: unsupported, writeCommand: unsupported, verifyDurability: unsupported }) }
   return { deps, out, err, calls, command, inspection, reply, starts: () => starts, output: () => JSON.parse(out.join("")), retain(value: AgentCommand) { retained = value } }
 }
+
+test("choices and filtered page use existing Handler without sampling caller environment", async () => {
+  for (const [argv, state] of [[["agent", "choices", "--json"], "choices"], [["agent", "page", "--limit", "100", "--cwd", "/checkout", "--active", "--json"], "page"]] as const) {
+    const f = fixture()
+    f.deps.cwd = () => { throw new Error("query must not sample cwd") }
+    f.deps.callAgent = async (_env, request) => {
+      f.calls.push(request)
+      if (request.op === "agent_choices") return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ok: true, result: { state: "choices", choices: [], unavailable: [] } }
+      assert.equal(request.op, "agent_page")
+      if (request.op !== "agent_page") throw new Error("wrong query")
+      assert.deepEqual(request.input, { limit: 100, cwd: "/checkout", activeOnly: true })
+      return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ok: true, result: { state: "page", revision: agentId(87), agents: [], issues: [], nextCursor: null } }
+    }
+    assert.equal(await runControl(argv, f.deps), 0)
+    assert.equal(f.output().result.state, state)
+    assert.equal(f.starts(), 0)
+  }
+})
+
+test("command inspection reports pending and interrupted receipts without resubmission", async () => {
+  for (const interrupted of [false, true]) {
+    const f = fixture(), command = sampleCommand()
+    f.retain(interrupted ? { ...command, state: "interrupted", result: { outcome: "interrupted", target: command.target, failure: { code: "INCOMPLETE", message: "incomplete" }, session: null } } : command)
+    assert.equal(await runControl(["agent", "command", command.commandId, "--handler-generation", command.handlerGeneration, "--json"], f.deps), 75)
+    assert.deepEqual(f.calls.map(r => r.op), ["agent_command"])
+    assert.equal(f.output().result.command.state, interrupted ? "interrupted" : "pending")
+    assert.equal(f.starts(), 0)
+  }
+})
+
+test("absent Handler and absent command receipts remain explicit lookup failures", async () => {
+  const f = fixture()
+  f.deps.inspect = async () => null
+  assert.equal(await runControl(["agent", "command", agentId(77), "--handler-generation", agentId(2), "--json"], f.deps), 69)
+  assert.equal(f.output().error.code, "UNAVAILABLE")
+  assert.equal(f.starts(), 0)
+  const g = fixture()
+  g.deps.callAgent = async (_env, request) => { g.calls.push(request); return agentErrorReply(request, new AgentError("UNAVAILABLE")) }
+  assert.equal(await runControl(["agent", "command", agentId(77), "--handler-generation", agentId(2), "--json"], g.deps), 69)
+  assert.deepEqual(g.calls.map(r => r.op), ["agent_command"])
+})
+
+for (const operation of ["start", "restore"]) test(`replay-only ${operation} with an absent receipt never dispatches`, async () => {
+  const f = fixture()
+  const argv = operation === "start" ? ["agent", "start", ...flags] : ["agent", "restore", agentId(1), "--json"]
+  assert.equal(await runControl([...argv, "--command-id", agentId(77), "--handler-generation", agentId(2)], f.deps), 69)
+  assert.equal(f.output().error.code, "UNAVAILABLE")
+  assert.equal(f.calls.length, 0)
+  assert.equal(f.starts(), 0)
+})
 
 test("restore snapshots caller environment without accessing caller cwd", async () => {
   const f = fixture()

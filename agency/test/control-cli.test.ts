@@ -133,6 +133,10 @@ test("help documents restore, prompt, and list-valued current", async () => {
   assert.ok(commands.includes("agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]"))
   assert.ok(commands.some(command => command.startsWith("agent current") && command.includes("list")))
   assert.ok(commands.includes("agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson"))
+  assert.ok(commands.includes("agent choices"))
+  assert.ok(commands.some(command => command.startsWith("agent page ")))
+  assert.ok(commands.includes("agent command COMMAND_UUID --handler-generation UUID"))
+  assert.ok(commands.some(command => command.startsWith("agent start ") && command.includes("--expected-handler-generation")))
 })
 
 test("shutdown success requires a receipt and independent absence, including a lost reply", async () => {

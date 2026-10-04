@@ -4,7 +4,9 @@ import { isDeepStrictEqual } from "node:util"
 import { observeConfig, readProfiles } from "../catalog/config.js"
 import { createCatalogStore } from "../catalog/store.js"
 import type { CatalogService, LaunchEvidence } from "../catalog/service.js"
-import { id, isFresh } from "../catalog/types.js"
+import { id, isFresh, PROVIDERS } from "../catalog/types.js"
+import { digest } from "../catalog/config.js"
+import { inventoryPage, launchChoices, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
 import { ControlError } from "../control/protocol.js"
 import { commitLaunchTransition, type LaunchContext } from "../handler/launch-transitions.js"
 import { confirmReconciledLaunch, refreshLaunchState } from "../handler/mutations.js"
@@ -22,7 +24,7 @@ import { createTurnCoordinator, type SubmissionReceipt, type SubmissionRequest, 
 import { LEGACY_TURN_LIMITS, type TurnOptions, type TurnResult } from "./session-events.js"
 import type { AgentTuple } from "./types.js"
 
-export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
+export type AgentService = { initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
 type LivePrompt = { controller: AbortController; promise: Promise<TurnResult> }
 type Live = { initial: AgentRecord; accepted: AgentCommand; environment: LaunchEnvironment | null; declaration: LaunchContract; contract: ConfiguredLaunchContract; evidence: LaunchEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
 
@@ -61,9 +63,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   let initialized = false, closed = false, frozen = false, accepting = 0, stopping = 0
   let assessment: AgentAssessment = { unavailable: new Map(), issues: [] }
   const runtimeIssues = new Map<string, AgentStateIssue>()
+  let inventoryRevision = randomUUID(), inventoryFingerprint = ""
+  const changed = (): void => { inventoryRevision = randomUUID() }
   const errorFor = (error: unknown): AgentError => error instanceof AgentError ? error : new AgentError("STARTUP_FAILED")
   const note = (agentId: string, kind: AgentStateIssue["kind"], id: string, path: string, error: unknown): void => {
-    runtimeIssues.set(agentId, { kind, id, path, message: String(error).slice(0, 512) })
+    const next = { kind, id, path, message: String(error).slice(0, 512) }
+    if (!isDeepStrictEqual(runtimeIssues.get(agentId), next)) changed()
+    runtimeIssues.set(agentId, next)
   }
   const noteOperation = (op: Live, error: unknown): void => note(op.initial.definition.agentId, "agent", op.initial.definition.agentId, join(root, "launches", op.initial.launch.launchAttemptId + ".json"), error)
   const issueFor = (agentId: string): AgentStateIssue | null => assessment.unavailable.get(agentId) ?? runtimeIssues.get(agentId) ?? null
@@ -115,11 +121,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     for (const commandId of commands.keys()) if (!commandIds.has(commandId) && !dirty.has(commandId)) commands.delete(commandId)
     for (const record of inventory.agents) if (!dirtyAgents.has(record.definition.agentId)) records.set(record.definition.agentId, record)
     for (const command of inventory.commands) if (!dirty.has(command.commandId)) commands.set(command.commandId, command)
+    const fingerprint = digest(JSON.stringify([inventory, context.state.launches, assessment.issues, [...assessment.unavailable], [...runtimeIssues]]))
+    if (fingerprint !== inventoryFingerprint) { changed(); inventoryFingerprint = fingerprint }
     return inventory
   }
   async function publishCommand(next: AgentCommand, expected: AgentCommand | null): Promise<void> {
     dirty.add(next.commandId)
-    try { await store.writeCommand(next, expected); dirty.delete(next.commandId) }
+    try { await store.writeCommand(next, expected); dirty.delete(next.commandId); if (!isDeepStrictEqual(next, expected)) changed() }
     finally {
       try {
         const visible = await store.readCommand(next.commandId)
@@ -135,7 +143,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   async function publishAgent(next: AgentRecord, expected: AgentRecord | null): Promise<void> {
     dirtyAgents.add(next.definition.agentId)
-    try { await store.writeAgent(next, expected); dirtyAgents.delete(next.definition.agentId) }
+    try { await store.writeAgent(next, expected); dirtyAgents.delete(next.definition.agentId); if (!isDeepStrictEqual(next, expected)) changed() }
     finally {
       try {
         const visible = await store.readAgent(next.definition.agentId)
@@ -536,6 +544,36 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   return {
     start, restore, stop, prompt, command,
+    async choices() {
+      available()
+      const result: AgentChoices = { state: "choices", choices: [], unavailable: [] }
+      for (const providerId of PROVIDERS) {
+        const candidates = input.contracts.filter(c => c.providerId === providerId)
+        if (candidates.length !== 1) { result.unavailable.push({ providerId, reason: new AgentError("ADAPTER_UNQUALIFIED").message }); continue }
+        try {
+          const evidence = await catalog.launchEvidence(providerId)
+          const contract = await configureLaunchContract(candidates[0]!, evidence.profile, evidence.configuration)
+          const choices = launchChoices(evidence, contract, context.paths.hostKey, generation)
+          result.choices.push(...choices)
+          if (!choices.length) result.unavailable.push({ providerId, reason: new AgentError("MODEL_UNAVAILABLE").message })
+        } catch (error) {
+          if (error instanceof AgentError && error.code === "INCOMPLETE") throw error
+          result.unavailable.push({ providerId, reason: new AgentError(error instanceof AgentError ? error.code : "MODEL_UNAVAILABLE").message })
+        }
+      }
+      if (Buffer.byteLength(JSON.stringify(result)) > QUERY_BYTES) throw new AgentError("INCOMPLETE")
+      return result
+    },
+    async page(raw) {
+      const options = parsePageInput(raw)
+      return queue.run(async () => {
+        const inventory = await verify()
+        const legacy = inventory.legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
+        const active = (record: AgentRecord): boolean => record.launch.handlerGeneration === generation && (record.phase === "ready" || ["starting", "restoring", "stopping"].includes(record.phase) && (!!operations.get(record.definition.agentId) || [...commands.values()].some(c => c.state === "pending" && c.target && isDeepStrictEqual(c.target, agentTuple(record)))))
+        const agents = [...records.values()].filter(record => !options.activeOnly || active(record)).map(agentView)
+        return inventoryPage({ revision: inventoryRevision, agents: options.activeOnly ? agents : [...agents, ...legacy], issues: [...assessment.issues, ...assessment.unavailable.values(), ...runtimeIssues.values()].filter((issue, index, all) => all.findIndex(other => isDeepStrictEqual(issue, other)) === index) }, options)
+      })
+    },
     observe(target, listener) { return queue.run(async () => (await requireTarget(target)).conversation.observe(listener)) },
     async submit(target, request) { const op = await queue.run(() => requireTarget(target)); return op.turns!.submit(request) },
     submission(target, submissionId) { id(submissionId); return queue.run(async () => (await requireTarget(target)).turns!.inspect(submissionId)) },
