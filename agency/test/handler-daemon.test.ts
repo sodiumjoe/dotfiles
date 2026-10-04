@@ -15,6 +15,15 @@ test("runtime rejects unsupported Node and platform before production state acce
   assert.doesNotThrow(() => assertRuntime("24.13.0", "darwin"))
 })
 
+test("a failed companion bind rolls back the control socket before publishing readiness", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t), path = join(f.paths.runtimeRoot, "attachment.sock")
+  await writeFile(path, "preserved", { mode: 0o600 })
+  await assert.rejects(f.start())
+  assert.notEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase, "ready")
+  await until(async () => !await fileExists(f.paths.handlerSocketPath) ? true : undefined)
+  assert.equal(await readFile(path, "utf8"), "preserved")
+})
+
 test("startup gate accepts fragmented exact token and rejects EOF, invalid bytes and timeout", async () => {
   const gate = new PassThrough(), status = new PassThrough()
   const result = receiveStart(gate, status, 100)

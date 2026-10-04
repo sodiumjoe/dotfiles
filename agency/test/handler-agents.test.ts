@@ -4,6 +4,31 @@ import { lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { agentHandlerFixture } from "./agent-support.js"
 import { privateRoot } from "./control-support.js"
+import { until } from "./control-support.js"
+import { createConnection } from "node:net"
+import { randomUUID } from "node:crypto"
+import { createNdjsonDecoder, parseAttachmentFrame } from "../src/agent/attachment-protocol.js"
+import { exchange } from "../src/control/wire.js"
+
+test("attachment peers do not delay verified forced Handler shutdown", { timeout: 60000 }, async t => {
+  const f = await agentHandlerFixture(t), ready = await f.waitCompleted(await f.start()), target = ready.command.target!
+  const socket = createConnection(join(f.paths.runtimeRoot, "attachment.sock")), frames: any[] = []
+  t.after(() => socket.destroy())
+  socket.on("error", () => undefined)
+  const decoder = createNdjsonDecoder(value => frames.push(parseAttachmentFrame(value)), error => { throw error })
+  socket.on("data", bytes => decoder.feed(bytes))
+  socket.write(JSON.stringify({ protocol: "agency-attachment/1", target, requestId: randomUUID(), op: "attach" }) + "\n")
+  await until(async () => frames.some(frame => frame.type === "snapshot_end") ? true : undefined)
+  const ordinary = await exchange(createConnection(f.paths.handlerSocketPath), { protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: target.handlerGeneration, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  assert.ok(!ordinary.ok && ordinary.error.code === "ACTIVE_AGENTS")
+  assert.equal(socket.destroyed, false)
+  const forced = await exchange(createConnection(f.paths.handlerSocketPath), { protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: target.handlerGeneration, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.equal(forced.ok, true)
+  await until(async () => socket.destroyed ? true : undefined)
+  await f.waitHandlerExit()
+  await f.assertProviderAbsent(target)
+  await f.verifyZeroSurvivors()
+})
 
 test("agent lifecycle does not execute Git or inspect historical admissions", { timeout: 60000 }, async t => {
   const trap = await privateRoot(t), marker = join(trap, "git-invoked"), admissionMarker = join(trap, "admissions-accessed"), preload = join(trap, "forbid-git.cjs")

@@ -4,6 +4,7 @@ import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
 import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { AgentError } from "../agent/types.js"
+import { serveAttachment } from "../agent/attachment-server.js"
 import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
 import type { Server, Socket } from "node:net"
@@ -88,7 +89,7 @@ function retainedIdentity(record: LaunchRecord): unknown {
 }
 
 export async function runHandler(options: HandlerOptions): Promise<void> {
-  let server: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
+  let server: Server | undefined, attachmentServer: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
   const sockets = new Set<Socket>()
   let entries: InventoryEntry[] = []
   let shutdown: ShutdownContext | undefined
@@ -102,7 +103,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (closing) return closed
     closing = true
     for (const socket of sockets) socket.destroy()
-    if (server !== undefined) await new Promise<void>(resolve => server!.close(() => resolve()))
+    for (const listener of [server, attachmentServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
     resolveClosed()
   }
   const terminate = async (): Promise<void> => {
@@ -161,6 +162,15 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       void serveProtocols(socket, dispatch, dispatchCatalog, 5000, dispatchAgent).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
     })
     server.on("error", rejectClosed)
+    server.on("close", () => { if (!closing) rejectClosed(new Error("control listener closed unexpectedly")) })
+    attachmentServer = await bindPrivateSocket(options.paths.runtimeRoot, "attachment.sock", socket => {
+      sockets.add(socket)
+      socket.once("close", () => sockets.delete(socket))
+      if (!agents || state.phase !== "ready" || closing) { socket.destroy(); return }
+      void serveAttachment(socket, agents, options.generation).catch(rejectClosed)
+    })
+    attachmentServer.on("error", rejectClosed)
+    attachmentServer.on("close", () => { if (!closing) rejectClosed(new Error("attachment listener closed unexpectedly")) })
     current = { ...published, writer: "handler", phase: "socket_bound" }
     await writeHandlerRecord(options.recordPath, current)
     const directory = join(options.paths.persistentRoot, "launches")

@@ -99,18 +99,21 @@ test("a lost shutdown reply is resolved from receipts and cannot stop a later Ha
   assert.equal((await f.start()).record.generation, second.record.generation)
 })
 
-test("shutdown closes partial-request and idle clients before reporting complete", { timeout: 20000 }, async t => {
+test("shutdown closes partial-request, idle control, and attachment clients before reporting complete", { timeout: 20000 }, async t => {
   const f = await controlFixture(t)
   await f.start()
-  const idle = createConnection(f.paths.handlerSocketPath), partial = createConnection(f.paths.handlerSocketPath)
-  t.after(() => { idle.destroy(); partial.destroy() })
-  idle.on("error", () => undefined); partial.on("error", () => undefined)
+  const idle = createConnection(f.paths.handlerSocketPath), partial = createConnection(f.paths.handlerSocketPath), attachment = createConnection(join(f.paths.runtimeRoot, "attachment.sock"))
+  let attachmentError: unknown
+  t.after(() => { idle.destroy(); partial.destroy(); attachment.destroy() })
+  idle.on("error", () => undefined); partial.on("error", () => undefined); attachment.on("error", error => { attachmentError = error })
   partial.write('{"protocol":')
   const cli = client(f)
   assert.equal(await cli.run(["shutdown"]), 0)
   await delay(20)
   assert.ok(idle.destroyed)
   assert.ok(partial.destroyed)
+  assert.equal(attachmentError, undefined)
+  assert.ok(attachment.destroyed)
 })
 
 test("launcher readiness timeout after gate release leaves one live reconciling Handler", { timeout: 20000 }, async t => {

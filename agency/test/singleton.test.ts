@@ -14,7 +14,7 @@ import { type Duplex } from "node:stream"
 import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { agencyLaunchMarker, parseAgencyLaunchMarker } from "../src/platform/launch-marker.js"
-import { bindPrivateSocket } from "../src/platform/private-socket.js"
+import { bindPrivateSocket, unlinkStalePrivateSocket } from "../src/platform/private-socket.js"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { readHandlerRecord, readLaunchRecord, writeHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import {
@@ -561,7 +561,10 @@ test("replaces one exactly stale generation and never unlinks an ambiguous one",
   assert.notEqual(firstIdentity, null)
   await stopIdentity(firstIdentity!, adapter)
   assert.equal(await pathExists(join(root, "handler.sock")), true)
+  const companion = await bindPrivateSocket(root, "attachment.sock")
+  t.after(() => { companion.close() })
   const second = await startOrConnect({ root, hostId, adapter, handler: handlerCommand(path) })
+  assert.equal(await pathExists(join(root, "attachment.sock")), false)
   assert.notEqual(second.record.generation, first.record.generation)
   assert.equal((await handlerIdentities(config.handlerLog)).length, 2)
   const secondIdentity = second.record.process
@@ -571,6 +574,21 @@ test("replaces one exactly stale generation and never unlinks an ambiguous one",
   assert.equal(await pathExists(join(root, "handler.sock")), true)
   assert.equal((await handlerIdentities(config.handlerLog)).length, 2)
   adapter.ambiguous.delete(secondIdentity!.pid)
+})
+
+test("stale companion removal rejects symlinks and unqualified generations", async t => {
+  const root = await fixtureRoot(t), adapter = new FakeAdapter(root), { config, path } = await writeConfig(root)
+  t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
+  const live = await startOrConnect({ root, hostId, adapter, handler: handlerCommand(path) })
+  const companion = await bindPrivateSocket(root, "attachment.sock")
+  t.after(() => { companion.close() })
+  await assert.rejects(unlinkStalePrivateSocket(root, "attachment.sock", live), /proven stale/)
+  await stopIdentity(live.record.process!, adapter)
+  const stale = (await inspectHandlerGeneration(root, adapter))!
+  await unlink(join(root, "attachment.sock"))
+  await symlink(join(root, "handler.sock"), join(root, "attachment.sock"))
+  await assert.rejects(unlinkStalePrivateSocket(root, "attachment.sock", stale), /symlink/)
+  await assert.rejects(unlinkStalePrivateSocket(root, "attachment.sock", { ...stale, record: { ...stale.record, socketPath: "/tmp/outside.sock" } }), /qualified root/)
 })
 
 test("times out under contention without starting outside the lock", async t => {

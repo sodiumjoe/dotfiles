@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { runAgentClient } from "../agent/client.js"
+import { runAttachmentClient, productionAttachmentStreams, type AttachmentDependencies } from "../agent/attachment-client.js"
 import { exchangeAgent, type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { createAgentStore, type AgentStore } from "../agent/store.js"
 import { createCatalogStore } from "../catalog/store.js"
@@ -20,6 +21,7 @@ import { DarwinObservationUnavailable } from "../platform/darwin.js"
 import { LinuxObservationUnavailable } from "../platform/linux.js"
 
 export type ControlDependencies = {
+  attachment?: Omit<AttachmentDependencies, "environment" | "inspect" | "stderr">
   environment(): Promise<HandlerEnvironment>
   start(env: HandlerEnvironment): Promise<HandlerInspection>
   inspect(env: HandlerEnvironment): Promise<HandlerInspection | null>
@@ -38,6 +40,7 @@ export type ControlDependencies = {
 
 export function productionControlDependencies(): ControlDependencies {
   return {
+    attachment: productionAttachmentStreams(),
     environment: productionEnvironment,
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
@@ -111,6 +114,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
+  if (argv[0] === "agent" && argv[1] === "attach") return runAttachmentClient(argv, { ...productionAttachmentStreams(), ...dependencies.attachment, environment: dependencies.environment, inspect: dependencies.inspect, stderr: dependencies.stderr })
   if (argv[0] === "agent") return runAgentClient(argv, { ...dependencies, callAgent: dependencies.callAgent ?? (async () => { throw new ControlError("UNAVAILABLE") }), agentStore: dependencies.agentStore ?? (env => createAgentStore(env.paths.persistentRoot)) })
   if (argv.find(value => !value.startsWith("-")) === "model") return runCatalogClient(argv, { ...dependencies, callCatalog: dependencies.callCatalog ?? (async () => { throw new ControlError("UNAVAILABLE", "catalog support unavailable") }) })
   const requestId = randomUUID()
@@ -124,7 +128,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID]", "agent current (list of agents in the current directory)", "agent list", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID]", "agent current (list of agents in the current directory)", "agent list", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)

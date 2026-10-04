@@ -254,8 +254,10 @@ export async function startOrConnect(options: StartOrConnectOptions): Promise<Ha
       if (settled.disposition === "ambiguous") throw new Error("Handler identity became ambiguous; startup is unavailable: " + JSON.stringify(settled.diagnostic))
       if (settled.disposition === "live") return settled
       await unlinkStalePrivateSocket(options.root, "handler.sock", settled)
+      await unlinkStalePrivateSocket(options.root, "attachment.sock", settled)
     } else if (existing?.disposition === "stale") {
       await unlinkStalePrivateSocket(options.root, "handler.sock", existing)
+      await unlinkStalePrivateSocket(options.root, "attachment.sock", existing)
     }
     const launchOptions = {
       root: options.root,
