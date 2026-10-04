@@ -1,6 +1,30 @@
 local utils = require("sodium.utils")
 
 describe("sodium.utils", function()
+    it("keeps Agency and native panels and other tabs out of editor discovery and closure", function()
+        local editor = vim.api.nvim_get_current_win()
+        vim.cmd.vsplit()
+        local agency = vim.api.nvim_get_current_win()
+        vim.w[agency].agency_bufnr = 123
+        vim.cmd.vsplit()
+        local native = vim.api.nvim_get_current_win()
+        vim.w[native].agentic_bufnr = 124
+        vim.cmd.tabnew()
+        local other = vim.api.nvim_get_current_win()
+        vim.cmd.tabprevious()
+        assert.are.equal(editor, utils.editor_window())
+        vim.api.nvim_set_current_win(editor)
+        utils.close_non_agentic_windows()
+        assert.is_true(vim.api.nvim_win_is_valid(agency))
+        assert.is_true(vim.api.nvim_win_is_valid(native))
+        assert.is_true(vim.api.nvim_win_is_valid(other))
+        vim.w[agency].agency_bufnr = nil
+        vim.w[native].agentic_bufnr = nil
+        vim.api.nvim_win_close(agency, true)
+        vim.api.nvim_win_close(native, true)
+        vim.cmd.tabnext()
+        vim.cmd.tabclose()
+    end)
     describe("merge", function()
         it("merges two tables", function()
             local result = utils.merge({ a = 1, b = 2 }, { b = 3, c = 4 })

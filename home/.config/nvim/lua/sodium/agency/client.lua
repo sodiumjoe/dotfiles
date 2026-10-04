@@ -185,7 +185,13 @@ local function capability(value)
         enum(value.state, { "none", "unknown" })
     end
 end
-local function catalog_evidence(value)
+local function catalog_failure(value)
+    keys(value, { "code", "message" })
+    enum(value.code, { "INVALID_CATALOG", "UNSUPPORTED_PROVIDER_VERSION", "CONFIG_CHANGED", "PROBE_FAILED", "PROBE_TIMEOUT",
+        "PROBE_CLEANUP_UNVERIFIED", "CATALOG_UNAVAILABLE", "COMMAND_CONFLICT", "STALE_HANDLER", "INCOMPLETE" })
+    text(value.message, 2048)
+end
+local function catalog_evidence(value, optional)
     keys(value, {
         "providerId",
         "fingerprint",
@@ -199,11 +205,11 @@ local function catalog_evidence(value)
         "error",
     })
     enum(value.providerId, { "codex-acp", "claude-agent-acp" })
-    hash(value.fingerprint)
-    integer(value.verifiedAt)
-    id(value.verifiedHandlerGeneration)
-    text(value.adapterVersion)
-    check(value.error == null)
+    if not optional or value.fingerprint ~= null then hash(value.fingerprint) end
+    if not optional or value.verifiedAt ~= null then integer(value.verifiedAt) end
+    if not optional or value.verifiedHandlerGeneration ~= null then id(value.verifiedHandlerGeneration) end
+    if not optional or value.adapterVersion ~= null then text(value.adapterVersion) end
+    if optional and value.error ~= null then catalog_failure(value.error) else check(value.error == null) end
     if value.sdkVersion ~= null then
         text(value.sdkVersion)
     end
@@ -225,6 +231,91 @@ local function catalog_evidence(value)
         capability(model.modes)
         check(not seen[model.modelId])
         seen[model.modelId] = true
+    end
+    if optional then
+        if value.verifiedAt == null then
+            check(value.fingerprint == null and value.verifiedHandlerGeneration == null and #value.models == 0 and value.providerVersion == null)
+        else
+            check(value.fingerprint ~= null and value.verifiedHandlerGeneration ~= null and value.adapterVersion ~= null)
+        end
+    end
+end
+local function catalog_snapshot(value)
+    keys(value, { "version", "hostId", "snapshotId", "handlerGeneration", "createdAt", "providers" })
+    check(value.version == 1)
+    hash(value.hostId)
+    id(value.snapshotId)
+    id(value.handlerGeneration)
+    integer(value.createdAt)
+    array(value.providers, 2)
+    local seen = {}
+    for _, provider in ipairs(value.providers) do
+        catalog_evidence(provider, true)
+        check(not seen[provider.providerId])
+        seen[provider.providerId] = true
+    end
+end
+local function refresh_command(value)
+    keys(value, { "commandId", "handlerGeneration", "state", "snapshotId" })
+    id(value.commandId)
+    id(value.handlerGeneration)
+    enum(value.state, { "pending", "completed", "interrupted" })
+    check((value.state == "completed") == (value.snapshotId ~= null))
+    if value.snapshotId ~= null then id(value.snapshotId) end
+end
+local function catalog_result(result, generation, argv)
+    id(generation)
+    local function flag(name)
+        for i, argument in ipairs(argv) do
+            if argument == name then return argv[i + 1] end
+        end
+    end
+    local expected_generation = flag("--handler-generation")
+    if expected_generation then check(expected_generation == generation) end
+    if argv[2] == "refresh" then
+        keys(result, { "state", "command", "snapshot" })
+        check(result.state == "refresh")
+        refresh_command(result.command)
+        check(result.command.handlerGeneration == generation)
+        if flag("--command-id") then check(result.command.commandId == flag("--command-id")) end
+        check((result.command.state == "completed") == (result.snapshot ~= null))
+        if result.snapshot ~= null then
+            catalog_snapshot(result.snapshot)
+            check(result.snapshot.snapshotId == result.command.snapshotId and result.snapshot.handlerGeneration == generation)
+        end
+        return
+    end
+    keys(result, { "state", "hostId", "handlerGeneration", "observedAt", "launchAuthorized", "providers", "refresh", "discovery" })
+    check(result.state == "catalog" and result.launchAuthorized == false and result.handlerGeneration == generation)
+    hash(result.hostId)
+    integer(result.observedAt)
+    array(result.providers, 2)
+    check(#result.providers == 2)
+    local seen = {}
+    for _, provider in ipairs(result.providers) do
+        local raw = vim.deepcopy(provider)
+        raw.state, raw.freshness, raw.refreshIssue = nil, nil, nil
+        catalog_evidence(raw, true)
+        enum(provider.state, { "unconfigured", "ready", "unavailable", "blocked" })
+        enum(provider.freshness, { "fresh", "stale", "unverified" })
+        check((provider.freshness == "unverified") == (provider.verifiedAt == null))
+        if provider.freshness == "fresh" then
+            check(provider.state == "ready" and provider.error == null and provider.verifiedHandlerGeneration == generation
+                and result.observedAt >= provider.verifiedAt and result.observedAt - provider.verifiedAt < 600000)
+        end
+        if provider.refreshIssue and provider.refreshIssue ~= null then catalog_failure(provider.refreshIssue) end
+        check(not seen[provider.providerId])
+        seen[provider.providerId] = true
+    end
+    if result.refresh ~= null then refresh_command(result.refresh) end
+    local discovery = result.discovery
+    keys(discovery, { "state", "error" }, { "issues" })
+    enum(discovery.state, { "idle", "refreshing", "blocked" })
+    check((discovery.state == "blocked") == (discovery.error ~= null))
+    if discovery.error ~= null then catalog_failure(discovery.error) end
+    if discovery.issues then
+        array(discovery.issues, 32)
+        for _, issue in ipairs(discovery.issues) do text(issue, 512) end
     end
 end
 local function launch(value, definition)
@@ -818,7 +909,7 @@ local function envelope(value, argv)
         return
     end
     if expected == "agency-catalog/1" then
-        enum(result.state, { "catalog", "refresh" })
+        catalog_result(result, value.handlerGeneration, argv)
         return
     end
     if argv[2] == "choices" then

@@ -196,7 +196,7 @@ function M.confirm_external(cwd, items, callback)
     local outside, seen = {}, {}
     for _, item in ipairs(items) do
         local path = item.path or item.file_path
-        if path and path ~= "" then
+        if path and path ~= "" and not (item.buffer and path == "[buffer:" .. item.buffer .. "]") then
             path = M.resolve(path)
             if not M.inside(cwd, path) and not seen[path] then
                 seen[path] = true

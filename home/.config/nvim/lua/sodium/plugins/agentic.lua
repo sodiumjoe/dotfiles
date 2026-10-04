@@ -3,7 +3,7 @@ local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
 local agentic_utils = require("sodium.agentic_utils")
 local agentic_tool_call_log = vim.fn.stdpath("state") .. "/agentic-codex-tool-call.log"
 
-local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
+local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos", "AgenticDiagnostics" }
 
 local picker_layout_no_preview = {
     reverse = true,
@@ -214,7 +214,10 @@ local function current_path_reference()
         end
     end
 
-    local absolute = vim.fn.fnamemodify(path, ":p")
+    local view = require("sodium.agency").view_for_buffer(vim.api.nvim_get_current_buf())
+    local cwd = view and view.status().cwd
+    local absolute = cwd and path:sub(1, 1) ~= "/" and vim.fs.normalize(cwd .. "/" .. path)
+        or vim.fn.fnamemodify(path, ":p")
     if not vim.uv.fs_stat(absolute) then
         return
     end
@@ -224,7 +227,7 @@ end
 
 local function find_editor_window()
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if vim.w[win].agentic_bufnr == nil and vim.api.nvim_win_get_config(win).relative == "" then
+        if vim.w[win].agentic_bufnr == nil and vim.w[win].agency_bufnr == nil and vim.api.nvim_win_get_config(win).relative == "" then
             return win
         end
     end
@@ -236,7 +239,7 @@ local function open_path_reference()
         return false
     end
 
-    if vim.w.agentic_bufnr ~= nil then
+    if vim.w.agentic_bufnr ~= nil or vim.w.agency_bufnr ~= nil then
         local editor_win = find_editor_window()
         if editor_win then
             vim.api.nvim_set_current_win(editor_win)
@@ -249,7 +252,7 @@ end
 
 local function resize_agentic_split()
     local target = math.floor(vim.o.lines * 0.5)
-    for _, win in ipairs(vim.api.nvim_list_wins()) do
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
         local buf = vim.api.nvim_win_get_buf(win)
         local ft = vim.bo[buf].filetype
         if vim.tbl_contains(agentic_filetypes, ft) then
@@ -654,71 +657,7 @@ local function add_task()
 end
 
 local function send_annotations_to_agentic()
-    local store = require("comment-overlay.store")
-    store.reload_if_changed()
-
-    local files = store.get_files_with_comments()
-    if #files == 0 then
-        vim.notify("No annotations", vim.log.levels.INFO)
-        return
-    end
-
-    local project_root = store.get_project_root()
-    local lines = { "I've annotated several files. Address each annotation.", "" }
-    local root_ids = {}
-
-    for _, rel_path in ipairs(files) do
-        table.insert(lines, "File: " .. rel_path)
-        table.insert(lines, "")
-        local roots = store.get_for_file(rel_path, { roots_only = true })
-        for _, root in ipairs(roots) do
-            if not root.resolved then
-                table.insert(root_ids, root.id)
-                local thread = store.get_thread(root.id)
-                local ls = root.line_start or root.line
-                local le = root.line_end or root.line
-                local range = (not ls) and "?"
-                    or ls == le and string.format("L%d", ls)
-                    or string.format("L%d-L%d", ls, le)
-                if #thread == 1 then
-                    table.insert(lines, string.format("  %s: %q", range, root.body))
-                else
-                    table.insert(lines, string.format("  %s (thread):", range))
-                    for _, c in ipairs(thread) do
-                        table.insert(lines, string.format("    - %q", c.body))
-                    end
-                end
-            end
-        end
-        table.insert(lines, "")
-    end
-
-    local SessionRegistry = require("agentic.session_registry")
-    SessionRegistry.get_session_for_tab_page(nil, function(session)
-        for _, rel_path in ipairs(files) do
-            session.file_list:add(project_root .. "/" .. rel_path)
-        end
-
-        local input_buf = session.widget.buf_nrs.input
-        vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, lines)
-        session.widget:show()
-
-        local function try_submit()
-            if session.session_id then
-                session.widget:_submit_input()
-                for _, id in ipairs(root_ids) do
-                    store.delete(id)
-                end
-                store.save()
-                pcall(vim.cmd, "CommentRefresh")
-            else
-                vim.defer_fn(function()
-                    try_submit()
-                end, 200)
-            end
-        end
-        try_submit()
-    end)
+    require("sodium.agency").submit_text("Address each captured annotation.", { annotations = true })
 end
 
 local function new_session_with_provider(opts, on_start)
@@ -961,14 +900,8 @@ end
 return {
     "carlos-algms/agentic.nvim",
     -- dir = vim.fn.expand("~/home/agentic.nvim"),
-    init = function()
-        vim.api.nvim_create_autocmd("VimEnter", {
-            once = true,
-            callback = function()
-                require("sodium.agentic_models").discover(function() end)
-            end,
-        })
-    end,
+    cmd = { "Agency", "AgencyCurrent", "AgencyNew", "AgencyOpen", "AgencyAttach", "AgencyRestore",
+        "AgencyDetach", "AgencyCancel", "AgencyStop", "AgencyInspect" },
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
@@ -1127,6 +1060,8 @@ return {
             callback = resize_agentic_split,
         })
 
+        require("sodium.agency").setup()
+
         utils.augroup("AgenticChatLinks", { clear = true })("FileType", {
             pattern = "AgenticChat",
             callback = function(ev)
@@ -1149,47 +1084,39 @@ return {
     keys = {
         {
             "<leader>ac",
-            function()
-                local SessionRegistry = require("agentic.session_registry")
-                local tab_page_id = vim.api.nvim_get_current_tabpage()
-                if SessionRegistry.sessions[tab_page_id] then
-                    require("agentic").toggle()
-                else
-                    new_session_with_model()
-                end
-            end,
+            function() require("sodium.agency").current() end,
             mode = { "n" },
-            desc = "Toggle Agentic Chat",
+            desc = "Agency current directory",
         },
         {
             "<leader>aa",
-            function()
-                local SessionRegistry = require("agentic.session_registry")
-                local tab_page_id = vim.api.nvim_get_current_tabpage()
-                if SessionRegistry.sessions[tab_page_id] then
-                    require("agentic").add_selection_or_file_to_context()
-                else
-                    new_session_with_provider(nil, function()
-                        require("agentic").add_selection_or_file_to_context()
-                    end)
-                end
-            end,
+            function() require("sodium.agency").add_context() end,
             mode = { "n", "v" },
-            desc = "Add file or selection to Agentic to Context",
+            desc = "Agency add captured file or selection",
         },
         {
             "<leader>ao",
-            function()
-                require("agentic").open()
-            end,
+            function() require("sodium.agency").open() end,
             mode = { "n" },
-            desc = "Open Agentic Chat",
+            desc = "Agency open attachment",
         },
         {
             "<leader>an",
-            new_session_with_model,
+            function() require("sodium.agency").new() end,
             mode = { "n" },
-            desc = "New Agentic Chat session with model",
+            desc = "Agency new session",
+        },
+        {
+            "<leader>af",
+            function() require("sodium.agency").roster() end,
+            mode = { "n" },
+            desc = "Agency local agents",
+        },
+        {
+            "<leader>as",
+            function() require("sodium.agency").stop() end,
+            mode = { "n" },
+            desc = "Agency stop observed agent",
         },
         {
             "<leader>ar",
@@ -1202,7 +1129,7 @@ return {
         {
             "<leader>ad",
             function()
-                require("agentic").add_current_line_diagnostics()
+                require("sodium.agency").add_diagnostics("line")
             end,
             desc = "Add current line diagnostic to Agentic",
             mode = { "n" },
@@ -1210,7 +1137,7 @@ return {
         {
             "<leader>aD",
             function()
-                require("agentic").add_buffer_diagnostics()
+                require("sodium.agency").add_diagnostics("buffer")
             end,
             desc = "Add all buffer diagnostics to Agentic",
             mode = { "n" },

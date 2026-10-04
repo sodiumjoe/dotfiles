@@ -1,3 +1,5 @@
+package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
+
 describe("agentic chat path:line links", function()
     local spec = require("sodium.plugins.agentic")
     local target_name = "agentic-chat-link-target.txt"
@@ -164,5 +166,39 @@ describe("agentic chat path:line links", function()
         vim.api.nvim_win_close(chat_win, true)
         vim.api.nvim_buf_delete(chat_buf, { force = true })
         vim.api.nvim_buf_delete(editor_buf, { force = true })
+    end)
+    it("resolves Agency links against recorded cwd after the editor cwd changes", function()
+        setup_agentic_config()
+        local fixture = require("fixtures.agency")
+        local f = fixture.commands()
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, "p")
+        vim.fn.writefile({ "one", "two" }, root .. "/recorded.txt")
+        local editor = vim.api.nvim_get_current_win()
+        f.agency.attach(fixture.target_a.agentId)
+        f.respond(1, fixture.page({ fixture.agent(fixture.target_a) }))
+        local frames = fixture.snapshot()
+        frames[1].cwd, frames[1].metadata.cwd = root, root
+        for _, frame in ipairs(frames) do
+            f.streams[1].handlers.on_frame(frame, #vim.json.encode(frame) + 1)
+        end
+        local view = f.agency.view_for_buffer(vim.api.nvim_get_current_buf())
+        vim.api.nvim_set_current_win(view.widget.win_nrs.chat)
+        vim.bo.modifiable = true
+        vim.api.nvim_buf_set_lines(view.widget.buf_nrs.chat, 0, -1, false, { "recorded.txt:2" })
+        vim.bo.modifiable = false
+        vim.api.nvim_win_set_cursor(0, { 1, 1 })
+        vim.cmd.lcd("/tmp")
+        local map = find_buffer_map(view.widget.buf_nrs.chat, "gf")
+        local ok, err = pcall(function()
+            map.callback()
+            assert.are.equal(editor, vim.api.nvim_get_current_win())
+            assert.are.equal(vim.fn.resolve(root .. "/recorded.txt"), vim.fn.resolve(vim.api.nvim_buf_get_name(0)))
+            assert.are.equal(2, vim.api.nvim_win_get_cursor(0)[1])
+            assert.are.equal(view.widget.buf_nrs.chat, vim.api.nvim_win_get_buf(view.widget.win_nrs.chat))
+        end)
+        f.close()
+        vim.fn.delete(root, "rf")
+        assert.is_true(ok, err)
     end)
 end)

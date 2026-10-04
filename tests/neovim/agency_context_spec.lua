@@ -1,4 +1,15 @@
 describe("Agency captured text context", function()
+    it("does not interpret unnamed buffer labels as outside paths", function()
+        local old = vim.ui.select
+        local selected, confirmed = false, false
+        vim.ui.select = function() selected = true end
+        require("sodium.agency.context").confirm_external("/work/a", { { file_path = "[buffer:17]", buffer = 17 } }, function(value)
+            confirmed = value
+        end)
+        vim.ui.select = old
+        assert.is_true(confirmed)
+        assert.is_false(selected)
+    end)
     local context, buf
     before_each(function()
         context = require("sodium.agency.context")

@@ -60,6 +60,10 @@ describe("sodium.statusline", function()
             vim.bo.filetype = "AgenticTodos"
             assert.are.equal("☐ TODO Items", statusline.get_agentic_title())
         end)
+        it("includes the Agency diagnostics panel in its extension", function()
+            vim.bo.filetype = "AgenticDiagnostics"
+            assert.are.equal("Diagnostics", statusline.get_agentic_title())
+        end)
 
         it("returns empty string for other filetypes", function()
             vim.bo.filetype = "lua"
@@ -72,9 +76,9 @@ describe("sodium.statusline", function()
 
         local function with_agentic_session(session_manager, callback)
             package.loaded["agentic.session_registry"] = {
-                get_session_for_tab_page = function(tab_page_id)
-                    assert.are.equal(vim.api.nvim_get_current_tabpage(), tab_page_id)
-                    return session_manager
+                sessions = { [vim.api.nvim_get_current_tabpage()] = session_manager },
+                get_session_for_tab_page = function()
+                    error("unexpected creating lookup")
                 end,
             }
 
@@ -108,6 +112,13 @@ describe("sodium.statusline", function()
                 },
             }, function()
                 assert.are.equal("10K/200K", statusline.get_agentic_context())
+            end)
+        end)
+
+        it("does not create a provider for an empty native registry", function()
+            with_agentic_session(nil, function()
+                assert.are.equal("", statusline.get_agentic_context())
+                assert.are.equal("", statusline.get_agentic_model())
             end)
         end)
 
@@ -274,8 +285,7 @@ describe("sodium.statusline", function()
 
         it("places model after the agentic title and keeps context in the right status sections", function()
             package.loaded["agentic.session_registry"] = {
-                get_session_for_tab_page = function()
-                    return {
+                sessions = { [vim.api.nvim_get_current_tabpage()] = {
                         is_generating = false,
                         session_state = {
                             get_context_used = function()
@@ -294,7 +304,9 @@ describe("sodium.statusline", function()
                                 return { name = "Full Access" }
                             end,
                         },
-                    }
+                    } },
+                get_session_for_tab_page = function()
+                    error("unexpected creating lookup")
                 end,
             }
 

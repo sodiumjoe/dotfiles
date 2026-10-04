@@ -400,7 +400,7 @@ function M.client()
     }
 end
 
-function M.operations()
+function M.operations(overrides)
     local calls, streams, selections, confirmations, reports = {}, {}, {}, {}, {}
     local n = 300
     local client = {
@@ -420,7 +420,7 @@ function M.operations()
             }
         end,
     }
-    local operations = require("sodium.agency.operations").new({
+    local dependencies = {
         client = client,
         uuid = function()
             n = n + 1
@@ -438,7 +438,8 @@ function M.operations()
         report = function(value)
             reports[#reports + 1] = value
         end,
-    })
+    }
+    local operations = require("sodium.agency.operations").new(vim.tbl_extend("force", dependencies, overrides or {}))
     return {
         operations = operations,
         calls = calls,
@@ -460,6 +461,46 @@ function M.operations()
                 streams[index].handlers.on_frame(frame, #vim.json.encode(frame) + 1)
             end
         end,
+    }
+end
+
+function M.commands(overrides)
+    local old = package.loaded["sodium.agency"]
+    package.loaded["sodium.agency"] = nil
+    local agency = require("sodium.agency")
+    local f, switches, notices = nil, {}, {}
+    agency.setup(vim.tbl_extend("force", {
+        operations_factory = function(deps)
+            f = M.operations({ on_change = deps.on_change })
+            return f.operations
+        end,
+        confirm_switch = function(callback)
+            switches[#switches + 1] = callback
+        end,
+        notify = function(message)
+            notices[#notices + 1] = message
+        end,
+        uuid = function()
+            return M.id(900)
+        end,
+        confirm_external = function(_, _, callback)
+            callback(true)
+        end,
+    }, overrides or {}))
+    f.agency, f.switches, f.notices = agency, switches, notices
+    f.close = function()
+        agency.detach()
+        package.loaded["sodium.agency"] = old
+    end
+    return f
+end
+
+function M.refresh()
+    return {
+        state = "refresh",
+        command = { commandId = M.id(600), handlerGeneration = M.target_a.handlerGeneration, state = "completed", snapshotId = M.id(601) },
+        snapshot = { version = 1, hostId = string.rep("a", 64), snapshotId = M.id(601), handlerGeneration = M.target_a.handlerGeneration,
+            createdAt = 1000, providers = {} },
     }
 end
 

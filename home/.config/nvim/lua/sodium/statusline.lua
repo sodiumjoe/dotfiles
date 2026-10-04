@@ -3,7 +3,7 @@ local utils = require("sodium.utils")
 local spinner = require("sodium.spinner")
 
 local non_standard_filetypes = { "", "Trouble", "vimwiki", "help" }
-local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos" }
+local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos", "AgenticDiagnostics" }
 
 local M = {}
 
@@ -252,6 +252,9 @@ local theme = {
 function M.get_agentic_title()
     local ft = vim.bo.filetype
     if ft == "AgenticChat" then
+        if vim.b.agency_view then
+            return "Agency Chat"
+        end
         return "󰻞 Agentic Chat"
     elseif ft == "AgenticInput" then
         return "󰦨 Prompt"
@@ -261,6 +264,8 @@ function M.get_agentic_title()
         return "󰪸 Referenced Files"
     elseif ft == "AgenticTodos" then
         return "☐ TODO Items"
+    elseif ft == "AgenticDiagnostics" then
+        return "Diagnostics"
     end
     return ""
 end
@@ -271,12 +276,30 @@ local function get_agentic_session_manager()
         return nil
     end
     local tab_page_id = vim.api.nvim_get_current_tabpage()
-    return session_registry.get_session_for_tab_page(tab_page_id)
+    return session_registry.sessions and session_registry.sessions[tab_page_id]
+end
+
+local function agency_status()
+    local agency = package.loaded["sodium.agency"]
+    local view = agency and agency.view_for_buffer(vim.api.nvim_get_current_buf())
+    return view and view.status()
 end
 
 local function get_agentic_status()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
+    end
+    local status = agency_status()
+    if status then
+        if not status.connected then
+            return "disconnected"
+        end
+        if status.busy then
+            spinner.start("agency")
+            return spinner.frame()
+        end
+        spinner.stop("agency")
+        return utils.icons.ok
     end
     local session_manager = get_agentic_session_manager()
     if not session_manager then
@@ -295,6 +318,10 @@ local function get_agentic_mode()
         return ""
     end
 
+    local status = agency_status()
+    if status then
+        return status.mode or ""
+    end
     local session_manager = get_agentic_session_manager()
     if not session_manager or not session_manager.agent_modes or not session_manager.agent_modes.current_mode_id then
         return ""
@@ -312,6 +339,11 @@ function M.get_agentic_context()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
     end
+    local status = agency_status()
+    if status then
+        local usage = status.usage
+        return usage and usage ~= vim.NIL and tostring(usage.used) .. "/" .. tostring(usage.size) or ""
+    end
     local session_manager = get_agentic_session_manager()
     if not session_manager or not session_manager.session_state then
         return ""
@@ -327,6 +359,10 @@ end
 function M.get_agentic_model()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
+    end
+    local status = agency_status()
+    if status then
+        return status.model or ""
     end
     local session_manager = get_agentic_session_manager()
     if not session_manager or not session_manager.session_state then

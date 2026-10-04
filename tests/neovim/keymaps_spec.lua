@@ -120,198 +120,55 @@ describe("keymaps", function()
 
         local ok, agentic = pcall(require, "sodium.plugins.agentic")
         if ok then
-            it("warms the model catalog after VimEnter", function()
+            it("does not discover models during lazy initialization", function()
                 local model_catalog = require("sodium.agentic_models")
-                local original_discover = model_catalog.discover
-                local original_create_autocmd = vim.api.nvim_create_autocmd
-                local registered_event
-                local registered_opts
-                local discovery_calls = 0
-
-                model_catalog.discover = function(callback)
-                    discovery_calls = discovery_calls + 1
-                    callback({}, {})
+                local original = model_catalog.discover
+                local original_autocmd = vim.api.nvim_create_autocmd
+                local callbacks = {}
+                local calls = 0
+                model_catalog.discover = function()
+                    calls = calls + 1
                 end
                 vim.api.nvim_create_autocmd = function(event, opts)
-                    registered_event = event
-                    registered_opts = opts
+                    if event == "VimEnter" then callbacks[#callbacks + 1] = opts.callback end
                     return 1
                 end
+                if agentic.init then agentic.init() end
+                for _, callback in ipairs(callbacks) do callback() end
+                vim.api.nvim_create_autocmd = original_autocmd
+                model_catalog.discover = original
+                assert.are.equal(0, calls)
+            end)
 
+            it("routes Agency mappings and preserves native restore and note mappings", function()
+                local targets = {
+                    ["<leader>ac"] = "current", ["<leader>an"] = "new", ["<leader>af"] = "roster",
+                    ["<leader>as"] = "stop", ["<leader>ao"] = "open", ["<leader>aa"] = "add_context",
+                    ["<leader>ad"] = "add_diagnostics", ["<leader>aD"] = "add_diagnostics",
+                    ["<leader>ai"] = "submit_text",
+                }
+                local original = package.loaded["sodium.agency"]
+                local routed = {}
+                local api = {}
+                for _, target in pairs(targets) do
+                    api[target] = function(...)
+                        routed[#routed + 1] = { target, ... }
+                    end
+                end
+                package.loaded["sodium.agency"] = api
                 local ok2, err = pcall(function()
-                    assert.is_function(agentic.init)
-                    agentic.init()
-                    assert.are.equal("VimEnter", registered_event)
-                    assert.is_true(registered_opts.once)
-                    registered_opts.callback()
+                    for lhs, target in pairs(targets) do
+                        local key = assert(find_spec_key(agentic, lhs))
+                        key[2]()
+                        assert.are.equal(target, routed[#routed][1])
+                    end
+                    for _, lhs in ipairs({ "<leader>ar", "<leader>ap", "<leader>aP", "<leader>at", "<leader>st", "<leader>sT", "<leader>pr", "<leader>a=" }) do
+                        assert.is_true(spec_has_key(agentic, lhs))
+                    end
+                    assert.is_true(vim.tbl_contains(agentic.cmd, "AgencyCurrent"))
                 end)
-
-                model_catalog.discover = original_discover
-                vim.api.nvim_create_autocmd = original_create_autocmd
-
-                if not ok2 then
-                    error(err)
-                end
-
-                assert.are.equal(1, discovery_calls)
-            end)
-
-            it("declares leader-a= in agentic spec", function()
-                assert.is_true(spec_has_key(agentic, "<leader>a="))
-            end)
-
-            it("maps leader-an to the combined model picker", function()
-                local key = find_spec_key(agentic, "<leader>an")
-                assert.is_not_nil(key)
-                assert.is_function(key[2])
-
-                local original_agentic = package.loaded.agentic
-                local original_config = package.loaded["agentic.config"]
-                local original_health = package.loaded["agentic.acp.acp_health"]
-                local model_catalog = require("sodium.agentic_models")
-                local original_pick = model_catalog.pick
-                local original_snacks = _G.Snacks
-                local called = false
-                local picked = false
-                package.loaded.agentic = {
-                    new_session = function(opts)
-                        assert.are.equal("codex-acp", opts.provider)
-                        assert.are.equal(
-                            "gpt-5.6-sol",
-                            package.loaded["agentic.config"].acp_providers["codex-acp"].initial_model
-                        )
-                        called = true
-                    end,
-                }
-                package.loaded["agentic.config"] = {
-                    provider = "codex-acp",
-                    acp_providers = {
-                        ["codex-acp"] = { command = "codex-acp" },
-                        ["gemini-acp"] = { command = "gemini-acp" },
-                    },
-                }
-                package.loaded["agentic.acp.acp_health"] = {
-                    get_default_provider_names = function()
-                        return { "gemini-acp", "codex-acp" }
-                    end,
-                    is_command_available = function()
-                        return true
-                    end,
-                }
-                model_catalog.pick = function(callback)
-                    picked = true
-                    callback({ provider = "codex-acp", model_id = "gpt-5.6-sol" })
-                end
-                _G.Snacks = {
-                    picker = function(opts)
-                        opts.confirm({ close = function() end }, opts.items[1])
-                    end,
-                }
-
-                local ok2, err = pcall(key[2])
-                package.loaded.agentic = original_agentic
-                package.loaded["agentic.config"] = original_config
-                package.loaded["agentic.acp.acp_health"] = original_health
-                model_catalog.pick = original_pick
-                _G.Snacks = original_snacks
-
-                if not ok2 then
-                    error(err)
-                end
-
-                assert.is_true(picked)
-                assert.is_true(called)
-            end)
-
-            it("maps leader-ac to the combined model picker when no session exists", function()
-                local key = find_spec_key(agentic, "<leader>ac")
-                local original_agentic = package.loaded.agentic
-                local original_config = package.loaded["agentic.config"]
-                local original_health = package.loaded["agentic.acp.acp_health"]
-                local original_registry = package.loaded["agentic.session_registry"]
-                local model_catalog = require("sodium.agentic_models")
-                local original_pick = model_catalog.pick
-                local picked = false
-                local started = false
-
-                package.loaded.agentic = {
-                    new_session = function(opts)
-                        assert.are.equal("claude-agent-acp", opts.provider)
-                        assert.are.equal(
-                            "sonnet",
-                            package.loaded["agentic.config"].acp_providers["claude-agent-acp"].initial_model
-                        )
-                        started = true
-                    end,
-                }
-                package.loaded["agentic.config"] = {
-                    provider = "claude-agent-acp",
-                    acp_providers = {
-                        ["claude-agent-acp"] = { command = "claude-agent-acp" },
-                    },
-                }
-                package.loaded["agentic.acp.acp_health"] = {
-                    get_default_provider_names = function()
-                        return { "claude-agent-acp" }
-                    end,
-                    is_command_available = function()
-                        return true
-                    end,
-                }
-                package.loaded["agentic.session_registry"] = { sessions = {} }
-                model_catalog.pick = function(callback)
-                    picked = true
-                    callback({ provider = "claude-agent-acp", model_id = "sonnet" })
-                end
-
-                local ok2, err = pcall(key[2])
-                package.loaded.agentic = original_agentic
-                package.loaded["agentic.config"] = original_config
-                package.loaded["agentic.acp.acp_health"] = original_health
-                package.loaded["agentic.session_registry"] = original_registry
-                model_catalog.pick = original_pick
-
-                if not ok2 then
-                    error(err)
-                end
-
-                assert.is_true(picked)
-                assert.is_true(started)
-            end)
-
-            it("keeps leader-ac as a toggle when a session exists", function()
-                local key = find_spec_key(agentic, "<leader>ac")
-                local original_agentic = package.loaded.agentic
-                local original_registry = package.loaded["agentic.session_registry"]
-                local model_catalog = require("sodium.agentic_models")
-                local original_pick = model_catalog.pick
-                local tab_page_id = vim.api.nvim_get_current_tabpage()
-                local toggled = false
-                local picked = false
-
-                package.loaded.agentic = {
-                    toggle = function()
-                        toggled = true
-                    end,
-                }
-                package.loaded["agentic.session_registry"] = {
-                    sessions = { [tab_page_id] = {} },
-                }
-                model_catalog.pick = function()
-                    picked = true
-                end
-
-                local ok2, err = pcall(key[2])
-                package.loaded.agentic = original_agentic
-                package.loaded["agentic.session_registry"] = original_registry
-                model_catalog.pick = original_pick
-
-                if not ok2 then
-                    error(err)
-                end
-
-                assert.is_true(toggled)
-                assert.is_false(picked)
+                package.loaded["sodium.agency"] = original
+                assert.is_true(ok2, err)
             end)
 
             it("declares leader-pr in agentic spec", function()

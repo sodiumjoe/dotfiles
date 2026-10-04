@@ -71,10 +71,16 @@ M.spinner_frames = {
     "",
 }
 
+local function editing_window(w)
+    return vim.w[w].agency_bufnr == nil and vim.w[w].agentic_bufnr == nil
+        and vim.api.nvim_win_get_config(w).relative == ""
+        and not vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) }):match("^Agentic")
+        and not vim.wo[w].winfixbuf
+end
+
 function M.editor_window()
-    for _, w in ipairs(vim.api.nvim_list_wins()) do
-        local ft = vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) })
-        if not ft:match("^Agentic") and not vim.wo[w].winfixbuf then
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if editing_window(w) then
             return w
         end
     end
@@ -82,10 +88,9 @@ end
 
 function M.close_non_agentic_windows()
     local current = vim.api.nvim_get_current_win()
-    for _, w in ipairs(vim.api.nvim_list_wins()) do
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
         if w ~= current then
-            local ft = vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) })
-            if not ft:match("^Agentic") and not vim.wo[w].winfixbuf then
+            if editing_window(w) then
                 pcall(vim.api.nvim_win_close, w, true)
             end
         end

@@ -67,13 +67,16 @@ function M.new(deps)
     end
     local epoch, active, candidate, pending, api = 0, nil, nil, {}, {}
     local current_origin
-    local function begin(cwd)
+    local function begin(cwd, origin)
         epoch = epoch + 1
         current_origin = {
             tab = vim.api.nvim_get_current_tabpage(),
             buffer = vim.api.nvim_get_current_buf(),
             cwd = cwd or vim.fn.getcwd(),
         }
+        if origin then
+            current_origin = vim.deepcopy(origin)
+        end
         if candidate then
             local previous = candidate
             candidate = nil
@@ -82,11 +85,14 @@ function M.new(deps)
         end
         return epoch
     end
+    local function valid_operation(operation)
+        return operation == epoch and vim.api.nvim_tabpage_is_valid(current_origin.tab)
+    end
     local function command(argv, cwd, callback, timeout_ms)
         client.command(argv, { cwd = cwd, timeout_ms = timeout_ms or 5000 }, callback)
     end
     local function attach(target, callback, operation, origin)
-        if operation ~= epoch then
+        if not valid_operation(operation) then
             callback(error_value("CANCELLED"))
             return
         end
@@ -112,8 +118,10 @@ function M.new(deps)
         candidate = value
         value.stream = client.attach(target, {
             on_frame = function(frame, bytes)
-                if operation ~= epoch and candidate == value then
+                if not valid_operation(operation) and candidate == value then
+                    candidate = nil
                     value.stream.close()
+                    callback(error_value("CANCELLED"))
                     return
                 end
                 if candidate ~= value and active ~= value then
@@ -143,7 +151,7 @@ function M.new(deps)
                     return
                 end
                 if frame.type == "snapshot_end" then
-                    if operation ~= epoch then
+                    if not valid_operation(operation) then
                         value.stream.close()
                         return
                     end
@@ -222,7 +230,7 @@ function M.new(deps)
             callback(error_value("INVALID_PROTOCOL"))
             return
         end
-        if operation ~= epoch then
+        if not valid_operation(operation) then
             report({ state = "created", target = outcome.target, commandId = receipt.commandId })
             callback(error_value("CANCELLED"), result)
             return
@@ -261,7 +269,7 @@ function M.new(deps)
     end
     local function status(cwd, operation, callback)
         command({ "status" }, cwd, function(error, envelope)
-            if operation ~= epoch then
+            if not valid_operation(operation) then
                 callback(error_value("CANCELLED"))
                 return
             end
@@ -287,7 +295,7 @@ function M.new(deps)
                 return
             end
             command({ "agent", "choices" }, cwd, function(choice_error, envelope)
-                if operation ~= epoch then
+                if not valid_operation(operation) then
                     callback(error_value("CANCELLED"))
                     return
                 end
@@ -300,12 +308,12 @@ function M.new(deps)
                     return
                 end
                 local result = envelope.result
-                if #result.choices == 0 then
+                if #result.choices == 0 and not deps.allow_empty_choices then
                     callback(error_value("MODEL_UNAVAILABLE"), result)
                     return
                 end
                 select_choice(result.choices, function(choice)
-                    if operation ~= epoch then
+                    if not valid_operation(operation) then
                         callback(error_value("CANCELLED"))
                         return
                     end
@@ -339,7 +347,7 @@ function M.new(deps)
                         selection.permissionProfile,
                     }
                     dispatch("start", cwd, generation, argv, callback, operation)
-                end)
+                end, { cwd = cwd, handlerGeneration = generation, unavailable = result.unavailable })
             end)
         end)
     end
@@ -347,7 +355,7 @@ function M.new(deps)
         options = options or {}
         local attempts = 0
         local function traversal()
-            local agents, revision, generation, last_id, cursors = {}, nil, nil, nil, {}
+            local agents, issues, revision, generation, last_id, cursors = {}, {}, nil, nil, nil, {}
             local function next_page(cursor)
                 local argv = { "agent", "page", "--limit", "100" }
                 if options.cwd then
@@ -370,7 +378,7 @@ function M.new(deps)
                         return
                     end
                     local page = envelope.result
-                    if #page.issues > 0 then
+                    if #page.issues > 0 and not options.allow_issues then
                         callback(error_value("INCOMPLETE"), page)
                         return
                     end
@@ -379,6 +387,7 @@ function M.new(deps)
                         return
                     end
                     revision, generation = page.revision, envelope.handlerGeneration
+                    vim.list_extend(issues, page.issues)
                     for _, view in ipairs(page.agents) do
                         local record = view.record
                         local agent_id = record.version == 2 and record.definition.agentId or record.spec.agentId
@@ -414,7 +423,7 @@ function M.new(deps)
                     else
                         callback(
                             nil,
-                            { agents = agents, revision = revision, handlerGeneration = generation, issues = {} }
+                            { agents = agents, revision = revision, handlerGeneration = generation, issues = issues }
                         )
                     end
                 end)
@@ -423,12 +432,12 @@ function M.new(deps)
         end
         traversal()
     end
-    function api.current(cwd, callback)
+    function api.current(cwd, callback, captured)
         cwd = cwd or vim.fn.getcwd()
-        local operation = begin(cwd)
-        local origin = { tab = vim.api.nvim_get_current_tabpage(), buffer = vim.api.nvim_get_current_buf(), cwd = cwd }
+        local operation = begin(cwd, captured)
+        local origin = vim.deepcopy(current_origin)
         api.page({ cwd = cwd, active = true }, function(error, result)
-            if operation ~= epoch then
+            if not valid_operation(operation) then
                 callback(error_value("CANCELLED"))
                 return
             end
@@ -441,7 +450,7 @@ function M.new(deps)
                 return
             end
             local function selected(view)
-                if operation ~= epoch then
+                if not valid_operation(operation) then
                     callback(error_value("CANCELLED"))
                     return
                 end
@@ -462,15 +471,16 @@ function M.new(deps)
             end
         end)
     end
-    function api.new(cwd, callback)
+    function api.new(cwd, callback, origin)
         cwd = cwd or vim.fn.getcwd()
-        launch(cwd, callback, begin(cwd))
+        launch(cwd, callback, begin(cwd, origin))
     end
-    function api.attach(target, callback)
-        attach(vim.deepcopy(target), callback, begin())
+    function api.attach(target, callback, origin)
+        attach(vim.deepcopy(target), callback, begin(nil, origin))
     end
-    function api.restore(agent_id, callback)
-        local operation, cwd = begin(), vim.fn.getcwd()
+    function api.restore(agent_id, callback, origin)
+        local operation = begin(nil, origin)
+        local cwd = current_origin.cwd
         status(cwd, operation, function(error, generation)
             if error then
                 callback(error)
@@ -479,15 +489,17 @@ function M.new(deps)
             dispatch("restore", cwd, generation, { "agent", "restore", agent_id }, callback, operation, agent_id)
         end)
     end
-    function api.stop(target, callback)
+    function api.stop(target, callback, detail)
         local operation, cwd, exact = begin(), vim.fn.getcwd(), vim.deepcopy(target)
         local display = vim.deepcopy(exact)
-        if active and vim.deep_equal(active.target, exact) then
+        if detail then
+            display.detail = vim.deepcopy(detail)
+        elseif active and vim.deep_equal(active.target, exact) then
             local state = active.state.current()
             display.detail = { cwd = state.cwd, model = state.selection.modelId }
         end
         confirm_stop(display, function(confirmed)
-            if operation ~= epoch then
+            if not valid_operation(operation) then
                 callback(error_value("CANCELLED"))
                 return
             end

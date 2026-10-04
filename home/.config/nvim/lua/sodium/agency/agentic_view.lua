@@ -7,9 +7,9 @@ local function busy(snapshot)
 end
 
 function M.new(tab, controller)
-    local api = { dirty = false }
+    local api = { dirty = false, destroyed = false }
     local destroyed, epoch, pending, files = false, 0, nil, {}
-    local delivery = "idle"
+    local delivery, rendered_target = "idle", nil
     local widget = require("sodium.agency.widget").new(tab, function()
         api.submit()
     end)
@@ -88,7 +88,8 @@ function M.new(tab, controller)
         end
         local renderer = api.renderer
         if
-            not renderer.renderFirstSeq
+            not vim.deep_equal(rendered_target, snapshot.target)
+            or not renderer.renderFirstSeq
             or snapshot.firstSeq > renderer.renderFirstSeq
             or snapshot.lastSeq < renderer.lastSeq
         then
@@ -100,6 +101,7 @@ function M.new(tab, controller)
                 end
             end
         end
+        rendered_target = vim.deepcopy(snapshot.target)
         widget.render_header(
             "chat",
             snapshot.selection.modelId .. " · " .. snapshot.cwd .. (snapshot.connected and "" or " · disconnected")
@@ -288,18 +290,33 @@ function M.new(tab, controller)
         end
     end
     function api.status()
+        local snapshot = controller.metadata and controller.metadata() or controller.snapshot()
         return {
             delivery = delivery,
             submissionId = pending and pending.id,
-            busy = busy(controller.snapshot()),
+            busy = busy(snapshot),
             destroyed = destroyed,
+            cwd = snapshot and snapshot.cwd,
+            model = snapshot and snapshot.selection.modelId,
+            mode = snapshot and snapshot.selection.mode,
+            usage = snapshot and snapshot.metadata.usage,
+            connected = snapshot and snapshot.connected or false,
         }
+    end
+    function api.has_draft()
+        if destroyed then
+            return false
+        end
+        return (pending and not pending.accepted) or #api.code:get_selections() > 0
+            or #api.files:get_files() > 0 or #api.diagnostics:get_diagnostics() > 0
+            or table.concat(vim.api.nvim_buf_get_lines(widget.buf_nrs.input, 0, -1, false), "\n"):match("%S") ~= nil
     end
     function api.destroy()
         if destroyed then
             return
         end
         destroyed = true
+        api.destroyed = true
         epoch = epoch + 1
         api.dirty = false
         unsubscribe()

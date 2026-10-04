@@ -2,6 +2,43 @@ package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.p
 local fixture = require("fixtures.agency")
 
 describe("Agency subprocess client", function()
+    it("rejects malformed catalog refresh receipts and mismatched retained identities", function()
+        for _, mutate in ipairs({
+            function(result) result.command = nil end,
+            function(result) result.command.commandId = fixture.id(602) end,
+            function(result) result.command.handlerGeneration = fixture.id(602) end,
+            function(result) result.snapshot.snapshotId = fixture.id(602) end,
+            function(result) result.snapshot.version = 9 end,
+            function(result) result.snapshot.providers = { { providerId = "unknown" } } end,
+            function(result) result.command.state = "pending" end,
+        }) do
+            local f = fixture.client()
+            local error
+            f.client.command({ "model", "refresh", "--command-id", fixture.id(600), "--handler-generation", fixture.target_a.handlerGeneration }, {}, function(err)
+                error = err
+            end)
+            local result = fixture.refresh()
+            mutate(result)
+            f.jobs[1].exit({ code = 0, stdout = vim.json.encode({ protocol = "agency-catalog/1", requestId = fixture.id(605),
+                handlerGeneration = fixture.target_a.handlerGeneration, ok = true, result = result }) })
+            f.drain()
+            assert.are.equal("INVALID_PROTOCOL", error and error.code)
+            f.close()
+        end
+    end)
+    it("accepts a completed refresh bound to its exact snapshot", function()
+        local f = fixture.client()
+        local error, result
+        f.client.command({ "model", "refresh", "--command-id", fixture.id(600), "--handler-generation", fixture.target_a.handlerGeneration }, {}, function(err, value)
+            error, result = err, value
+        end)
+        f.jobs[1].exit({ code = 0, stdout = vim.json.encode({ protocol = "agency-catalog/1", requestId = fixture.id(605),
+            handlerGeneration = fixture.target_a.handlerGeneration, ok = true, result = fixture.refresh() }) })
+        f.drain()
+        assert.is_nil(error)
+        assert.are.equal(fixture.id(601), result.result.snapshot.snapshotId)
+        f.close()
+    end)
     it("settles an acknowledgment lost between decoding and scheduled delivery as unavailable", function()
         local f = fixture.client()
         local stream = f.client.attach(f.target_a, f.handlers)
