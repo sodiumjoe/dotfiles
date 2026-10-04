@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { readFile, writeFile } from "node:fs/promises"
+import { chmod, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import test from "node:test"
@@ -40,9 +40,10 @@ test("daemon reports every retained classification without adopting a survivor",
   assert.equal(inspection.record.phase, "ready")
   const reply = await f.call()
   assert.ok(reply.ok && "launches" in reply.result)
-  assert.deepEqual(reply.result.reconciliation, { classified: 2, total: 2, quarantined: 1 })
-  assert.equal(reply.result.launches.find(r => r.checkoutId === "unattempted")?.phase, "cleanup_verified")
-  assert.equal(reply.result.launches.find(r => r.checkoutId === "checkout-a")?.phase, "quarantined")
+  assert.deepEqual(reply.result.reconciliation, { classified: 2, total: 2, uncertain: 1 })
+  assert.equal(reply.result.launches.find(r => r.launchAttemptId === unattempted.launchAttemptId)?.phase, "cleanup_verified")
+  assert.equal(reply.result.launches.find(r => r.launchAttemptId === ambiguous.launchAttemptId)?.phase, "quarantined")
+  assert.deepEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).reconciliation, { classified: 2, total: 2, quarantined: 1 })
   assert.equal((await f.start()).record.generation, inspection.record.generation)
 })
 
@@ -67,11 +68,66 @@ for (const [phase, mutation] of [["reconciling", "replace"], ["ready", "add"], [
   assert.notEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase, "ready")
 })
 
-test("malformed retained evidence prevents readiness and is preserved", { timeout: 20000 }, async t => {
+test("malformed retained evidence appears in status while valid readiness proceeds", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), path = join(f.paths.persistentRoot, "launches", `${randomUUID()}.json`)
   await writeFile(path, "{", { mode: 0o600 })
-  await assert.rejects(f.start())
+  const started = await f.start()
+  assert.equal(started.record.phase, "ready")
+  const reply = await f.call()
+  assert.ok(reply.ok && "issues" in reply.result)
+  assert.equal(reply.result.issues?.[0]?.path, path)
   assert.equal(await readFile(path, "utf8"), "{")
+})
+
+test("startup retains one failed exact cleanup and reconciles an independent launch", { timeout: 30000 }, async t => {
+  const f = await controlFixture(t), failed = await f.spawnProvider(), healthy = launch({ launchBootId: await f.adapter.bootId(), launchAttempted: false, checkoutId: "healthy" })
+  if (!failed.provider) throw new Error("missing provider identity")
+  const failedPath = join(f.paths.persistentRoot, "launches", `${failed.launchAttemptId}.json`), healthyPath = join(f.paths.persistentRoot, "launches", `${healthy.launchAttemptId}.json`)
+  await writeLaunchRecord(failedPath, failed); await writeLaunchRecord(healthyPath, healthy)
+  const config = JSON.parse(await readFile(f.configPath, "utf8"))
+  await writeFile(f.configPath, JSON.stringify({ ...config, failSignalGroup: failed.provider.group.leader.processGroupId, failSignalMessage: "RETAINED_INVENTORY_CHANGED from target signal" }), { mode: 0o600 })
+  const started = await f.start()
+  assert.equal(started.record.phase, "ready")
+  const reply = await f.call()
+  assert.ok(reply.ok && "issues" in reply.result)
+  assert.equal(reply.result.issues?.some(issue => issue.path === failedPath), true)
+  assert.equal(reply.result.launches.find(item => item.launchAttemptId === healthy.launchAttemptId)?.phase, "cleanup_verified")
+  assert.equal(JSON.parse(await readFile(healthyPath, "utf8")).phase, "cleanup_verified")
+})
+
+test("startup fails when the shared launch directory cannot publish reconciliation", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t), directory = join(f.paths.persistentRoot, "launches")
+  const record = launch({ launchBootId: await f.adapter.bootId(), launchAttempted: false })
+  await writeLaunchRecord(join(directory, `${record.launchAttemptId}.json`), record)
+  await chmod(directory, 0o500)
+  try {
+    await assert.rejects(f.start())
+    const failure = await until(async () => await fileExists(join(f.root, "failure")) ? readFile(join(f.root, "failure"), "utf8") : undefined)
+    assert.match(failure, /publication/i)
+    assert.notEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase, "ready")
+  } finally { await chmod(directory, 0o700) }
+})
+
+test("failed retained observation does not certify an existing cleanup-verified record", { timeout: 30000 }, async t => {
+  const f = await controlFixture(t), failed = { ...await f.spawnProvider(), phase: "cleanup_verified" as const }, healthy = launch({ launchBootId: await f.adapter.bootId(), launchAttemptId: "ffffffff-ffff-4fff-bfff-ffffffffffff", launchAttempted: false, checkoutId: "healthy" })
+  if (!failed.provider) throw new Error("missing provider identity")
+  const failedPath = join(f.paths.persistentRoot, "launches", `${failed.launchAttemptId}.json`), healthyPath = join(f.paths.persistentRoot, "launches", `${healthy.launchAttemptId}.json`)
+  await writeLaunchRecord(failedPath, failed); await writeLaunchRecord(healthyPath, healthy)
+  const config = JSON.parse(await readFile(f.configPath, "utf8"))
+  await writeFile(f.configPath, JSON.stringify({ ...config, failBootIdOnce: true }), { mode: 0o600 })
+  const started = await f.start()
+  assert.equal(started.record.phase, "ready")
+  const reply = await f.call()
+  assert.ok(reply.ok && "issues" in reply.result)
+  assert.equal(reply.result.issues?.some(issue => issue.path === failedPath), true)
+  assert.equal(reply.result.launches.find(item => item.launchAttemptId === healthy.launchAttemptId)?.phase, "cleanup_verified")
+  assert.equal(JSON.parse(await readFile(healthyPath, "utf8")).phase, "cleanup_verified")
+  assert.notEqual(await f.observe(failed.provider.group.leader.pid), null)
+  const ordinary = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: started.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  assert.ok(!ordinary.ok && ordinary.error.code === "ACTIVE_AGENTS")
+  const forced = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: started.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.ok(!forced.ok && forced.error.code === "INCOMPLETE")
+  assert.notEqual(await f.observe(failed.provider.group.leader.pid), null)
 })
 
 test("shutdown requests during reconciliation have no side effects", { timeout: 20000 }, async t => {
@@ -79,7 +135,7 @@ test("shutdown requests during reconciliation have no side effects", { timeout: 
   const started = f.start()
   await until(async () => await fileExists(join(f.root, "paused")) ? true : undefined)
   const current = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
-  const reply = await f.call({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
   assert.ok(!reply.ok)
   assert.equal(reply.error.code, "INCOMPLETE")
   await writeFile(join(f.root, "release"), "release", { mode: 0o600 })

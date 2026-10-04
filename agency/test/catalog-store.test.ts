@@ -15,9 +15,9 @@ function meta(root: string, c: RefreshCommand): ProbeMeta {
   const attemptId = randomUUID()
   c.fingerprints.push({ providerId: "claude-agent-acp", fingerprint })
   c.attempts.push({ providerId: "claude-agent-acp", attemptId })
-  return { version: 1, hostId, handlerGeneration: generation, commandId: c.commandId, providerId: "claude-agent-acp", attemptId, agentId: randomUUID(), leaseId: randomUUID(), fingerprint, workPath: join(root, "catalog/work", attemptId) }
+  return { version: 2, hostId, handlerGeneration: generation, commandId: c.commandId, providerId: "claude-agent-acp", attemptId, fingerprint, workPath: join(root, "catalog/work", attemptId) }
 }
-const launch = (m: ProbeMeta) => ({ version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, leaseId: m.leaseId, agentId: m.agentId, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
+const launch = (m: ProbeMeta) => ({ version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
 
 test("two individually bounded provider payloads persist and retain their receipt snapshot", async t => {
   const root = await privateRoot(t), store = createCatalogStore(root), s = snapshot(), c = command()
@@ -149,6 +149,36 @@ test("unsafe records, malformed UTF-8, remnants and bounded inventories fail clo
   assert.ok((await store.inventory()).issues.length > 0)
 })
 
+test("one probe metadata issue does not prevent an unrelated command write", async t => {
+  const root = await privateRoot(t), store = createCatalogStore(root), first = command(), m = meta(root, first)
+  await store.writeCommand(first, null)
+  await store.writeProbeMeta(m)
+  const launches = join(root, "catalog/probe-launches")
+  await mkdir(launches, { mode: 0o700 })
+  await writeFile(join(launches, m.attemptId + ".json"), JSON.stringify(launch(m)), { mode: 0o600 })
+  assert.deepEqual((await store.inventory()).issues, [])
+  await writeFile(join(root, "catalog/probe-meta", m.attemptId + ".json"), "{", { mode: 0o600 })
+  const second = command()
+  await store.writeCommand(second, null)
+  assert.deepEqual(await store.readCommand(second.commandId), second)
+  assert.deepEqual((await store.inventory()).issues, [`probe-meta/${m.attemptId}.json`, `probe-launches/${m.attemptId}.json`])
+})
+
+test("historical probe identities remain unique while new metadata writes require version two", async t => {
+  const root = await privateRoot(t), store = createCatalogStore(root), first = command(), second = command(), a = meta(root, first), b = meta(root, second)
+  const agentId = randomUUID(), leaseId = randomUUID()
+  await store.writeCommand(first, null); await store.writeCommand(second, null)
+  await mkdir(join(root, "catalog/probe-meta"), { mode: 0o700 })
+  await mkdir(join(root, "catalog/probe-launches"), { mode: 0o700 })
+  for (const m of [a, b]) {
+    const legacy = { ...m, version: 1, agentId, leaseId }
+    await assert.rejects(store.writeProbeMeta(legacy as unknown as ProbeMeta), { code: "INVALID_CATALOG" })
+    await writeFile(join(root, "catalog/probe-meta", m.attemptId + ".json"), JSON.stringify(legacy), { mode: 0o600 })
+    await writeFile(join(root, "catalog/probe-launches", m.attemptId + ".json"), JSON.stringify({ version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, agentId, leaseId, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null }), { mode: 0o600 })
+  }
+  assert.equal((await store.inventory()).issues.filter(issue => issue === `probe-meta/${a.attemptId}.json` || issue === `probe-meta/${b.attemptId}.json`).length, 1)
+})
+
 test("accepted command disappearance cannot be silently replaced by a later write", async t => {
   const root = await privateRoot(t), store = createCatalogStore(root), c = command()
   await store.writeCommand(c, null)
@@ -171,10 +201,9 @@ test("inventories reject cross-record host, generation, and reused probe identit
   }
   await writeFile(path, JSON.stringify(m))
   const other = command(), otherMeta = meta(root, other)
-  otherMeta.agentId = m.agentId
   await createCatalogStore(root).writeCommand(other, null)
   await createCatalogStore(root).writeProbeMeta(otherMeta)
-  await writeFile(join(dir, otherMeta.attemptId + ".json"), JSON.stringify(launch(otherMeta)), { mode: 0o600 })
+  await writeFile(join(dir, otherMeta.attemptId + ".json"), JSON.stringify({ ...launch(otherMeta), owner: { kind: "catalog-probe", providerId: otherMeta.providerId, commandId: m.commandId } }), { mode: 0o600 })
   assert.ok((await store.inventory()).issues.length > 0)
 })
 

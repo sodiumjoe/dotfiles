@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { unlink, writeFile } from "node:fs/promises"
+import { mkdir, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
 import { createCatalogService, type CatalogClock } from "../src/catalog/service.js"
@@ -14,15 +14,17 @@ import { privateRoot, until } from "./control-support.js"
 const result = (providerId: ProviderId, modelId = "a"): ProbeResult => ({ models: [{ providerId, modelId, resolvedModelId: null, displayName: "Model", reasoning: { state: "unknown" }, modes: { state: "unknown" }, availability: "advertised" }], providerVersion: null, providerVersionSource: "unknown" })
 async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: string) {
   const root = retainedRoot ?? await privateRoot(t)
-  let now = 1000000, tick: (() => void) | undefined, blocked = false, ready = true, shutdown = false
+  let now = 1000000, tick: (() => void) | undefined, ready = true, shutdown = false
+  const blocked = new Set<ProviderId>()
   const profiles: ProviderProfile[] = ["claude-agent-acp", "codex-acp"].map(id => ({ id: id as ProviderId, enabled: true, executable: "/fixture/native", adapterPackageJson: "/fixture/package.json", sdkPackageJson: id === "codex-acp" ? null : "/fixture/sdk.json", configurationFiles: [] }))
   const evidence = new Map(profiles.map(p => [p.id, { providerId: p.id, scope: "declared-config-v1" as const, fingerprint: (p.id === "codex-acp" ? "b" : "a").repeat(64), adapterVersion: "1", sdkVersion: p.id === "codex-acp" ? null : "0.3.232" }]))
   const queue = new MutationQueue(), store = createCatalogStore(root), generation = randomUUID(), paths = { hostKey: "c".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "socket") }
   const started: ProbeRequest[] = [], pending: Array<{ request: ProbeRequest; gate: ReturnType<typeof gate<ProbeOutcome>> }> = []
   const probes: ProbeRuntime = {
-    recover: async () => { if (blocked) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
-    verifyDischarged: async () => { if (blocked || pending.length) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
+    recover: async () => undefined,
+    verifyDischarged: async () => { if (blocked.size || pending.length) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
     async run(request, signal) {
+      if (blocked.has(request.meta.providerId)) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
       started.push(request)
       const done = gate<ProbeOutcome>(), entry = { request, gate: done }
       pending.push(entry)
@@ -36,9 +38,9 @@ async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: stri
     const index = pending.indexOf(entry)
     if (index < 0) return
     pending.splice(index, 1)
-    if (code === "PROBE_CLEANUP_UNVERIFIED") blocked = true
+    if (code === "PROBE_CLEANUP_UNVERIFIED") blocked.add(entry.request.meta.providerId)
     const m = entry.request.meta
-    entry.gate.resolve({ request: entry.request, record: { version: 1, checkoutId: `catalog-v1:${m.providerId}:${m.fingerprint}`, leaseId: m.leaseId, agentId: m.agentId, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "fixture", launchAttempted: false, provider: null, phase: blocked ? "quarantined" : "cleanup_verified", reason: blocked ? "fixture" : null }, result: value, error: code ? failure(new CatalogError(code)) : null })
+    entry.gate.resolve({ request: entry.request, record: { version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "fixture", launchAttempted: false, provider: null, phase: blocked.has(m.providerId) ? "quarantined" : "cleanup_verified", reason: blocked.has(m.providerId) ? "fixture" : null }, result: value, error: code ? failure(new CatalogError(code)) : null })
   }
   const clock: CatalogClock = { now: () => now, every: (ms, callback) => { assert.equal(ms, 30000); tick = callback; return () => { tick = undefined } } }
   const options = { paths, generation, queue, store, probes, isReady: () => ready, shutdownPending: () => shutdown, readProfiles: async () => structuredClone(profiles), observeConfig: async (p: ProviderProfile) => structuredClone(evidence.get(p.id)!), clock }
@@ -90,6 +92,29 @@ test("freshness respects expiry, backwards time, and generation provenance", asy
   assert.equal((await next.list()).providers[0]!.freshness, "stale")
 })
 
+test("launch evidence never refreshes and requires fresh accepted configuration provenance", async t => {
+  const f = await fixture(t), command = randomUUID()
+  await f.service.initialize()
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  assert.equal(f.started.length, 0)
+  await f.service.refresh(command, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  const completed = await f.finish(command)
+  const evidence = await f.service.launchEvidence("codex-acp")
+  assert.equal(evidence.snapshotId, completed.snapshot!.snapshotId)
+  assert.equal(evidence.provider.verifiedHandlerGeneration, f.generation)
+  evidence.provider.models.length = 0
+  assert.equal((await f.service.launchEvidence("codex-acp")).provider.models.length, 1)
+  f.advance(600000)
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  f.setTime(999999)
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  f.setTime(1000000)
+  f.evidence.get("codex-acp")!.fingerprint = "e".repeat(64)
+  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  assert.equal(f.started.length, 2)
+})
+
 test("partial refresh across clock rollback completes without rewriting historical verification time", async t => {
   const f = await fixture(t), first = randomUUID(), second = randomUUID()
   await f.service.initialize(); await f.service.refresh(first, f.generation)
@@ -125,17 +150,39 @@ test("verified query failure retains stale data while the other provider succeed
   assert.equal(view.providers[1]!.freshness, "fresh")
 })
 
-test("unverified probe ownership blocks all new probes but retains readable history", async t => {
-  const f = await fixture(t), command = randomUUID()
-  await f.service.initialize(); await f.service.refresh(command, f.generation)
+test("uncertain probe cleanup leaves verified evidence and unrelated provider launches usable", async t => {
+  const f = await fixture(t), first = randomUUID(), second = randomUUID()
+  await f.service.initialize(); await f.service.refresh(first, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(first)
+  const prior = await f.service.launchEvidence("claude-agent-acp")
+  await f.service.refresh(second, f.generation)
   await f.completeProbe("claude-agent-acp", null, "PROBE_CLEANUP_UNVERIFIED")
-  await f.finish(command)
-  assert.equal(f.started.length, 1)
-  assert.equal((await f.service.list()).discovery.state, "blocked")
-  await assert.rejects(f.service.refresh(randomUUID(), f.generation))
+  await f.completeProbe("codex-acp", result("codex-acp", "new"))
+  await f.finish(second)
+  const status = await f.service.list()
+  assert.equal(status.discovery.state, "idle")
+  assert.equal(status.providers[0]!.refreshIssue?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.deepEqual((await f.service.launchEvidence("claude-agent-acp")).provider, prior.provider)
+  assert.deepEqual((await f.service.launchEvidence("codex-acp")).provider.models.map(model => model.modelId), ["new"])
   await assert.rejects(f.service.verifyDischarged())
-  await f.service.freezeAndDrain(); f.service.resume()
-  assert.equal((await f.service.list()).discovery.state, "blocked")
+})
+
+test("orphan malformed probe evidence is reported without blocking verified starts", async t => {
+  const f = await fixture(t), first = randomUUID(), orphan = randomUUID()
+  await f.service.initialize(); await f.service.refresh(first, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(first)
+  const prior = await f.service.launchEvidence("claude-agent-acp")
+  await mkdir(join(f.root, "catalog/probe-meta"), { mode: 0o700 })
+  await writeFile(join(f.root, "catalog/probe-meta", orphan + ".json"), "{", { mode: 0o600 })
+  await writeFile(join(f.root, "catalog/probe-meta/unknown.json"), "{", { mode: 0o600 })
+  await writeFile(join(f.root, "catalog/probe-meta/line\nbreak.json"), "{", { mode: 0o600 })
+  const status = await f.service.list()
+  assert.equal(status.discovery.state, "idle")
+  assert.deepEqual((status.discovery as typeof status.discovery & { issues?: string[] }).issues, ["probe evidence entry has an unprintable or oversized name", `probe-meta/${orphan}.json`, "probe-meta/unknown.json"])
+  assert.deepEqual(await f.service.launchEvidence("claude-agent-acp"), prior)
+  const second = randomUUID()
+  await f.service.refresh(second, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(second)
 })
 
 test("freeze permits queued terminal writes and interrupts accepted commands", async t => {

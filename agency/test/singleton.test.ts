@@ -271,7 +271,7 @@ async function waitEvent(path: string, event: string): Promise<void> {
   await waitFor(async () => (await lines(path)).includes(event), `event ${event} was not observed`)
 }
 
-function launchRecord(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
+function launchRecord(overrides: Partial<import("../src/platform/types.js").LegacyLaunchRecord> = {}): import("../src/platform/types.js").LegacyLaunchRecord {
   return {
     version: RUNTIME_RECORD_VERSION,
     checkoutId: "checkout",

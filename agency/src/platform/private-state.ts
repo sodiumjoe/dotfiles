@@ -8,12 +8,22 @@ import {
   type HandlerGenerationRecord,
   type LaunchPhase,
   type LaunchRecord,
+  type LaunchOwner,
+  type ManagedLaunchRecord,
+  type LegacyLaunchRecord,
   type ProcessGroupProviderIdentity,
   type ProcessIdentity,
   type ProviderIdentity,
 } from "./types.js"
 
 const MAX_RECORD_BYTES = 1024 * 1024
+
+export class PrivateStatePublicationError extends Error {
+  constructor(cause: unknown) {
+    super(`private state publication failed: ${String(cause)}`, { cause })
+    this.name = "PrivateStatePublicationError"
+  }
+}
 
 type UnknownRecord = Record<string, unknown>
 
@@ -46,6 +56,10 @@ function boolean(value: unknown, name: string): boolean {
   return value
 }
 
+function exactKeys(value: UnknownRecord, expected: string[], name: string): void {
+  if (Object.keys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))) throw new Error(`${name} has invalid keys`)
+}
+
 function version(value: unknown): typeof RUNTIME_RECORD_VERSION {
   if (value !== RUNTIME_RECORD_VERSION) throw new Error(`record version must be ${RUNTIME_RECORD_VERSION}`)
   return RUNTIME_RECORD_VERSION
@@ -53,6 +67,7 @@ function version(value: unknown): typeof RUNTIME_RECORD_VERSION {
 
 function processIdentity(value: unknown, name: string): ProcessIdentity {
   const source = object(value, name)
+  exactKeys(source, ["bootId", "pid", "birth", "parentPid", "processGroupId", "sessionId", "uid", "gid"], name)
   return {
     bootId: nonempty(source.bootId, `${name}.bootId`),
     pid: integer(source.pid, `${name}.pid`, 1),
@@ -74,7 +89,9 @@ function providerIdentity(value: unknown): ProviderIdentity | null {
   if (value === null) return null
   const source = object(value, "provider")
   if (source.kind === "process-group") {
+    exactKeys(source, ["kind", "group"], "provider")
     const group = object(source.group, "provider.group")
+    exactKeys(group, ["leader", "observed"], "provider.group")
     return {
       kind: "process-group",
       group: {
@@ -93,11 +110,7 @@ function launchPhase(value: unknown): LaunchPhase {
 
 function parseLaunchRecord(value: unknown, strict: boolean): LaunchRecord {
   const source = object(value, "LaunchRecord")
-  const record: LaunchRecord = {
-    version: version(source.version),
-    checkoutId: nonempty(source.checkoutId, "checkoutId"),
-    leaseId: nonempty(source.leaseId, "leaseId"),
-    agentId: nonempty(source.agentId, "agentId"),
+  const fields = {
     handlerGeneration: nonempty(source.handlerGeneration, "handlerGeneration"),
     launchAttemptId: nonempty(source.launchAttemptId, "launchAttemptId"),
     launchBootId: nonempty(source.launchBootId, "launchBootId"),
@@ -106,6 +119,24 @@ function parseLaunchRecord(value: unknown, strict: boolean): LaunchRecord {
     provider: providerIdentity(source.provider),
     reason: nullableString(source.reason, "reason"),
   }
+  let record: LaunchRecord
+  if (source.version === 1) {
+    exactKeys(source, ["version", "checkoutId", "leaseId", "agentId", "handlerGeneration", "launchAttemptId", "launchBootId", "launchAttempted", "phase", "provider", "reason"], "LaunchRecord")
+    record = { version: 1, checkoutId: nonempty(source.checkoutId, "checkoutId"), leaseId: nonempty(source.leaseId, "leaseId"), agentId: nonempty(source.agentId, "agentId"), ...fields } satisfies LegacyLaunchRecord
+  } else if (source.version === 2) {
+    exactKeys(source, ["version", "owner", "handlerGeneration", "launchAttemptId", "launchBootId", "launchAttempted", "phase", "provider", "reason"], "LaunchRecord")
+    const owner = object(source.owner, "owner")
+    let parsed: LaunchOwner
+    if (owner.kind === "agent") {
+      exactKeys(owner, ["kind", "agentId", "providerGeneration"], "owner")
+      parsed = { kind: "agent", agentId: nonempty(owner.agentId, "owner.agentId"), providerGeneration: nonempty(owner.providerGeneration, "owner.providerGeneration") }
+    } else if (owner.kind === "catalog-probe") {
+      exactKeys(owner, ["kind", "providerId", "commandId"], "owner")
+      if (owner.providerId !== "claude-agent-acp" && owner.providerId !== "codex-acp") throw new Error("owner.providerId is invalid")
+      parsed = { kind: "catalog-probe", providerId: owner.providerId, commandId: nonempty(owner.commandId, "owner.commandId") }
+    } else throw new Error("owner.kind is invalid")
+    record = { version: 2, owner: parsed, ...fields } satisfies ManagedLaunchRecord
+  } else throw new Error("record version must be 1 or 2")
   if (strict) assertLaunchSemantics(record)
   return record
 }
@@ -207,10 +238,10 @@ async function publish(path: string, value: unknown): Promise<void> {
   if (serialized === undefined) throw new Error("record cannot be serialized as JSON")
   if (Buffer.byteLength(serialized, "utf8") > MAX_RECORD_BYTES) throw new Error(`${path} exceeds the 1 MiB size limit`)
   const parent = dirname(path)
-  await assertPrivateDirectory(parent)
   const temporary = join(parent, `.${basename(path)}.${randomUUID()}.tmp`)
   let handle: FileHandle | undefined
   try {
+    await assertPrivateDirectory(parent)
     handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     await handle.writeFile(serialized, { encoding: "utf8" })
     await handle.sync()
@@ -224,9 +255,9 @@ async function publish(path: string, value: unknown): Promise<void> {
       await parentHandle.close()
     }
   } catch (error) {
-    await handle?.close()
-    await rm(temporary, { force: true })
-    throw error
+    try { await handle?.close() } catch {}
+    try { await rm(temporary, { force: true }) } catch {}
+    throw new PrivateStatePublicationError(error)
   }
 }
 

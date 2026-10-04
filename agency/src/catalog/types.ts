@@ -10,7 +10,9 @@ export type CatalogFailure = { code: CatalogErrorCode; message: string }
 export type ProviderSnapshot = { providerId: ProviderId; fingerprint: string | null; verifiedAt: number | null; verifiedHandlerGeneration: string | null; providerVersion: string | null; providerVersionSource: "reported" | "unknown"; adapterVersion: string | null; sdkVersion: string | null; models: Model[]; error: CatalogFailure | null }
 export type CatalogSnapshot = { version: 1; hostId: string; snapshotId: string; handlerGeneration: string; createdAt: number; providers: ProviderSnapshot[] }
 export type RefreshCommand = { version: 1; commandId: string; hostId: string; handlerGeneration: string; batchId: string; fingerprints: Array<{ providerId: ProviderId; fingerprint: string }>; attempts: Array<{ providerId: ProviderId; attemptId: string }>; state: "pending" | "completed" | "interrupted"; snapshotId: string | null }
-export type ProbeMeta = { version: 1; hostId: string; handlerGeneration: string; commandId: string; providerId: ProviderId; attemptId: string; agentId: string; leaseId: string; fingerprint: string; workPath: string }
+export type ProbeMeta = { version: 2; hostId: string; handlerGeneration: string; commandId: string; providerId: ProviderId; attemptId: string; fingerprint: string; workPath: string }
+export type LegacyProbeMeta = Omit<ProbeMeta, "version"> & { version: 1; agentId: string; leaseId: string }
+export type RetainedProbeMeta = ProbeMeta | LegacyProbeMeta
 export const CATALOG_TTL_MS = 600000
 export const MAX_CATALOG_BYTES = 1024 * 1024
 export const catalogMessages = {
@@ -131,6 +133,13 @@ export function parseCommand(input: unknown): RefreshCommand {
 }
 export function parseProbeMeta(input: unknown): ProbeMeta {
   const v = object(input)
+  keys(v, ["version", "hostId", "handlerGeneration", "commandId", "providerId", "attemptId", "fingerprint", "workPath"])
+  if (v.version !== 2) invalid()
+  return { version: 2, hostId: hash(v.hostId), handlerGeneration: id(v.handlerGeneration), commandId: id(v.commandId), providerId: providerId(v.providerId), attemptId: id(v.attemptId), fingerprint: hash(v.fingerprint), workPath: absolutePath(v.workPath) }
+}
+export function parseRetainedProbeMeta(input: unknown): RetainedProbeMeta {
+  const v = object(input)
+  if (v.version === 2) return parseProbeMeta(v)
   keys(v, ["version", "hostId", "handlerGeneration", "commandId", "providerId", "attemptId", "agentId", "leaseId", "fingerprint", "workPath"])
   if (v.version !== 1) invalid()
   return { version: 1, hostId: hash(v.hostId), handlerGeneration: id(v.handlerGeneration), commandId: id(v.commandId), providerId: providerId(v.providerId), attemptId: id(v.attemptId), agentId: id(v.agentId), leaseId: id(v.leaseId), fingerprint: hash(v.fingerprint), workPath: absolutePath(v.workPath) }

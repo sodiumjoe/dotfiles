@@ -9,6 +9,7 @@ import { reconcileRecord } from "../src/platform/reconcile.js"
 import {
   RUNTIME_RECORD_VERSION,
   type LaunchRecord,
+  type LegacyLaunchRecord,
   type PlatformAdapter,
   type ProcessIdentity,
 } from "../src/platform/types.js"
@@ -30,7 +31,7 @@ function identity(overrides: Partial<ProcessIdentity> = {}): ProcessIdentity {
   }
 }
 
-function record(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
+function record(overrides: Partial<LegacyLaunchRecord> = {}): LegacyLaunchRecord {
   const leader = identity()
   return {
     version: RUNTIME_RECORD_VERSION,
@@ -107,6 +108,104 @@ async function assertOutcome(t: test.TestContext, starting: LaunchRecord, adapte
   assert.deepEqual(result.record, await readLaunchRecord(path))
   assert.equal(result.record.phase, expected.disposition === "quarantined" ? "quarantined" : "cleanup_verified")
 }
+
+test("late detached group members retain quarantine after every recorded process exits", async t => {
+  const leader = identity(), codex = identity({ pid: 102, birth: "102:unmarked:/managed/codex", parentPid: leader.pid })
+  const detached = identity({ pid: 103, birth: "103:unmarked:/managed/git", parentPid: 1 })
+  const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, codex] } } })
+  const adapter = new FakeAdapter({ leader: null, group: [detached] })
+  const path = await recordFixture(t, starting)
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "quarantined")
+  assert.equal(result.record.phase, "quarantined")
+  assert.deepEqual(result.record.provider, starting.provider)
+  assert.deepEqual(result.record, await readLaunchRecord(path))
+  assert.deepEqual(adapter.signals, [])
+  assert.deepEqual(adapter.group, [detached])
+})
+
+test("late detached group members cannot authorize escalation after SIGTERM", async t => {
+  const adapter = new FakeAdapter({ onSignal: (signal, state) => {
+    assert.equal(signal, "SIGTERM")
+    state.leader = null
+    state.group = [identity({ pid: 103, birth: "103:unmarked:/managed/git", parentPid: 1 })]
+  } })
+  await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: ["SIGTERM"] })
+})
+
+test("an observed helper outside the recorded group is diagnostic after group cleanup", async t => {
+  const leader = identity(), member = identity({ pid: 102, birth: "102:descendant" })
+  const detached = { ...member, processGroupId: 202, sessionId: 202 }
+  const adapter = new FakeAdapter({ leader: null, group: [] })
+  adapter.readProcess = async pid => pid === member.pid ? detached : null
+  const path = await recordFixture(t, record({ provider: { kind: "process-group", group: { leader, observed: [leader, member] } } }))
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "released")
+  assert.equal(result.record.phase, "cleanup_verified")
+  assert.deepEqual(result.diagnostics, [{ kind: "detached-helper", identity: detached }])
+  assert.deepEqual(adapter.signals, [])
+})
+
+test("a changed former helper outside the recorded group is not an exact detached diagnostic", async t => {
+  const leader = identity(), member = identity({ pid: 102, birth: "102:descendant" })
+  for (const change of [{ birth: "102:replacement" }, { uid: member.uid + 1 }, { gid: member.gid + 1 }]) {
+    const adapter = new FakeAdapter({ leader: null, group: [] })
+    adapter.readProcess = async pid => pid === member.pid ? { ...member, ...change, processGroupId: 202, sessionId: 202 } : null
+    const path = await recordFixture(t, record({ provider: { kind: "process-group", group: { leader, observed: [leader, member] } } }))
+    const result = await reconcileRecord(path, adapter)
+    assert.equal(result.disposition, "released")
+    assert.deepEqual(result.diagnostics, undefined)
+    assert.deepEqual(adapter.signals, [])
+  }
+})
+
+test("an unreadable former helper does not invalidate an empty owned group", async t => {
+  const leader = identity(), member = identity({ pid: 102, birth: "102:descendant" })
+  const adapter = new FakeAdapter({ leader: null, group: [] })
+  adapter.readProcess = async pid => { if (pid === member.pid) throw new Error("former helper unavailable"); return null }
+  const path = await recordFixture(t, record({ provider: { kind: "process-group", group: { leader, observed: [leader, member] } } }))
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "released")
+  assert.deepEqual(adapter.signals, [])
+})
+
+test("transient child exit between signal authorization snapshots retains cleanup authority", async t => {
+  const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+  const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
+  const adapter = new FakeAdapter({ group: [leader, child], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+  let reads = 0
+  adapter.readGroup = async () => adapter.signals.length ? [] : ++reads === 1 ? [leader, child] : [leader]
+  const path = await recordFixture(t, starting)
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "cleaned")
+  assert.deepEqual(adapter.signals, ["SIGTERM"])
+})
+
+test("an exact live leader authorizes a new same-session child before SIGTERM", async t => {
+  const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+  const adapter = new FakeAdapter({ group: [leader], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+  let reads = 0
+  adapter.readGroup = async () => adapter.signals.length ? [] : ++reads === 1 ? [leader] : [leader, child]
+  const path = await recordFixture(t, record())
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "cleaned")
+  assert.deepEqual(adapter.signals, ["SIGTERM"])
+  assert.ok(result.record.provider?.group.observed.some(member => member.pid === child.pid))
+})
+
+test("transient Darwin group observation churn stabilizes before SIGTERM", async t => {
+  const adapter = new FakeAdapter({ onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+  const readGroup = adapter.readGroup.bind(adapter)
+  let reads = 0
+  adapter.readGroup = async () => {
+    if (++reads < 3) throw new DarwinObservationUnavailable("transient group churn")
+    return readGroup()
+  }
+  const path = await recordFixture(t, record())
+  const result = await reconcileRecord(path, adapter)
+  assert.equal(result.disposition, "cleaned")
+  assert.deepEqual(adapter.signals, ["SIGTERM"])
+})
 
 test("expected inventory rejects a replaced record before any write or signal", async t => {
   const expected = record()
@@ -310,12 +409,13 @@ test("reconciles retained-member escape without unauthorized signaling", async t
     const leader = identity()
     const member = identity({ pid: 102, birth: "102:descendant" })
     const changed = { ...member, ...(scenario === "marker" ? { birth: "102:changed" } : scenario === "uid" ? { uid: member.uid + 1 } : scenario === "gid" ? { gid: member.gid + 1 } : scenario === "malformed" ? { birth: "invalid" } : { processGroupId: 202, sessionId: 202 }) }
-    const adapter = new FakeAdapter({ platform, leader: scenario === "empty" ? null : leader, group: scenario === "empty" ? [] : [leader] })
+    const adapter = new FakeAdapter({ platform, leader: scenario === "empty" ? null : leader, group: scenario === "empty" ? [] : [leader], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
     adapter.readProcess = async pid => pid === 102 ? changed : adapter.leader
     const path = await recordFixture(t, record({ phase: scenario === "omitted" ? "cleanup_pending" : "active", provider: { kind: "process-group", group: { leader, observed: [leader, member] } } }))
     const result = await reconcileRecord(path, adapter)
-    assert.equal(result.disposition, "quarantined")
-    assert.deepEqual(adapter.signals, [])
+    assert.equal(result.disposition, ["empty", "leader", "omitted"].includes(scenario) ? scenario === "empty" ? "released" : "cleaned" : "quarantined")
+    assert.deepEqual(adapter.signals, ["leader", "omitted"].includes(scenario) ? ["SIGTERM"] : [])
+    if (["empty", "leader", "omitted"].includes(scenario)) assert.deepEqual(result.diagnostics, [{ kind: "detached-helper", identity: changed }])
     assert.ok(result.record.provider?.kind === "process-group" && result.record.provider.group.observed.some(value => value.pid === 102))
   })
 })
@@ -334,10 +434,11 @@ test("retained-member escape preserves members first observed during signal poll
       adapter.leader = null
       return []
     }
-    adapter.readProcess = async pid => pid === 101 ? adapter.leader : polling > 0 ? { ...member, processGroupId: 202, sessionId: 202 } : null
+    adapter.readProcess = async pid => pid === 101 ? adapter.signals.includes(phase) && polling > 0 ? null : adapter.leader : polling > 0 ? { ...member, processGroupId: 202, sessionId: 202 } : null
     const result = await reconcileRecord(path, adapter)
-    assert.equal(result.disposition, "quarantined")
+    assert.equal(result.disposition, "cleaned")
     assert.deepEqual(adapter.signals, phase === "SIGTERM" ? ["SIGTERM"] : ["SIGTERM", "SIGKILL"])
+    assert.equal(result.diagnostics?.[0]?.kind, "detached-helper")
     assert.ok(result.record.provider?.group.observed.some(value => value.pid === member.pid))
   })
 })

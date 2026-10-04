@@ -22,19 +22,19 @@ test("failed mutations do not poison the queue or overlap later operations", asy
   assert.deepEqual(order, [1, 2])
 })
 
-test("unrecognized launch mutations latch admission unavailable without erasing cached status", async t => {
+test("unrecognized launch mutations remain localized without erasing cached status", async t => {
   const root = await privateRoot(t), directory = join(root, "launches")
   await mkdir(directory, { mode: 0o700 })
-  const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [], unavailable: null }
-  const state: HandlerStatus = { hostId: "a".repeat(64), handlerGeneration: "generation", phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
+  const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [] }
+  const state: HandlerStatus = { hostId: "a".repeat(64), handlerGeneration: "generation", phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   await refreshLaunchState(state, mutations, directory)
   const record = launch(), path = join(directory, `${record.launchAttemptId}.json`)
   await writeLaunchRecord(path, record)
   await refreshLaunchState(state, mutations, directory)
-  assert.notEqual(mutations.unavailable, null)
-  assert.equal(state.launches.length, 0)
+  assert.equal(mutations.issues?.length, 1)
+  assert.equal(state.launches.length, 1)
   mutations.accepted = [{ path, record }]
   await refreshLaunchState(state, mutations, directory)
-  assert.notEqual(mutations.unavailable, null)
+  assert.deepEqual(mutations.issues, [])
   assert.equal(state.launches[0]!.launchAttemptId, record.launchAttemptId)
 })

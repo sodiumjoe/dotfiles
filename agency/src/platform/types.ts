@@ -1,4 +1,5 @@
 export const RUNTIME_RECORD_VERSION = 1 as const
+import type { ProviderId } from "../catalog/types.js"
 
 export type ProcessIdentity = {
   bootId: string
@@ -32,11 +33,11 @@ export type LaunchPhase =
   | "cleanup_verified"
   | "quarantined"
 
-export type LaunchRecord = {
-  version: typeof RUNTIME_RECORD_VERSION
-  checkoutId: string
-  leaseId: string
-  agentId: string
+export type LaunchOwner =
+  | { kind: "agent"; agentId: string; providerGeneration: string }
+  | { kind: "catalog-probe"; providerId: ProviderId; commandId: string }
+
+type LaunchFields = {
   handlerGeneration: string
   launchAttemptId: string
   launchBootId: string
@@ -46,9 +47,38 @@ export type LaunchRecord = {
   reason: string | null
 }
 
+export type ManagedLaunchRecord = LaunchFields & {
+  version: 2
+  owner: LaunchOwner
+  checkoutId?: never
+  leaseId?: never
+  agentId?: never
+}
+
+export type LegacyLaunchRecord = LaunchFields & {
+  version: 1
+  checkoutId: string
+  leaseId: string
+  agentId: string
+  owner?: never
+}
+
+export type LaunchRecord = ManagedLaunchRecord | LegacyLaunchRecord
+
+export function launchOwner(record: LaunchRecord):
+  | { kind: "agent"; id: string; generation: string }
+  | { kind: "catalog-probe"; id: string; providerId: ProviderId }
+  | { kind: "legacy-agent"; id: string; handlerGeneration: string } {
+  if (record.version === 1) return { kind: "legacy-agent", id: record.agentId, handlerGeneration: record.handlerGeneration }
+  return record.owner.kind === "agent"
+    ? { kind: "agent", id: record.owner.agentId, generation: record.owner.providerGeneration }
+    : { kind: "catalog-probe", id: record.owner.commandId, providerId: record.owner.providerId }
+}
+
 export type ReconcileResult = {
   record: LaunchRecord
   disposition: "released" | "cleaned" | "quarantined"
+  diagnostics?: Array<{ kind: "detached-helper"; identity: ProcessIdentity }>
 }
 
 export type HandlerPhase =

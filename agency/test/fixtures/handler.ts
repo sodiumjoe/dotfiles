@@ -79,7 +79,7 @@ function assertProviderIdentity(leader: ProcessIdentity, members: ProcessIdentit
   if (members.some(member => member.bootId !== leader.bootId || member.processGroupId !== leader.processGroupId || member.sessionId !== leader.sessionId || member.uid !== leader.uid || member.gid !== leader.gid)) throw new Error("provider group identity is inconsistent")
 }
 
-function record(config: Config, launchAttemptId: string, bootId: string, changes: Partial<LaunchRecord> = {}): LaunchRecord {
+function record(config: Config, launchAttemptId: string, bootId: string, changes: Partial<import("../../src/platform/types.js").LegacyLaunchRecord> = {}): import("../../src/platform/types.js").LegacyLaunchRecord {
   return {
     version: RUNTIME_RECORD_VERSION,
     checkoutId: `checkout-${launchAttemptId}`,

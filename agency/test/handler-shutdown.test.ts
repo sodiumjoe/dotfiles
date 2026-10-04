@@ -11,24 +11,21 @@ import { privateRoot, launch } from "./control-support.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import type { HandlerGenerationRecord, PlatformAdapter } from "../src/platform/types.js"
 import { MutationQueue } from "../src/handler/mutations.js"
-import { createAdmissionController } from "../src/checkout/admission.js"
-import { resolveCheckout } from "../src/checkout/identity.js"
-import { writeAdmission } from "../src/checkout/records.js"
-import { reconcileRecord } from "../src/platform/reconcile.js"
-import { admissionFixture } from "./checkout-support.js"
+import { agentServiceFixture } from "./agent-support.js"
+import { until } from "./control-support.js"
 
 const generation = randomUUID(), marker = randomUUID()
 const identity = { bootId: "boot-a", pid: 101, birth: `1:agy-handler:${marker}`, parentPid: 1, processGroupId: 101, sessionId: 101, uid: process.getuid!(), gid: process.getgid!() }
 const receipt = (): ShutdownReceipt => ({ version: 1, commandId: randomUUID(), hostId: "a".repeat(64), handlerGeneration: generation, handlerIdentity: identity, stopAgents: false, state: "accepted" })
-const request = (commandId = randomUUID()): ControlRequest & { op: "shutdown" } => ({ protocol: "agency-control/1", requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId, stopAgents: false })
+const request = (commandId = randomUUID()): ControlRequest & { op: "shutdown" } => ({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: generation, op: "shutdown", commandId, stopAgents: false })
 
 async function context(t: test.TestContext): Promise<ShutdownContext> {
   const root = await privateRoot(t)
   await mkdir(join(root, "launches"), { mode: 0o700 })
   const record: HandlerGenerationRecord = { version: 1, hostId: "a".repeat(64), launchBootId: "boot-a", generation, launchAttemptId: marker, launchAttempted: true, phase: "ready", process: identity, socketPath: join(root, "handler.sock"), writer: "handler", reconciliation: { classified: 0, total: 0, quarantined: 0 }, reason: null }
-  const state: HandlerStatus = { hostId: record.hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
+  const state: HandlerStatus = { hostId: record.hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const adapter: PlatformAdapter = { platform: "linux", bootId: async () => "boot-a", readProcess: async () => { throw new Error("unexpected process observation") }, readGroup: async () => { throw new Error("unexpected group observation") }, signalGroup: async () => { throw new Error("unauthorized signal") } }
-  return { record, state, paths: { hostKey: record.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: record.socketPath }, adapter, mutations: { queue: new MutationQueue(), accepted: [], unavailable: null }, closeAfterReply: async () => undefined }
+  return { record, state, paths: { hostKey: record.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: record.socketPath }, adapter, mutations: { queue: new MutationQueue(), accepted: [] }, closeAfterReply: async () => undefined }
 }
 
 test("receipts preserve exact identity and reject changed fields or unsafe storage", async t => {
@@ -66,7 +63,7 @@ test("pre-rename failure leaves no receipt and post-rename directory failure pre
   assert.deepEqual(await readShutdownReceipt(root, value.commandId), value)
 })
 
-test("shutdown serializes admission, persists before draining, and deduplicates accepted commands", async t => {
+test("shutdown serializes receipt publication, persists before draining, and deduplicates accepted commands", async t => {
   const ctx = await context(t), first = request()
   const replies = await Promise.all([shutdownHandler(first, ctx), shutdownHandler({ ...first, requestId: randomUUID() }, ctx)])
   assert.ok(replies.every(reply => reply.ok))
@@ -142,43 +139,46 @@ test("uncertain receipt publication remains serviceable and retries the same pin
   assert.equal(ctx.state.phase, "draining")
 })
 
-async function checkoutContext(t: test.TestContext) {
-  const f = await admissionFixture(t), base = await context(t)
-  const ctx: ShutdownContext = { ...base, paths: f.context.paths, adapter: f.context.adapter, state: f.context.state, mutations: f.context.mutations, record: { ...base.record, generation: f.context.state.handlerGeneration } }
-  f.context.shutdownPending = () => ctx.pending !== undefined || ctx.accepted !== undefined
-  const command = { ...request(), handlerGeneration: ctx.record.generation }
-  return { f, ctx, command }
-}
-
-test("shutdown waits for an executing reservation before checking active leases", { timeout: 20000 }, async t => {
-  const { f, ctx, command } = await checkoutContext(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const controller = createAdmissionController(f.context, { resolve: resolveCheckout, publishAdmission: writeAdmission, reconcile: reconcileRecord, publishLaunch: async (path, value) => { entered.resolve(); await release.promise; await writeLaunchRecord(path, value) } })
-  const reservation = controller.reserve(f.request())
-  await entered.promise
-  const shutdown = shutdownHandler(command, ctx)
-  assert.notEqual(ctx.pending, undefined)
-  assert.equal(ctx.state.phase, "ready")
-  release.resolve()
-  assert.equal((await reservation).launch.phase, "launch_pending")
-  const reply = await shutdown
-  assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS")
-  assert.equal(ctx.state.launches.length, 1)
-  assert.equal(ctx.state.reconciliation.total, 1)
+for (const pause of ["spawn", "ready"] as const) test(`ordinary lifecycle shutdown refuses synchronously without cancelling ${pause}`, async t => {
+  const f = await agentServiceFixture(t, { pause }), base = await context(t)
+  const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
+  f.context.shutdownPending = () => ctx.pending !== undefined
+  await f.service.start(f.input); await f.entered
+  const reply = await shutdownHandler({ ...request(), handlerGeneration: f.input.handlerGeneration }, ctx)
+  assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS"); assert.equal(ctx.pending, undefined)
+  f.release()
+  const completed = await until(async () => { const v = await f.service.command(f.input.commandId, f.input.handlerGeneration); return v.command.state === "completed" ? v : undefined })
+  assert.equal(completed.command.result!.outcome, "started")
 })
 
-test("a pending shutdown coalesces retries and prevents queued reservations", { timeout: 20000 }, async t => {
-  const { f, ctx, command } = await checkoutContext(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  let publications = 0
-  ctx.publishReceipt = async (root, value) => { publications++; entered.resolve(); await release.promise; await writeShutdownReceipt(root, value) }
-  const first = shutdownHandler(command, ctx)
-  await entered.promise
-  const second = shutdownHandler({ ...command, requestId: randomUUID() }, ctx)
-  const reservation = assert.rejects(f.controller.reserve(f.request()), { code: "NOT_READY" })
-  release.resolve()
-  assert.ok((await first).ok)
-  assert.ok((await second).ok)
-  await reservation
-  assert.equal(publications, 1)
-  assert.equal(ctx.state.phase, "draining")
-  assert.equal(ctx.state.launches.length, 0)
+test("forced lifecycle and catalog drain independently release the mutation queue", async t => {
+  const f = await agentServiceFixture(t, { pause: "ready" }), base = await context(t)
+  const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
+  f.context.shutdownPending = () => ctx.pending !== undefined
+  let catalogDrained = false
+  ctx.catalog = { async freezeAndDrain() { await ctx.mutations.queue.run(async () => { catalogDrained = true }) }, resume() {}, async verifyDischarged() { assert.equal(catalogDrained, true) } }
+  await f.service.start(f.input); await f.entered
+  const reply = await shutdownHandler({ ...request(), handlerGeneration: f.input.handlerGeneration, stopAgents: true }, ctx)
+  assert.ok(reply.ok, JSON.stringify(reply)); assert.equal(ctx.state.phase, "draining")
+  f.release()
+  assert.equal((await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.result!.outcome, "failed")
+})
+
+test("incomplete forced lifecycle cleanup leaves Handler status and quarantine readable", async t => {
+  const f = await agentServiceFixture(t), base = await context(t)
+  const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
+  f.context.shutdownPending = () => ctx.pending !== undefined
+  await f.service.start(f.input)
+  await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
+  const read = f.context.adapter.readProcess
+  f.context.adapter.readProcess = async pid => { const identity = await read(pid); return identity ? { ...identity, birth: identity.birth.replace(/^100:/, "200:") } : null }
+  const command = { ...request(), handlerGeneration: f.input.handlerGeneration, stopAgents: true }
+  const reply = await shutdownHandler(command, ctx)
+  assert.ok(!reply.ok && reply.error.code === "INCOMPLETE", JSON.stringify(reply))
+  assert.equal(ctx.pending, undefined); assert.equal(ctx.state.phase, "ready")
+  assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "unknown")
+  f.context.adapter.readProcess = read
+  const unrelated = { ...f.input, commandId: randomUUID() }
+  assert.equal((await f.service.start(unrelated)).command.state, "pending")
 })

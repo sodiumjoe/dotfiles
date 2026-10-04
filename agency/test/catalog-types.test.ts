@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { normalizeClaude, normalizeCodex } from "../src/catalog/normalize.js"
-import { isFresh } from "../src/catalog/types.js"
+import { isFresh, parseProbeMeta } from "../src/catalog/types.js"
 
 test("native model evidence preserves reasoning, aliases and unknown session modes", () => {
   assert.deepEqual(normalizeClaude([{ value: "alias", resolvedModel: "canonical", displayName: "Model", supportsEffort: true, supportedEffortLevels: ["low", "high"], supportsFastMode: true }]), [
@@ -26,4 +26,11 @@ test("freshness expires at its bound and refuses absent or future verification",
   assert.equal(isFresh(100, 100), true)
   assert.equal(isFresh(100, 600099), true)
   assert.equal(isFresh(100, 600100), false)
+})
+
+test("probe metadata has only version-two process ownership fields", () => {
+  const attemptId = crypto.randomUUID()
+  const meta = { version: 2, hostId: "a".repeat(64), handlerGeneration: crypto.randomUUID(), commandId: crypto.randomUUID(), providerId: "codex-acp", attemptId, fingerprint: "b".repeat(64), workPath: `/tmp/catalog/work/${attemptId}` }
+  assert.deepEqual(parseProbeMeta(meta), meta)
+  for (const invalid of [{ ...meta, version: 1 }, { ...meta, leaseId: crypto.randomUUID() }, { ...meta, agentId: crypto.randomUUID() }]) assert.throws(() => parseProbeMeta(invalid), { code: "INVALID_CATALOG" })
 })

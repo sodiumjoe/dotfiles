@@ -2,7 +2,7 @@ import { mkdtemp, realpath, rm, mkdir, readFile, writeFile, chown } from "node:f
 import { join } from "node:path"
 import type { TestContext } from "node:test"
 import { randomUUID } from "node:crypto"
-import type { LaunchRecord } from "../src/platform/types.js"
+import type { LaunchRecord, LegacyLaunchRecord } from "../src/platform/types.js"
 import assert from "node:assert/strict"
 import { createConnection } from "node:net"
 import { fileURLToPath } from "node:url"
@@ -24,7 +24,7 @@ import type { ProviderProfile } from "../src/catalog/types.js"
 
 export function unavailableControlDependencies(): ControlDependencies {
   const unavailable = async (): Promise<never> => { throw new ControlError("UNAVAILABLE") }
-  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, callCatalog: unavailable, receipt: unavailable, inventory: unavailable, cwd: () => { throw new Error("unexpected cwd lookup") }, checkout: unavailable, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
+  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, callCatalog: unavailable, receipt: unavailable, inventory: unavailable, cwd: () => { throw new Error("unexpected cwd lookup") }, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
 }
 
 export const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -43,9 +43,7 @@ export async function fileExists(path: string): Promise<boolean> {
   try { await readFile(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error }
 }
 
-export type AdmissionFixtureOperation = { checkoutPath: string; action: "reserve" | "reserve_cancel"; agentId: string; leaseId: string; launchAttemptId: string }
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; admissionOperations?: AdmissionFixtureOperation[]; syntheticGitCleanup?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain"; admissionOnList: boolean } }
-type CheckoutFixtureCleanup = { root: string; verifyCleanup: () => void; beforeCleanup: (verify: () => Promise<void>) => void }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
 
 let fixtureBatchFailure: Error | undefined
 export function assertFixtureBatchHealthy(): void {
@@ -56,7 +54,7 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, checkout?: CheckoutFixtureCleanup) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
@@ -82,16 +80,10 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   async function signal(expected: ProcessIdentity, value: NodeJS.Signals): Promise<void> {
     if (await authorize(expected) && await authorize(expected)) await adapter.signalGroup(expected.pid, value)
   }
-  const verifyGitCleanup = async (): Promise<void> => {
+  const verifyCatalogCleanup = async (): Promise<void> => {
     try {
       const evidence = JSON.parse(await readFile(join(root, "catalog-cleanup-failure.json"), "utf8"))
       throw failFixtureBatch(Object.assign(new Error(`unverified Handler catalog cleanup; retained ${root}`), { evidence }))
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw failFixtureBatch(error)
-    }
-    try {
-      const evidence = JSON.parse(await readFile(join(root, "git-cleanup-failure.json"), "utf8"))
-      throw failFixtureBatch(Object.assign(new Error(`unverified Handler Git cleanup; retained ${root} and ${checkout?.root ?? "checkout"}`), { evidence }))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw failFixtureBatch(error)
     }
@@ -99,7 +91,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   let cleanupOperation: Promise<void> | undefined
   const cleanup = (): Promise<void> => cleanupOperation ??= (async () => {
     await Promise.allSettled(starts)
-    await verifyGitCleanup()
+    await verifyCatalogCleanup()
     assertFixtureBatchHealthy()
     for (const barrier of cleanupBarriers) await barrier()
     for (const item of pending) {
@@ -138,12 +130,10 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       for (const identity of provider.record.provider!.group.observed) assert.equal(await observe(identity.pid), null)
       assert.deepEqual(await adapter.readGroup(provider.record.provider!.group.leader.pid), [])
     }
-    checkout?.verifyCleanup()
     await writeFile(join(root, "cleanup.json"), JSON.stringify({ identities: owned, survivors: [], failedStarts: failedStarts.map(String) }), { mode: 0o600 })
     await rm(root, { recursive: true })
   })().catch(error => { throw failFixtureBatch(error) })
   t.after(cleanup)
-  checkout?.beforeCleanup(cleanup)
   await chown(root, process.getuid!(), process.getgid!())
   await mkdir(paths.persistentRoot, { mode: 0o700 })
   await mkdir(paths.runtimeRoot, { mode: 0o700 })
@@ -153,7 +143,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   const start = async (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
     assertFixtureBatchHealthy()
     let marker: string | undefined
-    const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath] }, onTransition: async (transition, pid) => {
+    const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath], ...(handlerEnv === undefined ? {} : { env: handlerEnv }) }, onTransition: async (transition, pid) => {
       if (transition === "launch_pending_written") marker = `agy-handler:${(await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))).launchAttemptId}`
       if (transition === "handler_spawned" && pid !== undefined) {
         assert.notEqual(marker, undefined)
@@ -162,9 +152,8 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
         if (identity !== null) { assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), marker); owned.push(identity) }
       }
       await hook?.(transition)
-    } }).then(async result => { await verifyGitCleanup(); return result }, async error => {
-      await verifyGitCleanup()
-      if (overrides.admissionOperations !== undefined) throw failFixtureBatch(new Error(`admission fixture startup failed; retained ${root} and ${checkout?.root ?? "checkout"}`, { cause: error }))
+    } }).then(async result => { await verifyCatalogCleanup(); return result }, async error => {
+      await verifyCatalogCleanup()
       throw error
     })
     starts.push(operation)
@@ -230,6 +219,6 @@ export async function privateRoot(t: TestContext): Promise<string> {
   return root
 }
 
-export function launch(overrides: Partial<LaunchRecord> = {}): LaunchRecord {
+export function launch(overrides: Partial<LegacyLaunchRecord> = {}): LegacyLaunchRecord {
   return { version: 1, checkoutId: "checkout-a", leaseId: randomUUID(), agentId: "agent-a", handlerGeneration: randomUUID(), launchAttemptId: randomUUID(), launchBootId: "boot-a", launchAttempted: true, phase: "launch_pending", provider: null, reason: null, ...overrides }
 }

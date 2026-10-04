@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto"
+import { runAgentClient } from "../agent/client.js"
+import { exchangeAgent, type AgentRequest, type AgentReply } from "../agent/protocol.js"
+import { createAgentStore, type AgentStore } from "../agent/store.js"
+import { createCatalogStore } from "../catalog/store.js"
 import { runCatalogClient } from "../catalog/client.js"
 import { exchangeCatalog, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { isDeepStrictEqual } from "node:util"
-import { CheckoutResolutionError, resolveCheckout, type CheckoutIdentity } from "../checkout/identity.js"
-import { classifyCheckout, verifyRetainedMappings, type CheckoutDecision } from "../checkout/admission.js"
-import { inventoryAdmissions } from "../checkout/records.js"
-import { ControlError, PROTOCOL, UUID, controlError, exitCode, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply } from "../control/protocol.js"
+import { ControlError, PROTOCOL, UUID, controlError, exitCode, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply, type DoctorDiagnostic } from "../control/protocol.js"
 import { exchange } from "../control/wire.js"
 import { productionEnvironment, type HandlerEnvironment } from "../handler/environment.js"
-import { inventoryLaunches } from "../handler/inventory.js"
+import { inventoryLaunchState, summarizeLaunches } from "../handler/inventory.js"
 import { readShutdownReceipt, assertSameShutdown, type ShutdownReceipt } from "../handler/receipt.js"
 import { inspectHandlerGeneration, startOrConnect } from "../platform/singleton.js"
 import { assertPrivateSocket } from "../platform/private-socket.js"
@@ -25,10 +25,11 @@ export type ControlDependencies = {
   inspect(env: HandlerEnvironment): Promise<HandlerInspection | null>
   call(env: HandlerEnvironment, request: ControlRequest): Promise<ControlReply>
   callCatalog?(env: HandlerEnvironment, request: CatalogRequest, timeoutMs?: number): Promise<CatalogReply>
+  callAgent?(env: HandlerEnvironment, request: AgentRequest, timeoutMs?: number): Promise<AgentReply>
+  agentStore?(env: HandlerEnvironment): AgentStore
   receipt: typeof readShutdownReceipt
-  inventory: typeof inventoryLaunches
+  inventory: typeof inventoryLaunchState
   cwd(): string
-  checkout(cwd: string, env: HandlerEnvironment): Promise<CheckoutDiagnostic>
   now(): number
   sleep(ms: number): Promise<void>
   stdout(text: string): void
@@ -42,29 +43,11 @@ export function productionControlDependencies(): ControlDependencies {
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
     call: async (env, request) => exchange(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request),
     callCatalog: async (env, request, timeoutMs) => exchangeCatalog(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
-    receipt: readShutdownReceipt, inventory: inventoryLaunches, cwd: process.cwd, checkout: diagnoseCheckout, now: Date.now,
+    callAgent: async (env, request, timeoutMs) => exchangeAgent(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
+    agentStore: env => createAgentStore(env.paths.persistentRoot),
+    receipt: readShutdownReceipt, inventory: inventoryLaunchState, cwd: process.cwd, now: () => performance.now(),
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     stdout: text => { process.stdout.write(text) }, stderr: text => { process.stderr.write(text) },
-  }
-}
-
-export type CheckoutDiagnostic =
-  | { state: "not_checkout"; reason: string }
-  | { state: "unavailable"; reason: string }
-  | { state: "observed"; checkout: CheckoutIdentity; admission: CheckoutDecision; authoritative: false }
-type DiagnosticDependencies = { inventory: typeof inventoryLaunches; admissions: typeof inventoryAdmissions; resolve: typeof resolveCheckout }
-
-export async function diagnoseCheckout(cwd: string, env: HandlerEnvironment, dependencies: DiagnosticDependencies = { inventory: inventoryLaunches, admissions: inventoryAdmissions, resolve: resolveCheckout }): Promise<CheckoutDiagnostic> {
-  try {
-    const directory = join(env.paths.persistentRoot, "launches")
-    const launches = await dependencies.inventory(directory), admissions = await dependencies.admissions(env.paths.persistentRoot)
-    const checkout = await dependencies.resolve(cwd, env.paths.hostKey)
-    const admission = classifyCheckout(checkout, launches, admissions)
-    if (admission.state !== "unavailable") await verifyRetainedMappings(launches, admissions, dependencies.resolve)
-    if (!isDeepStrictEqual(launches, await dependencies.inventory(directory)) || !isDeepStrictEqual(admissions, await dependencies.admissions(env.paths.persistentRoot))) throw new Error("checkout inventory changed during observation")
-    return { state: "observed", checkout, admission, authoritative: false }
-  } catch (error) {
-    return { state: error instanceof CheckoutResolutionError && error.code === "NOT_CHECKOUT" ? "not_checkout" : "unavailable", reason: String(error).slice(0, 512) }
   }
 }
 
@@ -128,6 +111,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
+  if (argv[0] === "agent") return runAgentClient(argv, { ...dependencies, callAgent: dependencies.callAgent ?? (async () => { throw new ControlError("UNAVAILABLE") }), agentStore: dependencies.agentStore ?? (env => createAgentStore(env.paths.persistentRoot)) })
   if (argv.find(value => !value.startsWith("-")) === "model") return runCatalogClient(argv, { ...dependencies, callCatalog: dependencies.callCatalog ?? (async () => { throw new ControlError("UNAVAILABLE", "catalog support unavailable") }) })
   const requestId = randomUUID()
   let generation: string | null = null, commandId: string | undefined
@@ -140,13 +124,22 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID]", "agent current (list of agents in the current directory)", "agent list", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
       generation = handler?.record.generation ?? null
       const launches = await dependencies.inventory(join(env.paths.persistentRoot, "launches"))
-      emit(true, { node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler, launches: launches.map(entry => entry.record), checkout: await dependencies.checkout(dependencies.cwd(), env) })
+      const agents = await createAgentStore(env.paths.persistentRoot).inventory()
+      const catalog = await createCatalogStore(env.paths.persistentRoot).inventory()
+      const result: DoctorDiagnostic = {
+        node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler,
+        launches: summarizeLaunches(launches.records.map(entry => entry.record)),
+        agents: { records: [...agents.agents.map(record => ({ id: record.definition.agentId, phase: record.phase })), ...agents.legacyAgents.map(record => ({ id: record.spec.agentId, phase: record.phase }))], commands: agents.commands.map(command => ({ id: command.commandId, op: command.op, state: command.state })), issues: agents.issues.map(issue => ({ path: issue.path, message: issue.message })) },
+        catalog: { probes: summarizeLaunches(catalog.launches.map(entry => entry.record)), commands: catalog.commands.map(command => ({ id: command.commandId, state: command.state })), issues: catalog.issues },
+        issues: [...launches.issues.map(issue => ({ source: "launch" as const, path: issue.path, message: "invalid launch record" })), ...agents.issues.map(issue => ({ source: "agent" as const, path: issue.path, message: issue.message })), ...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
+      }
+      emit(true, result)
       return 0
     }
     if (args.command === "status") {

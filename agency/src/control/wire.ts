@@ -1,4 +1,5 @@
 import type { Socket } from "node:net"
+import { AGENT_PROTOCOL, agentErrorReply, parseAgentRequest, type AgentReply, type AgentRequest } from "../agent/protocol.js"
 import { CATALOG_PROTOCOL, catalogErrorReply, parseCatalogRequest, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
 import { ControlError, MAX_FRAME_BYTES, errorReply, parseRequest, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply } from "./protocol.js"
 
@@ -63,10 +64,10 @@ export async function exchange(socket: Socket, request: ControlRequest, timeoutM
   } finally { socket.destroy() }
 }
 
-export function sendReply(socket: Socket, reply: ControlReply | CatalogReply, timeoutMs = 1000): Promise<void> {
+export function sendReply(socket: Socket, reply: ControlReply | CatalogReply | AgentReply, timeoutMs = 1000): Promise<void> {
   const closed = protectSocketErrors(socket)
   let bytes: Buffer
-  try { bytes = encodeFrame(reply) } catch { bytes = encodeFrame(reply.protocol === CATALOG_PROTOCOL ? catalogErrorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit")) : errorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit"))) }
+  try { bytes = encodeFrame(reply) } catch { bytes = encodeFrame(reply.protocol === AGENT_PROTOCOL ? agentErrorReply(reply, new ControlError("INCOMPLETE")) : reply.protocol === CATALOG_PROTOCOL ? catalogErrorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit")) : errorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit"))) }
   return new Promise<void>(resolve => {
     let settled = false
     const done = (): void => {
@@ -95,13 +96,16 @@ export async function serveControl(socket: Socket, handler: (request: ControlReq
   finally { socket.destroy(); await closed }
 }
 
-export async function serveProtocols(socket: Socket, control: (request: ControlRequest) => Promise<ControlReply>, catalog: (request: CatalogRequest) => Promise<CatalogReply>, timeoutMs = 5000): Promise<void> {
+export async function serveProtocols(socket: Socket, control: (request: ControlRequest) => Promise<ControlReply>, catalog: (request: CatalogRequest) => Promise<CatalogReply>, timeoutMs = 5000, agent?: (request: AgentRequest) => Promise<AgentReply>): Promise<void> {
   const closed = protectSocketErrors(socket)
   socket.allowHalfOpen = true
   try {
     const raw = await receiveFrame(socket, timeoutMs)
-    let reply: ControlReply | CatalogReply
-    if (typeof raw === "object" && raw !== null && "protocol" in raw && raw.protocol === CATALOG_PROTOCOL) {
+    let reply: ControlReply | CatalogReply | AgentReply
+    if (typeof raw === "object" && raw !== null && "protocol" in raw && raw.protocol === AGENT_PROTOCOL && agent) {
+      const request = parseAgentRequest(raw)
+      try { reply = await agent(request) } catch (error) { reply = agentErrorReply(request, error) }
+    } else if (typeof raw === "object" && raw !== null && "protocol" in raw && raw.protocol === CATALOG_PROTOCOL) {
       const request = parseCatalogRequest(raw)
       try { reply = await catalog(request) } catch (error) { reply = catalogErrorReply(request, error) }
     } else {
