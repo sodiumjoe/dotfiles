@@ -17,7 +17,7 @@ const barrier = async (name: string): Promise<void> => {
 }
 const send = (value: unknown): void => { process.stdout.write(JSON.stringify(value) + "\n") }
 if (scenario === "ignore-term") process.on("SIGTERM", () => undefined)
-let buffer = "", serial = Promise.resolve()
+let buffer = "", serial = Promise.resolve(), cancelledOnce = false, activePrompt: number | null = null
 process.stdin.on("data", (chunk: Buffer) => {
   buffer += chunk.toString("utf8")
   if (Buffer.byteLength(buffer) > 1048576) process.exit(2)
@@ -28,6 +28,11 @@ process.stdin.on("data", (chunk: Buffer) => {
       const request = JSON.parse(line)
       if (request.method === undefined) return
       await appendFile(join(root, "requests.jsonl"), JSON.stringify(request) + "\n", { mode: 0o600 })
+      if (request.method === "session/cancel") {
+        if (Object.hasOwn(request, "id") || request.params.sessionId !== "fixture-session") throw new Error("wrong cancellation")
+        if (activePrompt !== null) { send({ jsonrpc: "2.0", id: activePrompt, result: { stopReason: "cancelled" } }); activePrompt = null; cancelledOnce = true }
+        return
+      }
       let result: unknown
       if (request.method === "initialize") result = { protocolVersion: 1, agentCapabilities: { loadSession: true } }
       else if (request.method === "session/new" || request.method === "session/load") {
@@ -47,6 +52,7 @@ process.stdin.on("data", (chunk: Buffer) => {
         result = { configOptions: options }
       } else if (request.method === "session/prompt") {
         if (request.params.sessionId !== "fixture-session" || request.params.prompt?.length !== 1 || request.params.prompt[0]?.type !== "text") throw new Error("wrong prompt")
+        if (scenario === "cancel" && !cancelledOnce) { activePrompt = request.id; return }
         await barrier("prompt")
         const prompt = request.params.prompt[0].text as string
         let answer = `answer:${prompt}`

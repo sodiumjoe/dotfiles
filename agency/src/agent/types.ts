@@ -15,7 +15,7 @@ export type AgentDefinition = { hostId: string; agentId: string; createdCommandI
 export type AgentLaunch = { handlerGeneration: string; providerGeneration: string; launchAttemptId: string; commandId: string; catalogSnapshotId: string; catalogEvidence: ProviderSnapshot; configuration: ConfigEvidence; contractId: string; contractFingerprint: string; containment: "direct-process-group-v1"; authority: "normal-user"; limits: AgentLimits }
 export type LaunchSpec = AgentDefinition & AgentLaunch
 export type SessionEvidence = { sessionId: string; sessionGeneration: string; protocolVersion: 1; modelId: string; reasoning: Reasoning; mode: string; permissionProfile: string; permissionEvidence: PermissionEvidence }
-export type PromptResult = { stopReason: "end_turn"; text: string }
+export type PromptResult = import("./session-events.js").TurnResult
 export type AgentPhase = "starting" | "ready" | "recoverable" | "restoring" | "stopping" | "stopped" | "failed" | "interrupted"
 export type AgentRecord = { version: 2; definition: AgentDefinition; launch: AgentLaunch; phase: AgentPhase; session: SessionEvidence | null; failure: AgentFailure | null }
 export type LegacyAgentRecord = { version: 1; spec: { agentId: string; handlerGeneration: string; providerGeneration: string; launchAttemptId: string; checkout: { root: { path: string } }; [key: string]: unknown }; phase: string; session: unknown; failure: unknown }
@@ -35,7 +35,7 @@ export type LegacyAgentView = { record: LegacyAgentRecord; launch: LaunchRecord 
 export type CommandView = { state: "command"; command: AgentCommand; durability: "verified" | "unverified" }
 export type AgentList = { state: "agents"; agents: Array<AgentView | LegacyAgentView>; issues: AgentStateIssue[] }
 export type CurrentAgents = { state: "current"; cwd: string; agents: AgentView[] }
-export const AGENT_CODES = ["USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "RESTORE_UNSUPPORTED", "SESSION_UNAVAILABLE", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL"] as const
+export const AGENT_CODES = ["USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "RESTORE_UNSUPPORTED", "SESSION_UNAVAILABLE", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL", "INPUT_TOO_LARGE", "OUTPUT_TOO_LARGE", "ACP_FRAME_LIMIT", "ACP_HISTORY_LIMIT"] as const
 export type AgentErrorCode = typeof AGENT_CODES[number]
 export type AgentFailure = { code: AgentErrorCode; message: string }
 export class AgentError extends Error { constructor(readonly code: AgentErrorCode) { super(code.replaceAll("_", " ").toLowerCase()) } }

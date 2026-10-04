@@ -10,14 +10,15 @@ import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../platfor
 import { reconcileRecord } from "../platform/reconcile.js"
 import { sameProcess, sameProcessGeneration, type LaunchRecord, type ManagedLaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { createAcpConnection, type AcpConnection } from "./acp.js"
+import type { AcpObservation, TurnOptions } from "./session-events.js"
 import type { ConfiguredLaunchContract } from "./contracts.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
 import { AgentError, agentFailure, splitLaunchSpec, type SessionStart, type AgentFailure, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
-export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
+export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
 
-export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; revalidate(): Promise<void> }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; revalidate(): Promise<void> }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
   const { context, spec, contract, session, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.deadlines
   let overallDeadline = deadline ?? Infinity, spawnDeadline = Infinity
@@ -179,9 +180,13 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
   }
   return {
     record: snapshot, fault, cleanup,
-    prompt(text, signal) {
+    prompt(text, signal, limits) {
       if (!initialized || !connection || stopping || disposed || terminal || closed) return Promise.reject(new AgentError("NOT_READY"))
-      return connection.prompt(text, signal)
+      return connection.prompt(text, signal, limits)
+    },
+    cancelPrompt() {
+      if (!initialized || !connection || stopping || disposed || terminal || closed) return Promise.reject(new AgentError("NOT_READY"))
+      return connection.cancelPrompt()
     },
     dispose() {
       if (disposed) return
@@ -231,7 +236,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
         try {
           await bounded(() => preparation!, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
-          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), now })
+          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), ...(input.onUpdate ? { onUpdate: input.onUpdate } : {}), now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
           const evidence = await connection.initialize({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null }, contract, session ?? { kind: "new" }, controller.signal)
           check(); initialized = true; if (!isReady) overallDeadline = Infinity; return evidence

@@ -2,28 +2,16 @@ import { randomUUID } from "node:crypto"
 import type { Readable, Writable } from "node:stream"
 import { object } from "../catalog/types.js"
 import { parseConfiguredLaunchContract, type ConfiguredLaunchContract } from "./contracts.js"
+import { boundedText, contentChunk, knownKeys, metadata, validatePromptResponse, validateSessionUpdate, validateTurnInput, LEGACY_TURN_LIMITS, type AcpObservation, type StopReason, type TurnOptions } from "./session-events.js"
 import { AgentError, agentFailure, agentText, specOf, type AgentRecord, type SessionStart, type AgentFailure, type AgentLimits, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
 
-export type AcpConnection = { initialize(record: AgentRecord, contract: ConfiguredLaunchContract, session: SessionStart, signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal): Promise<PromptResult>; fault: Promise<AgentFailure>; close(): void }
+export type AcpConnection = { initialize(record: AgentRecord, contract: ConfiguredLaunchContract, session: SessionStart, signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>; cancelPrompt(): Promise<void>; fault: Promise<AgentFailure>; close(): void }
 type ConfigOption = { id: string; currentValue: string; values: string[] }
 type Pending = { method: string; prefix: number; deadline: number; resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
-type PromptState = { requestId: number; text: string; bytes: number; chunks: number; responseReceived: boolean }
+type PromptState = { requestId: number; text: string; bytes: number; encodedBytes: number; chunks: number; responseReceived: boolean; limits: TurnOptions; stopReason: StopReason; cancellation?: Promise<void>; cancelTimer?: NodeJS.Timeout }
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]): void {
   if (Object.keys(value).length !== expected.length || expected.some(key => !Object.hasOwn(value, key))) invalid()
-}
-function knownKeys(value: Record<string, unknown>, required: readonly string[], allowed: readonly string[]): void {
-  if (required.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => !allowed.includes(key))) invalid()
-}
-function boundedText(value: unknown, max: number): string {
-  if (typeof value !== "string" || Buffer.byteLength(value) > max || !value.isWellFormed()) invalid()
-  return value
-}
-function metadata(value: unknown, max = 16384): void {
-  if (value === null) return
-  const v = object(value)
-  if (Object.keys(v).length > 128) invalid()
-  try { if (Buffer.byteLength(JSON.stringify(v)) > max) invalid() } catch { invalid() }
 }
 function jsonValue(value: unknown, max = 16384): void {
   try { if (Buffer.byteLength(JSON.stringify(value)) > max) invalid() } catch { invalid() }
@@ -49,107 +37,6 @@ function permissionToolCall(value: unknown): void {
   }
   for (const name of ["rawInput", "rawOutput"] as const) if (Object.hasOwn(toolCall, name)) jsonValue(toolCall[name], 65536)
   if (Object.hasOwn(toolCall, "_meta")) metadata(toolCall._meta)
-}
-function annotations(value: unknown): void {
-  if (value === null) return
-  const v = object(value); knownKeys(v, [], ["audience", "lastModified", "priority", "_meta"])
-  if (Object.hasOwn(v, "audience") && v.audience !== null && (!Array.isArray(v.audience) || v.audience.length > 2 || v.audience.some(role => role !== "assistant" && role !== "user"))) invalid()
-  if (Object.hasOwn(v, "lastModified") && v.lastModified !== null) boundedText(v.lastModified, 64)
-  if (Object.hasOwn(v, "priority") && v.priority !== null && (typeof v.priority !== "number" || !Number.isFinite(v.priority))) invalid()
-  if (Object.hasOwn(v, "_meta")) metadata(v._meta)
-}
-function contentText(value: unknown): string {
-  const content = object(value); knownKeys(content, ["type", "text"], ["type", "text", "annotations", "_meta"])
-  if (content.type !== "text") invalid()
-  if (Object.hasOwn(content, "annotations")) annotations(content.annotations)
-  if (Object.hasOwn(content, "_meta")) metadata(content._meta)
-  return boundedText(content.text, 4096)
-}
-function contentChunk(update: Record<string, unknown>): string {
-  knownKeys(update, ["sessionUpdate", "content"], ["sessionUpdate", "content", "messageId", "_meta"])
-  if (Object.hasOwn(update, "messageId") && update.messageId !== null) agentText(update.messageId, 1024)
-  if (Object.hasOwn(update, "_meta")) metadata(update._meta)
-  return contentText(update.content)
-}
-function informational(update: Record<string, unknown>, kind: string): boolean {
-  if (kind === "tool_call" || kind === "tool_call_update") {
-    knownKeys(update, kind === "tool_call" ? ["sessionUpdate", "toolCallId", "title"] : ["sessionUpdate", "toolCallId"], ["sessionUpdate", "toolCallId", "title", "kind", "status", "content", "locations", "rawInput", "rawOutput", "_meta"])
-    if (Buffer.byteLength(JSON.stringify(update)) > 65536) invalid()
-    agentText(update.toolCallId, 1024)
-    if (update.title !== undefined && update.title !== null) boundedText(update.title, 4096)
-    if (update.kind !== undefined && update.kind !== null && !["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"].includes(update.kind as string)) invalid()
-    if (update.status !== undefined && update.status !== null && !["pending", "in_progress", "completed", "failed"].includes(update.status as string)) invalid()
-    if (update.content !== undefined && update.content !== null) {
-      if (!Array.isArray(update.content) || update.content.length > 32) invalid()
-      for (const raw of update.content) {
-        const item = object(raw)
-        knownKeys(item, ["type", "content"], ["type", "content", "_meta"])
-        if (item.type !== "content") invalid()
-        contentText(item.content)
-        if (Object.hasOwn(item, "_meta")) metadata(item._meta)
-      }
-    }
-    if (update.locations !== undefined && update.locations !== null) {
-      if (!Array.isArray(update.locations) || update.locations.length > 64) invalid()
-      for (const raw of update.locations) {
-        const location = object(raw); knownKeys(location, ["path"], ["path", "line", "_meta"]); boundedText(location.path, 4096)
-        if (location.line !== undefined && location.line !== null && (!Number.isSafeInteger(location.line) || Number(location.line) < 0)) invalid()
-        if (Object.hasOwn(location, "_meta")) metadata(location._meta)
-      }
-    }
-    if (Object.hasOwn(update, "_meta")) metadata(update._meta)
-    return true
-  }
-  if (kind === "agent_thought_chunk") { contentChunk(update); return true }
-  if (kind === "plan") {
-    knownKeys(update, ["sessionUpdate", "entries"], ["sessionUpdate", "entries", "_meta"])
-    if (Object.hasOwn(update, "_meta")) metadata(update._meta)
-    if (!Array.isArray(update.entries) || update.entries.length > 32 || Buffer.byteLength(JSON.stringify(update.entries)) > 65536) invalid()
-    for (const raw of update.entries) {
-      const entry = object(raw); knownKeys(entry, ["content", "priority", "status"], ["content", "priority", "status", "_meta"]); boundedText(entry.content, 4096)
-      if (typeof entry.priority !== "string" || !["high", "medium", "low"].includes(entry.priority) || typeof entry.status !== "string" || !["pending", "in_progress", "completed"].includes(entry.status)) invalid()
-      if (Object.hasOwn(entry, "_meta")) metadata(entry._meta)
-    }
-    return true
-  }
-  if (kind === "session_info_update") {
-    const names = Object.keys(update)
-    if (names.length < 2 || names.length > 4 || names.some(key => !["sessionUpdate", "title", "updatedAt", "_meta"].includes(key))) invalid()
-    if (Object.hasOwn(update, "title") && update.title !== null) boundedText(update.title, 1024)
-    if (Object.hasOwn(update, "updatedAt") && update.updatedAt !== null) {
-      const timestamp = boundedText(update.updatedAt, 64)
-      if (new Date(timestamp).toISOString() !== timestamp) invalid()
-    }
-    if (Object.hasOwn(update, "_meta")) metadata(update._meta, 65536)
-    return true
-  }
-  if (kind === "usage_update") {
-    const names = Object.keys(update)
-    if (names.length < 3 || names.length > 5 || names.some(key => !["sessionUpdate", "used", "size", "cost", "_meta"].includes(key))) invalid()
-    if (!Number.isSafeInteger(update.used) || !Number.isSafeInteger(update.size) || Number(update.used) < 0 || Number(update.size) < 0 || Number(update.used) > Number(update.size)) invalid()
-    if (Object.hasOwn(update, "cost") && update.cost !== null) {
-      const cost = object(update.cost); knownKeys(cost, ["amount", "currency"], ["amount", "currency", "_meta"])
-      if (typeof cost.amount !== "number" || !Number.isFinite(cost.amount) || cost.amount < 0 || typeof cost.currency !== "string" || !/^[A-Z]{3}$/.test(cost.currency)) invalid()
-      if (Object.hasOwn(cost, "_meta")) metadata(cost._meta)
-    }
-    if (Object.hasOwn(update, "_meta")) metadata(update._meta)
-    return true
-  }
-  return false
-}
-function promptResponse(value: Record<string, unknown>): void {
-  knownKeys(value, ["stopReason"], ["stopReason", "usage", "_meta"])
-  if (value.stopReason !== "end_turn") invalid()
-  if (Object.hasOwn(value, "usage") && value.usage !== null) {
-    const usage = object(value.usage)
-    knownKeys(usage, ["totalTokens", "inputTokens", "outputTokens"], ["totalTokens", "inputTokens", "outputTokens", "thoughtTokens", "cachedReadTokens", "cachedWriteTokens", "_meta"])
-    for (const name of ["totalTokens", "inputTokens", "outputTokens", "thoughtTokens", "cachedReadTokens", "cachedWriteTokens"] as const) {
-      const amount = usage[name]
-      if (amount !== undefined && amount !== null && (!Number.isSafeInteger(amount) || Number(amount) < 0)) invalid()
-    }
-    if (Object.hasOwn(usage, "_meta")) metadata(usage._meta)
-  }
-  if (Object.hasOwn(value, "_meta")) metadata(value._meta, 65536)
 }
 function parseOptions(value: unknown): ConfigOption[] {
   if (!Array.isArray(value) || value.length > 128 || Buffer.byteLength(JSON.stringify(value)) > 1048576) invalid()
@@ -212,7 +99,7 @@ function exactPrefix(options: ConfigOption[], desired: readonly [string, string]
   }
 }
 
-export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number; overallDeadline?: number }): AcpConnection {
+export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number; overallDeadline?: number; onUpdate?(event: AcpObservation): void }): AcpConnection {
   const { readable, writable, limits } = input, now = input.now ?? (() => performance.now())
   const decoder = new TextDecoder("utf-8", { fatal: true }), pending = new Map<number, Pending>()
   const writes = new Set<(error?: Error | null) => void>()
@@ -229,6 +116,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     for (const finish of writes) finish(failure)
     for (const request of pending.values()) { clearTimeout(request.timer); request.reject(failure) }
     pending.clear(); buffer = ""; options = []; windows.clear()
+    clearTimeout(promptState?.cancelTimer)
     resolveFault(agentFailure(failure))
   }
   const check = (receiving = false): void => {
@@ -238,14 +126,14 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     if (now() >= deadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   const budget = (bytes: number, frames: number): void => {
-    if (!ready) { startupBytes += bytes; if (startupBytes > limits.startupBytes) invalid(); return }
+    if (!ready) { startupBytes += bytes; if (startupBytes > limits.startupBytes) throw new AgentError("ACP_HISTORY_LIMIT"); return }
     const time = Math.floor(now())
     for (const stamp of windows.keys()) if (stamp <= time - 1000) windows.delete(stamp)
     const bucket = windows.get(time) ?? { bytes: 0, frames: 0 }
     bucket.bytes += bytes; bucket.frames += frames; windows.set(time, bucket)
     let totalBytes = 0, totalFrames = 0
     for (const bucket of windows.values()) { totalBytes += bucket.bytes; totalFrames += bucket.frames }
-    if (totalBytes > 1048576 || totalFrames > 256) invalid()
+    if (totalBytes > 8388608 || totalFrames > 256) invalid()
   }
   const write = (value: unknown): Promise<void> => new Promise((resolve, reject) => {
     let bytes: Buffer
@@ -314,16 +202,17 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       knownKeys(params, ["sessionId", "update"], ["sessionId", "update", "_meta"])
       if (Object.hasOwn(params, "_meta")) metadata(params._meta)
       if (sessionId === null || params.sessionId !== sessionId) invalid()
-      const update = object(params.update), kind = agentText(update.sessionUpdate)
+      const update = validateSessionUpdate(params.update), kind = update.sessionUpdate
       if (promptState?.responseReceived) invalid()
-      if (loading && kind === "user_message_chunk") { contentChunk(update); return }
-      if (kind === "agent_message_chunk") {
-        if (loading) { contentChunk(update); return }
+      if (kind === "user_message_chunk") {
+        if (!loading) invalid()
+      } else if (kind === "agent_message_chunk" && !loading) {
         if (!ready || !promptState) invalid()
         const text = contentChunk(update)
         promptState.chunks++
         promptState.bytes += Buffer.byteLength(text)
-        if (promptState.bytes > 4096) invalid()
+        promptState.encodedBytes += Buffer.byteLength(JSON.stringify(text)) - 2
+        if (promptState.bytes > promptState.limits.outputBytes || promptState.encodedBytes > promptState.limits.encodedTextBytes) throw new AgentError("OUTPUT_TOO_LARGE")
         promptState.text += text
       } else if (kind === "config_option_update") {
         knownKeys(update, ["sessionUpdate", "configOptions"], ["sessionUpdate", "configOptions", "_meta"])
@@ -333,13 +222,15 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       else if (kind === "current_mode_update") {
         knownKeys(update, ["sessionUpdate", "currentModeId"], ["sessionUpdate", "currentModeId", "_meta"])
         if (Object.hasOwn(update, "_meta")) metadata(update._meta)
-        if (loading) { agentText(update.currentModeId); return }
-        if (!contract?.modeOption) throw new AgentError("SELECTION_UNSUPPORTED")
-        const option = options.find(option => option.id === contract!.modeOption)
-        if (!option) invalid()
-        option.currentValue = agentText(update.currentModeId)
-      } else if (loading ? !informational(update, kind) && kind !== "available_commands_update" : ready && promptState ? !informational(update, kind) : !["available_commands_update", "usage_update", "session_info_update"].includes(kind)) invalid()
+        if (!loading) {
+          if (!contract?.modeOption) throw new AgentError("SELECTION_UNSUPPORTED")
+          const option = options.find(option => option.id === contract!.modeOption)
+          if (!option) invalid()
+          option.currentValue = agentText(update.currentModeId)
+        }
+      } else if (!loading && !promptState && !["available_commands_update", "usage_update", "session_info_update"].includes(kind)) invalid()
       if (ready) exact(options, spec!, contract!)
+      try { input.onUpdate?.({ update, replay: loading }) } catch {}
       return
     }
     if (Object.hasOwn(v, "method") || typeof v.id !== "number" || !pending.has(v.id) || Object.hasOwn(v, "result") === Object.hasOwn(v, "error")) invalid()
@@ -367,9 +258,10 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     else if (waiter.method === "session/load") { if (Object.hasOwn(response, "sessionId") && response.sessionId !== sessionId) invalid(); options = parseOptions(response.configOptions); loading = false }
     else if (waiter.method === "session/prompt") {
       if (!promptState || promptState.requestId !== v.id) invalid()
-      promptResponse(response)
-      if (promptState.chunks === 0) invalid()
+      promptState.stopReason = validatePromptResponse(response)
+      if (promptState.stopReason === "end_turn" && promptState.chunks === 0 && !promptState.limits.allowEmptyAnswer) invalid()
       promptState.responseReceived = true
+      clearTimeout(promptState.cancelTimer)
       const id = v.id
       queueMicrotask(() => {
         if (failure || !pending.has(id)) return
@@ -387,7 +279,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     if (failure || closed) return
     try {
       check(true); budget(chunk.length, 0)
-      for (const byte of chunk) { if (byte === 10) frameBytes = 0; else if (++frameBytes > limits.frameBytes) invalid() }
+      for (const byte of chunk) { if (byte === 10) frameBytes = 0; else if (++frameBytes > limits.frameBytes) throw new AgentError("ACP_FRAME_LIMIT") }
       buffer += decoder.decode(chunk, { stream: true })
       let at: number
       while (!failure && (at = buffer.indexOf("\n")) >= 0) {
@@ -434,18 +326,27 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       })()
       return initialization
     },
-    async prompt(text, signal) {
+    async prompt(text, signal, turnLimits = LEGACY_TURN_LIMITS) {
       check()
-      if (!ready || promptState || typeof text !== "string" || text.length === 0 || Buffer.byteLength(text) > 4096 || !text.isWellFormed()) throw new AgentError("INVALID_AGENT_STATE")
+      if (!ready || promptState) throw new AgentError("INVALID_AGENT_STATE")
+      validateTurnInput(text, turnLimits)
       const abort = (): void => fail(new AgentError("STARTUP_FAILED"))
-      promptState = { requestId: 0, text: "", bytes: 0, chunks: 0, responseReceived: false }
+      promptState = { requestId: 0, text: "", bytes: 0, encodedBytes: 2, chunks: 0, responseReceived: false, limits: turnLimits, stopReason: "end_turn" }
       try {
         signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort()
         await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] })
         check()
-        return { stopReason: "end_turn", text: promptState.text }
+        return { stopReason: promptState.stopReason, text: promptState.text }
       } catch (error) { fail(error); throw failure! }
-      finally { signal.removeEventListener("abort", abort); promptState = null }
+      finally { clearTimeout(promptState?.cancelTimer); signal.removeEventListener("abort", abort); promptState = null }
+    },
+    cancelPrompt() {
+      if (!promptState || promptState.responseReceived) return Promise.resolve()
+      if (promptState.cancellation) return promptState.cancellation
+      const state = promptState
+      state.cancelTimer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), 5000)
+      state.cancellation = write({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } }).catch(error => { fail(error); throw error })
+      return state.cancellation
     },
     close() {
       if (closed) return

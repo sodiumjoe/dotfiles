@@ -18,6 +18,17 @@ const completed = (service: AgentService, request: Pick<StartRequest, "commandId
   return view.command.state !== "pending" && view.durability === "verified" ? view : undefined
 }, 10000)
 
+test("scalar prompt reports cancellation as failure without failing its provider", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const prompt = f.service.prompt({ ...target, text: "challenge" })
+  await f.promptEntered
+  f.completePrompt(target.agentId, "", "cancelled")
+  await assert.rejects(prompt, { code: "INCOMPLETE" })
+  assert.equal((await f.service.current(f.workspace)).agents[0]!.record.phase, "ready")
+  assert.equal(f.spawns(), 1)
+})
+
 for (const crashed of [false, true]) test(`restore retains identity and rotates launch after ${crashed ? "crash" : "stop"}`, async t => {
   const f = await agentServiceFixture(t)
   const started = await completed(f.service, (await f.service.start(f.input)).command)

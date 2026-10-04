@@ -29,6 +29,7 @@ import { PROTOCOL } from "../src/control/protocol.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
 import type { TestContext } from "node:test"
 import { createAcpConnection } from "../src/agent/acp.js"
+import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
@@ -208,12 +209,16 @@ export function agentGate() {
   return { promise, resolve }
 }
 
-export async function syntheticAgentProcess(t: TestContext, scenario: string, startupEnvelope = false) {
+export async function syntheticAgentProcess(t: TestContext, scenario: string, startupEnvelope = false, settings: { onUpdate?(event: AcpObservation): void } = {}) {
   const root = await privateRoot(t), spec = sampleSpec(), contract = sampleContract(), beforeSpawn = agentGate(), publication = agentGate(), spawned = agentGate(), absentEntered = agentGate(), absentReleased = agentGate(), terminated = agentGate(), cleanupObservation = agentGate(), removalEntered = agentGate(), removalReleased = agentGate()
   const path = join(root, "launches", spec.launchAttemptId + ".json")
   await mkdir(join(root, "launches"), { mode: 0o700 })
   const launch: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, provider: null, phase: "launch_pending", reason: null }
-  const peer = scriptedAcp(t, "exact", { prompt(request, send) {
+  let firstPrompt: any
+  const peer = scriptedAcp(t, "exact", { notification(request, send) {
+    if (request.method === "session/cancel" && firstPrompt) send({ jsonrpc: "2.0", id: firstPrompt.id, result: { stopReason: "cancelled" } })
+  }, prompt(request, send) {
+    if (scenario === "cancel" && !firstPrompt) { firstPrompt = request; return }
     send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: request.params.prompt[0].text } } } })
     send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
   } }); peer.connection.close()
@@ -256,7 +261,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   }
   if (scenario === "queued-preparation") void context.mutations.queue.run(async () => { beforeSpawn.resolve(); await publication.promise })
   peer.writable.on("data", () => { if (!identityPublished) earlyWrites++ })
-  const owner = createAgentProcess({ context, spec, ...(scenario === "load" ? { session: { kind: "load" as const, sessionId: "fixture-session" } } : {}), environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved", CODEX_PATH: "/caller/codex" }, ...(startupEnvelope ? { isReady: () => false } : {}), contract, async revalidate() {
+  const owner = createAgentProcess({ ...settings, context, spec, ...(scenario === "load" ? { session: { kind: "load" as const, sessionId: "fixture-session" } } : {}), environment: { HOME: "/fixture-home", FIXTURE: "yes", NODE_OPTIONS: "preserved", NODE_PATH: "preserved", AGENCY_TEST: "preserved", GIT_DIR: "preserved", CODEX_PATH: "/caller/codex" }, ...(startupEnvelope ? { isReady: () => false } : {}), contract, async revalidate() {
     checks++
     if (invalidation || scenario === "restore-failure" && checks > 1) throw new AgentError("CONFIG_CHANGED")
   } }, { spawn: ((executable: string, args: string[], options: SpawnOptions) => {
@@ -283,7 +288,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
 }
 
 const NO_ACP_RESPONSE = Symbol("no-acp-response")
-export function scriptedAcp(t: TestContext, scenario = "exact", settings: { productionContract?: boolean; response?: (request: any, reply: any) => unknown | typeof NO_ACP_RESPONSE; prompt?: (request: any, send: (value: unknown) => void) => void; hold?: number; now?: () => number } = {}) {
+export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUpdate?: (event: any) => void; notification?: (request: any, send: (value: unknown) => void) => void; productionContract?: boolean; response?: (request: any, reply: any) => unknown | typeof NO_ACP_RESPONSE; prompt?: (request: any, send: (value: unknown) => void) => void; hold?: number; now?: () => number } = {}) {
   const readable = new PassThrough(), writable = new PassThrough(), sent: Array<{ jsonrpc: "2.0"; id: number; method: string; params: any }> = [], permissionReplies: unknown[] = []
   const options = [
     { id: "model", type: "select", name: "Model", currentValue: "model-a", options: [{ value: "model-a", name: "Model α" }] },
@@ -299,12 +304,13 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { prod
     if (scenario === "fragmented") for (const byte of bytes) readable.write(Buffer.from([byte]))
     else readable.write(bytes)
   }
-  const connection = createAcpConnection({ readable, writable, limits: sampleSpec().limits, ...(settings.now ? { now: settings.now } : {}) })
+  const connection = createAcpConnection({ readable, writable, limits: sampleSpec().limits, ...(settings.now ? { now: settings.now } : {}), ...(settings.onUpdate ? { onUpdate: settings.onUpdate } : {}) })
   writable.on("data", (bytes: Buffer) => {
     for (const line of bytes.toString().trim().split("\n")) {
       const request = JSON.parse(line)
       if (!request.method) { permissionReplies.push(request); continue }
       sent.push(request)
+      if (!Object.hasOwn(request, "id")) { settings.notification?.(request, send); continue }
       if (sent.length === settings.hold) continue
       if (scenario === "hang") continue
       if (scenario === "utf8") { readable.write(Buffer.from([255, 10])); continue }
@@ -494,7 +500,7 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures, failTerminalBeforeRename(value: boolean) { failTerminalBeforeRename = value }, terminalWriteFailures: () => terminalWriteFailures, retired: () => structuredClone(retired),
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
     fault(agent: string) { peers.get(agent)!.triggerDrift() },
-    completePrompt(agent: string, answer = "answer:challenge") { const pending = pendingPrompts.get(agent); if (!pending) throw new Error("prompt not pending"); pending.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } }); pending.send({ jsonrpc: "2.0", id: pending.request.id, result: { stopReason: "end_turn" } }) },
+    completePrompt(agent: string, answer = "answer:challenge", stopReason = "end_turn") { const pending = pendingPrompts.get(agent); if (!pending) throw new Error("prompt not pending"); if (answer) pending.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } }); pending.send({ jsonrpc: "2.0", id: pending.request.id, result: { stopReason } }) },
     exit(agent: string) { const owner = [...processes.entries()].find(([, value]) => value.agentId === agent); if (!owner) throw new Error("provider not live"); const [pid, value] = owner; processes.delete(pid); value.child.emit("exit", 1, null); value.child.emit("close", 1, null) },
     cleanupOwned: () => Promise.all(owners.map(owner => owner.cleanup())), stateRemovalCalls: () => stateRemovalCalls, releaseStateRemoval: stateRemovalReleased.resolve,
     async changeCatalog(kind: "stale" | "rollback" | "missing" | "refresh") {

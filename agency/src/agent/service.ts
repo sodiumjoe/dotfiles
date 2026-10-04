@@ -442,15 +442,18 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       op.controller.signal.addEventListener("abort", abort, { once: true })
       if (op.controller.signal.aborted) controller.abort()
       pending = Promise.resolve().then(async () => {
+        let completedOutcome = false
         try {
           await validateLiveOperation(op)
           if (controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
           const result = await op.owner!.prompt(request.text, controller.signal)
           await validateLiveOperation(op)
-          return { state: "prompt", target: agentTuple(record), stopReason: result.stopReason, text: result.text }
+          completedOutcome = true
+          if (result.stopReason !== "end_turn" || !result.text.length) throw new AgentError("INCOMPLETE")
+          return { state: "prompt", target: agentTuple(record), stopReason: "end_turn", text: result.text }
         } catch (error) {
           const failure = errorFor(error)
-          if (!controller.signal.aborted && !op.controller.signal.aborted && !closed) await failOperation(op, failure)
+          if (!completedOutcome && !controller.signal.aborted && !op.controller.signal.aborted && !closed) await failOperation(op, failure)
           throw failure
         } finally {
           op.controller.signal.removeEventListener("abort", abort)

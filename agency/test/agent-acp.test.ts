@@ -1,10 +1,204 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { PassThrough, Writable } from "node:stream"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
+import { privateRoot } from "./control-support.js"
 import { createAcpConnection } from "../src/agent/acp.js"
+import * as sessionEvents from "../src/agent/session-events.js"
 import type { PromptResult } from "../src/agent/types.js"
 import { splitLaunchSpec } from "../src/agent/types.js"
 import { sampleAgent, sampleContract, sampleSpec, sampleProductionContract, sampleProductionSpec, scriptedAcp } from "./agent-support.js"
+
+const editorLimits = { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true }
+const updateFrame = (update: unknown) => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update } })
+
+test("display titles truncate at UTF-8 boundaries without changing wire text", () => {
+  assert.deepEqual(sessionEvents.displayTitle("α".repeat(600)), { title: "α".repeat(512), titleTruncated: true, titleOriginalBytes: 1200 })
+  assert.deepEqual(sessionEvents.displayTitle("title"), { title: "title", titleTruncated: false, titleOriginalBytes: 5 })
+})
+
+test("tool content preserves bounded diff and terminal results without enabling RPCs", async t => {
+  const seen: sessionEvents.AcpObservation[] = [], update = { sessionUpdate: "tool_call_update", toolCallId: "tool", content: [
+    { type: "diff", path: "/a", oldText: null, newText: "new" },
+    { type: "terminal", terminalId: "terminal-1" },
+    { type: "content", content: { type: "text", text: "x".repeat(32768) } },
+  ] }
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), prompt(request, send) {
+    send(updateFrame(update)); send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  await peer.connection.prompt("question", new AbortController().signal, editorLimits)
+  assert.deepEqual(seen.at(-1)!.update, update)
+})
+
+test("load replay publishes validated user, assistant, and display updates without prompting", async t => {
+  const seen: sessionEvents.AcpObservation[] = []
+  const updates = [
+    { sessionUpdate: "user_message_chunk", content: { type: "text", text: "prior question" } },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "prior answer" } },
+    { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thought" } },
+    { sessionUpdate: "tool_call", toolCallId: "read", title: "Read", kind: "read" },
+    { sessionUpdate: "tool_call_update", toolCallId: "read", status: "completed" },
+    { sessionUpdate: "plan", entries: [{ content: "Answer", status: "completed", priority: "low" }] },
+    { sessionUpdate: "usage_update", used: 10, size: 100 },
+    { sessionUpdate: "session_info_update", title: "History" },
+  ]
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), response(request, reply) {
+    if (request.method === "session/load") for (const update of updates) peer.send(updateFrame(update))
+    return reply
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "load", sessionId: "fixture-session" }, new AbortController().signal)
+  assert.deepEqual(seen.filter(event => event.replay).map(event => event.update), updates)
+  assert.equal(peer.sent.some(request => request.method === "session/prompt"), false)
+})
+
+test("editor retains tool text above the former 64 KiB update ceiling", async t => {
+  const seen: sessionEvents.AcpObservation[] = []
+  const update = { sessionUpdate: "tool_call_update", toolCallId: "large-read", content: [{ type: "content", content: { type: "text", text: "x".repeat(131072) } }] }
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), prompt(request, send) {
+    send(updateFrame(update)); send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  assert.deepEqual(await peer.connection.prompt("read", new AbortController().signal, editorLimits), { stopReason: "end_turn", text: "" })
+  assert.deepEqual(seen.at(-1)?.update, update)
+})
+
+test("completion racing cancel clears grace and contains observer exceptions", async t => {
+  const peer = scriptedAcp(t, "exact", { onUpdate() { throw new Error("observer failed") }, prompt(request, send) {
+    send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } }))
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const result = peer.connection.prompt("first", new AbortController().signal, editorLimits)
+  await peer.connection.cancelPrompt()
+  assert.deepEqual(await result, { stopReason: "end_turn", text: "done" })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  t.mock.timers.tick(5000)
+  assert.deepEqual(await peer.connection.prompt("second", new AbortController().signal, editorLimits), { stopReason: "end_turn", text: "done" })
+  assert.equal(peer.sent.filter(request => request.method === "session/cancel").length, 0)
+})
+
+test("real fixture provider accepts cancellation and a subsequent turn", async t => {
+  const root = await privateRoot(t)
+  const child = spawn(process.execPath, [new URL("./fixtures/agent-provider.js", import.meta.url).pathname], { env: { ...process.env, FIXTURE_ROOT: root, FIXTURE_SCENARIO: "cancel" }, stdio: ["pipe", "pipe", "pipe"] })
+  const exited = once(child, "exit")
+  const peer = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: sampleSpec().limits })
+  try {
+    await peer.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+    const turn = peer.prompt("cancel", new AbortController().signal, editorLimits)
+    await peer.cancelPrompt()
+    assert.deepEqual(await turn, { stopReason: "cancelled", text: "" })
+    assert.deepEqual(await peer.prompt("second", new AbortController().signal, editorLimits), { stopReason: "end_turn", text: "answer:second" })
+  } finally {
+    peer.close(); child.kill("SIGTERM"); await exited
+    child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy()
+  }
+})
+
+test("invalid display updates and configuration drift are never observed", async t => {
+  const seen: sessionEvents.AcpObservation[] = []
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event) })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  seen.length = 0
+  peer.send(updateFrame({ sessionUpdate: "usage_update", used: -1, size: 10 }))
+  assert.equal((await Promise.race([peer.connection.fault, new Promise<undefined>(resolve => setTimeout(resolve, 100))]))?.code, "INVALID_PROTOCOL")
+  assert.deepEqual(seen, [])
+})
+
+test("editor accepts maximum raw prompt and answer plus full fallback title in one burst", async t => {
+  const input = "x".repeat(262144), answer = "y".repeat(786432), seen: sessionEvents.AcpObservation[] = []
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), prompt(request, send) {
+    send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } }))
+    send(updateFrame({ sessionUpdate: "session_info_update", title: input }))
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  assert.deepEqual(await peer.connection.prompt(input, new AbortController().signal, editorLimits), { stopReason: "end_turn", text: answer })
+  assert.equal(seen.at(-1)!.update.title, input)
+})
+
+test("native load replays complete editor messages without charging the answer turn budget", async t => {
+  const texts = ["x".repeat(262144), "y".repeat(786432)], seen: sessionEvents.AcpObservation[] = []
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), response(request, reply) {
+    if (request.method === "session/load") {
+      for (const [i, text] of texts.entries()) peer.send(updateFrame({ sessionUpdate: i ? "agent_message_chunk" : "user_message_chunk", content: { type: "text", text } }))
+      peer.send(updateFrame({ sessionUpdate: "session_info_update", title: texts[0] }))
+    }
+    return reply
+  } })
+  assert.equal((await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "load", sessionId: "fixture-session" }, new AbortController().signal)).sessionId, "fixture-session")
+  assert.equal(seen.filter(event => event.replay).length, 3)
+})
+
+test("cancel sends one notification and retains the original prompt until its response", async t => {
+  let original: any
+  const peer = scriptedAcp(t, "exact", { prompt(request) { original = request } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  const pending = peer.connection.prompt("first", new AbortController().signal, editorLimits)
+  void pending.catch(() => undefined)
+  await peer.connection.cancelPrompt()
+  await peer.connection.cancelPrompt()
+  assert.equal(peer.sent.filter(request => request.method === "session/cancel").length, 1)
+  peer.send({ jsonrpc: "2.0", id: original.id, result: { stopReason: "cancelled" } })
+  assert.deepEqual(await pending, { stopReason: "cancelled", text: "" })
+  const second = peer.connection.prompt("second", new AbortController().signal, editorLimits)
+  peer.send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "usable" } }))
+  peer.send({ jsonrpc: "2.0", id: original.id, result: { stopReason: "end_turn" } })
+  assert.deepEqual(await second, { stopReason: "end_turn", text: "usable" })
+  await peer.connection.cancelPrompt()
+  assert.equal(peer.sent.filter(request => request.method === "session/cancel").length, 1)
+})
+
+for (const stopReason of ["cancelled", "max_tokens", "max_turn_requests", "refusal", "end_turn"]) test(`editor accepts empty output for ${stopReason}`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) { send({ jsonrpc: "2.0", id: request.id, result: { stopReason } }) } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  assert.deepEqual(await peer.connection.prompt("question", new AbortController().signal, editorLimits), { stopReason, text: "" })
+})
+
+test("editor rejects excessive encoded input before dispatch while remaining usable", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(request, send) { send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } }) } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("\u0001".repeat(152918), new AbortController().signal, editorLimits), { code: "INPUT_TOO_LARGE" })
+  await assert.rejects(peer.connection.prompt("α".repeat(131073), new AbortController().signal, editorLimits), { code: "INPUT_TOO_LARGE" })
+  assert.equal(peer.sent.filter(request => request.method === "session/prompt").length, 0)
+  await peer.connection.prompt("\u0001".repeat(152917), new AbortController().signal, editorLimits)
+  assert.equal(peer.sent.filter(request => request.method === "session/prompt").length, 1)
+})
+
+for (const [name, chunks] of [["encoded", ["\u0001".repeat(100000), "\u0001".repeat(52918)]], ["raw", ["α".repeat(200000), "α".repeat(193217)]]] as const) test(`editor rejects aggregate ${name} answer overflow`, async t => {
+  const peer = scriptedAcp(t, "exact", { prompt(_request, send) {
+    for (const text of chunks) send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } }))
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  await assert.rejects(peer.connection.prompt("question", new AbortController().signal, editorLimits), { code: "OUTPUT_TOO_LARGE" })
+})
+
+test("uncooperative cancellation faults after five seconds and releases timers", async t => {
+  const peer = scriptedAcp(t, "exact", { prompt() {} })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const pending = peer.connection.prompt("question", new AbortController().signal, editorLimits)
+  const rejected = assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+  await peer.connection.cancelPrompt()
+  t.mock.timers.tick(4999)
+  await Promise.resolve()
+  t.mock.timers.tick(1)
+  await rejected
+  assert.equal((await peer.connection.fault).code, "STARTUP_TIMEOUT")
+})
+
+for (const scenario of ["frame", "history"]) test(`load reports the specific ${scenario} bound without creating a new session`, async t => {
+  const peer = scriptedAcp(t, "exact", { response(request, reply) {
+    if (request.method === "session/load") {
+      for (let i = 0; i < (scenario === "frame" ? 1 : 12); i++) peer.send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(scenario === "frame" ? 1048576 : 786432) } }))
+    }
+    return reply
+  } })
+  await assert.rejects(peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "load", sessionId: "fixture-session" }, new AbortController().signal), { code: scenario === "frame" ? "ACP_FRAME_LIMIT" : "ACP_HISTORY_LIMIT" })
+  assert.equal(peer.sent.some(request => request.method === "session/new"), false)
+})
 
 test("ACP returns the bounded text answer from one successful prompt turn", async t => {
   const peer = scriptedAcp(t, "fragmented", { prompt(request, send) {
@@ -200,10 +394,10 @@ for (const result of [
   await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
 })
 
-for (const stopReason of ["max_tokens", "max_turn_requests", "refusal", "cancelled"]) test(`ACP rejects prompt stop reason ${stopReason}`, async t => {
+for (const stopReason of ["max_tokens", "max_turn_requests", "refusal", "cancelled"]) test(`ACP accepts prompt stop reason ${stopReason}`, async t => {
   const peer = scriptedAcp(t, "exact", { prompt(request, send) { send({ jsonrpc: "2.0", id: request.id, result: { stopReason } }) } })
   await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
-  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+  assert.deepEqual(await peer.connection.prompt("challenge", new AbortController().signal), { stopReason, text: "" })
 })
 
 test("ACP rejects EOF during a prompt", async t => {
@@ -356,13 +550,13 @@ test("configured ACP uses promptMs without widening to overallMs", async t => {
 test("ACP rejects an answer larger than 4096 bytes", async t => {
   const peer = scriptedAcp(t, "exact", { prompt(_request, send) { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(4097) } } } }) } })
   await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
-  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "OUTPUT_TOO_LARGE" })
 })
 
 test("ACP rejects an oversized frame during a prompt", async t => {
   const peer = scriptedAcp(t, "exact", { prompt() { peer.readable.write(Buffer.alloc(1048577, 32)) } })
   await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
-  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "ACP_FRAME_LIMIT" })
 })
 
 test("ACP bounds prompt frames in the rolling window", async t => {
@@ -376,7 +570,7 @@ test("ACP bounds prompt frames in the rolling window", async t => {
 test("ACP bounds prompt bytes in the rolling window", async t => {
   const entries = Array.from({ length: 16 }, () => ({ content: "x".repeat(3800), priority: "low", status: "pending" }))
   const peer = scriptedAcp(t, "exact", { prompt(_request, send) {
-    for (let i = 0; i < 18; i++) send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "plan", entries } } })
+    for (let i = 0; i < 140; i++) send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "plan", entries } } })
   } })
   await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal)
   await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "INVALID_PROTOCOL" })
@@ -601,7 +795,7 @@ for (const defect of ["exact", "initialize", "option", "data", "extra", "missing
     if (defect === "notification") delete response.id
     return response
   } })
-  await assert.rejects(peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal), (error: any) => defect === "exact" ? error.code === "AUTH_REQUIRED" : ["INVALID_PROTOCOL", "STARTUP_FAILED"].includes(error.code))
+  await assert.rejects(peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new" }, new AbortController().signal), (error: any) => defect === "exact" ? error.code === "AUTH_REQUIRED" : ["INVALID_PROTOCOL", "STARTUP_FAILED", "ACP_FRAME_LIMIT"].includes(error.code))
   assert.equal(peer.sent.length, boundary)
 })
 

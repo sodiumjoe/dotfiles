@@ -1,5 +1,19 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { EDITOR_TURN_LIMITS, type AcpObservation } from "../src/agent/session-events.js"
+
+test("owned provider forwards observations and nonfatal cancellation through its ACP connection", async t => {
+  const seen: AcpObservation[] = []
+  const f = await syntheticAgentProcess(t, "cancel", false, { onUpdate: event => seen.push(event) })
+  await f.owner.initialize(new AbortController().signal)
+  const first = f.owner.prompt("cancel me", new AbortController().signal, EDITOR_TURN_LIMITS)
+  await f.owner.cancelPrompt()
+  assert.deepEqual(await first, { stopReason: "cancelled", text: "" })
+  assert.deepEqual(await f.owner.prompt("second", new AbortController().signal, EDITOR_TURN_LIMITS), { stopReason: "end_turn", text: "second" })
+  assert.deepEqual(seen.at(-1)?.update.content, { type: "text", text: "second" })
+  assert.equal(f.signals.length, 0)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
 import { lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
