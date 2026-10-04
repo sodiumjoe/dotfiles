@@ -286,7 +286,7 @@ function M.setup(deps)
             return
         end
         lifecycle(function(_, done, origin, alive)
-            api.page({ allow_issues = true }, function(err, result)
+            api.page({ allow_issues = true, ensure_handler = action == "restore", origin = origin }, function(err, result)
                 if not alive() then
                     done(failure("CANCELLED"))
                     return
@@ -352,16 +352,16 @@ function M.setup(deps)
             callback(err, frame and frame.receipt)
         end)
     end
-    function api.submit(id, text, callback)
-        request({ op = "submit", submissionId = id, text = text }, callback)
+    function api.submit(id, text, callback, exact)
+        request({ op = "submit", submissionId = id, text = text }, callback, exact)
     end
-    function api.inspect(id, callback)
+    function api.inspect(id, callback, exact)
         request({ op = "inspect-submission", submissionId = id }, function(err, receipt)
             if not err and receipt and receipt ~= vim.NIL and direct and direct.id == id then
                 accept_direct(direct)
             end
             callback(err, receipt)
-        end)
+        end, exact)
     end
     function api.inspect_delivery()
         if direct and not direct.accepted then
@@ -370,7 +370,7 @@ function M.setup(deps)
                 if receipt and receipt ~= vim.NIL then
                     api.notify("submission " .. receipt.state)
                 end
-            end)
+            end, direct.target)
         end
         for _, value in pairs(views) do
             value.inspect(report)

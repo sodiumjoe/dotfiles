@@ -10,6 +10,16 @@ local function snapshot(state, frames)
 end
 
 describe("Agency bounded projection", function()
+    it("preserves the display title across omitted and null optional updates", function()
+        local state = require("sodium.agency.state").new()
+        snapshot(state, fixture.snapshot())
+        for i, update in ipairs(fixture.nullable_updates()) do
+            state.apply_event({ target = fixture.target_a, event = fixture.update(i + 1, update),
+                firstSeq = 1, historyTruncated = false })
+            assert.are.equal("retained title", state.current().metadata.title.title)
+            assert.is_true(state.current().connected)
+        end
+    end)
     it("undercharges neither declared bytes nor local decoded event storage", function()
         local state = require("sodium.agency.state").new({ history_bytes = 4096 })
         snapshot(state, fixture.snapshot())

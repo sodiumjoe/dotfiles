@@ -296,4 +296,152 @@ describe("Agency editor commands", function()
         assert.are.same({ "status" }, f.calls[2].argv)
         assert.are.equal(2, #f.calls)
     end)
+    it("rejects delayed view confirmation after the captured target is replaced", function()
+        f.close()
+        local confirm
+        f = fixture.commands({ confirm_external = function(_, _, done) confirm = done end })
+        attach()
+        local view = f.agency.view_for_buffer(vim.api.nvim_get_current_buf())
+        vim.api.nvim_buf_set_lines(view.widget.buf_nrs.input, 0, -1, false, { "captured for A" })
+        local result
+        view.submit(function(value) result = value end)
+        f.operations.attach(fixture.target_b, function() end)
+        f.snapshot(2)
+        confirm(true)
+        assert.are.equal(0, #f.streams[2].requests)
+        assert.are.equal("rejected", result.state)
+        assert.are.same({ "captured for A" }, vim.api.nvim_buf_get_lines(view.widget.buf_nrs.input, 0, -1, false))
+    end)
+    it("does not inspect an old view submission through the replacement target", function()
+        attach()
+        local view = f.agency.view_for_buffer(vim.api.nvim_get_current_buf())
+        vim.api.nvim_buf_set_lines(view.widget.buf_nrs.input, 0, -1, false, { "unknown for A" })
+        view.submit(function() end)
+        f.streams[1].requests[1].callback({ code = "UNAVAILABLE" })
+        f.operations.attach(fixture.target_b, function() end)
+        f.snapshot(2)
+        local err
+        view.inspect(function(value) err = value end)
+        assert.are.equal(0, #f.streams[2].requests)
+        assert.are.equal("NOT_READY", err and err.code)
+        assert.are.equal("unknown", view.status().delivery)
+    end)
+    it("does not reconcile an old submission from a replacement tuple", function()
+        attach()
+        local view = f.agency.view_for_buffer(vim.api.nvim_get_current_buf())
+        vim.api.nvim_buf_set_lines(view.widget.buf_nrs.input, 0, -1, false, { "unknown for A" })
+        view.submit(function() end)
+        f.streams[1].requests[1].callback({ code = "UNAVAILABLE" })
+        f.operations.attach(fixture.target_b, function() end)
+        f.snapshot(2)
+        f.streams[2].handlers.on_frame({ type = "event", target = fixture.target_b,
+            event = { kind = "turn", seq = 2, encodedBytes = 128, submissionId = fixture.id(900), state = "completed" },
+            firstSeq = 1, historyTruncated = false }, 256)
+        assert.are.equal("unknown", view.status().delivery)
+        assert.are.same({ "unknown for A" }, vim.api.nvim_buf_get_lines(view.widget.buf_nrs.input, 0, -1, false))
+    end)
+    it("does not inspect an old direct submission through the replacement target", function()
+        attach()
+        f.agency.submit_text("unknown for A", {})
+        f.streams[1].requests[1].callback({ code = "UNAVAILABLE" })
+        f.operations.attach(fixture.target_b, function() end)
+        f.snapshot(2)
+        vim.cmd("AgencyInspect")
+        assert.are.equal(0, #f.streams[2].requests)
+    end)
+    for _, mode in ipairs({ "view", "direct" }) do
+        it("keeps " .. mode .. " submission retryable after a validated busy rejection", function()
+            f.close()
+            local transport = fixture.client()
+            f = fixture.commands(nil, transport.client)
+            local close = f.close
+            f.close = function() close() transport.close() end
+            f.operations.attach(fixture.target_a, function() end)
+            transport.deliver(1, fixture.snapshot())
+            f.agency.open()
+            local view = f.agency.view_for_buffer(vim.api.nvim_get_current_buf())
+            vim.api.nvim_buf_set_lines(view.widget.buf_nrs.input, 0, -1, false, { "retryable draft" })
+            local result
+            local function submit()
+                if mode == "view" then
+                    view.submit(function(value) result = value end)
+                else
+                    f.agency.submit_text("review command", {}, function(value) result = value end)
+                end
+            end
+            submit()
+            local request = vim.json.decode(transport.jobs[1].writes[1])
+            transport.deliver(1, { { protocol = "agency-attachment/1", type = "response",
+                target = fixture.target_a, requestId = request.requestId, ok = false,
+                error = { code = "INCOMPLETE", message = "another turn is active" } } })
+            assert.are.equal("rejected", result.state)
+            assert.are.same({ "retryable draft" }, vim.api.nvim_buf_get_lines(view.widget.buf_nrs.input, 0, -1, false))
+            submit()
+            assert.are.equal(2, #transport.jobs[1].writes)
+        end)
+    end
+    for _, choice in ipairs({ "Keep draft", "Include" }) do
+        it("confirms outside annotations captured by normal view submit before " .. choice, function()
+            f.close()
+            f = fixture.commands({ confirm_external = require("sodium.agency.context").confirm_external })
+            attach()
+            local old_store, old_select = package.loaded["comment-overlay.store"], vim.ui.select
+            local project, deletes, picker = "/other", 0, nil
+            local thread = { { id = "root", body = "captured annotation", line = 1 } }
+            package.loaded["comment-overlay.store"] = {
+                reload_if_changed = function() end,
+                get_project_root = function() return project end,
+                get_files_with_comments = function() return { "file.lua" } end,
+                get_for_file = function() return vim.deepcopy(thread) end,
+                get_thread = function() return vim.deepcopy(thread) end,
+                delete = function() deletes = deletes + 1 end,
+            }
+            vim.ui.select = function(_, options, callback)
+                picker = { options = options, callback = callback }
+            end
+            local ok, err = pcall(function()
+                local view = f.agency.view_for_buffer(vim.api.nvim_get_current_buf())
+                view.submit(function() end)
+                assert.is_truthy(picker)
+                assert.is_truthy(picker.options.prompt:find("/other/file.lua", 1, true))
+                assert.are.equal(0, #f.streams[1].requests)
+                project = "/later"
+                thread[1].body = "edited annotation"
+                picker.callback(choice)
+                if choice == "Include" then
+                    local request = f.streams[1].requests[1]
+                    assert.is_truthy(request.body.text:find("captured annotation", 1, true))
+                    assert.is_nil(request.body.text:find("edited annotation", 1, true))
+                    request.callback(nil, { receipt = { submissionId = fixture.id(900), state = "accepted" } })
+                else
+                    assert.are.equal(0, #f.streams[1].requests)
+                    assert.are.equal("rejected", view.status().delivery)
+                end
+                assert.are.equal(0, deletes)
+            end)
+            package.loaded["comment-overlay.store"], vim.ui.select = old_store, old_select
+            assert.is_true(ok, err)
+        end)
+    end
+    it("restores the retained agent after ensuring a Handler absent after reboot", function()
+        local result
+        f.agency.restore(fixture.target_a.agentId, function(err) result = err end)
+        f.respond(1, nil, { code = "UNAVAILABLE" })
+        assert.are.equal(2, #f.calls)
+        assert.are.same({ "status" }, f.calls[2].argv)
+        f.respond(2, { phase = "ready" }, nil, fixture.target_b.handlerGeneration)
+        local row = fixture.agent(fixture.target_a, "stopped")
+        row.cleanup = "verified"
+        f.respond(3, fixture.page({ row }), nil, fixture.target_b.handlerGeneration)
+        assert.are.same({ "status" }, f.calls[4].argv)
+        f.respond(4, { phase = "ready" }, nil, fixture.target_b.handlerGeneration)
+        assert.are.same({ "agent", "restore", fixture.target_a.agentId }, vim.list_slice(f.calls[5].argv, 1, 3))
+        assert.is_true(vim.tbl_contains(f.calls[5].argv, "--expected-handler-generation"))
+        local restored = vim.deepcopy(fixture.target_b)
+        restored.agentId = fixture.target_a.agentId
+        f.respond(5, fixture.command(restored, "restored"), nil, fixture.target_b.handlerGeneration)
+        f.snapshot(1)
+        assert.is_nil(result)
+        assert.are.same(restored, f.operations.attachment().target)
+    end)
 end)

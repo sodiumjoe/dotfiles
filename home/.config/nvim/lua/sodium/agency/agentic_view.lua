@@ -76,7 +76,8 @@ function M.new(tab, controller)
     end
     local function reconcile(snapshot)
         local turn = snapshot and snapshot.currentTurn
-        if pending and turn and turn ~= vim.NIL and turn.submissionId == pending.id then
+        if pending and turn and turn ~= vim.NIL and turn.submissionId == pending.id
+            and vim.deep_equal(pending.target, snapshot.target) then
             accepted(turn)
         end
     end
@@ -232,6 +233,7 @@ function M.new(tab, controller)
         pending, delivery = value, "confirming"
         local items = vim.list_extend(vim.deepcopy(captured_files), vim.deepcopy(selections))
         vim.list_extend(items, diagnostics)
+        vim.list_extend(items, value.annotations)
         local confirm = controller.confirm_external or Context.confirm_external
         confirm(snapshot.cwd, items, function(confirmed)
             if destroyed or pending ~= value then
@@ -274,19 +276,20 @@ function M.new(tab, controller)
                     delivery = "unknown"
                     callback({ state = "unknown", submissionId = value.id, error = error })
                 end
-            end)
+            end, value.target)
         end)
     end
     function api.inspect(callback)
         if pending and controller.inspect then
-            controller.inspect(pending.id, function(err, receipt)
-                if not destroyed and not err and receipt and receipt ~= vim.NIL then
+            local value = pending
+            controller.inspect(value.id, function(err, receipt)
+                if not destroyed and pending == value and not err and receipt and receipt ~= vim.NIL then
                     accepted(receipt)
                 end
                 if callback then
                     callback(err, receipt)
                 end
-            end)
+            end, value.target)
         end
     end
     function api.status()

@@ -2,6 +2,65 @@ package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.p
 local fixture = require("fixtures.agency")
 
 describe("Agency subprocess client", function()
+    for _, replay in ipairs({ false, true }) do
+        it("accepts nullable optional fields in " .. (replay and "snapshot replay" or "live projection"), function()
+            local f = fixture.client()
+            local operations = require("sodium.agency.operations").new({ client = f.client })
+            local error
+            operations.attach(f.target_a, function(err) error = err end)
+            local events = {}
+            for i, update in ipairs(fixture.nullable_updates()) do
+                events[i] = fixture.update(i, update)
+                events[i].replay = replay
+            end
+            if replay then
+                local frames = fixture.snapshot(f.target_a, events)
+                frames[1].metadata.title = { title = "retained title", titleTruncated = false, titleOriginalBytes = 14 }
+                f.deliver(1, frames)
+            else
+                f.deliver(1, fixture.snapshot(f.target_a, {}))
+                for _, event in ipairs(events) do
+                    f.deliver(1, { { protocol = "agency-attachment/1", type = "event", target = f.target_a,
+                        event = event, firstSeq = 1, historyTruncated = false } })
+                end
+            end
+            assert.is_nil(error)
+            local active = operations.attachment()
+            assert.is_truthy(active)
+            assert.is_true(active.state.current().connected)
+            assert.are.equal("retained title", active.state.current().metadata.title.title)
+            assert.are.equal(5, #active.state.current().events)
+            assert.are.same(events[5].update, active.state.current().events[5].update)
+            operations.detach()
+            f.close()
+        end)
+    end
+    it("marks only a validated response error as a definitive rejection", function()
+        for _, response in ipairs({ true, false }) do
+            local f = fixture.client()
+            local stream = f.client.attach(f.target_a, f.handlers)
+            f.deliver(1, f.snapshot_a)
+            local error
+            stream.request({ op = "submit", submissionId = fixture.id(601), text = "draft" }, function(value)
+                error = value
+            end)
+            if response then
+                local request = vim.json.decode(f.jobs[1].writes[1])
+                f.deliver(1, { { protocol = "agency-attachment/1", target = f.target_a, type = "response",
+                    requestId = request.requestId, ok = false,
+                    error = { code = "INCOMPLETE", message = "another turn is active" } } })
+            else
+                f.deliver(1, { { protocol = "agency-attachment/1", target = f.target_a, type = "fault",
+                    error = { code = "INCOMPLETE", message = "stream incomplete" } } })
+            end
+            assert.are.equal(response and "INCOMPLETE" or "UNAVAILABLE", error and error.code)
+            assert.are.equal(response, error.rejected == true)
+            if not response then
+                assert.are.equal("INCOMPLETE", f.faults[1].code)
+            end
+            f.close()
+        end
+    end)
     it("rejects malformed catalog refresh receipts and mismatched retained identities", function()
         for _, mutate in ipairs({
             function(result) result.command = nil end,

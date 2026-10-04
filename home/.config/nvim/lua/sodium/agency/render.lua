@@ -163,6 +163,11 @@ function M.new(widget, metadata, limits)
             vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
         end)
         widget.render_header("todos", tostring(#(entries or {})) .. " entries")
+        if #lines == 0 then
+            widget.close_optional_window("todos")
+        elseif widget.is_open() then
+            widget.show()
+        end
     end
     local function write(event, replay, snapshot)
         local writer = api.writer

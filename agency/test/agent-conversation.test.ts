@@ -1,9 +1,26 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { readFileSync } from "node:fs"
+import { validateSessionUpdate } from "../src/agent/session-events.js"
 import { agentId } from "./agent-support.js"
 import { createConversation } from "../src/agent/conversation.js"
 
 const target = { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3) }
+
+for (const replay of [false, true]) test(`nullable optional updates retain title and valid content with replay=${replay}`, () => {
+  const updates: unknown[] = JSON.parse(readFileSync(new URL("../../../tests/fixtures/agency-nullable-updates.json", import.meta.url), "utf8"))
+  const conversation = createConversation(target)
+  for (const raw of updates) {
+    const update = validateSessionUpdate(raw)
+    conversation.append({ kind: "update", replay, update })
+    assert.equal(conversation.observe(() => {}).snapshot.metadata.title?.title, "retained title")
+  }
+  const snapshot = conversation.observe(() => {}).snapshot
+  assert.equal(snapshot.events.length, 5)
+  assert.deepEqual(snapshot.events[4], { kind: "update", replay, update: updates[4], seq: 5,
+    encodedBytes: Buffer.byteLength(JSON.stringify({ kind: "update", replay, update: updates[4], seq: 5 })) })
+  conversation.close()
+})
 
 test("conversation observation captures a value snapshot and the following sequence atomically", async () => {
   const conversation = createConversation(target)

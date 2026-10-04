@@ -1,5 +1,9 @@
 local M = {}
 
+function M.nullable_updates()
+    return vim.json.decode(table.concat(vim.fn.readfile(vim.env.DOTFILES_TEST_ROOT .. "/tests/fixtures/agency-nullable-updates.json"), "\n"))
+end
+
 function M.update(seq, update)
     local event = { kind = "update", seq = seq, replay = false, update = vim.deepcopy(update) }
     event.encodedBytes = #vim.json.encode(event) + 64
@@ -471,14 +475,14 @@ function M.operations(overrides)
     }
 end
 
-function M.commands(overrides)
+function M.commands(overrides, transport)
     local old = package.loaded["sodium.agency"]
     package.loaded["sodium.agency"] = nil
     local agency = require("sodium.agency")
     local f, switches, notices = nil, {}, {}
     agency.setup(vim.tbl_extend("force", {
         operations_factory = function(deps)
-            f = M.operations({ on_change = deps.on_change })
+            f = M.operations({ on_change = deps.on_change, client = transport })
             return f.operations
         end,
         confirm_switch = function(callback)

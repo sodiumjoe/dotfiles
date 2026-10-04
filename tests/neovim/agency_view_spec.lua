@@ -8,6 +8,30 @@ describe("Agency view delivery and lifecycle", function()
         end
         f = nil
     end)
+    it("reopens retained todos after hide and show without rendering hidden updates", function()
+        local fixture = require("fixtures.agency")
+        f = fixture.view()
+        local entries = { { content = "first plan", status = "pending", priority = "low" } }
+        f.snapshot.metadata.plan = entries
+        f.snapshot.events[#f.snapshot.events + 1] = fixture.update(2, { sessionUpdate = "plan", entries = entries })
+        f.snapshot.lastSeq = 2
+        f.change()
+        f.flush()
+        assert.is_truthy(f.view.widget.win_nrs.todos)
+        f.view.hide()
+        entries[1].content = "retained hidden plan"
+        f.snapshot.events[#f.snapshot.events + 1] = fixture.update(3, { sessionUpdate = "plan", entries = entries })
+        f.snapshot.lastSeq = 3
+        f.change()
+        f.flush()
+        assert.is_false(f.view.widget.is_open())
+        assert.is_nil(f.view.widget.win_nrs.todos)
+        assert.are.same({ "" }, vim.api.nvim_buf_get_lines(f.view.widget.buf_nrs.todos, 0, -1, false))
+        f.view.show({ focus_prompt = true })
+        assert.is_truthy(f.view.widget.win_nrs.todos)
+        assert.are.same({ "[pending] retained hidden plan" }, vim.api.nvim_buf_get_lines(f.view.widget.buf_nrs.todos, 0, -1, false))
+        assert.are.equal(f.view.widget.win_nrs.input, vim.api.nvim_get_current_win())
+    end)
     it("keeps annotations when submission acknowledgement is lost", function()
         f = require("fixtures.agency").view()
         f.add_annotation("review this line")

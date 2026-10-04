@@ -119,7 +119,7 @@ function M.new(options)
                 or { submissionId = event.submissionId, state = event.state }
         elseif event.kind == "update" then
             local update = event.update
-            if update.sessionUpdate == "session_info_update" and update.title then
+            if update.sessionUpdate == "session_info_update" and type(update.title) == "string" then
                 metadata.title = title(update.title)
             elseif update.sessionUpdate == "usage_update" then
                 metadata.usage =

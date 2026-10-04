@@ -351,8 +351,13 @@ function M.new(deps)
             end)
         end)
     end
-    function api.page(options, callback)
+    local function inventory(options, callback, operation)
         options = options or {}
+        if options.ensure_handler and not operation then
+            operation = begin(nil, options.origin)
+        end
+        local origin = operation and vim.deepcopy(current_origin)
+        local ensured, ensured_generation = false, nil
         local attempts = 0
         local function traversal()
             local agents, issues, revision, generation, last_id, cursors = {}, {}, nil, nil, nil, {}
@@ -367,14 +372,32 @@ function M.new(deps)
                 if cursor then
                     vim.list_extend(argv, { "--cursor", cursor })
                 end
-                command(argv, options.cwd, function(error, envelope)
+                command(argv, options.cwd or (origin and origin.cwd), function(error, envelope)
+                    if operation and not valid_operation(operation) then
+                        callback(error_value("CANCELLED"))
+                        return
+                    end
                     if error then
-                        if error.code == "RESYNC_REQUIRED" and attempts == 0 then
+                        if operation and error.code == "UNAVAILABLE" and not cursor and attempts == 0 and not ensured then
+                            ensured = true
+                            status(origin.cwd, operation, function(ensure_error, handler_generation)
+                                if ensure_error then
+                                    callback(ensure_error)
+                                    return
+                                end
+                                ensured_generation = handler_generation
+                                traversal()
+                            end)
+                        elseif error.code == "RESYNC_REQUIRED" and attempts == 0 then
                             attempts = 1
                             traversal()
                         else
                             callback(error)
                         end
+                        return
+                    end
+                    if ensured_generation and envelope.handlerGeneration ~= ensured_generation then
+                        callback(error_value("STALE_HANDLER"))
                         return
                     end
                     local page = envelope.result
@@ -432,11 +455,14 @@ function M.new(deps)
         end
         traversal()
     end
+    function api.page(options, callback)
+        inventory(options, callback)
+    end
     function api.current(cwd, callback, captured)
         cwd = cwd or vim.fn.getcwd()
         local operation = begin(cwd, captured)
         local origin = vim.deepcopy(current_origin)
-        api.page({ cwd = cwd, active = true }, function(error, result)
+        inventory({ cwd = cwd, active = true }, function(error, result)
             if not valid_operation(operation) then
                 callback(error_value("CANCELLED"))
                 return
@@ -469,7 +495,7 @@ function M.new(deps)
             else
                 select_agent(result.agents, selected)
             end
-        end)
+        end, operation)
     end
     function api.new(cwd, callback, origin)
         cwd = cwd or vim.fn.getcwd()

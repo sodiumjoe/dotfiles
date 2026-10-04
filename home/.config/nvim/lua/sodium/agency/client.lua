@@ -476,7 +476,7 @@ local function content(value)
     if value._meta ~= nil then
         bounded_meta(value._meta)
     end
-    if value.annotations ~= nil then
+    if value.annotations ~= nil and value.annotations ~= null then
         keys(value.annotations, {}, { "audience", "lastModified", "priority", "_meta" })
         if value.annotations.audience ~= nil and value.annotations.audience ~= null then
             array(value.annotations.audience, 2)
@@ -1421,6 +1421,9 @@ function M.new(deps)
                     request.cancel()
                     enqueue(function()
                         pending[value.requestId] = nil
+                        if not value.ok then
+                            value.error.rejected = true
+                        end
                         request.callback(value.ok and nil or value.error, value)
                     end)
                 elseif value.type == "fault" then

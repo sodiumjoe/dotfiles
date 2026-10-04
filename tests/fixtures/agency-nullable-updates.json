@@ -1,0 +1,7 @@
+[
+  {"sessionUpdate":"session_info_update","title":"retained title"},
+  {"sessionUpdate":"session_info_update","updatedAt":"2026-10-04T00:00:00.000Z"},
+  {"sessionUpdate":"session_info_update","title":null},
+  {"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"omitted annotations"}},
+  {"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"null annotations","annotations":null}}
+]
