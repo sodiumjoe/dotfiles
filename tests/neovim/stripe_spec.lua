@@ -4,6 +4,13 @@ describe("build_sg_url", function()
     local home = vim.fn.expand("~")
     local local_dir = home .. "/stripe/"
 
+    it("treats worktree paths as literal directory prefixes", function()
+        assert.are.equal(
+            "https://stripe.sourcegraphcloud.com/git.corp.stripe.com/stripe-internal/pay-server/-/blob/a.lua?L2",
+            stripe.build_sg_url("/tmp/agency-neovim-integration/stripe/", "/tmp/agency-neovim-integration/stripe/pay-server/a.lua", 2)
+        )
+    end)
+
     it("generates URL for normal repo", function()
         local url = stripe.build_sg_url(local_dir, home .. "/stripe/pay-server/config/foo.yaml", 5)
         assert.are.equal(

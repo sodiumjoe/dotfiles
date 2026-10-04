@@ -29,10 +29,10 @@ local remote_stripe_dir = "/pay/src/"
 local local_stripe_dir = vim.fn.expand("~/stripe/")
 
 function M.build_sg_url(stripe_dir, full_path, line_number)
-    if stripe_dir == nil or not string.find(full_path, stripe_dir) then
+    if stripe_dir == nil or full_path:sub(1, #stripe_dir) ~= stripe_dir then
         return nil
     end
-    local path_with_repo = string.gsub(full_path, stripe_dir, "")
+    local path_with_repo = full_path:sub(#stripe_dir + 1)
     local i, j = string.find(path_with_repo, "^.-/")
     local repo = string.sub(path_with_repo, i or 0, j - 1)
     local path = string.sub(path_with_repo, j + 1)
