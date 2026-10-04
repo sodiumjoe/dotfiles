@@ -10,7 +10,11 @@
   },
   "model": "opus[1m]",
   "enabledMcpjsonServers": [
-    "toolshed"
+    "toolshed",
+    "toolshed_non_eng",
+    "toolshed_hubble",
+    "toolshed_data_catalog",
+    "nexus"
   ],
   "enabledPlugins": {
     "js-infra-internal@stripe-internal-marketplace": true,

@@ -28,6 +28,10 @@ trust_level = "trusted"
 source_type = "git"
 source = "http://codex-marketplace--northwest.corp.stripe.com.certproxy.localhost:7891/codex-marketplace.git"
 
+[marketplaces.stripe-kai-marketplace]
+source_type = "git"
+source = "http://kai-marketplace--northwest.corp.stripe.com.certproxy.localhost:7891/codex.git"
+
 [mcp_servers.toolshed_slack]
 command = "pay"
 args = ["toolshed", "serve", "slack"]
