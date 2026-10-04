@@ -1,5 +1,238 @@
 local M = {}
 
+function M.update(seq, update)
+    local event = { kind = "update", seq = seq, replay = false, update = vim.deepcopy(update) }
+    event.encodedBytes = #vim.json.encode(event) + 64
+    return event
+end
+
+function M.projection()
+    local frames = M.snapshot()
+    local snapshot = vim.deepcopy(frames[1])
+    snapshot.events = vim.deepcopy(frames[2].events)
+    snapshot.connected = true
+    return snapshot
+end
+
+function M.view()
+    local snapshot, annotations, requests, listeners = M.projection(), {}, {}, {}
+    local n = 700
+    local controller = {
+        snapshot = function()
+            return vim.deepcopy(snapshot)
+        end,
+        subscribe = function(callback)
+            listeners[callback] = true
+            return function()
+                listeners[callback] = nil
+            end
+        end,
+        uuid = function()
+            n = n + 1
+            return M.id(n)
+        end,
+        submit = function(id, text, callback)
+            requests[#requests + 1] = { id = id, text = text, callback = callback }
+        end,
+        annotations = function()
+            return vim.deepcopy(annotations)
+        end,
+        accept_annotations = function(captured)
+            for _, value in ipairs(captured) do
+                for i = #annotations, 1, -1 do
+                    if vim.deep_equal(value, annotations[i]) then
+                        table.remove(annotations, i)
+                    end
+                end
+            end
+        end,
+        confirm_external = function(_, _, callback)
+            callback(true)
+        end,
+    }
+    local view = require("sodium.agency.agentic_view").new(vim.api.nvim_get_current_tabpage(), controller)
+    view.show()
+    local function changed()
+        for listener in pairs(listeners) do
+            listener()
+        end
+    end
+    local function flush()
+        vim.wait(100, function()
+            return not view.dirty
+        end, 1)
+    end
+    local f = {
+        view = view,
+        requests = requests,
+        controller = controller,
+        snapshot = snapshot,
+        change = changed,
+        add_annotation = function(text)
+            annotations[#annotations + 1] = { id = #annotations + 1, revision = 1, text = text }
+        end,
+        annotation_count = function()
+            return #annotations
+        end,
+        submit = function()
+            view.submit(function() end)
+        end,
+        submit_count = function()
+            return #requests
+        end,
+        delivery_state = function()
+            return view.status().delivery
+        end,
+        set_draft = function(text)
+            vim.api.nvim_buf_set_lines(view.widget.buf_nrs.input, 0, -1, false, { text })
+        end,
+        draft = function()
+            return table.concat(vim.api.nvim_buf_get_lines(view.widget.buf_nrs.input, 0, -1, false), "\n")
+        end,
+        transcript = function()
+            return table.concat(vim.api.nvim_buf_get_lines(view.widget.buf_nrs.chat, 0, -1, false), "\n")
+        end,
+        lose_reply = function()
+            requests[1].callback({ code = "HANDLER_UNAVAILABLE" })
+        end,
+        acknowledge = function()
+            requests[1].callback(nil, { submissionId = requests[1].id, state = "accepted" })
+        end,
+        submitted_event = function()
+            snapshot.events[#snapshot.events + 1] =
+                { kind = "submitted", seq = 2, submissionId = requests[1].id, text = requests[1].text }
+            snapshot.lastSeq = 2
+            snapshot.currentTurn = { submissionId = requests[1].id, state = "accepted" }
+            changed()
+        end,
+        reconnect_receipt = function()
+            snapshot.currentTurn = { submissionId = requests[1].id, state = "completed" }
+            changed()
+        end,
+        busy = function()
+            snapshot.currentTurn = { submissionId = M.id(800), state = "running" }
+        end,
+        flush = flush,
+        close = function()
+            view.destroy()
+        end,
+    }
+    return f
+end
+
+function M.retention(limits)
+    local state = require("sodium.agency.state").new(limits)
+    local listeners, views, seq = {}, {}, 0
+    local transport = M.client()
+    local stream = transport.client.attach(M.target_a, {
+        on_frame = function(frame)
+            if frame.type == "snapshot_begin" then
+                state.begin_snapshot(frame, #vim.json.encode(frame) + 1)
+            elseif frame.type == "snapshot_events" then
+                state.add_snapshot_events(frame, #vim.json.encode(frame) + 1)
+            elseif frame.type == "snapshot_end" then
+                state.end_snapshot(frame, #vim.json.encode(frame) + 1)
+            elseif frame.type == "event" then
+                state.apply_event(frame)
+            end
+            for callback in pairs(listeners) do
+                callback()
+            end
+        end,
+        on_fault = function(err)
+            error(vim.inspect(err))
+        end,
+    })
+    transport.deliver(1, M.snapshot(nil, {}))
+    local controller = {
+        snapshot = state.current,
+        limits = limits,
+        subscribe = function(callback)
+            listeners[callback] = true
+            return function()
+                listeners[callback] = nil
+            end
+        end,
+    }
+    for i = 1, 2 do
+        views[i] = require("sodium.agency.agentic_view").new(vim.api.nvim_get_current_tabpage(), controller)
+    end
+    local function deliver(update)
+        seq = seq + 1
+        transport.deliver(
+            1,
+            {
+                {
+                    protocol = "agency-attachment/1",
+                    type = "event",
+                    target = M.target_a,
+                    firstSeq = math.max(1, seq - 127),
+                    historyTruncated = seq > 128,
+                    event = M.update(seq, update),
+                },
+            }
+        )
+    end
+    return {
+        show = function(i)
+            views[i].show()
+        end,
+        hide = function(i)
+            views[i].hide()
+        end,
+        set_draft = function(i, text)
+            vim.api.nvim_buf_set_lines(views[i].widget.buf_nrs.input, 0, -1, false, { text })
+        end,
+        draft = function(i)
+            return table.concat(vim.api.nvim_buf_get_lines(views[i].widget.buf_nrs.input, 0, -1, false), "\n")
+        end,
+        tool = function(i, text)
+            deliver({
+                sessionUpdate = "tool_call",
+                toolCallId = "tool-" .. i,
+                title = "execute",
+                kind = "execute",
+                status = "in_progress",
+                content = { { type = "content", content = { type = "text", text = text } } },
+            })
+        end,
+        update_tool = function(i, text)
+            deliver({
+                sessionUpdate = "tool_call_update",
+                toolCallId = "tool-" .. i,
+                status = "completed",
+                content = { { type = "content", content = { type = "text", text = text } } },
+            })
+        end,
+        flush = function()
+            vim.wait(100, function()
+                return not views[1].dirty and not views[2].dirty
+            end, 1)
+        end,
+        projection = state.retention,
+        metrics = function(i)
+            return views[i].renderer.metrics()
+        end,
+        has_partial_tool = function(i)
+            local block = views[1].renderer.writer.tool_call_blocks["tool-" .. i]
+            return block and block.argument:find("partial", 1, true) ~= nil
+        end,
+        connections = function()
+            return #transport.jobs
+        end,
+        replay_hook_calls = function()
+            return 0
+        end,
+        close = function()
+            for _, view in ipairs(views) do
+                view.destroy()
+            end
+            stream.close()
+            transport.close()
+        end,
+    }
+end
+
 function M.id(n)
     return string.format("00000000-0000-4000-8000-%012d", n)
 end
@@ -214,16 +447,13 @@ function M.operations()
         confirmations = confirmations,
         reports = reports,
         respond = function(index, result, error, generation)
-            calls[index].callback(
-                error,
-                {
-                    protocol = "agency-agent/2",
-                    requestId = M.id(400 + index),
-                    handlerGeneration = generation or M.target_a.handlerGeneration,
-                    ok = error == nil,
-                    result = result,
-                }
-            )
+            calls[index].callback(error, {
+                protocol = "agency-agent/2",
+                requestId = M.id(400 + index),
+                handlerGeneration = generation or M.target_a.handlerGeneration,
+                ok = error == nil,
+                result = result,
+            })
         end,
         snapshot = function(index)
             for _, frame in ipairs(M.snapshot(streams[index].target)) do
