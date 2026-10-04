@@ -444,7 +444,11 @@ export async function agentServiceFixture(t: TestContext, options: { contract?: 
       if (request.method === "session/load" && loadBehavior === "timeout") return NO_ACP_RESPONSE
       if (request.method === "session/load" && loadBehavior === "invalid-protocol") return { jsonrpc: "2.0", id: request.id, result: { sessionId: "other", configOptions: [] } }
       if (request.method === "session/load" && loadBehavior !== "normal") return { jsonrpc: "2.0", id: request.id, error: { code: loadBehavior === "auth" ? -32000 : ["missing", "invalid-params", "cwd"].includes(loadBehavior) ? -32602 : -32603, message: loadBehavior === "auth" ? "Authentication required" : loadBehavior === "missing" ? "Session not found" : loadBehavior === "invalid-params" ? "Invalid params" : loadBehavior === "cwd" ? "Invalid params: cwd must refer to an accessible directory" : "fixture failure" } }
+      if (request.method === "session/load") peer.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "restored history" } } } })
       return reply
+    }, notification(request, send) {
+      const pending = pendingPrompts.get(input.spec.agentId)
+      if (request.method === "session/cancel" && pending) send({ jsonrpc: "2.0", id: pending.request.id, result: { stopReason: "cancelled" } })
     }, prompt(request, send) {
       methodHistory.push(request.method)
       promptEntered.resolve()

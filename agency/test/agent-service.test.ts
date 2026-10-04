@@ -29,6 +29,86 @@ test("scalar prompt reports cancellation as failure without failing its provider
   assert.equal(f.spawns(), 1)
 })
 
+test("shell-originated turns are visible to observers without transferring provider ownership", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const seen: any[] = []
+  const observed = await f.service.observe(target, (event: unknown) => seen.push(event))
+  assert.equal(observed.snapshot.metadata.phase, "ready")
+  assert.equal(observed.snapshot.metadata.cwd, f.workspace)
+  await f.service.prompt({ ...target, text: "shell question" })
+  assert.deepEqual(seen.filter(event => event.kind === "event").map(event => event.event.kind), ["submitted", "turn", "update", "turn"])
+  assert.equal(seen.at(-1).event.state, "completed")
+  observed.close()
+  assert.equal((await f.service.current(f.workspace)).agents[0]!.record.phase, "ready")
+})
+
+test("attachment detach during a turn retains its receipt and rejects conflicting dispatch", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const service = f.service, request = { submissionId: randomUUID(), text: "editor question", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } }
+  const observed = await service.observe(target, () => { throw new Error("observer failed") })
+  await service.submit(target, request)
+  await f.promptEntered
+  observed.close()
+  await service.submit(target, request)
+  await assert.rejects(service.submit(target, { ...request, text: "changed" }), { code: "COMMAND_CONFLICT" })
+  await assert.rejects(service.submit(target, { ...request, submissionId: randomUUID() }), { code: "INCOMPLETE" })
+  assert.equal(f.methodHistory.filter(method => method === "session/prompt").length, 1)
+  f.completePrompt(target.agentId)
+  await until(async () => (await service.submission(target, request.submissionId))?.state === "completed" ? true : undefined)
+  const fresh = await service.observe(target, () => {})
+  assert.equal(fresh.snapshot.currentTurn!.submissionId, request.submissionId)
+  assert.equal(f.spawns(), 1)
+  fresh.close()
+})
+
+test("cooperative cancellation preserves the provider and cannot cancel the next turn", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const service = f.service, request = { submissionId: randomUUID(), text: "first", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } }
+  await service.submit(target, request); await f.promptEntered
+  await service.cancel(target, request.submissionId)
+  await until(async () => (await service.submission(target, request.submissionId))?.state === "completed" ? true : undefined)
+  const second = { ...request, submissionId: randomUUID(), text: "second" }
+  await service.submit(target, second)
+  await until(async () => f.methodHistory.filter(method => method === "session/prompt").length === 2 ? true : undefined)
+  await service.cancel(target, request.submissionId)
+  assert.equal((await service.submission(target, second.submissionId))!.state, "running")
+  f.completePrompt(target.agentId)
+  await until(async () => (await service.submission(target, second.submissionId))?.state === "completed" ? true : undefined)
+  assert.equal((await f.service.current(f.workspace)).agents[0]!.record.phase, "ready")
+})
+
+test("stop closes the old projection and restored observers receive only the new generation", async t => {
+  const f = await agentServiceFixture(t)
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!, service = f.service
+  const seen: any[] = []
+  await service.observe(target, (event: unknown) => seen.push(event))
+  await completed(f.service, (await f.service.stop({ ...target, commandId: randomUUID() })).command)
+  assert.equal(seen.at(-1).kind, "closed")
+  assert.deepEqual(seen.filter(event => event.kind === "event" && event.event.kind === "lifecycle").map(event => event.event.phase), ["stopping", "stopped"])
+  const restored = await completed(f.service, (await f.service.restore({ agentId: target.agentId, handlerGeneration: target.handlerGeneration, commandId: randomUUID(), environment: f.input.environment })).command)
+  await assert.rejects(service.observe(target, () => {}), { code: "STALE_PROVIDER" })
+  const observer = await service.observe(restored.command.target!, () => {})
+  assert.equal(observer.snapshot.target.providerGeneration, restored.command.target!.providerGeneration)
+  assert.ok(observer.snapshot.events.some((event: any) => event.kind === "update" && event.replay))
+  observer.close()
+})
+
+test("provider failure publishes the accepted turn failure before releasing its observers", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!, service = f.service
+  const seen: any[] = []
+  await service.observe(target, (event: unknown) => seen.push(event))
+  await service.submit(target, { submissionId: randomUUID(), text: "first", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } })
+  await f.promptEntered
+  f.fault(target.agentId)
+  await until(async () => seen.at(-1)?.kind === "closed" ? true : undefined)
+  assert.ok(seen.some(event => event.kind === "event" && event.event.kind === "turn" && event.event.state === "failed"))
+  await assert.rejects(service.observe(target, () => {}), { code: "NOT_READY" })
+})
+
 for (const crashed of [false, true]) test(`restore retains identity and rotates launch after ${crashed ? "crash" : "stop"}`, async t => {
   const f = await agentServiceFixture(t)
   const started = await completed(f.service, (await f.service.start(f.input)).command)
