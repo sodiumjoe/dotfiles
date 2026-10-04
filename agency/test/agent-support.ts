@@ -7,7 +7,9 @@ import assert from "node:assert/strict"
 import { createConnection } from "node:net"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
+import { homedir } from "node:os"
+import { ATTACHMENT_PROTOCOL, createNdjsonDecoder, parseAttachmentFrame, type AttachmentFrame } from "../src/agent/attachment-protocol.js"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
 import { AgentError } from "../src/agent/types.js"
 import { splitLaunchSpec, startCommand } from "../src/agent/types.js"
@@ -33,7 +35,7 @@ import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentRecord, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = { pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean }
+export type AgentHandlerOptions = { pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
@@ -119,7 +121,8 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     } finally { await trackProviders() }
   }
   const commandView = (result: Awaited<ReturnType<typeof call>>): CommandView => { assert.equal(result.state, "command"); if (result.state !== "command") throw new Error("wrong reply"); return result }
-  const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection }, environment: { ...process.env, FIXTURE_ROOT: f.root } as Record<string, string> } }))
+  const providerEnvironment = () => ({ ...process.env, FIXTURE_ROOT: f.root, FIXTURE_SCENARIO: options.providerScenario ?? "normal" } as Record<string, string>)
+  const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection }, environment: providerEnvironment() } }))
   const command = async (commandId: string, commandGeneration: string) => commandView(await call({ op: "agent_command", commandId, commandGeneration }))
   const currentAt = async (cwd: string) => { const result = await call({ op: "agent_current", cwd }); assert.equal(result.state, "current"); if (result.state !== "current") throw new Error("wrong reply"); return result }
   return { root: f.root, configPath: f.configPath, paths: f.paths, workspace, otherWorkspace, inventory, startAt, currentAt, command, releaseBarrier,
@@ -129,7 +132,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     current: () => currentAt(workspace),
     async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
     stop: async (target: AgentTuple, commandId = randomUUID()) => commandView(await call({ op: "agent_stop", input: { ...target, commandId } })),
-    restore: async (agentId: string) => commandView(await call({ op: "agent_restore", input: { agentId, commandId: randomUUID(), handlerGeneration: (await handler()).generation, environment: { ...process.env, FIXTURE_ROOT: f.root } as Record<string, string> } })),
+    restore: async (agentId: string) => commandView(await call({ op: "agent_restore", input: { agentId, commandId: randomUUID(), handlerGeneration: (await handler()).generation, environment: providerEnvironment() } })),
     providerRequests: async () => (await readFile(join(f.root, "requests.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line) as { method: string; params: Record<string, unknown> }),
     async prompt(target: AgentTuple, text: string) { const result = await call({ op: "agent_prompt", input: { ...target, text } }); assert.equal(result.state, "prompt"); if (result.state !== "prompt") throw new Error("wrong reply"); return result },
     retry: async (value: AgentCommand) => command(value.commandId, value.handlerGeneration),
@@ -160,6 +163,109 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     verifyZeroSurvivors: cleanupOwned,
     async cleanupEvidence() { return JSON.parse(await readFile(join(f.root, "agent-cleanup.json"), "utf8")) as { providers: LaunchRecord[]; launches: Array<{ path: string; record: LaunchRecord }>; survivors: unknown[] } },
   }
+}
+
+type StreamInput = { op: "submit"; submissionId: string; text: string } | { op: "cancel" | "inspect-submission"; submissionId: string }
+type ResponseFrame = Extract<AttachmentFrame, { type: "response" }>
+
+export async function attachmentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}) {
+  const f = await agentHandlerFixture(t, options), readers = new Set<ReturnType<typeof createConnection>>()
+  t.after(() => { for (const socket of readers) socket.destroy() })
+  async function attach(target: AgentTuple) {
+    const socket = createConnection(join(f.paths.runtimeRoot, "attachment.sock")), frames: AttachmentFrame[] = []
+    readers.add(socket)
+    let failure: unknown
+    socket.on("error", error => { failure = error })
+    const decoder = createNdjsonDecoder(value => frames.push(parseAttachmentFrame(value)), error => { failure = error })
+    socket.on("data", bytes => decoder.feed(bytes))
+    const send = (input: StreamInput | { op: "attach" }) => {
+      const requestId = randomUUID()
+      socket.write(JSON.stringify({ protocol: ATTACHMENT_PROTOCOL, target, requestId, ...input }) + "\n")
+      return requestId
+    }
+    async function wait(predicate: (frame: AttachmentFrame) => boolean, timeout = 15000) {
+      return until(async () => {
+        const frame = frames.find(predicate)
+        if (frame) return frame
+        if (failure) throw failure
+        const fault = frames.find(row => row.type === "fault")
+        if (fault?.type === "fault") throw new AgentError(fault.error.code)
+        if (socket.destroyed) throw new Error("attachment closed before observation")
+        return undefined
+      }, timeout)
+    }
+    send({ op: "attach" })
+    await wait(frame => frame.type === "snapshot_end")
+    return { socket, frames, send, wait,
+      close() { socket.destroy(); readers.delete(socket) },
+      async request(input: StreamInput): Promise<ResponseFrame> {
+        const id = send(input)
+        return await wait(frame => frame.type === "response" && frame.requestId === id) as ResponseFrame
+      },
+      completed: (id: string) => wait(frame => frame.type === "event" && frame.event.kind === "turn" && frame.event.submissionId === id && (frame.event.state === "completed" || frame.event.state === "failed"), 35000),
+    }
+  }
+  return { ...f, attach,
+    async stopAndVerify(target: AgentTuple) {
+      const stopped = await f.waitCompleted(await f.stop(target))
+      assert.equal(stopped.command.result?.outcome, "stopped")
+      await f.assertProviderAbsent(target)
+    },
+  }
+}
+
+export async function neovimAttachmentFixture(t: TestContext, options: AgentHandlerOptions = {}) {
+  const f = await attachmentHandlerFixture(t, options)
+  const executable = join(f.root, "agy-fixture.mjs"), repository = fileURLToPath(new URL("../../../", import.meta.url))
+  const source = (path: string) => new URL(path, import.meta.url).href
+  await writeFile(executable, `#!${process.execPath}\nimport { runControl, productionControlDependencies } from ${JSON.stringify(source("../src/cli/control.js"))}\nimport { createDarwinAdapter } from ${JSON.stringify(source("../src/platform/darwin.js"))}\nimport { createLinuxAdapter } from ${JSON.stringify(source("../src/platform/linux.js"))}\nconst deps = productionControlDependencies()\ndeps.environment = async () => ({ paths: ${JSON.stringify(f.paths)}, adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter() })\ndeps.start = async env => { const found = await deps.inspect(env); if (!found) throw new Error("fixture Handler absent"); return found }\nprocess.exitCode = await runControl(process.argv.slice(2), deps)`, { mode: 0o700 })
+  const editors = new Set<ChildProcess>()
+  t.after(async () => {
+    for (const child of editors) {
+      child.kill("SIGTERM")
+      await until(async () => child.exitCode !== null || child.signalCode !== null ? true : undefined)
+    }
+  })
+  async function editor(target: AgentTuple, settings: Record<string, unknown> = {}) {
+    const report = join(f.root, `editor-${randomUUID()}.jsonl`), config = join(f.root, `editor-${randomUUID()}.json`)
+    await writeFile(report, "", { mode: 0o600 })
+    const plugin = join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share"), "nvim/lazy/agentic.nvim")
+    await writeFile(config, JSON.stringify({ executable, target, repository, plugin, report, ...settings }), { mode: 0o600 })
+    const child = spawn(process.env.AGENCY_NVIM_EXECUTABLE ?? "/opt/homebrew/bin/nvim", ["--headless", "-u", "NONE", "-i", "NONE", "-n", "-l", resolve(repository, "tests/neovim/fixtures/agency_attachment_client.lua"), config], { cwd: f.workspace, env: process.env, stdio: ["pipe", "pipe", "pipe"] })
+    editors.add(child)
+    let diagnostics = "", failure: unknown, nextId = 0
+    child.stdout!.on("data", bytes => { diagnostics = (diagnostics + bytes.toString()).slice(-8192) })
+    child.stderr!.on("data", bytes => { diagnostics = (diagnostics + bytes.toString()).slice(-8192) })
+    child.on("error", error => { failure = error })
+    const deadline = setTimeout(() => { failure = new Error("editor lifetime exceeded"); child.kill("SIGTERM") }, 120000)
+    child.once("exit", () => { clearTimeout(deadline); editors.delete(child) })
+    async function response(id: number) {
+      return until(async () => {
+        const rows = (await readFile(report, "utf8")).split("\n").filter(Boolean)
+        for (const line of rows) {
+          let row: any
+          try { row = JSON.parse(line) } catch { continue }
+          if (row.id === id) { if (row.error) throw new Error(JSON.stringify(row.error)); return row }
+        }
+        if (failure || child.exitCode !== null || child.signalCode !== null) throw new Error(`editor unavailable: ${diagnostics}`, { cause: failure })
+        return undefined
+      }, 40000)
+    }
+    const initial = await response(0)
+    async function call(command: Record<string, unknown>): Promise<any> {
+      const id = ++nextId
+      child.stdin!.write(JSON.stringify({ ...command, id }) + "\n")
+      return response(id)
+    }
+    return { initial, call,
+      async exit() {
+        await call({ op: "exit" })
+        await until(async () => child.exitCode !== null || child.signalCode !== null ? true : undefined)
+        assert.equal(child.exitCode, 0, diagnostics)
+      },
+    }
+  }
+  return { ...f, editor, executable }
 }
 
 export const agentId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`

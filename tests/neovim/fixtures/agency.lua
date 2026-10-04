@@ -122,7 +122,7 @@ end
 
 function M.retention(limits)
     local state = require("sodium.agency.state").new(limits)
-    local listeners, views, seq = {}, {}, 0
+    local listeners, views, seq, hook_calls = {}, {}, 0, 0
     local transport = M.client()
     local stream = transport.client.attach(M.target_a, {
         on_frame = function(frame)
@@ -147,6 +147,13 @@ function M.retention(limits)
     local controller = {
         snapshot = state.current,
         limits = limits,
+        submit = function()
+            hook_calls = hook_calls + 1
+            error("rendering dispatched a prompt")
+        end,
+        accept_annotations = function()
+            hook_calls = hook_calls + 1
+        end,
         subscribe = function(callback)
             listeners[callback] = true
             return function()
@@ -221,7 +228,7 @@ function M.retention(limits)
             return #transport.jobs
         end,
         replay_hook_calls = function()
-            return 0
+            return hook_calls
         end,
         close = function()
             for _, view in ipairs(views) do

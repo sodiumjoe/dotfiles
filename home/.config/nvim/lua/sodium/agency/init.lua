@@ -91,6 +91,12 @@ function M.setup(deps)
     api.annotations = deps.annotations or annotation_capture
     api.accept_annotations = deps.accept_annotations or annotation_accept
     api.timer_factory = deps.timer_factory
+    local function accept_direct(value)
+        if not value.accepted then
+            value.accepted = true
+            api.accept_annotations(value.annotations)
+        end
+    end
     local operations
     function api.snapshot()
         local active = operations.attachment()
@@ -115,7 +121,7 @@ function M.setup(deps)
         if direct and snapshot and vim.deep_equal(direct.target, snapshot.target) then
             local turn = snapshot.currentTurn
             if turn and turn ~= vim.NIL and turn.submissionId == direct.id then
-                direct.accepted = true
+                accept_direct(direct)
             end
         end
         if delta and delta.appended and snapshot then
@@ -352,7 +358,7 @@ function M.setup(deps)
     function api.inspect(id, callback)
         request({ op = "inspect-submission", submissionId = id }, function(err, receipt)
             if not err and receipt and receipt ~= vim.NIL and direct and direct.id == id then
-                direct.accepted = true
+                accept_direct(direct)
             end
             callback(err, receipt)
         end)
@@ -453,7 +459,7 @@ function M.setup(deps)
                 callback({ state = "rejected", error = failure("NOT_READY") })
                 return
             end
-            local value = { id = api.uuid(), target = vim.deepcopy(snapshot.target) }
+            local value = { id = api.uuid(), target = vim.deepcopy(snapshot.target), annotations = annotations }
             direct = value
             api.confirm_external(snapshot.cwd, annotations, function(confirmed)
                 if direct ~= value then
@@ -467,10 +473,9 @@ function M.setup(deps)
                 end
                 request({ op = "submit", submissionId = value.id, text = encoded }, function(error, receipt)
                     if not error and receipt and receipt ~= vim.NIL and receipt.submissionId == value.id then
-                        value.accepted = true
+                        accept_direct(value)
                     end
                     if value.accepted then
-                        api.accept_annotations(annotations)
                         callback({ state = "accepted", receipt = receipt, submissionId = value.id })
                     elseif
                         error

@@ -16,6 +16,22 @@ const barrier = async (name: string): Promise<void> => {
   while (!await exists(join(root, `release-${name}`))) await new Promise(resolve => setTimeout(resolve, 20))
 }
 const send = (value: unknown): void => { process.stdout.write(JSON.stringify(value) + "\n") }
+const emit = async (value: unknown): Promise<void> => {
+  const bytes = Buffer.from(JSON.stringify(value) + "\n")
+  if (scenario === "utf8") {
+    const start = bytes.indexOf(Buffer.from("🙂"))
+    if (start >= 0) {
+      process.stdout.write(bytes.subarray(0, start + 1))
+      await new Promise(resolve => setTimeout(resolve, 15))
+      process.stdout.write(bytes.subarray(start + 1, start + 3))
+      await new Promise(resolve => setTimeout(resolve, 15))
+      process.stdout.write(bytes.subarray(start + 3))
+      return
+    }
+  }
+  await new Promise<void>((resolve, reject) => process.stdout.write(bytes, error => error ? reject(error) : resolve()))
+}
+const update = (value: unknown) => emit({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: value } })
 if (scenario === "ignore-term") process.on("SIGTERM", () => undefined)
 let buffer = "", serial = Promise.resolve(), cancelledOnce = false, activePrompt: number | null = null
 process.stdin.on("data", (chunk: Buffer) => {
@@ -37,6 +53,18 @@ process.stdin.on("data", (chunk: Buffer) => {
       if (request.method === "initialize") result = { protocolVersion: 1, agentCapabilities: { loadSession: true } }
       else if (request.method === "session/new" || request.method === "session/load") {
         await barrier("session")
+        if (request.method === "session/load" && scenario === "large-replay") {
+          const limit = await exists(join(root, "replay-limit")) ? await readFile(join(root, "replay-limit"), "utf8") : ""
+          if (limit === "frame") await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(1048576) } })
+          else if (limit === "history") {
+            for (let i = 0; i < 12; i++) await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(786432) } })
+          } else if (await exists(join(root, "replay-turn.json"))) {
+            const prior = JSON.parse(await readFile(join(root, "replay-turn.json"), "utf8"))
+            await update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: prior.prompt } })
+            await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: prior.answer } })
+            await update({ sessionUpdate: "session_info_update", title: prior.prompt })
+          }
+        }
         result = { sessionId: "fixture-session", configOptions: options }
       } else if (request.method === "session/set_config_option") {
         if (request.params.sessionId !== "fixture-session") throw new Error("wrong session")
@@ -56,6 +84,10 @@ process.stdin.on("data", (chunk: Buffer) => {
         await barrier("prompt")
         const prompt = request.params.prompt[0].text as string
         let answer = `answer:${prompt}`
+        if (scenario === "large-replay") {
+          answer = "a".repeat(786432)
+          await writeFile(join(root, "replay-turn.json"), JSON.stringify({ prompt, answer }), { mode: 0o600 })
+        }
         if (prompt.startsWith("AGENCY_ACCEPTANCE_READ ")) {
           if (!prompt.includes("read package.json in the current working directory")) throw new Error("wrong acceptance path")
           const challenge = prompt.slice("AGENCY_ACCEPTANCE_READ ".length).split(":", 1)[0]!
@@ -64,7 +96,15 @@ process.stdin.on("data", (chunk: Buffer) => {
           await writeFile(join(root, "acceptance-session"), challenge, { mode: 0o600 })
           answer = `${challenge} @moon/agency 24.13.0`
         } else if (prompt.startsWith("AGENCY_ACCEPTANCE_RECALL:")) answer = await readFile(join(root, "acceptance-session"), "utf8")
-        send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } })
+        if (scenario === "tools") {
+          for (let i = 0; i < 48; i++) {
+            await update({ sessionUpdate: "tool_call", toolCallId: `${prompt}-${i}`, kind: "execute", title: "fixture tool", status: "in_progress", content: [{ type: "content", content: { type: "text", text: "tool output\n".repeat(32) } }] })
+            await new Promise(resolve => setTimeout(resolve, 20))
+          }
+          await update({ sessionUpdate: "tool_call_update", toolCallId: `${prompt}-0`, status: "completed", content: [{ type: "content", content: { type: "text", text: "late partial update" } }] })
+        }
+        await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } })
+        if (scenario === "large-replay") await update({ sessionUpdate: "session_info_update", title: prompt })
         result = { stopReason: "end_turn" }
       } else throw new Error("unexpected fixture request")
       send({ jsonrpc: "2.0", id: request.id, result })

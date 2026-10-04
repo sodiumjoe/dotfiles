@@ -66,6 +66,48 @@ describe("Agency bounded pinned MessageWriter", function()
         assert.are.same(headers, vim.t.agentic_headers)
         assert.are.equal(name, vim.api.nvim_buf_get_name(widget.buf_nrs.todos))
     end)
+    it("preserves every diff in a multi-file tool update", function()
+        local event = fixture.update(2, {
+            sessionUpdate = "tool_call",
+            toolCallId = "multi-diff",
+            title = "change two files",
+            kind = "edit",
+            status = "completed",
+            content = {
+                { type = "diff", path = "first.lua", oldText = "before-first", newText = "after-first" },
+                { type = "diff", path = "second.lua", oldText = "before-second", newText = "after-second" },
+            },
+        })
+        renderer.reset(snapshot)
+        renderer.event(event)
+        local text = table.concat(vim.api.nvim_buf_get_lines(widget.buf_nrs.chat, 0, -1, false), "\n")
+        for _, value in ipairs({ "first.lua", "before-first", "after-first", "second.lua", "before-second", "after-second" }) do
+            assert.is_truthy(text:find(value, 1, true), value)
+        end
+    end)
+    it("keeps an oversized-event summary valid UTF-8 under a tiny byte budget", function()
+        renderer.destroy()
+        for budget = 75, 85 do
+            renderer = require("sodium.agency.render").new(widget, function()
+                return snapshot
+            end, { text_bytes = budget })
+            snapshot.events = { fixture.update(2, {
+                sessionUpdate = "tool_call",
+                toolCallId = string.rep("🙂", 16),
+                title = "large tool",
+                kind = "execute",
+                status = "completed",
+                content = { { type = "content", content = { type = "text", text = string.rep("x", 512) } } },
+            }) }
+            snapshot.lastSeq = 2
+            renderer.reset(snapshot)
+            local text = table.concat(vim.api.nvim_buf_get_lines(widget.buf_nrs.chat, 0, -1, false), "\n")
+            local encoded, err = require("sodium.agency.context").encode({ text = text }, {}, {}, {})
+            assert.is_nil(err)
+            assert.is_truthy(encoded)
+            renderer.destroy()
+        end
+    end)
     for _, limit in ipairs({ "text_bytes", "lines", "tool_count", "tool_string_bytes" }) do
         it("enforces the " .. limit .. " budget on real writer state", function()
             renderer.destroy()

@@ -7,7 +7,8 @@
   },
   "scripts": {
     "test:attachment": "npm run build && node --test --test-concurrency=1 dist/test/agent-attachment-protocol.test.js dist/test/agent-attachment-server.test.js dist/test/agent-attachment-cli.test.js",
-    "test:attachment-integration": "npm run build && node --test --test-concurrency=1 --test-name-pattern=attachment dist/test/handler-agents.test.js",
+    "test:attachment-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-attachment.test.js",
+    "test:neovim-integration": "npm run build && node --test --test-concurrency=1 dist/test/neovim-attachment.test.js",
     "accept:codex": "npm run build && node dist/scripts/accept-codex.js",
     "test:codex-acceptance": "npm run build && node --test --test-concurrency=1 dist/test/codex-acceptance.test.js",
     "test:agent-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-agents.test.js",

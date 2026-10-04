@@ -35,7 +35,7 @@ local function block(update, cwd, partial)
             result[target] = update[source]
         end
     end
-    local body = {}
+    local body, diffs = {}, {}
     if present(update.locations) then
         result.locations = vim.deepcopy(update.locations)
         for _, location in ipairs(result.locations) do
@@ -49,6 +49,7 @@ local function block(update, cwd, partial)
             if item.type == "content" then
                 vim.list_extend(body, vim.split(item.content.text, "\n", { plain = true }))
             elseif item.type == "diff" then
+                diffs[#diffs + 1] = item
                 result.file_path = path(cwd, item.path)
                 result.diff = {
                     old = vim.split(present(item.oldText) and item.oldText or "", "\n", { plain = true }),
@@ -57,6 +58,16 @@ local function block(update, cwd, partial)
             elseif item.type == "terminal" then
                 body[#body + 1] = "Terminal result: " .. item.terminalId
             end
+        end
+    end
+    if #diffs > 1 then
+        result.diff = nil
+        for _, item in ipairs(diffs) do
+            body[#body + 1] = "Diff: " .. path(cwd, item.path)
+            body[#body + 1] = "Before:"
+            vim.list_extend(body, vim.split(present(item.oldText) and item.oldText or "", "\n", { plain = true }))
+            body[#body + 1] = "After:"
+            vim.list_extend(body, vim.split(item.newText, "\n", { plain = true }))
         end
     end
     for _, key in ipairs({ "rawInput", "rawOutput" }) do
@@ -205,6 +216,9 @@ function M.new(widget, metadata, limits)
             .. " omitted: view limit]"
         local available = math.max(0, limits.text_bytes - api.metrics().text_bytes - 2)
         if #summary > available then
+            while available > 0 and summary:byte(available + 1) >= 128 and summary:byte(available + 1) < 192 do
+                available = available - 1
+            end
             summary = summary:sub(1, available)
         end
         helpers.with_modifiable(widget.buf_nrs.chat, function(buf)

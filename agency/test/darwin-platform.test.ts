@@ -714,6 +714,7 @@ async function independentFixtureSurvivors(execute: (file: string, args: string[
     })
   })
   const paths = [providerFixture, handlerFixture, singletonFixture]
+  const markers = new Set([...allEvidence, ...allPending].map(value => value.marker))
   const survivors = new Map<number, { pid: number; command: string }>()
   for (const line of stdout.split("\n")) {
     const match = /^\s*(\d+)\s+(.+)$/.exec(line)
@@ -722,7 +723,7 @@ async function independentFixtureSurvivors(execute: (file: string, args: string[
     const command = match[2]!
     const executable = command.slice(0, command.search(/\s|$/))
     const marker = parseAgencyLaunchMarker(executable)
-    if (marker !== null || paths.some(path => command.includes(path))) survivors.set(pid, { pid, command })
+    if ((marker !== null && markers.has(executable)) || paths.some(path => command.includes(path))) survivors.set(pid, { pid, command })
   }
   return [...survivors.values()].sort((left, right) => left.pid - right.pid)
 }
@@ -1658,6 +1659,19 @@ qualificationTest("bounds singleton launcher transition pauses by timeoutMs", as
   assert.deepEqual(await lines(handlerLog), [])
   assert.equal(await exists(join(root, "handler.sock")), false)
   child.stderr?.destroy()
+})
+
+qualificationTest("independent survivor scan excludes ambient Agency while detecting owned and unregistered fixtures", async t => {
+  const scope = await FixtureScope.create(t)
+  const fixture = await spawnProvider(scope, "scoped survivor scan provider")
+  const owned = { pid: fixture.leader.pid, command: `${fixture.evidence.marker} renamed-fixture-command` }
+  const unregistered = { pid: 41001, command: `node ${providerFixture} descendant` }
+  const ambient = { pid: 41002, command: `${agencyLaunchMarker("handler", randomUUID())} /ambient/agency/dist/src/main.js internal-handler` }
+  const hits = await independentFixtureSurvivors((_file, _args, _options, callback) => {
+    callback(null, [owned, unregistered, ambient].map(value => `${value.pid} ${value.command}`).join("\n"))
+  })
+  assert.deepEqual(hits, [owned, unregistered].sort((left, right) => left.pid - right.pid))
+  await cleanupEvidence(fixture.evidence)
 })
 
 qualificationTest("independent survivor scan detects a registered fixture command", async t => {

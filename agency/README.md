@@ -20,6 +20,10 @@ agy agent start --provider <id> --model <id> --reasoning <value|none> [--mode <i
 agy agent restore <agent-uuid> [--command-id <uuid>] [--handler-generation <uuid>] [--json]
 agy agent current [--json]
 agy agent list [--json]
+agy agent choices [--json]
+agy agent page --limit 100 [--cursor <cursor>] [--cwd <path>] [--active] [--json]
+agy agent command <command-uuid> --handler-generation <uuid> [--json]
+agy agent attach <agent-uuid> --handler-generation <uuid> --provider-generation <uuid> --format ndjson
 agy agent prompt <agent-uuid> --text <text> --handler-generation <uuid> --provider-generation <uuid> [--json]
 agy agent stop <agent-uuid> --handler-generation <uuid> --provider-generation <uuid> [--command-id <uuid>] [--json]
 ```
@@ -29,6 +33,47 @@ Status lazily starts or connects to one Handler. Doctor inspects local state wit
 Command IDs and Handler generations make mutation retries exact. After an incomplete result, retry with the original command ID, generation, and input. Completed command receipts remain immutable, while current agent liveness is reported separately.
 
 Prompt submission is single-delivery because an ambiguous disconnect can occur after the Handler accepted the turn. `agent prompt` therefore reports the transport failure without resubmitting. The current Codex prompt transport window is 95 seconds: the 90-second provider prompt deadline, one second for transport closure, and four seconds of client transport grace.
+
+`agent choices` intersects fresh catalog evidence with configured launch contracts without discovery. `agent page` provides revision-bound traversal, including issue-only pages; a changed inventory invalidates its cursor. `agent command` inspects a retained receipt without resubmitting. Initial editor start/restore commands capture the Handler generation from status and use `--expected-handler-generation <uuid>` together with `--command-id`; `--handler-generation` retains replay-only semantics for those mutations. These two generation flags are mutually exclusive.
+
+## Neovim integration
+
+Neovim requires the built Agency package, deployed `agy` on its inherited `PATH`, and the existing Agentic and Snacks plugins. The tested Agentic revision is `246feb4773923a10a6fedc40048657516bd05792`; this integration does not modify it. Agency commands lazy-load the editor integration, and setup launches neither providers nor discovery.
+
+| Mapping | Command |
+| --- | --- |
+| `<leader>ac` | `AgencyCurrent` |
+| `<leader>an` | `AgencyNew` |
+| `<leader>af` | `Agency` |
+| `<leader>as` | `AgencyStop` |
+| `<leader>ao` | `AgencyOpen` |
+| `<leader>aa` | Add captured file or selection |
+| `<leader>ad` | Add line diagnostics |
+| `<leader>aD` | Add buffer diagnostics |
+| `<leader>ai` | Submit annotations |
+| `<leader>ar` | Existing native saved-session picker |
+
+Additional commands are `AgencyAttach <agent-id>`, `AgencyRestore <agent-id>`, `AgencyDetach`, `AgencyCancel`, and `AgencyInspect`. Current toggles an existing pinned attachment. Without one, it captures the invoking cwd and selects from exact-directory active records: zero opens launch choices, one ready agent attaches, and multiple agents open a picker. Transitional records and read failures never count as zero. New permits another agent in the same directory. Open only displays an attachment. The local roster polls every five seconds while visible, with nonoverlapping reads and explicit refresh actions.
+
+One editor process owns one attachment shared by its tab views. Hiding or closing a view, closing a tab, detaching, terminating a proxy, or exiting Neovim never cancels or stops the provider. Reattachment reconstructs retained display history and the current turn without replaying a prompt. Stop requires confirmation of the displayed ID, model, cwd, and both generations, then verifies cleanup of that exact target. Restore is explicit and requires verified cleanup; failure never starts a replacement conversation.
+
+Input is captured text, including selections, diagnostics, unsaved named buffers, and annotations. Whole-file context references an absolute path. Context outside the agent's recorded cwd requires confirmation; unnamed selections use a buffer label. Binary/media context is rejected. Changing the editor cwd does not retarget an attachment or its relative chat links. Native Agentic sessions remain separate and retain their saved-session restore command.
+
+An unknown submission keeps its ID and disables redispatch. `AgencyInspect` queries submission and lifecycle receipts; acceptance evidence settles only captured drafts/context/annotations, and never authorizes sending the same prompt again. Changed annotation threads remain intact. Disconnecting during a turn leaves it running. Cancel targets the observed submission and leaves a cooperative provider usable; an uncooperative provider fails after the five-second cancellation grace deadline. The production prompt deadline remains 90 seconds.
+
+Launch choices show actual model, reasoning, mode, and permission metadata. Model discovery is demand-driven; the Agency picker refresh action explicitly launches discovery and rereads choices using the retained command identity. Stale, unsupported, or unconfigured choices do not fall back to native Agentic. The current production capability is Codex read-only with deny-all permission callbacks. This increment has no writable sessions, human permission routing, or remote roster.
+
+## Conversation and transport bounds
+
+Editor turns accept at most 256 KiB of raw UTF-8 input and 768 KiB of raw assistant answer. Each also has an independent 896-KiB JSON-encoded text budget, so heavily escaped text can reach that limit first. Legacy scalar `agent prompt` keeps its 4-KiB input/output limits. ACP validates text and fallback titles against a 1-MiB wire field bound, with a 1-MiB individual frame bound. Display titles are UTF-8-safe prefixes of at most 1,024 bytes with original-byte and truncation metadata; valid larger wire titles remain accepted.
+
+Native Agency restore uses provider `session/load`, including complete replay messages, rather than an Agency transcript archive. Initialization/load has an 8-MiB total wire budget. Replay exceeding this budget or the individual frame limit fails visibly as `ACP_HISTORY_LIMIT` or `ACP_FRAME_LIMIT`, preserving the recorded native session identity without fallback `session/new`. Provider-native persistence can retain more history than Agency can restore in one bounded load.
+
+The Handler and the one shared Lua projection retain at most 16 MiB and 8,192 display events per live generation. Metadata is bounded to 64 KiB. Eviction removes an oldest prefix and exposes `firstSeq` and `historyTruncated`; it does not forget pending delivery IDs. Receipts are not an answer archive. History is volatile across Handler/provider replacement; only native load replay reconstructs the next generation.
+
+Each visible view retains at most 4 MiB of transcript text, 20,000 lines, 512 tool trackers, and 4 MiB of tracker strings. It rebuilds from a bounded recent suffix with a truncation marker when history or rendering budgets require compaction. Oversized events become bounded summaries; multi-file diffs use complete labelled before/after text. Rebuilds do not submit prompts or run acceptance/completion hooks. Hidden views release transcript/tracker state while retaining draft/context and widget identity, then rebuild on show.
+
+The private `attachment.sock` carries `agency-attachment/1` NDJSON independently of the EOF-delimited control socket. Neovim only invokes the CLI; it neither inspects nor opens sockets. Attachment frames are bounded to 2 MiB, peer queued writes and scheduled Lua delivery to 4 MiB, raw snapshot staging to 17 MiB, and outstanding requests to 64. Snapshot chunks target 128 KiB, with a larger valid event in its own frame. Handshake and acknowledgment deadlines are five seconds; a live stream has no idle timeout. Overflow, sequence gaps, conflicting duplicates, stale tuples, and invalid UTF-8 disconnect only the attachment, which must obtain a fresh snapshot. Overflow may produce EOF instead of a fault when the peer cannot drain a terminal frame.
 
 ## Control protocols
 
@@ -99,6 +144,9 @@ Use Node 24.13.0 and run the package scripts sequentially:
 ```text
 npm run test:agent
 npm run test:agent-integration
+npm run test:attachment
+npm run test:attachment-integration
+npm run test:neovim-integration
 npm run test:unit
 npm run test:darwin
 npm run test:catalog
@@ -109,6 +157,8 @@ npm run test:codex-acceptance
 ```
 
 These suites use deterministic fixtures, private temporary roots, and owned local process groups. They do not run `accept:codex`, invoke a real model, submit a paid prompt, or deploy production state.
+
+Run `./test-nvim.sh` from the repository root for the editor suite. Node-owned Neovim integration tests explicitly supply a private fixture CLI, cwd, fake provider, and dedicated evidence file. They use the pinned UI plugin with `-u NONE`, disable swap/shada, and load no user hooks or native providers. `AGENCY_NVIM_EXECUTABLE` can select the binary; its Darwin default is `/opt/homebrew/bin/nvim`. Fixture teardown independently verifies provider/process-group absence.
 
 ## Limits
 

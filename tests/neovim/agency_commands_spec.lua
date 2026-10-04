@@ -260,6 +260,28 @@ describe("Agency editor commands", function()
         f.agency.submit_text("next", {})
         assert.are.equal(3, #f.streams[1].requests)
     end)
+    it("settles captured annotations exactly once when inspection proves unknown delivery accepted", function()
+        f.close()
+        local captured = { { text = "captured annotation", path = "/work/a/file.lua", revision = 1 } }
+        local cleared = {}
+        f = fixture.commands({
+            annotations = function()
+                return captured
+            end,
+            accept_annotations = function(value)
+                cleared[#cleared + 1] = vim.deepcopy(value)
+            end,
+        })
+        attach()
+        f.agency.submit_text("annotations", { annotations = true })
+        f.streams[1].requests[1].callback({ code = "UNAVAILABLE" })
+        assert.are.equal(0, #cleared)
+        vim.cmd("AgencyInspect")
+        f.streams[1].requests[2].callback(nil, { receipt = { submissionId = fixture.id(900), state = "completed" } })
+        assert.are.same({ captured }, cleared)
+        f.streams[1].requests[1].callback(nil, { receipt = { submissionId = fixture.id(900), state = "accepted" } })
+        assert.are.equal(1, #cleared)
+    end)
     it("refuses a ready roster row replaced before selection dispatch", function()
         local displayed = fixture.agent(fixture.target_a)
         f.agency.attach(fixture.target_a.agentId, nil, displayed)
