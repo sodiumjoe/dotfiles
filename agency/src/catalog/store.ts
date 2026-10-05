@@ -11,13 +11,15 @@ import { decodeJson, digest, readBoundedFile } from "./config.js"
 import { CatalogError, hash, id, invalid, keys, MAX_CATALOG_BYTES, object, parseCommand, parseProbeMeta, parseRetainedProbeMeta, parseSnapshot, type CatalogSnapshot, type ProbeMeta, type RefreshCommand, type RetainedProbeMeta } from "./types.js"
 
 export type CatalogFileSystem = { open(path: string, flags: number, mode?: number): Promise<FileHandle>; rename: typeof rename; rm: typeof rm; mkdir: typeof mkdir }
-export type CatalogInventory = { launches: InventoryEntry[]; metadata: RetainedProbeMeta[]; commands: RefreshCommand[]; issues: string[] }
+export type CatalogInventory = { launches: InventoryEntry[]; metadata: RetainedProbeMeta[]; commands: RefreshCommand[]; automatic: RefreshCommand[]; snapshots: CatalogSnapshot[]; issues: string[] }
 export type CatalogStore = {
   root: string
   readSnapshot(id: string): Promise<CatalogSnapshot | null>
   readCurrent(): Promise<CatalogSnapshot | null>
   readCommand(id: string): Promise<RefreshCommand | null>
   writeCommand(value: RefreshCommand, expected: RefreshCommand | null): Promise<void>
+  readAutomatic(id: string): Promise<RefreshCommand | null>
+  writeAutomatic(value: RefreshCommand, expected: RefreshCommand | null): Promise<void>
   writeSnapshot(value: CatalogSnapshot): Promise<void>
   publishCurrent(value: CatalogSnapshot): Promise<void>
   writeProbeMeta(value: ProbeMeta): Promise<void>
@@ -98,13 +100,15 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     if (value.snapshotId !== snapshotId) invalid()
     return value
   }
-  async function readCommand(commandId: string): Promise<RefreshCommand | null> {
-    const bytes = await read(join(catalog, "commands", id(commandId) + ".json"))
+  async function readOwner(commandId: string, kind: "commands" | "automatic"): Promise<RefreshCommand | null> {
+    const bytes = await read(join(catalog, kind, id(commandId) + ".json"))
     if (bytes === null) return null
     const value = parseCommand(decodeJson(bytes))
     if (value.commandId !== commandId) invalid()
     return value
   }
+  const readCommand = (commandId: string) => readOwner(commandId, "commands")
+  const readAutomatic = (commandId: string) => readOwner(commandId, "automatic")
   async function readCurrent(): Promise<CatalogSnapshot | null> {
     const bytes = await read(join(catalog, "current.json"))
     if (bytes === null) return null
@@ -124,11 +128,11 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     return result.sort()
   }
   async function inventory(): Promise<CatalogInventory> {
-    const result: CatalogInventory = { launches: [], metadata: [], commands: [], issues: [] }
+    const result: CatalogInventory = { launches: [], metadata: [], commands: [], automatic: [], snapshots: [], issues: [] }
     const observedSnapshots = new Map<string, Buffer>()
     try {
       await retirement?.validate()
-      const allowed = new Set(["providers.json", "current.json", "commands", "snapshots", "probe-launches", "probe-meta", "work"])
+      const allowed = new Set(["providers.json", "current.json", "commands", "automatic", "snapshots", "probe-launches", "probe-meta", "work"])
       for (const name of await names(catalog)) {
         if (allowed.has(name)) continue
         const remnant = /^\.current\.json\.(.+)\.tmp$/.exec(name)
@@ -136,7 +140,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
         const stats = await lstat(join(catalog, name))
         if (!stats.isFile() || stats.nlink !== 1 || stats.uid !== process.getuid!() || (stats.mode & 0o077) !== 0) invalid()
       }
-      for (const kind of ["commands", "snapshots", "probe-meta", "probe-launches", "work"]) {
+      for (const kind of ["commands", "automatic", "snapshots", "probe-meta", "probe-launches", "work"]) {
         const directory = join(catalog, kind)
         for (const name of await names(directory)) {
           const path = join(directory, name)
@@ -151,9 +155,11 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
             const recordId = id(name.slice(0, -5)), bytes = await read(path)
             if (bytes === null) invalid()
             const raw = decodeJson(bytes)
-            if (kind === "commands") { const c = parseCommand(raw); if (c.commandId !== recordId) invalid(); result.commands.push(c) }
+            if (kind === "commands" || kind === "automatic") { const c = parseCommand(raw); if (c.commandId !== recordId) invalid(); result[kind].push(c) }
             if (kind === "snapshots") {
-              if (parseSnapshot(raw).snapshotId !== recordId) invalid()
+              const snapshot = parseSnapshot(raw)
+              if (snapshot.snapshotId !== recordId) invalid()
+              result.snapshots.push(snapshot)
               observedSnapshots.set(path, bytes)
               if (snapshots !== null && !(snapshots.get(path) ?? accepted.get(path))?.equals(bytes)) invalid()
             }
@@ -188,7 +194,10 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
           } catch { result.issues.push(`${kind}/${name}`) }
         }
       }
-      const hosts = new Set(result.commands.map(v => v.hostId))
+      const commandsById = new Map(result.commands.map(c => [c.commandId, c])), automaticById = new Map(result.automatic.map(c => [c.commandId, c]))
+      if (result.automatic.some(c => commandsById.has(c.commandId))) invalid()
+      const launchesById = new Map(result.launches.map(l => [l.record.launchAttemptId, l])), metadataById = new Map(result.metadata.map(m => [m.attemptId, m])), snapshotsById = new Map(result.snapshots.map(s => [s.snapshotId, s]))
+      const hosts = new Set([...result.commands, ...result.automatic].map(v => v.hostId))
       if (hosts.size > 1) invalid()
       for (const meta of result.metadata) if (hosts.size && !hosts.has(meta.hostId)) result.issues.push(`probe-meta/${meta.attemptId}.json`)
       const legacyAgents = new Set<string>(), legacyLeases = new Set<string>()
@@ -197,15 +206,15 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
           if (legacyAgents.has(m.agentId) || legacyLeases.has(m.leaseId)) result.issues.push(`probe-meta/${m.attemptId}.json`)
           legacyAgents.add(m.agentId); legacyLeases.add(m.leaseId)
         }
-        const c = result.commands.find(c => c.commandId === m.commandId)
-        const entry = result.launches.find(l => l.record.launchAttemptId === m.attemptId)
-        const matched = entry && (m.version === 2
+        const c = (m.version === 3 && m.receiptKind === "automatic" ? automaticById : commandsById).get(m.commandId)
+        const entry = launchesById.get(m.attemptId)
+        const matched = entry && (m.version !== 1
           ? entry.record.version === 2 && entry.record.owner.kind === "catalog-probe" && entry.record.owner.providerId === m.providerId && entry.record.owner.commandId === m.commandId
           : entry.record.version === 1 && entry.record.agentId === m.agentId && entry.record.leaseId === m.leaseId && entry.record.checkoutId === `catalog-v1:${m.providerId}:${m.fingerprint}`)
         if (!c || c.hostId !== m.hostId || c.handlerGeneration !== m.handlerGeneration || !c.attempts.some(a => a.attemptId === m.attemptId && a.providerId === m.providerId) || !c.fingerprints.some(f => f.providerId === m.providerId && f.fingerprint === m.fingerprint) || !matched || entry.record.handlerGeneration !== m.handlerGeneration) result.issues.push(`probe-meta/${m.attemptId}.json`)
       }
-      for (const entry of result.launches) if (!result.metadata.some(m => m.attemptId === entry.record.launchAttemptId)) result.issues.push(`probe-launches/${entry.record.launchAttemptId}.json`)
-      for (const c of result.commands) if (c.snapshotId !== null) { const s = await readSnapshot(c.snapshotId); if (!s || s.hostId !== c.hostId || s.handlerGeneration !== c.handlerGeneration) invalid() }
+      for (const entry of result.launches) if (!metadataById.has(entry.record.launchAttemptId)) result.issues.push(`probe-launches/${entry.record.launchAttemptId}.json`)
+      for (const c of [...result.commands, ...result.automatic]) if (c.snapshotId !== null) { const s = snapshotsById.get(c.snapshotId); if (!s || s.hostId !== c.hostId || s.handlerGeneration !== c.handlerGeneration) invalid() }
       await readCurrent()
       if (snapshots !== null && [...snapshots.keys()].some(path => !observedSnapshots.has(path) && !retirement?.hides(relative(root, path)))) invalid()
       if (result.issues.every(issue => issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/"))) {
@@ -216,8 +225,19 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     } catch { result.issues.push("catalog") }
     return result
   }
+  async function writeOwner(input: RefreshCommand, expected: RefreshCommand | null, kind: "commands" | "automatic"): Promise<void> {
+    const value = parseCommand(input), current = await readOwner(value.commandId, kind)
+    if (await readOwner(value.commandId, kind === "commands" ? "automatic" : "commands")) conflict()
+    if (!isDeepStrictEqual(value, current)) {
+      if (!isDeepStrictEqual(current, expected)) conflict()
+      if (current === null) { if (value.state !== "pending") conflict() }
+      else if (current.state !== "pending" || value.state === "pending" || !isDeepStrictEqual({ ...value, state: current.state, snapshotId: current.snapshotId }, current)) conflict()
+    }
+    if (value.snapshotId !== null) { const s = await readSnapshot(value.snapshotId); if (!s || s.hostId !== value.hostId || s.handlerGeneration !== value.handlerGeneration) invalid() }
+    await publish(join(catalog, kind, value.commandId + ".json"), value, expected, false)
+  }
   return {
-    root, readSnapshot, readCurrent, readCommand, inventory,
+    root, readSnapshot, readCurrent, readCommand, readAutomatic, inventory,
     forgetRemoved(entry) { const path = join(root, entry.path); accepted.delete(path); snapshots?.delete(path) },
     async writeSnapshot(input) { const value = parseSnapshot(input); await publish(join(catalog, "snapshots", value.snapshotId + ".json"), value, null, true) },
     async publishCurrent(input) {
@@ -226,16 +246,8 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
       const previous = await read(path)
       await publish(path, { version: 1, hostId: value.hostId, snapshotId: value.snapshotId, sha256: digest(bytes) }, previous === null ? null : decodeJson(previous), false)
     },
-    async writeCommand(input, expected) {
-      const value = parseCommand(input), current = await readCommand(value.commandId)
-      if (!isDeepStrictEqual(value, current)) {
-        if (!isDeepStrictEqual(current, expected)) conflict()
-        if (current === null) { if (value.state !== "pending") conflict() }
-        else if (current.state !== "pending" || value.state === "pending" || !isDeepStrictEqual({ ...value, state: current.state, snapshotId: current.snapshotId }, current)) conflict()
-      }
-      if (value.snapshotId !== null) { const s = await readSnapshot(value.snapshotId); if (!s || s.hostId !== value.hostId || s.handlerGeneration !== value.handlerGeneration) invalid() }
-      await publish(join(catalog, "commands", value.commandId + ".json"), value, expected, false)
-    },
+    writeCommand: (input, expected) => writeOwner(input, expected, "commands"),
+    writeAutomatic: (input, expected) => writeOwner(input, expected, "automatic"),
     async writeProbeMeta(input) {
       const value = parseProbeMeta(input)
       if (value.workPath !== join(catalog, "work", value.attemptId)) invalid()

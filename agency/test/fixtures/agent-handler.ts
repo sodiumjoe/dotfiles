@@ -46,7 +46,7 @@ try {
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: [contract],
     catalogFactory(context) {
       const store = createCatalogStore(config.paths.persistentRoot)
-      const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
+      const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
       return { ...service, async initialize() {
         const evidence = await observeConfig(config.profile)
         const snapshot = { version: 1 as const, hostId: config.paths.hostKey, handlerGeneration: generation, snapshotId: randomUUID(), createdAt: Date.now(), providers: [{ providerId: "codex-acp" as const, fingerprint: evidence.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp" as const, modelId: "model-a", resolvedModelId: null, displayName: "Fixture model", reasoning: { state: "values" as const, values: ["high", "low"] }, modes: { state: "unknown" as const }, availability: "advertised" as const }] }] }

@@ -20,6 +20,20 @@ function meta(root: string, c: RefreshCommand): ProbeMeta {
 }
 const launch = (m: ProbeMeta) => ({ version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
 
+test("private discovery owners bind automatic metadata without exposing public receipts", async t => {
+  const root = await privateRoot(t), store = createCatalogStore(root), c = command(), m = { ...meta(root, c), version: 3 as const, receiptKind: "automatic" as const }
+  await store.writeAutomatic(c, null)
+  await store.writeProbeMeta(m)
+  await mkdir(join(root, "catalog/probe-launches"), { mode: 0o700 })
+  await writeFile(join(root, "catalog/probe-launches", m.attemptId + ".json"), JSON.stringify(launch(m)), { mode: 0o600 })
+  assert.equal(await store.readCommand(c.commandId), null)
+  assert.deepEqual(await store.readAutomatic(c.commandId), c)
+  assert.deepEqual((await store.inventory()).issues, [])
+  await assert.rejects(store.writeCommand(c, null), { code: "COMMAND_CONFLICT" })
+  await writeFile(join(root, "catalog/probe-meta", m.attemptId + ".json"), JSON.stringify({ ...m, receiptKind: "explicit" }))
+  assert.ok((await store.inventory()).issues.includes("probe-meta/" + m.attemptId + ".json"))
+})
+
 test("catalog inventory validates more than 4096 receipts without truncation", async t => {
   const root = await privateRoot(t), directory = join(root, "catalog", "commands")
   await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -45,7 +59,7 @@ test("two individually bounded provider payloads persist and retain their receip
 
 test("snapshots require explicit hash-bound publication and remain immutable", async t => {
   const root = await privateRoot(t), store = createCatalogStore(root), s = snapshot()
-  assert.deepEqual(await store.inventory(), { launches: [], metadata: [], commands: [], issues: [] })
+  assert.deepEqual(await store.inventory(), { launches: [], metadata: [], commands: [], automatic: [], snapshots: [], issues: [] })
   assert.deepEqual(await readdir(root), [])
   await store.writeSnapshot(s)
   assert.equal(await store.readCurrent(), null)

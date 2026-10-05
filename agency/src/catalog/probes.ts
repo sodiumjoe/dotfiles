@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url"
 import { isDeepStrictEqual } from "node:util"
 import type { MutationQueue } from "../handler/mutations.js"
 import type { InventoryEntry } from "../handler/inventory.js"
+import type { RetentionPins } from "../retention/policy.js"
+import type { RemovalEvidence, RetirementView } from "../retention/store.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import { assertPrivateDirectory, readLaunchRecordForReconciliation, writeLaunchRecord } from "../platform/private-state.js"
@@ -18,7 +20,7 @@ import { CatalogError, failure, invalid, keys, object, parseModels, parseProbeMe
 export type ProbeResult = { models: Model[]; providerVersion: string | null; providerVersionSource: "reported" | "unknown" }
 export type ProbeRequest = { meta: ProbeMeta; profile: ProviderProfile; evidence: ConfigEvidence }
 export type ProbeOutcome = { request: ProbeRequest; record: LaunchRecord; result: ProbeResult | null; error: CatalogFailure | null }
-export type ProbeRuntime = { run(request: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome>; recover(): Promise<void>; verifyDischarged(): Promise<void>; issues?(): Map<ProviderId, CatalogFailure>; diagnostics?(): string[] }
+export type ProbeRuntime = { retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; run(request: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome>; recover(): Promise<void>; verifyDischarged(): Promise<void>; issues?(): Map<ProviderId, CatalogFailure>; diagnostics?(): string[] }
 export type ProbeDependencies = { spawn?: typeof spawn; publish?: typeof writeLaunchRecord; timeoutMs?: number; closeMs?: number; env?: NodeJS.ProcessEnv }
 export function cleanProbeEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([key]) => key !== "NODE_OPTIONS" && key !== "NODE_PATH" && !key.startsWith("AGENCY_") && !key.startsWith("GIT_")))
@@ -39,12 +41,14 @@ export async function privateProbeDirectory(parent: string, name: string, requir
   try { await handle.sync() } finally { await handle.close() }
   return directory
 }
-export function createProbeRuntime(options: { paths: PlatformPaths; adapter: PlatformAdapter; queue: MutationQueue; store: CatalogStore; generation: string; canStart(): boolean; workerFile?: string; dependencies?: ProbeDependencies }): ProbeRuntime {
+export function createProbeRuntime(options: { paths: PlatformPaths; adapter: PlatformAdapter; queue: MutationQueue; store: CatalogStore; generation: string; canStart(): boolean; workerFile?: string; dependencies?: ProbeDependencies; retirement?: RetirementView }): ProbeRuntime {
   const { paths, adapter, queue, store, generation } = options, deps = options.dependencies ?? {}, publish = deps.publish ?? writeLaunchRecord
   let accepted: InventoryEntry[] = [], metadata: RetainedProbeMeta[] = [], initialized = false, blocked = false, running = false
   const blockedProviders = new Map<ProviderId, CatalogFailure>()
   const unscopedIssues = new Set<string>()
   const terminal = new Map<string, { child: ChildProcess; exit: boolean; close: boolean }>()
+  const visibleLaunch = (entry: InventoryEntry) => !options.retirement?.hides("catalog/probe-launches/" + entry.record.launchAttemptId + ".json")
+  const visibleMeta = (entry: RetainedProbeMeta) => !options.retirement?.hides("catalog/probe-meta/" + entry.attemptId + ".json")
   const unavailable = (): never => { blocked = true; throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
   const scopedUnavailable = (providerId: ProviderId): never => { blockedProviders.set(providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))); throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
   const issueFor = (attemptId: string, kind: "probe-meta" | "probe-launches") => `${kind}/${attemptId}.json`
@@ -53,7 +57,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     const acceptedEntry = known ?? accepted.find(entry => entry.record.launchAttemptId === attemptId)
     return (acceptedEntry ? ownerOf(acceptedEntry) : null)
       ?? metadata.find(meta => meta.attemptId === attemptId)?.providerId
-      ?? inventory.commands.flatMap(command => command.attempts).find(attempt => attempt.attemptId === attemptId)?.providerId
+      ?? [...inventory.commands, ...inventory.automatic].flatMap(command => command.attempts).find(attempt => attempt.attemptId === attemptId)?.providerId
       ?? inventory.metadata.find(meta => meta.attemptId === attemptId)?.providerId
       ?? null
   }
@@ -69,6 +73,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
   }
   async function verify(): Promise<void> {
     const inventory = await store.inventory()
+    await options.retirement?.validate()
     unscopedIssues.clear()
     for (const issue of inventory.issues) {
       const match = /^probe-(?:meta|launches)\/([0-9a-f-]+)\.json$/.exec(issue)
@@ -82,18 +87,18 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     const launchesByPath = new Map(inventory.launches.map(entry => [entry.path, entry]))
     const acceptedByPath = new Map(accepted.map(entry => [entry.path, entry]))
     for (const entry of inventory.launches) if (!isDeepStrictEqual(entry, acceptedByPath.get(entry.path))) markLaunch(entry, acceptedByPath.get(entry.path))
-    for (const entry of accepted) if (!isDeepStrictEqual(entry, launchesByPath.get(entry.path))) markLaunch(entry, entry)
+    for (const entry of accepted.filter(visibleLaunch)) if (!isDeepStrictEqual(entry, launchesByPath.get(entry.path))) markLaunch(entry, entry)
     const metadataByAttempt = new Map(inventory.metadata.map(entry => [entry.attemptId, entry]))
     const acceptedMetaByAttempt = new Map(metadata.map(entry => [entry.attemptId, entry]))
     for (const entry of inventory.metadata) if (entry.hostId !== paths.hostKey || !isDeepStrictEqual(entry, acceptedMetaByAttempt.get(entry.attemptId))) markIssue(issueFor(entry.attemptId, "probe-meta"), acceptedMetaByAttempt.get(entry.attemptId)?.providerId ?? providerFor(entry.attemptId, inventory))
-    for (const entry of metadata) if (!isDeepStrictEqual(entry, metadataByAttempt.get(entry.attemptId))) markIssue(issueFor(entry.attemptId, "probe-meta"), entry.providerId)
+    for (const entry of metadata.filter(visibleMeta)) if (!isDeepStrictEqual(entry, metadataByAttempt.get(entry.attemptId))) markIssue(issueFor(entry.attemptId, "probe-meta"), entry.providerId)
     const affected = (attemptId: string): boolean => {
       const providerId = providerFor(attemptId, inventory)
       return providerId !== null && blockedProviders.has(providerId) || unscopedIssues.has(issueFor(attemptId, "probe-meta")) || unscopedIssues.has(issueFor(attemptId, "probe-launches"))
     }
     const permitted = (entry: InventoryEntry) => !affected(entry.record.launchAttemptId)
     const permittedMeta = (entry: RetainedProbeMeta) => !affected(entry.attemptId)
-    if (!isDeepStrictEqual(inventory.launches.filter(permitted), accepted.filter(permitted)) || !isDeepStrictEqual(inventory.metadata.filter(permittedMeta), metadata.filter(permittedMeta))) unavailable()
+    if (!isDeepStrictEqual(inventory.launches.filter(permitted), accepted.filter(visibleLaunch).filter(permitted)) || !isDeepStrictEqual(inventory.metadata.filter(permittedMeta), metadata.filter(visibleMeta).filter(permittedMeta))) unavailable()
   }
   function accept(path: string, record: LaunchRecord): void {
     accepted = [...accepted.filter(e => e.path !== path), { path, record: structuredClone(record) }].sort((a, b) => a.path < b.path ? -1 : 1)
@@ -137,8 +142,8 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
   async function verifyDischarged(): Promise<void> {
     await verify()
     if (blocked || running) unavailable()
-    if (blockedProviders.size || unscopedIssues.size || accepted.some(e => e.record.phase !== "cleanup_verified") || [...terminal.values()].some(t => !t.exit || !t.close)) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-    for (const entry of [...accepted]) await discharge(entry)
+    if (blockedProviders.size || unscopedIssues.size || accepted.filter(visibleLaunch).some(e => e.record.phase !== "cleanup_verified") || [...terminal.values()].some(t => !t.exit || !t.close)) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
+    for (const entry of accepted.filter(visibleLaunch)) await discharge(entry)
   }
   async function run(input: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome> {
     const request = structuredClone(input), m = parseProbeMeta(request.meta), path = join(paths.persistentRoot, "catalog/probe-launches", m.attemptId + ".json")
@@ -259,5 +264,17 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     if (signal.aborted) error ??= failure(new CatalogError("INCOMPLETE"))
     return { request, record, result: error === null ? result : null, error }
   }
-  return { run, recover, verifyDischarged, issues: () => new Map(blockedProviders), diagnostics: () => [...unscopedIssues].sort() }
+  return { run, recover, verifyDischarged, issues: () => new Map(blockedProviders), diagnostics: () => [...unscopedIssues].sort(),
+    retentionPins() {
+      const attempts = new Set<string>()
+      for (const entry of accepted) if (blocked || running || entry.record.phase !== "cleanup_verified" || blockedProviders.has(ownerOf(entry)!) || unscopedIssues.has(issueFor(entry.record.launchAttemptId, "probe-launches"))) attempts.add(entry.record.launchAttemptId)
+      for (const meta of metadata) if (blocked || running || blockedProviders.has(meta.providerId) || unscopedIssues.has(issueFor(meta.attemptId, "probe-meta"))) attempts.add(meta.attemptId)
+      for (const [attempt, facts] of terminal) if (!facts.exit || !facts.close) attempts.add(attempt)
+      return { paths: [...attempts].flatMap(attempt => ["catalog/probe-meta/" + attempt + ".json", "catalog/probe-launches/" + attempt + ".json", "catalog/work/" + attempt]) }
+    },
+    forgetRemoved(entry) {
+      if (entry.path.startsWith("catalog/probe-launches/")) { accepted = accepted.filter(value => join(paths.persistentRoot, entry.path) !== value.path); terminal.delete(entry.path.split("/").at(-1)!.slice(0, -5)) }
+      if (entry.path.startsWith("catalog/probe-meta/")) metadata = metadata.filter(value => entry.path !== "catalog/probe-meta/" + value.attemptId + ".json")
+    },
+  }
 }

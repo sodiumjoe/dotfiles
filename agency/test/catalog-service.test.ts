@@ -21,6 +21,8 @@ async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: stri
   const queue = new MutationQueue(), store = createCatalogStore(root), generation = randomUUID(), paths = { hostKey: "c".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "socket") }
   const started: ProbeRequest[] = [], pending: Array<{ request: ProbeRequest; gate: ReturnType<typeof gate<ProbeOutcome>> }> = []
   const probes: ProbeRuntime = {
+    retentionPins: () => ({ paths: [] }),
+    forgetRemoved() {},
     recover: async () => undefined,
     verifyDischarged: async () => { if (blocked.size || pending.length) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
     async run(request, signal) {
@@ -268,6 +270,58 @@ test("external command disappearance latches unavailable and does not repair evi
   assert.equal((await f.service.list()).discovery.state, "blocked")
   await assert.rejects(f.service.refresh(randomUUID(), f.generation))
   assert.equal(await f.store.readCommand(command), null)
+})
+
+test("automatic discovery does not create an externally retryable receipt", async t => {
+  const f = await fixture(t)
+  await f.service.initialize(); f.service.startScheduling()
+  await f.waitProbe("claude-agent-acp")
+  assert.equal((await f.service.list()).refresh, null)
+  assert.equal((await f.store.inventory()).commands.length, 0)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  await until(async () => (await f.service.list()).discovery.state === "idle" ? true : undefined)
+  assert.equal((await f.service.list()).refresh, null)
+  assert.equal((await f.store.inventory()).commands.length, 0)
+})
+
+test("guessed private identities conflict and pending private restart does not replay", async t => {
+  const f = await fixture(t)
+  await f.service.initialize(); f.service.startScheduling(); await f.waitProbe("claude-agent-acp")
+  const privateId = (await f.store.inventory()).automatic[0]!.commandId
+  await assert.rejects(f.service.refresh(privateId, f.generation), { code: "COMMAND_CONFLICT" })
+  await f.service.freezeAndDrain(); f.service.close()
+  const started = f.started.length, next = createCatalogService({ ...f.options, generation: randomUUID() })
+  t.after(() => next.close())
+  await next.initialize()
+  assert.equal(f.started.length, started)
+  assert.equal((await f.store.readAutomatic(privateId))!.state, "interrupted")
+  assert.equal((await next.list()).refresh, null)
+})
+
+test("automatic publication retries retain pins and do not repeat provider work", async t => {
+  const f = await fixture(t), failed = gate(), write = f.store.writeAutomatic
+  let fail = true
+  f.store.writeAutomatic = async (record, expected) => { await write(record, expected); if (record.state === "completed" && fail) { failed.resolve(); throw new Error("automatic completion sync") } }
+  await f.service.initialize(); f.service.startScheduling(); await f.waitProbe("claude-agent-acp")
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await failed.promise
+  assert.ok(f.service.retentionPins().paths.some(path => path.startsWith("catalog/automatic/")))
+  fail = false; f.advance(30000)
+  await until(async () => (await f.service.list()).discovery.state === "idle" ? true : undefined)
+  assert.equal(f.started.length, 2)
+  assert.equal((await f.store.inventory()).automatic[0]!.state, "completed")
+})
+
+test("an explicit refresh joining an automatic batch retains its own snapshot", async t => {
+  const f = await fixture(t)
+  await f.service.initialize(); f.service.startScheduling()
+  await f.waitProbe("claude-agent-acp")
+  const command = randomUUID()
+  await f.service.refresh(command, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  const first = await f.finish(command), starts = f.started.length
+  assert.deepEqual(await f.service.refresh(command, f.generation), first)
+  assert.equal(f.started.length, starts)
+  assert.equal((await f.store.inventory()).commands.length, 1)
 })
 
 test("automatic refresh starts only after ready, polls configuration and backs off failures", async t => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { normalizeClaude, normalizeCodex } from "../src/catalog/normalize.js"
-import { isFresh, parseProbeMeta } from "../src/catalog/types.js"
+import { isFresh, parseProbeMeta, parseRetainedProbeMeta } from "../src/catalog/types.js"
 
 test("native model evidence preserves reasoning, aliases and unknown session modes", () => {
   assert.deepEqual(normalizeClaude([{ value: "alias", resolvedModel: "canonical", displayName: "Model", supportsEffort: true, supportedEffortLevels: ["low", "high"], supportsFastMode: true }]), [
@@ -33,4 +33,12 @@ test("probe metadata has only version-two process ownership fields", () => {
   const meta = { version: 2, hostId: "a".repeat(64), handlerGeneration: crypto.randomUUID(), commandId: crypto.randomUUID(), providerId: "codex-acp", attemptId, fingerprint: "b".repeat(64), workPath: `/tmp/catalog/work/${attemptId}` }
   assert.deepEqual(parseProbeMeta(meta), meta)
   for (const invalid of [{ ...meta, version: 1 }, { ...meta, leaseId: crypto.randomUUID() }, { ...meta, agentId: crypto.randomUUID() }]) assert.throws(() => parseProbeMeta(invalid), { code: "INVALID_CATALOG" })
+})
+
+test("probe origin is strict and legacy metadata remains readable", () => {
+  const attemptId = crypto.randomUUID(), base = { version: 2, hostId: "a".repeat(64), handlerGeneration: crypto.randomUUID(), commandId: crypto.randomUUID(), providerId: "codex-acp", attemptId, fingerprint: "b".repeat(64), workPath: `/tmp/catalog/work/${attemptId}` }
+  for (const receiptKind of ["explicit", "automatic"]) { const value = { ...base, version: 3, receiptKind }; assert.deepEqual(parseProbeMeta(value), value); assert.deepEqual(parseRetainedProbeMeta(value), value) }
+  const legacy = { ...base, version: 1, agentId: crypto.randomUUID(), leaseId: crypto.randomUUID() }
+  assert.deepEqual(parseRetainedProbeMeta(legacy), legacy)
+  for (const value of [{ ...base, receiptKind: "automatic" }, { ...base, version: 3 }, { ...base, version: 3, receiptKind: "other" }, { ...base, version: 3, receiptKind: "explicit", extra: true }]) assert.throws(() => parseRetainedProbeMeta(value))
 })
