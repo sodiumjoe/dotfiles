@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { createConnection } from "node:net"
-import { readFile, writeFile } from "node:fs/promises"
+import { readFile, readdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
 import { catalogHandlerFixture } from "./catalog-support.js"
@@ -31,12 +31,12 @@ test("real discovery retains provenance, stale failure history and removed model
   assert.deepEqual(before.providers.map(p => p.models[0]!.modes), [{ state: "unknown" }, { state: "unknown" }])
   assert.equal(before.providers[0]!.providerVersion, null)
   assert.equal(before.providers[0]!.sdkVersion, "0.3.232")
-  const inventory = await f.inventory()
+  const inventory = await until(async () => { const value = await f.inventory(); return !value.launches.length && !value.metadata.length && !value.issues.length ? value : undefined })
   assert.deepEqual(inventory.issues, [])
-  assert.equal(inventory.launches.length, 2)
-  for (const entry of inventory.launches) assert.equal(entry.record.phase, "cleanup_verified")
-  const claude = inventory.metadata.find(m => m.providerId === "claude-agent-acp")!
-  assert.deepEqual(JSON.parse(await readFile(join(claude.workPath, "sdk-observed.json"), "utf8")), { prompts: 0, cwd: claude.workPath, settingSources: [], mcpServers: {}, tools: [], persistSession: false })
+  assert.equal(inventory.launches.length, 0)
+  const evidenceName = (await readdir(f.root)).find(name => name.endsWith("-sdk-observed.json"))!
+  const evidence = JSON.parse(await readFile(join(f.root, evidenceName), "utf8"))
+  assert.deepEqual(evidence, { prompts: 0, cwd: join(f.paths.persistentRoot, "catalog/work", evidenceName.slice(0, 36)), settingSources: [], mcpServers: {}, tools: [], persistSession: false })
   await f.scenario("claude-agent-acp", { fail: true }); await f.scenario("codex-acp", { models: ["replacement"] })
   const second = randomUUID()
   await f.refresh(second); await f.waitCommand(second)
@@ -48,7 +48,7 @@ test("real discovery retains provenance, stale failure history and removed model
   assert.equal(after.providers[1]!.freshness, "fresh")
   const retry = await f.refresh(first)
   assert.equal(retry.command.snapshotId, initial.snapshotId)
-  assert.equal((await f.inventory()).launches.length, 4)
+  await until(async () => (await f.inventory()).launches.length === 0 ? true : undefined)
   assert.equal(JSON.stringify(after).includes("SECRET"), false)
 })
 
@@ -67,7 +67,8 @@ test("client disconnect leaves a durable refresh with exact retry and responsive
   await f.release("codex-acp")
   await f.waitCommand(commandId)
   assert.equal((await f.refresh(commandId)).command.state, "completed")
-  assert.equal((await f.inventory()).launches[0]!.record.launchAttemptId, active.record.launchAttemptId)
+  await until(async () => (await f.inventory()).launches.length === 0 ? true : undefined)
+  for (const identity of active.record.provider!.group.observed) assert.equal(await f.observe(identity.pid), null)
 })
 
 test("ordinary shutdown cancels a registered discovery group without agent flags", { timeout: 60000 }, async t => {
@@ -100,7 +101,7 @@ test("changed declared input discards a native candidate after cleanup", { timeo
   const provider = (await f.list()).providers.find(p => p.providerId === "codex-acp")!
   assert.equal(provider.error!.code, "CONFIG_CHANGED")
   assert.notEqual(provider.freshness, "fresh")
-  assert.equal((await f.inventory()).launches[0]!.record.phase, "cleanup_verified")
+  await until(async () => (await f.inventory()).launches.length === 0 ? true : undefined)
 })
 
 test("restart cleans the exact old probe and interrupts its command before new work", { timeout: 60000 }, async t => {
@@ -112,9 +113,11 @@ test("restart cleans the exact old probe and interrupts its command before new w
   assert.deepEqual(await f.adapter.readGroup(old.record.process!.pid), [])
   const replacement = await f.start()
   assert.notEqual(replacement.record.generation, old.record.generation)
-  assert.equal((await createCatalogStore(f.paths.persistentRoot).readCommand(commandId))!.state, "interrupted")
+  assert.equal(await createCatalogStore(f.paths.persistentRoot).readCommand(commandId), null)
   for (const identity of retained.record.provider!.group.observed) assert.equal(await f.adapter.readProcess(identity.pid), null)
-  await assert.rejects(f.refresh(commandId), { code: "COMMAND_CONFLICT" })
+  const ownedBeforeRetry = (await readdir(f.root)).filter(name => name.startsWith("owned-probe-"))
+  await assert.rejects(f.refresh(commandId, old.record.generation), { code: "STALE_HANDLER" })
+  assert.deepEqual((await readdir(f.root)).filter(name => name.startsWith("owned-probe-")), ownedBeforeRetry)
   await f.release("codex-acp")
   const fresh = randomUUID(); await f.refresh(fresh); await f.waitCommand(fresh)
   assert.equal((await f.list()).providers[1]!.verifiedHandlerGeneration, replacement.record.generation)

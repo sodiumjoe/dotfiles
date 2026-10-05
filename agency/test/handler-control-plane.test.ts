@@ -84,10 +84,11 @@ test("startup cleans an exact retained provider tree and independently proves ev
   assert.deepEqual(await f.adapter.readGroup(record.provider!.group.leader.pid), [])
 })
 
-test("a lost shutdown reply is resolved from receipts and cannot stop a later Handler", { timeout: 20000 }, async t => {
+test("a lost shutdown reply is resolved before receipt retirement and cannot stop a later Handler", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), first = await f.start(), cli = client(f)
   const call = cli.deps.call
-  cli.deps.call = async (env, request) => { const reply = await call(env, request); if (request.op === "shutdown") throw new ControlError("UNAVAILABLE", "reply lost"); return reply }
+  let shutdownCalls = 0
+  cli.deps.call = async (env, request) => { if (request.op === "shutdown") shutdownCalls++; const reply = await call(env, request); if (request.op === "shutdown") throw new ControlError("UNAVAILABLE", "reply lost"); return reply }
   assert.equal(await cli.run(["shutdown"]), 0)
   const completed = cli.result().result
   const receipt = await readShutdownReceipt(f.paths.persistentRoot, completed.commandId)
@@ -95,7 +96,11 @@ test("a lost shutdown reply is resolved from receipts and cannot stop a later Ha
   assert.equal(await f.observe(first.record.process!.pid), null)
   const second = await f.start()
   assert.notEqual(second.record.generation, first.record.generation)
-  assert.equal(await cli.run(["shutdown", "--command-id", completed.commandId, "--handler-generation", first.record.generation]), 0)
+  assert.equal(await readShutdownReceipt(f.paths.persistentRoot, completed.commandId), null)
+  assert.equal(shutdownCalls, 1)
+  assert.equal(await cli.run(["shutdown", "--command-id", completed.commandId, "--handler-generation", first.record.generation]), 69)
+  assert.equal(cli.result().error.code, "STALE_HANDLER")
+  assert.equal(shutdownCalls, 1)
   assert.equal((await f.start()).record.generation, second.record.generation)
 })
 

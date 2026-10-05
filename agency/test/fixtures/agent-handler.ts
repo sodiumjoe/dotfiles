@@ -20,6 +20,7 @@ import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../../src/
 import type { PlatformPaths } from "../../src/platform/paths.js"
 import type { ProviderProfile } from "../../src/catalog/types.js"
 import type { AgentHandlerOptions } from "../agent-support.js"
+import { fixtureRetention } from "../retention-support.js"
 
 process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as AgentHandlerOptions & { paths: PlatformPaths; profile: ProviderProfile }
@@ -42,10 +43,10 @@ const contract: LaunchContract = {
   permissionEvidence: "fixture-contract-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
 }
 try {
-  await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation,
+  await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: [contract],
     catalogFactory(context) {
-      const store = createCatalogStore(config.paths.persistentRoot)
+      const store = context.store
       const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
       return { ...service, async initialize() {
         const evidence = await observeConfig(config.profile)
@@ -65,7 +66,7 @@ try {
           await sync()
         }
         return handle
-      } })
+      } }, input.retirement)
       return createAgentService({ ...input, store: { ...base, async writeAgent(next, expected) {
         await base.writeAgent(next, expected)
         if (next.phase === "ready") await startupHang("publication")

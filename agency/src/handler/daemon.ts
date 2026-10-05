@@ -13,7 +13,7 @@ import { ControlError, PROTOCOL, errorReply, type HandlerStatus, type ControlReq
 import { serveProtocols } from "../control/wire.js"
 import { CATALOG_PROTOCOL, catalogErrorReply, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
 import { createCatalogService, type CatalogService } from "../catalog/service.js"
-import { createCatalogStore } from "../catalog/store.js"
+import { createCatalogStore, type CatalogStore } from "../catalog/store.js"
 import { createProbeRuntime } from "../catalog/probes.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
@@ -25,6 +25,8 @@ import { ensurePrivateChild } from "./environment.js"
 import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type LaunchIssue } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
+import { createRetentionStore, type RetirementView, type RetentionFileSystem } from "../retention/store.js"
+import { authorizeRetirement, authorizedRetirementView, createRetentionCoordinator, type RetentionCoordinator } from "../retention/coordinator.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -34,9 +36,10 @@ export type HandlerOptions = {
   status: Duplex
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
-  catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
+  catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; store: CatalogStore; retirement: RetirementView; onTerminal(): void; cleanupIssues(): readonly string[]; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
   agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
   launchContracts?: readonly LaunchContract[]
+  retention?: { now?: () => number; filesystem?: RetentionFileSystem }
 }
 
 export function receiveStart(gate: Duplex, status: Duplex, timeoutMs = 5000): Promise<void> {
@@ -134,6 +137,13 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const live = await selfIdentity(options.adapter)
     if (!isDeepStrictEqual(published, expected) || !sameProcess(self, live)) throw new Error("Handler publication mismatch")
     current = published
+    const root = options.paths.persistentRoot, retentionStore = createRetentionStore(root, options.paths.hostKey, options.generation, options.retention?.filesystem)
+    retentionStore.view = authorizedRetirementView(retentionStore, intent => authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter, pins: [...(catalog?.retentionPins().paths ?? []), ...(agents?.retentionPins().paths ?? [])] }, intent))
+    let coordinator: RetentionCoordinator | undefined, bootstrapIssue: string | undefined
+    try { await retentionStore.resume({ authorize: intent => authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter }, intent), removed() {} }) }
+    catch (error) { bootstrapIssue = String(error).slice(0, 480) }
+    const cleanupIssues = () => coordinator?.diagnostics() ?? (bootstrapIssue ? [bootstrapIssue] : [])
+    const onTerminal = () => coordinator?.request()
     await sendStatus(options.status, { type: "gate_released", generation: options.generation }).catch(() => undefined)
     const dispatch = async (request: ControlRequest): Promise<ControlReply> => {
       if (request.handlerGeneration !== options.generation) return errorReply({ ...request, handlerGeneration: options.generation }, new ControlError("STALE_HANDLER"))
@@ -174,7 +184,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     current = { ...published, writer: "handler", phase: "socket_bound" }
     await writeHandlerRecord(options.recordPath, current)
     const directory = join(options.paths.persistentRoot, "launches")
-    const initialInventory = await inventoryLaunchState(directory)
+    const initialInventory = await inventoryLaunchState(directory, retentionStore.view, root)
     entries = initialInventory.records
     state.issues = initialInventory.issues
     state.phase = "reconciling"
@@ -201,7 +211,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       await writeHandlerRecord(options.recordPath, current)
     }
     await options.onPhase?.("ready")
-    const checkedInventory = await inventoryLaunchState(directory)
+    const checkedInventory = await inventoryLaunchState(directory, retentionStore.view, root)
     const initialPaths = new Set(entries.map(entry => entry.path))
     if (checkedInventory.records.some(entry => !initialPaths.has(entry.path))) throw new Error("RETAINED_INVENTORY_CHANGED")
     for (const [path, expected] of successful) if (!isDeepStrictEqual(checkedInventory.records.find(entry => entry.path === path)?.record, expected)) throw new Error("RETAINED_INVENTORY_CHANGED")
@@ -216,18 +226,21 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     state.issues = [...checkedInventory.issues, ...reconciliationIssues]
     current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
     await writeHandlerRecord(options.recordPath, current)
-    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(trusted), reconciliationIssues }
-    const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
+    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(trusted), reconciliationIssues, retirement: retentionStore.view, root }
+    const catalogStore = createCatalogStore(root, undefined, retentionStore.view), agentStore = createAgentStore(root, undefined, retentionStore.view)
+    const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, store: catalogStore, retirement: retentionStore.view, onTerminal, cleanupIssues, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
     else {
-      const store = createCatalogStore(options.paths.persistentRoot)
+      const store = catalogStore
       const probes = createProbeRuntime({ ...catalogContext, queue: mutations.queue, store, canStart: () => catalogContext.isReady() && !catalogContext.shutdownPending() })
       catalog = createCatalogService({ ...catalogContext, queue: mutations.queue, store, probes })
     }
     await catalog.initialize()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
-    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: createAgentStore(options.paths.persistentRoot) })
+    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
     await agents.initialize()
+    coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, ...(options.retention?.now ? { now: options.retention.now } : {}) })
+    await coordinator.initialize()
     current = { ...current, phase: "ready" }
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")

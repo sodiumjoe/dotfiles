@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile } from "node:fs/promises"
+import { mkdir, writeFile, readFile, readdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
@@ -64,7 +64,8 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
     }
     const inventory = await createCatalogStore(f.paths.persistentRoot).inventory()
     assert.deepEqual(inventory.issues, [])
-    for (const entry of inventory.launches) {
+    const independent = await Promise.all((await readdir(f.root)).filter(name => /^owned-probe-[0-9a-f-]+\.json$/.test(name)).map(async name => ({ path: join(f.root, name), record: await readLaunchRecordForReconciliation(join(f.root, name)) })))
+    for (const entry of [...inventory.launches, ...independent]) {
       const path = join(f.root, entry.record.launchAttemptId + "-catalog-cleanup.json")
       await writeLaunchRecord(path, entry.record)
       assert.equal((await reconcileRecord(path, f.adapter, entry.record)).record.phase, "cleanup_verified")
@@ -96,9 +97,9 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
   if (options.enabled?.length !== 0) await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: profiles }), { mode: 0o600 })
   await writeFile(f.configPath, JSON.stringify({ paths: f.paths, catalog: { profiles, scenario: options.scenario ?? "normal" } }), { mode: 0o600 })
   const inventory = () => createCatalogStore(f.paths.persistentRoot).inventory()
-  const call = async (operation: { op: "model_list" } | { op: "model_refresh"; commandId: string }) => {
+  const call = async (operation: { op: "model_list" } | { op: "model_refresh"; commandId: string }, generation?: string) => {
     const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
-    const request: CatalogRequest = { protocol: CATALOG_PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.generation, ...operation }
+    const request: CatalogRequest = { protocol: CATALOG_PROTOCOL, requestId: randomUUID(), handlerGeneration: generation ?? handler.generation, ...operation }
     const reply = await exchangeCatalog(createConnection(f.paths.handlerSocketPath), request)
     if (!reply.ok) throw new ControlError(reply.error.code, reply.error.message)
     return reply.result
@@ -106,7 +107,7 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
   return {
     ...f, profiles, inventory,
     async list() { const result = await call({ op: "model_list" }); assert.equal(result.state, "catalog"); if (result.state !== "catalog") throw new Error("wrong result"); return result },
-    async refresh(commandId: string) { const result = await call({ op: "model_refresh", commandId }); if (result.state !== "refresh") throw new Error("wrong result"); return result },
+    async refresh(commandId: string, generation?: string) { const result = await call({ op: "model_refresh", commandId }, generation); if (result.state !== "refresh") throw new Error("wrong result"); return result },
     waitCommand: (commandId: string) => until(async () => {
       try { const command = await createCatalogStore(f.paths.persistentRoot).readCommand(commandId); return command && command.state !== "pending" ? command : undefined }
       catch (error) { if (error instanceof CatalogError && error.code === "INVALID_CATALOG") return undefined; throw error }

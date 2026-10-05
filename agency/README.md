@@ -141,19 +141,22 @@ On restart, Agency classifies each retained launch independently. Exact owned pr
 
 ## Retention and cleanup
 
-Persistent state lives under `${XDG_STATE_HOME:-$HOME/.local/state}/agency/hosts/<host-key>`. Agent definitions, lifecycle command receipts, launch records, shutdown receipts, catalog snapshots, probe metadata, and probe work directories are retained without automatic age-based pruning. Individual records are bounded, but accumulated history is not. Completing a turn does not stop its agent, and stopping an agent preserves its native session identity for explicit restore. Neither inactivity nor catalog staleness authorizes session deletion or process termination.
+Persistent state lives under `${XDG_STATE_HOME:-$HOME/.local/state}/agency/hosts/<host-key>`. Agency cleans disposable state automatically after operations finish and during Handler startup. Background discovery keeps the current catalog and unresolved recovery evidence, not retryable history for each scheduled refresh. Explicit command receipts and their original results remain available for the lifetime of their Handler generation. Unreferenced history from retired generations is removed only after reconciliation and verified process absence.
 
-Catalog retention also has an availability consequence. Newly accepted refresh commands are refused once 4,096 command receipts are retained, and catalog directory inventories reject more than 4,096 entries. The Handler automatically refreshes stale configured catalog evidence while running, so this history can accumulate without editor refresh actions. The ten-minute catalog freshness window is not a storage-retention policy.
+Native-session records remain available for explicit restore, including stopped sessions. Agency keeps their creation and latest launch references rather than every intermediate operation. Failed or interrupted starts without a native session become eligible after seven days from their latest terminal publication; current-generation receipts and unresolved cleanup still prevent removal. A quiet Handler may defer this age-based cleanup until another operation finishes or it restarts. Completing a turn does not stop its agent. The ten-minute catalog freshness window does not expire sessions or command receipts.
+
+Cleanup never terminates processes or removes provider-native sessions, logs, caches, or separately retained qualification evidence. Interrupted deletion retains a transient cleanup intent and resumes on startup. Unsafe or changed state remains visible as an issue. Cleanup storage issues are separate from process uncertainty and do not establish that a verified absent provider is alive. There is no fixed total-storage cap: retained sessions, manual receipts in a long-lived Handler, and unresolved failures can still grow.
 
 Agency does not write an append-only production transcript or log file. Handler stdout/stderr are discarded, and provider/probe output is consumed through bounded transports rather than copied into Agency log files. Native providers inherit the caller's home and configuration, so their own sessions, logs, and caches remain provider-owned; Agency neither rotates nor deletes them. Acceptance and qualification reports are separately retained in their selected evidence directories.
 
-There is currently no supported archive or prune command. Do not delete individual state files by age: agent recovery requires linked creation commands and launch evidence, catalog receipts reference snapshots and probes, and a running Handler checks retained state for unexpected removal. Any future cleanup must preserve active and cleanup-uncertain targets, retain receipt evidence or explicit expired-command rejection, and remove related history consistently. Forgetting a stopped session must be an explicit operation because it removes Agency's restore entry point; deleting its provider-native history requires separate ownership and retention rules.
+There is no supported archive or prune command. Do not delete individual state files by age: recovery requires linked creation commands and launch evidence, and a running Handler detects unexpected removal. Missing retired receipts are stale or unavailable, not permission to replay or retarget a command against the replacement Handler. Forgetting a stopped session must be an explicit operation because it removes Agency's restore entry point; deleting its provider-native history requires separate ownership and retention rules.
 
 ## Verification
 
 Use Node 24.13.0 and run the package scripts sequentially:
 
 ```text
+npm run test:retention
 npm run test:agent
 npm run test:agent-integration
 npm run test:attachment
@@ -176,7 +179,7 @@ Run `./test-nvim.sh` from the repository root for the editor suite. Node-owned N
 
 Providers run with the normal devbox user's filesystem and socket access. The `deny-all` permission profile governs ACP permission callbacks; it is not an operating-system sandbox. Provider helpers that detach from the recorded process group are outside Agency's cleanup ownership.
 
-Agency does not impose an agent-count or launch-count admission limit. Agent record and command inventory has no fixed entry-count limit, but other protocol and catalog payloads remain bounded. Durable histories are not automatically pruned; agent inventory cost and storage grow with retained history, and operating-system resource exhaustion is reported explicitly.
+Agency does not impose an agent-count, launch-count, or catalog-history admission limit. Inventories are validated without truncating at a fixed count, but individual records and protocol payloads remain bounded. A linked cleanup intent is limited to 1 MiB; an oversized group is retained with a diagnostic rather than partially authorized. Inventory cost and storage grow with protected history, and operating-system resource exhaustion is reported explicitly.
 
 Provider restoration depends on native persisted session state and ACP `session/load`. It cannot restore an in-flight RPC, repair deleted provider state, or guarantee that a provider version can read state created by another version.
 

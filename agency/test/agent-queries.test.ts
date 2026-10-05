@@ -108,6 +108,11 @@ test("active pages include starting before process ownership and stopping during
   page = await f.service.page({ limit: 100, activeOnly: true })
   assert.equal(page.agents[0]!.record.phase, "stopping")
   assert.equal(page.agents[0]!.live, false)
+  const stopCommands = (await f.store.inventory()).commands.filter(command => command.op === "stop")
+  const pins = f.service.retentionPins().paths
+  assert.ok(pins.includes("agents/commands/" + stopCommands[0]!.commandId + ".json"))
+  assert.ok(pins.includes("agents/records/" + started.command.target!.agentId + ".json"))
+  assert.equal(pins.includes("agents/records/" + stopCommands[0]!.commandId + ".json"), false)
   f.releaseCleanup()
   await stopping
   await until(async () => (await f.service.page({ limit: 100, activeOnly: true })).agents.length === 0 ? true : undefined)
@@ -131,4 +136,20 @@ test("durable mutation invalidates a service cursor without changing directory s
   assert.ok(page.nextCursor)
   await f.service.stop({ ...first.command.target!, commandId: randomUUID() })
   await assert.rejects(f.service.page({ limit: 1, cwd: f.workspace, cursor: page.nextCursor }), { code: "RESYNC_REQUIRED" })
+})
+
+test("logically retired cached agents are absent from list and page queries", async t => {
+  const hidden = new Set<string>(), retirement = { validate: async () => undefined, hides: (path: string) => hidden.has(path) }
+  const f = await agentServiceFixture(t, { retirement })
+  const started = await f.service.start(f.input)
+  await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
+  await f.service.stop({ ...started.command.target!, commandId: randomUUID() })
+  await until(async () => (await f.service.list()).agents[0]?.record.phase === "stopped" ? true : undefined)
+  const inventory = await f.store.inventory()
+  for (const record of inventory.agents) hidden.add("agents/records/" + record.definition.agentId + ".json")
+  for (const command of inventory.commands) hidden.add("agents/commands/" + command.commandId + ".json")
+  try {
+    assert.deepEqual((await f.service.list()).agents, [])
+    assert.deepEqual((await f.service.page({ limit: 100 })).agents, [])
+  } finally { hidden.clear() }
 })

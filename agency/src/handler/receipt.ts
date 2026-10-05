@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
-import { open, rename, rm, type FileHandle } from "node:fs/promises"
+import { lstat, open, opendir, rename, rm, type FileHandle } from "node:fs/promises"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { ControlError, object, exactKeys, string, uuid, hostId, integer } from "../control/protocol.js"
@@ -8,6 +8,7 @@ import { assertPrivateDirectory } from "../platform/private-state.js"
 import { parseAgencyLaunchMarker } from "../platform/launch-marker.js"
 import { processBirthStart, type ProcessIdentity } from "../platform/types.js"
 import { ensurePrivateChild } from "./environment.js"
+import type { RetirementView } from "../retention/store.js"
 
 export type ShutdownReceipt = { version: 1; commandId: string; hostId: string; handlerGeneration: string; handlerIdentity: ProcessIdentity; stopAgents: boolean; state: "accepted" }
 export type ReceiptFileSystem = { open(path: string, flags: number, mode?: number): Promise<FileHandle>; rename: typeof rename; rm: typeof rm }
@@ -44,6 +45,29 @@ export async function readShutdownReceipt(root: string, commandId: string): Prom
     return result
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error }
   finally { await handle?.close() }
+}
+
+export async function readShutdownInventory(root: string, retirement?: RetirementView): Promise<{ receipts: ShutdownReceipt[]; issues: string[] }> {
+  const result: { receipts: ShutdownReceipt[]; issues: string[] } = { receipts: [], issues: [] }, directory = join(root, "shutdown")
+  try {
+    await assertPrivateDirectory(root); await retirement?.validate()
+    try { await assertPrivateDirectory(directory) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return result; throw error }
+    for await (const entry of await opendir(directory)) {
+      const path = "shutdown/" + entry.name
+      if (retirement?.hides(path)) continue
+      try {
+        const stat = await lstat(join(root, path))
+        if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0) throw new Error("unsafe shutdown entry")
+        if (/^\.[0-9a-f-]{36}\.[0-9a-f-]{36}\.tmp$/.test(entry.name)) continue
+        if (!entry.name.endsWith(".json")) throw new Error("invalid shutdown filename")
+        const receipt = await readShutdownReceipt(root, uuid(entry.name.slice(0, -5)))
+        if (!receipt) throw new Error("missing shutdown receipt")
+        result.receipts.push(receipt)
+      } catch { result.issues.push(path) }
+    }
+  } catch { result.issues.push("shutdown") }
+  result.receipts.sort((a, b) => a.commandId.localeCompare(b.commandId))
+  return result
 }
 
 export async function writeShutdownReceipt(root: string, value: ShutdownReceipt, filesystem: ReceiptFileSystem = { open, rename, rm }): Promise<void> {

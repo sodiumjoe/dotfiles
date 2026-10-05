@@ -21,6 +21,7 @@ export type AgentStore = {
   verifyDurability(kind: "agent" | "command"): Promise<void>
   inventory(): Promise<AgentInventory>
   forgetRemoved(entry: RemovalEvidence): void
+  terminalTimes(agentId: string, commandIds: readonly string[]): Promise<number[] | null>
 }
 type FileEvidence = { bytes: Buffer; identity: string }
 const absent = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
@@ -142,6 +143,21 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   return {
     readAgent, readCommand, inventory,
     forgetRemoved(entry) { known.delete(join(root, entry.path)) },
+    async terminalTimes(agentId, commandIds) {
+      try {
+        const paths = [join(directory, "records", id(agentId) + ".json"), ...commandIds.map(value => join(directory, "commands", id(value) + ".json"))], times: number[] = []
+        for (const path of paths) {
+          const before = await evidence(path)
+          if (!before) return null
+          const stat = await lstat(path, { bigint: true })
+          if (!isDeepStrictEqual(before, await evidence(path))) return null
+          const time = Number(stat.mtimeNs) / 1000000
+          if (!Number.isFinite(time) || time < 0) return null
+          times.push(time)
+        }
+        return times
+      } catch { return null }
+    },
     async verifyDurability(kind) {
       const path = join(directory, kind === "agent" ? "records" : "commands")
       if (!await checkDirectory(path)) return

@@ -33,7 +33,7 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
     if (previous.hostId !== context.record.hostId || !isDeepStrictEqual(previous.handlerIdentity, context.record.process)) throw new ControlError("COMMAND_CONFLICT")
   }
   const directory = join(context.paths.persistentRoot, "launches")
-  const inventory = await inventoryLaunchState(directory), entries = inventory.records
+  const inventory = await inventoryLaunchState(directory, context.mutations.retirement, context.mutations.root), entries = inventory.records
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
   context.state.issues = [...inventory.issues, ...(context.mutations.reconciliationIssues ?? [])]
   if (!request.stopAgents && (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified"))) throw new ControlError("ACTIVE_AGENTS", "unverified launches remain; inspect status")
@@ -50,7 +50,7 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
     }
     if (failures.length) throw new ControlError("INCOMPLETE", "one or more launch cleanups remain unverified")
   }
-  const checked = await inventoryLaunchState(directory)
+  const checked = await inventoryLaunchState(directory, context.mutations.retirement, context.mutations.root)
   if (!isDeepStrictEqual(checked.records, entries)) throw new ControlError("INCOMPLETE", "retained inventory changed")
   context.state.issues = [...checked.issues, ...(context.mutations.reconciliationIssues ?? [])]
   context.state.launches = summarizeLaunches(entries.map(entry => entry.record))
