@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { lstat, mkdir, open, opendir, rename, rm, type FileHandle } from "node:fs/promises"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, relative } from "node:path"
+import type { RemovalEvidence, RetirementView } from "../retention/store.js"
 import { isDeepStrictEqual } from "node:util"
 import { decodeJson, readBoundedFile } from "../catalog/config.js"
 import type { CatalogFileSystem } from "../catalog/store.js"
@@ -19,6 +20,7 @@ export type AgentStore = {
   writeCommand(next: AgentCommand, expected: AgentCommand | null): Promise<void>
   verifyDurability(kind: "agent" | "command"): Promise<void>
   inventory(): Promise<AgentInventory>
+  forgetRemoved(entry: RemovalEvidence): void
 }
 type FileEvidence = { bytes: Buffer; identity: string }
 const absent = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
@@ -26,7 +28,7 @@ function unavailable(): never { throw new AgentError("INVALID_AGENT_STATE") }
 const conflict = (): never => { throw new AgentError("COMMAND_CONFLICT") }
 const edges: Record<AgentPhase, AgentPhase[]> = { starting: ["ready", "stopping", "failed", "interrupted"], ready: ["recoverable", "stopping", "failed", "interrupted"], recoverable: ["restoring", "stopping", "failed", "interrupted"], restoring: ["ready", "recoverable", "stopping", "failed", "interrupted"], stopping: ["stopped", "recoverable", "failed", "interrupted"], stopped: ["restoring"], failed: [], interrupted: [] }
 
-export function createAgentStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): AgentStore {
+export function createAgentStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }, retirement?: RetirementView): AgentStore {
   const directory = join(root, "agents")
   const known = new Map<string, "agent" | "command">()
   async function checkDirectory(path: string): Promise<boolean> {
@@ -70,6 +72,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   async function inventory(): Promise<AgentInventory> {
     const result: AgentInventory = { agents: [], legacyAgents: [], commands: [], issues: [] }, seen = new Set<string>()
     try {
+      await retirement?.validate()
       for (const name of await names(directory)) {
         if (name === "records" || name === "commands") continue
         if (name !== "provider-state") result.issues.push({ kind: "unknown", id: null, path: join(directory, name), message: "unknown agent state entry" })
@@ -77,6 +80,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
       for (const kind of ["records", "commands"] as const) {
         for (const name of await names(join(directory, kind))) {
           const path = join(directory, kind, name)
+          if (retirement?.hides(relative(root, path))) continue
           seen.add(path)
           try {
             const stat = await lstat(path)
@@ -99,7 +103,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
           }
         }
       }
-      for (const [path, kind] of known) if (!seen.has(path)) result.issues.push({ kind, id: basename(path, ".json"), path, message: "missing agent state entry" })
+      for (const [path, kind] of known) if (!seen.has(path) && !retirement?.hides(relative(root, path))) result.issues.push({ kind, id: basename(path, ".json"), path, message: "missing agent state entry" })
     } catch (error) { result.issues.push({ kind: "unknown", id: null, path: directory, message: String(error).slice(0, 512) }) }
     return result
   }
@@ -137,6 +141,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   }
   return {
     readAgent, readCommand, inventory,
+    forgetRemoved(entry) { known.delete(join(root, entry.path)) },
     async verifyDurability(kind) {
       const path = join(directory, kind === "agent" ? "records" : "commands")
       if (!await checkDirectory(path)) return

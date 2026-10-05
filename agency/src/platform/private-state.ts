@@ -108,7 +108,7 @@ function launchPhase(value: unknown): LaunchPhase {
   throw new Error("launch phase is invalid")
 }
 
-function parseLaunchRecord(value: unknown, strict: boolean): LaunchRecord {
+export function parseLaunchRecord(value: unknown, strict: boolean): LaunchRecord {
   const source = object(value, "LaunchRecord")
   const fields = {
     handlerGeneration: nonempty(source.handlerGeneration, "handlerGeneration"),

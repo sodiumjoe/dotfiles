@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
-import { chmod, link, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, link, mkdir, open, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises"
+import { createRetentionStore } from "../src/retention/store.js"
 import { join } from "node:path"
 import { createAgentStore } from "../src/agent/store.js"
 import { commitLaunchTransition, restoreUninvokedLaunch, type LaunchContext } from "../src/handler/launch-transitions.js"
@@ -15,6 +16,20 @@ import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "
 import { privateRoot } from "./control-support.js"
 
 const filesystem = { open, rename, rm, mkdir }
+
+test("authorized command retirement preserves unrelated disappearance checks", async t => {
+  const root = await privateRoot(t), a = sampleCommand(), b = { ...sampleCommand(), commandId: randomUUID() }
+  b.input = { ...b.input, commandId: b.commandId }
+  const retention = createRetentionStore(root, a.hostId, a.handlerGeneration), store = createAgentStore(root, undefined, retention.view)
+  await store.writeCommand(a, null); await store.writeCommand(b, null)
+  assert.deepEqual((await store.inventory()).issues, [])
+  await retention.prepare({ paths: ["agents/commands/" + a.commandId + ".json"], launches: [], handlers: [] })
+  assert.deepEqual((await store.inventory()).commands, [b])
+  await retention.resume({ authorize: async () => undefined, removed: entry => store.forgetRemoved(entry) })
+  assert.deepEqual((await store.inventory()).issues, [])
+  await unlink(join(root, "agents/commands", b.commandId + ".json"))
+  assert.equal((await store.inventory()).issues[0]!.id, b.commandId)
+})
 
 test("missing agent storage is read-only and valid updates cannot mutate specification or session", async t => {
   const root = await privateRoot(t), store = createAgentStore(root), initial = sampleAgent()

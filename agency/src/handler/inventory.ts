@@ -1,5 +1,6 @@
 import { lstat, readdir } from "node:fs/promises"
-import { join } from "node:path"
+import { join, relative } from "node:path"
+import type { RetirementView } from "../retention/store.js"
 import { isDeepStrictEqual } from "node:util"
 import { UUID, type LaunchSummary } from "../control/protocol.js"
 import { assertPrivateDirectory, readLaunchRecordForReconciliation } from "../platform/private-state.js"
@@ -9,12 +10,14 @@ export type InventoryEntry = { path: string; record: LaunchRecord }
 export type LaunchIssue = { path: string; launchAttemptId: string | null; message: string }
 export type LaunchInventory = { records: InventoryEntry[]; issues: LaunchIssue[] }
 
-export async function inventoryLaunchState(directory: string): Promise<LaunchInventory> {
+export async function inventoryLaunchState(directory: string, retirement?: RetirementView, root?: string): Promise<LaunchInventory> {
+  await retirement?.validate()
   await assertPrivateDirectory(directory)
   const records: InventoryEntry[] = [], issues: LaunchIssue[] = [], ids = new Set<string>()
   for (const name of (await readdir(directory)).sort()) {
     const id = name.endsWith(".json") ? name.slice(0, -5) : ""
     const path = join(directory, name)
+    if (retirement && root && retirement.hides(relative(root, path))) continue
     try {
       const metadata = await lstat(path)
       if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== process.getuid!() || (metadata.mode & 0o077) !== 0) throw new Error("unsafe retained inventory entry")

@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util"
+import { join, relative } from "node:path"
+import type { RemovalEvidence, RetirementView } from "../retention/store.js"
 import type { HandlerStatus } from "../control/protocol.js"
 import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type LaunchIssue } from "./inventory.js"
 
@@ -11,15 +13,23 @@ export class MutationQueue {
   }
 }
 
-export type HandlerMutations = { queue: MutationQueue; accepted: InventoryEntry[]; issues?: LaunchIssue[]; reconciliationIssues?: LaunchIssue[] }
+export type HandlerMutations = { queue: MutationQueue; accepted: InventoryEntry[]; issues?: LaunchIssue[]; reconciliationIssues?: LaunchIssue[]; retirement?: RetirementView; root?: string }
+
+export function forgetRemovedLaunch(mutations: HandlerMutations, entry: RemovalEvidence): void {
+  if (!mutations.root) return
+  const path = join(mutations.root, entry.path)
+  mutations.accepted = mutations.accepted.filter(e => e.path !== path)
+  if (mutations.issues) mutations.issues = mutations.issues.filter(e => e.path !== path)
+  if (mutations.reconciliationIssues) mutations.reconciliationIssues = mutations.reconciliationIssues.filter(e => e.path !== path)
+}
 
 export function confirmReconciledLaunch(mutations: HandlerMutations, path: string): void {
   if (mutations.reconciliationIssues) mutations.reconciliationIssues = mutations.reconciliationIssues.filter(issue => issue.path !== path)
 }
 
 export async function refreshLaunchState(state: HandlerStatus, mutations: HandlerMutations, directory: string): Promise<void> {
-  const current = await inventoryLaunchState(directory)
-  const expected = new Map(mutations.accepted.map(entry => [entry.path, entry.record]))
+  const current = await inventoryLaunchState(directory, mutations.retirement, mutations.root)
+  const expected = new Map(mutations.accepted.filter(entry => !mutations.root || !mutations.retirement?.hides(relative(mutations.root, entry.path))).map(entry => [entry.path, entry.record]))
   const observed = new Map(current.records.map(entry => [entry.path, entry.record]))
   mutations.issues = [...current.issues, ...(mutations.reconciliationIssues ?? [])]
   for (const [path, record] of observed) if (!isDeepStrictEqual(record, expected.get(path))) mutations.issues.push({ path, launchAttemptId: record.launchAttemptId, message: "RETAINED_INVENTORY_CHANGED" })

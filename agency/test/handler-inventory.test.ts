@@ -1,11 +1,33 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises"
+import { createRetentionStore } from "../src/retention/store.js"
+import { forgetRemovedLaunch, MutationQueue, refreshLaunchState, type HandlerMutations } from "../src/handler/mutations.js"
+import type { HandlerStatus } from "../src/control/protocol.js"
 import { join } from "node:path"
 import test from "node:test"
 import { inventoryLaunches, inventoryLaunchState, summarizeLaunches, verifyInventory } from "../src/handler/inventory.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import { privateRoot, launch } from "./control-support.js"
+
+test("launch retirement forgets only exact authorized paths", async t => {
+  const root = await privateRoot(t), directory = join(root, "launches"), a = launch(), b = launch()
+  await mkdir(directory, { mode: 0o700 })
+  for (const record of [a, b]) await writeLaunchRecord(join(directory, record.launchAttemptId + ".json"), record)
+  const retention = createRetentionStore(root, "a".repeat(64), randomUUID())
+  const mutations: HandlerMutations = { root, retirement: retention.view, queue: new MutationQueue(), accepted: await inventoryLaunches(directory) }
+  const state: HandlerStatus = { hostId: "a".repeat(64), handlerGeneration: randomUUID(), phase: "ready", capabilities: ["status", "doctor", "shutdown"], launches: [], reconciliation: { classified: 0, total: 0, uncertain: 0 } }
+  const path = "launches/" + a.launchAttemptId + ".json"
+  await retention.prepare({ paths: [path], launches: [{ path, record: a }], handlers: [] })
+  await refreshLaunchState(state, mutations, directory)
+  assert.equal(mutations.issues!.length, 0)
+  await retention.resume({ authorize: async () => undefined, removed: entry => forgetRemovedLaunch(mutations, entry) })
+  await refreshLaunchState(state, mutations, directory)
+  assert.equal(mutations.issues!.length, 0)
+  await unlink(join(directory, b.launchAttemptId + ".json"))
+  await refreshLaunchState(state, mutations, directory)
+  assert.equal(mutations.issues![0]!.launchAttemptId, b.launchAttemptId)
+})
 
 test("inventory preserves incomplete and semantically invalid launch evidence", async t => {
   const root = await privateRoot(t), first = launch(), second = launch({ phase: "active" })

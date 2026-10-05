@@ -7,6 +7,7 @@ import test from "node:test"
 import { createCatalogStore, type CatalogFileSystem } from "../src/catalog/store.js"
 import { parseSnapshot, type CatalogSnapshot, type ProbeMeta, type RefreshCommand } from "../src/catalog/types.js"
 import { privateRoot } from "./control-support.js"
+import { createRetentionStore } from "../src/retention/store.js"
 
 const hostId = "a".repeat(64), generation = randomUUID(), fingerprint = "b".repeat(64)
 const snapshot = (): CatalogSnapshot => ({ version: 1, hostId, handlerGeneration: generation, snapshotId: randomUUID(), createdAt: 100, providers: [] })
@@ -243,5 +244,19 @@ test("current-pointer temporary files must be private regular single-link entrie
   await writeFile(path, "retained", { mode: 0o600 })
   assert.deepEqual((await store.inventory()).issues, [])
   await chmod(path, 0o644)
+  assert.ok((await store.inventory()).issues.length > 0)
+})
+
+test("authorized snapshot retirement preserves detection of unrelated external disappearance", async t => {
+  const root = await privateRoot(t), retention = createRetentionStore(root, hostId, generation)
+  const store = createCatalogStore(root, undefined, retention.view), a = snapshot(), b = snapshot()
+  await store.writeSnapshot(a); await store.writeSnapshot(b)
+  assert.deepEqual((await store.inventory()).issues, [])
+  const path = "catalog/snapshots/" + a.snapshotId + ".json"
+  await retention.prepare({ paths: [path], launches: [], handlers: [] })
+  assert.deepEqual((await store.inventory()).issues, [])
+  await retention.resume({ authorize: async () => undefined, removed: entry => store.forgetRemoved(entry) })
+  assert.deepEqual((await store.inventory()).issues, [])
+  await unlink(join(root, "catalog/snapshots", b.snapshotId + ".json"))
   assert.ok((await store.inventory()).issues.length > 0)
 })

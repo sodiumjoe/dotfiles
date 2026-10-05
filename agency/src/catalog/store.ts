@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { lstat, mkdir, open, opendir, rename, rm, type FileHandle } from "node:fs/promises"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, relative } from "node:path"
+import type { RemovalEvidence, RetirementView } from "../retention/store.js"
 import { isDeepStrictEqual } from "node:util"
 import { UUID } from "../control/protocol.js"
 import type { InventoryEntry } from "../handler/inventory.js"
@@ -21,10 +22,11 @@ export type CatalogStore = {
   publishCurrent(value: CatalogSnapshot): Promise<void>
   writeProbeMeta(value: ProbeMeta): Promise<void>
   inventory(): Promise<CatalogInventory>
+  forgetRemoved(entry: RemovalEvidence): void
 }
 const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT"
 const conflict = (): never => { throw new CatalogError("COMMAND_CONFLICT") }
-export function createCatalogStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): CatalogStore {
+export function createCatalogStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }, retirement?: RetirementView): CatalogStore {
   const catalog = join(root, "catalog"), accepted = new Map<string, Buffer>()
   const byteLimit = (path: string) => dirname(path) === join(catalog, "snapshots") ? 2 * MAX_CATALOG_BYTES + 8192 : MAX_CATALOG_BYTES
   let snapshots: Map<string, Buffer> | null = null
@@ -50,9 +52,11 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     }
   }
   async function publish(path: string, value: unknown, expected: unknown, immutable: boolean): Promise<void> {
+    await retirement?.validate()
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > byteLimit(path)) invalid()
     for (const [knownPath, knownBytes] of accepted) {
+      if (retirement?.hides(relative(root, knownPath))) continue
       const probeMeta = dirname(knownPath) === join(catalog, "probe-meta")
       let current: Buffer | null
       try { current = await read(knownPath) }
@@ -123,6 +127,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     const result: CatalogInventory = { launches: [], metadata: [], commands: [], issues: [] }
     const observedSnapshots = new Map<string, Buffer>()
     try {
+      await retirement?.validate()
       const allowed = new Set(["providers.json", "current.json", "commands", "snapshots", "probe-launches", "probe-meta", "work"])
       for (const name of await names(catalog)) {
         if (allowed.has(name)) continue
@@ -135,6 +140,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
         const directory = join(catalog, kind)
         for (const name of await names(directory)) {
           const path = join(directory, name)
+          if (retirement?.hides(relative(root, path))) continue
           try {
             if (kind === "work") { id(name); await assertPrivateDirectory(path); continue }
             const stats = await lstat(path)
@@ -201,8 +207,9 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
       for (const entry of result.launches) if (!result.metadata.some(m => m.attemptId === entry.record.launchAttemptId)) result.issues.push(`probe-launches/${entry.record.launchAttemptId}.json`)
       for (const c of result.commands) if (c.snapshotId !== null) { const s = await readSnapshot(c.snapshotId); if (!s || s.hostId !== c.hostId || s.handlerGeneration !== c.handlerGeneration) invalid() }
       await readCurrent()
-      if (snapshots !== null && [...snapshots.keys()].some(path => !observedSnapshots.has(path))) invalid()
+      if (snapshots !== null && [...snapshots.keys()].some(path => !observedSnapshots.has(path) && !retirement?.hides(relative(root, path)))) invalid()
       if (result.issues.every(issue => issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/"))) {
+        for (const [path, bytes] of snapshots ?? []) if (retirement?.hides(relative(root, path))) observedSnapshots.set(path, bytes)
         snapshots = observedSnapshots
         for (const [path, bytes] of snapshots) accepted.set(path, bytes)
       }
@@ -211,6 +218,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
   }
   return {
     root, readSnapshot, readCurrent, readCommand, inventory,
+    forgetRemoved(entry) { const path = join(root, entry.path); accepted.delete(path); snapshots?.delete(path) },
     async writeSnapshot(input) { const value = parseSnapshot(input); await publish(join(catalog, "snapshots", value.snapshotId + ".json"), value, null, true) },
     async publishCurrent(input) {
       const value = parseSnapshot(input), path = join(catalog, "current.json"), bytes = await read(join(catalog, "snapshots", value.snapshotId + ".json"))
