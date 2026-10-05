@@ -116,7 +116,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
   async function names(directory: string): Promise<string[]> {
     if (!await checkDirectory(directory)) return []
     const result: string[] = [], handle = await opendir(directory)
-    for await (const entry of handle) { if (result.length >= 4096) invalid(); result.push(entry.name) }
+    for await (const entry of handle) result.push(entry.name)
     return result.sort()
   }
   async function inventory(): Promise<CatalogInventory> {

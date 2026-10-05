@@ -52,6 +52,36 @@ async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: stri
   return { root, service, store, generation, profiles, evidence, options, probes, queue, pending, started, completeProbe, waitProbe, finish, advance(ms: number) { now += ms; tick?.() }, setTime(value: number) { now = value }, setReady(value: boolean) { ready = value }, setShutdown(value: boolean) { shutdown = value } }
 }
 
+test("explicit refresh remains available above 4096 retained receipts", async t => {
+  const f = await fixture(t)
+  const snapshot = { version: 1 as const, hostId: f.options.paths.hostKey, handlerGeneration: f.generation, snapshotId: randomUUID(), createdAt: 1000000, providers: [] }
+  await f.store.writeSnapshot(snapshot)
+  const directory = join(f.root, "catalog", "commands")
+  await mkdir(directory, { mode: 0o700 })
+  for (let index = 0; index < 4097; index++) {
+    const command = { version: 1, commandId: randomUUID(), hostId: snapshot.hostId, handlerGeneration: f.generation, batchId: randomUUID(), fingerprints: [], attempts: [], state: "completed", snapshotId: snapshot.snapshotId }
+    await writeFile(join(directory, command.commandId + ".json"), JSON.stringify(command), { mode: 0o600 })
+  }
+  await f.service.initialize()
+  const commandId = randomUUID()
+  assert.equal((await f.service.refresh(commandId, f.generation)).command.state, "pending")
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  assert.equal((await f.finish(commandId)).command.state, "completed")
+})
+
+test("malformed evidence after 4096 retained receipts still blocks acceptance", async t => {
+  const f = await fixture(t), directory = join(f.root, "catalog", "commands")
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  for (let index = 0; index < 4097; index++) {
+    const command = { version: 1, commandId: randomUUID(), hostId: f.options.paths.hostKey, handlerGeneration: f.generation, batchId: randomUUID(), fingerprints: [], attempts: [], state: "interrupted", snapshotId: null }
+    await writeFile(join(directory, command.commandId + ".json"), JSON.stringify(command), { mode: 0o600 })
+  }
+  await writeFile(join(directory, "ffffffff-ffff-ffff-ffff-ffffffffffff.json"), "{", { mode: 0o600 })
+  await f.service.initialize()
+  await assert.rejects(f.service.refresh(randomUUID(), f.generation), { code: "CATALOG_UNAVAILABLE" })
+  assert.equal(f.started.length, 0)
+})
+
 test("32 callers coalesce durable identity and preserve immutable command snapshots", async t => {
   const f = await fixture(t), command = randomUUID()
   await f.service.initialize()

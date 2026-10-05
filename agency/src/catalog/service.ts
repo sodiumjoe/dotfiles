@@ -152,7 +152,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
       launch(active)
       return receipt(retained)
     }
-    if (commands.size >= 4096) throw new CatalogError("CATALOG_UNAVAILABLE")
     if (active && (!isDeepStrictEqual(active.config.fingerprints, observed.fingerprints) || !isDeepStrictEqual(active.config.profiles, observed.profiles))) throw new CatalogError("INCOMPLETE")
     if (active && active.commands.length >= 32) throw new CatalogError("INCOMPLETE")
     const batch: Batch = active ?? { id: randomUUID(), config: observed, requests: [], commands: [], controller: new AbortController(), operation: null, snapshot: null, finished: false, started: false, outcomes: new Map() }

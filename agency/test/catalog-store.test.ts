@@ -19,6 +19,15 @@ function meta(root: string, c: RefreshCommand): ProbeMeta {
 }
 const launch = (m: ProbeMeta) => ({ version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
 
+test("catalog inventory validates more than 4096 receipts without truncation", async t => {
+  const root = await privateRoot(t), directory = join(root, "catalog", "commands")
+  await mkdir(directory, { recursive: true, mode: 0o700 })
+  for (const value of Array.from({ length: 4097 }, command)) await writeFile(join(directory, value.commandId + ".json"), JSON.stringify(value), { mode: 0o600 })
+  const inventory = await createCatalogStore(root).inventory()
+  assert.deepEqual(inventory.issues, [])
+  assert.equal(inventory.commands.length, 4097)
+})
+
 test("two individually bounded provider payloads persist and retain their receipt snapshot", async t => {
   const root = await privateRoot(t), store = createCatalogStore(root), s = snapshot(), c = command()
   for (const providerId of ["claude-agent-acp", "codex-acp"] as const) s.providers.push({ providerId, fingerprint, verifiedAt: 100, verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown", adapterVersion: "1", sdkVersion: null, error: null, models: Array.from({ length: 400 }, (_, i) => ({ providerId, modelId: String(i).padStart(3, "0"), resolvedModelId: null, displayName: "d".repeat(512), reasoning: { state: "values", values: ["a", "b", "c", "d"].map(v => v.repeat(200)) }, modes: { state: "unknown" }, availability: "advertised" })) })
@@ -123,7 +132,7 @@ test("inventory binds probe attribution without entering checkout launches", asy
   assert.ok((await store.inventory()).issues.length > 0)
 })
 
-test("unsafe records, malformed UTF-8, remnants and bounded inventories fail closed", async t => {
+test("unsafe records and malformed UTF-8 fail closed while large remnant inventories remain valid", async t => {
   const root = await privateRoot(t), store = createCatalogStore(root), c = command()
   await store.writeCommand(c, null)
   const dir = join(root, "catalog/commands"), path = join(dir, c.commandId + ".json"), original = await readFile(path)
@@ -146,7 +155,7 @@ test("unsafe records, malformed UTF-8, remnants and bounded inventories fail clo
   assert.ok((await store.inventory()).issues.length > 0)
   await chmod(dir, 0o700)
   await Promise.all(Array.from({ length: 4096 }, (_, i) => writeFile(join(dir, `.${randomUUID()}.json.${randomUUID()}.tmp`), String(i), { mode: 0o600 })))
-  assert.ok((await store.inventory()).issues.length > 0)
+  assert.deepEqual((await store.inventory()).issues, [])
 })
 
 test("one probe metadata issue does not prevent an unrelated command write", async t => {
