@@ -1,5 +1,9 @@
 local M = {}
 
+local function no_preview(ctx)
+    ctx.preview:reset()
+end
+
 local function fields(row)
     local record = row.record
     if record.version == 2 then
@@ -83,7 +87,10 @@ function M.open(controller)
     picker = Snacks.picker({
         title = "Agency local agents",
         items = {},
+        show_empty = true,
         format = "text",
+        preview = no_preview,
+        layout = { hidden = { "preview" } },
         confirm = attach,
         actions = {
             attach = function(p)
@@ -234,6 +241,8 @@ function M.choices(client, initial, info, callback, controller)
         title = "Agency new session",
         items = items(initial, info.unavailable),
         format = "text",
+        preview = no_preview,
+        layout = { hidden = { "preview" } },
         confirm = function(p, item)
             if not item then
                 return

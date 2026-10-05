@@ -1,6 +1,26 @@
 package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
 local fixture = require("fixtures.agency")
 
+local function check_text_preview(options, item)
+    assert.is_truthy(vim.tbl_contains((options.layout or {}).hidden or {}, "preview"))
+    assert.are.equal("function", type(options.preview))
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "stale preview" })
+    local ok, err = pcall(options.preview, {
+        item = item,
+        buf = buf,
+        preview = {
+            reset = function()
+                vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+            end,
+        },
+    })
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    vim.api.nvim_buf_delete(buf, { force = true })
+    assert.is_true(ok, err)
+    assert.are.same({ "" }, lines)
+end
+
 describe("Agency roster picker", function()
     local original, requests, timer, picker, options, calls
     before_each(function()
@@ -64,6 +84,31 @@ describe("Agency roster picker", function()
             notify = function() end,
         })
     end
+    it("keeps the empty roster open until its first asynchronous poll completes", function()
+        open()
+        assert.are.equal(0, #options.items)
+        assert.is_true(options.show_empty)
+        assert.are.equal(1, #requests)
+        requests[1](nil, { agents = { fixture.agent(fixture.target_a) }, issues = {} })
+        assert.are.equal(1, #options.items)
+    end)
+    it("keeps fileless roster rows safe when preview is toggled", function()
+        open()
+        requests[1](nil, { agents = { fixture.agent(fixture.target_a) }, issues = {} })
+        assert.is_nil(picker.opts.items[1].file)
+        check_text_preview(options, picker.opts.items[1])
+    end)
+    it("keeps fileless launch choices safe when preview is toggled", function()
+        require("sodium.agency.picker").choices(
+            {},
+            { { displayName = "Model A", selection = fixture.selection } },
+            {},
+            function() end,
+            {}
+        )
+        assert.is_nil(picker.opts.items[1].file)
+        check_text_preview(options, picker.opts.items[1])
+    end)
     it("does not overlap polls and discards callbacks after close", function()
         open()
         timer.tick()
