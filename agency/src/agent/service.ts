@@ -565,6 +565,15 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       for (const id of dirtyAgents) pinAgent(id)
       for (const id of stops.keys()) { paths.add("agents/commands/" + id + ".json"); const target = commands.get(id)?.target; if (target) pinAgent(target.agentId) }
       for (const [id, issue] of [...assessment.unavailable, ...runtimeIssues]) { pinAgent(id); if (issue.path.startsWith(root + "/")) paths.add(issue.path.slice(root.length + 1)) }
+      for (const issue of assessment.issues) {
+        const path = issue.path.startsWith(root + "/") ? issue.path.slice(root.length + 1) : null
+        if (path && /^(?:agents\/(?:records|commands)|launches)\/[0-9a-f-]{36}\.json$/.test(path)) paths.add(path)
+        else {
+          for (const id of records.keys()) pinAgent(id)
+          for (const id of commands.keys()) paths.add("agents/commands/" + id + ".json")
+          for (const entry of context.mutations.accepted) if (entry.path.startsWith(root + "/")) paths.add(entry.path.slice(root.length + 1))
+        }
+      }
       return { paths: [...paths] }
     },
     forgetRemoved(entry) {

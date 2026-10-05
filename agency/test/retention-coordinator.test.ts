@@ -127,6 +127,19 @@ test("unreadable ages and runtime publication pins retain expired failures", asy
   await f.coordinator.initialize(); assert.ok(await f.agentStore.readAgent(initial.definition.agentId))
 })
 
+for (const op of ["stop", "restore"] as const) test("global missing-target assessment retains interrupted " + op + " evidence", async t => {
+  const f = await fixture(t), sample = sampleCommand(), target = sample.target!
+  const pending: AgentCommand = { ...sample, op, input: op === "stop" ? { ...target, commandId: sample.commandId } : { agentId: target.agentId, handlerGeneration: sample.handlerGeneration, commandId: sample.commandId, environmentDigest: "c".repeat(64) } }
+  await f.agentStore.writeCommand(pending, null)
+  const interrupted: AgentCommand = { ...pending, state: "interrupted", result: { outcome: "interrupted", target, session: null, failure: agentFailure(new AgentError("INCOMPLETE")) } }
+  await f.agentStore.writeCommand(interrupted, pending)
+  await f.agents.initialize()
+  assert.ok((await f.agents.list()).issues.some(issue => issue.id === sample.commandId && issue.message === "command target missing"))
+  await f.coordinator.initialize()
+  assert.deepEqual(await f.agentStore.readCommand(sample.commandId), interrupted)
+  assert.ok((await f.agents.list()).issues.some(issue => issue.id === sample.commandId && issue.message === "command target missing"))
+})
+
 test("unknown same-boot process evidence is retained without signaling", async t => {
   const f = await fixture(t), { launch } = await failedAgent(f)
   f.setTime(1000000 + FAILED_START_TTL_MS)
