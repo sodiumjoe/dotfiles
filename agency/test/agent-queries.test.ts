@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
 import { agentServiceFixture, sampleAgent, sampleProductionContract, sampleProductionSpec, agentId } from "./agent-support.js"
+import { normalizeAgentRecord } from "../src/agent/types.js"
 import { inventoryPage, launchChoices, parsePageInput } from "../src/agent/queries.js"
 import { until } from "./control-support.js"
 
@@ -31,12 +32,13 @@ for (const kind of ["stale", "rollback", "missing"] as const) test(`editor choic
   assert.equal(f.refreshes(), 0)
 })
 
-test("editor selections are revalidated at dispatch", async t => {
+test("stale discovery does not gate native session admission", async t => {
   const f = await agentServiceFixture(t, { productionCatalog: true })
   const choice = (await f.service.choices()).choices[0]!
   await f.changeCatalog("stale")
-  await assert.rejects(f.service.start({ ...f.input, selection: choice.selection }), { code: "MODEL_UNAVAILABLE" })
-  assert.equal(f.spawns(), 0)
+  const started = await f.service.start({ ...f.input, selection: choice.selection })
+  await until(async () => (await f.service.command(started.command.commandId, started.command.handlerGeneration)).command.result?.outcome === "started" ? true : undefined)
+  assert.equal(f.spawns(), 1)
 })
 
 test("unavailable reasoning and mode never become a different advertised selection", async t => {
@@ -56,7 +58,7 @@ test("service page revision is stable during unchanged traversal", async t => {
   assert.equal((await f.service.page({ limit: 1 })).revision, page.revision)
 })
 
-const views = (count: number) => Array.from({ length: count }, (_, i) => ({ record: { ...sampleAgent(), phase: "stopped" as const, definition: { ...sampleAgent().definition, agentId: agentId(1000 + i) } }, launch: null, live: false, cleanup: "not_launched" as const, unavailable: null }))
+const views = (count: number) => Array.from({ length: count }, (_, i) => ({ record: normalizeAgentRecord({ ...sampleAgent(), phase: "stopped" as const, definition: { ...sampleAgent().definition, agentId: agentId(1000 + i) } }), launch: null, live: false, cleanup: "not_launched" as const, unavailable: null }))
 
 test("paged inventory traverses 4200 stable records and all issues within bounded replies", () => {
   const agents = views(4200), revision = agentId(99), issues = Array.from({ length: 4200 }, (_, i) => ({ kind: "unknown" as const, id: null, path: `/state/${i}`, message: "invalid" }))
@@ -64,7 +66,7 @@ test("paged inventory traverses 4200 stable records and all issues within bounde
   do {
     const page = inventoryPage({ revision, agents, issues }, { limit: 100, ...(cursor ? { cursor } : {}) })
     assert.ok(page.agents.length + page.issues.length <= 100)
-    seen.push(...page.agents.map(a => a.record.version === 2 ? a.record.definition.agentId : a.record.spec.agentId))
+    seen.push(...page.agents.map(a => a.record.version === 3 ? a.record.definition.agentId : a.record.spec.agentId))
     issueCount += page.issues.length
     cursor = page.nextCursor ?? undefined
   } while (cursor)
@@ -83,7 +85,7 @@ test("page cursors reject mutation, filter changes, malformed and excessive inpu
 
 test("oversized records and diagnostics are explicit failures rather than empty pages", () => {
   const agents = views(1)
-  agents[0]!.record.launch.catalogEvidence.models = Array(60000).fill(sampleAgent().launch.catalogEvidence.models[0])
+  agents[0]!.record.settings.configValues = { huge: "x".repeat(8 * 1024 * 1024) }
   assert.throws(() => inventoryPage({ revision: agentId(99), agents, issues: [] }, { limit: 100 }), { code: "INCOMPLETE" })
   assert.throws(() => inventoryPage({ revision: agentId(99), agents: [], issues: [{ kind: "unknown", id: null, path: "x".repeat(8 * 1024 * 1024), message: "invalid" }] }, { limit: 100 }), { code: "INCOMPLETE" })
 })

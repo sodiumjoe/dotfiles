@@ -112,8 +112,8 @@ test("diagnostic acceptance records an accepted launch whose cleanup remains unr
   assert.equal(result.report.failure, "INCOMPLETE")
   assert.equal(result.report.cleanup.length, 0)
   const record = (await f.lifecycle.list()).agents[0]!.record
-  if (record.version !== 2) throw new Error("missing accepted agent")
-  assert.deepEqual(parseCodexAcceptanceReport(result.report).unresolved, [{ stage: "initial", target: { agentId: record.definition.agentId, handlerGeneration: record.launch.handlerGeneration, providerGeneration: record.launch.providerGeneration } }])
+  if (record.version !== 3) throw new Error("missing accepted agent")
+  assert.deepEqual(parseCodexAcceptanceReport(result.report).unresolved, [{ stage: "initial", target: { agentId: record.definition.agentId, handlerGeneration: record.launch!.handlerGeneration, providerGeneration: record.launch!.providerGeneration } }])
 })
 
 test("diagnostic acceptance rejects restored session discontinuity", async t => {

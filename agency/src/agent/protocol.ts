@@ -6,12 +6,12 @@ import { parseSelection } from "./types.js"
 import { ControlError, UUID } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
-import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentFailure, parseAgentRecord, parseLegacyAgentRecord, parsePromptInput, parsePromptView, parseStartInput, parseStopInput, projectStartInput, type AgentFailure, type AgentList, type AgentView, type LegacyAgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput } from "./types.js"
+import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentCommandV3, parseAgentFailure, parseAgentRecordV3, parseLegacyAgentRecord, parsePromptInput, parsePromptView, parseStartInput, parseStopInput, projectStartInput, type AgentFailure, type AgentList, type AgentView, type LegacyAgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput } from "./types.js"
 import type { AgentStateIssue } from "./store.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
-import { PRODUCTION_PROMPT_TRANSPORT_MS } from "./production-contracts.js"
+import { launchEnvironmentDigest } from "./environment.js"
 
-export const AGENT_PROTOCOL = "agency-agent/2" as const
+export const AGENT_PROTOCOL = "agency-agent/3" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (
   | { op: "agent_choices" } | { op: "agent_page"; input: PageInput } | { op: "agent_start"; input: StartInput } | { op: "agent_restore"; input: RestoreRequest } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
 )
@@ -54,11 +54,15 @@ function agentView(input: unknown, generation: string | null): AgentView | Legac
     if (v.live !== false || v.cleanup !== "unknown" && v.cleanup !== "verified" || launch && (launch.version !== 1 || launch.agentId !== record.spec.agentId || launch.launchAttemptId !== record.spec.launchAttemptId)) invalid()
     return { record, launch, live: false, cleanup: v.cleanup as LegacyAgentView["cleanup"] }
   }
-  const record = parseAgentRecord(v.record)
+  const record = parseAgentRecordV3(v.record)
   const unavailable = v.unavailable === null ? null : stateIssue(v.unavailable)
+  if (!record.launch) {
+    if (launch !== null || v.live !== false || v.cleanup !== "not_launched") invalid()
+    return { record, launch: null, live: false, cleanup: "not_launched", unavailable }
+  }
   if (typeof v.live !== "boolean" || !["not_launched", "verified", "unverified", "unknown"].includes(String(v.cleanup))) invalid()
-  if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.launchAttemptId !== record.launch.launchAttemptId || launch.handlerGeneration !== record.launch.handlerGeneration)) {
-    if (!unavailable || v.live !== false || !unavailable.path.endsWith("/" + record.launch.launchAttemptId + ".json")) invalid()
+  if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.launchAttemptId !== record.launch!.launchAttemptId || launch.handlerGeneration !== record.launch.handlerGeneration)) {
+    if (!unavailable || v.live !== false || !unavailable.path.endsWith("/" + record.launch!.launchAttemptId + ".json")) invalid()
     return { record, launch: null, live: false, cleanup: "unknown", unavailable }
   }
   if (v.cleanup === "verified" && launch?.phase !== "cleanup_verified" || v.cleanup === "not_launched" && launch !== null) invalid()
@@ -99,7 +103,7 @@ export function parseAgentReply(input: unknown): AgentReply {
     const r = object(v.result)
     if (r.state === "command") {
       keys(r, ["state", "command", "durability"])
-      const command = parseAgentCommand(r.command)
+      const command = object(r.command).version === 3 ? parseAgentCommandV3(r.command) : parseAgentCommand(r.command)
       if (common.commandId !== command.commandId || r.durability !== "verified" && r.durability !== "unverified") invalid()
       return { ...common, ok: true, result: { state: "command", command, durability: r.durability as CommandView["durability"] } }
     }
@@ -116,7 +120,7 @@ export function parseAgentReply(input: unknown): AgentReply {
       keys(r, ["state", "revision", "agents", "issues", "nextCursor"])
       if (!Array.isArray(r.agents) || !Array.isArray(r.issues) || r.agents.length + r.issues.length > 100 || Buffer.byteLength(JSON.stringify(r)) > QUERY_BYTES) invalid()
       if (r.nextCursor !== null && (typeof r.nextCursor !== "string" || !/^[A-Za-z0-9_-]+$/.test(r.nextCursor) || r.nextCursor.length > CURSOR_BYTES)) invalid()
-      const agents = r.agents.map(a => agentView(a, common.handlerGeneration)), ids = agents.map(a => a.record.version === 2 ? a.record.definition.agentId : a.record.spec.agentId)
+      const agents = r.agents.map(a => agentView(a, common.handlerGeneration)), ids = agents.map(a => a.record.version === 3 ? a.record.definition.agentId : a.record.spec.agentId)
       if (new Set(ids).size !== ids.length || ids.some((value, index) => index > 0 && ids[index - 1]! >= value)) invalid()
       return { ...common, ok: true, result: { state: "page", revision: id(r.revision), agents, issues: r.issues.map(stateIssue), nextCursor: r.nextCursor as string | null } }
     }
@@ -125,14 +129,14 @@ export function parseAgentReply(input: unknown): AgentReply {
       keys(r, ["state", "agents", "issues"])
       if (!Array.isArray(r.agents) || r.agents.length > 4096 || !Array.isArray(r.issues) || r.issues.length > 4096) invalid()
       const agents = (r.agents as unknown[]).map(a => agentView(a, common.handlerGeneration))
-      if (new Set(agents.map(a => a.record.version === 2 ? a.record.definition.agentId : a.record.spec.agentId)).size !== agents.length) invalid()
+      if (new Set(agents.map(a => a.record.version === 3 ? a.record.definition.agentId : a.record.spec.agentId)).size !== agents.length) invalid()
       return { ...common, ok: true, result: { state: "agents", agents, issues: (r.issues as unknown[]).map(stateIssue) } }
     }
     if (r.state !== "current") invalid()
     keys(r, ["state", "cwd", "agents"])
     if (!Array.isArray(r.agents) || r.agents.length > 4096) invalid()
     const cwd = absolutePath(r.cwd), agents = (r.agents as unknown[]).map(value => agentView(value, common.handlerGeneration))
-    if (agents.some(agent => agent.record.version !== 2 || !agent.live || agent.record.definition.cwd !== cwd) || new Set(agents.map(agent => agent.record.version === 2 ? agent.record.definition.agentId : agent.record.spec.agentId)).size !== agents.length) invalid()
+    if (agents.some(agent => agent.record.version !== 3 || !agent.live || agent.record.definition.cwd !== cwd) || new Set(agents.map(agent => agent.record.version === 3 ? agent.record.definition.agentId : agent.record.spec.agentId)).size !== agents.length) invalid()
     return { ...common, ok: true, result: { state: "current", cwd, agents: agents as AgentView[] } }
   } catch { return invalid() }
 }
@@ -144,8 +148,8 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   if (request.op === "agent_choices") { if (result.state !== "choices") invalid(); return }
   if (request.op === "agent_page") {
     if (result.state !== "page" || result.agents.length + result.issues.length > request.input.limit) invalid()
-    if (request.input.cwd && result.agents.some(a => (a.record.version === 2 ? a.record.definition.cwd : a.record.spec.checkout.root.path) !== request.input.cwd)) invalid()
-    if (request.input.activeOnly && result.agents.some(a => a.record.version !== 2 || a.record.launch.handlerGeneration !== request.handlerGeneration || !["starting", "ready", "restoring", "stopping"].includes(a.record.phase))) invalid()
+    if (request.input.cwd && result.agents.some(a => (a.record.version === 3 ? a.record.definition.cwd : a.record.spec.checkout.root.path) !== request.input.cwd)) invalid()
+    if (request.input.activeOnly && result.agents.some(a => a.record.version !== 3 || a.record.launch?.handlerGeneration !== request.handlerGeneration || !["starting", "ready", "restoring", "stopping"].includes(a.record.phase))) invalid()
     return
   }
   if (request.op === "agent_list") { if (result.state !== "agents") invalid(); return }
@@ -153,14 +157,28 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   if (request.op === "agent_prompt") { if (result.state !== "prompt" || !isDeepStrictEqual(result.target, { agentId: request.input.agentId, handlerGeneration: request.input.handlerGeneration, providerGeneration: request.input.providerGeneration })) invalid(); return }
   if (result.state !== "command") return invalid()
   if (request.op === "agent_command") { if (result.command.handlerGeneration !== request.commandGeneration) invalid(); return }
-  if (result.command.op !== (request.op === "agent_start" ? "start" : request.op === "agent_restore" ? "restore" : "stop") || !isDeepStrictEqual(result.command.input, request.op === "agent_start" ? projectStartInput(request.input) : request.op === "agent_restore" ? projectRestoreInput(request.input) : request.input)) invalid()
+  if (result.command.op !== (request.op === "agent_start" ? "start" : request.op === "agent_restore" ? "restore" : "stop")) invalid()
+  if (result.command.version === 2) {
+    if (!isDeepStrictEqual(result.command.input, request.op === "agent_start" ? projectStartInput(request.input) : request.op === "agent_restore" ? projectRestoreInput(request.input) : request.input)) invalid()
+    return
+  }
+  const input = result.command.input
+  if (request.op === "agent_stop") {
+    if (!isDeepStrictEqual(input, { target: { agentId: request.input.agentId, handlerGeneration: request.input.handlerGeneration, providerGeneration: request.input.providerGeneration } })) invalid()
+    return
+  }
+  if (input.environmentDigest !== launchEnvironmentDigest(request.input.environment)) invalid()
+  if (request.op === "agent_restore") { if (input.agentId !== request.input.agentId) invalid(); return }
+  const selection = object(input.selection)
+  if (input.cwd !== request.input.cwd || input.backendId !== request.input.selection.providerId || selection.modelId !== request.input.selection.modelId || request.input.selection.mode && selection.modeId !== request.input.selection.mode) invalid()
+  if (request.input.selection.reasoning.kind === "value" && object(selection.configValues).reasoning !== request.input.selection.reasoning.value) invalid()
 }
 export function agentErrorReply(request: AgentRequest | Pick<AgentReply, "requestId" | "handlerGeneration" | "commandId">, error: unknown): AgentReply {
   const commandId = "op" in request ? commandIdFor(request) : request.commandId
   if (error instanceof ControlError) error = new AgentError(error.code === "ACTIVE_AGENTS" ? "INCOMPLETE" : error.code)
   return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ...(commandId ? { commandId } : {}), ok: false, error: agentFailure(error) }
 }
-export function agentExchangeTimeout(request: AgentRequest): number { return request.op === "agent_prompt" ? PRODUCTION_PROMPT_TRANSPORT_MS : 5000 }
+export function agentExchangeTimeout(request: AgentRequest): number { return request.op === "agent_prompt" ? 0 : 5000 }
 export async function exchangeAgent(socket: Socket, request: AgentRequest, timeoutMs = agentExchangeTimeout(request)): Promise<AgentReply> {
   try {
     const frame = encodeFrame(parseAgentRequest(request)), incoming = receiveFrame(socket, timeoutMs)

@@ -9,7 +9,8 @@ import type { HandlerEnvironment } from "../handler/environment.js"
 import { snapshotLaunchEnvironment } from "./environment.js"
 import type { AgentStore } from "./store.js"
 import { AGENT_PROTOCOL, agentExchangeTimeout, parseAgentReply, validateAgentReply, type AgentReply, type AgentRequest } from "./protocol.js"
-import { AgentError, agentFailure, parseSelection, type AgentCommand, type AgentErrorCode, type CommandView, type StartSelection } from "./types.js"
+import { AgentError, agentFailure, parseSelection, type AgentCommand as AgentCommandV2, type AgentCommandV3, type AgentErrorCode, type CommandView, type StartSelection } from "./types.js"
+type AgentCommand = AgentCommandV2 | AgentCommandV3
 
 const exit = (code: AgentErrorCode): number => code === "USAGE" || code === "SELECTION_UNSUPPORTED" ? 64 : code === "INVALID_PROTOCOL" ? 65 : ["UNAVAILABLE", "STALE_HANDLER", "STALE_PROVIDER", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "INVALID_AGENT_STATE"].includes(code) ? 69 : code === "INTERNAL" ? 70 : 75
 export async function runAgentClient(argv: readonly string[], deps: ControlDependencies & { callAgent(env: HandlerEnvironment, request: AgentRequest, timeoutMs?: number): Promise<AgentReply>; agentStore(env: HandlerEnvironment): AgentStore }): Promise<number> {
@@ -17,7 +18,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
   let json = false, generation: string | null = null, commandId: string | undefined, last: CommandView | undefined
   const emit = (ok: boolean, value: unknown): void => deps.stdout(JSON.stringify({ protocol: AGENT_PROTOCOL, requestId, handlerGeneration: generation, ...(commandId ? { commandId } : {}), ok, ...(ok ? { result: value } : { error: value }) }, null, json ? undefined : 2) + "\n")
   try {
-    let selection: StartSelection | undefined, page: PageInput | undefined, expectedGeneration: string | undefined
+    let selection: StartSelection | undefined, page: PageInput | undefined, expectedGeneration: string | undefined, nativeParams: import("./session-config.js").JsonObject | undefined
     try {
       const seen = new Set<string>()
       for (let i = 0; i < argv.length; i++) {
@@ -27,7 +28,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         seen.add(flag)
         if (flag === "--json") { json = true; continue }
         if (flag === "--active") { flags.set(flag, "true"); continue }
-        if (!["--provider", "--model", "--reasoning", "--mode", "--permission-profile", "--command-id", "--handler-generation", "--expected-handler-generation", "--provider-generation", "--text", "--limit", "--cursor", "--cwd"].includes(flag)) throw new Error()
+        if (!["--provider", "--model", "--reasoning", "--mode", "--permission-profile", "--command-id", "--handler-generation", "--expected-handler-generation", "--provider-generation", "--text", "--limit", "--cursor", "--cwd", "--mcp-servers-json"].includes(flag)) throw new Error()
         const value = argv[++i]
         if (!value || flag !== "--text" && value.startsWith("--")) throw new Error()
         flags.set(flag, value)
@@ -45,7 +46,12 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         selection = parseSelection({ providerId: flags.get("--provider"), modelId: flags.get("--model"), reasoning: reasoning === "none" ? { kind: "none" } : { kind: "value", value: reasoning }, mode: flags.get("--mode") ?? null, permissionProfile: flags.get("--permission-profile") })
       } else if (positional[1] === "restore") {
         id(positional[2])
-        if (generation && !commandId || [...flags.keys()].some(flag => !["--command-id", "--handler-generation", "--expected-handler-generation"].includes(flag))) throw new Error()
+        if (generation && !commandId || [...flags.keys()].some(flag => !["--command-id", "--handler-generation", "--expected-handler-generation", "--mcp-servers-json"].includes(flag))) throw new Error()
+        if (flags.has("--mcp-servers-json")) {
+          const mcpServers = JSON.parse(flags.get("--mcp-servers-json")!)
+          if (!Array.isArray(mcpServers)) throw new Error()
+          nativeParams = { mcpServers }
+        }
       } else if (positional[1] === "stop") {
         id(positional[2]); id(generation); id(flags.get("--provider-generation"))
         if ([...flags.keys()].some(flag => !["--command-id", "--handler-generation", "--provider-generation"].includes(flag))) throw new Error()
@@ -66,7 +72,11 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
     let retained: AgentCommand | null = null
     const validateRetained = (command: AgentCommand): void => {
       if (command.hostId !== env.paths.hostKey || command.commandId !== commandId || command.handlerGeneration !== generation || command.op !== operation) throw new AgentError("COMMAND_CONFLICT")
-      if (operation === "start" && !isDeepStrictEqual((command.input as import("./types.js").StartCommandInput).selection, selection)) throw new AgentError("COMMAND_CONFLICT")
+      if (operation === "start") {
+        const recorded = command.version === 3 ? command.input.selection : (command.input as import("./types.js").StartCommandInput).selection
+        const expected = command.version === 2 ? selection : { modelId: selection!.modelId, ...(selection!.mode ? { modeId: selection!.mode } : {}), ...(selection!.reasoning.kind === "value" ? { configValues: { reasoning: selection!.reasoning.value } } : {}) }
+        if (!isDeepStrictEqual(recorded, expected)) throw new AgentError("COMMAND_CONFLICT")
+      }
       if (operation === "restore" && command.target?.agentId !== positional[2]) throw new AgentError("COMMAND_CONFLICT")
       if (operation === "stop" && (!command.target || command.target.agentId !== positional[2] || command.target.providerGeneration !== flags.get("--provider-generation"))) throw new AgentError("COMMAND_CONFLICT")
     }
@@ -89,7 +99,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
       : operation === "choices" ? { ...base, op: "agent_choices" }
       : operation === "page" ? { ...base, op: "agent_page", input: page! }
       : operation === "start" ? { ...base, op: "agent_start", input: { commandId: commandId!, handlerGeneration: generation, cwd: resolve(deps.cwd()), selection: selection!, environment: snapshotLaunchEnvironment(process.env) } }
-      : operation === "restore" ? { ...base, op: "agent_restore", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, environment: snapshotLaunchEnvironment(process.env) } }
+      : operation === "restore" ? { ...base, op: "agent_restore", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, environment: snapshotLaunchEnvironment(process.env), ...(nativeParams ? { nativeParams } : {}) } }
       : operation === "stop" ? { ...base, op: "agent_stop", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, providerGeneration: flags.get("--provider-generation")! } }
       : operation === "prompt" ? { ...base, op: "agent_prompt", input: { agentId: positional[2]!, handlerGeneration: generation, providerGeneration: flags.get("--provider-generation")!, text: flags.get("--text")! } }
       : operation === "current" ? { ...base, op: "agent_current", cwd: resolve(deps.cwd()) } : { ...base, op: "agent_list" }

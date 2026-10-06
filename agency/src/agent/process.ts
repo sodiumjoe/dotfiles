@@ -9,16 +9,18 @@ import { LinuxObservationUnavailable } from "../platform/linux.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
 import { sameProcess, sameProcessGeneration, type LaunchRecord, type ManagedLaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
-import { createAcpConnection, type AcpConnection } from "./acp.js"
+import { createAcpConnection, type AcpConnection, type ProviderSession } from "./acp.js"
 import type { AcpObservation, TurnOptions } from "./session-events.js"
-import type { ConfiguredLaunchContract } from "./contracts.js"
+import { cleanupBudget, type ConfiguredLaunchContract } from "./contracts.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
-import { AgentError, agentFailure, splitLaunchSpec, type SessionStart, type AgentFailure, type LaunchSpec, type PromptResult, type SessionEvidence } from "./types.js"
+import { AgentError, agentFailure, splitLaunchSpec, type AgentRecordV3, type SessionStart, type AgentFailure, type LaunchSpec, type PromptResult } from "./types.js"
+import type { JsonObject, SessionConfiguration } from "./session-config.js"
 
-export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<SessionEvidence>; prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
+export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): void; snapshot(): SessionConfiguration; prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
+export type AgentProcessSpec = Pick<LaunchSpec, "agentId" | "handlerGeneration" | "providerGeneration" | "launchAttemptId" | "cwd" | "limits">
 export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
 
-export function createAgentProcess(input: { context: LaunchContext; spec: LaunchSpec; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; revalidate(): Promise<void> }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: LaunchContext; spec: AgentProcessSpec; agentRecord?: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; revalidate(): Promise<void> }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
   const { context, spec, contract, session, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.deadlines
   let overallDeadline = deadline ?? Infinity, spawnDeadline = Infinity
@@ -26,7 +28,8 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
   let current: ManagedLaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "pending", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
   let published = false, spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
-  let initialization: Promise<SessionEvidence> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<LaunchRecord> | undefined
+  let initialization: Promise<ProviderSession> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<LaunchRecord> | undefined
+  let cleanupDeadline: number | undefined
   let terminal = false, closed = false, stopping = false, disposed = false, initialized = false, failure: AgentFailure | undefined
   let resolveFault!: (value: AgentFailure) => void, resolveTerminal!: () => void, resolveClose!: () => void
   const fault = new Promise<AgentFailure>(resolve => { resolveFault = resolve })
@@ -67,7 +70,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
   }
   let spawnOptions: SpawnOptions | undefined = {
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
-    env: { ...parseLaunchEnvironment(input.environment), CODEX_PATH: contract.executable },
+    env: { ...parseLaunchEnvironment(input.environment), ...(input.agentRecord ? {} : { CODEX_PATH: contract.executable }) },
   }
   const observe = async (): Promise<{ leader: ProcessIdentity; observed: ProcessIdentity[] }> => {
     if (!child?.pid) throw new AgentError("STARTUP_FAILED")
@@ -112,11 +115,12 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
   function cleanup(): Promise<LaunchRecord> {
     if (cleaning) return cleaning
     if (isReady?.()) overallDeadline = Infinity
+    cleanupDeadline ??= overallDeadline === Infinity ? Infinity : Math.min(overallDeadline + cleanupBudget(contract), now() + cleanupBudget(contract))
     stopping = true; controller.abort(); connection?.close()
     child?.stdout?.resume(); child?.stderr?.resume()
     let expired = false
     const checkCleanup = (): void => {
-      if (expired || overallDeadline !== Infinity && now() >= overallDeadline) throw new AgentError("CLEANUP_UNVERIFIED")
+      if (expired || now() >= cleanupDeadline!) throw new AgentError("CLEANUP_UNVERIFIED")
     }
     cleaning = bounded(async () => {
       await preparation?.catch(() => undefined)
@@ -137,7 +141,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
             catch { current = snapshot() }
           }
           checkCleanup()
-          const terminationDeadline = Math.min(overallDeadline, now() + (phases?.processTerminateMs ?? 5000))
+          const terminationDeadline = Math.min(cleanupDeadline!, now() + (phases?.processTerminateMs ?? 5000))
           const cleanupAdapter: PlatformAdapter = {
             platform: adapter.platform,
             bootId: () => bounded(() => adapter.bootId(), terminationDeadline, "CLEANUP_UNVERIFIED"),
@@ -157,7 +161,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
           checkCleanup()
           if (current.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
           if (child && !terminal) await bounded(() => terminalEvent, terminationDeadline, "CLEANUP_UNVERIFIED")
-          await absent(Math.min(overallDeadline, now() + (phases?.absenceMs ?? 2000)))
+          await absent(Math.min(cleanupDeadline!, now() + (phases?.absenceMs ?? 2000)))
           checkCleanup()
           if (child && !closed) await waitForCloseOrGrace(phases?.transportCloseMs ?? 1000)
           checkCleanup()
@@ -175,11 +179,15 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
       })
       checkCleanup()
       return structuredClone(current)
-    }, overallDeadline, "CLEANUP_UNVERIFIED").catch(() => { expired = true; cleaning = undefined; throw new AgentError("CLEANUP_UNVERIFIED") })
+    }, cleanupDeadline, "CLEANUP_UNVERIFIED").catch(() => { expired = true; cleaning = undefined; throw new AgentError("CLEANUP_UNVERIFIED") })
     return cleaning
   }
   return {
     record: snapshot, fault, cleanup,
+    request(method, params, signal) { if (!initialized || !connection || stopping || disposed || terminal || closed) return Promise.reject(new AgentError("NOT_READY")); return connection.request(method, params, signal) },
+    notify(method, params) { if (!initialized || !connection || stopping || disposed || terminal || closed) throw new AgentError("NOT_READY"); connection.notify(method, params) },
+    respond(id, result) { if (!initialized || !connection || stopping || disposed || terminal || closed) throw new AgentError("NOT_READY"); connection.respond(id, result) },
+    snapshot() { if (!connection) throw new AgentError("NOT_READY"); return connection.snapshot() },
     prompt(text, signal, limits) {
       if (!initialized || !connection || stopping || disposed || terminal || closed) return Promise.reject(new AgentError("NOT_READY"))
       return connection.prompt(text, signal, limits)
@@ -226,7 +234,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
         if (!options) throw new AgentError("STARTUP_FAILED")
         spawnOptions = undefined
         dependencies.onSpawnInputReleased?.()
-        child = (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint], options)
+        child = (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint, ...input.args ?? []], options)
         registerChildObservers(child)
         const stable = await stableObservation()
         check()
@@ -236,9 +244,9 @@ export function createAgentProcess(input: { context: LaunchContext; spec: Launch
         try {
           await bounded(() => preparation!, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
-          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), ...(input.onUpdate ? { onUpdate: input.onUpdate } : {}), now })
+          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), ...(input.onUpdate ? { onUpdate: input.onUpdate } : {}), ...(input.onRequest ? { onRequest: input.onRequest } : {}), now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
-          const evidence = await connection.initialize({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null }, contract, session ?? { kind: "new" }, controller.signal)
+          const evidence = await connection.initialize(input.agentRecord ?? { version: 2, ...splitLaunchSpec(spec as LaunchSpec), phase: "starting", session: null, failure: null }, contract, session ?? { kind: "new", params: {} }, controller.signal)
           check(); initialized = true; if (!isReady) overallDeadline = Infinity; return evidence
         } catch (error) { fail(error); throw error }
         finally { signal.removeEventListener("abort", abort) }

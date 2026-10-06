@@ -123,7 +123,7 @@ test("lost submit response can be inspected after reattachment without another p
 
 test("snapshot transfer includes concurrent updates strictly after its captured boundary", async t => {
   const f = await fixture(t), conversation = createConversation(f.target), ready = (await f.service.current(f.workspace)).agents[0]!.record
-  conversation.append({ kind: "lifecycle", phase: "ready", session: ready.session, selection: ready.definition.selection, cwd: f.workspace })
+  conversation.append({ kind: "lifecycle", phase: "ready", session: ready.session, cwd: f.workspace })
   for (let n = 0; n < 160; n++) conversation.append({ kind: "update", replay: true, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "α".repeat(24000) } } })
   f.service.observe = async (target, listener) => {
     assert.deepEqual(target, f.target)
@@ -143,7 +143,7 @@ test("snapshot transfer includes concurrent updates strictly after its captured 
 
 test("a slow observer overflows independently while a fast observer keeps receiving events", async t => {
   const f = await fixture(t), conversation = createConversation(f.target), ready = (await f.service.current(f.workspace)).agents[0]!.record
-  conversation.append({ kind: "lifecycle", phase: "ready", session: ready.session, selection: ready.definition.selection, cwd: f.workspace })
+  conversation.append({ kind: "lifecycle", phase: "ready", session: ready.session, cwd: f.workspace })
   f.service.observe = async (_target, listener) => conversation.observe(listener)
   const slow = await f.attach(), fast = await f.attach()
   slow.socket.pause()

@@ -1,7 +1,7 @@
 import { lstat, opendir } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { isDeepStrictEqual } from "node:util"
-import { parseAgentCommand, parseAgentRecord, tupleOfRecord } from "../agent/types.js"
+import { parseAgentCommand, parseAgentCommandV3, parseAgentRecord, parseAgentRecordV3, normalizeAgentRecord, tupleOfRecord } from "../agent/types.js"
 import type { AgentService } from "../agent/service.js"
 import type { AgentStore } from "../agent/store.js"
 import { decodeJson, readBoundedFile } from "../catalog/config.js"
@@ -80,13 +80,16 @@ export async function authorizeRetirement(input: { root: string; hostId: string;
     }
   }
   if (lifecycleTargets) await records("agents/records", raw => {
-    const value = parseAgentRecord(raw)
+    const value = (raw as { version?: unknown }).version === 3 ? parseAgentRecordV3(raw) : normalizeAgentRecord(parseAgentRecord(raw))
     if (value.definition.hostId !== input.hostId) cleanupError()
-    references.push(commandPath(value.definition.createdCommandId), commandPath(value.launch.commandId), launchPath(value.launch.launchAttemptId))
+    references.push(commandPath(value.definition.createdCommandId))
+    if (value.launch) references.push(commandPath(value.launch.commandId), launchPath(value.launch.launchAttemptId))
+    if (value.configurationState.verification.kind === "pending") references.push(commandPath(value.configurationState.verification.commandId))
   })
   if (lifecycleTargets) await records("agents/commands", raw => {
-    const value = parseAgentCommand(raw)
+    const value = (raw as { version?: unknown }).version === 3 ? parseAgentCommandV3(raw) : parseAgentCommand(raw)
     if (value.hostId !== input.hostId) cleanupError()
+    if (value.version === 3) references.push(agentPath(value.agentId))
     if (!value.target) return
     references.push(agentPath(value.target.agentId))
     for (const entry of witnesses.values()) if (entry.record.version === 2 && entry.record.owner.kind === "agent" && entry.record.owner.agentId === value.target.agentId && entry.record.owner.providerGeneration === value.target.providerGeneration && entry.record.handlerGeneration === value.target.handlerGeneration) references.push(entry.path)
@@ -140,21 +143,29 @@ export function createRetentionCoordinator(input: { root: string; hostId: string
       const agentCommands = new Map(agents.commands.map(command => [command.commandId, command]))
       for (const agent of agents.agents) {
         if (agent.definition.hostId !== input.hostId) cleanupError()
-        const associated = agents.commands.filter(command => command.target?.agentId === agent.definition.agentId)
+        const associated = agents.commands.filter(command => command.target?.agentId === agent.definition.agentId || command.version === 3 && command.agentId === agent.definition.agentId)
         const related = allLaunches.filter(entry => entry.record.version === 2 && entry.record.owner.kind === "agent" && entry.record.owner.agentId === agent.definition.agentId)
         const terminal = associated.every(command => command.state !== "pending") && related.every(entry => !retainedLaunches.has(relative(input.root, entry.path)))
         const times = terminal ? await input.agentStore.terminalTimes(agent.definition.agentId, associated.map(command => command.commandId)) : null
         const expired = !agent.session && ["failed", "interrupted"].includes(agent.phase) && times !== null && expiredFailure((input.now ?? Date.now)(), times)
-        const creation = agentCommands.get(agent.definition.createdCommandId), latest = agentCommands.get(agent.launch.commandId)
-        if (!creation || creation.op !== "start" || creation.target?.agentId !== agent.definition.agentId || !latest || !isDeepStrictEqual(latest.target, tupleOfRecord(agent))) cleanupError()
-        const references = [commandPath(agent.definition.createdCommandId), commandPath(agent.launch.commandId)]
-        if (nodes.has(launchPath(agent.launch.launchAttemptId))) references.push(launchPath(agent.launch.launchAttemptId))
-        else if (agent.session) cleanupError()
-        add(agentPath(agent.definition.agentId), references, !expired)
+        const creation = agentCommands.get(agent.definition.createdCommandId)
+        if (!creation || creation.op !== (agent.definition.origin === "import" ? "import" : "start") || (creation.version === 3 ? creation.agentId : creation.target?.agentId) !== agent.definition.agentId) cleanupError()
+        const references = [commandPath(agent.definition.createdCommandId)]
+        if (agent.launch) {
+          const latest = agentCommands.get(agent.launch.commandId)
+          if (!latest || !isDeepStrictEqual(latest.target, tupleOfRecord(agent))) cleanupError()
+          references.push(commandPath(agent.launch.commandId))
+          if (nodes.has(launchPath(agent.launch.launchAttemptId))) references.push(launchPath(agent.launch.launchAttemptId))
+          else if (agent.session) cleanupError()
+        }
+        const unverified = agent.configurationState.verification.kind !== "verified"
+        if (unverified) references.push(...associated.filter(command => command.op === "configure").map(command => commandPath(command.commandId)))
+        add(agentPath(agent.definition.agentId), references, !expired || unverified)
       }
       for (const command of agents.commands) {
         if (command.hostId !== input.hostId) cleanupError()
         const references: string[] = []
+        if (command.version === 3 && nodes.has(agentPath(command.agentId))) references.push(agentPath(command.agentId))
         if (command.target) {
           if (nodes.has(agentPath(command.target.agentId))) references.push(agentPath(command.target.agentId))
           else if (command.state === "completed") cleanupError()

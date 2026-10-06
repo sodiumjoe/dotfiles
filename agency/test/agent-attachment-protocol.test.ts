@@ -2,10 +2,35 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { agentId } from "./agent-support.js"
 import { createNdjsonDecoder, parseAttachmentRequest, parseAttachmentFrame, parseSubmissionReceipt } from "../src/agent/attachment-protocol.js"
+import { createConversation } from "../src/agent/conversation.js"
+import { ATTACHMENT_LIMITS } from "../src/agent/attachment-protocol.js"
 
 const load = async () => ({ createNdjsonDecoder, parseAttachmentRequest, parseAttachmentFrame, parseSubmissionReceipt })
 const target = { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3) }
 const request = { protocol: "agency-attachment/1", target, requestId: agentId(4), op: "attach" }
+
+test("compatibility attachments accept native identity and structured display events without policy evidence", () => {
+  const conversation = createConversation(target)
+  conversation.append({ kind: "lifecycle", phase: "ready", cwd: "/workspace/a", session: { sessionId: "native", protocolVersion: 1 } })
+  conversation.append({ kind: "submitted", submissionId: agentId(5), text: "question", prompt: [{ type: "text", text: "question" }], meta: { fixture: true }, originConnectionId: agentId(6) })
+  const observed = conversation.observe(() => {})
+  const snapshot = observed.snapshot
+  const base = { protocol: "agency-attachment/1", target }
+  assert.doesNotThrow(() => parseAttachmentFrame({ ...base, type: "snapshot_begin", snapshotId: agentId(7), sessionId: "native", cwd: "/workspace/a", selection: null, metadata: snapshot.metadata, firstSeq: snapshot.firstSeq, lastSeq: snapshot.lastSeq, historyTruncated: false, currentTurn: null, limits: ATTACHMENT_LIMITS }))
+  assert.doesNotThrow(() => parseAttachmentFrame({ ...base, type: "snapshot_events", snapshotId: agentId(7), chunkIndex: 0, events: snapshot.events }))
+  observed.close(); conversation.close()
+})
+
+test("compatibility snapshot metadata accepts native plan extensions and currency", () => {
+  const conversation = createConversation(target)
+  conversation.append({ kind: "lifecycle", phase: "ready", cwd: "/workspace/a", session: { sessionId: "native", protocolVersion: 1 } })
+  conversation.append({ kind: "update", replay: false, update: { sessionUpdate: "plan", entries: [{ content: "step", priority: "low", status: "pending", extension: "preserved" }] } })
+  conversation.append({ kind: "update", replay: false, update: { sessionUpdate: "usage_update", used: 9, size: 100, cost: { amount: 1.25, currency: "credits", _meta: { detail: "preserved" } } } })
+  const observed = conversation.observe(() => {}), snapshot = observed.snapshot
+  const frame = { protocol: "agency-attachment/1", target, type: "snapshot_begin", snapshotId: agentId(7), sessionId: "native", cwd: "/workspace/a", selection: null, metadata: snapshot.metadata, firstSeq: snapshot.firstSeq, lastSeq: snapshot.lastSeq, historyTruncated: false, currentTurn: null, limits: ATTACHMENT_LIMITS }
+  assert.deepEqual(parseAttachmentFrame(frame), frame)
+  observed.close(); conversation.close()
+})
 
 test("NDJSON decodes fragmented UTF-8 and bounds individual frames in a coalesced read", async () => {
   const { createNdjsonDecoder } = await load(), received: unknown[] = []

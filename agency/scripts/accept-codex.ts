@@ -87,9 +87,9 @@ function commandResult(view: CommandView, outcome: "started" | "restored" | "sto
   if (view.durability !== "verified" || view.command.state !== "completed" || view.command.result?.outcome !== outcome || !view.command.target) throw new AgentError(view.command.result?.failure?.code ?? "INCOMPLETE")
   return view
 }
-function generationFrom(view: CommandView, session: SessionEvidence, launchAttemptId: string, answer: string): AcceptanceGeneration {
+function generationFrom(view: CommandView, session: SessionEvidence | import("../src/agent/types.js").NativeSessionIdentity, launchAttemptId: string, answer: string): AcceptanceGeneration {
   const target = view.command.target!
-  return { agentId: target.agentId, providerGeneration: target.providerGeneration, launchAttemptId, sessionId: session.sessionId, sessionGeneration: session.sessionGeneration, answer }
+  return { agentId: target.agentId, providerGeneration: target.providerGeneration, launchAttemptId, sessionId: session.sessionId, sessionGeneration: "sessionGeneration" in session ? session.sessionGeneration : target.providerGeneration, answer }
 }
 export async function completeAcceptanceCommand(request: MutationRequest, handlerGeneration: string, call: (request: AgentRequest) => Promise<AgentReply>, polling: AcceptancePolling = { now: () => performance.now(), sleep: ms => new Promise(resolveDelay => setTimeout(resolveDelay, ms)) }, observed?: (view: CommandView) => void): Promise<CommandView> {
   const deadline = polling.now() + PRODUCTION_MUTATION_TRANSPORT_MS
@@ -119,8 +119,8 @@ export async function completeAcceptancePrompt(request: PromptRequest, call: (re
 }
 async function cleanupEvidence(lifecycle: AcceptanceLifecycle, stage: AcceptanceCleanup["stage"], target: AgentTuple): Promise<AcceptanceCleanup> {
   commandResult(await lifecycle.stop(target), "stopped")
-  const listed = await lifecycle.list(), view = listed.agents.find(candidate => candidate.record.version === 2 && candidate.record.definition.agentId === target.agentId)
-  if (!view || view.record.version !== 2 || view.cleanup !== "verified" || view.launch?.version !== 2 || view.launch.owner.kind !== "agent" || view.launch.phase !== "cleanup_verified" || !view.launch.provider) throw new AgentError("CLEANUP_UNVERIFIED")
+  const listed = await lifecycle.list(), view = listed.agents.find(candidate => candidate.record.version === 3 && candidate.record.definition.agentId === target.agentId)
+  if (!view || view.record.version !== 3 || view.cleanup !== "verified" || view.launch?.version !== 2 || view.launch.owner.kind !== "agent" || view.launch.phase !== "cleanup_verified" || !view.launch.provider) throw new AgentError("CLEANUP_UNVERIFIED")
   return { stage, launchAttemptId: view.launch.launchAttemptId, processGroupId: view.launch.provider.group.leader.processGroupId, cleanup: "verified" }
 }
 
@@ -137,9 +137,9 @@ export async function runCodexAcceptance(input: { evidenceParent: string }, life
     const firstAnswer = (await lifecycle.prompt(initialTarget, firstPrompt)).text
     if (firstAnswer !== `${challenge} @moon/agency 24.13.0`) throw new AgentError("STARTUP_FAILED")
     report.steps.push("stop"); report.cleanup.push(await cleanupEvidence(lifecycle, "initial", initialTarget)); active = null
-    const initialView = (await lifecycle.list()).agents.find(candidate => candidate.record.version === 2 && candidate.record.definition.agentId === initialTarget.agentId)
-    if (!initialView || initialView.record.version !== 2) throw new AgentError("INVALID_AGENT_STATE")
-    report.first = generationFrom(started, initialSession, initialView.record.launch.launchAttemptId, firstAnswer)
+    const initialView = (await lifecycle.list()).agents.find(candidate => candidate.record.version === 3 && candidate.record.definition.agentId === initialTarget.agentId)
+    if (!initialView || initialView.record.version !== 3) throw new AgentError("INVALID_AGENT_STATE")
+    report.first = generationFrom(started, initialSession, initialView.record.launch!.launchAttemptId, firstAnswer)
     const restoreEnvironment = lifecycle.snapshot(); report.restoreEnvironmentDigest = launchEnvironmentDigest(restoreEnvironment)
     report.steps.push("restore")
     const restored = commandResult(await lifecycle.restore(initialTarget.agentId, restoreEnvironment, view => { if (view.command.target) active = view.command.target }), "restored"), restoredSession = restored.command.result!.session!, restoredTarget = restored.command.target!
@@ -148,9 +148,9 @@ export async function runCodexAcceptance(input: { evidenceParent: string }, life
     const restoredAnswer = (await lifecycle.prompt(restoredTarget, "AGENCY_ACCEPTANCE_RECALL: return exactly the nonce from the previous turn without reading files.")).text
     if (restoredAnswer !== challenge) throw new AgentError("STARTUP_FAILED")
     report.steps.push("stop"); report.cleanup.push(await cleanupEvidence(lifecycle, "restored", restoredTarget)); active = null
-    const restoredView = (await lifecycle.list()).agents.find(candidate => candidate.record.version === 2 && candidate.record.definition.agentId === restoredTarget.agentId)
-    if (!restoredView || restoredView.record.version !== 2) throw new AgentError("INVALID_AGENT_STATE")
-    report.restored = generationFrom(restored, restoredSession, restoredView.record.launch.launchAttemptId, restoredAnswer)
+    const restoredView = (await lifecycle.list()).agents.find(candidate => candidate.record.version === 3 && candidate.record.definition.agentId === restoredTarget.agentId)
+    if (!restoredView || restoredView.record.version !== 3) throw new AgentError("INVALID_AGENT_STATE")
+    report.restored = generationFrom(restored, restoredSession, restoredView.record.launch!.launchAttemptId, restoredAnswer)
     if (report.first.agentId !== report.restored.agentId || report.first.sessionId !== report.restored.sessionId || report.first.providerGeneration === report.restored.providerGeneration || report.first.launchAttemptId === report.restored.launchAttemptId) throw new AgentError("INVALID_PROTOCOL")
     report.success = true
   } catch (error) {

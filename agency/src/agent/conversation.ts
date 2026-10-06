@@ -1,14 +1,14 @@
 import { displayTitle, type AcpObservation } from "./session-events.js"
-import { AgentError, type AgentFailure, type AgentPhase, type AgentTuple, type SessionEvidence, type StartSelection } from "./types.js"
+import { AgentError, type AgentFailure, type AgentPhase, type AgentTuple, type NativeSessionIdentity, type SessionEvidence, type StartSelection, type JsonObject } from "./types.js"
 
 export type TurnState = "accepted" | "running" | "completed" | "failed"
 export type ConversationEvent =
-  | { kind: "submitted"; submissionId: string; text: string }
+  | { kind: "submitted"; submissionId: string; text: string; prompt?: JsonObject[]; meta?: JsonObject; originConnectionId?: string }
   | ({ kind: "update" } & AcpObservation)
   | { kind: "turn"; submissionId: string; state: TurnState; stopReason: import("./session-events.js").StopReason | null; failure: AgentFailure | null }
-  | { kind: "lifecycle"; phase: AgentPhase; session?: SessionEvidence | null; selection?: StartSelection; cwd?: string; failure?: AgentFailure | null }
+  | { kind: "lifecycle"; phase: AgentPhase; session?: SessionEvidence | NativeSessionIdentity | null; selection?: StartSelection; cwd?: string; failure?: AgentFailure | null }
 export type RetainedEvent = ConversationEvent & { seq: number; encodedBytes: number }
-export type ConversationMetadata = { phase: AgentPhase; session: SessionEvidence | null; selection: StartSelection | null; cwd: string; failure: AgentFailure | null; title: ReturnType<typeof displayTitle> | null; plan: unknown[]; planTruncated: boolean; usage: { used: number; size: number; cost?: unknown } | null }
+export type ConversationMetadata = { phase: AgentPhase; session: SessionEvidence | NativeSessionIdentity | null; selection: StartSelection | null; cwd: string; failure: AgentFailure | null; title: ReturnType<typeof displayTitle> | null; plan: unknown[]; planTruncated: boolean; usage: { used: number; size: number; cost?: unknown } | null }
 export type ConversationSnapshot = { target: AgentTuple; metadata: ConversationMetadata; firstSeq: number; lastSeq: number; historyTruncated: boolean; events: RetainedEvent[]; currentTurn: { submissionId: string; state: TurnState } | null }
 export type ConversationNotification = { kind: "event"; event: RetainedEvent; firstSeq: number; historyTruncated: boolean } | { kind: "closed" }
 export type ConversationListener = (notification: ConversationNotification) => void
@@ -53,7 +53,10 @@ export function createConversation(target: AgentTuple, limits: { bytes?: number;
           }
           metadata.planTruncated = metadata.plan.length < update.entries.length
         }
-        if (update.sessionUpdate === "usage_update") metadata.usage = { used: Number(update.used), size: Number(update.size), ...(update.cost ? { cost: structuredClone(update.cost) } : {}) }
+        if (update.sessionUpdate === "usage_update") {
+          const cost = update.cost as JsonObject | null | undefined
+          metadata.usage = { used: Number(update.used), size: Number(update.size), ...(cost ? { cost: { amount: cost.amount, currency: displayTitle(String(cost.currency)).title } } : {}) }
+        }
       }
       if (Buffer.byteLength(JSON.stringify(metadata)) > 65536) throw new AgentError("INVALID_PROTOCOL")
       lastSeq = event.seq; events.push(event); bytes += Buffer.byteLength(JSON.stringify(event))

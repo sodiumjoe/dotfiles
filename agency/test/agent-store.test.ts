@@ -11,7 +11,7 @@ import { MutationQueue } from "../src/handler/mutations.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord } from "../src/platform/types.js"
 import type { CatalogFileSystem } from "../src/catalog/store.js"
-import { agentFailure, AgentError, splitLaunchSpec, type AgentCommand, type AgentRecord } from "../src/agent/types.js"
+import { agentFailure, AgentError, normalizeAgentRecord, splitLaunchSpec, type AgentCommand, type AgentRecord } from "../src/agent/types.js"
 import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
 import { privateRoot } from "./control-support.js"
 
@@ -46,7 +46,7 @@ test("missing agent storage is read-only and valid updates cannot mutate specifi
   const stopping = { ...ready, phase: "stopping" as const }, stopped = { ...stopping, phase: "stopped" as const }
   await store.writeAgent(stopping, ready); await store.writeAgent(stopped, stopping)
   await assert.rejects(store.writeAgent(ready, stopped))
-  assert.deepEqual(await store.readAgent(initial.definition.agentId), stopped)
+  assert.deepEqual(await store.readAgent(initial.definition.agentId), normalizeAgentRecord(stopped))
 })
 
 test("stopped restore requires verified cleanup and preserves the stable session while rotating generations", async t => {
@@ -67,7 +67,7 @@ test("stopped restore requires verified cleanup and preserves the stable session
   await store.writeAgent(restoring, stopped)
   const restored = { ...restoring, phase: "ready" as const, session: { ...restoring.session, sessionGeneration: agentId(43) } }
   await store.writeAgent(restored, restoring)
-  assert.deepEqual((await store.readAgent(initial.definition.agentId))!.definition, initial.definition)
+  assert.deepEqual((await store.readAgent(initial.definition.agentId))!.definition, normalizeAgentRecord(initial).definition)
   assert.equal((await store.readAgent(initial.definition.agentId))!.session!.sessionId, "fixture-session")
 })
 
@@ -126,7 +126,7 @@ for (const kind of ["commands", "records"] as const) test(`retained ${kind} hist
   } else {
     const next = record()
     await store.writeAgent(next, null)
-    assert.deepEqual(await store.readAgent(next.definition.agentId), next)
+    assert.deepEqual(await store.readAgent(next.definition.agentId), normalizeAgentRecord(next))
   }
 })
 
@@ -138,14 +138,14 @@ test("agent inventory retains healthy records beside malformed entries and clear
   const bytes = await readFile(damagedPath)
   await writeFile(damagedPath, "{}", { mode: 0o600 }); await writeFile(unknownPath, "{}", { mode: 0o600 })
   const inventory = await store.inventory()
-  assert.deepEqual(inventory.agents, [healthy])
+  assert.deepEqual(inventory.agents, [normalizeAgentRecord(healthy)])
   assert.deepEqual(inventory.issues.map(issue => issue.path), [damagedPath, unknownPath])
   assert.deepEqual(inventory.issues.map(issue => issue.kind), ["agent", "unknown"])
   await store.writeCommand(sampleCommand(), null)
   await writeFile(damagedPath, bytes)
   await rm(unknownPath)
   assert.deepEqual((await store.inventory()).issues, [])
-  assert.deepEqual((await store.inventory()).agents, [healthy, damaged])
+  assert.deepEqual((await store.inventory()).agents, [healthy, damaged].map(normalizeAgentRecord))
 })
 
 for (const kind of ["mode", "hardlink", "symlink", "utf8", "oversized", "wrong-name", "unknown", "deleted", "replaced"] as const) {
@@ -186,11 +186,11 @@ test("private provider-state coexists with record and command evidence without e
   await store.writeAgent(agent, null); await store.writeCommand(command, null)
   const state = join(root, "agents/provider-state")
   await mkdir(state, { mode: 0o700 })
-  assert.deepEqual(await store.inventory(), { agents: [agent], legacyAgents: [], commands: [command], issues: [] })
+  assert.deepEqual(await store.inventory(), { agents: [normalizeAgentRecord(agent)], legacyAgents: [], commands: [command], issues: [] })
   await mkdir(join(state, agent.launch.launchAttemptId), { mode: 0o700 })
   await writeFile(join(state, agent.launch.launchAttemptId, "provider-data"), "live", { mode: 0o600 })
-  assert.deepEqual(await store.inventory(), { agents: [agent], legacyAgents: [], commands: [command], issues: [] })
-  assert.deepEqual(await store.readAgent(agent.definition.agentId), agent)
+  assert.deepEqual(await store.inventory(), { agents: [normalizeAgentRecord(agent)], legacyAgents: [], commands: [command], issues: [] })
+  assert.deepEqual(await store.readAgent(agent.definition.agentId), normalizeAgentRecord(agent))
   assert.deepEqual(await store.readCommand(command.commandId), command)
 })
 

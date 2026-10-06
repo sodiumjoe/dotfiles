@@ -1,8 +1,9 @@
 import { object } from "../catalog/types.js"
 import { id } from "../catalog/types.js"
 import type { ConversationMetadata, ConversationSnapshot, RetainedEvent } from "./conversation.js"
-import { EDITOR_TURN_LIMITS, boundedText, knownKeys, validateSessionUpdate, validateTurnInput, type StopReason } from "./session-events.js"
-import { AgentError, parseAgentFailure, parseSelection, parseSession, parseTuple, type AgentFailure, type AgentTuple, type StartSelection } from "./types.js"
+import { EDITOR_TURN_LIMITS, boundedText, knownKeys, validateNativeUpdate, validateStructuredContent, validateTurnInput, type StopReason } from "./session-events.js"
+import { validateMetadata } from "./session-config.js"
+import { AgentError, parseAgentFailure, parseSelection, parseSession, parseNativeIdentity, parseTuple, type AgentFailure, type AgentTuple, type StartSelection } from "./types.js"
 import type { SubmissionReceipt } from "./turns.js"
 
 export const ATTACHMENT_PROTOCOL = "agency-attachment/1"
@@ -12,7 +13,7 @@ export const ATTACHMENT_LIMITS = Object.freeze({ ...EDITOR_TURN_LIMITS, historyB
 type Base = { protocol: typeof ATTACHMENT_PROTOCOL; target: AgentTuple }
 export type AttachmentRequest = Base & { requestId: string } & ({ op: "attach" } | { op: "submit"; submissionId: string; text: string } | { op: "cancel" | "inspect-submission"; submissionId: string })
 export type AttachmentFrame = Base & (
-  | { type: "snapshot_begin"; snapshotId: string; sessionId: string; cwd: string; selection: StartSelection; metadata: ConversationMetadata; firstSeq: number; lastSeq: number; historyTruncated: boolean; currentTurn: ConversationSnapshot["currentTurn"]; limits: typeof ATTACHMENT_LIMITS }
+  | { type: "snapshot_begin"; snapshotId: string; sessionId: string; cwd: string; selection: StartSelection | null; metadata: ConversationMetadata; firstSeq: number; lastSeq: number; historyTruncated: boolean; currentTurn: ConversationSnapshot["currentTurn"]; limits: typeof ATTACHMENT_LIMITS }
   | { type: "snapshot_events"; snapshotId: string; chunkIndex: number; events: RetainedEvent[] }
   | { type: "snapshot_end"; snapshotId: string; firstSeq: number; lastSeq: number; chunkCount: number; historyTruncated: boolean }
   | { type: "event"; event: RetainedEvent; firstSeq: number; historyTruncated: boolean }
@@ -50,12 +51,16 @@ function currentTurn(value: unknown): void {
   if (value === null) return
   const turn = object(value); exact(turn, ["submissionId", "state"]); id(turn.submissionId); state(turn.state)
 }
+function session(value: unknown): void {
+  if (Object.hasOwn(object(value), "sessionGeneration")) parseSession(value)
+  else parseNativeIdentity(value)
+}
 function metadata(value: unknown): void {
   const item = object(value)
   exact(item, ["phase", "session", "selection", "cwd", "failure", "title", "plan", "planTruncated", "usage"])
   if (Buffer.byteLength(JSON.stringify(item)) > 65536) invalid()
   phase(item.phase)
-  if (item.session !== null) parseSession(item.session)
+  if (item.session !== null) session(item.session)
   if (item.selection !== null) parseSelection(item.selection)
   text(item.cwd, 4096, true)
   if (item.failure !== null) parseAgentFailure(item.failure)
@@ -65,8 +70,8 @@ function metadata(value: unknown): void {
     if (title.titleTruncated !== (Number(title.titleOriginalBytes) > Buffer.byteLength(String(title.title)))) invalid()
   }
   boolean(item.planTruncated)
-  validateSessionUpdate({ sessionUpdate: "plan", entries: item.plan })
-  if (item.usage !== null) validateSessionUpdate({ sessionUpdate: "usage_update", ...object(item.usage) })
+  validateNativeUpdate({ sessionUpdate: "plan", entries: item.plan })
+  if (item.usage !== null) validateNativeUpdate({ sessionUpdate: "usage_update", ...object(item.usage) })
 }
 export function parseSubmissionReceipt(value: unknown): SubmissionReceipt {
   const receipt = object(value)
@@ -83,9 +88,17 @@ export function parseRetainedEvent(value: unknown): RetainedEvent {
   const event = object(value), common = ["kind", "seq", "encodedBytes"]
   integer(event.seq, 1); integer(event.encodedBytes, 1, ATTACHMENT_FRAME_BYTES)
   if (event.kind === "submitted") {
-    exact(event, [...common, "submissionId", "text"]); id(event.submissionId); validateTurnInput(text(event.text, 262144), EDITOR_TURN_LIMITS)
+    knownKeys(event, [...common, "submissionId", "text"], [...common, "submissionId", "text", "prompt", "meta", "originConnectionId"]); id(event.submissionId); text(event.text, 262144, true)
+    if (event.prompt !== undefined) {
+      if (!Array.isArray(event.prompt) || !event.prompt.length) invalid()
+      event.prompt.forEach(validateStructuredContent)
+    } else validateTurnInput(event.text as string, EDITOR_TURN_LIMITS)
+    if (event.meta !== undefined) validateMetadata({ _meta: event.meta })
+    if (event.originConnectionId !== undefined) id(event.originConnectionId)
   } else if (event.kind === "update") {
-    exact(event, [...common, "update", "replay"]); boolean(event.replay); validateSessionUpdate(event.update)
+    knownKeys(event, [...common, "update", "replay"], [...common, "update", "replay", "params", "meta"]); boolean(event.replay); validateNativeUpdate(event.update)
+    if (event.params !== undefined) validateMetadata(object(event.params))
+    if (event.meta !== undefined) object(event.meta)
   } else if (event.kind === "turn") {
     exact(event, [...common, "submissionId", "state", "stopReason", "failure"]); id(event.submissionId); state(event.state)
     if (event.stopReason !== null) reason(event.stopReason)
@@ -93,7 +106,7 @@ export function parseRetainedEvent(value: unknown): RetainedEvent {
     if (event.state === "completed" ? event.stopReason === null || event.failure !== null : event.state === "failed" ? event.failure === null || event.stopReason !== null : event.failure !== null || event.stopReason !== null) invalid()
   } else if (event.kind === "lifecycle") {
     knownKeys(event, [...common, "phase"], [...common, "phase", "session", "selection", "cwd", "failure"]); phase(event.phase)
-    if (event.session !== undefined && event.session !== null) parseSession(event.session)
+    if (event.session !== undefined && event.session !== null) session(event.session)
     if (event.selection !== undefined) parseSelection(event.selection)
     if (event.cwd !== undefined) text(event.cwd, 4096)
     if (event.failure !== undefined && event.failure !== null) parseAgentFailure(event.failure)
@@ -118,7 +131,7 @@ export function parseAttachmentFrame(value: unknown): AttachmentFrame {
     else target(frame)
     if (frame.type === "snapshot_begin") {
       exact(frame, [...base, "snapshotId", "sessionId", "cwd", "selection", "metadata", "firstSeq", "lastSeq", "historyTruncated", "currentTurn", "limits"])
-      id(frame.snapshotId); text(frame.sessionId, 1024); text(frame.cwd, 4096); parseSelection(frame.selection); metadata(frame.metadata); boundary(frame); currentTurn(frame.currentTurn)
+      id(frame.snapshotId); text(frame.sessionId, 1024); text(frame.cwd, 4096); if (frame.selection !== null) parseSelection(frame.selection); metadata(frame.metadata); boundary(frame); currentTurn(frame.currentTurn)
       const limits = object(frame.limits); exact(limits, Object.keys(ATTACHMENT_LIMITS))
       if (Object.entries(ATTACHMENT_LIMITS).some(([key, value]) => limits[key] !== value)) invalid()
       const info = object(frame.metadata)

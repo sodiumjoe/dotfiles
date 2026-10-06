@@ -9,14 +9,15 @@ import type { CatalogFileSystem } from "../catalog/store.js"
 import { id } from "../catalog/types.js"
 import { UUID } from "../control/protocol.js"
 import { assertPrivateDirectory, readLaunchRecordForReconciliation } from "../platform/private-state.js"
-import { AgentError, parseAgentCommand, parseAgentRecord, parseLegacyAgentRecord, type AgentCommand, type AgentPhase, type AgentRecord, type LegacyAgentRecord } from "./types.js"
+import { AgentError, parseAgentCommand, parseAgentCommandV3, normalizeAgentRecord, parseAgentRecord, parseAgentRecordV3, parseLegacyAgentRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type AgentPhase, type AgentRecord as AgentRecordV2, type AgentRecordV3 as AgentRecord, type LegacyAgentRecord } from "./types.js"
+type AgentCommand = AgentCommandV2 | AgentCommandV3
 
 export type AgentStateIssue = { kind: "agent" | "command" | "unknown"; id: string | null; path: string; message: string }
 export type AgentInventory = { agents: AgentRecord[]; legacyAgents: LegacyAgentRecord[]; commands: AgentCommand[]; issues: AgentStateIssue[] }
 export type AgentStore = {
   readAgent(id: string): Promise<AgentRecord | null>
   readCommand(id: string): Promise<AgentCommand | null>
-  writeAgent(next: AgentRecord, expected: AgentRecord | null): Promise<void>
+  writeAgent(next: AgentRecord | AgentRecordV2, expected: AgentRecord | AgentRecordV2 | null): Promise<void>
   writeCommand(next: AgentCommand, expected: AgentCommand | null): Promise<void>
   verifyDurability(kind: "agent" | "command"): Promise<void>
   inventory(): Promise<AgentInventory>
@@ -51,7 +52,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     if (!file) return null
     const raw = decodeJson(file.bytes)
     if ((raw as { version?: unknown }).version === 1) { if (parseLegacyAgentRecord(raw).spec.agentId !== agentId) unavailable(); return null }
-    const value = parseAgentRecord(raw)
+    const value = (raw as { version: unknown }).version === 3 ? parseAgentRecordV3(raw) : normalizeAgentRecord(parseAgentRecord(raw))
     if (value.definition.agentId !== agentId) unavailable()
     return value
   }
@@ -60,7 +61,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     if (!file) return null
     const raw = decodeJson(file.bytes)
     if ((raw as { version?: unknown }).version === 1) { if (id((raw as { commandId?: unknown }).commandId) !== commandId) unavailable(); return null }
-    const value = parseAgentCommand(raw)
+    const value = (raw as { version: unknown }).version === 3 ? parseAgentCommandV3(raw) : parseAgentCommand(raw)
     if (value.commandId !== commandId) unavailable()
     return value
   }
@@ -94,9 +95,9 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
             const raw = decodeJson(file.bytes)
             if (kind === "records") {
               if ((raw as { version?: unknown }).version === 1) { const value = parseLegacyAgentRecord(raw); if (value.spec.agentId !== recordId) unavailable(); result.legacyAgents.push(value) }
-              else { const value = parseAgentRecord(raw); if (value.definition.agentId !== recordId) unavailable(); result.agents.push(value) }
+              else { const value = (raw as { version: unknown }).version === 3 ? parseAgentRecordV3(raw) : normalizeAgentRecord(parseAgentRecord(raw)); if (value.definition.agentId !== recordId) unavailable(); result.agents.push(value) }
             } else if ((raw as { version?: unknown }).version === 1) { if (id((raw as { commandId?: unknown }).commandId) !== recordId) unavailable() }
-            else { const value = parseAgentCommand(raw); if (value.commandId !== recordId) unavailable(); result.commands.push(value) }
+            else { const value = (raw as { version: unknown }).version === 3 ? parseAgentCommandV3(raw) : parseAgentCommand(raw); if (value.commandId !== recordId) unavailable(); result.commands.push(value) }
             known.set(path, kind === "records" ? "agent" : "command")
           } catch (error) {
             const recordId = name.endsWith(".json") ? name.slice(0, -5) : ""
@@ -164,31 +165,38 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
       await sync(path); await sync(directory); await sync(root)
     },
     async writeAgent(input, expected) {
-      const value = parseAgentRecord(input), current = await readAgent(value.definition.agentId)
+      const value = normalizeAgentRecord(input)
+      const normalizedExpected = expected === null ? null : normalizeAgentRecord(expected)
+      const previous = await evidence(join(directory, "records", value.definition.agentId + ".json"))
+      const raw = previous === null ? null : decodeJson(previous.bytes)
+      const current = raw === null ? null : normalizeAgentRecord((raw as { version?: unknown }).version === 3 ? parseAgentRecordV3(raw) : parseAgentRecord(raw))
+      if (current && current.definition.agentId !== value.definition.agentId) unavailable()
       if (!isDeepStrictEqual(value, current)) {
-        if (!isDeepStrictEqual(current, expected)) conflict()
-        if (current === null) { if (value.phase !== "starting") conflict() }
+        if (!isDeepStrictEqual(current, normalizedExpected)) conflict()
+        if (current === null) { if (value.phase !== "starting" && !(value.definition.origin === "import" && value.phase === "stopped" && value.launch === null)) conflict() }
         else {
-          if (!isDeepStrictEqual(value.definition, current.definition) || !edges[current.phase].includes(value.phase)) conflict()
+          if (!isDeepStrictEqual(value.definition, current.definition) || value.phase !== current.phase && !edges[current.phase].includes(value.phase)) conflict()
           const restoring = value.phase === "restoring" && ["stopped", "recoverable"].includes(current.phase)
           if (restoring || value.phase === "recoverable") {
-            const launch = await readLaunchRecordForReconciliation(join(root, "launches", current.launch.launchAttemptId + ".json"))
-            if (!current.session || launch?.phase !== "cleanup_verified" || launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== current.definition.agentId || launch.owner.providerGeneration !== current.launch.providerGeneration || launch.handlerGeneration !== current.launch.handlerGeneration) conflict()
+            if (current.launch) {
+              const launch = await readLaunchRecordForReconciliation(join(root, "launches", current.launch.launchAttemptId + ".json"))
+              if (!current.session || launch?.phase !== "cleanup_verified" || launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== current.definition.agentId || launch.owner.providerGeneration !== current.launch.providerGeneration || launch.handlerGeneration !== current.launch.handlerGeneration) conflict()
+            } else if (!current.session || current.definition.origin !== "import") conflict()
           }
           if (restoring) {
-            if (["providerGeneration", "launchAttemptId", "commandId"].some(field => value.launch[field as keyof typeof value.launch] === current.launch[field as keyof typeof current.launch]) || !isDeepStrictEqual(value.session, current.session)) conflict()
+            if (!value.launch || current.launch && ["providerGeneration", "launchAttemptId", "commandId"].some(field => value.launch![field as keyof NonNullable<typeof value.launch>] === current.launch![field as keyof NonNullable<typeof current.launch>]) || !isDeepStrictEqual(value.session, current.session)) conflict()
           } else {
             if (!isDeepStrictEqual(value.launch, current.launch)) conflict()
             if (current.session !== null && !isDeepStrictEqual(value.session, current.session)) {
-              if (current.phase !== "restoring" || value.phase !== "ready" || !value.session || value.session.sessionGeneration === current.session.sessionGeneration || !isDeepStrictEqual({ ...value.session, sessionGeneration: current.session.sessionGeneration }, current.session)) conflict()
+              conflict()
             }
           }
         }
       }
-      await publish(join(directory, "records", value.definition.agentId + ".json"), value, expected)
+      await publish(join(directory, "records", value.definition.agentId + ".json"), value, raw)
     },
     async writeCommand(input, expected) {
-      const value = parseAgentCommand(input), current = await readCommand(value.commandId)
+      const value = input.version === 3 ? parseAgentCommandV3(input) : parseAgentCommand(input), current = await readCommand(value.commandId)
       if (!isDeepStrictEqual(value, current)) {
         if (!isDeepStrictEqual(current, expected)) conflict()
         if (current === null) { if (value.state !== "pending" && !(value.op === "start" && value.target === null && value.result?.outcome === "failed")) conflict() }

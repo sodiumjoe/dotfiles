@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readFileSync } from "node:fs"
-import { validateSessionUpdate } from "../src/agent/session-events.js"
+import { validateNativeUpdate, validateSessionUpdate } from "../src/agent/session-events.js"
 import { agentId } from "./agent-support.js"
 import { createConversation } from "../src/agent/conversation.js"
 
@@ -71,6 +71,30 @@ test("conversation contains observer mutation and exceptions and releases listen
   conversation.close()
   assert.equal(seen.at(-1).kind, "closed")
   assert.throws(() => conversation.append({ kind: "submitted", submissionId: agentId(4), text: "late" }), { code: "NOT_READY" })
+})
+
+test("usage cost extensions remain in history without overflowing compact metadata", () => {
+  const conversation = createConversation(target), seen: unknown[] = []
+  const update = validateNativeUpdate({ sessionUpdate: "usage_update", used: 9, size: 100, cost: { amount: 1.25, currency: "USD", _meta: { detail: "x".repeat(70000) } } })
+  conversation.observe(notification => seen.push(notification))
+  conversation.append({ kind: "update", replay: false, update })
+  const snapshot = conversation.observe(() => {}).snapshot
+  assert.deepEqual(snapshot.metadata.usage, { used: 9, size: 100, cost: { amount: 1.25, currency: "USD" } })
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot.metadata)) <= 65536)
+  assert.equal(snapshot.events.length, 1)
+  assert.equal(seen.length, 1)
+  assert.deepEqual(snapshot.events[0]?.kind === "update" && snapshot.events[0].update, update)
+  conversation.close()
+})
+
+test("compact usage currency is bounded without rejecting the native update", () => {
+  const conversation = createConversation(target)
+  const update = validateNativeUpdate({ sessionUpdate: "usage_update", used: 9, size: 100, cost: { amount: 1.25, currency: "x".repeat(70000) } })
+  conversation.append({ kind: "update", replay: false, update })
+  const snapshot = conversation.observe(() => {}).snapshot
+  assert.deepEqual(snapshot.metadata.usage, { used: 9, size: 100, cost: { amount: 1.25, currency: "x".repeat(1024) } })
+  assert.deepEqual(snapshot.events[0]?.kind === "update" && snapshot.events[0].update, update)
+  conversation.close()
 })
 
 test("compact metadata survives display eviction with bounded title and plan", async () => {

@@ -7,6 +7,7 @@ import { staticProductionContracts } from "./production-contracts.js"
 export type ContractDeadlines = { commandMs: number; spawnMs: number; initializeMs: number; sessionMs: number; optionMs: number; promptMs: number; transportCloseMs: number; processTerminateMs: number; absenceMs: number; overallMs: number }
 export type LaunchContract = { id: string; providerId: ProviderId; adapterPackage: string; adapterVersion: string; sessionLoad: boolean; modes: Capability; reasoning: Capability; effectiveMode: string | null; permissionProfiles: string[]; modelOption: string; reasoningOption: string | null; modeOption: string | null; permissionEvidence: PermissionEvidence; deadlines: ContractDeadlines }
 export type ConfiguredLaunchContract = LaunchContract & { entrypoint: string; executable: string; fingerprint: string }
+export const cleanupBudget = (contract: LaunchContract): number => contract.deadlines.processTerminateMs + contract.deadlines.absenceMs + contract.deadlines.transportCloseMs
 
 const deadlineKeys = ["commandMs", "spawnMs", "initializeMs", "sessionMs", "optionMs", "promptMs", "transportCloseMs", "processTerminateMs", "absenceMs", "overallMs"] as const
 function parseDeadlines(input: unknown): ContractDeadlines {

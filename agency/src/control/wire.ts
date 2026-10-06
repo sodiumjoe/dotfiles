@@ -48,7 +48,7 @@ export function receiveFrame(socket: Socket, timeoutMs = 5000): Promise<unknown>
     }
     const failed = (): void => finish(new ControlError("UNAVAILABLE", "socket failed"))
     const closed = (): void => finish(new ControlError("UNAVAILABLE", "socket closed before complete frame"))
-    const timer = setTimeout(() => finish(new ControlError("INCOMPLETE", "exchange timed out")), timeoutMs)
+    const timer = timeoutMs > 0 ? setTimeout(() => finish(new ControlError("INCOMPLETE", "exchange timed out")), timeoutMs) : undefined
     socket.on("data", data); socket.once("end", end); socket.once("error", failed); socket.once("close", closed)
   })
 }

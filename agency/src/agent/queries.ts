@@ -38,8 +38,8 @@ export function launchChoices(evidence: LaunchEvidence, contract: ConfiguredLaun
 }
 export function inventoryPage(state: { revision: string; agents: Array<AgentView | LegacyAgentView>; issues: AgentStateIssue[] }, raw: PageInput): AgentPage {
   const input = parsePageInput(raw), filters = digest(JSON.stringify([input.cwd ?? null, input.activeOnly ?? false]))
-  const agentId = (a: AgentView | LegacyAgentView): string => a.record.version === 2 ? a.record.definition.agentId : a.record.spec.agentId
-  const agents = state.agents.filter(a => !input.cwd || (a.record.version === 2 ? a.record.definition.cwd : a.record.spec.checkout.root.path) === input.cwd).sort((a, b) => agentId(a).localeCompare(agentId(b)))
+  const agentId = (a: AgentView | LegacyAgentView): string => a.record.version === 3 ? a.record.definition.agentId : a.record.spec.agentId
+  const agents = state.agents.filter(a => !input.cwd || (a.record.version === 3 ? a.record.definition.cwd : a.record.spec.checkout.root.path) === input.cwd).sort((a, b) => agentId(a).localeCompare(agentId(b)))
   const issues = [...state.issues].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
   let after: string | null = null, issueOffset = 0
   if (input.cursor) {

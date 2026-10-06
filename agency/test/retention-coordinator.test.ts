@@ -11,7 +11,7 @@ import { createCatalogService } from "../src/catalog/service.js"
 import { CatalogError, failure, type ProviderProfile } from "../src/catalog/types.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { createAgentService } from "../src/agent/service.js"
-import { agentFailure, AgentError, type AgentCommand } from "../src/agent/types.js"
+import { agentFailure, AgentError, normalizeAgentRecord, parseAgentCommandV3, parseAgentRecordV3, type AgentCommand } from "../src/agent/types.js"
 import { MutationQueue, type HandlerMutations } from "../src/handler/mutations.js"
 import { readShutdownInventory, writeShutdownReceipt } from "../src/handler/receipt.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
@@ -52,6 +52,20 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
   const record = (attempt: string, handler: string, owner: string): ManagedLaunchRecord => ({ version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: owner }, handlerGeneration: handler, launchAttemptId: attempt, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
   return { root, hostId, generation, queue, adapter, retention, catalogStore, agentStore, catalog, agents, mutations, coordinator, setTime(value: number) { now = value }, setFailure(value: boolean) { fail = value }, advance() { now += 600001; tick?.() }, invocations: () => invocations }
 }
+
+test("imported native history retains its creation receipt without invented launch evidence", async t => {
+  const f = await fixture(t), base = normalizeAgentRecord(sampleAgent())
+  const agent = parseAgentRecordV3({ ...base, definition: { ...base.definition, origin: "import" }, phase: "stopped", launch: null, session: { sessionId: "saved-native", protocolVersion: 1 } })
+  const command = parseAgentCommandV3({ version: 3, hostId: f.hostId, commandId: agent.definition.createdCommandId, handlerGeneration: randomUUID(), agentId: agent.definition.agentId, op: "import", input: { backendId: "codex-acp", nativeSessionId: "saved-native", cwd: agent.definition.cwd }, target: null, state: "pending", result: null })
+  await f.agentStore.writeCommand(command, null)
+  await f.agentStore.writeAgent(agent, null)
+  await f.agentStore.writeCommand({ ...command, state: "completed", result: { outcome: "imported", target: null, failure: null, session: agent.session } }, command)
+  await f.coordinator.initialize()
+  assert.deepEqual(f.coordinator.diagnostics(), [])
+  assert.equal((await f.agentStore.inventory()).commands.length, 1)
+  assert.equal((await f.agentStore.inventory()).agents.length, 1)
+  assert.deepEqual(await readdir(join(f.root, "launches")), [])
+})
 
 test("twenty successful and twenty failed automatic batches leave only the current cache", async t => {
   const f = await fixture(t)

@@ -4,8 +4,7 @@ import { createConnection, createServer } from "node:net"
 import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { AGENT_PROTOCOL, agentErrorReply, agentExchangeTimeout, exchangeAgent, parseAgentReply, parseAgentRequest, validateAgentReply, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
-import { PRODUCTION_PROMPT_TRANSPORT_MS } from "../src/agent/production-contracts.js"
-import { AgentError, parsePromptInput, type PromptView } from "../src/agent/types.js"
+import { AgentError, normalizeAgentRecord, parsePromptInput, type PromptView } from "../src/agent/types.js"
 import { projectRestoreInput } from "../src/agent/types.js"
 import { parseRequest, parseReply } from "../src/control/protocol.js"
 import { serveProtocols } from "../src/control/wire.js"
@@ -30,10 +29,25 @@ test("query framing strictly validates choices, pages, filters and resync errors
   assert.equal(parseAgentReply(agentErrorReply(parseAgentRequest(page), new AgentError("RESYNC_REQUIRED"))).ok, false)
 })
 
-test("agent prompt transport uses the production contract deadline plus close grace", () => {
+test("compatibility prompt exchange stays pending beyond the former turn deadline", async t => {
   const spec = sampleSpec(), prompt: AgentRequest = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: spec.handlerGeneration, op: "agent_prompt", input: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration, text: "challenge" } }
-  assert.equal(PRODUCTION_PROMPT_TRANSPORT_MS, 95000)
-  assert.equal(agentExchangeTimeout(prompt), 95000)
+  const root = await privateRoot(t), path = join(root, "socket"), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const server = createServer({ allowHalfOpen: true }, socket => { void serveProtocols(socket, async () => { throw new Error() }, async () => { throw new Error() }, 5000, async request => {
+    entered.resolve(); await release.promise
+    return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ok: true, result: { state: "prompt", target: { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration }, stopReason: "end_turn", text: "answer" } }
+  }) })
+  await new Promise<void>(resolve => server.listen(path, resolve))
+  t.after(() => new Promise<void>(resolve => { release.resolve(); server.close(() => resolve()) }))
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  let settled = false
+  const result = exchangeAgent(createConnection(path), prompt)
+  void result.then(() => { settled = true }, () => { settled = true })
+  await entered.promise
+  t.mock.timers.tick(190000)
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(settled, false)
+  release.resolve()
+  assert.equal((await result).ok, true)
   assert.equal(agentExchangeTimeout(request()), 5000)
 })
 
@@ -50,13 +64,14 @@ test("restore framing projects secrets to a digest and rejects cwd or authority 
 })
 
 test("current can frame a restoring session before its new process launch is published", () => {
-  const record = { ...sampleAgent(), phase: "restoring", session: sampleSession() }
+  const record = { ...normalizeAgentRecord(sampleAgent()), phase: "restoring", session: { sessionId: "fixture-session", protocolVersion: 1 } }
   const reply = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/workspace/a", agents: [{ record, live: true, launch: null, cleanup: "not_launched", unavailable: null }] } }
   assert.doesNotThrow(() => parseAgentReply(reply))
 })
 
 test("agent list frames a mismatched launch as a scoped diagnostic beside a healthy agent", () => {
-  const damaged = sampleAgent(), healthy = { ...sampleAgent(), definition: { ...sampleAgent().definition, agentId: agentId(61) }, launch: { ...sampleAgent().launch, providerGeneration: agentId(62), launchAttemptId: agentId(63), commandId: agentId(64) } }
+  const damaged = normalizeAgentRecord(sampleAgent()), healthy = normalizeAgentRecord({ ...sampleAgent(), definition: { ...sampleAgent().definition, agentId: agentId(61) }, launch: { ...sampleAgent().launch, providerGeneration: agentId(62), launchAttemptId: agentId(63), commandId: agentId(64) } })
+  assert.ok(damaged.launch)
   const launch = { version: 2 as const, owner: { kind: "agent" as const, agentId: agentId(65), providerGeneration: damaged.launch.providerGeneration }, handlerGeneration: damaged.launch.handlerGeneration, launchAttemptId: damaged.launch.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, phase: "launch_pending" as const, provider: null, reason: null }
   const issue = { kind: "agent" as const, id: damaged.definition.agentId, path: `/state/launches/${damaged.launch.launchAttemptId}.json`, message: "launch ownership mismatch" }
   const reply = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "agents", agents: [{ record: healthy, launch: null, live: false, cleanup: "not_launched", unavailable: null }, { record: damaged, launch, live: false, cleanup: "unverified", unavailable: issue }], issues: [] } }
@@ -138,7 +153,7 @@ test("current outside a Git checkout is an empty exact-directory result", () => 
 })
 
 test("current reply rejects duplicate or mismatched directory entries", () => {
-  const view = { record: sampleAgent(), launch: null, live: true, cleanup: "not_launched", unavailable: null }
+  const view = { record: normalizeAgentRecord(sampleAgent()), launch: null, live: true, cleanup: "not_launched", unavailable: null }
   const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true, result: { state: "current", cwd: "/workspace/a", agents: [view] } }
   assert.doesNotThrow(() => parseAgentReply(base))
   assert.throws(() => parseAgentReply({ ...base, result: { ...base.result, agents: [view, view] } }), { code: "INVALID_PROTOCOL" })
@@ -158,7 +173,7 @@ test("production Handler uses its static registry before configured-provider evi
   const f = await controlFixture(t), handler = await f.start(), initial = request().op === "agent_start" ? (request() as Extract<AgentRequest, { op: "agent_start" }>).input : undefined
   assert.ok(initial)
   const reply = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: handler.record.generation, op: "agent_start", input: { ...initial, handlerGeneration: handler.record.generation } })
-  assert.ok(!reply.ok && reply.error.code === "MODEL_UNAVAILABLE")
+  assert.equal(reply.ok ? "unexpected success" : reply.error.code, "UNAVAILABLE")
   const list = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: agentId(11), handlerGeneration: handler.record.generation, op: "agent_list" })
   assert.ok(list.ok && list.result.state === "agents" && list.result.agents.length === 0)
   assert.deepEqual(await readdir(join(f.paths.persistentRoot, "launches")), [])

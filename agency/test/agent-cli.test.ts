@@ -8,6 +8,12 @@ import { agentId, agentServiceFixture, sampleAgent, sampleCommand, sampleSession
 import type { HandlerInspection } from "../src/platform/types.js"
 
 const flags = ["--provider", "codex-acp", "--model", "model-a", "--reasoning", "high", "--mode", "review", "--permission-profile", "fixture-deny-v1", "--json"]
+test("restore forwards fresh MCP JSON without retaining credentials in command input", async () => {
+  const f = fixture(), servers = [{ type: "http", name: "context", url: "https://fixture", headers: [{ name: "Authorization", value: "fresh-secret" }] }]
+  assert.equal(await runControl(["agent", "restore", agentId(1), "--mcp-servers-json", JSON.stringify(servers), "--json"], f.deps), 0)
+  assert.deepEqual((f.calls[0] as any).input.nativeParams, { mcpServers: servers })
+  assert.equal(JSON.stringify(f.output()).includes("fresh-secret"), false)
+})
 test("initial expected generation permits a fresh command and lost stdout recovery only inspects it", async () => {
   const f = fixture(), commandId = agentId(77), generation = f.inspection.record.generation
   assert.equal(await runControl(["agent", "start", ...flags, "--command-id", commandId, "--expected-handler-generation", generation], f.deps), 0)
@@ -272,7 +278,7 @@ test("stop dispatch pins the exact provider tuple without lazy startup or cwd ac
   assert.equal(f.starts(), 0); assert.equal(f.calls.length, 1)
 })
 
-test("agent prompt sends one pinned turn with the production deadline", async () => {
+test("agent prompt sends one pinned turn without a response deadline", async () => {
   const f = fixture(), target = sampleAgent().launch, calls: AgentRequest[] = [], timeouts: number[] = []
   f.deps.start = async () => { throw new Error("prompt must not start a Handler") }
   f.deps.cwd = () => { throw new Error("prompt must not read cwd") }
@@ -283,7 +289,7 @@ test("agent prompt sends one pinned turn with the production deadline", async ()
   }
   assert.equal(await runControl(["agent", "prompt", agentId(1), "--text", "--literal\nline two", "--handler-generation", target.handlerGeneration, "--provider-generation", target.providerGeneration, "--json"], f.deps), 0)
   assert.deepEqual(calls.map(call => call.op), ["agent_prompt"])
-  assert.deepEqual(timeouts, [95000])
+  assert.deepEqual(timeouts, [0])
   assert.equal(f.starts(), 0)
   assert.deepEqual(f.output().result, { state: "prompt", target: { agentId: agentId(1), handlerGeneration: target.handlerGeneration, providerGeneration: target.providerGeneration }, stopReason: "end_turn", text: "answer" })
 })

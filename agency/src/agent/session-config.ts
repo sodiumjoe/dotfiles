@@ -6,6 +6,53 @@ export type RequestedSettings = { modelId?: string; modeId?: string; configValue
 export type RestorableSettings = RequestedSettings
 export type SessionConfiguration = { configOptions: JsonObject[]; models: JsonObject | null; modes: JsonObject | null; availableCommands: JsonObject[]; revision: number }
 
+export function validateMetadata(value: Record<string, unknown>): void {
+  if (Object.hasOwn(value, "_meta")) object(value._meta)
+}
+
+export function validateConfiguration(result: JsonObject): void {
+  validateMetadata(result)
+  if (Object.hasOwn(result, "configOptions")) {
+    if (!Array.isArray(result.configOptions)) throw new Error("invalid configuration options")
+    const ids = new Set<string>()
+    for (const raw of result.configOptions) {
+      const option = object(raw), id = text(option.id, 1024)
+      validateMetadata(option)
+      if (ids.has(id)) throw new Error("duplicate configuration option")
+      ids.add(id)
+      if (typeof option.type !== "string") throw new Error("invalid configuration option type")
+      if (option.type === "boolean" && typeof option.currentValue !== "boolean") throw new Error("invalid boolean option")
+      if (option.type !== "select") continue
+      if (!Array.isArray(option.options) || typeof option.currentValue !== "string") throw new Error("invalid select option")
+      const values = new Set<string>()
+      const choice = (raw: unknown) => {
+        const item = object(raw), value = text(item.value, 4096)
+        validateMetadata(item)
+        if (values.has(value)) throw new Error("duplicate select value")
+        values.add(value)
+      }
+      for (const raw of option.options) {
+        const item = object(raw)
+        validateMetadata(item)
+        if (Object.hasOwn(item, "options")) {
+          text(item.group, 1024)
+          if (!Array.isArray(item.options)) throw new Error("invalid option group")
+          item.options.forEach(choice)
+        } else choice(item)
+      }
+      if (!values.has(option.currentValue)) throw new Error("unadvertised current value")
+    }
+  }
+  for (const [field, choices, key, current] of [["models", "availableModels", "modelId", "currentModelId"], ["modes", "availableModes", "id", "currentModeId"]]) {
+    if (!Object.hasOwn(result, field!)) continue
+    const state = object(result[field!])
+    validateMetadata(state)
+    if (!Array.isArray(state[choices!])) throw new Error("invalid legacy configuration")
+    const ids = (state[choices!] as unknown[]).map(raw => { const item = object(raw); validateMetadata(item); return text(item[key!], 1024) })
+    if (new Set(ids).size !== ids.length || !ids.includes(text(state[current!], 1024))) throw new Error("invalid current legacy selection")
+  }
+}
+
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value)
   if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value)

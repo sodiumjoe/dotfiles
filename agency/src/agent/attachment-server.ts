@@ -63,7 +63,7 @@ export function serveAttachment(socket: Socket, agents: AgentService, expectedHa
         if (phase === "closing") { observed.close(); return }
         observation = { close: observed.close }; snapshot = observed.snapshot
         const value = snapshot, snapshotId = randomUUID(), metadata = value.metadata
-        if (!metadata.session || !metadata.selection || metadata.phase !== "ready") throw new AgentError("NOT_READY")
+        if (!metadata.session || metadata.phase !== "ready") throw new AgentError("NOT_READY")
         const bounds = { firstSeq: value.firstSeq, lastSeq: value.lastSeq, historyTruncated: value.historyTruncated }
         await write(encode({ type: "snapshot_begin", snapshotId, sessionId: metadata.session.sessionId, cwd: metadata.cwd, selection: metadata.selection, metadata, ...bounds, currentTurn: value.currentTurn, limits: ATTACHMENT_LIMITS }))
         let chunkIndex = 0, index = 0

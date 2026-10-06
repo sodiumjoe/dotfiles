@@ -92,8 +92,7 @@ try {
         return { ...owner, async cleanup() { const record = await owner.cleanup(); await pause("stop-verified"); return record } }
       }, async observeLaunchEvidence(spec, expected) {
         if (++evidenceCalls === 5) await startupHang("evidence")
-        const current = await createCatalogStore(config.paths.persistentRoot).readCurrent()
-        if (!current || current.snapshotId !== spec.catalogSnapshotId || !isDeepStrictEqual(current.providers[0], spec.catalogEvidence) || !isDeepStrictEqual(config.profile, expected.profile) || !isDeepStrictEqual(await observeConfig(config.profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
+        if (!isDeepStrictEqual(config.profile, expected.profile) || !isDeepStrictEqual(await observeConfig(config.profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
       }, fatalStartupTimeout(spec): never {
         if (!config.startupHang || spec.handlerGeneration !== generation) throw new Error("unexpected fixture startup timeout")
         const handlerPid = process.pid

@@ -5,6 +5,7 @@ import { keys, object, providerId, text, type ProviderId } from "../catalog/type
 import { assertPrivateDirectory } from "../platform/private-state.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
 import { canonicalJson, parseRequestedSettings, type RequestedSettings } from "./session-config.js"
+import { AgentError } from "./types.js"
 
 export type Backend = { id: ProviderId; args: string[]; environmentDefaults: LaunchEnvironment; initial: RequestedSettings; compatibilityId: string }
 export type BackendConfig = { version: 1; defaultBackendId: ProviderId; backends: Backend[] }
@@ -35,11 +36,11 @@ export async function readBackendConfig(root: string): Promise<BackendConfig> {
   const catalog = join(root, "catalog")
   try { await assertPrivateDirectory(catalog) } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-    throw new Error("Codex backend is not configured")
+    throw new AgentError("UNAVAILABLE")
   }
   const bytes = await readBoundedFile(join(catalog, "backends.json"), 65536, true)
   if (bytes !== null) return parseBackendConfig(decodeJson(bytes))
-  if (!(await readProfiles(root)).some(profile => profile.enabled && profile.id === "codex-acp")) throw new Error("Codex default backend is unavailable")
+  if (!(await readProfiles(root)).some(profile => profile.enabled && profile.id === "codex-acp")) throw new AgentError("UNAVAILABLE")
   return { version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: { CODEX_PATH: join(homedir(), "bin/acp-codex"), INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" }, initial: { modeId: "agent-full-access" }, compatibilityId: "codex-acp-1.7" }] }
 }
 
