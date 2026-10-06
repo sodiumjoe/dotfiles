@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { spawn, execFile } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { randomUUID } from "node:crypto"
@@ -7,16 +7,20 @@ import { join } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import type { TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 import type { ProviderId } from "../src/catalog/types.js"
-import type { JsonObject } from "../src/agent/session-config.js"
+import type { JsonObject, JsonValue } from "../src/agent/session-config.js"
 import { privateRoot } from "./control-support.js"
 import { agentHandlerFixture } from "./agent-support.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { agentTuple } from "../src/agent/recovery.js"
+import { until } from "./control-support.js"
 
 export type ObservedFrame = { id?: string | number; method?: string; params?: JsonObject; result?: JsonObject }
 export type AcpPeer = {
+  delayResponse(method: string): Promise<void>
+  releaseResponse(method: string): Promise<void>
   request(method: string, params: JsonObject): Promise<JsonObject>
   notify(method: string, params: JsonObject): void
   next(method: "session/request_permission"): Promise<{ id: string | number; params: JsonObject }>
@@ -30,7 +34,8 @@ export type AcpPeer = {
 export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
   let id = 0, buffer = "", closed = false
   const decoder = new TextDecoder("utf-8", { fatal: true }), frames: JsonObject[] = []
-  const pending = new Map<number, { resolve(value: JsonObject): void; reject(error: Error): void }>()
+  const pending = new Map<number, { method: string; resolve(value: JsonObject): void; reject(error: Error): void }>()
+  const delayed = new Set<string>(), held = new Map<string, Array<() => void>>()
   const waits = new Set<() => void>()
   const fail = (error: Error) => { closed = true; for (const call of pending.values()) call.reject(error); pending.clear(); for (const wake of waits) wake() }
   const send = (frame: JsonObject) => { if (closed) throw new Error("ACP peer closed"); writable.write(JSON.stringify({ jsonrpc: "2.0", ...frame }) + "\n") }
@@ -46,11 +51,15 @@ export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
         else {
           const call = pending.get(Number(frame.id))
           if (call) {
-            pending.delete(Number(frame.id))
-            if (frame.error) {
-              const error = frame.error as JsonObject, agency = (error.data as JsonObject | undefined)?.agency as JsonObject | undefined
-              call.reject(Object.assign(new Error(String(error.message)), { code: agency?.code ?? error.code }))
-            } else call.resolve(frame.result as JsonObject)
+            const complete = () => {
+              pending.delete(Number(frame.id))
+              if (frame.error) {
+                const error = frame.error as JsonObject, agency = (error.data as JsonObject | undefined)?.agency as JsonObject | undefined
+                call.reject(Object.assign(new Error(String(error.message)), { code: agency?.code ?? error.code }))
+              } else call.resolve(frame.result as JsonObject)
+            }
+            if (delayed.has(call.method)) { const callbacks = held.get(call.method) ?? []; callbacks.push(complete); held.set(call.method, callbacks) }
+            else complete()
           }
         }
         for (const wake of waits) wake()
@@ -75,9 +84,11 @@ export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
     }
   }
   return {
+    async delayResponse(method: string) { delayed.add(method) },
+    async releaseResponse(method: string) { delayed.delete(method); const callbacks = held.get(method) ?? []; held.delete(method); for (const complete of callbacks) complete() },
     request(method, params) {
       const requestId = ++id
-      return new Promise((resolve, reject) => { pending.set(requestId, { resolve, reject }); try { send({ id: requestId, method, params }) } catch (error) { pending.delete(requestId); reject(error) } })
+      return new Promise((resolve, reject) => { pending.set(requestId, { method, resolve, reject }); try { send({ id: requestId, method, params }) } catch (error) { pending.delete(requestId); reject(error) } })
     },
     notify: (method, params) => send({ method, params }),
     async next(method: string) {
@@ -122,7 +133,7 @@ export async function acpFixture(t: TestContext) {
     assert.ok(target)
     return target
   }
-  return { ...f, environment, tuple,
+  return { ...f, environment, tuple, onCleanup: (cleanup: () => Promise<void>) => t.after(cleanup), diagnostic: (message: string) => t.diagnostic(message),
     async connect() {
       const socket = createConnection(join(f.paths.runtimeRoot, "acp.sock"))
       socket.write(JSON.stringify({ jsonrpc: "2.0", method: "agency/connect", params: { handlerGeneration: (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation, environment } }) + "\n")
@@ -140,4 +151,46 @@ export async function acpFixture(t: TestContext) {
     async requests(backend: ProviderId): Promise<ObservedFrame[]> { try { return (await readFile(join(f.root, backend + ".jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line)) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error } },
     async release(_backend: ProviderId) { await writeFile(join(f.root, "release-prompt"), "released", { mode: 0o600 }) },
   }
+}
+
+export type AcpFixture = Awaited<ReturnType<typeof acpFixture>>
+export type EditorFixture = { lua(expression: string): Promise<JsonValue>; closeTab(): Promise<void>; exit(): Promise<void>; pid: number }
+const exec = promisify(execFile)
+
+export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
+  const repo = fileURLToPath(new URL("../../../", import.meta.url)), root = join(f.root, "editor-" + randomUUID())
+  await mkdir(root, { mode: 0o700 })
+  const config = join(root, "endpoint.json"), socket = join(root, "nvim.sock")
+  await writeFile(config, JSON.stringify({ paths: f.paths, environment: f.environment }), { mode: 0o600 })
+  const executable = process.env.NVIM_TEST_EXECUTABLE ?? "/opt/homebrew/bin/nvim"
+  const child = spawn(executable, ["--headless", "-i", "NONE", "--listen", socket, "-u", join(repo, "tests/neovim/acp_minimal_init.lua")], {
+    cwd: f.workspace, env: { ...process.env, HOME: f.environment.HOME, XDG_STATE_HOME: join(root, "state"), XDG_CACHE_HOME: join(root, "cache"),
+      XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"), DOTFILES_TEST_ROOT: repo,
+      AGENCY_FIXTURE_PLUGIN_ROOT: join(process.env.HOME!, ".local/share/nvim/lazy/agentic.nvim"), AGENCY_FIXTURE_NODE: process.execPath,
+      AGENCY_FIXTURE_ENDPOINT: fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
+  })
+  let closed = false, exited = false, stderr = ""
+  child.once("exit", () => { exited = true })
+  child.stderr.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-8192) })
+  const lua = async (expression: string): Promise<JsonValue> => {
+    const source = `(function() local value = ${expression}; return vim.json.encode(value == nil and vim.NIL or value) end)()`
+    const result = await exec(executable, ["--server", socket, "--remote-expr", `luaeval(${JSON.stringify(source)})`], { timeout: 15000, maxBuffer: 1048576 })
+    return JSON.parse(result.stdout.trim()) as JsonValue
+  }
+  async function exit(): Promise<void> {
+    if (closed) return
+    closed = true
+    if (!exited) {
+      try { await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("vim.schedule(function() vim.cmd(\'qa!\') end); return true")'], { timeout: 5000 }) } catch {}
+      try { await until(async () => exited ? true : undefined, 5000) } catch { child.kill("SIGKILL"); await new Promise<void>(resolve => child.once("exit", () => resolve())) }
+    }
+    assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
+    f.diagnostic(`fixture editor cleanup verified: pid ${child.pid}`)
+  }
+  f.onCleanup(exit)
+  await until(async () => {
+    if (exited) throw new Error("fixture editor failed: " + stderr)
+    try { return await lua("true") === true ? true : undefined } catch { return undefined }
+  }, 15000)
+  return { pid: child.pid!, lua, closeTab: async () => { await lua("AgencyFixture.close_tab()") }, exit }
 }
