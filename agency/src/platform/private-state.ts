@@ -233,7 +233,28 @@ async function readJson(path: string): Promise<unknown> {
   }
 }
 
-async function publish(path: string, value: unknown): Promise<void> {
+export type PrivateStateFileSystem = { open: typeof open; rename: typeof rename; rm: typeof rm }
+export type PublicationGuard = { validate(): Promise<void>; assertHeld(): void }
+
+async function expectedBytes(path: string, expected: Buffer): Promise<void> {
+  await assertPrivateDirectory(dirname(path))
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile() || before.uid !== BigInt(currentUid()) || before.nlink !== 1n || (before.mode & 0o077n) !== 0n || before.size > BigInt(MAX_RECORD_BYTES)) throw new Error("unsafe expected record")
+    const bytes = Buffer.alloc(MAX_RECORD_BYTES + 1)
+    let length = 0
+    while (length < bytes.length) {
+      const result = await handle.read(bytes, length, bytes.length - length, null)
+      if (result.bytesRead === 0) break
+      length += result.bytesRead
+    }
+    const fields = (stats: typeof before) => [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs, stats.uid, stats.mode, stats.nlink]
+    if (!expected.equals(bytes.subarray(0, length)) || !isDeepStrictEqual(fields(before), fields(await handle.stat({ bigint: true }))) || !isDeepStrictEqual(fields(before), fields(await lstat(path, { bigint: true })))) throw new Error("expected record changed")
+  } finally { await handle.close() }
+}
+
+async function publish(path: string, value: unknown, expected?: Buffer, filesystem: PrivateStateFileSystem = { open, rename, rm }, guard?: PublicationGuard): Promise<void> {
   const serialized = JSON.stringify(value)
   if (serialized === undefined) throw new Error("record cannot be serialized as JSON")
   if (Buffer.byteLength(serialized, "utf8") > MAX_RECORD_BYTES) throw new Error(`${path} exceeds the 1 MiB size limit`)
@@ -242,13 +263,19 @@ async function publish(path: string, value: unknown): Promise<void> {
   let handle: FileHandle | undefined
   try {
     await assertPrivateDirectory(parent)
-    handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    guard?.assertHeld()
+    if (expected !== undefined) await expectedBytes(path, expected)
+    handle = await filesystem.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     await handle.writeFile(serialized, { encoding: "utf8" })
     await handle.sync()
     await handle.close()
     handle = undefined
-    await rename(temporary, path)
-    const parentHandle = await open(parent, constants.O_RDONLY | constants.O_DIRECTORY)
+    await guard?.validate()
+    if (expected !== undefined) await expectedBytes(path, expected)
+    guard?.assertHeld()
+    await filesystem.rename(temporary, path)
+    guard?.assertHeld()
+    const parentHandle = await filesystem.open(parent, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
     try {
       await parentHandle.sync()
     } finally {
@@ -256,7 +283,7 @@ async function publish(path: string, value: unknown): Promise<void> {
     }
   } catch (error) {
     try { await handle?.close() } catch {}
-    try { await rm(temporary, { force: true }) } catch {}
+    try { await filesystem.rm(temporary, { force: true }) } catch {}
     throw new PrivateStatePublicationError(error)
   }
 }
@@ -271,6 +298,10 @@ export async function readLaunchRecordForReconciliation(path: string): Promise<L
 
 export async function writeLaunchRecord(path: string, record: LaunchRecord): Promise<void> {
   await publish(path, parseLaunchRecord(record, true))
+}
+
+export async function writeLaunchRecordExpected(path: string, record: LaunchRecord, expected: Buffer, filesystem?: PrivateStateFileSystem, guard?: PublicationGuard): Promise<void> {
+  await publish(path, parseLaunchRecord(record, true), expected, filesystem, guard)
 }
 
 export async function readHandlerRecord(path: string): Promise<HandlerGenerationRecord> {

@@ -28,6 +28,9 @@ export type StartOrConnectOptions = {
   onTransition?: (transition: StartTransition, pid?: number) => Promise<void> | void
 }
 
+export type StartupLockOptions = Pick<StartOrConnectOptions, "root" | "adapter" | "lockTimeoutSeconds">
+export type StartupLockGuard = { assertHeld(): void; signal: AbortSignal }
+
 type LockMetadata = {
   isFile(): boolean
   uid: number
@@ -123,7 +126,7 @@ async function waitForLock(child: ChildProcess, ready: Duplex, timeoutMs: number
   })
 }
 
-async function acquireStartupLock(options: StartOrConnectOptions, handle: FileHandle): Promise<{ child: ChildProcess; release: Duplex }> {
+async function acquireStartupLock(options: StartupLockOptions, handle: FileHandle): Promise<{ child: ChildProcess; release: Duplex }> {
   const timeoutSeconds = options.lockTimeoutSeconds ?? 10
   const argv = [process.execPath, "-e", LOCK_HOLDER_SOURCE]
   const command = commandWithTimeout(options.adapter.platform, 3, argv, timeoutSeconds)
@@ -144,8 +147,41 @@ async function acquireStartupLock(options: StartOrConnectOptions, handle: FileHa
   }
 }
 
+export async function withStartupLock<T>(options: StartupLockOptions, work: (guard: StartupLockGuard) => Promise<T>): Promise<T> {
+  const handle = await openStartupLock(options.root)
+  let lock: Awaited<ReturnType<typeof acquireStartupLock>> | undefined
+  const controller = new AbortController()
+  const lost = (): void => { controller.abort(new Error("startup lock holder was lost")) }
+  const guard: StartupLockGuard = {
+    signal: controller.signal,
+    assertHeld() {
+      if (lock === undefined || lock.child.exitCode !== null || lock.child.signalCode !== null || lock.release.destroyed) lost()
+      controller.signal.throwIfAborted()
+    },
+  }
+  try {
+    lock = await acquireStartupLock(options, handle)
+    lock.child.once("exit", lost)
+    lock.child.once("error", lost)
+    guard.assertHeld()
+    const result = await work(guard)
+    guard.assertHeld()
+    return result
+  } finally {
+    try {
+      if (lock !== undefined) {
+        lock.child.off("exit", lost)
+        lock.child.off("error", lost)
+        await releaseStartupLock(lock.child, lock.release)
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+}
+
 async function releaseStartupLock(child: ChildProcess, release: Duplex): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return
+  if (child.exitCode !== null || child.signalCode !== null) { release.end(); return }
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("startup lock helper did not exit")), 1000)
     child.once("exit", () => {
@@ -241,10 +277,7 @@ export async function startOrConnect(options: StartOrConnectOptions): Promise<Ha
   const timeoutMs = options.timeoutMs ?? 5000
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("startup timeout must be a positive integer")
   const socketPath = expectedSocketPath(options.root)
-  const handle = await openStartupLock(options.root)
-  let lock: Awaited<ReturnType<typeof acquireStartupLock>> | undefined
-  try {
-    lock = await acquireStartupLock(options, handle)
+  return withStartupLock(options, async guard => {
     await options.onTransition?.("lock_acquired")
     const deadline = Date.now() + timeoutMs
     const existing = await inspectHandlerGeneration(options.root, options.adapter)
@@ -269,15 +302,10 @@ export async function startOrConnect(options: StartOrConnectOptions): Promise<Ha
       timeoutMs: Math.max(1, deadline - Date.now()),
       ...(options.onTransition === undefined ? {} : { onTransition: options.onTransition }),
     }
+    guard.assertHeld()
     const launched = await launchHandlerGeneration(launchOptions)
     await assertPrivateSocket(options.root, "handler.sock")
     await socketAccepts(socketPath, Math.max(1, deadline - Date.now()))
     return launched
-  } finally {
-    try {
-      if (lock !== undefined) await releaseStartupLock(lock.child, lock.release)
-    } finally {
-      await handle.close()
-    }
-  }
+  })
 }

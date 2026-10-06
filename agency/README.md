@@ -121,9 +121,15 @@ Automatic retention preserves logical native-session records, current-generation
 
 The Handler does not persist an append-only transcript or environment values. Native providers retain their own state under caller configuration. Agentic debug logging is disabled; explicitly enabling it later can log ordinary ACP requests, including transient start metadata.
 
+### Explicit probe recovery
+
+`agy model recover-probe --attempt-id UUID --handler-generation UUID --sha256 HEX --json` is an offline maintenance operation for one quarantined managed V2 catalog probe. The digest identifies the original raw launch record, not a reserialized copy. The recorded Handler PID must be absent on the unchanged boot, and the startup lock is held throughout. Every retained provider PID must be absent and its group empty in two independent checks. Live or reused PIDs, observation failures, incomplete ownership, changed state, and conflicting archives reject recovery. Legacy V1 probes are unsupported.
+
+Recovery preserves the original launch, metadata, command receipt, Handler record, and digest manifest under `agency/recovery/<host>/<attempt>/`, outside automatic-retention targets. It then publishes only a cleanup-verified derivative of that launch. Retries require the same digest and matching archived evidence. Failed archive writes leave quarantine intact; failures after replacement can be retried to establish durability. Recovery never signals processes, stops or starts the Handler, restores agents, or alters ordinary sticky quarantine. Stopping a live Handler is a separate, explicitly authorized maintenance action.
+
 ## Verification
 
-Run `npm run build`, `test:acp`, `test:neovim-acp`, `test:agent`, `test:agent-integration`, `test:retention`, `test:catalog`, `test:catalog-integration`, `test:control`, `test:control-integration`, `test:attachment`, and `test:attachment-integration` from `agency/`. Additional foundation gates are `test:unit`, `test:darwin`, `test:import`, and `test:codex-acceptance`. Run `./test-nvim.sh` from the repository root.
+Run `npm run build`, `test:acp`, `test:neovim-acp`, `test:agent`, `test:agent-integration`, `test:retention`, `test:catalog`, `test:catalog-integration`, `test:control`, `test:control-integration`, `test:attachment`, and `test:attachment-integration` from `agency/`. Additional foundation gates are `test:unit`, `test:darwin`, `test:import`, `test:recovery`, and `test:codex-acceptance`. Run `./test-nvim.sh` from the repository root.
 
 These tests use deterministic providers and isolated temporary roots. Fresh-process coverage loads the installed native Agentic classes in independent Neovim processes with private home/state/cache, explicit repository runtime paths, fixture-only endpoints, and no user startup configuration. `NVIM_TEST_EXECUTABLE` selects the binary; Darwin defaults to `/opt/homebrew/bin/nvim`. Teardown reports and independently verifies editor, endpoint, Handler, and provider absence.
 

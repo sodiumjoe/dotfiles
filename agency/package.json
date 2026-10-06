@@ -6,6 +6,7 @@
     "node": "24.13.0"
   },
   "scripts": {
+    "test:recovery": "npm run build && node --test --test-concurrency=1 dist/test/catalog-recovery.test.js",
     "test:neovim-acp": "npm run build && node --test --test-concurrency=1 dist/test/neovim-acp.test.js",
     "test:import": "npm run build && node --test --test-concurrency=1 dist/test/native-sessions.test.js dist/test/agent-import.test.js dist/test/agent-v3.test.js dist/test/agent-cli.test.js dist/test/agent-protocol.test.js",
     "test:acp": "npm run build && node --test --test-concurrency=1 dist/test/backend-config.test.js dist/test/acp-*.test.js",

@@ -5,6 +5,7 @@ import { exchangeAgent, type AgentRequest, type AgentReply } from "../agent/prot
 import { createAgentStore, type AgentStore } from "../agent/store.js"
 import { createCatalogStore } from "../catalog/store.js"
 import { runCatalogClient } from "../catalog/client.js"
+import { runProbeRecovery } from "../catalog/recovery-client.js"
 import { exchangeCatalog, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
 import { createConnection } from "node:net"
 import { join } from "node:path"
@@ -114,6 +115,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
+  if (argv[0] === "model" && argv[1] === "recover-probe") return runProbeRecovery(argv, dependencies)
   if (argv[0] === "agent" && argv[1] === "attach") return runAttachmentClient(argv, { ...productionAttachmentStreams(), ...dependencies.attachment, environment: dependencies.environment, inspect: dependencies.inspect, stderr: dependencies.stderr })
   if (argv[0] === "agent") return runAgentClient(argv, { ...dependencies, callAgent: dependencies.callAgent ?? (async () => { throw new ControlError("UNAVAILABLE") }), agentStore: dependencies.agentStore ?? (env => createAgentStore(env.paths.persistentRoot)) })
   if (argv.find(value => !value.startsWith("-")) === "model") return runCatalogClient(argv, { ...dependencies, callCatalog: dependencies.callCatalog ?? (async () => { throw new ControlError("UNAVAILABLE", "catalog support unavailable") }) })
