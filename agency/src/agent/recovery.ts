@@ -123,7 +123,7 @@ export async function recoverAgents(input: { context: LaunchContext; store: Agen
       const identity = inventory.agents.find(agent => agent.definition.hostId === command.hostId && agent.definition.backendId === command.input.backendId && agent.session?.sessionId === command.input.nativeSessionId)
       if (identity && identity.definition.agentId !== command.agentId || inventory.issues.some(issue => issue.id === command.agentId)) continue
       const expected = parseAgentRecordV3({ version: 3, definition: { hostId: command.hostId, agentId: command.agentId, createdCommandId: command.commandId, cwd: command.input.cwd, backendId: command.input.backendId, origin: "import" }, launch: null, phase: "stopped", session: { sessionId: command.input.nativeSessionId, protocolVersion: 1 }, inputRequirements: { mcpServerNames: [] }, settings: {}, configurationState: { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }, failure: null })
-      if (record && !isDeepStrictEqual(record, expected)) continue
+      if (record && (record.definition.hostId !== command.hostId || record.definition.backendId !== command.input.backendId || record.definition.cwd !== command.input.cwd || record.session?.sessionId !== command.input.nativeSessionId)) continue
       if (!record) {
         try { await store.writeAgent(expected, null) }
         catch (error) {
@@ -131,7 +131,7 @@ export async function recoverAgents(input: { context: LaunchContext; store: Agen
           continue
         }
       }
-      const next = { ...command, state: "completed" as const, result: { outcome: "imported" as const, target: null, failure: null, session: expected.session } }
+      const next = { ...command, state: "completed" as const, result: { outcome: "imported" as const, target: null, failure: null, session: (record ?? expected).session } }
       try { await store.writeCommand(next, command) }
       catch (error) { repairs.push({ kind: "command", expected: command, next, issue: { kind: "command", id: command.commandId, path: join(context.paths.persistentRoot, "agents/commands", command.commandId + ".json"), message: String(error).slice(0, 512) } }) }
     }

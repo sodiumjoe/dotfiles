@@ -130,9 +130,10 @@ export async function acpFixture(t: TestContext) {
     },
     async stopSession(sessionId: string) { return f.waitCompleted(await f.stop(await tuple(sessionId))) },
     async restoreSession(sessionId: string, fresh: Record<string, string> = {}) {
-      const target = await tuple(sessionId), current = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+      const record = await createAgentStore(f.paths.persistentRoot).readAgent(sessionId.slice(7)), current = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+      assert.ok(record)
       const { exchangeAgent, AGENT_PROTOCOL } = await import("../src/agent/protocol.js")
-      const reply = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "agent_restore", input: { agentId: target.agentId, commandId: randomUUID(), handlerGeneration: current.generation, environment: { ...environment, ...fresh }, nativeParams: { cwd: f.workspace, mcpServers: [] } } })
+      const reply = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "agent_restore", input: { agentId: record.definition.agentId, commandId: randomUUID(), handlerGeneration: current.generation, environment: { ...environment, ...fresh }, nativeParams: { cwd: record.definition.cwd, mcpServers: [] } } })
       assert.ok(reply.ok && reply.result.state === "command")
       return f.waitCompleted(reply.result)
     },

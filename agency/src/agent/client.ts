@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import type { ControlDependencies } from "../cli/control.js"
-import { id } from "../catalog/types.js"
+import { absolutePath, id, providerId } from "../catalog/types.js"
+import { nativeSessionId } from "./native-sessions.js"
 import { parsePageInput, type PageInput } from "./queries.js"
 import { ControlError } from "../control/protocol.js"
 import type { HandlerEnvironment } from "../handler/environment.js"
@@ -27,20 +28,24 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         if (seen.has(flag)) throw new Error()
         seen.add(flag)
         if (flag === "--json") { json = true; continue }
+        if (flag === "--format") { if (argv[++i] !== "json") throw new Error(); json = true; continue }
         if (flag === "--active") { flags.set(flag, "true"); continue }
-        if (!["--provider", "--model", "--reasoning", "--mode", "--permission-profile", "--command-id", "--handler-generation", "--expected-handler-generation", "--provider-generation", "--text", "--limit", "--cursor", "--cwd", "--mcp-servers-json"].includes(flag)) throw new Error()
+        if (!["--provider", "--session", "--model", "--reasoning", "--mode", "--permission-profile", "--command-id", "--handler-generation", "--expected-handler-generation", "--provider-generation", "--text", "--limit", "--cursor", "--cwd", "--mcp-servers-json"].includes(flag)) throw new Error()
         const value = argv[++i]
         if (!value || flag !== "--text" && value.startsWith("--")) throw new Error()
         flags.set(flag, value)
       }
-      if (positional[0] !== "agent" || !["start", "restore", "stop", "prompt", "current", "list", "choices", "page", "command"].includes(positional[1] ?? "") || positional.length !== ((["stop", "restore", "prompt", "command"].includes(positional[1]!)) ? 3 : 2)) throw new Error()
+      if (positional[0] !== "agent" || !["import", "start", "restore", "stop", "prompt", "current", "list", "choices", "page", "command"].includes(positional[1] ?? "") || positional.length !== ((["stop", "restore", "prompt", "command"].includes(positional[1]!)) ? 3 : 2)) throw new Error()
       commandId = flags.has("--command-id") ? id(flags.get("--command-id")) : undefined
       generation = flags.has("--handler-generation") ? id(flags.get("--handler-generation")) : null
       if (flags.has("--expected-handler-generation")) {
         expectedGeneration = id(flags.get("--expected-handler-generation"))
-        if (!commandId || generation || !["start", "restore"].includes(positional[1]!)) throw new Error()
+        if (!commandId || generation || !["start", "restore", "import"].includes(positional[1]!)) throw new Error()
       }
-      if (positional[1] === "start") {
+      if (positional[1] === "import") {
+        providerId(flags.get("--provider")); nativeSessionId(flags.get("--session")); absolutePath(flags.get("--cwd"))
+        if (generation && !commandId || [...flags.keys()].some(flag => !["--provider", "--session", "--cwd", "--command-id", "--handler-generation", "--expected-handler-generation"].includes(flag))) throw new Error()
+      } else if (positional[1] === "start") {
         if (generation && !commandId || [...flags.keys()].some(flag => !["--provider", "--model", "--reasoning", "--mode", "--permission-profile", "--command-id", "--handler-generation", "--expected-handler-generation"].includes(flag))) throw new Error()
         const reasoning = flags.get("--reasoning")
         selection = parseSelection({ providerId: flags.get("--provider"), modelId: flags.get("--model"), reasoning: reasoning === "none" ? { kind: "none" } : { kind: "value", value: reasoning }, mode: flags.get("--mode") ?? null, permissionProfile: flags.get("--permission-profile") })
@@ -66,8 +71,8 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         page = parsePageInput({ limit: Number(flags.get("--limit")), ...(flags.has("--cursor") ? { cursor: flags.get("--cursor") } : {}), ...(flags.has("--cwd") ? { cwd: flags.get("--cwd") } : {}), ...(flags.has("--active") ? { activeOnly: true } : {}) })
       } else if (flags.size) throw new Error()
     } catch { throw new AgentError("USAGE") }
-    const operation = positional[1]!, pinned = (operation === "start" || operation === "restore") && generation !== null
-    if (operation === "start" || operation === "restore" || operation === "stop") commandId ??= randomUUID()
+    const operation = positional[1]!, pinned = ["start", "restore", "import"].includes(operation) && generation !== null
+    if (["start", "restore", "stop", "import"].includes(operation)) commandId ??= randomUUID()
     const env = await deps.environment()
     let retained: AgentCommand | null = null
     const validateRetained = (command: AgentCommand): void => {
@@ -78,6 +83,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         if (!isDeepStrictEqual(recorded, expected)) throw new AgentError("COMMAND_CONFLICT")
       }
       if (operation === "restore" && command.target?.agentId !== positional[2]) throw new AgentError("COMMAND_CONFLICT")
+      if (operation === "import" && (command.version !== 3 || !isDeepStrictEqual(command.input, { backendId: flags.get("--provider"), nativeSessionId: flags.get("--session"), cwd: flags.get("--cwd") }))) throw new AgentError("COMMAND_CONFLICT")
       if (operation === "stop" && (!command.target || command.target.agentId !== positional[2] || command.target.providerGeneration !== flags.get("--provider-generation"))) throw new AgentError("COMMAND_CONFLICT")
     }
     if (pinned || operation === "stop") {
@@ -98,6 +104,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
     let request: AgentRequest = retained || operation === "command" ? { ...base, op: "agent_command", commandId: commandId!, commandGeneration }
       : operation === "choices" ? { ...base, op: "agent_choices" }
       : operation === "page" ? { ...base, op: "agent_page", input: page! }
+      : operation === "import" ? { ...base, op: "agent_import", input: { commandId: commandId!, handlerGeneration: generation, backendId: providerId(flags.get("--provider")), nativeSessionId: flags.get("--session")!, cwd: flags.get("--cwd")! } }
       : operation === "start" ? { ...base, op: "agent_start", input: { commandId: commandId!, handlerGeneration: generation, cwd: resolve(deps.cwd()), selection: selection!, environment: snapshotLaunchEnvironment(process.env) } }
       : operation === "restore" ? { ...base, op: "agent_restore", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, environment: snapshotLaunchEnvironment(process.env), ...(nativeParams ? { nativeParams } : {}) } }
       : operation === "stop" ? { ...base, op: "agent_stop", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, providerGeneration: flags.get("--provider-generation")! } }
@@ -129,7 +136,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         if (reply.result.state !== "command") { emit(true, reply.result); return (reply.result.state === "agents" || reply.result.state === "page") && reply.result.issues.length ? 69 : 0 }
         last = reply.result
         if (operation === "command") { emit(true, last); return last.command.state === "pending" || last.durability !== "verified" ? 75 : last.command.result?.failure ? 75 : 0 }
-        if (last.command.state !== "pending" && last.durability === "verified") { emit(true, last); return last.command.result?.outcome === "started" || last.command.result?.outcome === "restored" || last.command.result?.outcome === "stopped" ? 0 : 75 }
+        if (last.command.state !== "pending" && last.durability === "verified") { emit(true, last); return ["started", "restored", "stopped", "imported"].includes(String(last.command.result?.outcome)) ? 0 : 75 }
       }
       if (commandId) request = { ...base, requestId: randomUUID(), op: "agent_command", commandId, commandGeneration }
       if (deps.now() < deadline) await deps.sleep(Math.min(100, deadline - deps.now()))

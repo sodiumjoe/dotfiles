@@ -40,6 +40,8 @@ export type SessionStart = { kind: "new"; params: JsonObject } | { kind: "load";
 export type RestoreRequest = { commandId: string; handlerGeneration: string; agentId: string; environment: LaunchEnvironment; nativeParams?: JsonObject }
 export type RestoreCommandInput = Omit<RestoreRequest, "environment" | "nativeParams"> & { environmentDigest: string }
 export type StopInput = AgentTuple & { commandId: string }
+export type ImportInput = { commandId: string; handlerGeneration: string; backendId: ProviderId; nativeSessionId: string; cwd: string }
+export function parseImportInput(input: unknown): ImportInput { return checked(() => { const v = object(input); keys(v, ["commandId", "handlerGeneration", "backendId", "nativeSessionId", "cwd"]); const nativeSessionId = agentText(v.nativeSessionId, 1024); if (nativeSessionId.startsWith("agency:")) invalidAgent(); return { commandId: id(v.commandId), handlerGeneration: id(v.handlerGeneration), backendId: providerId(v.backendId), nativeSessionId, cwd: absolutePath(v.cwd) } }) }
 export type PromptInput = AgentTuple & { text: string }
 export type PromptView = { state: "prompt"; target: AgentTuple; stopReason: "end_turn"; text: string }
 export type AgentCommand = { version: 2; hostId: string; commandId: string; handlerGeneration: string; input: StartCommandInput | RestoreCommandInput | StopInput; op: "start" | "restore" | "stop"; target: AgentTuple | null; state: "pending" | "completed" | "interrupted"; result: CommandResult | null }

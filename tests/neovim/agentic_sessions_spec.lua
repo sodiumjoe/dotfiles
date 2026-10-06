@@ -3,6 +3,47 @@ describe("agentic session picker data", function()
         package.loaded["sodium.agentic_sessions"] = nil
     end)
 
+    it("imports native Agency history only after selection and explicit restore confirmation", function()
+        local config = require("agentic.config")
+        local previous = config.acp_providers.agency
+        config.acp_providers.agency = { command = "fixture" }
+        local original_snacks, original_select = _G.Snacks, vim.ui.select
+        local picker, confirm, requests, commands, loaded = nil, nil, {}, {}, nil
+        _G.Snacks = { picker = function(opts) picker = opts end }
+        vim.ui.select = function(_, _, callback) confirm = callback end
+        local manager = { agent = { provider_config = config.acp_providers.agency,
+            when_ready = function(_, callback) callback() end,
+            _send_request = function(_, method, params, callback)
+                requests[#requests + 1] = { method = method, params = params }
+                if method == "session/list" then callback({ sessions = {} })
+                elseif method == "agency/native_sessions" then callback({ sessions = { { backendId = "codex-acp", nativeSessionId = "saved-native", cwd = "/recorded", title = "Saved" } } })
+                elseif method == "agency/import" then callback({ sessionId = "agency:logical" }) end
+            end }, chat_history = { messages = {} }, widget = { show = function() end },
+            load_acp_session = function(_, value) loaded = value end }
+        local control = { uuid = function() return "command-uuid" end, command = function(argv, _, callback) commands[#commands + 1] = argv; callback(nil, { result = { state = "command", durability = "verified", command = { state = "completed", result = { outcome = "restored" } } } }) end }
+        require("sodium.agentic_sessions").show_picker(manager, { control = control })
+        vim.wait(1000, function() return picker ~= nil end)
+        assert.are.equal(2, #requests)
+        picker.confirm({ close = function() end }, picker.items[1])
+        assert.are.equal(2, #requests)
+        assert.are.equal(0, #commands)
+        confirm("Restore")
+        assert.are.equal("agency/import", requests[3].method)
+        assert.are.equal("/recorded", requests[3].params.cwd)
+        assert.are.equal("command-uuid", requests[3].params.commandId)
+        assert.are.equal("agent", commands[1][1])
+        assert.are.equal("restore", commands[1][2])
+        assert.are.equal("agency:logical", loaded)
+        config.acp_providers.agency, _G.Snacks, vim.ui.select = previous, original_snacks, original_select
+    end)
+
+    it("keeps unavailable backend roster entries visible without importing into Codex", function()
+        local sessions = require("sodium.agentic_sessions")
+        local items = sessions.normalize_sessions({ { sessionId = "agency:claude", cwd = "/other", title = "Claude", _meta = { agency = { backendId = "claude-agent-acp", phase = "stopped" } } } })
+        assert.are.equal("claude-agent-acp", items[1].backend_id)
+        assert.is_true(items[1].unavailable)
+    end)
+
     it("extracts a clean title and structured metadata", function()
         local sessions = require("sodium.agentic_sessions")
         local item = sessions.normalize_session({

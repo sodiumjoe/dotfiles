@@ -6,6 +6,7 @@
     "node": "24.13.0"
   },
   "scripts": {
+    "test:import": "npm run build && node --test --test-concurrency=1 dist/test/native-sessions.test.js dist/test/agent-import.test.js dist/test/agent-v3.test.js dist/test/agent-cli.test.js dist/test/agent-protocol.test.js",
     "test:acp": "npm run build && node --test --test-concurrency=1 dist/test/backend-config.test.js dist/test/acp-*.test.js",
     "test:retention": "npm run build && node --test --test-concurrency=1 dist/test/retention-policy.test.js dist/test/retention-store.test.js dist/test/retention-coordinator.test.js dist/test/handler-retention.test.js",
     "test:attachment": "npm run build && node --test --test-concurrency=1 dist/test/agent-attachment-protocol.test.js dist/test/agent-attachment-server.test.js dist/test/agent-attachment-cli.test.js",

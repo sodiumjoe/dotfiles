@@ -14,6 +14,15 @@ import { agentId, sampleAgent, sampleCommand, sampleSpec, sampleSession } from "
 const request = (): AgentRequest => ({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_start", input: { commandId: agentId(6), handlerGeneration: agentId(2), cwd: "/workspace/a", selection: sampleSpec().selection, environment: {} } })
 const response = (r: AgentRequest): AgentReply => ({ protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: agentId(6), ok: true, result: { state: "command", command: sampleCommand(), durability: "verified" } })
 
+test("import framing verifies native identity, directory and command receipt", () => {
+  const r = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), op: "agent_import", input: { commandId: agentId(6), handlerGeneration: agentId(2), backendId: "codex-acp", nativeSessionId: "saved-native", cwd: "/workspace/a" } }
+  assert.deepEqual(parseAgentRequest(r), r)
+  for (const extra of [{ environment: {} }, { providerGeneration: agentId(3) }]) assert.throws(() => parseAgentRequest({ ...r, input: { ...r.input, ...extra } }), { code: "INVALID_PROTOCOL" })
+  const reply = { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: r.input.commandId, ok: true, result: { state: "command", durability: "verified", command: { version: 3, hostId: "a".repeat(64), commandId: r.input.commandId, handlerGeneration: r.handlerGeneration, op: "import", input: { backendId: "codex-acp", nativeSessionId: "saved-native", cwd: "/workspace/a" }, agentId: agentId(1), target: null, state: "completed", result: { outcome: "imported", target: null, failure: null, session: { sessionId: "saved-native", protocolVersion: 1 } } } } }
+  validateAgentReply(parseAgentReply(reply), parseAgentRequest(r))
+  for (const change of [{ cwd: "/other" }, { nativeSessionId: "other" }, { backendId: "claude-agent-acp" }]) assert.throws(() => validateAgentReply(parseAgentReply(reply), parseAgentRequest({ ...r, input: { ...r.input, ...change } })), { code: "INVALID_PROTOCOL" })
+})
+
 test("query framing strictly validates choices, pages, filters and resync errors", () => {
   const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2) }
   const page = { ...base, op: "agent_page", input: { limit: 100, cwd: "/workspace/a", activeOnly: true } }

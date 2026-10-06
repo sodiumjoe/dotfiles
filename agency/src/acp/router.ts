@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { join } from "node:path"
 import { absolutePath, id, object, providerId } from "../catalog/types.js"
 import { agentTuple } from "../agent/recovery.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "../agent/environment.js"
@@ -8,6 +9,8 @@ import type { ConversationNotification, RetainedEvent } from "../agent/conversat
 import { sessionInputs, type AgentService, type AcpSessionObservation } from "../agent/service.js"
 import { AgentError, type AgentTuple } from "../agent/types.js"
 import { parsePageInput } from "../agent/queries.js"
+import { discoverCodexSessions } from "../agent/native-sessions.js"
+import { parseImportInput } from "../agent/types.js"
 import { AcpError, acpError, parseAcpFrame, parseAgencyMeta, parseLogicalSessionId, type RpcId } from "./protocol.js"
 
 type Binding = { target: AgentTuple; invalid: boolean; turnId: string | null; configuration: SessionConfiguration; observation?: AcpSessionObservation }
@@ -86,6 +89,18 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     }
     if (!initialized) throw new AcpError(-32600, "Initialize required")
     if (method === "authenticate") throw new AgentError("UNSUPPORTED_SESSION_FEATURE")
+    if (method === "agency/native_sessions") {
+      const environment = input.environment ?? {}
+      const root = environment.CODEX_HOME ?? (environment.HOME ? join(environment.HOME, ".codex") : null)
+      if (!root) throw new AgentError("UNAVAILABLE")
+      return { sessions: json({ sessions: await discoverCodexSessions(join(root, "sessions")) }).sessions! }
+    }
+    if (method === "agency/import") {
+      const request = checked(() => parseImportInput({ ...params, commandId: params.commandId ?? randomUUID(), handlerGeneration: service.handlerGeneration }))
+      const receipt = await service.importSession(request)
+      if (receipt.durability !== "verified" || receipt.command.version !== 3 || receipt.command.result?.outcome !== "imported") throw new AgentError("INCOMPLETE")
+      return { sessionId: "agency:" + receipt.command.agentId, commandId: receipt.command.commandId }
+    }
     if (method === "agency/detach") {
       const sessionId = "agency:" + parseLogicalSessionId(params.sessionId), binding = bindings.get(sessionId)
       if (binding) { binding.observation?.close(); service.detachPermissions(input.connectionId, binding.target); bindings.delete(sessionId) }
@@ -98,7 +113,7 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       catch (error) { if (error instanceof AgentError && error.code === "INVALID_PROTOCOL") throw new AcpError(-32602, "Invalid cursor"); throw error }
       return { sessions: inventory.agents.flatMap(view => {
         if (view.record.version !== 3) return []
-        return [{ sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, title: view.record.definition.backendId, _meta: { agency: { version: 1, backendId: view.record.definition.backendId, phase: view.record.phase } } }]
+        return [{ sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, title: view.record.definition.backendId, _meta: { agency: { version: 1, backendId: view.record.definition.backendId, phase: view.record.phase, nativeSessionId: view.record.session?.sessionId ?? null } } }]
       }), ...(inventory.nextCursor ? { nextCursor: inventory.nextCursor } : {}) }
     }
     if (method === "session/new") {

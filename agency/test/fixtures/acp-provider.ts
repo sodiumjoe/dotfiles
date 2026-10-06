@@ -10,11 +10,11 @@ const options = [
   { id: "reasoning_effort", name: "Reasoning", type: "select", currentValue: "high", options: [{ value: "high", name: "High" }, { value: "low", name: "Low" }] },
   { id: "mode", name: "Mode", type: "select", category: "mode", currentValue: "agent-full-access", options: [{ value: "agent-full-access", name: "Full access" }, { value: "read-only", name: "Read only" }] },
 ]
-let modelId = "legacy-a", modeId = "normal", promptId: string | number | null = null
+let modelId = "legacy-a", modeId = "normal", sessionId = "native-session", promptId: string | number | null = null
 let permission: (() => void) | undefined, release: (() => void) | undefined
 const send = (frame: unknown) => { process.stdout.write(JSON.stringify(frame) + "\n") }
 const reply = (id: string | number, result: unknown) => send({ jsonrpc: "2.0", id, result })
-const update = (value: unknown) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "native-session", update: value } })
+const update = (value: unknown) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: value } })
 const exists = async (name: string) => { try { await readFile(join(root!, name)); return true } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return false } }
 async function barrier(name: string) {
   if (!await exists("pause-" + name)) return
@@ -42,6 +42,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
   } else if (request.method === "session/new" || request.method === "session/load") {
     if (params.cwd !== process.cwd() || !Array.isArray(params.mcpServers)) throw new Error("wrong transient session input")
     if (request.method === "session/load") {
+      sessionId = params.sessionId
       try {
         const state = JSON.parse(await readFile(statePath, "utf8"))
         if (state.configOptions) for (const option of options) option.currentValue = state.configOptions.find((value: { id: string }) => value.id === option.id)?.currentValue ?? option.currentValue
@@ -50,7 +51,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
     }
     await barrier("session")
-    reply(request.id, { sessionId: "native-session", ...snapshot(), _meta: { fixture: backend } })
+    reply(request.id, { sessionId, ...snapshot(), _meta: { fixture: backend } })
   } else if (request.method === "session/set_config_option") {
     const option = options.find(value => value.id === params.configId)
     if (!option || !option.options.some(value => value.value === params.value)) throw new Error("unoffered selection")
@@ -70,7 +71,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
     permission?.(); permission = undefined; release?.(); release = undefined
     if (current !== null) reply(current, { stopReason: "cancelled" })
   } else if (request.method === "session/prompt") {
-    if (params.sessionId !== "native-session" || !Array.isArray(params.prompt)) throw new Error("wrong prompt")
+    if (params.sessionId !== sessionId || !Array.isArray(params.prompt)) throw new Error("wrong prompt")
     const text = params.prompt.filter((value: { type: string }) => value.type === "text").map((value: { text: string }) => value.text).join("\n")
     if (text === "auth-required") { send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "AUTH_REQUIRED" } }); return }
     if (text === "fail") { process.exit(2) }
@@ -79,7 +80,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
       const wait = new Promise<void>(resolve => { permission = resolve })
       const failure = setInterval(() => { void exists("fail-permission").then(ready => { if (ready) process.exit(2) }) }, 10)
       failure.unref()
-      send({ jsonrpc: "2.0", id: 1, method: "session/request_permission", params: { sessionId: "native-session", toolCall: { toolCallId: "fixture-tool", title: "Fixture write", kind: "edit" }, options: [{ optionId: "allow-once", name: "Allow", kind: "allow_once" }, { optionId: "reject-once", name: "Reject", kind: "reject_once" }] } })
+      send({ jsonrpc: "2.0", id: 1, method: "session/request_permission", params: { sessionId, toolCall: { toolCallId: "fixture-tool", title: "Fixture write", kind: "edit" }, options: [{ optionId: "allow-once", name: "Allow", kind: "allow_once" }, { optionId: "reject-once", name: "Reject", kind: "reject_once" }] } })
       try { await wait } finally { clearInterval(failure) }
     }
     if (text === "held") await new Promise<void>(resolve => {

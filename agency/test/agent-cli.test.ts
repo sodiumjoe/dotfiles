@@ -8,6 +8,22 @@ import { agentId, agentServiceFixture, sampleAgent, sampleCommand, sampleSession
 import type { HandlerInspection } from "../src/platform/types.js"
 
 const flags = ["--provider", "codex-acp", "--model", "model-a", "--reasoning", "high", "--mode", "review", "--permission-profile", "fixture-deny-v1", "--json"]
+test("CLI import emits a verified receipt using recorded cwd without provider launch", async () => {
+  const f = fixture(), commandId = agentId(77)
+  f.deps.cwd = () => { throw new Error("import must use recorded cwd") }
+  f.deps.callAgent = async (_env, request) => {
+    f.calls.push(request)
+    const input = (request as any).input
+    return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, commandId: input.commandId, ok: true, result: { state: "command", durability: "verified", command: { version: 3, hostId: "a".repeat(64), commandId: input.commandId, handlerGeneration: request.handlerGeneration, op: "import", input: { backendId: input.backendId, nativeSessionId: input.nativeSessionId, cwd: input.cwd }, agentId: agentId(1), target: null, state: "completed", result: { outcome: "imported", target: null, failure: null, session: { sessionId: input.nativeSessionId, protocolVersion: 1 } } } } }
+  }
+  assert.equal(await runControl(["agent", "import", "--provider", "codex-acp", "--session", "saved-native", "--cwd", "/recorded", "--command-id", commandId, "--expected-handler-generation", agentId(2), "--format", "json"], f.deps), 0)
+  assert.equal(f.calls[0]!.op, "agent_import")
+  assert.equal(f.output().result.command.input.cwd, "/recorded")
+  assert.equal(f.starts(), 0)
+  f.calls.length = 0
+  assert.equal(await runControl(["agent", "import", "--provider", "codex-acp", "--session", "agency:" + agentId(1), "--cwd", "/recorded"], f.deps), 64)
+  assert.equal(f.calls.length, 0)
+})
 test("restore forwards fresh MCP JSON without retaining credentials in command input", async () => {
   const f = fixture(), servers = [{ type: "http", name: "context", url: "https://fixture", headers: [{ name: "Authorization", value: "fresh-secret" }] }]
   assert.equal(await runControl(["agent", "restore", agentId(1), "--mcp-servers-json", JSON.stringify(servers), "--json"], f.deps), 0)

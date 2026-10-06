@@ -2,7 +2,7 @@ import type { Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
 import { absolutePath, hash, id, keys, object, providerId } from "../catalog/types.js"
 import { CURSOR_BYTES, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
-import { parseSelection } from "./types.js"
+import { parseImportInput, parseSelection, type ImportInput } from "./types.js"
 import { ControlError, UUID } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
@@ -13,11 +13,11 @@ import { launchEnvironmentDigest } from "./environment.js"
 
 export const AGENT_PROTOCOL = "agency-agent/3" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (
-  | { op: "agent_choices" } | { op: "agent_page"; input: PageInput } | { op: "agent_start"; input: StartInput } | { op: "agent_restore"; input: RestoreRequest } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
+  | { op: "agent_import"; input: ImportInput } | { op: "agent_choices" } | { op: "agent_page"; input: PageInput } | { op: "agent_start"; input: StartInput } | { op: "agent_restore"; input: RestoreRequest } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
 )
 export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgents | PromptView | AgentChoices | AgentPage } | { ok: false; error: AgentFailure })
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
-const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" ? request.input.commandId : undefined
+const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" || request.op === "agent_import" ? request.input.commandId : undefined
 function identity(input: unknown): ProcessIdentity {
   const v = object(input)
   keys(v, ["bootId", "pid", "birth", "parentPid", "processGroupId", "sessionId", "uid", "gid"])
@@ -86,6 +86,7 @@ export function parseAgentRequest(input: unknown): AgentRequest {
     if (v.op === "agent_current") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "cwd"]); return { ...common, op: "agent_current", cwd: absolutePath(v.cwd) } }
     if (v.op === "agent_command") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "commandGeneration"]); return { ...common, op: "agent_command", commandId: id(v.commandId), commandGeneration: id(v.commandGeneration) } }
     keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"])
+    if (v.op === "agent_import") { const input = parseImportInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_import", input } }
     if (v.op === "agent_start") { const input = parseStartInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_start", input } }
     if (v.op === "agent_restore") { const input = parseRestoreRequest(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_restore", input } }
     if (v.op === "agent_stop") { const input = parseStopInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_stop", input } }
@@ -157,6 +158,10 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   if (request.op === "agent_prompt") { if (result.state !== "prompt" || !isDeepStrictEqual(result.target, { agentId: request.input.agentId, handlerGeneration: request.input.handlerGeneration, providerGeneration: request.input.providerGeneration })) invalid(); return }
   if (result.state !== "command") return invalid()
   if (request.op === "agent_command") { if (result.command.handlerGeneration !== request.commandGeneration) invalid(); return }
+  if (request.op === "agent_import") {
+    if (result.command.version !== 3 || result.command.op !== "import" || !isDeepStrictEqual(result.command.input, { backendId: request.input.backendId, nativeSessionId: request.input.nativeSessionId, cwd: request.input.cwd })) invalid()
+    return
+  }
   if (result.command.op !== (request.op === "agent_start" ? "start" : request.op === "agent_restore" ? "restore" : "stop")) invalid()
   if (result.command.version === 2) {
     if (!isDeepStrictEqual(result.command.input, request.op === "agent_start" ? projectStartInput(request.input) : request.op === "agent_restore" ? projectRestoreInput(request.input) : request.input)) invalid()
