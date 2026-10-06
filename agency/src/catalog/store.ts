@@ -132,7 +132,7 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     const observedSnapshots = new Map<string, Buffer>()
     try {
       await retirement?.validate()
-      const allowed = new Set(["providers.json", "current.json", "commands", "automatic", "snapshots", "probe-launches", "probe-meta", "work"])
+      const allowed = new Set(["providers.json", "backends.json", "current.json", "commands", "automatic", "snapshots", "probe-launches", "probe-meta", "work"])
       for (const name of await names(catalog)) {
         if (allowed.has(name)) continue
         const remnant = /^\.current\.json\.(.+)\.tmp$/.exec(name)
