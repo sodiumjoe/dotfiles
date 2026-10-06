@@ -2,7 +2,7 @@ import type { Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
 import { absolutePath, hash, id, keys, object, providerId } from "../catalog/types.js"
 import { CURSOR_BYTES, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
-import { parseImportInput, parseSelection, type ImportInput } from "./types.js"
+import { parseImportInput, parseSelection, startSelectionDigest, type ImportInput } from "./types.js"
 import { ControlError, UUID } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
@@ -174,9 +174,7 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   }
   if (input.environmentDigest !== launchEnvironmentDigest(request.input.environment)) invalid()
   if (request.op === "agent_restore") { if (input.agentId !== request.input.agentId) invalid(); return }
-  const selection = object(input.selection)
-  if (input.cwd !== request.input.cwd || input.backendId !== request.input.selection.providerId || selection.modelId !== request.input.selection.modelId || request.input.selection.mode && selection.modeId !== request.input.selection.mode) invalid()
-  if (request.input.selection.reasoning.kind === "value" && object(selection.configValues).reasoning !== request.input.selection.reasoning.value) invalid()
+  if (input.cwd !== request.input.cwd || input.backendId !== request.input.selection.providerId || input.selectionDigest !== startSelectionDigest(request.input.selection)) invalid()
 }
 export function agentErrorReply(request: AgentRequest | Pick<AgentReply, "requestId" | "handlerGeneration" | "commandId">, error: unknown): AgentReply {
   const commandId = "op" in request ? commandIdFor(request) : request.commandId

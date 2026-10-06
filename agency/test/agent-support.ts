@@ -153,8 +153,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     async prompt(target: AgentTuple, text: string) { const result = await call({ op: "agent_prompt", input: { ...target, text } }); assert.equal(result.state, "prompt"); if (result.state !== "prompt") throw new Error("wrong reply"); return result },
     retry: async (value: AgentCommand | AgentCommandV3) => command(value.commandId, value.handlerGeneration),
     async retryOperation(value: AgentCommand | AgentCommandV3) {
-      const settings = value.version === 3 ? value.input.selection as import("../src/agent/session-config.js").RequestedSettings : null
-      const selection: StartSelection = value.version === 2 ? (value.input as import("../src/agent/types.js").StartCommandInput).selection : { ...sampleSpec().selection, modelId: settings?.modelId ?? sampleSpec().selection.modelId, mode: settings?.modeId ?? null }
+      const selection: StartSelection = value.version === 2 ? (value.input as import("../src/agent/types.js").StartCommandInput).selection : sampleSpec().selection
       const operation = value.op === "start" ? { op: "agent_start" as const, input: { commandId: value.commandId, handlerGeneration: value.handlerGeneration, cwd: String((value.input as { cwd: string }).cwd), selection, environment: providerEnvironment() } } : value.op === "restore" ? { op: "agent_restore" as const, input: { commandId: value.commandId, handlerGeneration: value.handlerGeneration, agentId: value.target!.agentId, environment: providerEnvironment() } } : { op: "agent_stop" as const, input: { ...value.target!, commandId: value.commandId } }
       const reply = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: value.handlerGeneration, ...operation })
       if (!reply.ok) throw new AgentError(reply.error.code)

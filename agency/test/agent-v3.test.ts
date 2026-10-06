@@ -6,7 +6,7 @@ import { crossCheckAgents } from "../src/agent/recovery.js"
 import type { LaunchContext } from "../src/handler/launch-transitions.js"
 import { AGENT_PROTOCOL, parseAgentReply, validateAgentReply } from "../src/agent/protocol.js"
 import { launchEnvironmentDigest } from "../src/agent/environment.js"
-import { sampleAgent, agentServiceFixture } from "./agent-support.js"
+import { sampleAgent, agentServiceFixture, sampleProductionSpec } from "./agent-support.js"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { createAgentStore } from "../src/agent/store.js"
@@ -113,9 +113,23 @@ test("control roster accepts an imported stopped record without a live tuple", (
 })
 
 test("control reply validates V3 native selection against the CLI request", () => {
-  const old = sampleAgent(), record = normalizeAgentRecord(old), commandId = record.definition.createdCommandId
-  const request = { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: old.launch.handlerGeneration, op: "agent_start" as const, input: { commandId, handlerGeneration: old.launch.handlerGeneration, cwd: old.definition.cwd, selection: old.definition.selection, environment: {} } }
-  const command = parseAgentCommandV3({ version: 3, hostId: record.definition.hostId, commandId, handlerGeneration: request.handlerGeneration, agentId: record.definition.agentId, op: "start", input: { cwd: record.definition.cwd, backendId: "codex-acp", selection: record.settings, environmentDigest: launchEnvironmentDigest({}), mcpServerNames: [] }, target: tupleOfRecord(record), state: "pending", result: null })
+  const production = sampleProductionSpec(), record = normalizeAgentRecord({ version: 2, definition: {
+    hostId: production.hostId, agentId: production.agentId, createdCommandId: production.createdCommandId,
+    cwd: production.cwd, selection: production.selection }, launch: {
+    handlerGeneration: production.handlerGeneration, providerGeneration: production.providerGeneration,
+    launchAttemptId: production.launchAttemptId, commandId: production.commandId,
+    catalogSnapshotId: production.catalogSnapshotId, catalogEvidence: production.catalogEvidence,
+    configuration: production.configuration, contractId: production.contractId,
+    contractFingerprint: production.contractFingerprint, containment: production.containment,
+    authority: production.authority, limits: production.limits }, phase: "starting", session: null, failure: null })
+  const commandId = record.definition.createdCommandId
+  const request = { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: production.handlerGeneration, op: "agent_start" as const, input: { commandId, handlerGeneration: production.handlerGeneration, cwd: production.cwd, selection: production.selection, environment: {} } }
+  const command = parseAgentCommandV3({ version: 3, hostId: record.definition.hostId, commandId,
+    handlerGeneration: request.handlerGeneration, agentId: record.definition.agentId, op: "start",
+    input: { cwd: record.definition.cwd, backendId: "codex-acp",
+      selectionDigest: "b0c6a7f808b429c02496953456b02b244525fb9aac35ab8b8083ca7549277c4a",
+      environmentDigest: launchEnvironmentDigest({}), mcpServerNames: [] },
+    target: tupleOfRecord(record), state: "pending", result: null })
   const reply = parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, commandId, ok: true, result: { state: "command", command, durability: "verified" } })
   assert.doesNotThrow(() => validateAgentReply(reply, request))
   assert.throws(() => validateAgentReply(reply, { ...request, input: { ...request.input, environment: { SECRET: "changed" } } }), { code: "INVALID_PROTOCOL" })

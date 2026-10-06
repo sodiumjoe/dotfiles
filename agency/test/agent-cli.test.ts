@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { runControl, type ControlDependencies } from "../src/cli/control.js"
 import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../src/agent/protocol.js"
-import { AgentError, projectStartInput, projectRestoreInput, type AgentCommand, type AgentErrorCode } from "../src/agent/types.js"
+import { AgentError, projectStartInput, projectRestoreInput, type AgentCommand, type AgentCommandV3, type AgentErrorCode } from "../src/agent/types.js"
+import { launchEnvironmentDigest } from "../src/agent/environment.js"
 import { unavailableControlDependencies, until } from "./control-support.js"
 import { agentId, agentServiceFixture, sampleAgent, sampleCommand, sampleSession } from "./agent-support.js"
 import type { HandlerInspection } from "../src/platform/types.js"
@@ -75,7 +76,7 @@ for (const extra of [["--expected-handler-generation", agentId(2)], ["--command-
 })
 function fixture() {
   const out: string[] = [], err: string[] = [], calls: AgentRequest[] = [], command = sampleCommand()
-  let retained: AgentCommand = { ...command, state: "completed", result: { outcome: "started", target: command.target, session: sampleSession(), failure: null } }, now = 0, starts = 0
+  let retained: AgentCommand | AgentCommandV3 = { ...command, state: "completed", result: { outcome: "started", target: command.target, session: sampleSession(), failure: null } }, now = 0, starts = 0
   const inspection: HandlerInspection = { disposition: "live", record: { version: 1, hostId: command.hostId, generation: command.handlerGeneration, launchBootId: "boot-a", launchAttemptId: agentId(50), launchAttempted: true, phase: "ready", process: { bootId: "boot-a", pid: 100, birth: `1:agy-handler:${agentId(50)}`, parentPid: 1, processGroupId: 100, sessionId: 100, uid: 1, gid: 1 }, socketPath: "/fixture/socket", writer: "handler", reconciliation: { classified: 0, total: 0, quarantined: 0 }, reason: null } }
   const unsupported = async (): Promise<never> => { throw new Error("unexpected store mutation") }
   const reply = (r: AgentRequest): AgentReply => {
@@ -86,7 +87,7 @@ function fixture() {
     return { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: retained.commandId, ok: true, result: { state: "command", command: retained, durability: "verified" } }
   }
   const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: command.hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/socket" }, adapter: { platform: "darwin", bootId: async () => "boot-a", readProcess: unsupported, readGroup: unsupported, signalGroup: unsupported } }), start: async () => { starts++; return inspection }, inspect: async () => inspection, cwd: () => "/checkout", now: () => now, sleep: async ms => { now += ms }, stdout: value => out.push(value), stderr: value => err.push(value), callAgent: async (_env, r) => { calls.push(r); return reply(r) }, agentStore: () => ({ readCommand: async id => id === retained.commandId ? structuredClone(retained) : null, readAgent: unsupported, inventory: unsupported, writeAgent: unsupported, writeCommand: unsupported, verifyDurability: unsupported, forgetRemoved() {}, terminalTimes: async () => null }) }
-  return { deps, out, err, calls, command, inspection, reply, starts: () => starts, output: () => JSON.parse(out.join("")), retain(value: AgentCommand) { retained = value } }
+  return { deps, out, err, calls, command, inspection, reply, starts: () => starts, output: () => JSON.parse(out.join("")), retain(value: AgentCommand | AgentCommandV3) { retained = value } }
 }
 
 test("choices and filtered page use existing Handler without sampling caller environment", async () => {
@@ -339,6 +340,19 @@ test("a pinned lookup cannot create an unknown command or change retained select
   const other = fixture(), changed = flags.map(value => value === "model-a" ? "model-b" : value)
   assert.equal(await runControl(["agent", "start", ...changed, "--command-id", agentId(6), "--handler-generation", agentId(2)], other.deps), 75)
   assert.equal(other.output().error.code, "COMMAND_CONFLICT"); assert.equal(other.calls.length, 0)
+})
+
+test("a pinned V3 start compares the selection digest", async () => {
+  const f = fixture(), base = f.command
+  f.retain({ version: 3, hostId: base.hostId, commandId: base.commandId,
+    handlerGeneration: base.handlerGeneration, op: "start", agentId: base.target!.agentId,
+    target: base.target, state: "completed", input: { cwd: "/checkout", backendId: "codex-acp",
+      selectionDigest: "81614afeb0b86dc3bdc46121f448a4abef09b633a6bd2d2ceb5cdb87572169f4",
+      environmentDigest: launchEnvironmentDigest({}), mcpServerNames: [] },
+    result: { outcome: "started", target: base.target, session: { sessionId: "fixture-session", protocolVersion: 1 }, failure: null } })
+  assert.equal(await runControl(["agent", "start", ...flags, "--command-id", base.commandId,
+    "--handler-generation", base.handlerGeneration], f.deps), 0)
+  assert.deepEqual(f.calls.map(call => call.op), ["agent_command"])
 })
 
 test("offline visible receipt after failed fsync remains unverified until the owner repairs it", async t => {

@@ -407,10 +407,19 @@ function M.open(view)
     local record = assert(view.record)
     assert(record.version == 3, "Unavailable legacy Agency session")
     local id, Registry = "agency:" .. record.definition.agentId, require("agentic.session_registry")
+    local target = type(record.launch) == "table" and {
+        agentId = record.definition.agentId,
+        handlerGeneration = record.launch.handlerGeneration,
+        providerGeneration = record.launch.providerGeneration,
+    } or nil
     for tab, manager in pairs(Registry.sessions) do
         if agency(manager.agent) and (manager.session_id == id or manager._agency_loading_session == id
             or manager._agency_intent and manager._agency_intent.session_id == id) and vim.api.nvim_tabpage_is_valid(tab) then
             vim.api.nvim_set_current_tabpage(tab)
+            if manager.session_id == id and target and not vim.deep_equal(manager._agency_binding, target) then
+                manager._agency_load_cwd = record.definition.cwd
+                manager:load_acp_session(id, record.definition.backendId)
+            end
             manager.widget:show()
             return manager
         end

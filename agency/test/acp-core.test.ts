@@ -205,6 +205,17 @@ test("ordinary native creation needs no fresh catalog and persists MCP names but
   await f.service.stop(stop)
 })
 
+test("rejected initial configuration persists only its identity digest", async t => {
+  const f = await agentServiceFixture(t), commandId = randomUUID()
+  await assert.rejects(f.service.createSession({ commandId, cwd: f.workspace, environment: {},
+    selection: { configValues: { credential: "transient-secret" } }, nativeParams: { cwd: f.workspace, mcpServers: [] } }), { code: "SELECTION_UNSUPPORTED" })
+  const inventory = await f.store.inventory(), command = inventory.commands.find(value => value.commandId === commandId)
+  assert.ok(command?.version === 3 && command.op === "start")
+  assert.equal(typeof command.input.selectionDigest, "string")
+  assert.equal(Object.hasOwn(command.input, "selection"), false)
+  assert.equal(JSON.stringify(inventory).includes("transient-secret"), false)
+})
+
 test("restore requires fresh complete MCP descriptors before native dispatch", async t => {
   const f = await agentServiceFixture(t)
   const descriptors = [{ type: "http", name: "context", url: "https://fixture", headers: [{ name: "Authorization", value: "first-secret" }] }]

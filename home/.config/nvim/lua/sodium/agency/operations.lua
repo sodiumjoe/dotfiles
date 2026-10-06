@@ -357,7 +357,8 @@ function M.new(deps)
         end, operation)
     end
     function api.attach(target, callback, origin)
-        attach(vim.deepcopy(target), callback, begin(nil, origin))
+        local operation = begin(nil, origin)
+        attach(vim.deepcopy(target), callback, operation, vim.deepcopy(current_origin))
     end
     function api.restore(agent_id, callback, origin)
         local operation = begin(nil, origin)

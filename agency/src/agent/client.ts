@@ -10,7 +10,7 @@ import type { HandlerEnvironment } from "../handler/environment.js"
 import { snapshotLaunchEnvironment } from "./environment.js"
 import type { AgentStore } from "./store.js"
 import { AGENT_PROTOCOL, agentExchangeTimeout, parseAgentReply, validateAgentReply, type AgentReply, type AgentRequest } from "./protocol.js"
-import { AgentError, agentFailure, parseSelection, type AgentCommand as AgentCommandV2, type AgentCommandV3, type AgentErrorCode, type CommandView, type StartSelection } from "./types.js"
+import { AgentError, agentFailure, parseSelection, startSelectionDigest, type AgentCommand as AgentCommandV2, type AgentCommandV3, type AgentErrorCode, type CommandView, type StartSelection } from "./types.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 
 const exit = (code: AgentErrorCode): number => code === "USAGE" || code === "SELECTION_UNSUPPORTED" ? 64 : code === "INVALID_PROTOCOL" ? 65 : ["UNAVAILABLE", "STALE_HANDLER", "STALE_PROVIDER", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "INVALID_AGENT_STATE"].includes(code) ? 69 : code === "INTERNAL" ? 70 : 75
@@ -78,9 +78,9 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
     const validateRetained = (command: AgentCommand): void => {
       if (command.hostId !== env.paths.hostKey || command.commandId !== commandId || command.handlerGeneration !== generation || command.op !== operation) throw new AgentError("COMMAND_CONFLICT")
       if (operation === "start") {
-        const recorded = command.version === 3 ? command.input.selection : (command.input as import("./types.js").StartCommandInput).selection
-        const expected = command.version === 2 ? selection : { modelId: selection!.modelId, ...(selection!.mode ? { modeId: selection!.mode } : {}), ...(selection!.reasoning.kind === "value" ? { configValues: { reasoning: selection!.reasoning.value } } : {}) }
-        if (!isDeepStrictEqual(recorded, expected)) throw new AgentError("COMMAND_CONFLICT")
+        if (command.version === 3) {
+          if (command.input.selectionDigest !== startSelectionDigest(selection)) throw new AgentError("COMMAND_CONFLICT")
+        } else if (!isDeepStrictEqual((command.input as import("./types.js").StartCommandInput).selection, selection)) throw new AgentError("COMMAND_CONFLICT")
       }
       if (operation === "restore" && command.target?.agentId !== positional[2]) throw new AgentError("COMMAND_CONFLICT")
       if (operation === "import" && (command.version !== 3 || !isDeepStrictEqual(command.input, { backendId: flags.get("--provider"), nativeSessionId: flags.get("--session"), cwd: flags.get("--cwd") }))) throw new AgentError("COMMAND_CONFLICT")

@@ -33,6 +33,24 @@ describe("Agency control transport", function()
         end
     end)
 
+    it("accepts failed and interrupted V3 records in mixed inventory", function()
+        local control = require("sodium.agency.control")
+        local id = "00000000-0000-0000-0000-000000000001"
+        for _, phase in ipairs({ "failed", "interrupted" }) do
+            local finish, failure
+            local client = control.new({ system = function(_, _, cb) finish = cb; return { kill = function() end } end,
+                schedule = function(cb) cb() end })
+            client.command({ "agent", "page", "--limit", "100" }, {}, function(err) failure = err end)
+            local record = { version = 3, definition = { agentId = id, cwd = "/work", backendId = "codex-acp" },
+                launch = vim.NIL, phase = phase, settings = {} }
+            local result = { state = "page", revision = id, nextCursor = vim.NIL, issues = {},
+                agents = { { record = record, live = false, cleanup = "not_launched" } } }
+            finish({ code = 0, stdout = vim.json.encode({ protocol = "agency-agent/3", requestId = id,
+                handlerGeneration = id, ok = true, result = result }) })
+            assert.is_nil(failure)
+        end
+    end)
+
     it("rejects receipts from another requested Handler generation", function()
         local control = require("sodium.agency.control")
         local id = "00000000-0000-0000-0000-000000000001"

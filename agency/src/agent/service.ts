@@ -16,7 +16,7 @@ import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import type { LaunchEnvironment } from "./environment.js"
 import { agentTuple, crossCheckAgents, recoverAgents, retainUnspawnedRestore, type AgentAssessment, type AgentRecoveryRepair } from "./recovery.js"
 import type { AgentInventory, AgentStateIssue, AgentStore } from "./store.js"
-import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type RuntimeLaunchSpec as LaunchSpec, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity } from "./types.js"
+import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type RuntimeLaunchSpec as LaunchSpec, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity } from "./types.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
 import { createConversation, type Conversation, type ConversationListener, type ConversationObservation } from "./conversation.js"
 import { createTurnCoordinator, type AcpSubmissionRequest, type SubmissionReceipt, type SubmissionRequest, type TurnCoordinator } from "./turns.js"
@@ -456,7 +456,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       } : {}
       const settings = previousAgent?.settings ?? parseRequestedSettings({ ...backend.initial, ...selected, ...((backend.initial.configValues || selected.configValues) ? { configValues: { ...backend.initial.configValues, ...selected.configValues } } : {}) })
       const { params, names } = sessionInputs(cwd, "nativeParams" in raw ? raw.nativeParams : undefined, previousAgent?.inputRequirements.mcpServerNames)
-      const durableInput: JsonObject = kind === "start" ? { cwd, backendId, selection: settings as JsonObject, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names } : { agentId: (request as RestoreRequest).agentId, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names }
+      const selectionDigest = kind === "start" ? native ? requestedSettingsDigest(settings) : startSelectionDigest((raw as StartInput).selection) : null
+      const durableInput: JsonObject = kind === "start" ? { cwd, backendId, selectionDigest, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names } : { agentId: (request as RestoreRequest).agentId, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names }
       if (existing) {
         if (existing.op !== kind || existing.version !== 3 || !isDeepStrictEqual(existing.input, durableInput)) throw new AgentError("COMMAND_CONFLICT")
         return command(request.commandId, request.handlerGeneration)
@@ -482,7 +483,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           version: 3, definition: previousAgent?.definition ?? { hostId: context.paths.hostKey, agentId, createdCommandId: request.commandId, cwd, backendId, origin: "new" },
           launch: { handlerGeneration: generation, providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId, configuration, backendFingerprint: backendFingerprint(backend, contract), compatibilityId: declaration.id, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS },
           phase: kind === "restore" ? "restoring" : "starting", session: previousAgent?.session ?? null, failure: null,
-          settings, inputRequirements: { mcpServerNames: names }, configurationState: previousAgent?.configurationState ?? { verification: { kind: "verified" }, nonRestorableOptionIds: [] }
+          settings, inputRequirements: { mcpServerNames: names }, configurationState: previousAgent?.configurationState ?? { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }
         }))
         if (previousAgent && (assessment.configurationPending.get(agentId)?.length ?? 0) > 0 && record.configurationState.verification.kind === "verified") record.configurationState.verification = { kind: "unknown" }
         const accepted = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: kind, input: durableInput, agentId, target: agentTuple(record), state: "pending", result: null })
@@ -492,7 +493,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invoke: (text, limits) => invoke(op, text, limits), invokeAcp: params => invokeAcp(op, params), cancel: () => { permissions.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: () => { permissions.invalidate(agentTuple(op.initial)); retire(op) } })
         checkCommandDeadline(); acceptingOperation = op
         operations.set(agentId, op); intents.set(request.commandId, op)
-        try { await publishCommand(accepted, null); checkCommandDeadline(); await publishAgent(record, previousAgent ?? null) }
+        const durableRecord = previousAgent ? record : parseAgentRecordV3({ ...record, settings: {} })
+        try { await publishCommand(accepted, null); checkCommandDeadline(); await publishAgent(durableRecord, previousAgent ?? null) }
         catch (error) { if (error instanceof AgentError && error.code === "STARTUP_TIMEOUT") throw error; throw new AgentError("INCOMPLETE") }
         checkCommandDeadline(); launch(op); return view(accepted)
       })

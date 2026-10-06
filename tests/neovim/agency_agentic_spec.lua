@@ -68,6 +68,24 @@ describe("native Agency Agentic adaptation", function()
         assert.are.equal(manager, integration.open({ record = { version = 3, definition = { agentId = binding.agentId, cwd = vim.fn.getcwd() } }, live = true }))
     end)
 
+    it("reloads an existing manager when the logical session has a replacement generation", function()
+        local manager = opened()
+        local replacement = vim.tbl_extend("force", binding, { providerGeneration = "44444444-4444-4444-8444-444444444444" })
+        local launch = vim.tbl_extend("force", replacement, { launchAttemptId = "55555555-5555-4555-8555-555555555555" })
+        local before = 0
+        for _, frame in ipairs(frames) do if frame.method == "session/load" then before = before + 1 end end
+        assert.are.equal(manager, integration.open({ record = { version = 3,
+            definition = { agentId = binding.agentId, cwd = vim.fn.getcwd(), backendId = "codex-acp" },
+            launch = launch }, live = true }))
+        flush()
+        local after = 0
+        for _, frame in ipairs(frames) do if frame.method == "session/load" then after = after + 1 end end
+        assert.are.equal(before + 1, after)
+        reply(request("session/load"), nil, nil, replacement)
+        flush()
+        assert.are.same(replacement, manager._agency_binding)
+    end)
+
     it("destroys the native view by detaching without canceling the shared turn", function()
         local manager = opened()
         state(manager, "turn-a", "running")

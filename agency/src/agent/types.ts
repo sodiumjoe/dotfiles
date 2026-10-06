@@ -62,6 +62,8 @@ function checked<T>(operation: () => T): T { try { return operation() } catch { 
 export function agentText(value: unknown, max = 256): string { return checked(() => { const result = text(value, max); if (!result.trim()) invalidAgent(); return result }) }
 export function parseReasoning(input: unknown): Reasoning { return checked(() => { const v = object(input); if (v.kind === "none") { keys(v, ["kind"]); return { kind: "none" } } keys(v, ["kind", "value"]); if (v.kind !== "value") invalidAgent(); return { kind: "value", value: agentText(v.value) } }) }
 export function parseSelection(input: unknown): StartSelection { return checked(() => { const v = object(input); keys(v, ["providerId", "modelId", "reasoning", "mode", "permissionProfile"]); return { providerId: providerId(v.providerId), modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: v.mode === null ? null : agentText(v.mode), permissionProfile: agentText(v.permissionProfile) } }) }
+export function startSelectionDigest(input: unknown): string { return digest(canonicalJson(parseSelection(input))) }
+export function requestedSettingsDigest(input: unknown): string { return digest(canonicalJson(parseRequestedSettings(input))) }
 export function parseTuple(input: unknown): AgentTuple { return checked(() => { const v = object(input); keys(v, ["agentId", "handlerGeneration", "providerGeneration"]); return { agentId: id(v.agentId), handlerGeneration: id(v.handlerGeneration), providerGeneration: id(v.providerGeneration) } }) }
 export function tupleOf(spec: LaunchSpec): AgentTuple { return { agentId: spec.agentId, handlerGeneration: spec.handlerGeneration, providerGeneration: spec.providerGeneration } }
 export function tupleOfRecord(record: AgentRecord): AgentTuple
@@ -133,8 +135,8 @@ export function parseAgentCommandV3(input: unknown): AgentCommandV3 { return che
   if (target && (target.agentId !== agentId || target.handlerGeneration !== handlerGeneration)) invalidAgent()
   if ((v.op === "import") !== (target === null)) invalidAgent()
   if (v.op === "start") {
-    keys(request, ["cwd", "backendId", "selection", "environmentDigest", "mcpServerNames"])
-    absolutePath(request.cwd); providerId(request.backendId); parseRequestedSettings(request.selection); hash(request.environmentDigest); uniqueStrings(request.mcpServerNames)
+    keys(request, ["cwd", "backendId", "selectionDigest", "environmentDigest", "mcpServerNames"])
+    absolutePath(request.cwd); providerId(request.backendId); hash(request.selectionDigest); hash(request.environmentDigest); uniqueStrings(request.mcpServerNames)
   } else if (v.op === "restore") {
     keys(request, ["agentId", "environmentDigest", "mcpServerNames"])
     if (id(request.agentId) !== agentId) invalidAgent()
@@ -165,7 +167,7 @@ export function normalizeAgentCommand(input: AgentCommand | AgentCommandV3): Age
   const old = parseAgentCommand(input)
   if (!old.target) invalidAgent()
   const selection = old.op === "start" ? (old.input as StartCommandInput).selection : null
-  const request = old.op === "start" ? { cwd: (old.input as StartCommandInput).cwd, backendId: selection!.providerId, selection: { modelId: selection!.modelId, ...(selection!.mode ? { modeId: selection!.mode } : {}), ...(selection!.reasoning.kind === "value" ? { configValues: { reasoning: selection!.reasoning.value } } : {}) }, environmentDigest: (old.input as StartCommandInput).environmentDigest, mcpServerNames: [] } : old.op === "restore" ? { agentId: old.target.agentId, environmentDigest: (old.input as RestoreCommandInput).environmentDigest, mcpServerNames: [] } : { target: old.target }
+  const request = old.op === "start" ? { cwd: (old.input as StartCommandInput).cwd, backendId: selection!.providerId, selectionDigest: startSelectionDigest(selection), environmentDigest: (old.input as StartCommandInput).environmentDigest, mcpServerNames: [] } : old.op === "restore" ? { agentId: old.target.agentId, environmentDigest: (old.input as RestoreCommandInput).environmentDigest, mcpServerNames: [] } : { target: old.target }
   return parseAgentCommandV3({ version: 3, hostId: old.hostId, commandId: old.commandId, handlerGeneration: old.handlerGeneration, op: old.op, input: request, agentId: old.target.agentId, target: old.target, state: old.state, result: old.result ? { ...old.result, session: old.result.session ? { sessionId: old.result.session.sessionId, protocolVersion: 1 } : null } : null })
 }
 export function parseLaunchSpec(input: unknown): LaunchSpec { return checked(() => {

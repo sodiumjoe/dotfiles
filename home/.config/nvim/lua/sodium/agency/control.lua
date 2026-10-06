@@ -76,7 +76,7 @@ local function validate(value, argv)
                     assert(type(view.live) == "boolean" and vim.tbl_contains({ "not_launched", "verified", "unverified", "unknown" }, view.cleanup))
                     assert(valid_id(record.definition.agentId) and type(record.definition.cwd) == "string" and record.definition.cwd:sub(1, 1) == "/")
                     assert(vim.tbl_contains({ "codex-acp", "claude-agent-acp" }, record.definition.backendId) and type(record.settings) == "table")
-                    assert(vim.tbl_contains({ "starting", "ready", "recoverable", "restoring", "stopping", "stopped" }, record.phase))
+                    assert(vim.tbl_contains({ "starting", "ready", "recoverable", "restoring", "stopping", "stopped", "failed", "interrupted" }, record.phase))
                     if record.launch == vim.NIL then assert(not view.live)
                     else
                         assert(type(record.launch) == "table" and valid_id(record.launch.handlerGeneration) and valid_id(record.launch.providerGeneration))
