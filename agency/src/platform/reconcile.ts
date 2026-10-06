@@ -174,12 +174,24 @@ function membersRetained(first: ProcessIdentity[], second: ProcessIdentity[]): b
   return second.every(member => first.some(other => sameProcess(member, other)))
 }
 
+async function observeRetainedProcess(adapter: PlatformAdapter, pid: number, deadline: number): Promise<ProcessIdentity | null> {
+  while (true) {
+    try {
+      return await adapter.readProcess(pid)
+    } catch (error) {
+      if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable) || Date.now() >= deadline) throw error
+      await sleep()
+    }
+  }
+}
+
 async function retainedState(adapter: PlatformAdapter, provider: ProcessGroupProviderIdentity, groupAbsent = false): Promise<{ state: "absent" | "live" | "ambiguous"; detached: ProcessIdentity[] }> {
+  const deadline = Date.now() + OBSERVATION_DEADLINE_MS
   let live = false
   const detached: ProcessIdentity[] = []
   for (const retained of unionMembers([provider.group.leader], provider.group.observed)) {
     let current: ProcessIdentity | null
-    try { current = await adapter.readProcess(retained.pid) } catch { if (groupAbsent) continue; return { state: "ambiguous", detached } }
+    try { current = await (groupAbsent ? adapter.readProcess(retained.pid) : observeRetainedProcess(adapter, retained.pid, deadline)) } catch { if (groupAbsent) continue; return { state: "ambiguous", detached } }
     if (current === null) continue
     if (current.pid !== retained.pid || current.bootId !== retained.bootId) continue
     if (current.processGroupId !== provider.group.leader.processGroupId) {

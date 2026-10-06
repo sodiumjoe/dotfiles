@@ -5,6 +5,7 @@ import { join } from "node:path"
 import test from "node:test"
 import { readLaunchRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
+import { LinuxObservationUnavailable } from "../src/platform/linux.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
 import {
   RUNTIME_RECORD_VERSION,
@@ -206,6 +207,85 @@ test("transient Darwin group observation churn stabilizes before SIGTERM", async
   assert.equal(result.disposition, "cleaned")
   assert.deepEqual(adapter.signals, ["SIGTERM"])
 })
+
+for (const platform of ["darwin", "linux"] as const) {
+  const Unavailable = platform === "darwin" ? DarwinObservationUnavailable : LinuxObservationUnavailable
+  for (const stage of ["initial", "SIGTERM", "SIGKILL"] as const) {
+    test(`${platform} retained observation churn stabilizes before ${stage} authorization`, async t => {
+      const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
+      const adapter = new FakeAdapter({ platform, group: [leader, child], onSignal: (signal, state) => {
+        if (stage !== "SIGKILL" || signal === "SIGKILL") { state.leader = null; state.group = [] }
+      } })
+      const readProcess = adapter.readProcess.bind(adapter)
+      let childReads = 0
+      adapter.readProcess = async pid => {
+        if (pid === child.pid && ++childReads === (stage === "initial" ? 1 : stage === "SIGTERM" ? 2 : 3)) throw new Unavailable("transient retained child observation")
+        return readProcess(pid)
+      }
+      await assertOutcome(t, starting, adapter, { disposition: "cleaned", signals: stage === "SIGKILL" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"] })
+    })
+  }
+
+  test(`${platform} retained observation churn settles to an exited child`, async t => {
+    const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+    const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
+    const adapter = new FakeAdapter({ platform, group: [leader, child], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+    const readProcess = adapter.readProcess.bind(adapter)
+    let childReads = 0
+    adapter.readProcess = async pid => {
+      if (pid === child.pid && ++childReads === 2) {
+        adapter.group = [leader]
+        throw new Unavailable("child exited during observation")
+      }
+      return readProcess(pid)
+    }
+    await assertOutcome(t, starting, adapter, { disposition: "cleaned", signals: ["SIGTERM"] })
+  })
+
+  test(`${platform} retained observation retry does not authorize changed ownership`, async t => {
+    for (const changed of [{ birth: "102:changed" }, { uid: uid + 1 }, { gid: gid + 1 }, { sessionId: 202 }]) {
+      const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
+      const adapter = new FakeAdapter({ platform, group: [leader, child] })
+      const readProcess = adapter.readProcess.bind(adapter)
+      let childReads = 0
+      adapter.readProcess = async pid => {
+        if (pid === child.pid) {
+          if (++childReads === 2) throw new Unavailable("transient retained child observation")
+          if (childReads > 2) return { ...child, ...changed }
+        }
+        return readProcess(pid)
+      }
+      await assertOutcome(t, starting, adapter, { disposition: "quarantined", signals: [] })
+    }
+  })
+
+  for (const failure of ["transient", "unknown"] as const) {
+    test(`${platform} persistent ${failure} retained observation failure prevents signaling`, { timeout: 5000 }, async t => {
+      const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
+      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
+      const adapter = new FakeAdapter({ platform, group: [leader, child] })
+      const readProcess = adapter.readProcess.bind(adapter)
+      let childReads = 0
+      const started = Date.now()
+      adapter.readProcess = async pid => {
+        if (pid === child.pid && ++childReads >= 2) throw failure === "transient" ? new Unavailable("persistent observation failure") : new Error("unknown observation failure")
+        return readProcess(pid)
+      }
+      const path = await recordFixture(t, starting)
+      const result = await reconcileRecord(path, adapter)
+      assert.equal(result.disposition, "quarantined")
+      assert.deepEqual(result.record, await readLaunchRecord(path))
+      assert.deepEqual(adapter.signals, [])
+      if (failure === "transient") assert.ok(Date.now() - started >= 1000)
+      else assert.equal(childReads, 2)
+      const stable = new FakeAdapter({ platform, group: [leader, child] })
+      assert.deepEqual(await reconcileRecord(path, stable), result)
+      assert.deepEqual(stable.signals, [])
+    })
+  }
+}
 
 test("expected inventory rejects a replaced record before any write or signal", async t => {
   const expected = record()
