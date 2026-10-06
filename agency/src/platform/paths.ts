@@ -16,6 +16,8 @@ export type PlatformPaths = {
   handlerSocketPath: string
 }
 
+export function acpSocketPath(paths: PlatformPaths): string { return join(paths.runtimeRoot, "acp.sock") }
+
 async function lstatOrCreate(path: string): ReturnType<typeof lstat> {
   try {
     return await lstat(path)

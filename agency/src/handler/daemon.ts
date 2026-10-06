@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import { startAcpServer } from "../acp/server.js"
 import { createAgentService, type AgentService } from "../agent/service.js"
 import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
@@ -20,7 +21,7 @@ import { bindPrivateSocket } from "../platform/private-socket.js"
 import { PrivateStatePublicationError, readHandlerRecord, readLaunchRecordForReconciliation, writeHandlerRecord } from "../platform/private-state.js"
 import { reconcileRecord, RetainedInventoryChangedError } from "../platform/reconcile.js"
 import { sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
-import type { PlatformPaths } from "../platform/paths.js"
+import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
 import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type LaunchIssue } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
@@ -98,6 +99,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
+  let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject })
@@ -105,6 +107,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const close = async (): Promise<void> => {
     if (closing) return closed
     closing = true
+    await acpServer?.close()
     for (const socket of sockets) socket.destroy()
     for (const listener of [server, attachmentServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
     resolveClosed()
@@ -239,6 +242,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
     await agents.initialize()
+    acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
     coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()
     current = { ...current, phase: "ready" }

@@ -5,7 +5,7 @@ import { AGENT_LIMITS, AgentError, agentText, parseLaunchSpec, parsePermissionEv
 import { staticProductionContracts } from "./production-contracts.js"
 
 export type ContractDeadlines = { commandMs: number; spawnMs: number; initializeMs: number; sessionMs: number; optionMs: number; promptMs: number; transportCloseMs: number; processTerminateMs: number; absenceMs: number; overallMs: number }
-export type LaunchContract = { id: string; providerId: ProviderId; adapterPackage: string; adapterVersion: string; sessionLoad: boolean; modes: Capability; reasoning: Capability; effectiveMode: string | null; permissionProfiles: string[]; modelOption: string; reasoningOption: string | null; modeOption: string | null; permissionEvidence: PermissionEvidence; deadlines: ContractDeadlines }
+export type LaunchContract = { id: string; providerId: ProviderId; adapterPackage: string; adapterVersion: string; sdkVersion?: string; sessionLoad: boolean; promptCapabilities?: { image: boolean; audio: boolean; embeddedContext: boolean }; modes: Capability; reasoning: Capability; effectiveMode: string | null; permissionProfiles: string[]; modelOption: string; reasoningOption: string | null; modeOption: string | null; permissionEvidence: PermissionEvidence; deadlines: ContractDeadlines }
 export type ConfiguredLaunchContract = LaunchContract & { entrypoint: string; executable: string; fingerprint: string }
 export const cleanupBudget = (contract: LaunchContract): number => contract.deadlines.processTerminateMs + contract.deadlines.absenceMs + contract.deadlines.transportCloseMs
 
@@ -22,7 +22,7 @@ export function productionLaunchContracts(): readonly LaunchContract[] { return 
 export function parseLaunchContract(input: unknown): LaunchContract {
   try {
     const v = object(input)
-    keys(v, ["id", "providerId", "adapterPackage", "adapterVersion", "sessionLoad", "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "permissionEvidence", "deadlines"])
+    keys(v, ["id", "providerId", "adapterPackage", "adapterVersion", "sessionLoad", ...["promptCapabilities", "sdkVersion"].filter(key => Object.hasOwn(v, key)), "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "permissionEvidence", "deadlines"])
     if (typeof v.sessionLoad !== "boolean" || !Array.isArray(v.permissionProfiles) || v.permissionProfiles.length < 1 || v.permissionProfiles.length > 16) throw new Error()
     const provider = providerId(v.providerId), adapterPackage = agentText(v.adapterPackage), permissionEvidence = parsePermissionEvidence(v.permissionEvidence)
     if (adapterPackage !== `@agentclientprotocol/${provider}`) throw new Error()
@@ -32,7 +32,14 @@ export function parseLaunchContract(input: unknown): LaunchContract {
     if ((modes.state === "none") !== (modeOption === null) || (modes.state === "none") !== (effectiveMode !== null) || (reasoning.state === "none") !== (reasoningOption === null)) throw new Error()
     const optionIds = [modelOption, modeOption, reasoningOption].filter(value => value !== null)
     if (new Set(optionIds).size !== optionIds.length) throw new Error()
-    return { id: agentText(v.id), providerId: provider, adapterPackage, adapterVersion: agentText(v.adapterVersion), sessionLoad: v.sessionLoad, modes, reasoning, effectiveMode, permissionProfiles, modelOption, reasoningOption, modeOption, permissionEvidence, deadlines: parseDeadlines(v.deadlines) }
+    let promptCapabilities: LaunchContract["promptCapabilities"]
+    if (v.promptCapabilities !== undefined) {
+      const capabilities = object(v.promptCapabilities)
+      keys(capabilities, ["image", "audio", "embeddedContext"])
+      if (["image", "audio", "embeddedContext"].some(key => typeof capabilities[key] !== "boolean")) throw new Error()
+      promptCapabilities = capabilities as NonNullable<LaunchContract["promptCapabilities"]>
+    }
+    return { id: agentText(v.id), providerId: provider, adapterPackage, adapterVersion: agentText(v.adapterVersion), ...(v.sdkVersion !== undefined ? { sdkVersion: agentText(v.sdkVersion) } : {}), sessionLoad: v.sessionLoad, ...(promptCapabilities ? { promptCapabilities } : {}), modes, reasoning, effectiveMode, permissionProfiles, modelOption, reasoningOption, modeOption, permissionEvidence, deadlines: parseDeadlines(v.deadlines) }
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }
 
@@ -45,7 +52,7 @@ export function launchContractFingerprint(input: LaunchContract & { entrypoint: 
 export function parseConfiguredLaunchContract(input: unknown): ConfiguredLaunchContract {
   try {
     const v = object(input)
-    keys(v, ["id", "providerId", "adapterPackage", "adapterVersion", "sessionLoad", "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "permissionEvidence", "deadlines", "entrypoint", "executable", "fingerprint"])
+    keys(v, ["id", "providerId", "adapterPackage", "adapterVersion", "sessionLoad", ...["promptCapabilities", "sdkVersion"].filter(key => Object.hasOwn(v, key)), "modes", "reasoning", "effectiveMode", "permissionProfiles", "modelOption", "reasoningOption", "modeOption", "permissionEvidence", "deadlines", "entrypoint", "executable", "fingerprint"])
     const contract = parseLaunchContract(Object.fromEntries(Object.entries(v).filter(([key]) => !["entrypoint", "executable", "fingerprint"].includes(key))))
     return { ...contract, entrypoint: absolutePath(v.entrypoint), executable: absolutePath(v.executable), fingerprint: hash(v.fingerprint) }
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
@@ -54,7 +61,7 @@ export function parseConfiguredLaunchContract(input: unknown): ConfiguredLaunchC
 export async function configureLaunchContract(input: LaunchContract, profile: ProviderProfile, configuration: ConfigEvidence): Promise<ConfiguredLaunchContract> {
   try {
     const contract = parseLaunchContract(input)
-    if (!profile.enabled || profile.id !== contract.providerId || configuration.providerId !== contract.providerId || configuration.adapterVersion !== contract.adapterVersion || configuration.sdkVersion !== null || contract.adapterPackage !== `@agentclientprotocol/${profile.id}`) throw new Error()
+    if (!profile.enabled || profile.id !== contract.providerId || configuration.providerId !== contract.providerId || configuration.adapterVersion !== contract.adapterVersion || configuration.sdkVersion !== (contract.sdkVersion ?? null) || contract.adapterPackage !== `@agentclientprotocol/${profile.id}`) throw new Error()
     const configured = { ...contract, entrypoint: await adapterEntry(profile), executable: absolutePath(profile.executable) }
     return { ...configured, fingerprint: launchContractFingerprint(configured, configuration.fingerprint) }
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }

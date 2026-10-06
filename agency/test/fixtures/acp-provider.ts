@@ -87,6 +87,16 @@ async function dispatch(request: { id: string | number; method?: string; params?
     })
     await barrier("prompt")
     if (promptId !== request.id) return
+    if (text === "echo") {
+      update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "ec" } })
+      update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "ho" } })
+      update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "provider context" } })
+    }
+    if (text === "echo-mismatch") {
+      update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "echo-" } })
+      update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "different" } })
+    }
+    if (text === "history") for (let index = 0; index < 8300; index++) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: String(index) } })
     update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${text}` } })
     promptId = null
     reply(request.id, { stopReason: "end_turn" })

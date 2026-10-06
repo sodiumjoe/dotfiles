@@ -76,12 +76,13 @@ export async function unlinkStalePrivateSocket(root: string, name: string, inspe
   await assertPrivateDirectory(root)
   const path = socketPath(root, name)
   if (inspection.disposition !== "stale") throw new Error("only a proven stale generation authorizes socket removal")
-  if (inspection.record.socketPath !== (name === "attachment.sock" ? socketPath(root, "handler.sock") : path)) throw new Error("stale generation socket is outside the qualified root")
+  const companion = name === "attachment.sock" || name === "acp.sock"
+  if (inspection.record.socketPath !== (companion ? socketPath(root, "handler.sock") : path)) throw new Error("stale generation socket is outside the qualified root")
   if (await missing(path)) return
   const stats = await lstat(path)
   if (stats.isSymbolicLink()) throw new Error(`${path} is a symlink`)
   if (!stats.isSocket()) throw new Error(`${path} is not a socket`)
   if (stats.uid !== currentUid()) throw new Error(`${path} has the wrong owner`)
-  if (name === "attachment.sock") await assertPrivateSocket(root, name)
+  if (companion) await assertPrivateSocket(root, name)
   await unlink(path)
 }

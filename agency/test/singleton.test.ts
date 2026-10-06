@@ -563,8 +563,11 @@ test("replaces one exactly stale generation and never unlinks an ambiguous one",
   assert.equal(await pathExists(join(root, "handler.sock")), true)
   const companion = await bindPrivateSocket(root, "attachment.sock")
   t.after(() => { companion.close() })
+  const acpCompanion = await bindPrivateSocket(root, "acp.sock")
+  t.after(() => { acpCompanion.close() })
   const second = await startOrConnect({ root, hostId, adapter, handler: handlerCommand(path) })
   assert.equal(await pathExists(join(root, "attachment.sock")), false)
+  assert.equal(await pathExists(join(root, "acp.sock")), false)
   assert.notEqual(second.record.generation, first.record.generation)
   assert.equal((await handlerIdentities(config.handlerLog)).length, 2)
   const secondIdentity = second.record.process

@@ -41,6 +41,16 @@ test("startup gate accepts fragmented exact token and rejects EOF, invalid bytes
   gate.destroy(); status.destroy()
 })
 
+test("an ACP bind failure rolls back both existing listeners before readiness", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t), path = join(f.paths.runtimeRoot, "acp.sock")
+  await writeFile(path, "preserved", { mode: 0o600 })
+  await assert.rejects(f.start())
+  assert.notEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase, "ready")
+  await until(async () => !await fileExists(f.paths.handlerSocketPath) ? true : undefined)
+  await until(async () => !await fileExists(join(f.paths.runtimeRoot, "attachment.sock")) ? true : undefined)
+  assert.equal(await readFile(path, "utf8"), "preserved")
+})
+
 test("daemon reports every retained classification without adopting a survivor", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), boot = await f.adapter.bootId()
   const ambiguous = launch({ launchBootId: boot }), unattempted = launch({ launchBootId: boot, launchAttempted: false, checkoutId: "unattempted" })

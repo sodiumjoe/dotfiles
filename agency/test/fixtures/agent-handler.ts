@@ -23,7 +23,7 @@ import type { AgentHandlerOptions } from "../agent-support.js"
 import { fixtureRetention } from "../retention-support.js"
 
 process.umask(0o077)
-const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as AgentHandlerOptions & { paths: PlatformPaths; profile: ProviderProfile }
+const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as AgentHandlerOptions & { paths: PlatformPaths; profile: ProviderProfile; profiles?: ProviderProfile[] }
 const root = dirname(config.paths.runtimeRoot), generation = process.env.AGENCY_HANDLER_GENERATION!
 const platform = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
 const adapter = { ...platform, async signalGroup(group: number, signal: NodeJS.Signals) { await pause("stop-cleanup"); await platform.signalGroup(group, signal) } }
@@ -44,7 +44,7 @@ const contract: LaunchContract = {
 }
 try {
   await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
-    status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: [contract],
+    status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: config.nativeAcp ? [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }] : [contract],
     catalogFactory(context) {
       const store = context.store
       const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
@@ -92,7 +92,8 @@ try {
         return { ...owner, async cleanup() { const record = await owner.cleanup(); await pause("stop-verified"); return record } }
       }, async observeLaunchEvidence(spec, expected) {
         if (++evidenceCalls === 5) await startupHang("evidence")
-        if (!isDeepStrictEqual(config.profile, expected.profile) || !isDeepStrictEqual(await observeConfig(config.profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
+        const profile = (config.profiles ?? [config.profile]).find(value => value.id === spec.backendId)
+        if (!profile || !isDeepStrictEqual(profile, expected.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
       }, fatalStartupTimeout(spec): never {
         if (!config.startupHang || spec.handlerGeneration !== generation) throw new Error("unexpected fixture startup timeout")
         const handlerPid = process.pid

@@ -36,7 +36,7 @@ import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentCommandV3, AgentRecord, AgentRecordV3, RuntimeLaunchSpec, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = RetentionFixtureOptions & { pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
+export type AgentHandlerOptions = RetentionFixtureOptions & { nativeAcp?: boolean; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
@@ -107,7 +107,22 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   await mkdir(join(f.paths.persistentRoot, "catalog"), { mode: 0o700 })
   await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: [profile] }), { mode: 0o600 })
   await writeFile(join(f.paths.persistentRoot, "catalog/backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: {}, initial: {}, compatibilityId: "fixture-v1" }] }), { mode: 0o600 })
-  const configure = (settings: AgentHandlerOptions) => writeFile(f.configPath, JSON.stringify({ paths: f.paths, profile, ...settings }), { mode: 0o600 })
+  const profiles = [profile]
+  if (options.nativeAcp) {
+    await writeFile(join(f.root, "profile/agent-provider.js"), await readFile(fileURLToPath(new URL("./fixtures/acp-provider.js", import.meta.url))), { mode: 0o600 })
+    const secondary = join(f.root, "secondary")
+    await mkdir(secondary, { mode: 0o700 })
+    await writeFile(join(secondary, "native"), "fixture metadata only", { mode: 0o700 })
+    await writeFile(join(secondary, "adapter.json"), JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "1.0.0", main: "agent-provider.js" }), { mode: 0o600 })
+    await writeFile(join(secondary, "agent-provider.js"), await readFile(fileURLToPath(new URL("./fixtures/acp-provider.js", import.meta.url))), { mode: 0o600 })
+    await writeFile(join(secondary, "declared.json"), "{}", { mode: 0o600 })
+    await writeFile(join(secondary, "sdk.json"), JSON.stringify({ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.232", main: "sdk.js" }), { mode: 0o600 })
+    await writeFile(join(secondary, "sdk.js"), "", { mode: 0o600 })
+    profiles.push({ ...profile, id: "claude-agent-acp", executable: join(secondary, "native"), adapterPackageJson: join(secondary, "adapter.json"), sdkPackageJson: join(secondary, "sdk.json"), configurationFiles: [join(secondary, "declared.json")] })
+    await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: profiles }), { mode: 0o600 })
+    await writeFile(join(f.paths.persistentRoot, "catalog/backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: profiles.map(value => ({ id: value.id, args: [], environmentDefaults: { FIXTURE_ROOT: f.root, FIXTURE_BACKEND: value.id }, initial: {}, compatibilityId: "fixture-v1" })) }), { mode: 0o600 })
+  }
+  const configure = (settings: AgentHandlerOptions) => writeFile(f.configPath, JSON.stringify({ paths: f.paths, profile, profiles, ...settings }), { mode: 0o600 })
   await configure(options)
   if (options.pauseAt === "session") await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 })
   if (options.pauseAt === "prompt") await writeFile(join(f.root, "pause-prompt"), "pause", { mode: 0o600 })

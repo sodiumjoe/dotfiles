@@ -6,6 +6,7 @@ const codex: LaunchContract = Object.freeze({
   adapterPackage: "@agentclientprotocol/codex-acp",
   adapterVersion: "1.7.0",
   sessionLoad: true,
+  promptCapabilities: Object.freeze({ image: true, audio: false, embeddedContext: true }),
   modes: Object.freeze({ state: "values", values: Object.freeze(["read-only"]) }) as LaunchContract["modes"],
   reasoning: Object.freeze({ state: "values", values: Object.freeze(["high"]) }) as LaunchContract["reasoning"],
   effectiveMode: null,

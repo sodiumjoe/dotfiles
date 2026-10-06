@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { readHostId, type HostIdDependencies } from "../src/platform/host-id.js"
-import { resolvePlatformPaths } from "../src/platform/paths.js"
+import { acpSocketPath, resolvePlatformPaths } from "../src/platform/paths.js"
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex")
@@ -84,6 +84,7 @@ test("resolves distinct private roots and a short socket path", async t => {
   assert.notEqual(first.persistentRoot, second.persistentRoot)
   assert.notEqual(first.runtimeRoot, second.runtimeRoot)
   assert.equal(first.handlerSocketPath, join(first.runtimeRoot, "handler.sock"))
+  assert.equal(acpSocketPath(first), join(first.runtimeRoot, "acp.sock"))
   assert.ok(Buffer.byteLength(first.handlerSocketPath, "utf8") < 100)
   for (const path of [first.persistentRoot, first.runtimeRoot]) {
     const stats = await lstat(path)

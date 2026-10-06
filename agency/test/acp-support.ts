@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, readFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { createConnection } from "node:net"
+import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import type { TestContext } from "node:test"
@@ -8,6 +10,10 @@ import { fileURLToPath } from "node:url"
 import type { ProviderId } from "../src/catalog/types.js"
 import type { JsonObject } from "../src/agent/session-config.js"
 import { privateRoot } from "./control-support.js"
+import { agentHandlerFixture } from "./agent-support.js"
+import { readHandlerRecord } from "../src/platform/private-state.js"
+import { createAgentStore } from "../src/agent/store.js"
+import { agentTuple } from "../src/agent/recovery.js"
 
 export type ObservedFrame = { id?: string | number; method?: string; params?: JsonObject; result?: JsonObject }
 export type AcpPeer = {
@@ -17,6 +23,7 @@ export type AcpPeer = {
   next(method: string): Promise<JsonObject>
   nextState(state: "idle" | "running" | "unavailable"): Promise<JsonObject>
   respond(id: string | number, result: JsonObject): void
+  drain(method: string): JsonObject[]
   close(): void
 }
 
@@ -79,6 +86,7 @@ export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
     },
     async nextState(state) { const frame = await take(frame => frame.method === "agency/session_state" && (frame.params as JsonObject)?.state === state); return frame.params as JsonObject },
     respond: (requestId, result) => send({ id: requestId, result }),
+    drain(method) { const matching = frames.filter(frame => frame.method === method); for (const frame of matching) frames.splice(frames.indexOf(frame), 1); return matching.map(frame => frame.params as JsonObject) },
     close() { fail(new Error("ACP peer closed")); readable.destroy(); writable.destroy() },
   } as AcpPeer
 }
@@ -99,5 +107,36 @@ export async function providerFixture(t: TestContext, backendId: ProviderId = "c
   })
   return { root, workspace, peer,
     async requests(): Promise<ObservedFrame[]> { return (await readFile(join(root, backendId + ".jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line) as ObservedFrame) },
+  }
+}
+
+export async function acpFixture(t: TestContext) {
+  const f = await agentHandlerFixture(t, { nativeAcp: true }), peers = new Set<AcpPeer>()
+  t.after(() => { for (const peer of peers) peer.close() })
+  const environment = { PATH: process.env.PATH!, HOME: join(f.root, "home") }
+  const tuple = async (sessionId: string) => {
+    assert.ok(sessionId.startsWith("agency:"))
+    const record = await createAgentStore(f.paths.persistentRoot).readAgent(sessionId.slice(7))
+    assert.ok(record)
+    const target = agentTuple(record)
+    assert.ok(target)
+    return target
+  }
+  return { ...f, environment, tuple,
+    async connect() {
+      const socket = createConnection(join(f.paths.runtimeRoot, "acp.sock"))
+      socket.write(JSON.stringify({ jsonrpc: "2.0", method: "agency/connect", params: { handlerGeneration: (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation, environment } }) + "\n")
+      const peer = createAcpPeer(socket, socket); peers.add(peer); return peer
+    },
+    async stopSession(sessionId: string) { return f.waitCompleted(await f.stop(await tuple(sessionId))) },
+    async restoreSession(sessionId: string, fresh: Record<string, string> = {}) {
+      const target = await tuple(sessionId), current = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+      const { exchangeAgent, AGENT_PROTOCOL } = await import("../src/agent/protocol.js")
+      const reply = await exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "agent_restore", input: { agentId: target.agentId, commandId: randomUUID(), handlerGeneration: current.generation, environment: { ...environment, ...fresh }, nativeParams: { cwd: f.workspace, mcpServers: [] } } })
+      assert.ok(reply.ok && reply.result.state === "command")
+      return f.waitCompleted(reply.result)
+    },
+    async requests(backend: ProviderId): Promise<ObservedFrame[]> { try { return (await readFile(join(f.root, backend + ".jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line)) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error } },
+    async release(_backend: ProviderId) { await writeFile(join(f.root, "release-prompt"), "released", { mode: 0o600 }) },
   }
 }
