@@ -7,8 +7,7 @@ import assert from "node:assert/strict"
 import { createConnection } from "node:net"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { join, resolve } from "node:path"
-import { homedir } from "node:os"
+import { join } from "node:path"
 import { ATTACHMENT_PROTOCOL, createNdjsonDecoder, parseAttachmentFrame, type AttachmentFrame } from "../src/agent/attachment-protocol.js"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
 import { AgentError } from "../src/agent/types.js"
@@ -238,60 +237,6 @@ export async function attachmentHandlerFixture(t: TestContext, options: AgentHan
       await f.assertProviderAbsent(target)
     },
   }
-}
-
-export async function neovimAttachmentFixture(t: TestContext, options: AgentHandlerOptions = {}) {
-  const f = await attachmentHandlerFixture(t, options)
-  const executable = join(f.root, "agy-fixture.mjs"), repository = fileURLToPath(new URL("../../../", import.meta.url))
-  const source = (path: string) => new URL(path, import.meta.url).href
-  await writeFile(executable, `#!${process.execPath}\nimport { runControl, productionControlDependencies } from ${JSON.stringify(source("../src/cli/control.js"))}\nimport { createDarwinAdapter } from ${JSON.stringify(source("../src/platform/darwin.js"))}\nimport { createLinuxAdapter } from ${JSON.stringify(source("../src/platform/linux.js"))}\nconst deps = productionControlDependencies()\ndeps.environment = async () => ({ paths: ${JSON.stringify(f.paths)}, adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter() })\ndeps.start = async env => { const found = await deps.inspect(env); if (!found) throw new Error("fixture Handler absent"); return found }\nprocess.exitCode = await runControl(process.argv.slice(2), deps)`, { mode: 0o700 })
-  const editors = new Set<ChildProcess>()
-  t.after(async () => {
-    for (const child of editors) {
-      child.kill("SIGTERM")
-      await until(async () => child.exitCode !== null || child.signalCode !== null ? true : undefined)
-    }
-  })
-  async function editor(target: AgentTuple, settings: Record<string, unknown> = {}) {
-    const report = join(f.root, `editor-${randomUUID()}.jsonl`), config = join(f.root, `editor-${randomUUID()}.json`)
-    await writeFile(report, "", { mode: 0o600 })
-    const plugin = join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share"), "nvim/lazy/agentic.nvim")
-    await writeFile(config, JSON.stringify({ executable, target, repository, plugin, report, ...settings }), { mode: 0o600 })
-    const child = spawn(process.env.AGENCY_NVIM_EXECUTABLE ?? "/opt/homebrew/bin/nvim", ["--headless", "-u", "NONE", "-i", "NONE", "-n", "-l", resolve(repository, "tests/neovim/fixtures/agency_attachment_client.lua"), config], { cwd: f.workspace, env: process.env, stdio: ["pipe", "pipe", "pipe"] })
-    editors.add(child)
-    let diagnostics = "", failure: unknown, nextId = 0
-    child.stdout!.on("data", bytes => { diagnostics = (diagnostics + bytes.toString()).slice(-8192) })
-    child.stderr!.on("data", bytes => { diagnostics = (diagnostics + bytes.toString()).slice(-8192) })
-    child.on("error", error => { failure = error })
-    const deadline = setTimeout(() => { failure = new Error("editor lifetime exceeded"); child.kill("SIGTERM") }, 120000)
-    child.once("exit", () => { clearTimeout(deadline); editors.delete(child) })
-    async function response(id: number) {
-      return until(async () => {
-        const rows = (await readFile(report, "utf8")).split("\n").filter(Boolean)
-        for (const line of rows) {
-          let row: any
-          try { row = JSON.parse(line) } catch { continue }
-          if (row.id === id) { if (row.error) throw new Error(JSON.stringify(row.error)); return row }
-        }
-        if (failure || child.exitCode !== null || child.signalCode !== null) throw new Error(`editor unavailable: ${diagnostics}`, { cause: failure })
-        return undefined
-      }, 40000)
-    }
-    const initial = await response(0)
-    async function call(command: Record<string, unknown>): Promise<any> {
-      const id = ++nextId
-      child.stdin!.write(JSON.stringify({ ...command, id }) + "\n")
-      return response(id)
-    }
-    return { initial, call,
-      async exit() {
-        await call({ op: "exit" })
-        await until(async () => child.exitCode !== null || child.signalCode !== null ? true : undefined)
-        assert.equal(child.exitCode, 0, diagnostics)
-      },
-    }
-  }
-  return { ...f, editor, executable }
 }
 
 export const agentId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`

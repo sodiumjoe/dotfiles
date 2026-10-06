@@ -298,11 +298,9 @@ describe("sodium.statusline", function()
                                 return "gpt-5.5"
                             end,
                         },
-                        agent_modes = {
-                            current_mode_id = "agent-full-access",
-                            get_mode = function()
-                                return { name = "Full Access" }
-                            end,
+                        config_options = {
+                            get_mode_id = function() return "agent-full-access" end,
+                            get_mode_name = function() return "Full Access" end,
                         },
                     } },
                 get_session_for_tab_page = function()

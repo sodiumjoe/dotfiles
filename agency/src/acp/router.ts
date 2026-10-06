@@ -89,6 +89,7 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     }
     if (!initialized) throw new AcpError(-32600, "Initialize required")
     if (method === "authenticate") throw new AgentError("UNSUPPORTED_SESSION_FEATURE")
+    if (method === "agency/backends") return service.backendChoices()
     if (method === "agency/native_sessions") {
       const environment = input.environment ?? {}
       const root = environment.CODEX_HOME ?? (environment.HOME ? join(environment.HOME, ".codex") : null)

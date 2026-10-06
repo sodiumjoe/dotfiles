@@ -215,7 +215,7 @@ local function current_path_reference()
     end
 
     local view = require("sodium.agency").view_for_buffer(vim.api.nvim_get_current_buf())
-    local cwd = view and view.status().cwd
+    local cwd = view and view._agency_cwd
     local absolute = cwd and path:sub(1, 1) ~= "/" and vim.fs.normalize(cwd .. "/" .. path)
         or vim.fn.fnamemodify(path, ":p")
     if not vim.uv.fs_stat(absolute) then
@@ -263,27 +263,7 @@ local function resize_agentic_split()
 end
 
 local function start_project_session(proj)
-    local Config = require("agentic.config")
-    local AgentInstance = require("agentic.acp.agent_instance")
-    local SessionRegistry = require("agentic.session_registry")
-
-    local provider = Config.provider or "claude-agent-acp"
-    local instance = AgentInstance._instances[provider]
-    if instance then
-        SessionRegistry.destroy_session()
-        pcall(function()
-            instance:stop()
-        end)
-        AgentInstance._instances[provider] = nil
-    end
-
-    Config.acp_providers[provider].env.CLAUDE_PROJECT = proj
-
-    if proj and proj ~= "" then
-        vim.fn.system(string.format("tmux label '%s' 2>/dev/null || true", proj))
-    end
-
-    require("agentic").new_session({ auto_add_to_context = false })
+    require("sodium.agency").new(nil, { environment = { CLAUDE_PROJECT = proj or "" } })
 end
 
 local function pick_project()
@@ -660,98 +640,6 @@ local function send_annotations_to_agentic()
     require("sodium.agency").submit_text("Address each captured annotation.", { annotations = true })
 end
 
-local function new_session_with_provider(opts, on_start)
-    local Config = require("agentic.config")
-    local ACPHealth = require("agentic.acp.acp_health")
-
-    local installed = {}
-    for _, name in ipairs(ACPHealth.get_default_provider_names()) do
-        local provider_config = Config.acp_providers[name]
-        if provider_config and ACPHealth.is_command_available(provider_config.command) then
-            installed[#installed + 1] = name
-        end
-    end
-
-    if #installed == 0 then
-        vim.notify("No ACP providers installed", vim.log.levels.ERROR)
-        return
-    end
-
-    local function start_with(provider_name)
-        local merged = vim.tbl_deep_extend("force", opts or {}, { provider = provider_name })
-        require("agentic").new_session(merged)
-        if on_start then
-            on_start()
-        end
-    end
-
-    if #installed == 1 then
-        start_with(installed[1])
-        return
-    end
-
-    -- Sort: current/default provider first
-    local default = Config.provider
-    table.sort(installed, function(a, b)
-        if a == default then
-            return true
-        end
-        if b == default then
-            return false
-        end
-        return a < b
-    end)
-
-    local items = {}
-    for i, name in ipairs(installed) do
-        local provider_config = Config.acp_providers[name]
-        items[i] = {
-            text = name,
-            provider_name = name,
-            sort_idx = i,
-            command = provider_config and provider_config.command or "",
-        }
-    end
-
-    Snacks.picker({
-        title = "Provider",
-        items = items,
-        preview = false,
-        layout = picker_layout_no_preview,
-        on_show = function()
-            vim.cmd.stopinsert()
-        end,
-        sort = function(a, b)
-            if a.score ~= b.score then
-                return a.score > b.score
-            end
-            return a.sort_idx < b.sort_idx
-        end,
-        format = function(item)
-            local ret = { { item.provider_name } }
-            if item.provider_name == default then
-                ret[#ret + 1] = { " (default)", "SnacksPickerDir" }
-            end
-            return ret
-        end,
-        confirm = function(picker, item)
-            if not item then
-                return
-            end
-            picker:close()
-            start_with(item.provider_name)
-        end,
-    })
-end
-
-local function new_session_with_model()
-    require("sodium.agentic_models").pick(function(item)
-        local Config = require("agentic.config")
-        Config.acp_providers[item.provider].initial_model = item.model_id
-        require("agentic").new_session({ provider = item.provider })
-    end)
-end
-
 local function pick_pr_for_review()
     local review = require("sodium.review")
     vim.system({
@@ -905,8 +793,6 @@ return {
     config = function()
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
-        local claude_path = agentic_utils.claude_executable()
-        local codex_binary = agentic_utils.codex_executable()
 
         local function patch_agentic_acp_client()
             local ok, ACPClient = pcall(require, "agentic.acp.acp_client")
@@ -994,6 +880,8 @@ return {
         patch_agentic_acp_client()
         patch_agentic_session_restore()
 
+        local providers = { agency = { command = "agy", args = { "acp" } } }
+        for name in pairs(require("agentic.config_default").acp_providers) do providers[name] = false end
         require("agentic").setup({
             image_paste = {
                 enabled = false,
@@ -1002,36 +890,8 @@ return {
                 enabled = false,
             },
             border_style = "boxed",
-            provider = (vim.env.DOTFILES_ENV == "work" or vim.env.DOTFILES_ENV == "devbox") and "codex-acp"
-                or "claude-agent-acp",
-            acp_providers = {
-                ["claude-acp"] = false,
-                ["claude-agent-acp"] = {
-                    command = "claude-agent-acp",
-                    env = {
-                        NODE_NO_WARNINGS = "1",
-                        IS_AI_TERMINAL = "1",
-                        NODENV_VERSION = "24.13.0",
-                        CLAUDE_CODE_EXECUTABLE = claude_path,
-                        NVIM = vim.v.servername,
-                    },
-                },
-                ["gemini-acp"] = {
-                    command = "gemini",
-                    args = { "--experimental-acp" },
-                    env = {},
-                },
-                ["codex-acp"] = {
-                    command = "codex-acp",
-                    default_mode = "agent-full-access",
-                    env = {
-                        CODEX_PATH = codex_binary,
-                        INITIAL_AGENT_MODE = "agent-full-access",
-                        MODEL_PROVIDER = "litellm",
-                        NVIM = vim.v.servername,
-                    },
-                },
-            },
+            provider = "agency",
+            acp_providers = providers,
             windows = {
                 height = 0.5,
                 width = 0.4,
@@ -1060,6 +920,7 @@ return {
             callback = resize_agentic_split,
         })
 
+        require("sodium.agency.agentic").install()
         require("sodium.agency").setup()
 
         utils.augroup("AgenticChatLinks", { clear = true })("FileType", {

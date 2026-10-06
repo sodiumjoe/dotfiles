@@ -169,20 +169,15 @@ describe("agentic chat path:line links", function()
     end)
     it("resolves Agency links against recorded cwd after the editor cwd changes", function()
         setup_agentic_config()
-        local fixture = require("fixtures.agency")
-        local f = fixture.commands()
+        package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
+        local f = require("fixtures.agency_native").new()
+        require("sodium.agency").setup()
         local root = vim.fn.tempname()
         vim.fn.mkdir(root, "p")
         vim.fn.writefile({ "one", "two" }, root .. "/recorded.txt")
-        local editor = vim.api.nvim_get_current_win()
-        f.agency.attach(fixture.target_a.agentId)
-        f.respond(1, fixture.page({ fixture.agent(fixture.target_a) }))
-        local frames = fixture.snapshot()
-        frames[1].cwd, frames[1].metadata.cwd = root, root
-        for _, frame in ipairs(frames) do
-            f.streams[1].handlers.on_frame(frame, #vim.json.encode(frame) + 1)
-        end
-        local view = f.agency.view_for_buffer(vim.api.nvim_get_current_buf())
+        local editor = f.manager.widget:find_first_non_widget_window()
+        local view = f.manager
+        view._agency_cwd = root
         vim.api.nvim_set_current_win(view.widget.win_nrs.chat)
         vim.bo.modifiable = true
         vim.api.nvim_buf_set_lines(view.widget.buf_nrs.chat, 0, -1, false, { "recorded.txt:2" })

@@ -55,6 +55,7 @@ export type AcpSessionObservation = ConversationObservation & { native: Provider
 export type AgentService = {
   importSession(input: ImportInput): Promise<CommandView>
   readonly handlerGeneration: string
+  backendChoices(): Promise<JsonObject>
   acpCapabilities(): Promise<JsonObject>
   sessionRecord(agentId: string): Promise<AgentView | null>
   attachPermissions(target: AgentTuple, client: PermissionClient): Promise<void>
@@ -792,6 +793,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     attachPermissions(target, client) { return queue.run(async () => { await requireTarget(target); permissions.attach(target, client) }) },
     permissionDecision(connectionId, requestId, result) { return queue.run(() => permissions.decision(connectionId, requestId, result)) },
     detachPermissions: (connectionId, target) => permissions.detach(connectionId, target),
+    async backendChoices() {
+      const config = await readBackendConfig(root), profiles = await readProfiles(root)
+      const backends = config.backends.filter(backend => profiles.some(profile => profile.id === backend.id && profile.enabled)
+        && input.contracts.some(contract => contract.id === backend.compatibilityId && contract.providerId === backend.id))
+      return { defaultBackendId: config.defaultBackendId, backends: backends.map(backend => ({ id: backend.id })) }
+    },
     async acpCapabilities() {
       const capabilities = { image: false, audio: false, embeddedContext: false }
       try {

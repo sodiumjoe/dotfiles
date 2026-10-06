@@ -7,7 +7,7 @@ end
 
 local function tuple_of(view)
     local record = view.record
-    if record.version ~= 2 then
+    if record.version ~= 3 or not record.launch or record.launch == null then
         return nil
     end
     return {
@@ -19,17 +19,8 @@ end
 
 function M.new(deps)
     deps = deps or {}
-    local client = deps.client or require("sodium.agency.client").new()
-    local uuid = deps.uuid or require("sodium.agency.client").uuid
-    local select_choice = deps.select_choice
-        or function(choices, callback)
-            vim.ui.select(choices, {
-                prompt = "Agency launch selection",
-                format_item = function(choice)
-                    return choice.displayName .. " · " .. choice.selection.permissionProfile
-                end,
-            }, callback)
-        end
+    local client = deps.client or require("sodium.agency.control").new()
+    local uuid = deps.uuid or require("sodium.agency.control").uuid
     local select_agent = deps.select_agent
         or function(agents, callback)
             vim.ui.select(agents, {
@@ -65,7 +56,7 @@ function M.new(deps)
     local report = deps.report or function(value)
         vim.notify("Agency " .. vim.inspect(value))
     end
-    local epoch, active, candidate, pending, api = 0, nil, nil, {}, {}
+    local epoch, active, pending, api = 0, nil, {}, {}
     local current_origin
     local function begin(cwd, origin)
         epoch = epoch + 1
@@ -77,12 +68,6 @@ function M.new(deps)
         if origin then
             current_origin = vim.deepcopy(origin)
         end
-        if candidate then
-            local previous = candidate
-            candidate = nil
-            previous.stream.close()
-            previous.callback(error_value("CANCELLED"))
-        end
         return epoch
     end
     local function valid_operation(operation)
@@ -91,92 +76,27 @@ function M.new(deps)
     local function command(argv, cwd, callback, timeout_ms)
         client.command(argv, { cwd = cwd, timeout_ms = timeout_ms or 5000 }, callback)
     end
+    local inventory
     local function attach(target, callback, operation, origin)
-        if not valid_operation(operation) then
-            callback(error_value("CANCELLED"))
-            return
-        end
-        if active and active.state.current().connected and vim.deep_equal(active.target, target) then
-            callback(nil, target)
-            return
-        end
-        local called = false
-        local original_callback = callback
-        callback = function(...)
-            if called then
-                return
+        inventory({ allow_issues = true }, function(err, result)
+            if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
+            if err then callback(err); return end
+            for _, row in ipairs(result.agents) do
+                if row.record.version == 3 and row.record.definition.agentId == target.agentId then
+                    if not row.live or row.record.phase ~= "ready" or not tuple_of(row) then callback(error_value("NOT_READY")); return end
+                    if not vim.deep_equal(tuple_of(row), target) then callback(error_value("STALE_PROVIDER")); return end
+                    vim.api.nvim_set_current_tabpage(origin.tab)
+                    local manager = (deps.open or require("sodium.agency.agentic").open)(row)
+                    active = manager
+                    manager:on_session_ready(function()
+                        if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
+                        callback(nil, manager)
+                    end)
+                    return
+                end
             end
-            called = true
-            original_callback(...)
-        end
-        local value = {
-            target = vim.deepcopy(target),
-            state = require("sodium.agency.state").new(),
-            callback = callback,
-            origin = vim.deepcopy(origin or current_origin),
-        }
-        candidate = value
-        value.stream = client.attach(target, {
-            on_frame = function(frame, bytes)
-                if not valid_operation(operation) and candidate == value then
-                    candidate = nil
-                    value.stream.close()
-                    callback(error_value("CANCELLED"))
-                    return
-                end
-                if candidate ~= value and active ~= value then
-                    return
-                end
-                local ok, result = pcall(function()
-                    if frame.type == "snapshot_begin" then
-                        return value.state.begin_snapshot(frame, bytes)
-                    elseif frame.type == "snapshot_events" then
-                        return value.state.add_snapshot_events(frame, bytes)
-                    elseif frame.type == "snapshot_end" then
-                        return value.state.end_snapshot(frame, bytes)
-                    elseif frame.type == "event" then
-                        return value.state.apply_event(frame)
-                    end
-                end)
-                if not ok then
-                    value.stream.close()
-                    value.state.disconnect(error_value("INVALID_PROTOCOL"))
-                    if candidate == value then
-                        candidate = nil
-                        callback(error_value("INVALID_PROTOCOL"))
-                    end
-                    if deps.on_change then
-                        deps.on_change(value, nil)
-                    end
-                    return
-                end
-                if frame.type == "snapshot_end" then
-                    if not valid_operation(operation) then
-                        value.stream.close()
-                        return
-                    end
-                    if active then
-                        active.stream.close()
-                    end
-                    active = value
-                    candidate = nil
-                    callback(nil, vim.deepcopy(target))
-                end
-                if active == value and deps.on_change then
-                    deps.on_change(value, result)
-                end
-            end,
-            on_fault = function(error)
-                value.state.disconnect(error)
-                if candidate == value then
-                    candidate = nil
-                    callback(error)
-                end
-                if active == value and deps.on_change then
-                    deps.on_change(value, nil)
-                end
-            end,
-        })
+            callback(error_value("UNAVAILABLE"))
+        end, operation)
     end
     local function complete(receipt, envelope, callback, operation)
         local result = envelope.result
@@ -207,13 +127,6 @@ function M.new(deps)
             if not vim.deep_equal(outcome.target, receipt.target) or outcome.outcome ~= "stopped" then
                 callback(error_value("INVALID_PROTOCOL"))
                 return
-            end
-            if active and vim.deep_equal(active.target, receipt.target) then
-                active.stream.close()
-                active.state.disconnect(error_value("NOT_READY"))
-                if deps.on_change then
-                    deps.on_change(active, nil)
-                end
             end
             callback(nil, result)
             return
@@ -288,70 +201,7 @@ function M.new(deps)
             callback(nil, envelope.handlerGeneration)
         end)
     end
-    local function launch(cwd, callback, operation)
-        status(cwd, operation, function(error, generation)
-            if error then
-                callback(error)
-                return
-            end
-            command({ "agent", "choices" }, cwd, function(choice_error, envelope)
-                if not valid_operation(operation) then
-                    callback(error_value("CANCELLED"))
-                    return
-                end
-                if choice_error then
-                    callback(choice_error)
-                    return
-                end
-                if envelope.handlerGeneration ~= generation then
-                    callback(error_value("STALE_HANDLER"))
-                    return
-                end
-                local result = envelope.result
-                if #result.choices == 0 and not deps.allow_empty_choices then
-                    callback(error_value("MODEL_UNAVAILABLE"), result)
-                    return
-                end
-                select_choice(result.choices, function(choice)
-                    if not valid_operation(operation) then
-                        callback(error_value("CANCELLED"))
-                        return
-                    end
-                    if not choice then
-                        callback(error_value("CANCELLED"))
-                        return
-                    end
-                    local recognized = false
-                    for _, item in ipairs(result.choices) do
-                        if vim.deep_equal(item, choice) then
-                            recognized = true
-                        end
-                    end
-                    if not recognized then
-                        callback(error_value("INVALID_PROTOCOL"))
-                        return
-                    end
-                    local selection = choice.selection
-                    local argv = {
-                        "agent",
-                        "start",
-                        "--provider",
-                        selection.providerId,
-                        "--model",
-                        selection.modelId,
-                        "--reasoning",
-                        selection.reasoning.kind == "none" and "none" or selection.reasoning.value,
-                        "--mode",
-                        selection.mode,
-                        "--permission-profile",
-                        selection.permissionProfile,
-                    }
-                    dispatch("start", cwd, generation, argv, callback, operation)
-                end, { cwd = cwd, handlerGeneration = generation, unavailable = result.unavailable })
-            end)
-        end)
-    end
-    local function inventory(options, callback, operation)
+    inventory = function(options, callback, operation)
         options = options or {}
         if options.ensure_handler and not operation then
             operation = begin(nil, options.origin)
@@ -413,15 +263,16 @@ function M.new(deps)
                     vim.list_extend(issues, page.issues)
                     for _, view in ipairs(page.agents) do
                         local record = view.record
-                        local agent_id = record.version == 2 and record.definition.agentId or record.spec.agentId
-                        local cwd = record.version == 2 and record.definition.cwd or record.spec.checkout.root.path
+                        local agent_id = record.version == 3 and record.definition.agentId or record.spec.agentId
+                        local cwd = record.version == 3 and record.definition.cwd or record.spec.checkout.root.path
                         if
                             (last_id and agent_id <= last_id)
                             or (options.cwd and cwd ~= options.cwd)
                             or (
                                 options.active
                                 and (
-                                    record.version ~= 2
+                                    record.version ~= 3
+                                    or record.launch == null or not record.launch
                                     or record.launch.handlerGeneration ~= generation
                                     or not vim.tbl_contains(
                                         { "ready", "starting", "restoring", "stopping" },
@@ -472,7 +323,10 @@ function M.new(deps)
                 return
             end
             if #result.agents == 0 then
-                launch(origin.cwd, callback, operation)
+                (deps.new_session or function(opts, done)
+                    local manager = require("sodium.agency.agentic").new_session(opts)
+                    manager:on_session_ready(function() done(nil, manager) end)
+                end)({ cwd = origin.cwd }, callback)
                 return
             end
             local function selected(view)
@@ -488,7 +342,12 @@ function M.new(deps)
                     callback(error_value("NOT_READY"), view)
                     return
                 end
-                attach(tuple_of(view), callback, operation, origin)
+                vim.api.nvim_set_current_tabpage(origin.tab)
+                local manager = (deps.open or require("sodium.agency.agentic").open)(view)
+                active = manager
+                manager:on_session_ready(function()
+                    if valid_operation(operation) then callback(nil, manager) else callback(error_value("CANCELLED")) end
+                end)
             end
             if #result.agents == 1 then
                 selected(result.agents[1])
@@ -496,10 +355,6 @@ function M.new(deps)
                 select_agent(result.agents, selected)
             end
         end, operation)
-    end
-    function api.new(cwd, callback, origin)
-        cwd = cwd or vim.fn.getcwd()
-        launch(cwd, callback, begin(cwd, origin))
     end
     function api.attach(target, callback, origin)
         attach(vim.deepcopy(target), callback, begin(nil, origin))
@@ -520,9 +375,6 @@ function M.new(deps)
         local display = vim.deepcopy(exact)
         if detail then
             display.detail = vim.deepcopy(detail)
-        elseif active and vim.deep_equal(active.target, exact) then
-            local state = active.state.current()
-            display.detail = { cwd = state.cwd, model = state.selection.modelId }
         end
         confirm_stop(display, function(confirmed)
             if not valid_operation(operation) then
@@ -590,10 +442,7 @@ function M.new(deps)
     end
     function api.detach()
         begin()
-        if active then
-            active.stream.close()
-            active = nil
-        end
+        active = nil
         if deps.on_change then
             deps.on_change(nil, nil)
         end

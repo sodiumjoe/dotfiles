@@ -19,6 +19,10 @@ function M.uuid()
         .. "-" .. value:sub(17, 20) .. "-" .. value:sub(21)
 end
 
+local function target(value)
+    assert(type(value) == "table" and valid_id(value.agentId) and valid_id(value.handlerGeneration) and valid_id(value.providerGeneration))
+end
+
 local function validate(value, argv)
     local protocol = argv[1] == "agent" and "agency-agent/3"
         or argv[1] == "model" and "agency-catalog/1" or "agency-control/2"
@@ -39,21 +43,45 @@ local function validate(value, argv)
             and command.commandId == value.commandId and valid_id(command.handlerGeneration)
             and valid_id(command.agentId) and (result.durability == "verified" or result.durability == "unverified"))
         assert(command.state == "pending" or command.state == "completed" or command.state == "interrupted")
+        if argv[2] == "command" then assert(command.commandId == argv[3]) end
+        if command.result ~= vim.NIL and command.result ~= nil then
+            local outcome = command.result
+            assert(type(outcome) == "table" and vim.tbl_contains({ "started", "restored", "stopped", "imported", "failed", "interrupted" }, outcome.outcome))
+            if outcome.target ~= vim.NIL and outcome.target ~= nil then
+                target(outcome.target)
+                assert(outcome.target.agentId == command.agentId and outcome.target.handlerGeneration == command.handlerGeneration)
+            end
+            if vim.tbl_contains({ "started", "restored", "stopped" }, outcome.outcome) then assert(type(outcome.target) == "table") end
+        end
         if argv[2] ~= "command" then assert(command.op == argv[2]) end
         if argv[2] == "restore" or argv[2] == "stop" then assert(command.agentId == argv[3]) end
         for index, flag in ipairs(argv) do
             if flag == "--command-id" then assert(command.commandId == argv[index + 1]) end
+            if flag == "--handler-generation" or flag == "--expected-handler-generation" then assert(command.handlerGeneration == argv[index + 1]) end
         end
     else
         local states = { list = "agents", page = "page", choices = "choices", current = "current" }
         assert(states[argv[2]] == result.state)
+        if result.state == "page" then
+            assert(valid_id(result.revision) and type(result.issues) == "table" and vim.islist(result.issues))
+            assert(result.nextCursor == vim.NIL or type(result.nextCursor) == "string" and #result.nextCursor <= 4096 and result.nextCursor:match("^[%w_-]+$"))
+            assert(#result.agents + #result.issues <= 100)
+        end
         if result.agents then
             assert(type(result.agents) == "table" and vim.islist(result.agents))
             for _, view in ipairs(result.agents) do
                 assert(type(view.record) == "table")
                 if view.record.version == 3 then
-                    assert(valid_id(view.record.definition.agentId) and type(view.record.definition.cwd) == "string")
-                    if view.record.launch == vim.NIL then assert(not view.live) end
+                    local record = view.record
+                    assert(type(view.live) == "boolean" and vim.tbl_contains({ "not_launched", "verified", "unverified", "unknown" }, view.cleanup))
+                    assert(valid_id(record.definition.agentId) and type(record.definition.cwd) == "string" and record.definition.cwd:sub(1, 1) == "/")
+                    assert(vim.tbl_contains({ "codex-acp", "claude-agent-acp" }, record.definition.backendId) and type(record.settings) == "table")
+                    assert(vim.tbl_contains({ "starting", "ready", "recoverable", "restoring", "stopping", "stopped" }, record.phase))
+                    if record.launch == vim.NIL then assert(not view.live)
+                    else
+                        assert(type(record.launch) == "table" and valid_id(record.launch.handlerGeneration) and valid_id(record.launch.providerGeneration))
+                        if view.live then assert(record.launch.handlerGeneration == value.handlerGeneration) end
+                    end
                 else assert(view.record.version == 1) end
             end
         end

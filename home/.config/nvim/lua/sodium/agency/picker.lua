@@ -6,10 +6,10 @@ end
 
 local function fields(row)
     local record = row.record
-    if record.version == 2 then
+    if record.version == 3 then
         return record.definition.agentId,
-            record.definition.selection.providerId,
-            record.definition.selection.modelId,
+            record.definition.backendId,
+            record.settings.modelId or "",
             record.definition.cwd,
             record.phase
     end
@@ -39,11 +39,13 @@ function M.open(controller)
                 for _, row in ipairs(result.agents) do
                     local id, provider, model, cwd, phase = fields(row)
                     local attached = active
-                        and row.record.version == 2
+                        and row.record.version == 3
+                        and row.record.launch ~= vim.NIL and row.record.launch
                         and active.target.agentId == id
                         and active.target.handlerGeneration == row.record.launch.handlerGeneration
                         and active.target.providerGeneration == row.record.launch.providerGeneration
-                    local freshness = row.record.version == 2
+                    local freshness = row.record.version == 3
+                            and row.record.launch ~= vim.NIL and row.record.launch
                             and row.record.launch.handlerGeneration == result.handlerGeneration
                             and "current"
                         or "historical"
@@ -77,7 +79,7 @@ function M.open(controller)
     end
     local function attach(p, item)
         local row = item and item.view
-        if row and row.record.version == 2 and row.record.phase == "ready" and row.live then
+        if row and row.record.version == 3 and row.record.phase == "ready" and row.live then
             p:close()
             controller.attach(item.id, nil, vim.deepcopy(row))
         else
@@ -101,8 +103,8 @@ function M.open(controller)
                 local row = item and item.view
                 if
                     row
-                    and row.record.version == 2
-                    and row.cleanup == "verified"
+                    and row.record.version == 3
+                    and (row.cleanup == "verified" or row.cleanup == "not_launched")
                     and vim.tbl_contains({ "stopped", "recoverable" }, row.record.phase)
                 then
                     p:close()
@@ -113,7 +115,7 @@ function M.open(controller)
             end,
             stop = function(p)
                 local item = p:current()
-                if item and item.view and item.view.record.version == 2 then
+                if item and item.view and item.view.record.version == 3 then
                     local selected = vim.deepcopy(item.view)
                     p:close()
                     controller.stop(selected)

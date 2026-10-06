@@ -65,12 +65,26 @@ local function attachment(manager, result)
     assert(type(info) == "table" and info.version == 1 and type(info.binding) == "table", "Agency attachment metadata missing")
     manager._agency_binding = vim.deepcopy(info.binding)
     manager._agency_backend_id = info.backendId
+    manager._agency_cwd = manager._agency_load_cwd or manager._agency_new_options and manager._agency_new_options.cwd or vim.fn.getcwd()
     manager._agency_capabilities = info.capabilities
     manager.session_state._provider_name = info.backendId
     manager.message_writer:set_provider_name(info.backendId)
     configuration(manager, info.configuration)
     if type(info.turnId) == "string" and manager._agency_turn_id == nil then manager._agency_turn_id = info.turnId end
     manager.history_to_send = nil
+end
+
+function M.stage_context(manager, content, accepted, rejected)
+    manager._agency_pending_context = manager._agency_pending_context or {}
+    local entry = { content = vim.deepcopy(content), accepted = accepted, rejected = rejected }
+    table.insert(manager._agency_pending_context, entry)
+    return entry
+end
+
+function M.unstage_context(manager, entry)
+    for index, value in ipairs(manager._agency_pending_context or {}) do
+        if value == entry then table.remove(manager._agency_pending_context, index); return end
+    end
 end
 
 function M.install()
@@ -120,6 +134,7 @@ function M.install()
             self._agency_load_cwd = intent.cwd
             return self:load_acp_session(intent.session_id, intent.title, intent.timestamp)
         end
+        self._agency_pending_context = {}
         local previous = self.session_id
         self._agency_new_options = intent or { inherit_session_id = previous }
         return lifecycle(self, sm.new_session, opts)
@@ -127,12 +142,19 @@ function M.install()
 
     function Manager:load_acp_session(...)
         if not agency(self.agent) then return sm.load_acp_session(self, ...) end
+        local context = { selections = self.code_selection:get_selections(), files = self.file_list:get_files(),
+            diagnostics = self.diagnostics_list:get_diagnostics(),
+            input = vim.api.nvim_buf_get_lines(self.widget.buf_nrs.input, 0, -1, false) }
         local restore = self.config_options.restore_snapshot
         self.config_options.restore_snapshot = function() end
         self._agency_loading_session = select(1, ...)
         local args = { n = select("#", ...), ... }
         local ok, result = xpcall(function() return lifecycle(self, sm.load_acp_session, unpack(args, 1, args.n)) end, debug.traceback)
         self.config_options.restore_snapshot = restore
+        for _, selection in ipairs(context.selections) do self.code_selection:add(selection) end
+        for _, file in ipairs(context.files) do self.file_list:add(file) end
+        self.diagnostics_list:add_many(context.diagnostics)
+        vim.api.nvim_buf_set_lines(self.widget.buf_nrs.input, 0, -1, false, context.input)
         if not ok then error(result) end
         return result
     end
@@ -167,6 +189,7 @@ function M.install()
 
     function Manager:_handle_input_submit(input)
         if not agency(self.agent) then return sm._handle_input_submit(self, input) end
+        if self.is_generating and not input:match("^/new%s") and input ~= "/new" then return false end
         self.history_to_send = nil
         self._agency_input = input
         self._agency_captured_context = { selections = self.code_selection:get_selections(),
@@ -179,7 +202,7 @@ function M.install()
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
         local opts = manager._agency_new_options or {}
         manager._agency_initial_context = opts.initial_context
-        local environment = vim.fn.environ()
+        local environment = vim.tbl_extend("force", vim.fn.environ(), opts.environment or {})
         environment.NVIM = vim.v.servername
         local meta = { version = 1, commandId = require("sodium.agency.control").uuid(), environment = environment,
             backendId = opts.backend_id, selection = opts.selection, inheritSessionId = opts.inherit_session_id }
@@ -252,10 +275,16 @@ function M.install()
         local context = manager._agency_captured_context
         local initial = manager._agency_initial_context
         if initial then vim.list_extend(prompt, vim.deepcopy(initial)) end
-        local admission = { accepted = false }
+        local staged = {}
+        for _, entry in ipairs(manager._agency_pending_context or {}) do
+            staged[#staged + 1] = entry
+            vim.list_extend(prompt, vim.deepcopy(entry.content))
+        end
+        local admission = { accepted = false, entries = staged }
         manager._agency_admission = admission
         self:_send_request("session/prompt", { sessionId = id, prompt = prompt, _meta = { agency = { version = 1, submissionId = submission } } }, function(result, err)
             if err and not admission.accepted then
+                for _, entry in ipairs(staged) do if entry.rejected then entry.rejected(err) end end
                 M.guard_callback(manager, token(manager, false, false), function()
                     if manager._agency_epoch ~= captured.epoch or not vim.deep_equal(manager._agency_binding, captured.binding) then return end
                     local buffer = manager.widget.buf_nrs.input
@@ -327,7 +356,13 @@ function M.install()
                     manager._agency_binding = vim.deepcopy(params.binding)
                     if type(params.turnId) == "string" then manager._agency_turn_id = params.turnId end
                     if params.state == "running" and params.turnId == manager._agency_local_submission and manager._agency_admission then
-                        manager._agency_admission.accepted = true
+                        if not manager._agency_admission.accepted then
+                            manager._agency_admission.accepted = true
+                            for _, entry in ipairs(manager._agency_admission.entries) do
+                                M.unstage_context(manager, entry)
+                                if entry.accepted then entry.accepted() end
+                            end
+                        end
                         manager._agency_initial_context = nil
                     end
                     manager.is_generating = params.state == "running"

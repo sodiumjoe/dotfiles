@@ -279,27 +279,9 @@ local function get_agentic_session_manager()
     return session_registry.sessions and session_registry.sessions[tab_page_id]
 end
 
-local function agency_status()
-    local agency = package.loaded["sodium.agency"]
-    local view = agency and agency.view_for_buffer(vim.api.nvim_get_current_buf())
-    return view and view.status()
-end
-
 local function get_agentic_status()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
-    end
-    local status = agency_status()
-    if status then
-        if not status.connected then
-            return "disconnected"
-        end
-        if status.busy then
-            spinner.start("agency")
-            return spinner.frame()
-        end
-        spinner.stop("agency")
-        return utils.icons.ok
     end
     local session_manager = get_agentic_session_manager()
     if not session_manager then
@@ -318,31 +300,17 @@ local function get_agentic_mode()
         return ""
     end
 
-    local status = agency_status()
-    if status then
-        return status.mode or ""
-    end
     local session_manager = get_agentic_session_manager()
-    if not session_manager or not session_manager.agent_modes or not session_manager.agent_modes.current_mode_id then
+    if not session_manager or not session_manager.config_options or not session_manager.config_options:get_mode_id() then
         return ""
     end
 
-    local mode = session_manager.agent_modes:get_mode(session_manager.agent_modes.current_mode_id)
-    if mode then
-        return mode.name
-    end
-
-    return ""
+    return session_manager.config_options:get_mode_name(session_manager.config_options:get_mode_id()) or ""
 end
 
 function M.get_agentic_context()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
-    end
-    local status = agency_status()
-    if status then
-        local usage = status.usage
-        return usage and usage ~= vim.NIL and tostring(usage.used) .. "/" .. tostring(usage.size) or ""
     end
     local session_manager = get_agentic_session_manager()
     if not session_manager or not session_manager.session_state then
@@ -359,10 +327,6 @@ end
 function M.get_agentic_model()
     if vim.bo.filetype ~= "AgenticChat" then
         return ""
-    end
-    local status = agency_status()
-    if status then
-        return status.model or ""
     end
     local session_manager = get_agentic_session_manager()
     if not session_manager or not session_manager.session_state then

@@ -120,24 +120,11 @@ describe("keymaps", function()
 
         local ok, agentic = pcall(require, "sodium.plugins.agentic")
         if ok then
-            it("does not discover models during lazy initialization", function()
-                local model_catalog = require("sodium.agentic_models")
-                local original = model_catalog.discover
-                local original_autocmd = vim.api.nvim_create_autocmd
-                local callbacks = {}
-                local calls = 0
-                model_catalog.discover = function()
-                    calls = calls + 1
-                end
-                vim.api.nvim_create_autocmd = function(event, opts)
-                    if event == "VimEnter" then callbacks[#callbacks + 1] = opts.callback end
-                    return 1
-                end
+            it("does not start an endpoint during lazy initialization", function()
+                local instances = require("agentic.acp.agent_instance")
+                local before = vim.deepcopy(instances._instances)
                 if agentic.init then agentic.init() end
-                for _, callback in ipairs(callbacks) do callback() end
-                vim.api.nvim_create_autocmd = original_autocmd
-                model_catalog.discover = original
-                assert.are.equal(0, calls)
+                assert.are.same(before, instances._instances)
             end)
 
             it("routes Agency mappings and preserves native restore and note mappings", function()

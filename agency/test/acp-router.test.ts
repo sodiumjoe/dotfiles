@@ -28,6 +28,16 @@ test("initialize and list launch no backend and defer interactive authentication
   assert.equal((await f.requests("claude-agent-acp")).length, 0)
 })
 
+test("backend choices come from enabled Agency configuration without catalog qualification or spawning", async t => {
+  const f = await acpFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const choices = await c.request("agency/backends", {})
+  assert.equal(choices.defaultBackendId, "codex-acp")
+  assert.deepEqual((choices.backends as JsonObject[]).map(value => value.id), ["codex-acp", "claude-agent-acp"])
+  assert.equal((await f.requests("codex-acp")).length, 0)
+  assert.equal((await f.requests("claude-agent-acp")).length, 0)
+})
+
 test("one connection routes two colliding native session IDs without sharing backend configuration", async t => {
   const f = await acpFixture(t), c = await f.connect()
   await c.request("initialize", initialize)

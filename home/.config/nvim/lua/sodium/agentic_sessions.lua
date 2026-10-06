@@ -171,7 +171,7 @@ function M.normalize_session(session)
         backend_id = backend,
         cwd = session.cwd,
         phase = agency.phase,
-        unavailable = backend ~= nil and backend ~= "codex-acp",
+        unavailable = session.unavailable == true or session.unavailable == nil and backend ~= nil and backend ~= "codex-acp",
         original_title = session.title,
         title = title,
         updated_at = updated_at,
@@ -262,43 +262,23 @@ local function with_conflict_check(current_session, on_restore)
     end)
 end
 
-local function restore(current_session, item, control)
-    if control then
+local function restore(current_session, item, lifecycle)
+    if lifecycle then
         local Logger = require("agentic.utils.logger")
         if item.unavailable then
             Logger.notify("Backend unavailable: " .. tostring(item.backend_id), vim.log.levels.WARN)
             return
         end
-        local function load(session_id)
-            current_session._agency_load_cwd = item.cwd
-            current_session:load_acp_session(session_id, item.original_title, item.updated_at)
-            current_session.widget:show()
-        end
-        if not item.native_session_id and item.phase == "ready" then
-            with_conflict_check(current_session, function() load(item.session_id) end)
-            return
-        end
+        if not item.native_session_id and item.phase == "ready" then lifecycle.attach(item.session_id:sub(8)); return end
         vim.ui.select({ "Cancel", "Restore" }, { prompt = "Restore saved session with a new provider process?" }, function(choice)
             if choice ~= "Restore" then return end
-            local function launch(session_id)
-                control.command({ "agent", "restore", session_id:sub(8), "--command-id", control.uuid() },
-                    { cwd = item.cwd, timeout_ms = 45000 }, function(err, reply)
-                        local result = reply and reply.result
-                        if err or not result or result.durability ~= "verified" or not result.command.result
-                            or result.command.result == vim.NIL or result.command.result.outcome ~= "restored" then
-                            Logger.notify("Restore failed: " .. (err and err.message or "incomplete"), vim.log.levels.WARN)
-                            return
-                        end
-                        with_conflict_check(current_session, function() load(session_id) end)
-                    end)
-            end
-            if not item.native_session_id then launch(item.session_id); return end
-            item.import_command_id = item.import_command_id or control.uuid()
+            if not item.native_session_id then lifecycle.restore(item.session_id:sub(8)); return end
+            item.import_command_id = item.import_command_id or lifecycle.uuid()
             current_session.agent:_send_request("agency/import", { commandId = item.import_command_id,
                 backendId = item.backend_id, nativeSessionId = item.native_session_id, cwd = item.cwd }, function(reply, err)
                     if err or not reply then
                         Logger.notify("Import failed: " .. (err and err.message or "unknown error"), vim.log.levels.WARN)
-                    else launch(reply.sessionId) end
+                    else lifecycle.restore(reply.sessionId:sub(8)) end
                 end)
         end)
         return
@@ -314,7 +294,7 @@ function M.show_picker(current_session, deps)
     local config = require("agentic.config")
     local agency = config.acp_providers.agency ~= nil
         and current_session.agent.provider_config == config.acp_providers.agency
-    local control = agency and (deps and deps.control or require("sodium.agency.control"))
+    local lifecycle = agency and (deps and deps.lifecycle or require("sodium.agency").setup())
     current_session.agent:when_ready(function()
         local function show(result, err)
             local Logger = require("agentic.utils.logger")
@@ -352,7 +332,7 @@ function M.show_picker(current_session, deps)
                             return
                         end
                         picker:close()
-                        restore(current_session, item, control)
+                        restore(current_session, item, lifecycle)
                     end,
                 })
             end)
@@ -364,6 +344,10 @@ function M.show_picker(current_session, deps)
                 if err or not result then show(nil, err); return end
                 vim.list_extend(known, result.sessions or {})
                 if result.nextCursor then list(result.nextCursor); return end
+                current_session.agent:_send_request("agency/backends", {}, function(backends, backend_err)
+                    if backend_err or not backends then show(nil, backend_err); return end
+                    local enabled = {}
+                    for _, backend in ipairs(backends.backends) do enabled[backend.id] = true end
                 current_session.agent:_send_request("agency/native_sessions", {}, function(native, native_err)
                     if native_err and #known == 0 then show(nil, native_err); return end
                     local seen = {}
@@ -374,7 +358,12 @@ function M.show_picker(current_session, deps)
                     for _, session in ipairs(native and native.sessions or {}) do
                         if not seen[session.backendId .. ":" .. session.nativeSessionId] then known[#known + 1] = session end
                     end
+                    for _, session in ipairs(known) do
+                        local identity = session._meta and session._meta.agency or {}
+                        session.unavailable = not enabled[session.backendId or identity.backendId]
+                    end
                     show({ sessions = known })
+                end)
                 end)
             end)
         end

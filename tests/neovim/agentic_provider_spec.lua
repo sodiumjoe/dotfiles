@@ -1,4 +1,4 @@
-describe("agentic codex provider", function()
+describe("Agentic Agency provider", function()
     local tool_call_log = vim.fn.stdpath("state") .. "/agentic-codex-tool-call.log"
 
     local function delete_tool_call_log()
@@ -53,52 +53,22 @@ describe("agentic codex provider", function()
         delete_tool_call_log()
     end)
 
-    it("passes the CODEX_PATH-free shim to codex-acp", function()
-        local saved_env = vim.env.DOTFILES_ENV
-        vim.env.DOTFILES_ENV = "work"
-        local opts = load_agentic_setup()
-        vim.env.DOTFILES_ENV = saved_env
-        local provider = opts.acp_providers["codex-acp"]
-
-        assert.are.equal("codex-acp", opts.provider)
-        assert.are.equal("codex-acp", provider.command)
-        assert.are.equal(vim.env.HOME .. "/bin/acp-codex", provider.env.CODEX_PATH)
-        assert.is_nil(provider.env.CODEX_REAL_PATH)
-    end)
-
-    it("selects claude-agent-acp outside work environments", function()
-        local saved_env = vim.env.DOTFILES_ENV
-        vim.env.DOTFILES_ENV = "home"
-        local opts = load_agentic_setup()
-        vim.env.DOTFILES_ENV = saved_env
-
-        assert.are.equal("claude-agent-acp", opts.provider)
-        assert.are.equal(
-            "claude-agent-acp",
-            opts.acp_providers["claude-agent-acp"].command
-        )
-    end)
-
-    it("forwards the current neovim server to codex", function()
-        local opts = load_agentic_setup()
-        local provider = opts.acp_providers["codex-acp"]
-
-        assert.are.equal(vim.v.servername, provider.env.NVIM)
-    end)
-
-    it("starts codex sessions in full-access mode", function()
-        local opts = load_agentic_setup()
-        local provider = opts.acp_providers["codex-acp"]
-
-        assert.are.equal("agent-full-access", provider.default_mode)
-        assert.are.equal("agent-full-access", provider.env.INITIAL_AGENT_MODE)
-    end)
-
-    it("forces codex-acp to use the litellm model provider", function()
-        local opts = load_agentic_setup()
-        local provider = opts.acp_providers["codex-acp"]
-
-        assert.are.equal("litellm", provider.env.MODEL_PROVIDER)
+    it("uses Agency as the only enabled provider in every environment", function()
+        local saved = vim.env.DOTFILES_ENV
+        for _, env in ipairs({ "work", "home", "devbox" }) do
+            vim.env.DOTFILES_ENV = env
+            local opts = load_agentic_setup()
+            assert.are.equal("agency", opts.provider)
+            assert.are.equal("agy", opts.acp_providers.agency.command)
+            assert.are.same({ "acp" }, opts.acp_providers.agency.args)
+            for name in pairs(require("agentic.config_default").acp_providers) do
+                assert.is_false(opts.acp_providers[name])
+            end
+            assert.is_nil(opts.acp_providers.agency.env)
+            assert.is_nil(opts.acp_providers.agency.initial_model)
+            assert.is_nil(opts.acp_providers.agency.default_mode)
+        end
+        vim.env.DOTFILES_ENV = saved
     end)
 
     it("runs the agent notification hook when a response completes", function()

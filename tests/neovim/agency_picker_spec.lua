@@ -1,5 +1,5 @@
 package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
-local fixture = require("fixtures.agency")
+local fixture = require("fixtures.agency_control")
 
 local function check_text_preview(options, item)
     assert.is_truthy(vim.tbl_contains((options.layout or {}).hidden or {}, "preview"))
