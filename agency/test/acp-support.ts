@@ -122,8 +122,16 @@ export async function providerFixture(t: TestContext, backendId: ProviderId = "c
 }
 
 export async function acpFixture(t: TestContext) {
-  const f = await agentHandlerFixture(t, { nativeAcp: true }), peers = new Set<AcpPeer>()
-  t.after(() => { for (const peer of peers) peer.close() })
+  const cleanup: Array<() => unknown> = [], context = Object.create(t) as TestContext
+  context.diagnostic = t.diagnostic.bind(t)
+  context.after = fn => { cleanup.push(() => fn?.(t, error => { if (error) throw error })) }
+  t.after(async () => {
+    const failures: unknown[] = []
+    for (const close of cleanup.reverse()) try { await close() } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, "ACP fixture cleanup incomplete")
+  })
+  const f = await agentHandlerFixture(context, { nativeAcp: true }), peers = new Set<AcpPeer>()
+  context.after(() => { for (const peer of peers) peer.close() })
   const environment = { PATH: process.env.PATH!, HOME: join(f.root, "home") }
   const tuple = async (sessionId: string) => {
     assert.ok(sessionId.startsWith("agency:"))
@@ -133,7 +141,7 @@ export async function acpFixture(t: TestContext) {
     assert.ok(target)
     return target
   }
-  return { ...f, environment, tuple, onCleanup: (cleanup: () => Promise<void>) => t.after(cleanup), diagnostic: (message: string) => t.diagnostic(message),
+  return { ...f, environment, tuple, onCleanup: (close: () => Promise<void>) => context.after(close), diagnostic: (message: string) => t.diagnostic(message),
     async connect() {
       const socket = createConnection(join(f.paths.runtimeRoot, "acp.sock"))
       socket.write(JSON.stringify({ jsonrpc: "2.0", method: "agency/connect", params: { handlerGeneration: (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation, environment } }) + "\n")
@@ -170,22 +178,30 @@ export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
       AGENCY_FIXTURE_ENDPOINT: fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
   })
   let closed = false, exited = false, stderr = ""
+  const endpoints = new Set<number>()
   child.once("exit", () => { exited = true })
   child.stderr.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-8192) })
   const lua = async (expression: string): Promise<JsonValue> => {
-    const source = `(function() local value = ${expression}; return vim.json.encode(value == nil and vim.NIL or value) end)()`
+    const source = `(function() local value = ${expression}; local endpoints = {}; for _,client in pairs(require('agentic.acp.agent_instance')._instances) do if client.transport and client.transport.pid then endpoints[#endpoints+1]=client.transport.pid end end; return vim.json.encode({value=value == nil and vim.NIL or value,endpoints=endpoints}) end)()`
     const result = await exec(executable, ["--server", socket, "--remote-expr", `luaeval(${JSON.stringify(source)})`], { timeout: 15000, maxBuffer: 1048576 })
-    return JSON.parse(result.stdout.trim()) as JsonValue
+    const envelope = JSON.parse(result.stdout.trim()) as { value: JsonValue; endpoints: number[] }
+    for (const pid of envelope.endpoints) endpoints.add(pid)
+    return envelope.value
   }
   async function exit(): Promise<void> {
     if (closed) return
     closed = true
     if (!exited) {
-      try { await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("vim.schedule(function() vim.cmd(\'qa!\') end); return true")'], { timeout: 5000 }) } catch {}
+      try { await lua("true"); await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("(function() vim.schedule(function() vim.cmd(\'qa!\') end); return true end)()")'], { timeout: 5000 }) } catch {}
       try { await until(async () => exited ? true : undefined, 5000) } catch { child.kill("SIGKILL"); await new Promise<void>(resolve => child.once("exit", () => resolve())) }
     }
     assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
     f.diagnostic(`fixture editor cleanup verified: pid ${child.pid}`)
+    for (const pid of endpoints) {
+      await until(async () => { try { process.kill(pid, 0); return undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return true } }, 5000)
+      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
+      f.diagnostic(`fixture endpoint cleanup verified: pid ${pid}`)
+    }
   }
   f.onCleanup(exit)
   await until(async () => {

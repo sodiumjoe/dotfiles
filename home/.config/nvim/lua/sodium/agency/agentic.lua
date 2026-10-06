@@ -65,11 +65,16 @@ local function attachment(manager, result)
     assert(type(info) == "table" and info.version == 1 and type(info.binding) == "table", "Agency attachment metadata missing")
     manager._agency_binding = vim.deepcopy(info.binding)
     manager._agency_backend_id = info.backendId
-    manager._agency_cwd = manager._agency_load_cwd or manager._agency_new_options and manager._agency_new_options.cwd or vim.fn.getcwd()
+    manager._agency_cwd = manager._agency_request_cwd
     manager._agency_capabilities = info.capabilities
     manager.session_state._provider_name = info.backendId
     manager.message_writer:set_provider_name(info.backendId)
     configuration(manager, info.configuration)
+    if info.historyTruncated then
+        vim.schedule(M.guard_callback(manager, token(manager, true, false), function()
+            manager.message_writer:write_structural_message(require("agentic.acp.acp_payloads").generate_agent_message({ "Agency retained display history is truncated." }))
+        end))
+    end
     if type(info.turnId) == "string" and manager._agency_turn_id == nil then manager._agency_turn_id = info.turnId end
     manager.history_to_send = nil
 end
@@ -201,13 +206,25 @@ function M.install()
         if not agency(self) then return acp.create_session(self, handlers, callback) end
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
         local opts = manager._agency_new_options or {}
+        manager._agency_request_cwd = opts.cwd or vim.fn.getcwd()
         manager._agency_initial_context = opts.initial_context
         local environment = vim.tbl_extend("force", vim.fn.environ(), opts.environment or {})
         environment.NVIM = vim.v.servername
         local meta = { version = 1, commandId = require("sodium.agency.control").uuid(), environment = environment,
             backendId = opts.backend_id, selection = opts.selection, inheritSessionId = opts.inherit_session_id }
-        self:_send_request("session/new", { cwd = opts.cwd or vim.fn.getcwd(), mcpServers = opts.mcp_servers or {}, _meta = { agency = meta } },
-            M.guard_callback(manager, captured, function(result, err)
+        self:_send_request("session/new", { cwd = manager._agency_request_cwd, mcpServers = opts.mcp_servers or {}, _meta = { agency = meta } },
+            function(result, err)
+                if manager._agency_destroyed or manager._agency_epoch ~= captured.epoch then
+                    if result and not err and not self.subscribers[result.sessionId] then
+                        self:_send_notification("agency/detach", { sessionId = result.sessionId })
+                    end
+                    local previous = manager._agency_deferred_detach
+                    if previous and not self.subscribers[previous] then
+                        manager._agency_deferred_detach = nil
+                        self:_send_notification("agency/detach", { sessionId = previous })
+                    end
+                    return
+                end
                 if manager._agency_deferred_detach then
                     local previous = manager._agency_deferred_detach
                     manager._agency_deferred_detach = nil
@@ -220,7 +237,7 @@ function M.install()
                 local next_token = token(manager, true, false)
                 invoke(manager, next_token, callback, result, err)
                 if result and not err then configuration(manager, result._meta.agency.configuration) end
-            end))
+            end)
     end
 
     function Client:_send_request(method, params, callback)
@@ -238,8 +255,9 @@ function M.install()
     function Client:load_session(id, cwd, servers, handlers, callback)
         if not agency(self) then return acp.load_session(self, id, cwd, servers, handlers, callback) end
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
+        manager._agency_request_cwd = manager._agency_load_cwd or cwd
         self:_subscribe(id, handlers)
-        self:_send_request("session/load", { sessionId = id, cwd = manager._agency_load_cwd or cwd, mcpServers = servers or {} },
+        self:_send_request("session/load", { sessionId = id, cwd = manager._agency_request_cwd, mcpServers = servers or {} },
             M.guard_callback(manager, captured, function(result, err)
                 if err then if self.subscribers[id] == handlers then self.subscribers[id] = nil end
                 else attachment(manager, result) end
@@ -284,9 +302,9 @@ function M.install()
         manager._agency_admission = admission
         self:_send_request("session/prompt", { sessionId = id, prompt = prompt, _meta = { agency = { version = 1, submissionId = submission } } }, function(result, err)
             if err and not admission.accepted then
-                for _, entry in ipairs(staged) do if entry.rejected then entry.rejected(err) end end
                 M.guard_callback(manager, token(manager, false, false), function()
                     if manager._agency_epoch ~= captured.epoch or not vim.deep_equal(manager._agency_binding, captured.binding) then return end
+                    for _, entry in ipairs(staged) do if entry.rejected then entry.rejected(err) end end
                     local buffer = manager.widget.buf_nrs.input
                     if vim.api.nvim_buf_is_valid(buffer) and table.concat(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), "\n") == "" then
                         vim.api.nvim_buf_set_lines(buffer, 0, -1, false, vim.split(input or "", "\n", { plain = true }))

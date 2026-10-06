@@ -130,6 +130,7 @@ test("help documents restore, prompt, and list-valued current", async () => {
   assert.equal(await runControl(["help", "--json"], m.deps), 0)
   const commands: string[] = m.output().result.commands
   assert.ok(commands.some(command => command.startsWith("agent restore ")))
+  assert.ok(commands.some(command => command.startsWith("agent import ")))
   assert.ok(commands.includes("agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]"))
   assert.ok(commands.some(command => command.startsWith("agent current") && command.includes("list")))
   assert.ok(commands.includes("agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson"))

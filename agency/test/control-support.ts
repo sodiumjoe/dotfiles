@@ -67,15 +67,22 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
     return until(async () => { try { return await adapter.readProcess(pid) } catch (error) { if (!(error instanceof Error) || !error.name.endsWith("ObservationUnavailable")) throw error; return undefined } })
   }
   async function authorize(expected: ProcessIdentity): Promise<boolean> {
-    const current = await observe(expected.pid)
-    if (current === null) { assert.deepEqual(await adapter.readGroup(expected.pid), []); return false }
-    assert.ok(sameProcess(expected, current), "fixture generation changed")
-    assert.equal(await adapter.bootId(), expected.bootId)
-    const first = await adapter.readGroup(expected.pid), second = await adapter.readGroup(expected.pid)
-    assert.deepEqual(first, second)
-    assert.equal(first.length, 1)
-    assert.ok(sameProcess(first[0]!, expected))
-    return true
+    return until(async () => {
+      try {
+        const current = await observe(expected.pid)
+        if (current === null) { assert.deepEqual(await adapter.readGroup(expected.pid), []); return false }
+        assert.ok(sameProcess(expected, current), "fixture generation changed")
+        assert.equal(await adapter.bootId(), expected.bootId)
+        const first = await adapter.readGroup(expected.pid), second = await adapter.readGroup(expected.pid)
+        assert.deepEqual(first, second)
+        assert.equal(first.length, 1)
+        assert.ok(sameProcess(first[0]!, expected))
+        return true
+      } catch (error) {
+        if (!(error instanceof Error) || !error.name.endsWith("ObservationUnavailable")) throw error
+        return undefined
+      }
+    })
   }
   async function signal(expected: ProcessIdentity, value: NodeJS.Signals): Promise<void> {
     if (await authorize(expected) && await authorize(expected)) await adapter.signalGroup(expected.pid, value)
