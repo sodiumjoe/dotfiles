@@ -28,6 +28,7 @@ import { backendFingerprint, readBackendConfig, mergeBackendEnvironment, type Ba
 import { canonicalJson, parseRequestedSettings, projectRestorableSettings, nonRestorableOptionIds, type RequestedSettings, type JsonObject, type SessionConfiguration } from "./session-config.js"
 import { withNativeSession, withoutAgencyMetadata, type ProviderSession } from "./acp.js"
 import { launchEnvironmentDigest, parseLaunchEnvironment } from "./environment.js"
+import { createPermissionBroker, type PermissionClient } from "../acp/permissions.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
@@ -54,6 +55,9 @@ export type AgentService = {
   readonly handlerGeneration: string
   acpCapabilities(): Promise<JsonObject>
   sessionRecord(agentId: string): Promise<AgentView | null>
+  attachPermissions(target: AgentTuple, client: PermissionClient): Promise<void>
+  permissionDecision(connectionId: string, requestId: string | number, result: JsonObject): Promise<boolean>
+  detachPermissions(connectionId: string, target?: AgentTuple): void
   observeSession(target: AgentTuple, listener: ConversationListener, configuration: (snapshot: SessionConfiguration) => void): Promise<AcpSessionObservation>
   createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
@@ -90,6 +94,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   const { context, store, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const dirty = new Set<string>(), dirtyAgents = new Set<string>(), stops = new Map<string, Promise<void>>()
+  const permissions = createPermissionBroker({ respond(target, requestId, result) {
+    const op = operations.get(target.agentId)
+    if (!op?.owner || op.controller.signal.aborted || !isDeepStrictEqual(agentTuple(op.initial), target)) throw new AgentError("STALE_ATTACHMENT")
+    op.owner.respond(requestId, result)
+  } })
   const recoveryRepairs = new Map<string, AgentRecoveryRepair>()
   const configuring = new Set<string>()
   const echoes = new Map<Live, { blocks: JsonObject[]; index: number; offset: number; held: AcpObservation[]; bytes: number }>()
@@ -272,6 +281,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     retire(op)
   }
   function cleanup(op: Live): Promise<void> {
+    permissions.invalidate(agentTuple(op.initial))
     if (op.cleanup) return op.cleanup
     const checkCleanup = (): void => { if (op.expired || !op.ready && performance.now() >= op.deadline + cleanupBudget(op.contract)) throw new AgentError("CLEANUP_UNVERIFIED") }
     op.cleanup = (async () => {
@@ -305,6 +315,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   async function failOperation(op: Live, error: unknown): Promise<void> {
     if (op.expired) return
     op.fault ??= agentFailure(errorFor(error)); op.controller.abort(); op.uncertain = null
+    permissions.invalidate(agentTuple(op.initial))
     if (!op.ready) op.result = { outcome: "failed", target: agentTuple(op.initial), failure: op.fault, session: null }
     await queue.run(async () => {
       const record = records.get(op.initial.definition.agentId)
@@ -346,7 +357,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         if (op.controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
         const environment = op.environment
         if (!environment) throw new AgentError("STARTUP_FAILED")
-        try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.evidence.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, revalidate: () => revalidate(op) }) }
+        try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.evidence.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
+          await requireTarget(agentTuple(op.initial))
+          if (!op.turns?.busy()) throw new AgentError("INVALID_PROTOCOL")
+          permissions.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
+        }).catch(error => { void failOperation(op, error).catch(error => noteOperation(op, error)) }) }, revalidate: () => revalidate(op) }) }
         finally { op.environment = null }
         void op.owner.fault.then(failure => { if (!closed && !op.controller.signal.aborted) void failOperation(op, new AgentError(failure.code)).catch(error => noteOperation(op, error)) })
         if (op.controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
@@ -470,7 +485,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const conversation = createConversation(agentTuple(record))
         conversation.append({ kind: "lifecycle", phase: record.phase, cwd, session: record.session })
         const op: Live = { initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, declaration, contract, evidence, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
-        op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invoke: (text, limits) => invoke(op, text, limits), invokeAcp: params => invokeAcp(op, params), cancel: () => op.owner!.cancelPrompt(), onSettled: () => retire(op) })
+        op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invoke: (text, limits) => invoke(op, text, limits), invokeAcp: params => invokeAcp(op, params), cancel: () => { permissions.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: () => { permissions.invalidate(agentTuple(op.initial)); retire(op) } })
         checkCommandDeadline(); acceptingOperation = op
         operations.set(agentId, op); intents.set(request.commandId, op)
         try { await publishCommand(accepted, null); checkCommandDeadline(); await publishAgent(record, previousAgent ?? null) }
@@ -678,6 +693,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (op) intents.set(command.commandId, op)
     const activePrompt = op?.prompt?.promise
     op?.controller.abort()
+    if (op) permissions.invalidate(agentTuple(op.initial))
     const operation = (async () => {
       try {
         await activePrompt?.catch(() => undefined)
@@ -729,6 +745,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   return {
     start, restore, stop, prompt, command, setSession,
     handlerGeneration: generation,
+    attachPermissions(target, client) { return queue.run(async () => { await requireTarget(target); permissions.attach(target, client) }) },
+    permissionDecision(connectionId, requestId, result) { return queue.run(() => permissions.decision(connectionId, requestId, result)) },
+    detachPermissions: (connectionId, target) => permissions.detach(connectionId, target),
     async acpCapabilities() {
       const capabilities = { image: false, audio: false, embeddedContext: false }
       try {

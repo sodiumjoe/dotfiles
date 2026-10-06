@@ -77,8 +77,10 @@ async function dispatch(request: { id: string | number; method?: string; params?
     promptId = request.id
     if (text === "permission") {
       const wait = new Promise<void>(resolve => { permission = resolve })
+      const failure = setInterval(() => { void exists("fail-permission").then(ready => { if (ready) process.exit(2) }) }, 10)
+      failure.unref()
       send({ jsonrpc: "2.0", id: 1, method: "session/request_permission", params: { sessionId: "native-session", toolCall: { toolCallId: "fixture-tool", title: "Fixture write", kind: "edit" }, options: [{ optionId: "allow-once", name: "Allow", kind: "allow_once" }, { optionId: "reject-once", name: "Reject", kind: "reject_once" }] } })
-      await wait
+      try { await wait } finally { clearInterval(failure) }
     }
     if (text === "held") await new Promise<void>(resolve => {
       release = resolve

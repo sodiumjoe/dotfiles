@@ -20,7 +20,7 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
   const send = (frame: JsonObject): void => { if (!closed) input.send(frame) }
   const notify = (method: string, params: JsonObject, meta?: JsonObject): void => send({ jsonrpc: "2.0", method, params, ...(meta ? { _meta: meta } : {}) })
   const state = (sessionId: string, binding: Binding, configuration = false): void => notify("agency/session_state", json({ sessionId, binding: binding.target, turnId: binding.turnId, state: binding.invalid ? "unavailable" : binding.turnId ? "running" : "idle", ...(configuration ? { configuration: binding.configuration } : {}) }))
-  const invalidate = (sessionId: string, binding: Binding): void => { if (!binding.invalid) { binding.invalid = true; state(sessionId, binding); binding.observation?.close() } }
+  const invalidate = (sessionId: string, binding: Binding): void => { if (!binding.invalid) { binding.invalid = true; state(sessionId, binding); binding.observation?.close(); service.detachPermissions(input.connectionId, binding.target) } }
   const event = (sessionId: string, binding: Binding, value: RetainedEvent, replay: boolean): void => {
     if (value.kind === "submitted") {
       binding.turnId = value.submissionId
@@ -55,7 +55,9 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     const configuration = (snapshot: SessionConfiguration): void => { binding.configuration = snapshot; state(sessionId, binding, true) }
     const observed = await service.observeSession(target, value => { if (replaying) buffered.push(value); else deliver(value) }, snapshot => { if (replaying) buffered.push(snapshot); else configuration(snapshot) })
     if (closed) { observed.close(); throw new AgentError("UNAVAILABLE") }
-    bindings.get(sessionId)?.observation?.close()
+    const previous = bindings.get(sessionId)
+    previous?.observation?.close()
+    if (previous) service.detachPermissions(input.connectionId, previous.target)
     bindings.set(sessionId, binding); binding.observation = observed; binding.configuration = observed.native.configuration
     const snapshot = observed.snapshot
     for (const value of snapshot.events) event(sessionId, binding, value, true)
@@ -67,6 +69,8 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       else configuration(value)
     }
     if (binding.invalid) throw new AgentError("STALE_ATTACHMENT")
+    await service.attachPermissions(target, { connectionId: input.connectionId, send })
+    if (closed) { service.detachPermissions(input.connectionId); observed.close(); throw new AgentError("UNAVAILABLE") }
     const native = observed.native, result = { ...native.result }
     delete result.configOptions; delete result.models; delete result.modes; delete result.availableCommands
     const config = binding.configuration
@@ -82,6 +86,11 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     }
     if (!initialized) throw new AcpError(-32600, "Initialize required")
     if (method === "authenticate") throw new AgentError("UNSUPPORTED_SESSION_FEATURE")
+    if (method === "agency/detach") {
+      const sessionId = "agency:" + parseLogicalSessionId(params.sessionId), binding = bindings.get(sessionId)
+      if (binding) { binding.observation?.close(); service.detachPermissions(input.connectionId, binding.target); bindings.delete(sessionId) }
+      return {}
+    }
     if (method === "session/list") {
       const options = checked(() => parsePageInput({ limit: 100, ...(params.cwd === undefined ? {} : { cwd: params.cwd }), ...(params.cursor === undefined ? {} : { cursor: params.cursor }) }))
       let inventory
@@ -144,7 +153,10 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       let admitted = false
       try {
         const frame = parseAcpFrame(raw)
-        if (typeof frame.method !== "string") return
+        if (typeof frame.method !== "string") {
+          if (initialized && Object.hasOwn(frame, "result")) await service.permissionDecision(input.connectionId, frame.id as RpcId, frame.result as JsonObject)
+          return
+        }
         requestId = frame.id as RpcId | undefined
         if (requestId !== undefined && pending.has(requestId)) { pending.delete(requestId); throw new AcpError(-32600, "Duplicate pending request ID") }
         if (pending.size >= 64) throw new AcpError(-32600, "Too many pending requests")
@@ -161,6 +173,6 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       } catch (error) { if (requestId !== undefined && (!admitted || pending.get(requestId) === token)) send(json(acpError(requestId, error))) }
       finally { if (requestId !== undefined && pending.get(requestId) === token) pending.delete(requestId) }
     },
-    close() { if (closed) return; closed = true; for (const binding of bindings.values()) binding.observation?.close(); bindings.clear(); pending.clear() },
+    close() { if (closed) return; closed = true; for (const binding of bindings.values()) binding.observation?.close(); service.detachPermissions(input.connectionId); bindings.clear(); pending.clear() },
   }
 }
