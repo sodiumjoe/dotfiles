@@ -48,6 +48,17 @@ test("declared fingerprints track presence, content, and physical executable ide
   }
 })
 
+test("declared configuration timestamp rewrites preserve content evidence", async t => {
+  const f = await profileFixture(t)
+  await writeFile(f.config, "configured value")
+  const bytes = await readFile(f.config), first = await observeConfig(f.profile)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  await writeFile(f.config, bytes)
+  assert.deepEqual(await observeConfig(f.profile), first)
+  await writeFile(f.config, "changed configuration")
+  assert.notEqual((await observeConfig(f.profile)).fingerprint, first.fingerprint)
+})
+
 test("declared fingerprints accept installed-size adapter entrypoints", async t => {
   const f = await profileFixture(t), entrypoint = join(f.adapter, "index.mjs")
   await writeFile(entrypoint, Buffer.alloc(1_225_880, 0x61), { mode: 0o600 })

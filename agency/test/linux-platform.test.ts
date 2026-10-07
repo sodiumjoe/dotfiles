@@ -67,6 +67,12 @@ synthetic("Linux procfs preserves exact byte-zero argv0 identity", async t => {
   })
 })
 
+synthetic("Linux procfs scheduling transitions preserve an exact live identity", async () => {
+  let reads = 0
+  const adapter = createLinuxAdapter(proc({ stat: () => stat(41,41,"99999999999999999999", ++reads % 2 ? "R" : "S") }))
+  assert.deepEqual(await adapter.readProcess(41), procIdentity())
+})
+
 synthetic("Linux procfs waits for zombie reaping and rejects persistent zombies", async t => {
   await t.test("live to zombie to absent", async () => {
     let n = 0

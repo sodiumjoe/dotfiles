@@ -147,7 +147,7 @@ test("a slow observer overflows independently while a fast observer keeps receiv
   f.service.observe = async (_target, listener) => conversation.observe(listener)
   const slow = await f.attach(), fast = await f.attach()
   slow.socket.pause()
-  for (let n = 0; n < 120; n++) {
+  for (let n = 0; n < 1024 && f.peers.size === 2; n++) {
     const seq = conversation.append({ kind: "update", replay: false, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(64000) } } })
     await until(async () => fast.frames.some(frame => frame.type === "event" && frame.event.seq === seq) ? true : undefined)
   }

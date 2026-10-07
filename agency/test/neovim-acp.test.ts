@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto"
 import { acpFixture, editorFixture, type AcpFixture, type EditorFixture } from "./acp-support.js"
 import type { ProviderId } from "../src/catalog/types.js"
 import type { JsonObject } from "../src/agent/session-config.js"
+import { until } from "./control-support.js"
 
 const run = (e: EditorFixture, source: string) => e.lua(`(function() ${source}; return true end)()`)
 const wait = async (e: EditorFixture, condition: string) => assert.equal(await e.lua(`vim.wait(10000, function() return ${condition} end)`), true, condition)
@@ -209,6 +210,7 @@ test("tab close, session switch and endpoint termination detach without cancelli
   const f = await acpFixture(t), a = await editorFixture(f)
   const sid = await start(a), target = await f.tuple(sid)
   await submit(a, "held"); await wait(a, "fixture_manager.is_generating")
+  await until(async () => (await f.requests("codex-acp")).some(frame => frame.method === "session/prompt") ? true : undefined)
   await a.closeTab()
   const b = await editorFixture(f)
   await attach(f, b, sid)

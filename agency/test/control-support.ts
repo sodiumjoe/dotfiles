@@ -74,6 +74,9 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
         assert.ok(sameProcess(expected, current), "fixture generation changed")
         assert.equal(await adapter.bootId(), expected.bootId)
         const first = await adapter.readGroup(expected.pid), second = await adapter.readGroup(expected.pid)
+        const latest = await observe(expected.pid)
+        if (latest === null) { assert.deepEqual(second, []); assert.deepEqual(await adapter.readGroup(expected.pid), []); return false }
+        assert.ok(sameProcess(expected, latest), "fixture generation changed")
         assert.deepEqual(first, second)
         assert.equal(first.length, 1)
         assert.ok(sameProcess(first[0]!, expected))

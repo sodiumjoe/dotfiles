@@ -252,9 +252,24 @@ test("wrapper follows deployed relative symlinks, preserves arguments and ignore
   await chmod(wrapper, 0o755)
   await writeFile(join(repo, "agency/dist/src/main.js"), "process.stdout.write(JSON.stringify(process.argv.slice(2)))")
   await symlink("repo with spaces/home/bin/agy", join(root, "agy"))
-  const result = await promisify(execFile)(join(root, "agy"), ["status", "argument with spaces"], { cwd: "/", env: { ...process.env, HOME: user } })
+  const result = await promisify(execFile)(join(root, "agy"), ["status", "argument with spaces"], { cwd: "/", env: { ...process.env, HOME: user, NODENV_ROOT: undefined } })
   assert.deepEqual(JSON.parse(result.stdout), ["status", "argument with spaces"])
-  await assert.rejects(promisify(execFile)(join(root, "agy"), ["status"], { env: { ...process.env, HOME: root } }), (error: unknown) => (error as { code: number }).code === 69)
+  await assert.rejects(promisify(execFile)(join(root, "agy"), ["status"], { env: { ...process.env, HOME: root, NODENV_ROOT: undefined } }), (error: unknown) => (error as { code: number }).code === 69)
+})
+
+test("wrapper uses the pinned runtime under the configured nodenv root", async t => {
+  const root = await privateRoot(t), nodenv = join(root, "system nodenv")
+  await mkdir(join(root, "home/bin"), { recursive: true })
+  await mkdir(join(root, "agency/dist/src"), { recursive: true })
+  await mkdir(join(nodenv, "versions/24.13.0/bin"), { recursive: true })
+  await symlink(process.execPath, join(nodenv, "versions/24.13.0/bin/node"))
+  const wrapper = join(root, "home/bin/agy")
+  await copyFile(fileURLToPath(new URL("../../../home/bin/agy", import.meta.url)), wrapper)
+  await chmod(wrapper, 0o755)
+  await writeFile(join(root, "agency/dist/src/main.js"), "process.stdout.write(JSON.stringify(process.argv.slice(2)))")
+  const result = await promisify(execFile)(wrapper, ["status", "argument with spaces"], { cwd: "/", env: { ...process.env, HOME: root, NODENV_ROOT: nodenv } })
+  assert.deepEqual(JSON.parse(result.stdout), ["status", "argument with spaces"])
+  await assert.rejects(promisify(execFile)(wrapper, ["status"], { env: { ...process.env, HOME: root, NODENV_ROOT: join(root, "missing") } }), (error: unknown) => (error as { code: number }).code === 69)
 })
 
 test("wrapper reports a missing build without creating it", async t => {

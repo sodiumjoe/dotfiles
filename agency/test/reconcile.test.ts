@@ -298,6 +298,16 @@ test("expected inventory rejects a replaced record before any write or signal", 
   assert.deepEqual(await readFile(path), before)
 })
 
+for (const platform of ["darwin", "linux"] as const) test(`${platform} cleanup reobserves a leader that exits during its group scan`, async t => {
+  const adapter = new FakeAdapter({ platform })
+  const readGroup = adapter.readGroup.bind(adapter)
+  adapter.readGroup = async () => {
+    if (adapter.signals.includes("SIGTERM")) { adapter.leader = null; adapter.group = [] }
+    return readGroup()
+  }
+  await assertOutcome(t, record(), adapter, { disposition: "cleaned", signals: ["SIGTERM"] })
+})
+
 for (const platform of ["darwin", "linux"] as const) {
  test("reconciles the process-group safety matrix on " + platform, async t => {
   const fake = (options: AdapterOptions = {}) => new FakeAdapter({ ...options, platform })

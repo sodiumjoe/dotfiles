@@ -45,7 +45,7 @@ function argv0(value: string): string {
 }
 
 function sameStat(first: ReturnType<typeof parseLinuxStat>, second: ReturnType<typeof parseLinuxStat>): boolean {
-  return first.pid === second.pid && first.state === second.state && first.starttime === second.starttime && first.processGroupId === second.processGroupId && first.sessionId === second.sessionId
+  return first.pid === second.pid && first.starttime === second.starttime && first.processGroupId === second.processGroupId && first.sessionId === second.sessionId
 }
 
 export function createLinuxAdapter(procfs: LinuxProcfs = defaults): PlatformAdapter {
@@ -70,7 +70,7 @@ export function createLinuxAdapter(procfs: LinuxProcfs = defaults): PlatformAdap
         if (first.state === "Z") {
           zombieDeadline ??= Date.now() + 250
           const second = parseLinuxStat(await procfs.readFile(path + "/stat"))
-          if (!sameStat(first, second)) throw new LinuxObservationUnavailable("zombie identity is unstable")
+          if (second.state !== "Z" || !sameStat(first, second)) throw new LinuxObservationUnavailable("zombie identity is unstable")
           if (Date.now() >= zombieDeadline) throw new LinuxObservationUnavailable("terminal process remains unreaped")
           await new Promise(resolve => setTimeout(resolve, 25))
           continue

@@ -56,7 +56,7 @@ export async function readProfiles(root: string): Promise<ProviderProfile[]> {
     return profiles.sort((a, b) => a.id < b.id ? -1 : 1)
   } catch (error) { if (error instanceof CatalogError) throw error; return invalid() }
 }
-async function fileIdentity(path: string): Promise<unknown> {
+async function fileIdentity(path: string): Promise<[string, string[]]> {
   if (await realpath(path) !== path) invalid()
   const stat = await lstat(path, { bigint: true })
   if (!stat.isFile()) invalid()
@@ -92,7 +92,7 @@ export async function observeConfig(input: ProviderProfile): Promise<ConfigEvide
   try {
     const profile = parseProfile(input), evidence: unknown[] = [1, "declared-config-v1", profile]
     let size = 0
-    const file = async (path: string, absent = false, max = 1024 * 1024): Promise<Buffer | null> => {
+    const file = async (path: string, absent = false, max = 1024 * 1024, configuration = false): Promise<Buffer | null> => {
       let before
       try { before = await fileIdentity(path) } catch (error) {
         if (absent && missing(error)) { evidence.push([path, null]); return null }
@@ -102,7 +102,7 @@ export async function observeConfig(input: ProviderProfile): Promise<ConfigEvide
       if (bytes === null || !isDeepStrictEqual(before, await fileIdentity(path))) throw new CatalogError("CONFIG_CHANGED")
       size += bytes.length
       if (size > 8 * 1024 * 1024) invalid()
-      evidence.push([before, digest(bytes)])
+      evidence.push([configuration ? [before[0], before[1].filter((_, index) => index !== 3 && index !== 4)] : before, digest(bytes)])
       return bytes
     }
     evidence.push(await fileIdentity(profile.executable))
@@ -118,7 +118,7 @@ export async function observeConfig(input: ProviderProfile): Promise<ConfigEvide
       sdkVersion = sdk.version
       evidence.push(await fileIdentity(await sdkEntry(profile)))
     }
-    for (const path of profile.configurationFiles) await file(path, true)
+    for (const path of profile.configurationFiles) await file(path, true, 1024 * 1024, true)
     return { fingerprint: digest(JSON.stringify(evidence)), scope: "declared-config-v1", providerId: profile.id, adapterVersion, sdkVersion }
   } catch (error) { if (error instanceof CatalogError) throw error; return invalid() }
 }

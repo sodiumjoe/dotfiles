@@ -101,6 +101,9 @@ async function observeGroup(adapter: PlatformAdapter, provider: ProcessGroupProv
     try {
       const leader = await adapter.readProcess(provider.group.leader.pid)
       const members = await adapter.readGroup(provider.group.leader.processGroupId)
+      if (leader !== null && !members.some(member => sameProcess(leader, member)) && await adapter.readProcess(leader.pid) === null) {
+        return { leader: null, members: await adapter.readGroup(provider.group.leader.processGroupId) }
+      }
       return { leader, members }
     } catch (error) {
       if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable) || Date.now() >= deadline) throw error
