@@ -16,9 +16,9 @@ test("ACP framing retains fragmented UTF-8 content and independent string/numeri
   assert.equal((parseAcpFrame(frames[0]).params as { text: string }).text, "λ")
 })
 
-test("ACP rejects malformed IDs, envelopes, UTF-8, oversized frames and incomplete EOF", () => {
+test("ACP rejects malformed IDs, envelopes, UTF-8 and incomplete EOF", () => {
   for (const frame of [null, [], { jsonrpc: "1.0", method: "test" }, { jsonrpc: "2.0", id: null, method: "test" }, { jsonrpc: "2.0", id: 0.5, method: "test" }, { jsonrpc: "2.0", id: 1, result: {}, error: {} }]) assert.throws(() => parseAcpFrame(frame))
-  for (const bytes of [Buffer.from([0xff, 10]), Buffer.alloc(1048577, 32), Buffer.from('{"jsonrpc":"2.0"')]) {
+  for (const bytes of [Buffer.from([0xff, 10]), Buffer.from('{"jsonrpc":"2.0"')]) {
     const errors: unknown[] = [], decoder = createAcpDecoder(() => assert.fail("invalid frame dispatched"), error => errors.push(error))
     decoder.feed(bytes); decoder.end()
     assert.equal(errors.length, 1)
@@ -36,4 +36,14 @@ test("logical IDs and namespaced metadata reject ambiguous selection without rej
 test("ACP errors retain namespaced service failure codes", () => {
   assert.equal(acpError(1, new AgentError("STALE_ATTACHMENT")).error.code, -32000)
   assert.deepEqual(acpError("a", new AgentError("BUSY")).error.data, { agency: { code: "BUSY" } })
+})
+
+test("ACP framing accepts a fragmented message beyond the former frame cap", () => {
+  const frames: any[] = [], errors: unknown[] = [], text = "λ".repeat(1048577)
+  const decoder = createAcpDecoder(frame => frames.push(frame), error => errors.push(error))
+  const bytes = Buffer.from(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { text } }) + "\n")
+  for (let at = 0; at < bytes.length; at += 997) decoder.feed(bytes.subarray(at, at + 997))
+  decoder.end()
+  assert.equal(errors.length, 0)
+  assert.equal(frames[0].params.text, text)
 })

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { once } from "node:events"
+import { createServer, createConnection, type Socket } from "node:net"
 import { randomUUID } from "node:crypto"
 import { lstat, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -137,7 +139,10 @@ for (const crashed of [false, true]) test(`restore retains identity and rotates 
   assert.notEqual(restored.launch!.launchAttemptId, before.launch!.launchAttemptId)
   assert.notEqual(restored.launch!.commandId, before.launch!.commandId)
   assert.equal(f.spawnOptions.at(-1)!.cwd, before.definition.cwd)
-  assert.deepEqual(f.spawnOptions.at(-1)!.env, restoringEnvironment)
+  const { NVIM, NVIM_SOCKET_PATH, ...environment } = f.spawnOptions.at(-1)!.env!
+  assert.deepEqual(environment, restoringEnvironment)
+  assert.match(NVIM!, /\/editor-[a-f0-9-]+\.sock$/)
+  assert.equal(NVIM_SOCKET_PATH, NVIM)
   assert.deepEqual(f.methodHistory.filter(method => method === "session/new" || method === "session/load"), ["session/new", "session/load"])
   assert.equal(JSON.stringify(done).includes("new-secret"), false)
   await assert.rejects(service.restore({ ...request, environment: { SECRET: "changed" } }), { code: "COMMAND_CONFLICT" })
@@ -740,7 +745,7 @@ test("uncertain completed receipt is repaired without repeating a provider launc
   const f = await agentServiceFixture(t)
   f.failReceipt(true)
   await f.service.start(f.input)
-  await until(async () => (await f.store.readCommand(f.input.commandId))?.state === "completed" ? true : undefined)
+  await until(async () => f.receiptFailures() > 0 ? true : undefined)
   assert.equal((await f.service.command(f.input.commandId, f.input.handlerGeneration)).durability, "unverified")
   f.failReceipt(false)
   assert.equal((await completed(f.service, f.input)).command.result?.outcome, "started")
@@ -795,4 +800,30 @@ test("restart interrupts a pending start without replaying its transient environ
   assert.equal((await next.command(f.input.commandId, f.input.handlerGeneration)).command.state, "interrupted")
   assert.equal((await next.list()).agents[0]!.record.phase, "interrupted")
   assert.equal(f.spawns(), 0)
+})
+
+test("stop revokes editor channels before publishing its receipt", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" }), service = f.service
+  const record = await service.createSession({ commandId: randomUUID(), cwd: f.workspace, environment: { NVIM: "/stale", NVIM_SOCKET_PATH: "/also-stale" }, nativeParams: { cwd: f.workspace, mcpServers: [] } })
+  const target = agentTuple(record)!, broker = f.spawnOptions.at(-1)!.env!.NVIM!, editorPath = join(f.root, "editor-test.sock")
+  assert.equal(f.spawnOptions.at(-1)!.env!.NVIM_SOCKET_PATH, broker); assert.notEqual(broker, "/stale")
+  const connections: Socket[] = [], editor = createServer(socket => { connections.push(socket); socket.on("error", () => {}); socket.pipe(socket) })
+  editor.listen(editorPath); await once(editor, "listening")
+  t.after(() => { for (const socket of connections) socket.destroy(); editor.close() })
+  const attachment = randomUUID(), submissionId = randomUUID()
+  service.attachEditor(target, "editor", editorPath, attachment)
+  await service.submitAcp(target, { submissionId, prompt: [{ type: "text", text: "held" }], originConnectionId: "editor", originAttachment: attachment })
+  await f.promptEntered
+  const socket = createConnection(broker)
+  socket.on("error", () => {}); t.after(() => socket.destroy())
+  await once(socket, "connect")
+  const echoed = once(socket, "data"); socket.write("connected"); await echoed
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), writeCommand = f.store.writeCommand.bind(f.store)
+  f.store.writeCommand = async (next, previous) => { if (next.op === "stop" && next.state === "pending") { entered.resolve(); await release.promise }; return writeCommand(next, previous) }
+  t.after(() => release.resolve())
+  const stopping = service.stop({ ...target, commandId: randomUUID() })
+  await entered.promise
+  try { await until(async () => socket.destroyed ? true : undefined, 1000) }
+  finally { release.resolve(); await stopping }
+  assert.equal(socket.destroyed, true)
 })

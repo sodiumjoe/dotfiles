@@ -1,3 +1,4 @@
+import { cloneWireJson, wireJsonBytes } from "../acp/wire-json.js"
 import { displayTitle, type AcpObservation } from "./session-events.js"
 import { AgentError, type AgentFailure, type AgentPhase, type AgentTuple, type NativeSessionIdentity, type SessionEvidence, type StartSelection, type JsonObject } from "./types.js"
 
@@ -13,10 +14,11 @@ export type ConversationSnapshot = { target: AgentTuple; metadata: ConversationM
 export type ConversationNotification = { kind: "event"; event: RetainedEvent; firstSeq: number; historyTruncated: boolean } | { kind: "closed" }
 export type ConversationListener = (notification: ConversationNotification) => void
 export type ConversationObservation = { snapshot: ConversationSnapshot; close(): void }
-export type Conversation = { append(event: ConversationEvent): number; observe(listener: ConversationListener): ConversationObservation; close(): void }
+export type ConversationDisplay = { title: string | null; activity: "working" | "idle" }
+export type Conversation = { display(): ConversationDisplay; append(event: ConversationEvent): number; observe(listener: ConversationListener): ConversationObservation; close(): void }
 
 export function createConversation(target: AgentTuple, limits: { bytes?: number; events?: number } = {}): Conversation {
-  const maxBytes = limits.bytes ?? 16777216, maxEvents = limits.events ?? 8192, tuple = structuredClone(target)
+  const maxBytes = limits.bytes ?? 16777216, maxEvents = limits.events ?? 8192, tuple = cloneWireJson(target)
   if (![maxBytes, maxEvents].every(value => Number.isSafeInteger(value) && value > 0)) throw new AgentError("INVALID_AGENT_STATE")
   const listeners = new Set<ConversationListener>(), events: RetainedEvent[] = []
   const metadata: ConversationMetadata = { phase: "starting", session: null, selection: null, cwd: "", failure: null, title: null, plan: [], planTruncated: false, usage: null }
@@ -25,31 +27,45 @@ export function createConversation(target: AgentTuple, limits: { bytes?: number;
   const notify = (value: ConversationNotification): void => {
     for (const listener of [...listeners]) {
       if (!listeners.has(listener)) continue
-      try { listener(structuredClone(value)) } catch {}
+      try { listener(cloneWireJson(value)) } catch {}
     }
   }
+  const plainTitle = (raw: string): string => raw.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim()
+  const fallbackTitle = (raw: string): void => {
+    if (metadata.title) return
+    const title = plainTitle(raw)
+    if (title) metadata.title = displayTitle(title)
+  }
   return {
+    display() { return { title: plainTitle(metadata.title?.title ?? "") || null, activity: currentTurn && ["accepted", "running"].includes(currentTurn.state) ? "working" : "idle" } },
     append(value) {
       if (closed) throw new AgentError("NOT_READY")
       if (lastSeq >= Number.MAX_SAFE_INTEGER - 1) throw new AgentError("INVALID_AGENT_STATE")
-      const raw = { ...structuredClone(value), seq: lastSeq + 1 }
-      const event = { ...raw, encodedBytes: Buffer.byteLength(JSON.stringify(raw)) }
+      const raw = { ...cloneWireJson(value), seq: lastSeq + 1 }
+      const event = { ...raw, encodedBytes: wireJsonBytes(raw) }
       if (value.kind === "lifecycle") {
         metadata.phase = value.phase
-        if (Object.hasOwn(value, "session")) metadata.session = structuredClone(value.session ?? null)
-        if (value.selection) metadata.selection = structuredClone(value.selection)
+        if (Object.hasOwn(value, "session")) metadata.session = cloneWireJson(value.session ?? null)
+        if (value.selection) metadata.selection = cloneWireJson(value.selection)
         if (value.cwd !== undefined) metadata.cwd = value.cwd
-        metadata.failure = structuredClone(value.failure ?? null)
+        metadata.failure = cloneWireJson(value.failure ?? null)
+      } else if (value.kind === "submitted") {
+        fallbackTitle(value.text)
+        currentTurn = { submissionId: value.submissionId, state: "accepted" }
       } else if (value.kind === "turn") currentTurn = { submissionId: value.submissionId, state: value.state }
       else if (value.kind === "update") {
         const update = value.update
-        if (update.sessionUpdate === "session_info_update" && typeof update.title === "string") metadata.title = displayTitle(update.title)
+        if (update.sessionUpdate === "session_info_update" && typeof update.title === "string" && update.title.trim()) metadata.title = displayTitle(update.title)
+        if (update.sessionUpdate === "user_message_chunk") {
+          const content = update.content as JsonObject | undefined
+          if (content?.type === "text" && typeof content.text === "string") fallbackTitle(content.text)
+        }
         if (update.sessionUpdate === "plan" && Array.isArray(update.entries)) {
           metadata.plan = []
           for (const entry of update.entries) {
             const next = [...metadata.plan, entry]
             if (Buffer.byteLength(JSON.stringify(next)) > 16384) break
-            metadata.plan.push(structuredClone(entry))
+            metadata.plan.push(cloneWireJson(entry))
           }
           metadata.planTruncated = metadata.plan.length < update.entries.length
         }
@@ -59,16 +75,16 @@ export function createConversation(target: AgentTuple, limits: { bytes?: number;
         }
       }
       if (Buffer.byteLength(JSON.stringify(metadata)) > 65536) throw new AgentError("INVALID_PROTOCOL")
-      lastSeq = event.seq; events.push(event); bytes += Buffer.byteLength(JSON.stringify(event))
+      lastSeq = event.seq; events.push(event); bytes += wireJsonBytes(event)
       while (events.length > maxEvents || bytes > maxBytes) {
-        bytes -= Buffer.byteLength(JSON.stringify(events.shift()!)); historyTruncated = true
+        bytes -= wireJsonBytes(events.shift()!); historyTruncated = true
       }
       notify({ kind: "event", event, firstSeq: firstSeq(), historyTruncated })
       return lastSeq
     },
     observe(listener) {
       if (closed) throw new AgentError("NOT_READY")
-      const snapshot = structuredClone({ target: tuple, metadata, firstSeq: firstSeq(), lastSeq, historyTruncated, events, currentTurn })
+      const snapshot = cloneWireJson({ target: tuple, metadata, firstSeq: firstSeq(), lastSeq, historyTruncated, events, currentTurn })
       listeners.add(listener)
       return { snapshot, close() { listeners.delete(listener) } }
     },

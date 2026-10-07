@@ -5,8 +5,9 @@ import { parseLaunchEnvironment } from "../agent/environment.js"
 import type { AgentService } from "../agent/service.js"
 import type { JsonObject } from "../agent/session-config.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
-import { createAcpDecoder, ACP_FRAME_BYTES, ACP_QUEUE_BYTES } from "./protocol.js"
+import { createAcpDecoder } from "./protocol.js"
 import { createAcpRouter } from "./router.js"
+import { encodeWireJson } from "./wire-json.js"
 
 export function createAcpWriter(stream: Writable, fail: (error: unknown) => void): { send(frame: JsonObject): void; close(): void } {
   const timers = new Set<NodeJS.Timeout>()
@@ -15,8 +16,8 @@ export function createAcpWriter(stream: Writable, fail: (error: unknown) => void
     send(frame) {
       if (closed) return
       try {
-        const bytes = Buffer.from(JSON.stringify(frame) + "\n")
-        if (bytes.length > ACP_FRAME_BYTES || bytes.length + stream.writableLength > ACP_QUEUE_BYTES || stream.destroyed) throw new Error("ACP client write limit")
+        const bytes = Buffer.from(encodeWireJson(frame) + "\n")
+        if (!stream.writable || stream.destroyed) throw new Error("ACP client connection closed")
         const timer = setTimeout(() => { timers.delete(timer); fail(new Error("ACP client write timed out")) }, 5000)
         timers.add(timer)
         stream.write(bytes, error => { clearTimeout(timer); timers.delete(timer); if (error) fail(error) })

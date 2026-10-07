@@ -1,8 +1,7 @@
 package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
 local fixture = require("fixtures.agency_control")
 
-local function check_text_preview(options, item)
-    assert.is_truthy(vim.tbl_contains((options.layout or {}).hidden or {}, "preview"))
+local function preview_lines(options, item)
     assert.are.equal("function", type(options.preview))
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "stale preview" })
@@ -13,12 +12,15 @@ local function check_text_preview(options, item)
             reset = function()
                 vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
             end,
+            set_lines = function(_, lines)
+                vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+            end,
         },
     })
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     vim.api.nvim_buf_delete(buf, { force = true })
     assert.is_true(ok, err)
-    assert.are.same({ "" }, lines)
+    return lines
 end
 
 describe("Agency active picker", function()
@@ -103,16 +105,116 @@ describe("Agency active picker", function()
         assert.are.equal("Agency active agents", options.title)
         assert.are.equal(2, #picker.opts.items)
         assert.is_truthy(picker.opts.items[2].text:find("/work/b", 1, true))
-        assert.is_truthy(picker.opts.items[2].text:find("codex-acp/model-b", 1, true))
+        assert.is_truthy(picker.opts.items[2].text:find("Codex/model-b", 1, true))
         assert.is_nil(options.actions.restore)
         assert.is_nil(options.actions.new)
+    end)
+    it("leads with readable titles and labels the current editor connection", function()
+        open({ target = vim.deepcopy(fixture.target_a), connected = true, busy = true })
+        local row = fixture.agent(fixture.target_a)
+        row.display = { title = "Repair picker windows", activity = "working" }
+        respond(1, { row })
+        local text = picker.opts.items[1].text
+        assert.is_truthy(text:find("Repair picker windows", 1, true) == 1)
+        assert.is_truthy(text:find("Working", 1, true))
+        assert.is_truthy(text:find("Open in this tab", 1, true))
+        assert.is_nil(text:find("unverified", 1, true))
+        assert.is_nil(text:find(fixture.target_a.agentId, 1, true))
+    end)
+    it("keeps untitled agent identities in previews and available to open", function()
+        open()
+        respond(1, { fixture.agent(fixture.target_a), fixture.agent(fixture.target_b) })
+        assert.is_truthy(picker.opts.items[1].text:find("New conversation", 1, true) == 1)
+        assert.is_truthy(picker.opts.items[1].text:find("Available to open", 1, true))
+        assert.are.equal(picker.opts.items[1].text, picker.opts.items[2].text)
+        assert.are_not.equal(picker.opts.items[1].id, picker.opts.items[2].id)
+        for _, item in ipairs(picker.opts.items) do
+            assert.is_truthy(table.concat(preview_lines(options, item), "\n"):find(item.id, 1, true))
+        end
+    end)
+    it("moves flattened environment metadata and agent IDs into the visible preview", function()
+        open({ target = vim.deepcopy(fixture.target_a), connected = true, busy = true })
+        local row = fixture.agent(fixture.target_a)
+        row.display = { title = "hello<environment_info> - Platform: Darwin-27.0.0-arm64 - Shell: /bin/zsh"
+            .. " - Editor: Neovim 0.12.5 - Current branch: moon/picker - Project root: /work/a </environment_info>",
+            activity = "working" }
+        respond(1, { row })
+        local item = picker.opts.items[1]
+        assert.are.equal("hello · Codex/model-a · /work/a · Working · Open in this tab", item.text)
+        assert.is_false(vim.tbl_contains((options.layout or {}).hidden or {}, "preview"))
+        assert.are.same({ "hello", "",
+            "Agent ID:     " .. fixture.target_a.agentId,
+            "Backend:      Codex",
+            "Model:        model-a",
+            "Directory:    /work/a",
+            "Status:       Working",
+            "Connection:   Open in this tab",
+            "Project root: /work/a",
+            "Branch:       moon/picker",
+            "Platform:     Darwin-27.0.0-arm64",
+            "Editor:       Neovim 0.12.5",
+            "Shell:        /bin/zsh",
+        }, preview_lines(options, item))
+    end)
+    it("cleans truncated environment blocks while retaining available preview metadata", function()
+        open()
+        local row = fixture.agent(fixture.target_a)
+        row.display = { title = "hello<environment_info>\n- Platform: Darwin-27.0.0-arm64\n- Shell: /bin/zsh",
+            activity = "idle" }
+        respond(1, { row })
+        local item = picker.opts.items[1]
+        assert.are.equal("hello · Codex/model-a · /work/a · Waiting for input · Available to open", item.text)
+        local preview = table.concat(preview_lines(options, item), "\n")
+        assert.is_truthy(preview:find("Platform:     Darwin-27.0.0-arm64", 1, true))
+        assert.is_truthy(preview:find("Shell:        /bin/zsh", 1, true))
+    end)
+    it("retains full titles in previews and clears stale previews for empty selections", function()
+        open()
+        local row = fixture.agent(fixture.target_a)
+        local title = string.rep("long title ", 10) .. "end"
+        row.display = { title = title, activity = "idle" }
+        respond(1, { row })
+        local item = picker.opts.items[1]
+        assert.is_truthy(item.text:find(vim.fn.strcharpart(title, 0, 71) .. "…", 1, true) == 1)
+        assert.are.equal(title, preview_lines(options, item)[1])
+        assert.are.same({ "" }, preview_lines(options, nil))
+    end)
+    it("waits for picker window teardown before attaching the selected agent", function()
+        open()
+        respond(1, { fixture.agent(fixture.target_a) })
+        local torn_down = false
+        picker.close = function()
+            options.on_close()
+            vim.schedule(function() torn_down = true end)
+        end
+        options.confirm(picker, picker.opts.items[1])
+        assert.are.equal(0, #calls)
+        vim.wait(100, function() return #calls > 0 end)
+        assert.is_true(torn_down)
+        assert.are.equal("attach", calls[1][1])
+    end)
+    it("discards an attachment superseded during picker teardown", function()
+        local valid = true
+        require("sodium.agency.picker").open({
+            timer_factory = function() return timer end,
+            page = function(_, callback) requests[#requests + 1] = callback end,
+            snapshot = function() end,
+            selection_guard = function() return function() return valid end end,
+            attach = function() calls[#calls + 1] = { "attach" } end,
+        })
+        respond(1, { fixture.agent(fixture.target_a) })
+        options.confirm(picker, picker.opts.items[1])
+        valid = false
+        vim.wait(30, function() return false end)
+        assert.are.equal(0, #calls)
     end)
     it("keeps an attached agent with an ongoing turn selectable", function()
         open({ target = vim.deepcopy(fixture.target_a), connected = true, busy = true })
         respond(1, { fixture.agent(fixture.target_a) })
         assert.are.equal(1, #picker.opts.items)
-        assert.is_truthy(picker.opts.items[1].text:find("attached", 1, true))
+        assert.is_truthy(picker.opts.items[1].text:find("Open in this tab", 1, true))
         options.confirm(picker, picker.opts.items[1])
+        vim.wait(100, function() return #calls > 0 end)
         assert.are.same({ "attach", fixture.target_a.agentId, fixture.agent(fixture.target_a) }, calls[1])
     end)
     it("leaves an empty active picker empty without creating or restoring", function()
@@ -142,7 +244,8 @@ describe("Agency active picker", function()
         open()
         respond(1, { fixture.agent(fixture.target_a) })
         assert.is_nil(picker.opts.items[1].file)
-        check_text_preview(options, picker.opts.items[1])
+        local preview = table.concat(preview_lines(options, picker.opts.items[1]), "\n")
+        assert.is_truthy(preview:find(fixture.target_a.agentId, 1, true))
     end)
     it("keeps fileless launch choices safe when preview is toggled", function()
         require("sodium.agency.picker").choices(
@@ -153,7 +256,8 @@ describe("Agency active picker", function()
             {}
         )
         assert.is_nil(picker.opts.items[1].file)
-        check_text_preview(options, picker.opts.items[1])
+        assert.is_truthy(vim.tbl_contains((options.layout or {}).hidden or {}, "preview"))
+        assert.are.same({ "" }, preview_lines(options, picker.opts.items[1]))
     end)
     it("does not overlap polls and discards callbacks after close", function()
         open()
@@ -166,12 +270,12 @@ describe("Agency active picker", function()
         assert.is_true(timer.stopped)
         assert.is_true(timer.closed)
     end)
-    it("renders live transitional records and issues without attaching", function()
+    it("renders transitional records before ownership and during cleanup with issues without attaching", function()
         open()
         local rows = {}
         for _, phase in ipairs({ "starting", "restoring", "stopping" }) do
             local row = fixture.agent(fixture.target_a, phase)
-            row.live = true
+            row.live = false
             rows[#rows + 1] = row
         end
         respond(1, rows, { { path = "/state/broken", message = "broken" } })
@@ -186,6 +290,7 @@ describe("Agency active picker", function()
         respond(1, { row })
         row.record.launch.providerGeneration = fixture.id(99)
         options.confirm(picker, picker.opts.items[1])
+        vim.wait(100, function() return #calls > 0 end)
         assert.are.same({ "attach", fixture.target_a.agentId, fixture.agent(fixture.target_a) }, calls[1])
         assert.are.equal(1, #calls)
     end)

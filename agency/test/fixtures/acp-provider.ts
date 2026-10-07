@@ -28,7 +28,7 @@ const snapshot = () => backend === "codex-acp" ? { configOptions: options, ...(p
   models: { currentModelId: modelId, availableModels: [{ modelId: "legacy-a", name: "A" }, { modelId: "legacy-b", name: "B" }] },
   modes: { currentModeId: modeId, availableModes: [{ id: "normal", name: "Normal" }, { id: "review", name: "Review" }] },
 }
-await appendFile(log, JSON.stringify({ method: "fixture/environment", params: { AGENCY_TEST_EDITOR_MARKER: process.env.AGENCY_TEST_EDITOR_MARKER ?? null, NVIM: process.env.NVIM ?? null } }) + "\n", { mode: 0o600 })
+await appendFile(log, JSON.stringify({ method: "fixture/environment", params: { AGENCY_TEST_EDITOR_MARKER: process.env.AGENCY_TEST_EDITOR_MARKER ?? null, NVIM: process.env.NVIM ?? null, NVIM_SOCKET_PATH: process.env.NVIM_SOCKET_PATH ?? null } }) + "\n", { mode: 0o600 })
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
 for await (const line of lines) {
   const request = JSON.parse(line)
@@ -105,6 +105,10 @@ async function dispatch(request: { id: string | number; method?: string; params?
     if (text === "echo-mismatch") {
       update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "echo-" } })
       update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "different" } })
+    }
+    if (text === "large-tool") {
+      const output = "fixture-large-tool:" + "λ".repeat(1048577)
+      update({ sessionUpdate: "tool_call_update", toolCallId: "large-tool", status: "completed", rawOutput: { stdout: output }, content: [{ type: "content", content: { type: "text", text: output } }] })
     }
     if (text === "history") for (let index = 0; index < 8300; index++) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: String(index) } })
     update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${text}` } })

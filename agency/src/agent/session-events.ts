@@ -23,7 +23,7 @@ export function validateStructuredContent(raw: unknown): void {
   invalid()
 }
 
-export function validateNativeUpdate(raw: unknown): ValidatedSessionUpdate {
+export function validateNativeUpdate(raw: unknown, inspectToolContent = true): ValidatedSessionUpdate {
   const update = object(raw), kind = agentText(update.sessionUpdate)
   validateMetadata(update)
   if (["user_message_chunk", "agent_message_chunk", "agent_thought_chunk"].includes(kind)) validateStructuredContent(update.content)
@@ -34,7 +34,7 @@ export function validateNativeUpdate(raw: unknown): ValidatedSessionUpdate {
     if (update.title != null && typeof update.title !== "string") invalid()
     if (update.kind != null && (typeof update.kind !== "string" || !["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"].includes(update.kind))) invalid()
     if (update.status != null && (typeof update.status !== "string" || !["pending", "in_progress", "completed", "failed"].includes(update.status))) invalid()
-    if (update.content != null) {
+    if (inspectToolContent && update.content != null) {
       if (!Array.isArray(update.content)) invalid()
       for (const raw of update.content) {
         const item = object(raw); validateMetadata(item)
@@ -44,7 +44,7 @@ export function validateNativeUpdate(raw: unknown): ValidatedSessionUpdate {
         else invalid()
       }
     }
-    if (update.locations != null) {
+    if (inspectToolContent && update.locations != null) {
       if (!Array.isArray(update.locations)) invalid()
       for (const raw of update.locations) { const location = object(raw); validateMetadata(location); if (typeof location.path !== "string" || location.line != null && (!Number.isSafeInteger(location.line) || Number(location.line) < 0)) invalid() }
     }

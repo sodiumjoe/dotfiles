@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { encodeWireJson, parseWireJson } from "../src/acp/wire-json.js"
 import test from "node:test"
 import { readFileSync } from "node:fs"
 import { validateNativeUpdate, validateSessionUpdate } from "../src/agent/session-events.js"
@@ -108,5 +109,67 @@ test("compact metadata survives display eviction with bounded title and plan", a
   assert.equal(snapshot.metadata.planTruncated, true)
   assert.deepEqual(snapshot.metadata.usage, { used: 9, size: 100 })
   assert.equal(snapshot.events.length, 1)
+  conversation.close()
+})
+
+test("first request supplies a stable title until the provider supplies one", () => {
+  const conversation = createConversation(target, { events: 1 })
+  conversation.append({ kind: "submitted", submissionId: agentId(4), text: "  Fix\n the picker layout\t after restarting  " })
+  assert.equal(conversation.observe(() => {}).snapshot.metadata.title?.title, "Fix the picker layout after restarting")
+  conversation.append({ kind: "submitted", submissionId: agentId(5), text: "A different follow-up" })
+  assert.equal(conversation.observe(() => {}).snapshot.metadata.title?.title, "Fix the picker layout after restarting")
+  conversation.append({ kind: "update", replay: false, update: { sessionUpdate: "session_info_update", title: "Repair agent picker" } })
+  assert.equal(conversation.observe(() => {}).snapshot.metadata.title?.title, "Repair agent picker")
+  conversation.append({ kind: "update", replay: false, update: { sessionUpdate: "session_info_update", title: " " } })
+  assert.equal(conversation.observe(() => {}).snapshot.metadata.title?.title, "Repair agent picker")
+  conversation.close()
+})
+
+test("restored user history supplies a title without submitting another request", () => {
+  const conversation = createConversation(target)
+  conversation.append({ kind: "update", replay: true, update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Investigate session persistence" } } })
+  assert.equal(conversation.observe(() => {}).snapshot.metadata.title?.title, "Investigate session persistence")
+  conversation.close()
+})
+
+test("inventory display normalizes provider titles and reports turn activity without copying history", () => {
+  const conversation = createConversation(target)
+  assert.deepEqual(conversation.display(), { title: null, activity: "idle" })
+  conversation.append({ kind: "submitted", submissionId: agentId(4), text: "Fix the picker" })
+  assert.deepEqual(conversation.display(), { title: "Fix the picker", activity: "working" })
+  conversation.append({ kind: "update", replay: false, update: { sessionUpdate: "session_info_update", title: "Picker\n\t repair\u0000" } })
+  assert.equal(conversation.display().title, "Picker repair")
+  conversation.append({ kind: "turn", submissionId: agentId(4), state: "completed", stopReason: "end_turn", failure: null })
+  assert.deepEqual(conversation.display(), { title: "Picker repair", activity: "idle" })
+  const display = conversation.display(); display.title = "changed"
+  assert.equal(conversation.display().title, "Picker repair")
+  conversation.close()
+})
+
+test("conversation retention and fanout preserve unread opaque payloads", t => {
+  const update = parseWireJson('{"sessionUpdate":"tool_call_update","toolCallId":"tool","rawOutput":{"text":"opaque-retained:' + "x".repeat(2 * 1024 * 1024) + '"},"content":[{"type":"content","content":{"type":"text","text":"opaque-retained:content"}}]}')
+  const conversation = createConversation(target), forwarded: string[] = []
+  conversation.observe(value => { if (value.kind === "event") forwarded.push(encodeWireJson(value.event)) })
+  conversation.observe(value => { if (value.kind === "event") forwarded.push(encodeWireJson(value.event)) })
+  const parse = t.mock.method(JSON, "parse")
+  conversation.append({ kind: "update", replay: false, update: update as any })
+  const snapshot = conversation.observe(() => {}).snapshot
+  assert.equal(forwarded.length, 2)
+  assert.equal(forwarded[0], forwarded[1])
+  assert.strictEqual(snapshot.events[0]!.kind === "update" && snapshot.events[0]!.update, update)
+  assert.ok(parse.mock.calls.every(call => !String(call.arguments[0]).includes("opaque-retained:")))
+  conversation.close()
+})
+
+test("a wire event exceeding retained history still reaches live subscribers", () => {
+  const conversation = createConversation(target, { bytes: 1024 }), seen: any[] = []
+  conversation.observe(value => { if (value.kind === "event") seen.push(value.event) })
+  const update = parseWireJson('{"sessionUpdate":"tool_call_update","toolCallId":"tool","rawOutput":"' + "x".repeat(1048577) + '"}')
+  conversation.append({ kind: "update", replay: false, update: update as any })
+  const snapshot = conversation.observe(() => {}).snapshot
+  assert.equal(seen.length, 1)
+  assert.equal(encodeWireJson(seen[0].update), encodeWireJson(update))
+  assert.equal(snapshot.events.length, 0)
+  assert.equal(snapshot.historyTruncated, true)
   conversation.close()
 })

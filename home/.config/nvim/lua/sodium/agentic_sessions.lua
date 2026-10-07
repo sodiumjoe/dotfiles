@@ -123,12 +123,14 @@ local function file_uri_to_path(uri)
     return ok and path or uri:gsub("^file://", "")
 end
 
-local function parse_title(raw_title)
+function M.parse_title(raw_title, allow_incomplete_environment)
     local raw = type(raw_title) == "string" and raw_title or ""
     local metadata = {}
     local environment = raw:match("<environment_info>%s*(.-)%s*</environment_info>")
+        or allow_incomplete_environment and raw:match("<environment_info>%s*(.*)$")
 
     if environment then
+        environment = environment:gsub("%s+%- ", "\n- ")
         for line in environment:gmatch("[^\r\n]+") do
             local key, value = line:match("^%- ([^:]+):%s*(.*)$")
             local normalized_key = key and metadata_keys[key]
@@ -149,16 +151,17 @@ local function parse_title(raw_title)
         :gsub("<environment_info>.-</environment_info>", " ")
         :gsub("%[@[^%]]+%]%((file://[^%)]+)%)", " ")
         :gsub("%s+", " ")
-    title = vim.trim(title)
-    if title == "" then
-        title = "(no title)"
+    if allow_incomplete_environment then
+        title = title:gsub("<environment_info>.*$", " ")
     end
+    title = vim.trim(title)
 
     return title, metadata
 end
 
 function M.normalize_session(session)
-    local title, metadata = parse_title(session.title)
+    local title, metadata = M.parse_title(session.title)
+    if title == "" then title = "(no title)" end
     local updated_at = type(session.updatedAt) == "string"
             and session.updatedAt:sub(1, 16):gsub("T", " ")
         or "unknown date"
@@ -337,6 +340,7 @@ function M.show_picker(current_session, deps)
                 Snacks.picker({
                     title = "Select session to restore",
                     items = items,
+                    layout = { hidden = { "preview" } },
                     format = function(item)
                         return {
                             { item.updated_at, "SnacksPickerComment" },

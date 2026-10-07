@@ -276,7 +276,7 @@ test("uncooperative cancellation faults after five seconds and releases timers",
   assert.equal((await peer.connection.fault).code, "STARTUP_TIMEOUT")
 })
 
-for (const scenario of ["frame", "history"]) test(`load reports the specific ${scenario} bound without creating a new session`, async t => {
+for (const scenario of ["frame", "history"]) test(`load accepts the former ${scenario} bound without creating a new session`, async t => {
   const peer = scriptedAcp(t, "exact", { response(request, reply) {
     if (request.method === "session/load") {
       for (let i = 0; i < (scenario === "frame" ? 1 : 12); i++) peer.send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x".repeat(scenario === "frame" ? 1048576 : 786432) } }))
@@ -284,8 +284,7 @@ for (const scenario of ["frame", "history"]) test(`load reports the specific ${s
     return reply
   } })
   const loading = peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "load", sessionId: "fixture-session", params: {} }, new AbortController().signal)
-  if (scenario === "frame") await assert.rejects(loading, { code: "ACP_FRAME_LIMIT" })
-  else assert.equal((await loading).sessionId, "fixture-session")
+  assert.equal((await loading).sessionId, "fixture-session")
   assert.equal(peer.sent.some(request => request.method === "session/new"), false)
 })
 
@@ -557,10 +556,18 @@ test("legacy answer projection truncates without terminating native output", asy
   assert.equal((seen.at(-1)!.update.content as { text: string }).text.length, 4097)
 })
 
-test("ACP rejects an oversized frame during a prompt", async t => {
-  const peer = scriptedAcp(t, "exact", { prompt() { peer.readable.write(Buffer.alloc(1048577, 32)) } })
+test("ACP forwards a large tool result without materializing its payload", async t => {
+  const seen: sessionEvents.AcpObservation[] = [], output = "opaque-result:" + "λ".repeat(1048577)
+  const update = { sessionUpdate: "tool_call_update", toolCallId: "tool", status: "completed", rawOutput: { stdout: output }, content: [{ type: "content", content: { type: "text", text: output } }] }
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), prompt(request, send) {
+    send(updateFrame(update)); send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
   await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
-  await assert.rejects(peer.connection.prompt("challenge", new AbortController().signal), { code: "ACP_FRAME_LIMIT" })
+  const parse = t.mock.method(JSON, "parse")
+  await peer.connection.prompt("challenge", new AbortController().signal)
+  assert.ok(parse.mock.calls.every(call => !String(call.arguments[0]).includes("opaque-result:")))
+  parse.mock.restore()
+  assert.deepEqual(seen.at(-1)!.update, update)
 })
 
 test("native updates exceed former rolling frame and byte quotas", async t => {
@@ -844,12 +851,17 @@ test("stdout startup traffic is cumulatively bounded even when frames are small"
   assert.equal((await peer.connection.fault).code, "INVALID_PROTOCOL")
 })
 
-test("backpressured output cannot exceed the write queue limit", async t => {
+test("backpressured provider writes use a deadline without a byte quota", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
   const writable = new Writable({ write() {} }), readable = new PassThrough()
   writable.write(Buffer.alloc(1048576))
   const connection = createAcpConnection({ writable, readable, limits: sampleSpec().limits })
   t.after(() => { connection.close(); readable.destroy(); writable.destroy() })
-  await assert.rejects(connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal))
+  const pending = connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  const rejected = assert.rejects(pending, { code: "STARTUP_TIMEOUT" })
+  assert.ok(writable.writableLength > 1048576)
+  t.mock.timers.tick(5000)
+  await rejected
 })
 
 test("closing a blocked write disposes its timer as well as the RPC deadline", async t => {

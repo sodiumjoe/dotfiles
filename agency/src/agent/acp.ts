@@ -1,4 +1,6 @@
 import type { Readable, Writable } from "node:stream"
+import { createAcpDecoder } from "../acp/protocol.js"
+import { cloneWireJson, encodeWireJson } from "../acp/wire-json.js"
 import { object } from "../catalog/types.js"
 import type { ConfiguredLaunchContract } from "./contracts.js"
 import { configurationSnapshot, projectRestorableSettings, validateConfiguration, validateMetadata, type JsonObject, type SessionConfiguration } from "./session-config.js"
@@ -19,16 +21,16 @@ export type AcpConnection = {
 }
 type Pending = { method: string; params: JsonObject; resolve(value: JsonObject): void; reject(error: Error): void; timer?: NodeJS.Timeout; dispose(): void }
 export function withoutAgencyMetadata(params: JsonObject): JsonObject {
-  const routed = structuredClone(params)
-  if (Object.hasOwn(routed, "_meta")) { const meta = object(routed._meta) as JsonObject; delete meta.agency; routed._meta = meta }
+  const routed = { ...cloneWireJson(params) }
+  if (Object.hasOwn(routed, "_meta")) { const meta = { ...object(routed._meta) } as JsonObject; delete meta.agency; routed._meta = meta }
   return routed
 }
 export function withNativeSession(params: JsonObject, nativeSessionId: string): JsonObject { return { ...withoutAgencyMetadata(params), sessionId: nativeSessionId } }
 
 export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number; overallDeadline?: number; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void }): AcpConnection {
-  const { readable, writable, limits } = input, now = input.now ?? (() => performance.now()), decoder = new TextDecoder("utf-8", { fatal: true })
+  const { readable, writable, limits } = input, now = input.now ?? (() => performance.now())
   const pending = new Map<number, Pending>(), providerRequests = new Set<string | number>(), writes = new Set<(error?: Error | null) => void>()
-  let nextId = 0, buffer = "", frameBytes = 0, queuedBytes = 0, closed = false, failure: AgentError | null = null
+  let nextId = 0, closed = false, failure: AgentError | null = null
   let sessionId: string | null = null, loading = false, ready = false, promptActive = false, cancellation: Promise<void> | undefined
   let configuration = configurationSnapshot({}), capabilities: JsonObject = {}, initialization: Promise<ProviderSession> | undefined
   let startupDeadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity), initializationTimer: NodeJS.Timeout | undefined
@@ -39,7 +41,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     failure = error instanceof AgentError ? error : new AgentError("INVALID_PROTOCOL")
     clearTimeout(initializationTimer); clearTimeout(cancelTimer)
     for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.dispose(); waiter.reject(failure) }
-    pending.clear(); providerRequests.clear(); buffer = ""
+    pending.clear(); providerRequests.clear()
     for (const finish of [...writes]) finish(failure)
     faultDeferred.resolve(agentFailure(failure))
   }
@@ -51,14 +53,13 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   const write = (frame: JsonObject): Promise<void> => new Promise((resolve, reject) => {
     let bytes: Buffer
     try {
-      check(); bytes = Buffer.from(JSON.stringify({ jsonrpc: "2.0", ...frame }) + "\n")
-      if (bytes.length > limits.frameBytes || Math.max(queuedBytes, writable.writableLength) + bytes.length > limits.writeQueueBytes || !writable.writable) throw new AgentError("ACP_FRAME_LIMIT")
+      check(); bytes = Buffer.from(encodeWireJson({ jsonrpc: "2.0", ...frame }) + "\n")
+      if (!writable.writable || writable.destroyed) throw new AgentError("STARTUP_FAILED")
     } catch (error) { reject(error); return }
-    queuedBytes += bytes.length
     let settled = false
     const finish = (error?: Error | null) => {
       if (settled) return
-      settled = true; clearTimeout(timer); queuedBytes -= bytes.length; writes.delete(finish)
+      settled = true; clearTimeout(timer); writes.delete(finish)
       if (error) reject(error); else resolve()
     }
     const timer = setTimeout(() => finish(new AgentError("STARTUP_TIMEOUT")), limits.rpcMs)
@@ -118,7 +119,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       }
       if (frame.method !== "session/update" || params.sessionId !== sessionId || !sessionId) throw new AgentError("INVALID_PROTOCOL")
       validateMetadata(params)
-      const update = validateNativeUpdate(params.update) as JsonObject
+      const update = validateNativeUpdate(params.update, false) as JsonObject
       if (update.sessionUpdate === "config_option_update") applyResult({ configOptions: update.configOptions! }, "update")
       if (update.sessionUpdate === "available_commands_update") configuration.availableCommands = (update.availableCommands ?? []) as JsonObject[]
       if (update.sessionUpdate === "current_mode_update" && configuration.modes) configuration.modes.currentModeId = update.currentModeId!
@@ -131,8 +132,8 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
           promptText += bytes.subarray(0, end).toString("utf8")
         }
       }
-      const extra = Object.fromEntries(Object.entries(params).filter(([key]) => key !== "sessionId" && key !== "update")) as JsonObject
-      try { input.onUpdate?.({ update: { ...update, sessionUpdate: String(update.sessionUpdate) }, replay: loading, ...(Object.keys(extra).length ? { params: structuredClone(extra) } : {}), ...(frame._meta ? { meta: structuredClone(frame._meta) as JsonObject } : {}) }) } catch {}
+      const extra = Object.fromEntries(Object.keys(params).filter(key => key !== "sessionId" && key !== "update").map(key => [key, params[key]])) as JsonObject
+      try { input.onUpdate?.({ update: update as AcpObservation["update"], replay: loading, ...(Object.keys(extra).length ? { params: cloneWireJson(extra) } : {}), ...(frame._meta ? { meta: cloneWireJson(frame._meta) as JsonObject } : {}) }) } catch {}
       return
     }
     if (typeof frame.id !== "number" || !pending.has(frame.id) || Object.hasOwn(frame, "result") === Object.hasOwn(frame, "error")) throw new AgentError("INVALID_PROTOCOL")
@@ -159,17 +160,16 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     if (waiter.method === "session/set_mode" && configuration.modes && !result.modes) { configuration.modes.currentModeId = waiter.params.modeId!; configuration.revision++ }
     pending.delete(frame.id); clearTimeout(waiter.timer); waiter.dispose(); waiter.resolve(structuredClone(result))
   }
+  let eof = false
+  const transport = createAcpDecoder(frame => {
+    if (!closed && !failure) receive(frame.method === "session/update" ? frame : JSON.parse(encodeWireJson(frame)))
+  }, error => fail(eof ? new AgentError("STARTUP_FAILED") : error instanceof AgentError && error.code === "INVALID_AGENT_STATE" ? new AgentError("INVALID_PROTOCOL") : error))
   const data = (chunk: Buffer) => {
     if (closed || failure) return
-    try {
-      check()
-      for (const byte of chunk) { if (byte === 10) frameBytes = 0; else if (++frameBytes > limits.frameBytes) throw new AgentError("ACP_FRAME_LIMIT") }
-      buffer += decoder.decode(chunk, { stream: true })
-      let at: number
-      while (!failure && (at = buffer.indexOf("\n")) >= 0) { const line = buffer.slice(0, at); buffer = buffer.slice(at + 1); receive(JSON.parse(line)) }
-    } catch (error) { fail(error instanceof AgentError && error.code === "INVALID_AGENT_STATE" ? new AgentError("INVALID_PROTOCOL") : error) }
+    try { check(); transport.feed(chunk) }
+    catch (error) { fail(error instanceof AgentError && error.code === "INVALID_AGENT_STATE" ? new AgentError("INVALID_PROTOCOL") : error) }
   }
-  const ended = () => { try { decoder.decode(); fail(new AgentError("STARTUP_FAILED")) } catch (error) { fail(error) } }
+  const ended = () => { eof = true; transport.end(); fail(new AgentError("STARTUP_FAILED")) }
   readable.on("data", data); readable.on("end", ended); readable.on("close", ended); readable.on("error", fail); writable.on("error", fail); writable.on("close", ended)
   return {
     fault: faultDeferred.promise, request,

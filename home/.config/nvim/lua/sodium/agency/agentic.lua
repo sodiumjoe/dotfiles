@@ -33,6 +33,52 @@ local function invoke(manager, captured, callback, ...)
     return result
 end
 
+local function replay_notification(client, handlers, params, dispatch)
+    local batch = handlers._agency_replay_batch
+    if not batch then
+        batch = {}
+        handlers._agency_replay_batch = batch
+        local manager = handlers._agency_owner
+        vim.schedule(M.guard_callback(manager, { epoch = handlers._agency_epoch }, function()
+            if handlers._agency_replay_batch == batch then handlers._agency_replay_batch = nil end
+            if client.subscribers[params.sessionId] ~= handlers then return end
+            local writer = manager.message_writer
+            local capture, apply = writer._capture_scroll, writer._apply_scroll
+            local own_capture, own_apply = rawget(writer, "_capture_scroll"), rawget(writer, "_apply_scroll")
+            capture(writer, writer.bufnr)
+            writer._capture_scroll, writer._apply_scroll = function() end, function() end
+            client._agency_replay_handlers = handlers
+            local ok, err = xpcall(function()
+                for _, entry in ipairs(batch) do
+                    if entry.fragments then entry.params.update.content.text = table.concat(entry.fragments) end
+                    local delivered, failure = pcall(dispatch, entry.params)
+                    if not delivered then vim.schedule(function() error(failure) end) end
+                end
+            end, debug.traceback)
+            client._agency_replay_handlers = nil
+            writer._capture_scroll, writer._apply_scroll = own_capture, own_apply
+            if manager._agency_epoch == handlers._agency_epoch and not manager._agency_destroyed then apply(writer, writer.bufnr) end
+            if not ok then error(err) end
+        end))
+    end
+    local update, previous = params.update, batch[#batch]
+    local content = update.content
+    local mergeable = (update.sessionUpdate == "agent_message_chunk" or update.sessionUpdate == "agent_thought_chunk")
+        and type(content) == "table" and content.type == "text" and type(content.text) == "string" and content.text ~= ""
+        and vim.tbl_count(content) == 2
+    local key = mergeable and vim.tbl_extend("force", update, { content = false })
+    if mergeable and previous and previous.fragments and vim.deep_equal(previous.key, key) then
+        previous.fragments[#previous.fragments + 1] = content.text
+    else
+        local entry = { params = params }
+        if mergeable then
+            entry.params = vim.tbl_extend("force", params, { update = vim.tbl_extend("force", update, { content = vim.deepcopy(content) }) })
+            entry.fragments, entry.key = { content.text }, key
+        end
+        batch[#batch + 1] = entry
+    end
+end
+
 local function lifecycle(manager, callback, ...)
     local depth = manager._agency_depth or 0
     if depth == 0 then
@@ -96,6 +142,7 @@ function M.install()
     local provider = require("agentic.config").acp_providers.agency
     if provider and not provider.name then provider.name = "Agency" end
     if installed then return end
+    require("sodium.agency.layout").setup()
     local Manager = require("agentic.session_manager")
     local Client = require("agentic.acp.acp_client")
     local Instances = require("agentic.acp.agent_instance")
@@ -222,7 +269,7 @@ function M.install()
         manager._agency_initial_context = opts.initial_context
         local environment = vim.tbl_extend("force", vim.fn.environ(), opts.environment or {})
         environment.NVIM = vim.v.servername
-        local meta = { version = 1, commandId = require("sodium.agency.control").uuid(), environment = environment,
+        local meta = { version = 1, editor = vim.v.servername, commandId = require("sodium.agency.control").uuid(), environment = environment,
             backendId = opts.backend_id, selection = opts.selection, inheritSessionId = opts.inherit_session_id }
         self:_send_request("session/new", { cwd = manager._agency_request_cwd, mcpServers = opts.mcp_servers or {}, _meta = { agency = meta } },
             function(result, err)
@@ -269,7 +316,7 @@ function M.install()
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
         manager._agency_request_cwd = manager._agency_load_cwd or cwd
         self:_subscribe(id, handlers)
-        self:_send_request("session/load", { sessionId = id, cwd = manager._agency_request_cwd, mcpServers = servers or {} },
+        self:_send_request("session/load", { sessionId = id, cwd = manager._agency_request_cwd, mcpServers = servers or {}, _meta = { agency = { version = 1, editor = vim.v.servername } } },
             M.guard_callback(manager, captured, function(result, err)
                 if err then if self.subscribers[id] == handlers then self.subscribers[id] = nil end
                 else attachment(manager, result) end
@@ -291,9 +338,10 @@ function M.install()
         local handlers = self.subscribers[id]
         if not handlers then return end
         local manager = handlers._agency_owner
-        vim.schedule(M.guard_callback(manager, { epoch = handlers._agency_epoch }, function()
+        local deliver = M.guard_callback(manager, { epoch = handlers._agency_epoch }, function()
             if self.subscribers[id] == handlers then callback(handlers) end
-        end))
+        end)
+        if self._agency_replay_handlers == handlers then deliver() else vim.schedule(deliver) end
     end
 
     function Client:send_prompt(id, prompt, callback)
@@ -312,7 +360,7 @@ function M.install()
         end
         local admission = { accepted = false, entries = staged }
         manager._agency_admission = admission
-        self:_send_request("session/prompt", { sessionId = id, prompt = prompt, _meta = { agency = { version = 1, submissionId = submission } } }, function(result, err)
+        self:_send_request("session/prompt", { sessionId = id, prompt = prompt, _meta = { agency = { version = 1, submissionId = submission, editor = vim.v.servername } } }, function(result, err)
             if err and not admission.accepted then
                 M.guard_callback(manager, token(manager, false, false), function()
                     if manager._agency_epoch ~= captured.epoch or not vim.deep_equal(manager._agency_binding, captured.binding) then return end
@@ -375,6 +423,15 @@ function M.install()
 
     function Client:_handle_notification(request_id, method, params)
         if not agency(self) then return acp._handle_notification(self, request_id, method, params) end
+        local handlers = type(params) == "table" and self.subscribers[params.sessionId]
+        local meta = type(params) == "table" and params._meta and params._meta.agency
+        if handlers and method == "session/update" and params.update and meta and meta.replay == true then
+            replay_notification(self, handlers, params, function(value)
+                return acp._handle_notification(self, request_id, method, value)
+            end)
+            return
+        end
+        if handlers then handlers._agency_replay_batch = nil end
         if method == "agency/session_state" or method == "agency/permission_withdrawn" then
             self:__with_subscriber(params.sessionId, function(handlers)
                 local manager = handlers._agency_owner
@@ -428,6 +485,7 @@ function M.open(view)
         if agency(manager.agent) and (manager.session_id == id or manager._agency_loading_session == id
             or manager._agency_intent and manager._agency_intent.session_id == id) and vim.api.nvim_tabpage_is_valid(tab) then
             vim.api.nvim_set_current_tabpage(tab)
+            require("sodium.agency.layout").cleanup(tab)
             if manager.session_id == id and target and not vim.deep_equal(manager._agency_binding, target) then
                 manager._agency_load_cwd = record.definition.cwd
                 manager:load_acp_session(id, record.definition.backendId)
@@ -437,6 +495,7 @@ function M.open(view)
         end
     end
     local tab = vim.api.nvim_get_current_tabpage()
+    require("sodium.agency.layout").cleanup(tab)
     if Registry.sessions[tab] then vim.cmd("tabnew"); tab = vim.api.nvim_get_current_tabpage() end
     local manager = assert(Registry.get_session_for_tab_page(tab))
     manager._agency_intent = { session_id = id, cwd = record.definition.cwd, title = record.definition.backendId }
@@ -448,6 +507,7 @@ function M.new_session(opts)
     M.install()
     local Registry = require("agentic.session_registry")
     local tab = vim.api.nvim_get_current_tabpage()
+    require("sodium.agency.layout").cleanup(tab)
     if Registry.sessions[tab] then vim.cmd("tabnew"); tab = vim.api.nvim_get_current_tabpage() end
     local manager = assert(Registry.get_session_for_tab_page(tab))
     manager._agency_intent = opts or {}

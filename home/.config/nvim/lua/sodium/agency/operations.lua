@@ -201,8 +201,23 @@ function M.new(deps)
             callback(nil, envelope.handlerGeneration)
         end)
     end
-    inventory = function(options, callback, operation)
+    inventory = function(options, callback, operation, use_roster)
         options = options or {}
+        local finished, timer, cancel_request = false, nil, nil
+        local complete = callback
+        callback = function(err, result)
+            if finished then return end
+            finished = true
+            if timer then timer:stop(); timer:close() end
+            if cancel_request then cancel_request() end
+            complete(err, result)
+        end
+        if use_roster then
+            timer = assert(vim.uv.new_timer())
+            timer:start(deps.roster_timeout_ms or 10000, 0, vim.schedule_wrap(function()
+                callback(error_value("UNAVAILABLE"))
+            end))
+        end
         if options.ensure_handler and not operation then
             operation = begin(nil, options.origin)
         end
@@ -212,6 +227,7 @@ function M.new(deps)
         local function traversal()
             local agents, issues, revision, generation, last_id, cursors = {}, {}, nil, nil, nil, {}
             local function next_page(cursor)
+                if finished then return end
                 local argv = { "agent", "page", "--limit", "100" }
                 if options.cwd then
                     vim.list_extend(argv, { "--cwd", options.cwd })
@@ -222,7 +238,15 @@ function M.new(deps)
                 if cursor then
                     vim.list_extend(argv, { "--cursor", cursor })
                 end
-                command(argv, options.cwd or (origin and origin.cwd), function(error, envelope)
+                local function request(cb)
+                    if use_roster then
+                        return deps.roster_request({ limit = 100, cwd = options.cwd, cursor = cursor }, cb)
+                    end
+                    return command(argv, options.cwd or (origin and origin.cwd), cb)
+                end
+                cancel_request = request(function(error, envelope)
+                    if finished then return end
+                    cancel_request = nil
                     if operation and not valid_operation(operation) then
                         callback(error_value("CANCELLED"))
                         return
@@ -288,6 +312,10 @@ function M.new(deps)
                         last_id = agent_id
                     end
                     if page.nextCursor ~= null and page.nextCursor ~= nil then
+                        if use_roster and #page.agents == 0 and #page.issues == 0 then
+                            callback(error_value("INVALID_PROTOCOL"))
+                            return
+                        end
                         if cursors[page.nextCursor] then
                             callback(error_value("INVALID_PROTOCOL"))
                             return
@@ -307,7 +335,7 @@ function M.new(deps)
         traversal()
     end
     function api.page(options, callback)
-        inventory(options, callback)
+        inventory(options, callback, nil, options and options.active and deps.roster_request)
     end
     function api.current(cwd, callback, captured)
         cwd = cwd or vim.fn.getcwd()

@@ -385,7 +385,7 @@ test("legacy saved history remains visible with stable pagination and cwd filter
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
 })
 
-for (const catalogState of ["missing", "stale", "prior-generation", "failed"] as const) test(`unusable ${catalogState} catalog evidence preserves explicit defaults and creates only on request`, async t => {
+for (const catalogState of ["missing", "stale", "prior-generation", "failed"] as const) test(`${catalogState} catalog preserves defaults and labels reusable model evidence before creation`, async t => {
   const f = await acpFixture(t, { selectionCatalog: true, catalogState }), c = await f.connect()
   await c.request("initialize", initialize)
   const path = join(f.paths.persistentRoot, "catalog/backends.json")
@@ -393,8 +393,11 @@ for (const catalogState of ["missing", "stale", "prior-generation", "failed"] as
   config.backends[0].initial = { modeId: "agent-full-access", configValues: { reasoning_effort: "high" } }
   await writeFile(path, JSON.stringify(config), { mode: 0o600 })
   const backend = ((await c.request("agency/backends", {})).backends as JsonObject[]).find(value => value.id === "codex-acp")!
-  assert.equal(backend.discovery, "unavailable")
-  assert.deepEqual(backend.models, [])
+  assert.equal(backend.discovery, catalogState === "missing" ? "unavailable" : "cached")
+  const models = backend.models as JsonObject[]
+  if (catalogState === "missing") assert.deepEqual(models, [])
+  else assert.ok(models.some(model => model.id === "model-c"))
+  if (catalogState === "failed") assert.equal(backend.discoveryError, "Provider discovery failed")
   assert.deepEqual(backend.defaults, { modeId: "agent-full-access", configValues: { reasoning_effort: "high" } })
   assert.equal((await f.inventory()).agents.length, 0)
   assert.equal((await f.requests("codex-acp")).length, 0)
@@ -428,4 +431,84 @@ test("incompatible enabled backends do not block compatible choices or change th
   assert.deepEqual(await c.request("agency/backends", {}), { defaultBackendId: "codex-acp", backends: [] })
   assert.equal((await f.requests("codex-acp")).length, 0)
   assert.equal((await f.requests("claude-agent-acp")).length, 0)
+})
+
+test("active and saved session listings use the first request title after the creating client disconnects", async t => {
+  const f = await acpFixture(t), a = await f.connect(), b = await f.connect()
+  await a.request("initialize", initialize); await b.request("initialize", initialize)
+  const created = await a.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  await a.request("session/prompt", { sessionId: created.sessionId!, prompt: [{ type: "text", text: "Repair picker window layout" }] })
+  a.close()
+  const listed = await b.request("session/list", {})
+  assert.equal((listed.sessions as JsonObject[]).find(value => value.sessionId === created.sessionId)?.title, "Repair picker window layout")
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 1)
+})
+
+test("ACP roster returns full active memory pages without authoritative page reads", async t => {
+  const f = await agentServiceFixture(t), frames: JsonObject[] = []
+  const router = createAcpRouter({ service: f.service, connectionId: randomUUID(), send: frame => frames.push(frame) })
+  t.after(() => router.close())
+  await router.receive({ jsonrpc: "2.0", id: 1, method: "initialize", params: initialize })
+  const started = await f.service.start(f.input)
+  await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
+  const failure = t.mock.method(f.store, "inventory", async () => { throw new Error("authoritative read") })
+  try {
+    await router.receive({ jsonrpc: "2.0", id: 2, method: "agency/roster", params: { limit: 100 } })
+    const page = frames.find(frame => frame.id === 2)!.result as JsonObject
+    assert.ok(page)
+    assert.equal(page.handlerGeneration, f.input.handlerGeneration)
+    assert.equal(page.state, "page")
+    const agents = page.agents as JsonObject[]
+    assert.equal(agents.length, 1)
+    assert.deepEqual(agentTuple((agents[0]!.record as unknown) as Parameters<typeof agentTuple>[0]), started.command.target)
+    for (const params of [{ limit: 100, activeOnly: false }, { limit: 101 }, { limit: 100, extra: true }]) {
+      await router.receive({ jsonrpc: "2.0", id: 3, method: "agency/roster", params })
+      assert.equal((frames.at(-1)!.error as JsonObject).code, -32602)
+    }
+  } finally { failure.mock.restore() }
+})
+
+test("a load superseded during permission attachment cannot replace the newer binding", async t => {
+  const f = await agentServiceFixture(t), service = f.service, frames: JsonObject[] = []
+  const record = await service.createSession({ commandId: randomUUID(), cwd: f.workspace, environment: {}, nativeParams: { cwd: f.workspace, mcpServers: [] } })
+  const sessionId = "agency:" + record.definition.agentId, entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let hold = true
+  const router = createAcpRouter({ service: { ...service, async attachPermissions(...args) {
+    if (hold) { hold = false; entered.resolve(); await release.promise }
+    return service.attachPermissions(...args)
+  } }, connectionId: randomUUID(), send: frame => frames.push(frame) })
+  t.after(() => { release.resolve(); router.close() })
+  await router.receive({ jsonrpc: "2.0", id: 1, method: "initialize", params: initialize })
+  const params = { sessionId, cwd: f.workspace, mcpServers: [] }
+  const obsolete = router.receive({ jsonrpc: "2.0", id: 2, method: "session/load", params })
+  await entered.promise
+  await router.receive({ jsonrpc: "2.0", id: 3, method: "session/load", params })
+  release.resolve(); await obsolete
+  assert.ok(frames.find(frame => frame.id === 3)?.result)
+  assert.equal((((frames.find(frame => frame.id === 2)?.error as JsonObject)?.data as JsonObject)?.agency as JsonObject)?.code, "STALE_ATTACHMENT")
+  await router.receive({ jsonrpc: "2.0", id: 4, method: "session/prompt", params: { sessionId, prompt: [{ type: "text", text: "still attached" }] } })
+  assert.ok(frames.find(frame => frame.id === 4)?.result)
+})
+
+test("a prompt validated against a replaced attachment cannot be accepted", async t => {
+  const f = await agentServiceFixture(t), service = f.service, frames: JsonObject[] = []
+  const record = await service.createSession({ commandId: randomUUID(), cwd: f.workspace, environment: {}, nativeParams: { cwd: f.workspace, mcpServers: [] } })
+  const sessionId = "agency:" + record.definition.agentId, entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let hold = false
+  const router = createAcpRouter({ service: { ...service, async sessionSnapshot(target) {
+    if (hold) { hold = false; entered.resolve(); await release.promise }
+    return service.sessionSnapshot(target)
+  } }, connectionId: randomUUID(), send: frame => frames.push(frame) })
+  t.after(() => { release.resolve(); router.close() })
+  await router.receive({ jsonrpc: "2.0", id: 1, method: "initialize", params: initialize })
+  const params = { sessionId, cwd: f.workspace, mcpServers: [] }
+  await router.receive({ jsonrpc: "2.0", id: 2, method: "session/load", params })
+  hold = true
+  const obsolete = router.receive({ jsonrpc: "2.0", id: 3, method: "session/prompt", params: { sessionId, prompt: [{ type: "text", text: "obsolete" }] } })
+  await entered.promise
+  await router.receive({ jsonrpc: "2.0", id: 4, method: "session/load", params })
+  release.resolve(); await obsolete
+  assert.equal((((frames.find(frame => frame.id === 3)?.error as JsonObject)?.data as JsonObject)?.agency as JsonObject)?.code, "STALE_ATTACHMENT")
+  assert.equal(f.methodHistory.filter(method => method === "session/prompt").length, 0)
 })

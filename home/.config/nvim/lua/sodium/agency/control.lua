@@ -88,6 +88,17 @@ local function validate(value, argv)
     end
 end
 
+function M.page_envelope(page)
+    assert(type(page) == "table" and valid_id(page.handlerGeneration))
+    local result = vim.deepcopy(page)
+    result.handlerGeneration = nil
+    if result.nextCursor == nil then result.nextCursor = vim.NIL end
+    local envelope = { protocol = "agency-agent/3", requestId = page.handlerGeneration,
+        handlerGeneration = page.handlerGeneration, ok = true, result = result }
+    validate(envelope, { "agent", "page" })
+    return envelope
+end
+
 function M.new(deps)
     deps = deps or {}
     local system, schedule = deps.system or vim.system, deps.schedule or vim.schedule

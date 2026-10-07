@@ -1,9 +1,36 @@
+local sources = {}
+for _, source in ipairs({
+    "autocmds",
+    "cliphist",
+    "colorschemes",
+    "command_history",
+    "commands",
+    "gh_actions",
+    "gh_labels",
+    "gh_reactions",
+    "highlights",
+    "icons",
+    "keymaps",
+    "notifications",
+    "picker_actions",
+    "picker_format",
+    "picker_preview",
+    "pickers",
+    "registers",
+    "search_history",
+    "select",
+    "spelling",
+}) do
+    sources[source] = { preview = "none", layout = { hidden = { "preview" } } }
+end
+
 return {
     "folke/snacks.nvim",
     priority = 1000,
     lazy = false,
     opts = {
         picker = {
+            sources = sources,
             main = {
                 file = false,
                 current = true,

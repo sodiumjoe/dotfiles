@@ -51,7 +51,7 @@ function psRow(values: {
   return `${values.pid} ${values.ppid ?? 1} ${values.pgid ?? values.pid} ${values.uid ?? process.getuid!()} ${values.gid ?? process.getgid!()} ${values.weekday ?? "Wed"} ${values.month ?? "Sep"} ${values.day ?? 23} ${values.time ?? "12:34:56"} ${values.year ?? 2026} ${values.command ?? "/usr/bin/true"}`
 }
 
-function scriptedExecutor(psOutputs: readonly (string | Error)[], boot = bootOutput): { execute: DarwinCommandExecutor; calls: Array<{ file: string; args: readonly string[]; options: CommandOptions }> } {
+function scriptedExecutor(psOutputs: readonly (string | Error | { stdout: string; stderr?: string; exitCode?: number })[], boot = bootOutput): { execute: DarwinCommandExecutor; calls: Array<{ file: string; args: readonly string[]; options: CommandOptions }> } {
   const queue = [...psOutputs]
   const calls: Array<{ file: string; args: readonly string[]; options: CommandOptions }> = []
   const execute: DarwinCommandExecutor = async (file, args, options) => {
@@ -60,7 +60,7 @@ function scriptedExecutor(psOutputs: readonly (string | Error)[], boot = bootOut
     const value = queue.shift()
     if (value === undefined) throw new Error("unexpected ps invocation")
     if (value instanceof Error) throw value
-    return { stdout: value }
+    return typeof value === "string" ? { stdout: value } : value
   }
   return { execute, calls }
 }
@@ -187,8 +187,8 @@ darwinTest("uses only fixed commands with a bounded C-locale UTC execution contr
   assert.notEqual(observed, null)
   assert.deepEqual(scripted.calls.map(call => [call.file, call.args]), [
     ["/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]],
-    ["/bin/ps", ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="]],
-    ["/bin/ps", ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="]],
+    ["/bin/ps", ["-ww", "-p", "41", "-o", "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="]],
+    ["/bin/ps", ["-ww", "-p", "41", "-o", "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="]],
   ])
   for (const call of scripted.calls) assert.deepEqual(call.options, { encoding: "utf8", env: { LANG: "C", TZ: "UTC" }, maxBuffer: 1024 * 1024, shell: false, timeout: 2000 })
 })
@@ -231,8 +231,8 @@ darwinTest("same-executable leaders retain distinct marker-bound births", async 
 darwinTest("equal start-second observations remain distinct only through their markers", async () => {
   const firstMarker = agencyLaunchMarker("provider", "123e4567-e89b-12d3-a456-426614174001")
   const secondMarker = agencyLaunchMarker("provider", "123e4567-e89b-12d3-a456-426614174002")
-  const snapshot = `${psRow({ pid: 41, command: firstMarker })}\n${psRow({ pid: 42, command: secondMarker })}\n`
-  const scripted = scriptedExecutor([snapshot, snapshot, snapshot, snapshot])
+  const firstRow = `${psRow({ pid: 41, command: firstMarker })}\n`, secondRow = `${psRow({ pid: 42, command: secondMarker })}\n`
+  const scripted = scriptedExecutor([firstRow, firstRow, secondRow, secondRow])
   const adapter = createDarwinAdapter(scripted.execute)
   const first = await adapter.readProcess(41)
   const second = await adapter.readProcess(42)
@@ -257,11 +257,11 @@ darwinTest("present missing and malformed markers remain mismatching identities"
   }
 })
 
-darwinTest("returns null only after two complete snapshots confirm PID absence", async () => {
-  const empty = `${psRow({ pid: 99 })}\n`
+darwinTest("returns null only after two targeted observations confirm PID absence", async () => {
+  const empty = { stdout: "", stderr: "", exitCode: 1 }
   const absent = scriptedExecutor([empty, empty])
   assert.equal(await createDarwinAdapter(absent.execute).readProcess(41), null)
-  const changed = scriptedExecutor([empty, `${empty}${psRow({ pid: 41 })}\n`])
+  const changed = scriptedExecutor([empty, `${psRow({ pid: 41 })}\n`])
   await assert.rejects(createDarwinAdapter(changed.execute).readProcess(41), DarwinObservationUnavailable)
 })
 
@@ -304,7 +304,7 @@ darwinTest("retries complete group pairs and never returns their intersection", 
 })
 
 darwinTest("accepts valid zero snapshot fields but rejects nonpositive signal targets", async () => {
-  const snapshot = `${psRow({ pid: 41, ppid: 0, command: `agy-handler:${canonicalId}` })}\n${psRow({ pid: 42, ppid: 0, pgid: 0, uid: 0, gid: 0 })}\n${psRow({ pid: 43, uid: -2, gid: -2 })}\n`
+  const snapshot = `${psRow({ pid: 41, ppid: 0, command: `agy-handler:${canonicalId}` })}\n`
   const scripted = scriptedExecutor([snapshot, snapshot])
   const observed = await createDarwinAdapter(scripted.execute).readProcess(41)
   assert.equal(observed?.parentPid, 0)
@@ -439,4 +439,19 @@ test("Darwin process groups preserve unstable identity observation diagnostics",
     assert.match(error.message,/"pid":401/)
     return true
   })
+})
+
+darwinTest("targeted process reads reject failed commands and unexpected rows", async () => {
+  for (const result of [
+    { stdout: "", stderr: "permission denied", exitCode: 1 },
+    { stdout: "", stderr: "", exitCode: 2 },
+    { stdout: "", stderr: "", exitCode: 0 },
+    { stdout: `${psRow({ pid: 41 })}\n`, stderr: "", exitCode: 1 },
+    { stdout: `${psRow({ pid: 41 })}\n`, stderr: "warning", exitCode: 0 },
+    `${psRow({ pid: 99 })}\n`,
+    `${psRow({ pid: 41 })}\n${psRow({ pid: 99 })}\n`,
+  ]) await assert.rejects(createDarwinAdapter(scriptedExecutor([result, result]).execute).readProcess(41), DarwinObservationUnavailable)
+  const group = scriptedExecutor([`${psRow({ pid: 41 })}\n`, `${psRow({ pid: 41 })}\n`])
+  await createDarwinAdapter(group.execute).readGroup(41)
+  assert.ok(group.calls.filter(call => call.file === "/bin/ps").every(call => call.args.includes("-axo")))
 })

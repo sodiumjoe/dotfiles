@@ -64,7 +64,6 @@ export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
         }
         for (const wake of waits) wake()
       }
-      if (Buffer.byteLength(buffer) > 1048576) throw new Error("oversized fixture frame")
     } catch (error) { fail(error as Error) }
   })
   readable.on("error", fail); readable.on("end", () => fail(new Error("ACP peer EOF")))

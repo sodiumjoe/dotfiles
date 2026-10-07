@@ -47,27 +47,34 @@ function launchRecord(input: unknown): LaunchRecord {
 }
 function agentView(input: unknown, generation: string | null): AgentView | LegacyAgentView {
   const v = object(input), current = object(v.record)
-  keys(v, current.version === 1 ? ["record", "launch", "live", "cleanup"] : ["record", "launch", "live", "cleanup", "unavailable"])
+  keys(v, current.version === 1 ? ["record", "launch", "live", "cleanup"] : ["record", "launch", "live", "cleanup", "unavailable", ...(Object.hasOwn(v, "display") ? ["display"] : [])])
   const recordValue = object(v.record), launch = v.launch === null ? null : launchRecord(v.launch)
   if (recordValue.version === 1) {
     const record = parseLegacyAgentRecord(v.record)
     if (v.live !== false || v.cleanup !== "unknown" && v.cleanup !== "verified" || launch && (launch.version !== 1 || launch.agentId !== record.spec.agentId || launch.launchAttemptId !== record.spec.launchAttemptId)) invalid()
     return { record, launch, live: false, cleanup: v.cleanup as LegacyAgentView["cleanup"] }
   }
+  let display: AgentView["display"]
+  if (Object.hasOwn(v, "display")) {
+    const value = object(v.display); keys(value, ["title", "activity"])
+    if (value.activity !== "working" && value.activity !== "idle") invalid()
+    display = { title: value.title === null ? null : agentText(value.title, 1024), activity: value.activity }
+  }
+  const displayFields = display ? { display } : {}
   const record = parseAgentRecordV3(v.record)
   const unavailable = v.unavailable === null ? null : stateIssue(v.unavailable)
   if (!record.launch) {
     if (launch !== null || v.live !== false || v.cleanup !== "not_launched") invalid()
-    return { record, launch: null, live: false, cleanup: "not_launched", unavailable }
+    return { ...displayFields, record, launch: null, live: false, cleanup: "not_launched", unavailable }
   }
   if (typeof v.live !== "boolean" || !["not_launched", "verified", "unverified", "unknown"].includes(String(v.cleanup))) invalid()
   if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.launchAttemptId !== record.launch!.launchAttemptId || launch.handlerGeneration !== record.launch.handlerGeneration)) {
     if (!unavailable || v.live !== false || !unavailable.path.endsWith("/" + record.launch!.launchAttemptId + ".json")) invalid()
-    return { record, launch: null, live: false, cleanup: "unknown", unavailable }
+    return { ...displayFields, record, launch: null, live: false, cleanup: "unknown", unavailable }
   }
   if (v.cleanup === "verified" && launch?.phase !== "cleanup_verified" || v.cleanup === "not_launched" && launch !== null) invalid()
   if (v.live && (record.launch.handlerGeneration !== generation || !["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase) || !launch && !["starting", "restoring"].includes(record.phase) || launch?.phase === "cleanup_verified" || launch?.phase === "quarantined")) invalid()
-  return { record, launch, live: v.live as boolean, cleanup: v.cleanup as AgentView["cleanup"], unavailable }
+  return { ...displayFields, record, launch, live: v.live as boolean, cleanup: v.cleanup as AgentView["cleanup"], unavailable }
 }
 function stateIssue(input: unknown): AgentStateIssue {
   const v = object(input)

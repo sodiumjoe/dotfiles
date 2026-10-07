@@ -1,9 +1,9 @@
 import { id, keys, object } from "../catalog/types.js"
 import type { JsonObject } from "../agent/session-config.js"
-import { AgentError, agentFailure } from "../agent/types.js"
+import { agentFailure } from "../agent/types.js"
 
-export const ACP_FRAME_BYTES = 1048576
-export const ACP_QUEUE_BYTES = 33554432
+import { parseWireJson } from "./wire-json.js"
+
 export type RpcId = string | number
 export class AcpError extends Error {
   constructor(readonly code: number, message: string) { super(message) }
@@ -45,24 +45,22 @@ export function acpError(requestId: RpcId | null, error: unknown): { jsonrpc: st
 }
 
 export function createAcpDecoder(receive: (frame: JsonObject) => void, fail: (error: unknown) => void): { feed(bytes: Buffer): void; end(): void } {
-  let buffer = Buffer.alloc(0), failed = false
+  let chunks: Buffer[] = [], buffered = 0, failed = false
   const decoder = new TextDecoder("utf-8", { fatal: true })
-  const fault = (error: unknown) => { if (!failed) { failed = true; buffer = Buffer.alloc(0); fail(error) } }
+  const fault = (error: unknown) => { if (!failed) { failed = true; chunks = []; buffered = 0; fail(error) } }
   return {
     feed(bytes) {
       if (failed) return
       try {
         let start = 0, index: number
         while ((index = bytes.indexOf(10, start)) !== -1) {
-          if (buffer.length + index - start > ACP_FRAME_BYTES) throw new AgentError("ACP_FRAME_LIMIT")
-          const line = Buffer.concat([buffer, bytes.subarray(start, index)])
-          buffer = Buffer.alloc(0); start = index + 1
-          receive(parseAcpFrame(JSON.parse(decoder.decode(line))))
+          const tail = bytes.subarray(start, index), line = chunks.length ? Buffer.concat([...chunks, tail], buffered + tail.length) : tail
+          chunks = []; buffered = 0; start = index + 1
+          receive(parseAcpFrame(parseWireJson(decoder.decode(line))))
         }
-        if (buffer.length + bytes.length - start > ACP_FRAME_BYTES) throw new AgentError("ACP_FRAME_LIMIT")
-        buffer = Buffer.concat([buffer, bytes.subarray(start)])
+        if (start < bytes.length) { const tail = Buffer.from(bytes.subarray(start)); chunks.push(tail); buffered += tail.length }
       } catch (error) { fault(error) }
     },
-    end() { if (buffer.length) fault(new AcpError(-32700, "Incomplete frame")) },
+    end() { if (buffered) fault(new AcpError(-32700, "Incomplete frame")) },
   }
 }

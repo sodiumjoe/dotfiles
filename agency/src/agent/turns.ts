@@ -8,11 +8,11 @@ import { canonicalJson, type JsonObject } from "./session-config.js"
 import { withoutAgencyMetadata } from "./acp.js"
 
 export type SubmissionRequest = { submissionId: string; text: string; limits: TurnOptions }
-export type AcpSubmissionRequest = { submissionId: string; prompt: JsonObject[]; meta?: JsonObject; originConnectionId?: string }
+export type AcpSubmissionRequest = { submissionId: string; prompt: JsonObject[]; meta?: JsonObject; originConnectionId?: string; originAttachment?: string; editorAddress?: string | null }
 export type SubmissionReceipt = { submissionId: string; digest: string; state: TurnState; stopReason: StopReason | null; failure: AgentFailure | null; acceptedSeq: number; completedSeq: number | null }
 export type TurnCoordinator = { submit(request: SubmissionRequest): Promise<SubmissionReceipt>; submitAcp(request: AcpSubmissionRequest): Promise<SubmissionReceipt>; inspect(submissionId: string): SubmissionReceipt | null; cancel(submissionId: string): Promise<SubmissionReceipt>; settled(submissionId: string): Promise<TurnResult>; settledAcp(submissionId: string): Promise<JsonObject>; busy(): boolean; close(failure: AgentFailure | null): void }
 
-export function createTurnCoordinator(input: { target: AgentTuple; conversation: Conversation; invoke?(text: string, limits: TurnOptions): Promise<TurnResult>; invokeAcp?(params: JsonObject): Promise<JsonObject>; cancel(): Promise<void>; validate(): Promise<void>; queue?: MutationQueue; onSettled?(): void }): TurnCoordinator {
+export function createTurnCoordinator(input: { target: AgentTuple; conversation: Conversation; invoke?(text: string, limits: TurnOptions): Promise<TurnResult>; invokeAcp?(params: JsonObject): Promise<JsonObject>; cancel(submissionId: string): Promise<void>; validate(): Promise<void>; queue?: MutationQueue; onAccepted?(request: AcpSubmissionRequest): void; onSettled?(submissionId: string): void }): TurnCoordinator {
   const { conversation } = input, queue = input.queue ?? new MutationQueue(), receipts = new Map<string, SubmissionReceipt>(), nativeResults = new Map<string, JsonObject>()
   type Active = { submissionId: string; deferred: ReturnType<typeof Promise.withResolvers<TurnResult>>; native: ReturnType<typeof Promise.withResolvers<JsonObject>>; cancellation?: Promise<void> }
   let active: Active | null = null, closed = false
@@ -27,13 +27,13 @@ export function createTurnCoordinator(input: { target: AgentTuple; conversation:
       if (!Array.isArray(request.prompt) || !request.prompt.length || request.prompt.some(value => !value || Array.isArray(value) || typeof value !== "object" || typeof value.type !== "string")) throw new AgentError("INVALID_AGENT_STATE")
       const params = withoutAgencyMetadata({ prompt: request.prompt, ...(request.meta ? { _meta: request.meta } : {}) })
       const encoded = canonicalJson(params)
-      if (Buffer.byteLength(encoded) > 1000000) throw new AgentError("INPUT_TOO_LARGE")
       const digest = createHash("sha256").update(encoded, "utf8").digest("hex")
       return queue.run(async () => {
         check(); await input.validate(); check()
         const previous = receipts.get(request.submissionId)
         if (previous) { if (previous.digest !== digest) throw new AgentError("COMMAND_CONFLICT"); return structuredClone(previous) }
         if (active) throw new AgentError("BUSY")
+        input.onAccepted?.(request)
         const text = request.prompt.filter(value => value.type === "text" && typeof value.text === "string").map(value => value.text).join("")
         const receipt: SubmissionReceipt = { submissionId: request.submissionId, digest, state: "accepted", stopReason: null, failure: null, acceptedSeq: conversation.append({ kind: "submitted", submissionId: request.submissionId, text, prompt: structuredClone(request.prompt), ...(request.meta ? { meta: params._meta as JsonObject } : {}), ...(request.originConnectionId ? { originConnectionId: request.originConnectionId } : {}) }), completedSeq: null }
         receipts.set(request.submissionId, receipt)
@@ -62,7 +62,7 @@ export function createTurnCoordinator(input: { target: AgentTuple; conversation:
             if (!closed) terminal(receipt, null, failure)
             current.deferred.reject(new AgentError(failure.code))
             current.native.reject(new AgentError(failure.code))
-          } finally { if (active === current) active = null; input.onSettled?.() }
+          } finally { if (active === current) active = null; input.onSettled?.(request.submissionId) }
         })
         return structuredClone(receipt)
       })
@@ -79,7 +79,7 @@ export function createTurnCoordinator(input: { target: AgentTuple; conversation:
         const receipt = receipts.get(submissionId)
         if (!receipt) throw new AgentError("UNAVAILABLE")
         if (active?.submissionId !== submissionId) return
-        active.cancellation ??= input.cancel()
+        active.cancellation ??= input.cancel(submissionId)
         cancellation = active.cancellation
       })
       await cancellation
@@ -105,6 +105,7 @@ export function createTurnCoordinator(input: { target: AgentTuple; conversation:
     close(failure) {
       if (closed) return
       closed = true
+      if (active) input.onSettled?.(active.submissionId)
       active?.deferred.reject(new AgentError(failure?.code ?? "STARTUP_FAILED")); active?.native.reject(new AgentError(failure?.code ?? "STARTUP_FAILED")); active = null; receipts.clear(); nativeResults.clear()
     },
   }

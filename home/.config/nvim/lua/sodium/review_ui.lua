@@ -275,7 +275,8 @@ function M.pick_base_and_review()
     Snacks.picker({
         title = "Review Base",
         items = items,
-        preview = false,
+        preview = "none",
+        layout = { hidden = { "preview" } },
         on_show = function()
             vim.cmd.stopinsert()
         end,

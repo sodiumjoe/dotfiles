@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -341,27 +343,78 @@ test("stale native mutations cannot target a restored generation until explicit 
   await run(e, `fixture_manager:load_acp_session(${JSON.stringify(sid)},'Restored')`); await ready(e)
   await submit(e, "fresh"); await idle(e)
   const launches = (await f.requests("codex-acp")).filter(frame => frame.method === "fixture/environment")
-  assert.deepEqual(launches.at(-1)?.params, { AGENCY_TEST_EDITOR_MARKER: "restored", NVIM: "/fixture-restored" })
+  assert.equal(launches.at(-1)?.params?.AGENCY_TEST_EDITOR_MARKER, "restored")
+  assert.match(String(launches.at(-1)?.params?.NVIM), /\/editor-[a-f0-9-]+\.sock$/)
+  assert.equal(launches.at(-1)?.params?.NVIM_SOCKET_PATH, launches.at(-1)?.params?.NVIM)
   assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/load").length, 1)
 })
 
-for (const entry of ["new", "switch_provider", "new_session_with_provider"]) test(`fresh editor ${entry} selects model and settings before creating the conversation`, { timeout: 60000 }, async t => {
+for (const entry of ["new", "switch_provider", "new_session_with_provider"]) test(`fresh editor ${entry} selects only the model and applies configured defaults`, { timeout: 60000 }, async t => {
   const f = await acpFixture(t, { selectionCatalog: true }), e = await editorFixture(f)
+  const path = join(f.paths.persistentRoot, "catalog/backends.json")
+  const config = JSON.parse(await (await import("node:fs/promises")).readFile(path, "utf8"))
+  config.backends.find((backend: { id: string }) => backend.id === "codex-acp").initial = { modeId: "read-only", configValues: { reasoning_effort: "medium" } }
+  await writeFile(path, JSON.stringify(config), { mode: 0o600 })
   await run(e, `AgencyFixture.commands(); fixture_prompts={}; vim.ui.select=function(items,opts,callback)
     assert(not vim.in_fast_event()); fixture_prompts[#fixture_prompts+1]=opts.prompt
     if opts.prompt == 'Agency backend' then callback(items[1])
-    elseif opts.prompt == 'Agency model' then callback(items[3])
-    elseif opts.prompt == 'Agency Reasoning effort' then callback(items[2])
-    elseif opts.prompt == 'Agency Mode' then callback(items[1]) end
+    elseif opts.prompt == 'Agency model' then callback(items[3]) end
   end; ${entry === "new" ? "fixture_controller.new()" : `require('agentic').${entry}()`}`)
   await wait(e, "fixture_controller.snapshot() ~= nil")
-  assert.deepEqual(await e.lua("fixture_prompts"), ["Agency backend", "Agency model", "Agency Reasoning effort", "Agency Mode"])
+  assert.deepEqual(await e.lua("fixture_prompts"), ["Agency backend", "Agency model"])
   const records = await f.inventory()
   assert.equal(records.agents.length, 1)
   assert.equal(records.agents[0]!.settings.configValues?.model, "model-c")
   assert.equal(records.agents[0]!.settings.configValues?.reasoning_effort, "medium")
+  assert.equal(records.agents[0]!.settings.configValues?.mode, "read-only")
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
+})
+
+test("settings picker updates both attached editors while new sessions retain configured defaults", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t), a = await editorFixture(f), b = await editorFixture(f)
+  const sid = await start(a)
+  await attach(f, b, sid)
+  await run(a, "AgencyFixture.commands()")
+  for (const [id, value] of [["reasoning_effort", "low"], ["mode", "read-only"]]) {
+    await run(a, `fixture_settings_prompts={}; vim.ui.select=function(items,opts,callback)
+      fixture_settings_prompts[#fixture_settings_prompts+1]=opts.prompt
+      for _,item in ipairs(items) do
+        if opts.prompt == 'Agency settings' and item.id == ${JSON.stringify(id)} then callback(item); return end
+        if opts.prompt ~= 'Agency settings' and item.value == ${JSON.stringify(value)} then callback(item); return end
+      end
+      error('missing setting choice')
+    end; vim.cmd('AgencySettings')`)
+    const changed = `vim.tbl_contains(vim.tbl_map(function(option) return option.id == ${JSON.stringify(id)} and option.currentValue == ${JSON.stringify(value)} end,fixture_manager.config_options.options),true)`
+    await wait(a, changed); await wait(b, changed)
+    assert.equal((await a.lua("fixture_settings_prompts") as string[]).length, 2)
+  }
+  const records = await f.inventory()
+  assert.equal(records.agents.length, 1)
+  assert.equal(records.agents[0]!.settings.configValues?.reasoning_effort, "low")
+  assert.equal(records.agents[0]!.settings.configValues?.mode, "read-only")
+  await run(a, "fixture_controller.new(nil,{backend_id='codex-acp'}); fixture_manager=require('agentic.session_registry').sessions[vim.api.nvim_get_current_tabpage()]")
+  const next = await ready(a)
+  assert.notEqual(next, sid)
+  assert.equal(await a.lua("fixture_manager.config_options:get_mode_id()"), "agent-full-access")
+  assert.equal(await a.lua("fixture_manager.config_options.options[2].currentValue"), "high")
+  assert.equal((await f.inventory()).agents.length, 2)
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
+})
+
+for (const stage of ["Agency settings", "Agency Reasoning"]) test(`settings picker discards ${stage} after same-ID loading`, { timeout: 60000 }, async t => {
+  const f = await acpFixture(t), e = await editorFixture(f)
+  const sid = await start(e)
+  await run(e, `AgencyFixture.commands(); vim.ui.select=function(items,opts,callback)
+    if opts.prompt == ${JSON.stringify(stage)} then fixture_setting_choice=function() callback(items[2]) end
+    else for _,item in ipairs(items) do if item.id == 'reasoning_effort' then callback(item); return end end end
+  end; vim.cmd('AgencySettings')`)
+  await wait(e, "fixture_setting_choice ~= nil")
+  await run(e, `fixture_manager:load_acp_session(${JSON.stringify(sid)},'Reloaded')`)
+  await ready(e)
+  await run(e, "fixture_setting_choice(); vim.wait(100,function() return false end)")
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/set_config_option").length, 0)
+  assert.equal((await f.inventory()).agents.length, 1)
 })
 
 test("fresh saved-session picker labels legacy and disabled backends and rejects before restoration", { timeout: 60000 }, async t => {
@@ -390,7 +443,7 @@ test("fresh saved-session picker labels legacy and disabled backends and rejects
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/load").length, 0)
 })
 
-for (const stage of ["Agency backend", "Agency model", "Agency Reasoning effort", "Agency Mode"]) test(`fresh editor supersession invalidates the pending ${stage} callback`, { timeout: 60000 }, async t => {
+for (const stage of ["Agency backend", "Agency model"]) test(`fresh editor supersession invalidates the pending ${stage} callback`, { timeout: 60000 }, async t => {
   const f = await acpFixture(t, { selectionCatalog: true }), e = await editorFixture(f)
   const sid = await start(e, "codex-acp")
   await run(e, `AgencyFixture.commands(); held_choice=nil; vim.ui.select=function(items,opts,callback)
@@ -422,4 +475,122 @@ test("fresh saved history remains visible when every configured adapter is incom
   assert.equal(await e.lua("confirms"), 0)
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
+})
+
+test("restarting an editor keeps its agent in the roster beside another live agent", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t), a = await editorFixture(f), b = await editorFixture(f)
+  const sid = await start(a), other = await start(b), target = await f.tuple(sid)
+  await submit(a, "Repair picker window layout"); await idle(a)
+  await a.exit()
+  const c = await editorFixture(f)
+  await run(c, `AgencyFixture.commands(); Snacks={picker=function(opts)
+    fixture_roster=opts; return {opts=opts,find=function() end,close=function() opts.on_close() end}
+  end}; vim.cmd('Agency')`)
+  await wait(c, "fixture_roster ~= nil and #fixture_roster.items == 2")
+  const ids = await c.lua("vim.tbl_map(function(item) return item.id end, fixture_roster.items)") as string[]
+  assert.ok(ids.includes(sid.slice(7))); assert.ok(ids.includes(other.slice(7)))
+  assert.equal(await c.lua(`(function() for _,item in ipairs(fixture_roster.items) do if item.id == ${JSON.stringify(sid.slice(7))} then return item.text:find('Repair picker window layout',1,true) == 1 end end end)()`), true)
+  await run(c, `for _,item in ipairs(fixture_roster.items) do if item.id == ${JSON.stringify(sid.slice(7))} then
+    fixture_roster.confirm({close=function() fixture_roster.on_close() end},item)
+  end end`)
+  await wait(c, `fixture_controller.snapshot() ~= nil and fixture_controller.snapshot().target.agentId == ${JSON.stringify(sid.slice(7))}`)
+  assert.deepEqual(await f.tuple(sid), target)
+  assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/new").length, 2)
+  assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/cancel").length, 0)
+})
+
+test("new-session model selection exposes cached models after discovery failure in a fresh editor", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { selectionCatalog: true, catalogState: "failed" }), e = await editorFixture(f)
+  await run(e, `AgencyFixture.commands(); fixture_model_labels={}; vim.ui.select=function(items,opts,callback)
+    if opts.prompt == 'Agency backend' then callback(items[1])
+    elseif opts.prompt:find('Agency model',1,true) then
+      fixture_model_prompt=opts.prompt
+      for _,item in ipairs(items) do fixture_model_labels[#fixture_model_labels+1]=opts.format_item(item) end
+      callback(items[3])
+    else callback(items[1]) end
+  end; vim.cmd('AgencyNew')`)
+  await wait(e, "fixture_controller.snapshot() ~= nil")
+  assert.match(String(await e.lua("fixture_model_prompt")), /cached; Provider discovery failed/)
+  assert.ok((await e.lua("fixture_model_labels") as string[]).includes("Model C (cached)"))
+  const manager = "require('agentic.session_registry').sessions[vim.api.nvim_get_current_tabpage()]"
+  assert.equal(await e.lua(`${manager}.config_options:get_model_id()`), "model-c")
+  assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/new").length, 1)
+  assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/prompt").length, 0)
+})
+
+test("warm roster reuses native ACP with no CLI and reports query latency", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t), e = await editorFixture(f)
+  const sid = await start(e)
+  await run(e, "AgencyFixture.commands(); fixture_original_client=fixture_manager.agent; fixture_endpoint_pid=fixture_manager.agent.transport.pid; fixture_original_system=vim.system; vim.system=function() error('roster spawned CLI') end")
+  try {
+    await run(e, `fixture_roster_times={}; fixture_roster_error=nil; local function query()
+      local began=vim.uv.hrtime()
+      fixture_controller.page({active=true,allow_issues=true},function(err,result)
+        if err then fixture_roster_error=err; return end
+        fixture_roster_result=result
+        fixture_roster_times[#fixture_roster_times+1]=(vim.uv.hrtime()-began)/1000000
+        if #fixture_roster_times < 20 then query() end
+      end)
+    end; query()`)
+    await wait(e, "#fixture_roster_times == 20 or fixture_roster_error ~= nil")
+    assert.equal(await e.lua("fixture_roster_error"), null)
+    assert.equal(await e.lua("fixture_roster_result.agents[1].record.definition.agentId"), sid.slice(7))
+    assert.equal(await e.lua("fixture_original_client == require('agentic.acp.agent_instance')._instances.agency"), true)
+    assert.equal(await e.lua("fixture_endpoint_pid == fixture_original_client.transport.pid"), true)
+    assert.deepEqual(await e.lua("fixture_notifications"), [])
+    const times = (await e.lua("fixture_roster_times") as number[]).sort((a, b) => a - b)
+    t.diagnostic(`warm Neovim ACP roster ms: median=${times[10]!.toFixed(3)} range=${times[0]!.toFixed(3)}..${times[19]!.toFixed(3)}`)
+  } finally { await run(e, "vim.system=fixture_original_system") }
+})
+
+test("provider editor RPC follows the submitting attachment across editor replacement", { timeout: 120000 }, async t => {
+  const f = await acpFixture(t), a = await editorFixture(f), b = await editorFixture(f)
+  const sid = await start(a), target = await f.tuple(sid)
+  const environment = (await f.requests("codex-acp")).find(frame => frame.method === "fixture/environment")!.params!
+  const broker = String(environment.NVIM)
+  assert.equal(environment.NVIM_SOCKET_PATH, broker)
+  assert.notEqual(broker, await a.lua("vim.v.servername"))
+  const rpc = async () => Number((await promisify(execFile)(process.env.NVIM_TEST_EXECUTABLE ?? "/opt/homebrew/bin/nvim", ["--server", broker, "--remote-expr", "getpid()"], { timeout: 5000 })).stdout.trim())
+  await assert.rejects(rpc())
+  await submit(a, "permission"); await pending(a)
+  assert.equal(await rpc(), a.pid)
+  await attach(f, b, sid); await pending(b)
+  assert.equal(await rpc(), a.pid)
+  const first = String(await a.lua("fixture_manager._agency_local_submission"))
+  await run(b, `fixture_busy=nil; fixture_duplicate=nil; fixture_manager.agent:_send_request('session/prompt',
+    {sessionId=fixture_manager.session_id,prompt={{type='text',text='busy'}},_meta={agency={version=1,submissionId=${JSON.stringify(randomUUID())},editor=vim.v.servername}}},
+    function(_,err) fixture_busy=err end); fixture_manager.agent:_send_request('session/prompt',
+    {sessionId=fixture_manager.session_id,prompt={{type='text',text='permission'}},_meta={agency={version=1,submissionId=${JSON.stringify(first)},editor=vim.v.servername}}},
+    function(_,err) fixture_duplicate=err or false end)`)
+  await wait(b, "fixture_busy ~= nil")
+  assert.equal(await rpc(), a.pid)
+  await run(a, "fixture_manager.agent:stop_generation(fixture_manager.session_id)"); await idle(a); await idle(b)
+  await wait(b, "fixture_duplicate ~= nil")
+  assert.equal(await b.lua("fixture_duplicate"), false)
+  await assert.rejects(rpc())
+  await submit(b, "permission"); await pending(a); await pending(b)
+  assert.equal(await rpc(), b.pid)
+  await run(b, "fixture_manager:destroy()")
+  await run(a, "fixture_barrier=false; fixture_manager.agent:_send_request('agency/backends',{},function() fixture_barrier=true end)")
+  await wait(a, "fixture_barrier"); await assert.rejects(rpc())
+  await run(a, "fixture_manager.agent:stop_generation(fixture_manager.session_id)"); await idle(a)
+  await submit(a, "permission"); await pending(a)
+  assert.equal(await rpc(), a.pid)
+  await run(a, "fixture_manager:load_acp_session(fixture_manager.session_id)"); await ready(a)
+  await assert.rejects(rpc())
+  await run(a, "fixture_manager.agent:stop_generation(fixture_manager.session_id)"); await idle(a)
+  await a.exit()
+  const c = await editorFixture(f)
+  await attach(f, c, sid); await submit(c, "permission"); await pending(c)
+  assert.equal(await rpc(), c.pid)
+  assert.deepEqual(await f.tuple(sid), target)
+  const launches = (await f.requests("codex-acp")).filter(frame => frame.method === "fixture/environment")
+  assert.equal(launches.length, 1); assert.equal(launches[0]!.params!.NVIM, broker)
+  const prompts = (await f.requests("codex-acp")).filter(frame => frame.method === "session/prompt")
+  for (const prompt of prompts) assert.equal((prompt.params!._meta as JsonObject | undefined)?.agency, undefined)
+  const peer = await f.connect(); await peer.request("initialize", { protocolVersion: 1 })
+  await peer.request("session/load", { sessionId: sid, cwd: f.workspace, mcpServers: [] })
+  const replay = JSON.stringify(peer.drain("session/update"))
+  assert.equal(replay.includes(String(await c.lua("vim.v.servername"))), false)
+  await f.stopSession(sid); await assert.rejects(rpc())
 })

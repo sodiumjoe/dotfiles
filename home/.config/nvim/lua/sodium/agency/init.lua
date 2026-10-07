@@ -36,7 +36,8 @@ function M.setup(deps)
         return manager
     end
     local operations = require("sodium.agency.operations").new({ client = deps.client, uuid = api.uuid,
-        report = api.notify, new_session = create, confirm_stop = deps.confirm_stop })
+        report = api.notify, new_session = create, confirm_stop = deps.confirm_stop,
+        roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
     function api.snapshot()
         local manager = local_manager()
@@ -83,6 +84,12 @@ function M.setup(deps)
                 end))
             end)
         end)
+    end
+    function api.settings()
+        local manager = local_manager()
+        if not manager or not manager.session_id or not manager._agency_binding then report(failure("NOT_READY")); return end
+        local valid = api.selection_guard(manager)
+        require("sodium.agency.selection").settings(manager.config_options, valid, api.notify)
     end
     function api.open()
         epoch = epoch + 1
@@ -204,7 +211,7 @@ function M.setup(deps)
     controller = api
     local commands = { Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
         AgencyOpen = { "open", 0 }, AgencyAttach = { "attach", 1 }, AgencyRestore = { "restore", 1 },
-        AgencyDetach = { "detach", 0 }, AgencyCancel = { "cancel", 0 }, AgencyStop = { "stop", 0 }, AgencyInspect = { "inspect_delivery", 0 } }
+        AgencySettings = { "settings", 0 }, AgencyDetach = { "detach", 0 }, AgencyCancel = { "cancel", 0 }, AgencyStop = { "stop", 0 }, AgencyInspect = { "inspect_delivery", 0 } }
     for name, spec in pairs(commands) do
         vim.api.nvim_create_user_command(name, function(args)
             if spec[2] == 1 then api[spec[1]](args.args) else api[spec[1]]() end
@@ -220,7 +227,7 @@ function M.setup(deps)
     return api
 end
 
-for _, name in ipairs({ "current", "new", "open", "attach", "restore", "detach", "cancel", "stop", "roster",
+for _, name in ipairs({ "current", "new", "settings", "open", "attach", "restore", "detach", "cancel", "stop", "roster",
     "add_context", "add_diagnostics", "submit_text" }) do M[name] = function(...) return M.setup()[name](...) end end
 function M.view_for_buffer(buf) return controller and controller.view_for_buffer(buf) end
 return M

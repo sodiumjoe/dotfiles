@@ -35,7 +35,43 @@ describe("Agency native commands", function()
                 settings = { { id = "reasoning_effort", name = "Reasoning effort", kind = "config", values = { { value = "medium", name = "medium" } } } } } },
             settings = { { id = "mode", name = "Mode", kind = "config", values = { { value = "read-only", name = "Read only" } } } } } } }
     end
-    it("chooses model and supported settings before any conversation is created", function()
+    it("uses the cached ACP connection for active roster display outside fast events", function()
+        local systems, complete, fast = 0, nil, nil
+        local system = vim.system
+        vim.system = function() systems = systems + 1; error("roster spawned CLI") end
+        local ok, err = pcall(function()
+            api.page({ active = true, allow_issues = true }, function(error, result)
+                assert.is_nil(error); fast = vim.in_fast_event(); complete = result
+            end)
+            f.flush()
+            local request = f.request("agency/roster")
+            assert.are.same({ limit = 100 }, request.params)
+            local page = require("fixtures.agency_control").page({ f.row })
+            page.handlerGeneration = f.row.record.launch.handlerGeneration
+            respond_fast(request, page)
+            assert.are.equal(1, #complete.agents)
+            assert.is_false(fast)
+            assert.are.equal(0, systems)
+        end)
+        vim.system = system
+        assert.is_true(ok, err)
+    end)
+    it("retries ACP roster resync once and rejects a changed Handler across pages", function()
+        local failure
+        api.page({ active = true }, function(err) failure = err end)
+        f.flush()
+        respond_fast(f.request("agency/roster"), nil, { code = -32000, message = "resync", data = { agency = { code = "RESYNC_REQUIRED" } } })
+        assert.are.equal(2, count("agency/roster"))
+        local control = require("fixtures.agency_control")
+        local page = control.page({ f.row }, "next")
+        page.handlerGeneration = f.row.record.launch.handlerGeneration
+        respond_fast(f.request("agency/roster"), page)
+        local other = control.page()
+        other.handlerGeneration = control.id(99)
+        respond_fast(f.request("agency/roster"), other)
+        assert.are.equal("INVALID_PROTOCOL", failure.code)
+    end)
+    it("chooses only the model and preserves configured defaults before creation", function()
         local prompts = {}
         vim.ui.select = function(items, opts, callback)
             assert.are.equal(0, count("session/new"))
@@ -45,16 +81,20 @@ describe("Agency native commands", function()
         end
         api.new()
         f.flush()
-        respond_fast(f.request("agency/backends"), choices())
-        assert.are.same({ "Agency model", "Agency Reasoning effort", "Agency Mode" }, prompts)
-        assert.are.same({ configValues = { model = "model-c", reasoning_effort = "medium", mode = "read-only" } }, f.request("session/new").params._meta.agency.selection)
+        local result = choices()
+        result.backends[1].defaults = { modeId = "agent-full-access", configValues = { reasoning_effort = "medium" } }
+        respond_fast(f.request("agency/backends"), result)
+        assert.are.same({ "Agency model" }, prompts)
+        assert.are.same({ modeId = "agent-full-access", configValues = { model = "model-c", reasoning_effort = "medium" } }, f.request("session/new").params._meta.agency.selection)
     end)
-    for _, stage in ipairs({ "Agency model", "Agency Reasoning effort", "Agency Mode" }) do
+    for _, stage in ipairs({ "Agency backend", "Agency model" }) do
         it("cancels without creating a conversation at " .. stage, function()
             vim.ui.select = function(items, opts, callback) callback(opts.prompt ~= stage and items[2] or nil) end
             api.new()
             f.flush()
-            respond_fast(f.request("agency/backends"), choices())
+            local result = choices()
+            result.backends[2] = { id = "claude-agent-acp", models = {} }
+            respond_fast(f.request("agency/backends"), result)
             assert.are.equal(0, count("session/new"))
             assert.are.equal("agency:" .. f.row.record.definition.agentId, f.manager.session_id)
         end)
@@ -65,7 +105,9 @@ describe("Agency native commands", function()
             end
             api.new()
             f.flush()
-            respond_fast(f.request("agency/backends"), choices())
+            local result = choices()
+            result.backends[2] = { id = "claude-agent-acp", models = {} }
+            respond_fast(f.request("agency/backends"), result)
             assert.is_function(pending)
             api.current()
             pending()
@@ -127,6 +169,23 @@ describe("Agency native commands", function()
         assert.is_truthy(label:find("discovery unavailable", 1, true))
         assert.are.same({ modeId = "agent-full-access" }, f.request("session/new").params._meta.agency.selection)
     end)
+    it("shows cached models and the discovery failure before creation", function()
+        local result, labels = choices(), {}
+        result.backends[1].discovery = "cached"
+        result.backends[1].discoveryError = "Provider discovery timed out"
+        vim.ui.select = function(items, opts, callback)
+            if opts.prompt:find("Agency model", 1, true) then
+                assert.is_truthy(opts.prompt:find("Provider discovery timed out", 1, true))
+                for _, item in ipairs(items) do labels[#labels + 1] = opts.format_item(item) end
+                callback(items[2])
+            else callback(items[1]) end
+        end
+        api.new()
+        f.flush()
+        respond_fast(f.request("agency/backends"), result)
+        assert.is_truthy(labels[2]:find("cached", 1, true))
+        assert.are.equal("model-c", f.request("session/new").params._meta.agency.selection.configValues.model)
+    end)
     it("requires explicit backend choice when the configured default is unavailable", function()
         local prompt
         vim.ui.select = function(_, opts, callback) prompt = opts.prompt; callback(nil) end
@@ -136,22 +195,128 @@ describe("Agency native commands", function()
         assert.are.equal("Agency backend", prompt)
         assert.are.equal(0, count("session/new"))
     end)
-    it("offers only supported reasoning when the configured default conflicts with the selected model", function()
-        local result = choices()
+    it("preserves unsupported configured defaults for provider validation", function()
+        local result, prompts = choices(), {}
         result.backends[1].defaults = { modelId = "model-a[high]", modeId = "agent", configValues = { reasoning_effort = "high" } }
         vim.ui.select = function(items, opts, callback)
-            if opts.prompt == "Agency model" then callback(items[2])
-            elseif opts.prompt == "Agency Reasoning effort" then
-                assert.are.equal(1, #items)
-                assert.are.equal("medium", items[1].value)
-                callback(items[1])
-            else callback(items[1]) end
+            prompts[#prompts + 1] = opts.prompt
+            callback(items[2])
         end
         api.new()
         f.flush()
         respond_fast(f.request("agency/backends"), result)
-        assert.are.same({ configValues = { model = "model-c", reasoning_effort = "medium", mode = "read-only" } },
+        assert.are.same({ "Agency model" }, prompts)
+        assert.are.same({ modeId = "agent", configValues = { model = "model-c", reasoning_effort = "high" } },
             f.request("session/new").params._meta.agency.selection)
+    end)
+    local function settings()
+        return {
+            { id = "reasoning_effort", name = "Reasoning effort", type = "select", currentValue = "high",
+                options = { { value = "low", name = "Low" }, { value = "high", name = "High" } } },
+            { id = "mode", name = "Permissions", category = "mode", type = "select", currentValue = "agent-full-access",
+                options = { { value = "read-only", name = "Read only" }, { value = "agent-full-access", name = "Full access" } } },
+        }
+    end
+    for _, id in ipairs({ "reasoning_effort", "mode" }) do
+        it("changes the attached agent's " .. id .. " through the native setter", function()
+            f.manager.config_options:set_options(settings())
+            local prompts = {}
+            vim.ui.select = function(items, opts, callback)
+                assert.is_false(vim.in_fast_event())
+                prompts[#prompts + 1] = opts.prompt
+                if opts.prompt == "Agency settings" then
+                    for _, item in ipairs(items) do
+                        if item.id == id then
+                            assert.is_truthy(opts.format_item(item):find(id == "mode" and "Full access" or "High", 1, true))
+                            callback(item); return
+                        end
+                    end
+                else
+                    assert.is_truthy(opts.format_item(items[1]):find("current", 1, true))
+                    callback(items[2])
+                end
+            end
+            vim.cmd("AgencySettings")
+            f.flush()
+            assert.are.equal(2, #prompts)
+            local frame = f.request("session/set_config_option")
+            assert.are.equal(f.manager.session_id, frame.params.sessionId)
+            assert.are.equal(id, frame.params.configId)
+            assert.are.equal(id == "mode" and "read-only" or "low", frame.params.value)
+            local options = settings()
+            for _, option in ipairs(options) do if option.id == id then option.currentValue = frame.params.value end end
+            respond_fast(frame, { configOptions = options })
+            for _, option in ipairs(f.manager.config_options.options) do
+                if option.id == id then assert.are.equal(frame.params.value, option.currentValue) end
+            end
+            assert.are.equal(0, count("session/new"))
+        end)
+    end
+    for _, stage in ipairs({ "Agency settings", "Agency Reasoning effort" }) do
+        it("cancels the settings picker at " .. stage, function()
+            f.manager.config_options:set_options(settings())
+            vim.ui.select = function(items, opts, callback) callback(opts.prompt ~= stage and items[1] or nil) end
+            api.settings(); f.flush()
+            assert.are.equal(0, count("session/set_config_option"))
+            assert.are.equal(0, count("session/new"))
+        end)
+        for _, action in ipairs({ "current", "reload", "configuration" }) do
+            it("discards a pending " .. stage .. " callback after " .. action, function()
+                f.manager.config_options:set_options(settings())
+                local pending
+                vim.ui.select = function(items, opts, callback)
+                    if opts.prompt == stage then pending = function() callback(items[2]) end else callback(items[1]) end
+                end
+                api.settings(); f.flush()
+                assert.is_function(pending)
+                if action == "current" then api.current()
+                elseif action == "reload" then f.manager:load_acp_session(f.manager.session_id, "Reloaded")
+                else local options = settings(); options[1].currentValue = "low"; f.manager.config_options:set_options(options) end
+                pending(); f.flush()
+                assert.are.equal(0, count("session/set_config_option"))
+            end)
+        end
+    end
+    it("does not send a setter when the current value is chosen", function()
+        f.manager.config_options:set_options(settings())
+        api.settings(); f.flush()
+        assert.are.equal(0, count("session/set_config_option"))
+    end)
+    it("preserves boolean values and grouped choices", function()
+        f.manager.config_options:set_options({
+            { id = "toggle", name = "Toggle", type = "boolean", currentValue = true },
+            { id = "grouped", name = "Grouped", type = "select", currentValue = "a",
+                options = { { group = "Group", options = { { value = "a", name = "A" }, { value = "b", name = "B" } } } } },
+        })
+        vim.ui.select = function(items, opts, callback) callback(opts.prompt == "Agency settings" and items[1] or items[2]) end
+        api.settings(); f.flush()
+        local frame = f.request("session/set_config_option")
+        assert.are.equal("toggle", frame.params.configId)
+        assert.is_false(frame.params.value)
+        respond_fast(frame, {})
+        vim.ui.select = function(items, _, callback) callback(items[2]) end
+        api.settings(); f.flush()
+        frame = f.request("session/set_config_option")
+        assert.are.equal("grouped", frame.params.configId)
+        assert.are.equal("b", frame.params.value)
+    end)
+    it("uses legacy modes when config options are unavailable", function()
+        f.manager.config_options:set_legacy_modes({ currentModeId = "normal",
+            availableModes = { { id = "normal", name = "Normal" }, { id = "review", name = "Review" } } })
+        vim.ui.select = function(items, opts, callback) callback(opts.prompt == "Agency settings" and items[1] or items[2]) end
+        api.settings(); f.flush()
+        assert.are.equal("review", f.request("session/set_mode").params.modeId)
+        assert.are.equal(0, count("session/set_config_option"))
+    end)
+    it("does not create an agent when settings are requested without an attachment", function()
+        api.detach(); api.settings(); f.flush()
+        assert.are.equal(0, count("session/new"))
+        assert.are.same({ "not ready" }, notifications)
+    end)
+    it("reports a provider with no adjustable settings", function()
+        api.settings(); f.flush()
+        assert.are.same({ "This agent has no adjustable settings" }, notifications)
+        assert.are.equal(0, count("session/new"))
     end)
     for _, stage in ipairs({ "confirmation", "import" }) do
         for _, action in ipairs({ "new session", "close tab" }) do
@@ -323,11 +488,11 @@ describe("Agency native commands", function()
         local native = require("agentic")
         local restore = native.restore_session
         local called, saved = {}, {}
-        local expected = { ["<leader>ac"] = { "current" }, ["<leader>an"] = { "new" },
+        local expected = { ["<leader>ac"] = { "current" }, ["<leader>an"] = { "new" }, ["<leader>ae"] = { "settings" },
             ["<leader>af"] = { "roster" }, ["<leader>as"] = { "stop" }, ["<leader>ao"] = { "open" },
             ["<leader>aa"] = { "add_context" }, ["<leader>ad"] = { "add_diagnostics", "line" },
             ["<leader>aD"] = { "add_diagnostics", "buffer" }, ["<leader>ar"] = { "restore_session" } }
-        for _, method in ipairs({ "current", "new", "roster", "stop", "open", "add_context", "add_diagnostics" }) do
+        for _, method in ipairs({ "current", "new", "settings", "roster", "stop", "open", "add_context", "add_diagnostics" }) do
             saved[method] = module[method]
             module[method] = function(value) called = { method, value } end
         end
@@ -341,7 +506,7 @@ describe("Agency native commands", function()
                     seen[mapping[1]] = true
                 end
             end
-            assert.are.equal(9, vim.tbl_count(seen))
+            assert.are.equal(10, vim.tbl_count(seen))
         end)
         for method, original in pairs(saved) do module[method] = original end
         native.restore_session = restore

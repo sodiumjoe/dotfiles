@@ -155,3 +155,63 @@ test("logically retired cached agents are absent from list and page queries", as
     assert.deepEqual((await f.service.page({ limit: 100 })).agents, [])
   } finally { hidden.clear() }
 })
+
+test("memory roster bypasses failing and queued retained verification while actions revalidate", async t => {
+  const f = await agentServiceFixture(t)
+  const started = await f.service.start(f.input)
+  await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
+  const service = f.service as typeof f.service & { roster: typeof f.service.page }
+  const original = f.store.inventory.bind(f.store)
+  const failure = t.mock.method(f.store, "inventory", async () => { throw new Error("retained verification unavailable") })
+  try {
+    const page = await service.roster({ limit: 100 })
+    assert.equal(page.agents.length, 1)
+    assert.equal(page.agents[0]!.live, true)
+    assert.equal((await service.roster({ limit: 100 })).revision, page.revision)
+    page.agents[0]!.record.phase = "failed"
+    assert.equal((await service.roster({ limit: 100 })).agents[0]!.record.phase, "ready")
+    await assert.rejects(f.service.page({ limit: 100 }), /retained verification unavailable/)
+    await assert.rejects(f.service.sessionSnapshot(started.command.target!), /retained verification unavailable/)
+  } finally { failure.mock.restore() }
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), seen = new Promise<void>(resolve => { entered = resolve })
+  const blocked = t.mock.method(f.store, "inventory", async () => { entered(); await gate; return original() })
+  const verifying = f.service.page({ limit: 100 })
+  await seen
+  try {
+    const page = await Promise.race([service.roster({ limit: 100 }), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("roster waited for verification queue")), 500).unref())])
+    assert.equal(page.agents.length, 1)
+  } finally { release(); await verifying; blocked.mock.restore() }
+  f.service.close()
+  await assert.rejects(service.roster({ limit: 100 }), { code: "NOT_READY" })
+})
+
+test("memory roster tracks transitions, retirement and cursor scope", async t => {
+  const hidden = new Set<string>(), retirement = { validate: async () => undefined, hides: (path: string) => hidden.has(path) }
+  const f = await agentServiceFixture(t, { pause: "spawn", pauseCleanup: true, retirement })
+  const service = f.service as typeof f.service & { roster: typeof f.service.page }
+  const first = await f.service.start(f.input)
+  await f.entered
+  const starting = await service.roster({ limit: 100 })
+  assert.equal(starting.agents[0]!.record.phase, "starting")
+  assert.deepEqual((await service.roster({ limit: 100, cwd: f.workspace + "/other" })).agents, [])
+  f.release()
+  const second = { ...f.input, commandId: randomUUID() }
+  await f.service.start(second)
+  await until(async () => (await f.service.command(second.commandId, second.handlerGeneration)).command.state === "completed" ? true : undefined)
+  const page = await service.roster({ limit: 1 })
+  assert.ok(page.nextCursor)
+  assert.equal((await service.roster({ limit: 1, cursor: page.nextCursor })).agents.length, 1)
+  await assert.rejects(service.roster({ limit: 1, cursor: page.nextCursor, cwd: f.workspace + "/other" }), { code: "RESYNC_REQUIRED" })
+  const stop = f.service.stop({ ...first.command.target!, commandId: randomUUID() })
+  await f.cleanupEntered
+  const stopping = await service.roster({ limit: 100 })
+  assert.equal(stopping.agents.find(a => a.record.version === 3 && a.record.definition.agentId === first.command.target!.agentId)!.record.phase, "stopping")
+  await assert.rejects(service.roster({ limit: 1, cursor: page.nextCursor }), { code: "RESYNC_REQUIRED" })
+  f.releaseCleanup(); await stop
+  await until(async () => (await service.roster({ limit: 100 })).agents.length === 1 ? true : undefined)
+  const live = (await service.roster({ limit: 100 })).agents[0]!
+  hidden.add("agents/records/" + (live.record.version === 3 ? live.record.definition.agentId : "" ) + ".json")
+  assert.deepEqual((await service.roster({ limit: 100 })).agents, [])
+  hidden.clear()
+})

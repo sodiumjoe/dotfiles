@@ -188,3 +188,17 @@ test("production Handler uses its static registry before configured-provider evi
   assert.deepEqual(await readdir(join(f.paths.persistentRoot, "launches")), [])
   assert.ok((await f.call()).ok)
 })
+
+test("optional conversation display frames titles and activity without changing retained records", () => {
+  const record = normalizeAgentRecord(sampleAgent())
+  const view = { record, live: false, launch: null, cleanup: "unverified", unavailable: null }
+  const envelope = (display?: unknown) => ({ protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2), ok: true,
+    result: { state: "agents", agents: [{ ...view, ...(display === undefined ? {} : { display }) }], issues: [] } })
+  assert.deepEqual(parseAgentReply(envelope()), envelope())
+  for (const display of [{ title: "Repair picker windows", activity: "working" }, { title: null, activity: "idle" }]) {
+    assert.deepEqual(parseAgentReply(envelope(display)), envelope(display))
+  }
+  for (const display of [{ title: "x", activity: "ready" }, { title: 42, activity: "idle" }, { title: "x".repeat(1025), activity: "idle" }, { title: "x", activity: "idle", extra: true }]) {
+    assert.throws(() => parseAgentReply(envelope(display)), { code: "INVALID_PROTOCOL" })
+  }
+})

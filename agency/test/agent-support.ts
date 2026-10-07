@@ -161,7 +161,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     start: (selection?: Partial<StartSelection>) => startAt(workspace, selection),
     current: () => currentAt(workspace),
     async list() { const result = await call({ op: "agent_list" }); assert.equal(result.state, "agents"); if (result.state !== "agents") throw new Error("wrong reply"); return result },
-    stop: async (target: AgentTuple, commandId = randomUUID()) => commandView(await call({ op: "agent_stop", input: { ...target, commandId } })),
+    stop: async (target: AgentTuple, commandId = randomUUID()) => { await trackProviders(); return commandView(await call({ op: "agent_stop", input: { ...target, commandId } })) },
     restore: async (agentId: string) => commandView(await call({ op: "agent_restore", input: { agentId, commandId: randomUUID(), handlerGeneration: (await handler()).generation, environment: providerEnvironment() } })),
     providerRequests: async () => (await readFile(join(f.root, "requests.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line) as { method: string; params: Record<string, unknown> }),
     async prompt(target: AgentTuple, text: string) { const result = await call({ op: "agent_prompt", input: { ...target, text } }); assert.equal(result.state, "prompt"); if (result.state !== "prompt") throw new Error("wrong reply"); return result },
@@ -406,7 +406,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUp
       if (sent.length === settings.hold) continue
       if (scenario === "hang") continue
       if (scenario === "utf8") { readable.write(Buffer.from([255, 10])); continue }
-      if (scenario === "oversized") { readable.write(Buffer.alloc(1048577, 32)); continue }
+      if (scenario === "oversized") { readable.write(Buffer.from(" ".repeat(1048577) + "invalid\n")); continue }
       if (scenario === "empty-eof") { readable.end(); continue }
       if (scenario === "incomplete-eof") { readable.end("{\"jsonrpc\":"); continue }
       if (scenario === "error" || scenario === "auth") { send({ jsonrpc: "2.0", id: request.id, error: { code: scenario === "auth" ? -32000 : -32603, message: "sensitive remote diagnostic" } }); continue }
@@ -482,12 +482,12 @@ export async function agentServiceFixture(t: TestContext, options: { retirement?
   await saveCatalog()
   const contract = { ...(options.productionContract ? productionLaunchContracts()[0]! : sampleStaticContract()), sessionLoad: options.sessionLoad ?? true }
   if (!options.injectedOnly) await writeFile(join(directory, "backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: {}, initial: {}, compatibilityId: contract.id }] }), { mode: 0o600 })
-  let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failTerminalBeforeRename = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, readyFailures = 0, terminalFailures = 0, terminalWriteFailures = 0
+  let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failTerminalBeforeRename = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, receiptFailures = 0, readyFailures = 0, terminalFailures = 0, terminalWriteFailures = 0
   const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {
     const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
     handle.sync = async () => {
       if (holdReady && writingReady && path === join(root, "agents/records")) { readyCommitEntered.resolve(); await readyCommitReleased.promise }
-      if (failReceipt && writingReceipt && path === join(root, "agents/commands")) throw new Error("receipt directory fsync")
+      if (failReceipt && writingReceipt && path === join(root, "agents/commands")) { receiptFailures++; throw new Error("receipt directory fsync") }
       if (failReady && writingReady && path === join(root, "agents/records")) { readyFailures++; throw new Error("ready directory fsync") }
       if (failTerminal && writingTerminal && path === join(root, "agents/records")) { terminalFailures++; throw new Error("terminal directory fsync") }
       await sync()
@@ -615,7 +615,7 @@ export async function agentServiceFixture(t: TestContext, options: { retirement?
     failStopReceipt(value: boolean) { failStopReceipt = value },
     pauseRestore(value: string) { restorePause = value }, restoreEntered: restoreEntered.promise,
     evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, cleanupCalls: () => cleanupCalls, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
-    failReceipt(value: boolean) { failReceipt = value }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value }, failInitialCommand(value: boolean) { failInitialCommand = value },
+    failReceipt(value: boolean) { failReceipt = value }, receiptFailures() { return receiptFailures }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value }, failInitialCommand(value: boolean) { failInitialCommand = value },
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures, failTerminalBeforeRename(value: boolean) { failTerminalBeforeRename = value }, terminalWriteFailures: () => terminalWriteFailures, retired: () => structuredClone(retired),
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
     fault(agent: string) { peers.get(agent)!.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "tool_call", toolCallId: [] } } }) },

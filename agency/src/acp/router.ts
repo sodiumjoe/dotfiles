@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { cloneWireJson } from "./wire-json.js"
 import { join } from "node:path"
 import { absolutePath, id, object, providerId } from "../catalog/types.js"
 import { agentTuple } from "../agent/recovery.js"
@@ -13,23 +14,38 @@ import { discoverCodexSessions } from "../agent/native-sessions.js"
 import { parseImportInput } from "../agent/types.js"
 import { AcpError, acpError, parseAcpFrame, parseAgencyMeta, parseLogicalSessionId, type RpcId } from "./protocol.js"
 
-type Binding = { target: AgentTuple; invalid: boolean; turnId: string | null; configuration: SessionConfiguration; observation?: AcpSessionObservation }
+type Binding = { attachment: string; target: AgentTuple; invalid: boolean; turnId: string | null; configuration: SessionConfiguration; observation?: AcpSessionObservation }
 const checked = <T>(read: () => T): T => { try { return read() } catch (error) { if (error instanceof AcpError) throw error; throw new AcpError(-32602, "Invalid parameters") } }
 const json = (value: unknown): JsonObject => JSON.parse(JSON.stringify(value)) as JsonObject
 
 export function createAcpRouter(input: { service: AgentService; connectionId: string; send(frame: JsonObject): void; environment?: LaunchEnvironment }): { receive(frame: JsonObject): Promise<void>; close(): void } {
-  const { service } = input, bindings = new Map<string, Binding>(), pending = new Map<RpcId, symbol>()
+  const { service } = input, bindings = new Map<string, Binding>(), pending = new Map<RpcId, symbol>(), loads = new Map<string, symbol>()
   let initialized = false, closed = false
   const send = (frame: JsonObject): void => { if (!closed) input.send(frame) }
   const notify = (method: string, params: JsonObject, meta?: JsonObject): void => send({ jsonrpc: "2.0", method, params, ...(meta ? { _meta: meta } : {}) })
   const state = (sessionId: string, binding: Binding, configuration = false): void => notify("agency/session_state", json({ sessionId, binding: binding.target, turnId: binding.turnId, state: binding.invalid ? "unavailable" : binding.turnId ? "running" : "idle", ...(configuration ? { configuration: binding.configuration } : {}) }))
-  const invalidate = (sessionId: string, binding: Binding): void => { if (!binding.invalid) { binding.invalid = true; state(sessionId, binding); binding.observation?.close(); service.detachPermissions(input.connectionId, binding.target) } }
+  const current = (sessionId: string, binding: Binding): boolean => !closed && bindings.get(sessionId) === binding && !binding.invalid
+  const checkBinding = (sessionId: string, binding: Binding): void => { if (!current(sessionId, binding)) throw new AgentError("STALE_ATTACHMENT") }
+  const detach = (binding: Binding): void => {
+    binding.invalid = true
+    binding.observation?.close()
+    service.detachEditor(input.connectionId, binding.target, binding.attachment)
+    service.detachPermissions(input.connectionId, binding.target)
+  }
+  const editorAddress = (meta: JsonObject): string | null | undefined => checked(() => {
+    if (!Object.hasOwn(meta, "editor")) return undefined
+    if (meta.editor === null || meta.editor === "") return null
+    const address = absolutePath(meta.editor)
+    if (address.includes("\0")) throw new Error()
+    return address
+  })
+  const invalidate = (sessionId: string, binding: Binding): void => { if (!binding.invalid) { detach(binding); if (bindings.get(sessionId) === binding) state(sessionId, binding) } }
   const event = (sessionId: string, binding: Binding, value: RetainedEvent, replay: boolean): void => {
     if (value.kind === "submitted") {
       binding.turnId = value.submissionId
       for (const content of value.prompt ?? [{ type: "text", text: value.text }]) notify("session/update", { sessionId, update: { sessionUpdate: "user_message_chunk", content }, _meta: { ...value.meta, agency: { version: 1, seq: value.seq, replay, submissionId: value.submissionId, ...(value.originConnectionId ? { originConnectionId: value.originConnectionId } : {}) } } })
     } else if (value.kind === "update") {
-      const meta = object(value.params?._meta ?? {}) as JsonObject
+      const meta = cloneWireJson(object(value.params?._meta ?? {})) as JsonObject
       notify("session/update", { ...value.params, sessionId, update: value.update as JsonObject, _meta: { ...meta, agency: { version: 1, seq: value.seq, replay } } }, value.meta)
     } else if (value.kind === "turn") {
       binding.turnId = value.state === "accepted" || value.state === "running" ? value.submissionId : null
@@ -42,42 +58,53 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     return [logical, binding]
   }
   const live = async (sessionId: string, binding: Binding): Promise<void> => {
-    try { await service.sessionSnapshot(binding.target) }
+    try { await service.sessionSnapshot(binding.target); checkBinding(sessionId, binding) }
     catch (error) {
       if (error instanceof AgentError && ["STALE_HANDLER", "STALE_PROVIDER", "NOT_READY", "UNAVAILABLE", "CLEANUP_UNVERIFIED"].includes(error.code)) { invalidate(sessionId, binding); throw new AgentError("STALE_ATTACHMENT") }
       throw error
     }
   }
-  const attach = async (sessionId: string, target: AgentTuple): Promise<JsonObject> => {
-    const buffered: Array<ConversationNotification | SessionConfiguration> = [], binding: Binding = { target, invalid: false, turnId: null, configuration: { configOptions: [], models: null, modes: null, availableCommands: [], revision: 0 } }
+  const attach = async (sessionId: string, target: AgentTuple, address: string | null): Promise<JsonObject> => {
+    const buffered: Array<ConversationNotification | SessionConfiguration> = [], binding: Binding = { attachment: randomUUID(), target, invalid: false, turnId: null, configuration: { configOptions: [], models: null, modes: null, availableCommands: [], revision: 0 } }
+    const previous = bindings.get(sessionId)
+    if (previous) detach(previous)
+    if (closed) throw new AgentError("UNAVAILABLE")
+    bindings.set(sessionId, binding)
     let replaying = true
     const deliver = (value: ConversationNotification): void => {
+      if (!current(sessionId, binding)) return
       if (value.kind === "closed") invalidate(sessionId, binding)
       else event(sessionId, binding, value.event, false)
     }
-    const configuration = (snapshot: SessionConfiguration): void => { binding.configuration = snapshot; state(sessionId, binding, true) }
-    const observed = await service.observeSession(target, value => { if (replaying) buffered.push(value); else deliver(value) }, snapshot => { if (replaying) buffered.push(snapshot); else configuration(snapshot) })
-    if (closed) { observed.close(); throw new AgentError("UNAVAILABLE") }
-    const previous = bindings.get(sessionId)
-    previous?.observation?.close()
-    if (previous) service.detachPermissions(input.connectionId, previous.target)
-    bindings.set(sessionId, binding); binding.observation = observed; binding.configuration = observed.native.configuration
-    const snapshot = observed.snapshot
-    for (const value of snapshot.events) event(sessionId, binding, value, true)
-    binding.turnId = snapshot.currentTurn && ["accepted", "running"].includes(snapshot.currentTurn.state) ? snapshot.currentTurn.submissionId : null
-    state(sessionId, binding, true)
-    replaying = false
-    for (const value of buffered) {
-      if ("kind" in value) { if (value.kind === "closed" || value.event.seq > snapshot.lastSeq) deliver(value) }
-      else configuration(value)
+    const configuration = (snapshot: SessionConfiguration): void => { if (current(sessionId, binding)) { binding.configuration = snapshot; state(sessionId, binding, true) } }
+    try {
+      const observed = await service.observeSession(target, value => { if (replaying) buffered.push(value); else deliver(value) }, snapshot => { if (replaying) buffered.push(snapshot); else configuration(snapshot) })
+      binding.observation = observed
+      checkBinding(sessionId, binding)
+      service.attachEditor(target, input.connectionId, address, binding.attachment)
+      binding.configuration = observed.native.configuration
+      const snapshot = observed.snapshot
+      for (const value of snapshot.events) event(sessionId, binding, value, true)
+      binding.turnId = snapshot.currentTurn && ["accepted", "running"].includes(snapshot.currentTurn.state) ? snapshot.currentTurn.submissionId : null
+      state(sessionId, binding, true)
+      replaying = false
+      for (const value of buffered) {
+        if ("kind" in value) { if (value.kind === "closed" || value.event.seq > snapshot.lastSeq) deliver(value) }
+        else configuration(value)
+      }
+      checkBinding(sessionId, binding)
+      await service.attachPermissions(target, { connectionId: input.connectionId, send }, () => current(sessionId, binding))
+      checkBinding(sessionId, binding)
+      const native = observed.native, result = { ...native.result }
+      delete result.configOptions; delete result.models; delete result.modes; delete result.availableCommands
+      const config = binding.configuration
+      return { ...result, sessionId, configOptions: config.configOptions, ...(config.models ? { models: config.models } : {}), ...(config.modes ? { modes: config.modes } : {}), availableCommands: config.availableCommands, _meta: { ...object(result._meta ?? {}), agency: json({ version: 1, binding: target, backendId: observed.backendId, capabilities: native.capabilities, configuration: config, firstSeq: snapshot.firstSeq, lastSeq: snapshot.lastSeq, historyTruncated: snapshot.historyTruncated, turnId: binding.turnId, connectionId: input.connectionId }) } }
+    } catch (error) {
+      binding.invalid = true; binding.observation?.close()
+      service.detachEditor(input.connectionId, target, binding.attachment)
+      if (bindings.get(sessionId) === binding) service.detachPermissions(input.connectionId, target)
+      throw error
     }
-    if (binding.invalid) throw new AgentError("STALE_ATTACHMENT")
-    await service.attachPermissions(target, { connectionId: input.connectionId, send })
-    if (closed) { service.detachPermissions(input.connectionId); observed.close(); throw new AgentError("UNAVAILABLE") }
-    const native = observed.native, result = { ...native.result }
-    delete result.configOptions; delete result.models; delete result.modes; delete result.availableCommands
-    const config = binding.configuration
-    return { ...result, sessionId, configOptions: config.configOptions, ...(config.models ? { models: config.models } : {}), ...(config.modes ? { modes: config.modes } : {}), availableCommands: config.availableCommands, _meta: { ...object(result._meta ?? {}), agency: json({ version: 1, binding: target, backendId: observed.backendId, capabilities: native.capabilities, configuration: config, firstSeq: snapshot.firstSeq, lastSeq: snapshot.lastSeq, historyTruncated: snapshot.historyTruncated, turnId: binding.turnId, connectionId: input.connectionId }) } }
   }
   async function dispatch(method: string, params: JsonObject, pinnedCancel: string | null): Promise<JsonObject> {
     if (method === "initialize") {
@@ -89,6 +116,14 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     }
     if (!initialized) throw new AcpError(-32600, "Initialize required")
     if (method === "authenticate") throw new AgentError("UNSUPPORTED_SESSION_FEATURE")
+    if (method === "agency/roster") {
+      const options = checked(() => {
+        const options = parsePageInput(params)
+        if (options.activeOnly === false) throw new Error()
+        return options
+      })
+      return json({ handlerGeneration: service.handlerGeneration, ...await service.roster(options) })
+    }
     if (method === "agency/backends") return service.backendChoices()
     if (method === "agency/native_sessions") {
       const environment = input.environment ?? {}
@@ -104,7 +139,8 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     }
     if (method === "agency/detach") {
       const sessionId = "agency:" + parseLogicalSessionId(params.sessionId), binding = bindings.get(sessionId)
-      if (binding) { binding.observation?.close(); service.detachPermissions(input.connectionId, binding.target); bindings.delete(sessionId) }
+      loads.delete(sessionId)
+      if (binding) { detach(binding); bindings.delete(sessionId) }
       return {}
     }
     if (method === "session/list") {
@@ -117,12 +153,13 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
           cwd: view.record.spec.checkout.root.path, title: "Legacy Agency session", _meta: { agency: {
             version: 1, recordVersion: 1, phase: view.record.phase, unavailable: true, unavailableReason: "Legacy record (version 1)" } } }
         const issue = "unavailable" in view ? view.unavailable : null
-        return { sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, title: view.record.definition.backendId, _meta: { agency: { version: 1, recordVersion: 3, backendId: view.record.definition.backendId, phase: view.record.phase, nativeSessionId: view.record.session?.sessionId ?? null,
+        return { sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, title: ("display" in view ? view.display?.title : null) ?? "New conversation", _meta: { agency: { version: 1, recordVersion: 3, backendId: view.record.definition.backendId, phase: view.record.phase, nativeSessionId: view.record.session?.sessionId ?? null,
           unavailable: !!issue, ...(issue ? { unavailableReason: issue.message } : {}) } } }
       }), ...(inventory.nextCursor ? { nextCursor: inventory.nextCursor } : {}) }
     }
     if (method === "session/new") {
-      const cwd = checked(() => absolutePath(params.cwd)), meta = parseAgencyMeta(params, ["commandId", "backendId", "inheritSessionId", "selection", "environment"])
+      const cwd = checked(() => absolutePath(params.cwd)), meta = parseAgencyMeta(params, ["commandId", "backendId", "inheritSessionId", "selection", "environment", "editor"])
+      const address = editorAddress(meta) ?? null
       if (!Array.isArray(params.mcpServers)) throw new AcpError(-32602, "MCP server list required")
       checked(() => sessionInputs(cwd, params))
       if (meta.backendId !== undefined && meta.inheritSessionId !== undefined) throw new AcpError(-32602, "Ambiguous backend selection")
@@ -135,29 +172,35 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       const environment = checked(() => parseLaunchEnvironment(meta.environment ?? input.environment ?? {}))
       const commandId = meta.commandId === undefined ? randomUUID() : checked(() => id(meta.commandId))
       const record = await service.createSession({ cwd, commandId, ...(backendId ? { backendId } : {}), ...(selection ? { selection } : {}), environment, nativeParams: params })
-      return attach("agency:" + record.definition.agentId, agentTuple(record)!)
+      return attach("agency:" + record.definition.agentId, agentTuple(record)!, address)
     }
     if (method === "session/load") {
-      const agentId = parseLogicalSessionId(params.sessionId), cwd = checked(() => absolutePath(params.cwd))
+      const agentId = parseLogicalSessionId(params.sessionId), cwd = checked(() => absolutePath(params.cwd)), meta = parseAgencyMeta(params, ["editor"]), address = editorAddress(meta) ?? null
       if (!Array.isArray(params.mcpServers)) throw new AcpError(-32602, "MCP server list required")
       checked(() => sessionInputs(cwd, params))
+      const logical = "agency:" + agentId, intent = Symbol()
+      loads.set(logical, intent)
       const view = await service.sessionRecord(agentId)
+      if (closed || loads.get(logical) !== intent) throw new AgentError("STALE_ATTACHMENT")
       if (!view || view.record.version !== 3) throw new AgentError("UNAVAILABLE")
       if (view.record.definition.cwd !== cwd) throw new AcpError(-32602, "Session directory mismatch")
       if (!view.live || !view.record.launch) throw new AgentError("NOT_READY")
-      return attach("agency:" + agentId, agentTuple(view.record)!)
+      return attach(logical, agentTuple(view.record)!, address)
     }
     if (!["session/prompt", "session/cancel", "session/set_model", "session/set_mode", "session/set_config_option"].includes(method)) throw new AcpError(-32601, "Method not found")
     const [logical, binding] = requireBinding(params.sessionId)
+    const attachment = binding.attachment
+    const promptMeta = method === "session/prompt" ? parseAgencyMeta(params, ["submissionId", "editor"]) : undefined
+    const address = promptMeta ? editorAddress(promptMeta) : undefined
     await live(logical, binding)
     if (method === "session/cancel") { if (pinnedCancel) await service.cancel(binding.target, pinnedCancel); return {} }
     if (method === "session/prompt") {
-      const meta = parseAgencyMeta(params, ["submissionId"])
+      const meta = promptMeta!
       checked(() => { if (!Array.isArray(params.prompt) || !params.prompt.length) throw new Error(); params.prompt.forEach(validateStructuredContent) })
       const prompt = params.prompt as JsonObject[], capabilities = binding.observation!.native.capabilities.promptCapabilities as JsonObject | undefined
       for (const content of prompt) if (content.type === "image" && capabilities?.image !== true || content.type === "audio" && capabilities?.audio !== true || ["resource", "resource_link"].includes(String(content.type)) && capabilities?.embeddedContext !== true) throw new AgentError("UNSUPPORTED_SESSION_FEATURE")
       const submissionId = meta.submissionId === undefined ? randomUUID() : checked(() => id(meta.submissionId))
-      await service.submitAcp(binding.target, { submissionId, prompt, ...(params._meta ? { meta: params._meta as JsonObject } : {}), originConnectionId: input.connectionId })
+      await service.submitAcp(binding.target, { submissionId, prompt, ...(params._meta ? { meta: params._meta as JsonObject } : {}), originConnectionId: input.connectionId, originAttachment: attachment, ...(address === undefined ? {} : { editorAddress: address }) })
       return service.settledAcp(binding.target, submissionId)
     }
     checked(() => {
@@ -193,6 +236,6 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       } catch (error) { if (requestId !== undefined && (!admitted || pending.get(requestId) === token)) send(json(acpError(requestId, error))) }
       finally { if (requestId !== undefined && pending.get(requestId) === token) pending.delete(requestId) }
     },
-    close() { if (closed) return; closed = true; for (const binding of bindings.values()) binding.observation?.close(); service.detachPermissions(input.connectionId); bindings.clear(); pending.clear() },
+    close() { if (closed) return; closed = true; for (const binding of bindings.values()) detach(binding); service.detachEditor(input.connectionId); service.detachPermissions(input.connectionId); bindings.clear(); loads.clear(); pending.clear() },
   }
 }

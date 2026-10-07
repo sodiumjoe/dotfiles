@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import { EDITOR_TURN_LIMITS, type TurnResult } from "../src/agent/session-events.js"
 import { agentId } from "./agent-support.js"
 import { createConversation } from "../src/agent/conversation.js"
+import { AgentError } from "../src/agent/types.js"
 import { createTurnCoordinator } from "../src/agent/turns.js"
 
 const target = { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3) }
@@ -119,5 +120,31 @@ test("late settlement uses retained answer events but never reconstructs evicted
   for (let i = 0; i < 10; i++) conversation.append({ kind: "update", replay: false, update: { sessionUpdate: "usage_update", used: i, size: 100 } })
   await assert.rejects(turns.settled(request.submissionId), { code: "INCOMPLETE" })
   assert.equal(turns.inspect(request.submissionId)!.state, "completed")
+  turns.close(null); conversation.close()
+})
+
+test("accepted admission runs once and cannot be stolen by busy or duplicate requests", async () => {
+  const conversation = createConversation(target), answer = Promise.withResolvers<TurnResult>(), origins: string[] = []
+  const admission = { onAccepted: (request: { originConnectionId?: string }) => { origins.push(request.originConnectionId!) } }
+  const turns = createTurnCoordinator({ ...admission, target, conversation, validate: async () => {}, invokeAcp: async () => { await answer.promise; return { stopReason: "end_turn" } }, cancel: async () => {} })
+  const request = { submissionId: randomUUID(), prompt: [{ type: "text", text: "one" }], originConnectionId: "a" }
+  await turns.submitAcp(request)
+  await turns.submitAcp({ ...request, originConnectionId: "b" })
+  await assert.rejects(turns.submitAcp({ ...request, submissionId: randomUUID(), originConnectionId: "b" }), { code: "BUSY" })
+  assert.deepEqual(origins, ["a"])
+  const settled = turns.settledAcp(request.submissionId)
+  answer.resolve({ stopReason: "end_turn", text: "" }); await settled
+  turns.close(null); conversation.close()
+})
+
+test("stale accepted origin creates no receipt or submitted event", async () => {
+  const conversation = createConversation(target)
+  const admission = { onAccepted: () => { throw new AgentError("STALE_ATTACHMENT") } }
+  const turns = createTurnCoordinator({ ...admission, target, conversation, validate: async () => {}, invokeAcp: async () => { throw new Error("must not invoke") }, cancel: async () => {} })
+  const request = { submissionId: randomUUID(), prompt: [{ type: "text", text: "one" }] }
+  await assert.rejects(turns.submitAcp(request), { code: "STALE_ATTACHMENT" })
+  assert.equal(turns.inspect(request.submissionId), null)
+  const observation = conversation.observe(() => {})
+  assert.equal(observation.snapshot.events.length, 0); observation.close()
   turns.close(null); conversation.close()
 })
