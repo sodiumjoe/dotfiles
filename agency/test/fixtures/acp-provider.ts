@@ -10,6 +10,7 @@ const options = [
   { id: "reasoning_effort", name: "Reasoning", type: "select", currentValue: "high", options: [{ value: "high", name: "High" }, { value: "low", name: "Low" }] },
   { id: "mode", name: "Mode", type: "select", category: "mode", currentValue: "agent-full-access", options: [{ value: "agent-full-access", name: "Full access" }, { value: "read-only", name: "Read only" }] },
 ]
+if (process.env.FIXTURE_SELECTION) options[0]!.options.push({ value: "model-c", name: "C" })
 let modelId = "legacy-a", modeId = "normal", sessionId = "native-session", promptId: string | number | null = null
 let permission: (() => void) | undefined, release: (() => void) | undefined
 const send = (frame: unknown) => { process.stdout.write(JSON.stringify(frame) + "\n") }
@@ -21,7 +22,9 @@ async function barrier(name: string) {
   await writeFile(join(root!, "at-" + name), "ready", { mode: 0o600 })
   while (!await exists("release-" + name)) await new Promise(resolve => setTimeout(resolve, 10))
 }
-const snapshot = () => backend === "codex-acp" ? { configOptions: options } : {
+const snapshot = () => backend === "codex-acp" ? { configOptions: options, ...(process.env.FIXTURE_SELECTION ? {
+  models: { currentModelId: options[0]!.currentValue + "[" + options[1]!.currentValue + "]", availableModels: options[0]!.options.flatMap(model => (model.value === "model-c" ? ["medium", "minimal"] : ["high", "low"]).map(effort => ({ modelId: model.value + "[" + effort + "]", name: model.name + effort }))) }
+} : {}) } : {
   models: { currentModelId: modelId, availableModels: [{ modelId: "legacy-a", name: "A" }, { modelId: "legacy-b", name: "B" }] },
   modes: { currentModeId: modeId, availableModes: [{ id: "normal", name: "Normal" }, { id: "review", name: "Review" }] },
 }
@@ -57,6 +60,10 @@ async function dispatch(request: { id: string | number; method?: string; params?
     if (!option || !option.options.some(value => value.value === params.value)) throw new Error("unoffered selection")
     await barrier("setter-before")
     option.currentValue = params.value
+    if (process.env.FIXTURE_SELECTION && option.id === "model") {
+      options[1]!.options = (params.value === "model-c" ? ["medium", "minimal"] : ["high", "low"]).map(value => ({ value, name: value }))
+      options[1]!.currentValue = options[1]!.options[1]!.value
+    }
     await writeFile(statePath, JSON.stringify(snapshot()), { mode: 0o600 })
     await barrier("setter-after")
     reply(request.id, snapshot())

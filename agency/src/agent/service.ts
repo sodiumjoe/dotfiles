@@ -30,6 +30,7 @@ import { withNativeSession, withoutAgencyMetadata, type ProviderSession } from "
 import { launchEnvironmentDigest, parseLaunchEnvironment } from "./environment.js"
 import { createPermissionBroker, type PermissionClient } from "../acp/permissions.js"
 import { parseImportInput, type ImportInput } from "./types.js"
+import { backendSelection } from "./backend-selection.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
@@ -454,7 +455,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         ...((raw as StartInput).selection.mode ? { modeId: (raw as StartInput).selection.mode! } : {}),
         ...((raw as StartInput).selection.reasoning.kind === "value" && declaration.reasoningOption ? { configValues: { [declaration.reasoningOption]: ((raw as StartInput).selection.reasoning as { kind: "value"; value: string }).value } } : {})
       } : {}
-      const settings = previousAgent?.settings ?? parseRequestedSettings({ ...backend.initial, ...selected, ...((backend.initial.configValues || selected.configValues) ? { configValues: { ...backend.initial.configValues, ...selected.configValues } } : {}) })
+      const merged = parseRequestedSettings({ ...backend.initial, ...selected, ...((backend.initial.configValues || selected.configValues) ? { configValues: { ...backend.initial.configValues, ...selected.configValues } } : {}) })
+      for (const [field, option] of [["modelId", declaration.modelOption], ["modeId", declaration.modeOption]] as const) {
+        if (!option) continue
+        if (selected.configValues?.[option] !== undefined && selected[field] === undefined) delete merged[field]
+        if (selected[field] !== undefined && selected.configValues?.[option] === undefined && merged.configValues) delete merged.configValues[option]
+      }
+      const settings = previousAgent?.settings ?? merged
       const { params, names } = sessionInputs(cwd, "nativeParams" in raw ? raw.nativeParams : undefined, previousAgent?.inputRequirements.mcpServerNames)
       const selectionDigest = kind === "start" ? native ? requestedSettingsDigest(settings) : startSelectionDigest((raw as StartInput).selection) : null
       const durableInput: JsonObject = kind === "start" ? { cwd, backendId, selectionDigest, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names } : { agentId: (request as RestoreRequest).agentId, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names }
@@ -799,7 +806,16 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const config = await readBackendConfig(root), profiles = await readProfiles(root)
       const backends = config.backends.filter(backend => profiles.some(profile => profile.id === backend.id && profile.enabled)
         && input.contracts.some(contract => contract.id === backend.compatibilityId && contract.providerId === backend.id))
-      return { defaultBackendId: config.defaultBackendId, backends: backends.map(backend => ({ id: backend.id })) }
+      const choices: JsonObject[] = []
+      for (const backend of backends) {
+        const declaration = input.contracts.find(contract => contract.id === backend.compatibilityId && contract.providerId === backend.id)!
+        const profile = profiles.find(profile => profile.id === backend.id)!
+        try { await configureLaunchContract(declaration, profile, await observeConfig(profile)) } catch { continue }
+        let provider
+        try { provider = (await catalog.launchEvidence(backend.id)).provider } catch {}
+        choices.push(backendSelection(backend, declaration, provider))
+      }
+      return { defaultBackendId: config.defaultBackendId, backends: choices }
     },
     async acpCapabilities() {
       const capabilities = { image: false, audio: false, embeddedContext: false }

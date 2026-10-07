@@ -112,9 +112,13 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       let inventory
       try { inventory = await service.page(options) }
       catch (error) { if (error instanceof AgentError && error.code === "INVALID_PROTOCOL") throw new AcpError(-32602, "Invalid cursor"); throw error }
-      return { sessions: inventory.agents.flatMap(view => {
-        if (view.record.version !== 3) return []
-        return [{ sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, title: view.record.definition.backendId, _meta: { agency: { version: 1, backendId: view.record.definition.backendId, phase: view.record.phase, nativeSessionId: view.record.session?.sessionId ?? null } } }]
+      return { sessions: inventory.agents.map<JsonObject>(view => {
+        if (view.record.version === 1) return { sessionId: "agency:" + view.record.spec.agentId,
+          cwd: view.record.spec.checkout.root.path, title: "Legacy Agency session", _meta: { agency: {
+            version: 1, recordVersion: 1, phase: view.record.phase, unavailable: true, unavailableReason: "Legacy record (version 1)" } } }
+        const issue = "unavailable" in view ? view.unavailable : null
+        return { sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, title: view.record.definition.backendId, _meta: { agency: { version: 1, recordVersion: 3, backendId: view.record.definition.backendId, phase: view.record.phase, nativeSessionId: view.record.session?.sessionId ?? null,
+          unavailable: !!issue, ...(issue ? { unavailableReason: issue.message } : {}) } } }
       }), ...(inventory.nextCursor ? { nextCursor: inventory.nextCursor } : {}) }
     }
     if (method === "session/new") {

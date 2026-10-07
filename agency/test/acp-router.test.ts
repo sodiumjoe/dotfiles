@@ -317,3 +317,115 @@ test("new-session inheritance uses the current binding backend instead of the de
   assert.notEqual(second.sessionId, first.sessionId)
   assert.equal((await f.requests("codex-acp")).length, 0)
 })
+
+test("pre-creation choices carry configured defaults and advertised model-specific settings without spawning", async t => {
+  const f = await acpFixture(t, { selectionCatalog: true }), c = await f.connect()
+  await c.request("initialize", initialize)
+  const choices = await c.request("agency/backends", {})
+  const backend = (choices.backends as JsonObject[]).find(value => value.id === "codex-acp")!
+  assert.equal(backend.discovery, "fresh")
+  assert.deepEqual(backend.defaults, {})
+  const model = (backend.models as JsonObject[]).find(value => value.id === "model-c")!
+  assert.deepEqual(model.selection, { configValues: { model: "model-c" } })
+  assert.deepEqual((model.settings as JsonObject[])[0]!.values, [{ value: "medium", name: "medium" }, { value: "minimal", name: "minimal" }])
+  assert.equal((await f.inventory()).agents.length, 0)
+  assert.equal((await f.requests("codex-acp")).length, 0)
+})
+
+test("changed catalog configuration exposes only labeled configured defaults without replacing the backend", async t => {
+  const f = await acpFixture(t, { selectionCatalog: true }), c = await f.connect()
+  await c.request("initialize", initialize)
+  await writeFile(join(f.root, "profile/declared.json"), "changed", { mode: 0o600 })
+  const backend = ((await c.request("agency/backends", {})).backends as JsonObject[]).find(value => value.id === "codex-acp")!
+  assert.equal(backend.discovery, "unavailable")
+  assert.deepEqual(backend.models, [])
+  assert.deepEqual(backend.defaults, {})
+  assert.equal((await f.inventory()).agents.length, 0)
+})
+
+test("raw selected models work beside composite legacy IDs and validate reasoning after changing model", async t => {
+  const f = await acpFixture(t, { selectionCatalog: true }), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: {
+    agency: { version: 1, backendId: "codex-acp", selection: { configValues: { reasoning_effort: "medium", model: "model-c", mode: "read-only" } } }
+  } })
+  const configuration = ((session._meta as JsonObject).agency as JsonObject).configuration as JsonObject
+  const options = configuration.configOptions as JsonObject[]
+  assert.equal(options.find(value => value.id === "model")!.currentValue, "model-c")
+  assert.equal(options.find(value => value.id === "reasoning_effort")!.currentValue, "medium")
+  assert.equal(options.find(value => value.id === "mode")!.currentValue, "read-only")
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
+})
+
+test("legacy saved history remains visible with stable pagination and cwd filtering", async t => {
+  const f = await acpFixture(t, { legacyCount: 101 }), c = await f.connect()
+  await c.request("initialize", initialize)
+  await c.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  const all: JsonObject[] = []
+  let cursor: string | undefined
+  do {
+    const page = await c.request("session/list", cursor ? { cursor } : {})
+    all.push(...page.sessions as JsonObject[])
+    cursor = page.nextCursor as string | undefined
+  } while (cursor)
+  assert.equal(all.length, 102)
+  assert.equal(new Set(all.map(value => value.sessionId)).size, 102)
+  const historical = all.filter(value => ((value._meta as JsonObject).agency as JsonObject).recordVersion === 1)
+  assert.equal(historical.length, 101)
+  const saved = historical[0]!
+  assert.equal(((saved._meta as JsonObject).agency as JsonObject).unavailable, true)
+  assert.equal(((saved._meta as JsonObject).agency as JsonObject).backendId, undefined)
+  assert.equal(((saved._meta as JsonObject).agency as JsonObject).nativeSessionId, undefined)
+  assert.equal(saved.cwd, f.otherWorkspace)
+  await assert.rejects(c.request("session/load", { sessionId: saved.sessionId!, cwd: saved.cwd!, mcpServers: [] }), { code: "UNAVAILABLE" })
+  await assert.rejects(f.restore(String(saved.sessionId).slice(7)), { code: "NOT_READY" })
+  const local = await c.request("session/list", { cwd: f.workspace })
+  assert.equal((local.sessions as JsonObject[]).length, 1)
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
+})
+
+for (const catalogState of ["missing", "stale", "prior-generation", "failed"] as const) test(`unusable ${catalogState} catalog evidence preserves explicit defaults and creates only on request`, async t => {
+  const f = await acpFixture(t, { selectionCatalog: true, catalogState }), c = await f.connect()
+  await c.request("initialize", initialize)
+  const path = join(f.paths.persistentRoot, "catalog/backends.json")
+  const config = JSON.parse(await readFile(path, "utf8"))
+  config.backends[0].initial = { modeId: "agent-full-access", configValues: { reasoning_effort: "high" } }
+  await writeFile(path, JSON.stringify(config), { mode: 0o600 })
+  const backend = ((await c.request("agency/backends", {})).backends as JsonObject[]).find(value => value.id === "codex-acp")!
+  assert.equal(backend.discovery, "unavailable")
+  assert.deepEqual(backend.models, [])
+  assert.deepEqual(backend.defaults, { modeId: "agent-full-access", configValues: { reasoning_effort: "high" } })
+  assert.equal((await f.inventory()).agents.length, 0)
+  assert.equal((await f.requests("codex-acp")).length, 0)
+  await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, backendId: "codex-acp", selection: backend.defaults! } } })
+  assert.equal((await f.inventory()).agents.length, 1)
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
+})
+
+test("explicit modern selections override conflicting configured legacy model and mode defaults", async t => {
+  const f = await acpFixture(t, { selectionCatalog: true }), c = await f.connect()
+  await c.request("initialize", initialize)
+  const path = join(f.paths.persistentRoot, "catalog/backends.json"), config = JSON.parse(await readFile(path, "utf8"))
+  config.backends[0].initial = { modelId: "model-a[high]", modeId: "read-only", configValues: { reasoning_effort: "high" } }
+  await writeFile(path, JSON.stringify(config), { mode: 0o600 })
+  const s = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, backendId: "codex-acp", selection: {
+    configValues: { model: "model-c", reasoning_effort: "medium", mode: "agent-full-access" }
+  } } } })
+  const options = (((s._meta as JsonObject).agency as JsonObject).configuration as JsonObject).configOptions as JsonObject[]
+  assert.equal(options.find(value => value.id === "model")!.currentValue, "model-c")
+  assert.equal(options.find(value => value.id === "mode")!.currentValue, "agent-full-access")
+})
+
+test("incompatible enabled backends do not block compatible choices or change the configured default", async t => {
+  const f = await acpFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  await writeFile(join(f.root, "secondary/adapter.json"), JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "99.0.0", main: "agent-provider.js" }), { mode: 0o600 })
+  const compatible = await c.request("agency/backends", {})
+  assert.equal(compatible.defaultBackendId, "codex-acp")
+  assert.deepEqual((compatible.backends as JsonObject[]).map(value => value.id), ["codex-acp"])
+  await writeFile(join(f.root, "profile/adapter.json"), JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "99.0.0", main: "agent-provider.js" }), { mode: 0o600 })
+  assert.deepEqual(await c.request("agency/backends", {}), { defaultBackendId: "codex-acp", backends: [] })
+  assert.equal((await f.requests("codex-acp")).length, 0)
+  assert.equal((await f.requests("claude-agent-acp")).length, 0)
+})

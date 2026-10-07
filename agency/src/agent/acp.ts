@@ -206,16 +206,13 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
                 selected[optionId] = value
               }
             }
-            for (const [configId, value] of Object.entries(selected)) {
+            for (const { method, field, value } of legacySelections) await request(method, { sessionId, [field]: value }, signal)
+            const acknowledged: Record<string, string | boolean> = {}
+            const choices = Object.entries(selected).sort(([a], [b]) => a === contract.modelOption ? -1 : b === contract.modelOption ? 1 : 0)
+            for (const [configId, value] of choices) {
               const option = configuration.configOptions.find(option => option.id === configId)
               if (!option) throw new AgentError("SELECTION_UNSUPPORTED")
               if (projectRestorableSettings({ configOptions: [{ ...option, currentValue: value }] }).configValues?.[configId] !== value) throw new AgentError("SELECTION_UNSUPPORTED")
-            }
-            for (const { method, field, value } of legacySelections) await request(method, { sessionId, [field]: value }, signal)
-            const acknowledged: Record<string, string | boolean> = {}
-            for (const [configId, value] of Object.entries(selected)) {
-              const option = configuration.configOptions.find(option => option.id === configId)
-              if (!option) throw new AgentError("SELECTION_UNSUPPORTED")
               if (option.currentValue !== value) {
                 const response = await request("session/set_config_option", { sessionId, configId, value }, signal)
                 const values = projectRestorableSettings(response).configValues ?? {}

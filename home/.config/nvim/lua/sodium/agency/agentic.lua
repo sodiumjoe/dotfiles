@@ -107,6 +107,18 @@ function M.install()
     local native = {}
     for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = entry[1][name] end end
     local sm, acp = native[Manager], native[Client]
+    local Agentic = require("agentic")
+    for _, name in ipairs({ "switch_provider", "new_session_with_provider" }) do
+        local original = Agentic[name]
+        Agentic[name] = function(opts)
+            if require("agentic.config").provider ~= "agency" then return original(opts) end
+            if opts and opts.provider and opts.provider ~= "agency" then
+                require("sodium.agency").setup().notify("Select an Agency backend instead of a direct provider")
+                return
+            end
+            return require("sodium.agency").new(nil, opts)
+        end
+    end
 
     function Manager:new(tab)
         if require("agentic.config").provider ~= "agency" then return sm.new(self, tab) end

@@ -6,14 +6,11 @@ end
 
 local function fields(row)
     local record = row.record
-    if record.version == 3 then
-        return record.definition.agentId,
-            record.definition.backendId,
-            record.settings.modelId or "",
-            record.definition.cwd,
-            record.phase
-    end
-    return record.spec.agentId, "legacy", "", record.spec.checkout.root.path, record.phase
+    return record.definition.agentId,
+        record.definition.backendId,
+        (record.settings.configValues or {}).model or record.settings.modelId or "",
+        record.definition.cwd,
+        record.phase
 end
 
 function M.open(controller)
@@ -37,33 +34,29 @@ function M.open(controller)
             else
                 local active = controller.snapshot()
                 for _, row in ipairs(result.agents) do
-                    local id, provider, model, cwd, phase = fields(row)
-                    local attached = active
-                        and row.record.version == 3
-                        and row.record.launch ~= vim.NIL and row.record.launch
-                        and active.target.agentId == id
-                        and active.target.handlerGeneration == row.record.launch.handlerGeneration
-                        and active.target.providerGeneration == row.record.launch.providerGeneration
-                    local freshness = row.record.version == 3
-                            and row.record.launch ~= vim.NIL and row.record.launch
-                            and row.record.launch.handlerGeneration == result.handlerGeneration
-                            and "current"
-                        or "historical"
-                    items[#items + 1] = {
-                        id = id,
-                        view = vim.deepcopy(row),
-                        text = table.concat(
-                            {
-                                id,
-                                provider .. "/" .. model,
-                                cwd,
-                                phase,
-                                row.cleanup,
-                                attached and (active.connected and "attached" or "disconnected") or freshness,
-                            },
-                            " · "
-                        ),
-                    }
+                    if row.record.version == 3 and row.live and row.record.launch and row.record.launch ~= vim.NIL
+                        and row.record.launch.handlerGeneration == result.handlerGeneration then
+                        local id, provider, model, cwd, phase = fields(row)
+                        local attached = active
+                            and active.target.agentId == id
+                            and active.target.handlerGeneration == row.record.launch.handlerGeneration
+                            and active.target.providerGeneration == row.record.launch.providerGeneration
+                        items[#items + 1] = {
+                            id = id,
+                            view = vim.deepcopy(row),
+                            text = table.concat(
+                                {
+                                    id,
+                                    provider .. "/" .. model,
+                                    cwd,
+                                    phase,
+                                    row.cleanup,
+                                    attached and (active.connected and "attached" or "disconnected") or "current",
+                                },
+                                " · "
+                            ),
+                        }
+                    end
                 end
                 for _, issue in ipairs(result.issues) do
                     items[#items + 1] =
@@ -87,7 +80,7 @@ function M.open(controller)
         end
     end
     picker = Snacks.picker({
-        title = "Agency local agents",
+        title = "Agency active agents",
         items = {},
         show_empty = true,
         format = "text",
@@ -97,21 +90,6 @@ function M.open(controller)
         actions = {
             attach = function(p)
                 attach(p, p:current())
-            end,
-            restore = function(p)
-                local item = p:current()
-                local row = item and item.view
-                if
-                    row
-                    and row.record.version == 3
-                    and (row.cleanup == "verified" or row.cleanup == "not_launched")
-                    and vim.tbl_contains({ "stopped", "recoverable" }, row.record.phase)
-                then
-                    p:close()
-                    controller.restore(item.id)
-                else
-                    inspect(item)
-                end
             end,
             stop = function(p)
                 local item = p:current()
@@ -123,14 +101,10 @@ function M.open(controller)
                     inspect(item)
                 end
             end,
-            new = function(p)
-                p:close()
-                controller.new()
-            end,
             refresh = refresh,
             help = function()
                 controller.notify(
-                    "Enter/a attach ready; n new; s stop selected; r explicit verified restore; R refresh; ? help. Other rows are inspectable only."
+                    "Enter/C-a attach ready; C-s stop selected; M-r refresh; ? help. Transitional rows are inspectable only. Saved sessions: <leader>ar. New session: <leader>an."
                 )
             end,
         },
@@ -138,9 +112,7 @@ function M.open(controller)
             input = {
                 keys = {
                     ["<C-a>"] = { "attach", mode = { "n", "i" } },
-                    ["<C-n>"] = { "new", mode = { "n", "i" } },
                     ["<C-s>"] = { "stop", mode = { "n", "i" } },
-                    ["<C-r>"] = { "restore", mode = { "n", "i" } },
                     ["<M-r>"] = { "refresh", mode = { "n", "i" } },
                     ["?"] = { "help", mode = "n" },
                 },

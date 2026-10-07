@@ -11,7 +11,7 @@ import { promisify } from "node:util"
 import type { ProviderId } from "../src/catalog/types.js"
 import type { JsonObject, JsonValue } from "../src/agent/session-config.js"
 import { privateRoot } from "./control-support.js"
-import { agentHandlerFixture } from "./agent-support.js"
+import { type AgentHandlerOptions, agentHandlerFixture } from "./agent-support.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { agentTuple } from "../src/agent/recovery.js"
@@ -121,7 +121,7 @@ export async function providerFixture(t: TestContext, backendId: ProviderId = "c
   }
 }
 
-export async function acpFixture(t: TestContext) {
+export async function acpFixture(t: TestContext, options: AgentHandlerOptions = {}) {
   const cleanup: Array<() => unknown> = [], context = Object.create(t) as TestContext
   context.diagnostic = t.diagnostic.bind(t)
   context.after = fn => { cleanup.push(() => fn?.(t, error => { if (error) throw error })) }
@@ -130,7 +130,7 @@ export async function acpFixture(t: TestContext) {
     for (const close of cleanup.reverse()) try { await close() } catch (error) { failures.push(error) }
     if (failures.length) throw new AggregateError(failures, "ACP fixture cleanup incomplete")
   })
-  const f = await agentHandlerFixture(context, { nativeAcp: true }), peers = new Set<AcpPeer>()
+  const f = await agentHandlerFixture(context, { ...options, nativeAcp: true }), peers = new Set<AcpPeer>()
   context.after(() => { for (const peer of peers) peer.close() })
   const environment = { PATH: process.env.PATH!, HOME: join(f.root, "home") }
   const tuple = async (sessionId: string) => {
@@ -175,7 +175,8 @@ export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
     cwd: f.workspace, env: { ...process.env, HOME: f.environment.HOME, XDG_STATE_HOME: join(root, "state"), XDG_CACHE_HOME: join(root, "cache"),
       XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"), DOTFILES_TEST_ROOT: repo,
       AGENCY_FIXTURE_PLUGIN_ROOT: join(process.env.HOME!, ".local/share/nvim/lazy/agentic.nvim"), AGENCY_FIXTURE_NODE: process.execPath,
-      AGENCY_FIXTURE_ENDPOINT: fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
+      AGENCY_FIXTURE_ENDPOINT: fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)),
+      AGENCY_FIXTURE_CONTROL: fileURLToPath(new URL("./fixtures/acp-control.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
   })
   let closed = false, exited = false, stderr = ""
   const endpoints = new Set<number>()

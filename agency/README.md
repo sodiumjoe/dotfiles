@@ -44,7 +44,7 @@ Only configured, enabled, technically compatible backends are available. Codex i
 | --- | --- |
 | `<leader>ac` | `AgencyCurrent` |
 | `<leader>an` | `AgencyNew` |
-| `<leader>af` | `Agency` |
+| `<leader>af` | `Agency` active-agent picker |
 | `<leader>as` | `AgencyStop` |
 | `<leader>ao` | `AgencyOpen` |
 | `<leader>aa` | Add file or selection |
@@ -52,8 +52,13 @@ Only configured, enabled, technically compatible backends are available. Codex i
 | `<leader>aD` | Add buffer diagnostics |
 | `<leader>ai` | Submit annotations |
 | `<leader>ar` | Agency saved-session picker |
+| `<leader>ap` | Project file picker |
 
 Additional commands are `AgencyAttach <agent-id>`, `AgencyRestore <agent-id>`, `AgencyDetach`, `AgencyCancel`, and `AgencyInspect`. Current toggles the current native widget, selects exact-cwd active records, or creates a default session when inventory is genuinely empty. Transitional records and read failures do not count as empty inventory. New permits another agent in the same directory. Opening an already displayed logical session focuses its existing native manager; it does not create a competing subscriber. Different sessions can occupy different tabs on the same cached Agency client.
+
+`<leader>ap` previews projects and opens the selected `project.md` without creating a session or changing the attached agent. `<leader>af` lists live agents across directories in the current Handler generation, including agents with active turns. Ready rows attach to the exact selected generation; live starting, restoring, and stopping rows are inspectable. Stopped, historical, and legacy records belong in `<leader>ar`. An empty active picker creates nothing. The active picker can stop the selected agent, but new-session creation and saved-session restoration use their separate entry points.
+
+`<leader>an`, `agentic.switch_provider()`, and `agentic.new_session_with_provider()` select an Agency backend, model, and supported settings before creating a conversation. Model discovery uses fresh configuration-matching catalog evidence. When discovery is unavailable, the picker explicitly offers configured defaults. Cancelling any selection preserves the existing conversation. Codex model and reasoning choices use ordinary ACP configuration options, and its modes include full access.
 
 `/new` inherits the current session's backend and uses its backend defaults for the new conversation. Session-specific model, mode, and reasoning selections are exposed through native Agentic configuration. Changes propagate to all attached editors and update restorable settings. Live attachment preserves current configuration rather than applying the reconnecting editor's defaults.
 
@@ -79,7 +84,7 @@ Closing an editor or clearing its callbacks is not a user rejection. If every ed
 
 The saved-session picker combines Agency inventory with bounded, read-only Codex metadata discovery. Ready logical sessions attach directly. Stopped sessions require confirmed restore. Supported unregistered Codex sessions require explicit import and restore. Import records backend, native session ID, and cwd without claiming ownership of an external direct-provider process. Reimporting an existing native identity resolves to its existing logical agent.
 
-The CLI equivalent is `agy agent import --provider codex-acp --session <native-id> --cwd <absolute-path>`, followed by `agy agent restore <agent-uuid>`. Native IDs and logical IDs are separate namespaces; ACP uses `agency:<agent-uuid>`. Import does not submit transcript messages or signal an external provider. Provider-native session files are neither deleted nor rewritten. Unsupported backends remain unavailable.
+The CLI equivalent is `agy agent import --provider codex-acp --session <native-id> --cwd <absolute-path>`, followed by `agy agent restore <agent-uuid>`. Native IDs and logical IDs are separate namespaces; ACP uses `agency:<agent-uuid>`. Import does not submit transcript messages or signal an external provider. Provider-native session files are neither deleted nor rewritten. Unsupported backends remain unavailable. Saved-session rows and previews label unavailable entries explicitly. Version-1 retained records remain visible as unavailable history; selecting them cannot import, load, or restore a provider.
 
 ## CLI and protocol boundaries
 
@@ -103,7 +108,7 @@ Status lazily starts or connects to one Handler. Doctor reads state without star
 
 `agy acp` connects to the ready Handler's mode-0600 ACP socket inside its mode-0700 runtime directory. The endpoint owns no provider and emits only JSON-RPC on stdout. Initialization selects and starts no backend. Session load is live attachment, not implicit restoration. Authentication methods are not advertised. Client filesystem and terminal RPCs are not forwarded to an arbitrary editor; provider-owned tool execution is unaffected.
 
-Control uses `agency-control/2`, agent lifecycle uses `agency-agent/2`, and the compatibility attachment stream uses `agency-attachment/1`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
+Control uses `agency-control/2`, agent lifecycle uses `agency-agent/3`, and the compatibility attachment stream uses `agency-attachment/1`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
 
 ## Transport bounds and failures
 

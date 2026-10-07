@@ -324,7 +324,6 @@ local function pick_project()
                         vim.api.nvim_set_current_win(editor_win)
                     end
                     vim.cmd.edit(item.file)
-                    start_project_session(item.slug)
                 end,
             })
         end)
@@ -971,7 +970,7 @@ return {
             "<leader>af",
             function() require("sodium.agency").roster() end,
             mode = { "n" },
-            desc = "Agency local agents",
+            desc = "Agency active agents",
         },
         {
             "<leader>as",
@@ -985,7 +984,7 @@ return {
                 require("agentic").restore_session()
             end,
             mode = { "n" },
-            desc = "Restore Agentic Chat session",
+            desc = "Agency saved sessions",
         },
         {
             "<leader>ad",
@@ -1007,7 +1006,7 @@ return {
             "<leader>ap",
             pick_project,
             mode = { "n" },
-            desc = "Pick project and start Agentic session",
+            desc = "Pick project file",
         },
         {
             "<leader>aP",

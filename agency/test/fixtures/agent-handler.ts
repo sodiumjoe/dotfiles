@@ -18,7 +18,7 @@ import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../../src/platform/private-state.js"
 import type { PlatformPaths } from "../../src/platform/paths.js"
-import type { ProviderProfile } from "../../src/catalog/types.js"
+import type { CatalogSnapshot, ProviderProfile } from "../../src/catalog/types.js"
 import type { AgentHandlerOptions } from "../agent-support.js"
 import { fixtureRetention } from "../retention-support.js"
 
@@ -48,10 +48,16 @@ try {
     catalogFactory(context) {
       const store = context.store
       const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
-      return { ...service, async initialize() {
+      return { ...service, ...(config.selectionCatalog ? { startScheduling() {} } : {}), async initialize() {
         const evidence = await observeConfig(config.profile)
-        const snapshot = { version: 1 as const, hostId: config.paths.hostKey, handlerGeneration: generation, snapshotId: randomUUID(), createdAt: Date.now(), providers: [{ providerId: "codex-acp" as const, fingerprint: evidence.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp" as const, modelId: "model-a", resolvedModelId: null, displayName: "Fixture model", reasoning: { state: "values" as const, values: ["high", "low"] }, modes: { state: "unknown" as const }, availability: "advertised" as const }] }] }
-        await store.writeSnapshot(snapshot); await store.publishCurrent(snapshot); await service.initialize()
+        const snapshot: CatalogSnapshot = { version: 1 as const, hostId: config.paths.hostKey, handlerGeneration: generation, snapshotId: randomUUID(), createdAt: Date.now(), providers: [{ providerId: "codex-acp" as const, fingerprint: evidence.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp" as const, modelId: "model-a", resolvedModelId: null, displayName: "Fixture model", reasoning: { state: "values" as const, values: ["high", "low"] }, modes: { state: "unknown" as const }, availability: "advertised" as const }] }] }
+        if (config.selectionCatalog) snapshot.providers[0]!.models[0]!.modes = { state: "values", values: ["agent-full-access", "read-only"] }
+        if (config.selectionCatalog) snapshot.providers[0]!.models.push({ ...snapshot.providers[0]!.models[0]!, modelId: "model-c", displayName: "Model C", reasoning: { state: "values", values: ["medium", "minimal"] } })
+        if (config.catalogState === "stale") snapshot.providers[0]!.verifiedAt = Date.now() - 600001
+        if (config.catalogState === "prior-generation") snapshot.providers[0]!.verifiedHandlerGeneration = randomUUID()
+        if (config.catalogState === "failed") snapshot.providers[0]!.error = { code: "PROBE_FAILED", message: "Provider discovery failed" }
+        if (config.catalogState !== "missing") { await store.writeSnapshot(snapshot); await store.publishCurrent(snapshot) }
+        await service.initialize()
       } }
     },
     agentFactory(input) {

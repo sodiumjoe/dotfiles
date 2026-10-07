@@ -21,7 +21,7 @@ local function check_text_preview(options, item)
     assert.are.same({ "" }, lines)
 end
 
-describe("Agency roster picker", function()
+describe("Agency active picker", function()
     local original, requests, timer, picker, options, calls
     before_each(function()
         original = _G.Snacks
@@ -61,7 +61,7 @@ describe("Agency roster picker", function()
         end
         _G.Snacks = original
     end)
-    local function open()
+    local function open(snapshot)
         return require("sodium.agency.picker").open({
             timer_factory = function()
                 return timer
@@ -70,8 +70,8 @@ describe("Agency roster picker", function()
                 assert.is_true(opts.allow_issues)
                 requests[#requests + 1] = callback
             end,
-            attach = function(id)
-                calls[#calls + 1] = { "attach", id }
+            attach = function(id, _, row)
+                calls[#calls + 1] = { "attach", id, row }
             end,
             restore = function(id)
                 calls[#calls + 1] = { "restore", id }
@@ -79,22 +79,68 @@ describe("Agency roster picker", function()
             stop = function(row)
                 calls[#calls + 1] = { "stop", row }
             end,
-            new = function() end,
-            snapshot = function() end,
+            new = function() calls[#calls + 1] = { "new" } end,
+            snapshot = function() return snapshot end,
             notify = function() end,
         })
     end
+    local function respond(index, agents, issues)
+        requests[index](nil, { agents = agents, issues = issues or {}, handlerGeneration = fixture.target_a.handlerGeneration })
+    end
+    it("shows only live current-generation agents across directories", function()
+        open()
+        local current = fixture.agent(fixture.target_a)
+        local other = fixture.agent(fixture.target_b)
+        other.record.definition.cwd = "/work/b"
+        other.record.settings = { configValues = { model = "model-b" } }
+        local stopped = fixture.agent(fixture.target_a, "stopped")
+        local old = fixture.agent(fixture.target_a)
+        old.record.launch.handlerGeneration = fixture.id(99)
+        local missing = fixture.agent(fixture.target_a)
+        missing.record.launch = vim.NIL
+        respond(1, { current, other, stopped, old, missing, { record = { version = 1, phase = "stopped", spec = { agentId = fixture.id(98),
+            checkout = { root = { path = "/work/legacy" } } } }, live = false, cleanup = "unknown" } })
+        assert.are.equal("Agency active agents", options.title)
+        assert.are.equal(2, #picker.opts.items)
+        assert.is_truthy(picker.opts.items[2].text:find("/work/b", 1, true))
+        assert.is_truthy(picker.opts.items[2].text:find("codex-acp/model-b", 1, true))
+        assert.is_nil(options.actions.restore)
+        assert.is_nil(options.actions.new)
+    end)
+    it("keeps an attached agent with an ongoing turn selectable", function()
+        open({ target = vim.deepcopy(fixture.target_a), connected = true, busy = true })
+        respond(1, { fixture.agent(fixture.target_a) })
+        assert.are.equal(1, #picker.opts.items)
+        assert.is_truthy(picker.opts.items[1].text:find("attached", 1, true))
+        options.confirm(picker, picker.opts.items[1])
+        assert.are.same({ "attach", fixture.target_a.agentId, fixture.agent(fixture.target_a) }, calls[1])
+    end)
+    it("leaves an empty active picker empty without creating or restoring", function()
+        open()
+        respond(1, { fixture.agent(fixture.target_a, "stopped") })
+        options.confirm(picker, nil)
+        assert.are.equal(0, #picker.opts.items)
+        assert.are.equal(0, #calls)
+    end)
+    it("removes exited agents on refresh without selecting a replacement", function()
+        open()
+        respond(1, { fixture.agent(fixture.target_a) })
+        options.actions.refresh()
+        respond(2, { fixture.agent(fixture.target_a, "stopped") })
+        assert.are.equal(0, #picker.opts.items)
+        assert.are.equal(0, #calls)
+    end)
     it("keeps the empty roster open until its first asynchronous poll completes", function()
         open()
         assert.are.equal(0, #options.items)
         assert.is_true(options.show_empty)
         assert.are.equal(1, #requests)
-        requests[1](nil, { agents = { fixture.agent(fixture.target_a) }, issues = {} })
+        respond(1, { fixture.agent(fixture.target_a) })
         assert.are.equal(1, #options.items)
     end)
     it("keeps fileless roster rows safe when preview is toggled", function()
         open()
-        requests[1](nil, { agents = { fixture.agent(fixture.target_a) }, issues = {} })
+        respond(1, { fixture.agent(fixture.target_a) })
         assert.is_nil(picker.opts.items[1].file)
         check_text_preview(options, picker.opts.items[1])
     end)
@@ -115,45 +161,37 @@ describe("Agency roster picker", function()
         vim.wait(20)
         assert.are.equal(1, #requests)
         picker.close()
-        requests[1](nil, { agents = { fixture.agent(fixture.target_a) }, issues = {} })
+        respond(1, { fixture.agent(fixture.target_a) })
         assert.are.equal(0, #picker.opts.items)
         assert.is_true(timer.stopped)
         assert.is_true(timer.closed)
     end)
-    it("renders issues and transitional records without attaching", function()
+    it("renders live transitional records and issues without attaching", function()
         open()
-        requests[1](
-            nil,
-            {
-                agents = { fixture.agent(fixture.target_a, "starting") },
-                issues = {
-                    { path = "/state/broken", message = "broken" },
-                },
-            }
-        )
-        assert.are.equal(2, #picker.opts.items)
-        options.confirm(picker, picker.opts.items[1])
+        local rows = {}
+        for _, phase in ipairs({ "starting", "restoring", "stopping" }) do
+            local row = fixture.agent(fixture.target_a, phase)
+            row.live = true
+            rows[#rows + 1] = row
+        end
+        respond(1, rows, { { path = "/state/broken", message = "broken" } })
+        assert.are.equal(4, #picker.opts.items)
+        for _, item in ipairs(picker.opts.items) do options.confirm(picker, item) end
         assert.are.equal(0, #calls)
-        assert.is_truthy(picker.opts.items[2].text:find("broken", 1, true))
+        assert.is_truthy(picker.opts.items[4].text:find("broken", 1, true))
     end)
-    it("attaches ready rows and restores only explicitly with verified cleanup", function()
+    it("attaches the exact immutable ready row without creating or restoring", function()
         open()
         local row = fixture.agent(fixture.target_a)
-        requests[1](nil, { agents = { row }, issues = {} })
+        respond(1, { row })
+        row.record.launch.providerGeneration = fixture.id(99)
         options.confirm(picker, picker.opts.items[1])
-        assert.are.same({ "attach", fixture.target_a.agentId }, calls[1])
-        row.record.phase, row.cleanup = "recoverable", "unverified"
-        open()
-        requests[2](nil, { agents = { row }, issues = {} })
-        options.actions.restore(picker)
+        assert.are.same({ "attach", fixture.target_a.agentId, fixture.agent(fixture.target_a) }, calls[1])
         assert.are.equal(1, #calls)
-        picker.opts.items[1].view.cleanup = "verified"
-        options.actions.restore(picker)
-        assert.are.same({ "restore", fixture.target_a.agentId }, calls[2])
     end)
     it("stops the selected immutable row", function()
         open()
-        requests[1](nil, { agents = { fixture.agent(fixture.target_b) }, issues = {} })
+        respond(1, { fixture.agent(fixture.target_b) })
         options.actions.stop(picker)
         assert.are.equal(fixture.target_b.agentId, calls[1][2].record.definition.agentId)
     end)

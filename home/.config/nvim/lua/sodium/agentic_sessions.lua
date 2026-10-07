@@ -165,19 +165,26 @@ function M.normalize_session(session)
 
     local agency = session._meta and session._meta.agency or {}
     local backend = session.backendId or agency.backendId
+    local unavailable = session.unavailable == true or agency.unavailable == true or agency.recordVersion == 1
+        or session.unavailable == nil and backend ~= nil and backend ~= "codex-acp"
+    local availability = unavailable and "Unavailable" or backend and "Available" or nil
+    local labels = (backend and " [" .. backend .. "]" or "") .. (unavailable and " [Unavailable]" or "")
     return {
         session_id = session.sessionId or session.nativeSessionId,
         native_session_id = session.nativeSessionId,
         backend_id = backend,
         cwd = session.cwd,
         phase = agency.phase,
-        unavailable = session.unavailable == true or session.unavailable == nil and backend ~= nil and backend ~= "codex-acp",
+        unavailable = unavailable,
+        availability = availability,
+        unavailable_reason = agency.unavailableReason or (agency.recordVersion == 1 and "Legacy record (version 1)" or nil),
+        labels = labels,
         original_title = session.title,
         title = title,
         updated_at = updated_at,
         sort_key = session_updated_at_sort_key(session.updatedAt),
         metadata = metadata,
-        text = updated_at .. " " .. title,
+        text = updated_at .. " " .. title .. labels,
     }
 end
 
@@ -208,6 +215,9 @@ end
 function M.preview_lines(item)
     local lines = { item.title, "", string.format("%-14s%s", "Updated:", item.updated_at) }
     local context = {
+        { "Backend:", item.backend_id },
+        { "Availability:", item.availability },
+        { "Reason:", item.unavailable_reason },
         { "Project root:", item.metadata.project_root },
         { "Branch:", item.metadata.branch },
         { "Plan:", item.metadata.plan },
@@ -262,25 +272,27 @@ local function with_conflict_check(current_session, on_restore)
     end)
 end
 
-local function restore(current_session, item, lifecycle)
+local function restore(current_session, item, lifecycle, valid)
+    if not valid() then return end
     if lifecycle then
         local Logger = require("agentic.utils.logger")
         if item.unavailable then
-            Logger.notify("Backend unavailable: " .. tostring(item.backend_id), vim.log.levels.WARN)
+            Logger.notify(item.unavailable_reason or "Backend unavailable: " .. tostring(item.backend_id), vim.log.levels.WARN)
             return
         end
         if not item.native_session_id and item.phase == "ready" then lifecycle.attach(item.session_id:sub(8)); return end
-        vim.ui.select({ "Cancel", "Restore" }, { prompt = "Restore saved session with a new provider process?" }, function(choice)
-            if choice ~= "Restore" then return end
+        vim.ui.select({ "Cancel", "Restore" }, { prompt = "Restore saved session with a new provider process?" }, vim.schedule_wrap(function(choice)
+            if choice ~= "Restore" or not valid() then return end
             if not item.native_session_id then lifecycle.restore(item.session_id:sub(8)); return end
             item.import_command_id = item.import_command_id or lifecycle.uuid()
             current_session.agent:_send_request("agency/import", { commandId = item.import_command_id,
-                backendId = item.backend_id, nativeSessionId = item.native_session_id, cwd = item.cwd }, function(reply, err)
+                backendId = item.backend_id, nativeSessionId = item.native_session_id, cwd = item.cwd }, vim.schedule_wrap(function(reply, err)
+                    if not valid() then return end
                     if err or not reply then
                         Logger.notify("Import failed: " .. (err and err.message or "unknown error"), vim.log.levels.WARN)
                     else lifecycle.restore(reply.sessionId:sub(8)) end
-                end)
-        end)
+                end))
+        end))
         return
     end
     with_conflict_check(current_session, function()
@@ -295,8 +307,16 @@ function M.show_picker(current_session, deps)
     local agency = config.acp_providers.agency ~= nil
         and current_session.agent.provider_config == config.acp_providers.agency
     local lifecycle = agency and (deps and deps.lifecycle or require("sodium.agency").setup())
-    current_session.agent:when_ready(function()
+    local valid = function() return true end
+    if lifecycle and lifecycle.selection_guard then
+        local guard, tab = lifecycle.selection_guard(current_session)
+        valid = function() return guard() and vim.api.nvim_get_current_tabpage() == tab end
+    end
+    local schedule = agency and vim.schedule_wrap or function(callback) return callback end
+    current_session.agent:when_ready(schedule(function()
+        if not valid() then return end
         local function show(result, err)
+            if not valid() then return end
             local Logger = require("agentic.utils.logger")
             if err or not result then
                 Logger.notify(
@@ -313,6 +333,7 @@ function M.show_picker(current_session, deps)
             end
 
             vim.schedule(function()
+                if not valid() then return end
                 Snacks.picker({
                     title = "Select session to restore",
                     items = items,
@@ -321,6 +342,7 @@ function M.show_picker(current_session, deps)
                             { item.updated_at, "SnacksPickerComment" },
                             { "  " },
                             { item.title },
+                            { item.labels or "", "SnacksPickerComment" },
                         }
                     end,
                     preview = function(ctx)
@@ -332,7 +354,7 @@ function M.show_picker(current_session, deps)
                             return
                         end
                         picker:close()
-                        restore(current_session, item, lifecycle)
+                        restore(current_session, item, lifecycle, valid)
                     end,
                 })
             end)
@@ -340,15 +362,19 @@ function M.show_picker(current_session, deps)
         if not agency then current_session.agent:list_sessions(cwd, show); return end
         local known = {}
         local function list(cursor)
-            current_session.agent:_send_request("session/list", cursor and { cursor = cursor } or {}, function(result, err)
+            if not valid() then return end
+            current_session.agent:_send_request("session/list", cursor and { cursor = cursor } or vim.empty_dict(), vim.schedule_wrap(function(result, err)
+                if not valid() then return end
                 if err or not result then show(nil, err); return end
                 vim.list_extend(known, result.sessions or {})
                 if result.nextCursor then list(result.nextCursor); return end
-                current_session.agent:_send_request("agency/backends", {}, function(backends, backend_err)
+                current_session.agent:_send_request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(backends, backend_err)
+                    if not valid() then return end
                     if backend_err or not backends then show(nil, backend_err); return end
                     local enabled = {}
                     for _, backend in ipairs(backends.backends) do enabled[backend.id] = true end
-                current_session.agent:_send_request("agency/native_sessions", {}, function(native, native_err)
+                current_session.agent:_send_request("agency/native_sessions", vim.empty_dict(), vim.schedule_wrap(function(native, native_err)
+                    if not valid() then return end
                     if native_err and #known == 0 then show(nil, native_err); return end
                     local seen = {}
                     for _, session in ipairs(known) do
@@ -360,15 +386,16 @@ function M.show_picker(current_session, deps)
                     end
                     for _, session in ipairs(known) do
                         local identity = session._meta and session._meta.agency or {}
-                        session.unavailable = not enabled[session.backendId or identity.backendId]
+                        session.unavailable = session.unavailable == true or identity.unavailable == true
+                            or identity.recordVersion == 1 or not enabled[session.backendId or identity.backendId]
                     end
                     show({ sessions = known })
-                end)
-                end)
-            end)
+                end))
+                end))
+            end))
         end
         list()
-    end)
+    end))
 end
 
 return M

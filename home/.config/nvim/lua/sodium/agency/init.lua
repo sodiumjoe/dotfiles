@@ -45,6 +45,7 @@ function M.setup(deps)
             connected = not manager._agency_destroyed, busy = manager.is_generating }
     end
     function api.current(callback)
+        epoch = epoch + 1
         local manager = local_manager()
         if manager then
             if manager.widget:is_open() then manager.widget:hide() else manager.widget:show() end
@@ -53,30 +54,38 @@ function M.setup(deps)
         end
         operations.current(vim.fn.getcwd(), function(err, result) report(err); if callback then callback(err, result) end end)
     end
-    function api.new(callback, opts)
+    function api.selection_guard(origin)
         epoch = epoch + 1
         operations.detach()
         local captured, tab = epoch, vim.api.nvim_get_current_tabpage()
+        origin = origin or Registry.sessions[tab]
+        local origin_epoch = origin and origin._agency_epoch
+        local function valid()
+            return captured == epoch and vim.api.nvim_tabpage_is_valid(tab)
+                and Registry.sessions[tab] == origin and (not origin or not origin._agency_destroyed and origin._agency_epoch == origin_epoch)
+        end
+        return valid, tab
+    end
+    function api.new(callback, opts)
+        local valid, tab = api.selection_guard()
         opts = vim.tbl_extend("force", { cwd = vim.fn.getcwd() }, opts or {})
         if opts.backend_id then return create(opts, callback) end
         require("agentic.acp.agent_instance").get_instance("agency", function(client)
             client:when_ready(function()
-                client:_send_request("agency/backends", {}, function(result, err)
-                    if captured ~= epoch or not vim.api.nvim_tabpage_is_valid(tab) then return end
+                client:_send_request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(result, err)
+                    if not valid() then return end
                     if err or not result or #result.backends == 0 then report(err or failure("UNAVAILABLE")); return end
-                    local function selected(backend)
-                        if not backend or captured ~= epoch or not vim.api.nvim_tabpage_is_valid(tab) then return end
+                    require("sodium.agency.selection").select(result, valid, function(selection)
+                        if not valid() then return end
                         vim.api.nvim_set_current_tabpage(tab)
-                        create(vim.tbl_extend("force", opts, { backend_id = backend.id }), callback)
-                    end
-                    if #result.backends == 1 then selected(result.backends[1])
-                    else vim.ui.select(result.backends, { prompt = "Agency backend",
-                        format_item = function(value) return value.id .. (value.id == result.defaultBackendId and " (default)" or "") end }, selected) end
-                end)
+                        create(vim.tbl_extend("force", opts, selection), callback)
+                    end)
+                end))
             end)
         end)
     end
     function api.open()
+        epoch = epoch + 1
         local manager = local_manager()
         if manager then manager.widget:show(); return manager end
         return api.current()
@@ -126,16 +135,18 @@ function M.setup(deps)
         if manager then Registry.destroy_session(manager.tab_page_id) end
     end
     function api.cancel()
+        epoch = epoch + 1
         local manager = local_manager()
         if manager then manager.agent:stop_generation(manager.session_id) end
     end
     function api.stop(row)
+        epoch = epoch + 1
         local snapshot = api.snapshot()
         local exact = row and tuple(row) or snapshot and snapshot.target
         if not exact then report(failure("NOT_READY")); return end
         operations.stop(exact, report, { cwd = row and row.record.definition.cwd or snapshot.cwd })
     end
-    function api.roster() return require("sodium.agency.picker").open(api) end
+    function api.roster() epoch = epoch + 1; return require("sodium.agency.picker").open(api) end
     function api.inspect_delivery() operations.inspect_pending(function(err, result) report(err); api.notify(vim.inspect(result)) end) end
     local function with_context(captured, kind)
         local function add(err, manager)
@@ -147,8 +158,9 @@ function M.setup(deps)
         if manager then add(nil, manager)
         else operations.current(captured.cwd, add, { tab = captured.tab, buffer = captured.buffer, cwd = captured.cwd }) end
     end
-    function api.add_context() with_context(Context.capture(vim.api.nvim_get_current_buf(), vim.fn.mode())) end
+    function api.add_context() epoch = epoch + 1; with_context(Context.capture(vim.api.nvim_get_current_buf(), vim.fn.mode())) end
     function api.add_diagnostics(scope)
+        epoch = epoch + 1
         local captured = Context.capture(vim.api.nvim_get_current_buf())
         if scope == "line" then
             local line = vim.api.nvim_win_get_cursor(0)[1] - 1
@@ -157,6 +169,7 @@ function M.setup(deps)
         with_context(captured, "diagnostics")
     end
     function api.submit_text(text, opts, callback)
+        epoch = epoch + 1
         opts, callback = opts or {}, callback or function(result) report(result.error) end
         local annotations = opts.annotations and vim.deepcopy(api.annotations()) or {}
         if opts.annotations and #annotations == 0 then callback({ state = "rejected", error = failure("EMPTY_INPUT") }); return false end

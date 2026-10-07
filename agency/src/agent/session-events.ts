@@ -31,7 +31,6 @@ export function validateNativeUpdate(raw: unknown): ValidatedSessionUpdate {
   if (kind === "config_option_update" && !Array.isArray(update.configOptions)) invalid()
   if (kind === "tool_call" || kind === "tool_call_update") {
     agentText(update.toolCallId, 1024)
-    if (kind === "tool_call" && typeof update.title !== "string") invalid()
     if (update.title != null && typeof update.title !== "string") invalid()
     if (update.kind != null && (typeof update.kind !== "string" || !["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"].includes(update.kind))) invalid()
     if (update.status != null && (typeof update.status !== "string" || !["pending", "in_progress", "completed", "failed"].includes(update.status))) invalid()

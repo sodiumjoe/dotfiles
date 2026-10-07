@@ -56,6 +56,66 @@ test("tool content preserves bounded diff and terminal results without enabling 
   assert.deepEqual(seen.at(-1)!.update, update)
 })
 
+for (const [name, title] of [["missing", undefined], ["null", null]] as const) {
+  for (const kind of ["new", "load"] as const) test(`ACP ${kind} preserves a tool call with a ${name} title and keeps the session usable`, async t => {
+    const seen: sessionEvents.AcpObservation[] = []
+    const update = { sessionUpdate: "tool_call", toolCallId: "subagent-completed-fixture", kind: "other", status: "completed",
+      rawInput: { agentThreadId: "child-session", agentPath: "/root/plan_reviewer", activityKind: "completed" },
+      _meta: { codex: { subagent: { threadId: "child-session", path: "/root/plan_reviewer", activity: "completed" } } },
+      ...(title === undefined ? {} : { title }),
+    }
+    const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), response(request, reply) {
+      if (request.method === "session/load") peer.send(updateFrame(update))
+      return reply
+    }, prompt(request, send) {
+      send(updateFrame(update))
+      send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } }))
+      send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+    } })
+    await peer.connection.initialize(sampleAgent(), sampleContract(), kind === "load" ? { kind, sessionId: "fixture-session", params: {} } : { kind, params: {} }, new AbortController().signal)
+    assert.deepEqual(await peer.connection.prompt("first", new AbortController().signal), { stopReason: "end_turn", text: "answer" })
+    assert.deepEqual(await peer.connection.prompt("second", new AbortController().signal), { stopReason: "end_turn", text: "answer" })
+    const tools = seen.filter(event => event.update.sessionUpdate === "tool_call")
+    assert.equal(tools.length, kind === "load" ? 3 : 2)
+    for (const event of tools) assert.deepEqual(event.update, update)
+    assert.equal(tools[0]!.replay, kind === "load")
+  })
+}
+
+for (const [name, title] of [["missing", undefined], ["null", null]] as const) {
+  test(`native tool call validation preserves provider input with a ${name} title`, () => {
+    const update = Object.freeze({ sessionUpdate: "tool_call", toolCallId: "tool-1", status: "completed", ...(title === undefined ? {} : { title }) })
+    assert.strictEqual(sessionEvents.validateNativeUpdate(update), update)
+    assert.equal(Object.hasOwn(update, "title"), title !== undefined)
+  })
+}
+
+test("ACP preserves supplied tool titles and sparse tool call updates", async t => {
+  const seen: sessionEvents.AcpObservation[] = [], updates = [
+    { sessionUpdate: "tool_call", toolCallId: "tool-1", title: "Read package", kind: "read" },
+    { sessionUpdate: "tool_call_update", toolCallId: "tool-1", status: "completed" },
+    { sessionUpdate: "tool_call", toolCallId: "tool-2", title: "" },
+    { sessionUpdate: "tool_call_update", toolCallId: "tool-2", title: null },
+  ]
+  const peer = scriptedAcp(t, "exact", { onUpdate: event => seen.push(event), prompt(request, send) {
+    for (const update of updates) send(updateFrame(update))
+    send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  assert.equal((await peer.connection.prompt("question", new AbortController().signal)).stopReason, "end_turn")
+  assert.deepEqual(seen.map(event => event.update), updates)
+})
+
+for (const kind of ["tool_call", "tool_call_update"]) {
+  for (const title of [42, false, {}]) test(`ACP rejects malformed ${kind} title: ${JSON.stringify(title)}`, async t => {
+    const peer = scriptedAcp(t, "exact", { prompt(_request, send) {
+      send(updateFrame({ sessionUpdate: kind, toolCallId: "tool-1", title }))
+    } })
+    await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+    await assert.rejects(peer.connection.prompt("question", new AbortController().signal), { code: "INVALID_PROTOCOL" })
+  })
+}
+
 test("load replay publishes validated user, assistant, and display updates without prompting", async t => {
   const seen: sessionEvents.AcpObservation[] = []
   const updates = [

@@ -35,7 +35,7 @@ import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentCommandV3, AgentRecord, AgentRecordV3, RuntimeLaunchSpec, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = RetentionFixtureOptions & { nativeAcp?: boolean; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
+export type AgentHandlerOptions = RetentionFixtureOptions & { nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
@@ -119,13 +119,27 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     await writeFile(join(secondary, "sdk.js"), "", { mode: 0o600 })
     profiles.push({ ...profile, id: "claude-agent-acp", executable: join(secondary, "native"), adapterPackageJson: join(secondary, "adapter.json"), sdkPackageJson: join(secondary, "sdk.json"), configurationFiles: [join(secondary, "declared.json")] })
     await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: profiles }), { mode: 0o600 })
-    await writeFile(join(f.paths.persistentRoot, "catalog/backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: profiles.map(value => ({ id: value.id, args: [], environmentDefaults: { FIXTURE_ROOT: f.root, FIXTURE_BACKEND: value.id }, initial: {}, compatibilityId: "fixture-v1" })) }), { mode: 0o600 })
+    await writeFile(join(f.paths.persistentRoot, "catalog/backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: profiles.map(value => ({ id: value.id, args: [], environmentDefaults: { FIXTURE_ROOT: f.root, FIXTURE_BACKEND: value.id, ...(options.selectionCatalog ? { FIXTURE_SELECTION: "true" } : {}) }, initial: {}, compatibilityId: "fixture-v1" })) }), { mode: 0o600 })
+  }
+  if (options.legacyCount) {
+    const directory = join(f.paths.persistentRoot, "agents/records")
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    for (let index = 0; index < options.legacyCount; index++) {
+      const agentId = randomUUID()
+      await writeFile(join(directory, agentId + ".json"), JSON.stringify({ version: 1,
+        spec: { agentId, handlerGeneration: randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), checkout: { root: { path: otherWorkspace } } },
+        phase: "stopped", session: null, failure: null }), { mode: 0o600 })
+    }
   }
   const configure = (settings: AgentHandlerOptions) => writeFile(f.configPath, JSON.stringify({ paths: f.paths, profile, profiles, ...settings }), { mode: 0o600 })
   await configure(options)
   if (options.pauseAt === "session") await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 })
   if (options.pauseAt === "prompt") await writeFile(join(f.root, "pause-prompt"), "pause", { mode: 0o600 })
-  await f.start(15000)
+  try { await f.start(15000) } catch (error) {
+    let detail = ""
+    try { detail = await readFile(join(f.root, "failure"), "utf8") } catch {}
+    throw new Error("fixture startup failed: " + detail, { cause: error })
+  }
   async function call(operation: Omit<Extract<AgentRequest, { op: "agent_start" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_restore" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_stop" }>, "protocol" | "requestId" | "handlerGeneration"> | Omit<Extract<AgentRequest, { op: "agent_prompt" }>, "protocol" | "requestId" | "handlerGeneration"> | { op: "agent_choices" } | { op: "agent_page"; input: import("../src/agent/queries.js").PageInput } | { op: "agent_list" } | { op: "agent_current"; cwd: string } | { op: "agent_command"; commandId: string; commandGeneration: string }) {
     const current = await handler()
     const operationPromise = exchangeAgent(createConnection(f.paths.handlerSocketPath), { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, ...operation }, 15000)
