@@ -150,3 +150,9 @@ Run `npm run build`, `test:acp`, `test:neovim-acp`, `test:agent`, `test:agent-in
 These tests use deterministic providers and isolated temporary roots. Fresh-process coverage loads the installed native Agentic classes in independent Neovim processes with private home/state/cache, explicit repository runtime paths, fixture-only endpoints, and no user startup configuration. `NVIM_TEST_EXECUTABLE` selects the binary; Darwin defaults to `/opt/homebrew/bin/nvim`. Teardown reports and independently verifies editor, endpoint, Handler, and provider absence.
 
 The test scripts do not invoke a real model, paid prompt, login, deployment, or `accept:codex`. Real-provider acceptance remains separate and requires an explicit prompt count, target directory, allowed edits, and exact cleanup targets. Historical plans and qualification evidence remain immutable descriptions of earlier architectures, not runtime inputs.
+
+### Local orchestration storage
+
+The delegation core stores orchestration envelopes separately from native sessions. The journal publishes private immutable events under a serialized mutation queue, fsyncs files and parent directories before returning receipts, and rejects conflicting event IDs. Per-event recipient acknowledgements advance only a contiguous watermark. Seven-day acknowledged report compaction publishes a hashed summary and durable checkpoint before deleting the replay prefix. A cursor below that checkpoint returns `CURSOR_EXPIRED`; exact event replies remain retained for retry. Missing unexpired events, changed bytes, replaced files and unsafe state fail closed.
+
+Records are bounded to 1 MiB, transport queues to 2 MiB and pages to 256 entries. Description, summary and validation output fields are bounded to 64 KiB; arrays to 128 entries; arguments and paths to 4096 bytes. Creation lineage is immutable and separate from provider generation. These storage primitives do not start providers or expose delegation commands yet.
