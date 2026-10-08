@@ -16,6 +16,7 @@ function AgencyFixture.commands()
         vim.list_extend(args, vim.list_slice(argv, 2))
         return vim.system(args, opts, callback)
     end })
+    _G.fixture_control = control
     _G.fixture_notifications = {}
     _G.fixture_controller = require("sodium.agency").setup({ client = control, roster_request = require("sodium.agency.roster").new(),
         notify = function(value) fixture_notifications[#fixture_notifications + 1] = value end })

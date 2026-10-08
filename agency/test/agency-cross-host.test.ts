@@ -270,3 +270,64 @@ test("remote code publication, offline report replay and human immutable integra
   await git(["merge-base", "--is-ancestor", oid, "HEAD"], g.destination)
   await assert.rejects(git(["merge-base", "--is-ancestor", newer, "HEAD"], g.destination))
 })
+
+test("provider permission races remote parent human against attached child human once", { timeout: 30000 }, async t => {
+  const f = await cluster(t), execution = f.child.attempt.execution, frames: import("../src/agent/session-config.js").JsonObject[] = []
+  await f.b.fixture.service.attachPermissions(execution, { connectionId: "child-editor", send(frame) { frames.push(frame) } })
+  await f.b.fixture.promptEntered
+  f.b.fixture.requestPermission(execution.agentId, "native-collision")
+  const local = await until(async () => frames.find(frame => frame.method === "session/request_permission"))
+  const snapshot = await f.a.coordination.human({ op: "permission_snapshot" }) as { pending: import("../src/orchestration/permission-routing.js").PermissionOffer[] }
+  const offer = snapshot.pending.find(value => value.ref.target.agentId === execution.agentId)!
+  assert.ok(offer); assert.equal(offer.originCwd, f.b.fixture.workspace)
+  const [remote, child] = await Promise.all([
+    f.a.coordination.human({ op: "permission_decide", commandId: randomUUID(), ref: offer.ref, optionId: "allow" }) as Promise<{ state: string }>,
+    f.b.fixture.service.permissionDecision("child-editor", local.id as string, { outcome: { outcome: "selected", optionId: "deny" } })
+  ])
+  assert.equal(Number(remote.state === "applied") + Number(child), 1)
+  await until(async () => f.b.fixture.permissionReplies(execution.agentId).length === 1 ? true : undefined)
+  assert.equal(f.b.fixture.permissionReplies(execution.agentId).length, 1)
+  assert.deepEqual(f.a.fixture.permissionReplies(f.root.root.agentId), [])
+  assert.equal((await f.a.coordination.human({ op: "permission_snapshot" }) as { pending: unknown[] }).pending.length, 0)
+  assert.equal((await f.b.fixture.service.permissionRouting.snapshot()).pending.length, 0)
+})
+
+test("restored provider rejects old human approval despite native request ID reuse", { timeout: 30000 }, async t => {
+  const f = await cluster(t), prior = f.child.attempt.execution
+  await f.b.fixture.promptEntered
+  f.b.fixture.requestPermission(prior.agentId, "native-reused")
+  await until(async () => (await f.b.fixture.service.permissionRouting.snapshot()).pending.length === 1 ? true : undefined)
+  const old = (await f.a.coordination.human({ op: "permission_snapshot" }) as { pending: import("../src/orchestration/permission-routing.js").PermissionOffer[] }).pending[0]!
+  const invocation = await f.b.coordination.origin.invocation(prior)
+  await f.b.coordination.origin.stop(randomUUID(), prior)
+  const restored = await f.laptop.coordination.bureau.retry(randomUUID(), f.child.assignmentId, "restore", invocation)
+  const current = restored.attempt.execution!
+  assert.notEqual(current.providerGeneration, prior.providerGeneration)
+  f.b.fixture.requestPermission(current.agentId, "native-reused")
+  await until(async () => (await f.b.fixture.service.permissionRouting.snapshot()).pending.length === 1 ? true : undefined)
+  const stale = await f.a.coordination.human({ op: "permission_decide", commandId: randomUUID(), ref: old.ref, optionId: "allow" }) as { state: string }
+  assert.equal(stale.state, "stale")
+  assert.deepEqual(f.b.fixture.permissionReplies(current.agentId), [])
+  const fresh = (await f.a.coordination.human({ op: "permission_snapshot" }) as { pending: import("../src/orchestration/permission-routing.js").PermissionOffer[] }).pending[0]!
+  assert.notEqual(fresh.ref.permissionId, old.ref.permissionId)
+  assert.equal((await f.a.coordination.human({ op: "permission_decide", commandId: randomUUID(), ref: fresh.ref, optionId: "allow" }) as { state: string }).state, "applied")
+  assert.equal(f.b.fixture.permissionReplies(current.agentId).length, 1)
+})
+
+test("offline child report produces one parent notification after reconnect and settling", { timeout: 30000 }, async t => {
+  const f = await cluster(t)
+  await f.a.coordination.origin.submit(f.root.execution!, { submissionId: randomUUID(), prompt: [{ type: "text", text: "Busy parent" }] })
+  await f.a.fixture.promptEntered
+  await f.laptop.coordination.bureau.disable()
+  assert.equal((await f.report(f.b, f.childToken, f.child, "Offline notification")).isError, false)
+  await f.laptop.coordination.bureau.enable()
+  await until(async () => (await f.laptop.coordination.bureau.assignment(f.child.assignmentId)).attempt.state === "completed" ? true : undefined)
+  const before = await f.laptop.coordination.bureau.inbox(f.root.root, f.root.runId)
+  assert.equal(before.entries.length, 1)
+  f.a.fixture.completePrompt(f.root.root.agentId)
+  await until(async () => (await f.laptop.coordination.bureau.inbox(f.root.root, f.root.runId)).deliveries.some(value => value.state === "accepted" || value.state === "completed") ? true : undefined)
+  await f.laptop.coordination.bureau.reconcile()
+  const after = await f.laptop.coordination.bureau.inbox(f.root.root, f.root.runId)
+  assert.equal(after.deliveries.length, 1)
+  assert.equal(f.a.fixture.methodHistory.filter(method => method === "session/prompt").length, 2)
+})

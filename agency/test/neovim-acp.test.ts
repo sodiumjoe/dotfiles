@@ -596,3 +596,35 @@ test("provider editor RPC follows the submitting attachment across editor replac
   assert.equal(replay.includes(String(await c.lua("vim.v.servername"))), false)
   await f.stopSession(sid); await assert.rejects(rpc())
 })
+
+test("routed approval UI races an attached child UI without replying through the parent provider", { timeout: 60000 }, async t => {
+  const { createConnection } = await import("node:net"), { exchangeBureau, BUREAU_PROTOCOL } = await import("../src/bureau/protocol.js")
+  const f = await acpFixture(t), parent = await editorFixture(f), child = await editorFixture(f)
+  const parentSession = await start(parent), childSession = await start(child), target = await f.tuple(childSession)
+  const enabled = await exchangeBureau(createConnection(join(f.paths.runtimeRoot, "bureau.sock")), { protocol: BUREAU_PROTOCOL, requestId: randomUUID(), handlerGeneration: target.handlerGeneration, op: "bureau_enable" })
+  assert.equal(enabled.ok, true)
+  await run(parent, `AgencyFixture.commands(); _G.Snacks=nil; fixture_before_layout=vim.fn.winlayout(); fixture_selection=nil;
+    vim.ui.select=function(items,opts,callback) fixture_selection={items=items,opts=opts,callback=callback} end;
+    fixture_routed=require('sodium.agency.permissions').new({command=fixture_control.command,
+      watch=function() return {start=function() end,close=function() end} end});
+    fixture_manager._agency_routed_permissions=fixture_routed`)
+  await submit(child, "permission"); await pending(child)
+  await run(parent, "vim.cmd('AgencyPermissions')")
+  await wait(parent, "fixture_selection ~= nil")
+  const offers = await parent.lua("fixture_routed.pending()") as Array<{ ref: { target: { agentId: string } }; title: string }>
+  assert.equal(offers.length, 1); assert.equal(offers[0]!.ref.target.agentId, childSession.slice(7))
+  await run(parent, "fixture_selection.callback(fixture_selection.items[1])")
+  await wait(parent, "fixture_selection.items[1].optionId ~= nil")
+  await Promise.all([run(parent, "fixture_selection.callback(fixture_selection.items[1])"), decide(child, "reject-once")])
+  await idle(child)
+  await wait(parent, "#fixture_routed.pending()==0")
+  assert.equal(await child.lua("fixture_manager.permission_manager:has_pending()"), false)
+  assert.equal(await parent.lua("fixture_manager.permission_manager:has_pending()"), false)
+  assert.equal(await parent.lua("vim.deep_equal(fixture_before_layout,vim.fn.winlayout())"), true)
+  assert.equal(await parent.lua("fixture_manager.session_id"), parentSession)
+  const replies = await decisions(f)
+  assert.equal(replies.length, 1)
+  assert.ok(["allow-once", "reject-once"].includes(String((replies[0]!.result!.outcome as JsonObject).optionId)))
+  const requests = await f.requests("codex-acp")
+  assert.equal(requests.filter(frame => frame.method === "session/prompt").length, 1)
+})

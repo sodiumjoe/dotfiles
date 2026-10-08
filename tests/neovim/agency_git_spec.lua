@@ -38,3 +38,21 @@ describe("Agency Git result controls", function()
         assert.are.equal(1, count); assert.are.same({ "GIT_FETCH_FAILED" }, result.issues)
     end)
 end)
+
+describe("Agency Git control transport", function()
+    it("accepts Bureau protocol results for Git commands", function()
+        local failure, result, completed
+        local control = require("sodium.agency.control").new({ system = function(_, _, callback)
+            callback({ code = 0, stdout = vim.json.encode({ protocol = "agency-bureau-v1", requestId = "00000000-0000-4000-8000-000000000001",
+                handlerGeneration = "00000000-0000-4000-8000-000000000002", ok = true, result = { state = "integrated" } }) })
+            return { kill = function() end }
+        end })
+        control.command({ "git", "inspect", "00000000-0000-4000-8000-000000000003" }, {}, function(err, envelope)
+            failure, result, completed = err, envelope, true
+        end)
+        assert.is_true(vim.wait(1000, function() return completed end))
+        assert.is_nil(failure)
+        assert.are.equal("integrated", result.result.state)
+        control.close()
+    end)
+end)

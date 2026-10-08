@@ -26,7 +26,7 @@ end
 local function validate(value, argv)
     local protocol = argv[1] == "agent" and "agency-agent/3"
         or argv[1] == "model" and "agency-catalog/1"
-        or vim.tbl_contains({ "permission", "bureau", "run", "assignment", "roster", "entry" }, argv[1]) and "agency-bureau-v1" or "agency-control/2"
+        or vim.tbl_contains({ "permission", "bureau", "run", "assignment", "roster", "entry", "git" }, argv[1]) and "agency-bureau-v1" or "agency-control/2"
     assert(type(value) == "table" and value.protocol == protocol and valid_id(value.requestId))
     assert(value.handlerGeneration == vim.NIL or valid_id(value.handlerGeneration))
     assert(type(value.ok) == "boolean")
