@@ -153,3 +153,18 @@ for (const kind of ["request", "event"] as const) test(`slow inbound ${kind} con
   assert.equal((await peer.closed).message, "BRIDGE_BACKPRESSURE")
   if (kind === "request") assert.equal(aborted, true)
 })
+
+test("request detachment aborts the remote waiter without closing shared transport", async t => {
+  const f = peers(t), started = Promise.withResolvers<void>(), detached = Promise.withResolvers<void>(), controller = new AbortController()
+  f.remote.onRequest(async (channel, _payload, _id, signal) => {
+    if (channel === "snapshot") return { healthy: true }
+    started.resolve()
+    await new Promise<void>(resolve => { signal.addEventListener("abort", () => { detached.resolve(); resolve() }, { once: true }); if (signal.aborted) resolve() })
+    return { detached: true }
+  })
+  const waiting = f.client.request("tool", { waitId: randomUUID() }, { signal: controller.signal, timeoutMs: 0 })
+  await started.promise; controller.abort(new Error("TRANSPORT_DETACHED"))
+  await assert.rejects(waiting, /TRANSPORT_DETACHED/)
+  await detached.promise
+  assert.deepEqual(await f.client.request("snapshot", {}), { healthy: true })
+})

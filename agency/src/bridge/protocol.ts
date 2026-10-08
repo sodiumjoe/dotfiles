@@ -9,6 +9,7 @@ type Base = { protocol: typeof BRIDGE_PROTOCOL; connectionId: string }
 export type BridgeEvent = Base & { type: "event"; channel: string; streamId: string; runId: string; hostId: string; eventId: string; seq: number; digest: string; payload: unknown }
 export type BridgeAck = Omit<BridgeEvent, "type" | "payload"> & { type: "ack"; cursor: number }
 export type BridgeFrame = (BridgeHello & { type: "hello" }) | BridgeEvent | BridgeAck | (Base & (
+  { type: "request_cancel"; requestId: string } |
   { type: "request"; requestId: string; channel: string; payload: unknown } |
   { type: "reply"; requestId: string; ok: true; payload: unknown } |
   { type: "reply"; requestId: string; ok: false; error: string } |
@@ -35,6 +36,7 @@ export function parseBridgeFrame(raw: unknown): BridgeFrame {
         if (new Set(capabilities).size !== capabilities.length) bridgeError("INVALID_BRIDGE_HELLO")
         return { ...base, type: "hello", hostId: hash(v.hostId), handlerGeneration: id(v.handlerGeneration), sourceRevision: revision, nodeVersion: text(v.nodeVersion), capabilities, outboxCursor: timestamp(v.outboxCursor) }
       }
+      case "request_cancel": exact("requestId"); return { ...base, type: "request_cancel", requestId: id(v.requestId) }
       case "request": exact("requestId", "channel", "payload"); return { ...base, type: "request", requestId: id(v.requestId), channel: text(v.channel), payload: v.payload }
       case "reply":
         if (typeof v.ok !== "boolean") bridgeError("INVALID_BRIDGE_REPLY")

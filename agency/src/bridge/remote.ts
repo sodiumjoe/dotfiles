@@ -21,12 +21,13 @@ export function productionHostBridgeDependencies(): HostBridgeDependencies { ret
 export async function runHostBridgeCli(argv: readonly string[], deps: HostBridgeDependencies): Promise<void> {
   const config = parseHostBridgeArguments(argv), local = await deps.connect()
   try {
-    const localHello = await local.ready, hello = { ...localHello, connectionId: randomUUID(), capabilities: localHello.capabilities.filter(value => value !== "invoke") }, enrollment = { ...config, hostId: hello.hostId, hostname: "localhost", inventoryId: randomUUID() }
+    const localHello = await local.ready, hello = { ...localHello, connectionId: randomUUID(), capabilities: localHello.capabilities.filter(value => value !== "invoke" && value !== "coordinate") }, enrollment = { ...config, hostId: hello.hostId, hostname: "localhost", inventoryId: randomUUID() }
+    if (localHello.capabilities.includes("coordinate")) await local.request("coordinate", {})
     let publicPeer: ReturnType<typeof createBridgePeer>
     await serveHostBridge({ input: deps.input, output: deps.output, hello,
       configure(peer) {
         publicPeer = peer
-        local.onRequest(async (channel, payload) => { if (channel !== "tool") bridgeError("UNSUPPORTED_CAPABILITY"); return peer.request(channel, payload, { timeoutMs: 0 }) })
+        local.onRequest(async (channel, payload, _requestId, signal) => { if (channel !== "tool" && channel !== "settled") bridgeError("UNSUPPORTED_CAPABILITY"); return peer.request(channel, payload, { timeoutMs: 0, signal }) })
         local.subscribe(frame => peer.sendEvent({ ...frame, connectionId: hello.connectionId }))
         peer.subscribe(frame => local.sendEvent({ ...frame, connectionId: localHello.connectionId }))
         void local.closed.then(error => peer.close(error))

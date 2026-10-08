@@ -7,7 +7,7 @@ import { createToolBindings } from "../src/orchestration/tool-bindings.js"
 import { bindPrivateSocket } from "../src/platform/private-socket.js"
 import { exchangeTool, serveToolSocket } from "../src/orchestration/tool-client.js"
 import { loadOrchestrationPins } from "../src/orchestration/receipts.js"
-import { serveMcp } from "../src/orchestration/mcp.js"
+import { agencyToolSchemas, serveMcp } from "../src/orchestration/mcp.js"
 import { createOrchestrationService } from "../src/orchestration/service.js"
 import { createBureauService } from "../src/bureau/service.js"
 import { createBureauStore } from "../src/bureau/store.js"
@@ -457,10 +457,10 @@ test("large tool wait results preserve report references within the MCP response
 
 test("operational scoped stop updates attempts and waits without restarting Bureau", async t => {
   const f = await toolsFixture(t), child = await f.delegate()
-  await until(async () => (await f.store.readAttempt(child.value.attempt.ref.attemptId))?.state === "awaiting_report" ? true : undefined)
+  await until(async () => (await f.core.assignment(child.value.assignmentId)).attempt.state === "awaiting_report" ? true : undefined)
   const result = await f.call("agency_stop", { ...f.scope, commandId: randomUUID(), agentId: child.value.agent.agentId })
   assert.equal(result.isError, false)
-  await until(async () => (await f.store.readAttempt(child.value.attempt.ref.attemptId))?.state === "interrupted" ? true : undefined)
+  await until(async () => (await f.core.assignment(child.value.assignmentId)).attempt.state === "interrupted" ? true : undefined)
   assert.equal((await f.core.assignment(child.value.assignmentId)).attempt.state, "interrupted")
   const wait = await f.core.wait({ waitId: randomUUID(), runId: f.root.runId, parent: f.root.root, assignmentIds: [child.value.assignmentId], after: 0, timeoutMs: 0 })
   assert.equal(wait.kind, "terminal_failure")
@@ -508,4 +508,37 @@ test("disabled Bureau retains a locally authenticated report and replays it afte
   await f.core.enable()
   assert.equal((await f.core.assignment(child.value.assignmentId)).attempt.state, "completed")
   assert.equal((await f.store.readReport(child.value.attempt.ref.attemptId))!.input.report.summary, "Offline completed")
+})
+
+test("remote credentials stay local while authenticated controls are routed and reports remain retained", async t => {
+  const f = await agentServiceFixture(t), journals = createJournalPool(f.root, undefined, Date.now, "origin"), store = createBureauStore(f.root), core = createBureauService({ store, journals: createJournalPool(f.root), hosts: [] })
+  let host: ReturnType<typeof createOrchestrationService>, forwarded: unknown = null
+  const tools = createToolBindings({ socketPath: join(f.root, "tools.sock"), journals, bureau: () => core, host: () => host, route: async request => { forwarded = request; return { content: [{ type: "text", text: JSON.stringify({ state: "pending" }) }], isError: false } } })
+  t.after(async () => { tools.close(); await core.close() }); await core.initialize()
+  host = createOrchestrationService({ root: f.root, hostId: f.context.paths.hostKey, agents: f.service, journals, lineage: createLineageStore(f.root), tools, relay: async () => { throw new Error("BUREAU_UNAVAILABLE") } })
+  const hostId = f.context.paths.hostKey, runId = randomUUID(), assignmentId = randomUUID(), attemptId = randomUUID(), parent = { hostId: "b".repeat(64), agentId: randomUUID() }, bindingEpoch = randomUUID()
+  const receipt = await host.launch({ commandId: randomUUID(), runId, ref: { runId, assignmentId, attemptId }, agent: { hostId, agentId: randomUUID() }, handlerGeneration: f.service.handlerGeneration, bindingEpoch, spec: { parent, description: "Remote child", hostId, cwd: f.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {}, git: null }, lineage: { runId, parent, assignmentId }, git: null, retryMode: "new", savedSettings: null }, { environment: f.input.environment, nativeParams: {} })
+  const token = tools.tokenFor(receipt.execution!)!, scope = { runId, bindingEpoch }
+  const delegated = await tools.call(token, "agency_delegate", { ...scope, commandId: randomUUID(), description: "Another host", hostId: parent.hostId, cwd: f.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {}, git: null })
+  assert.equal(delegated.isError, false, JSON.stringify(delegated))
+  assert.deepEqual((forwarded as any).execution, receipt.execution)
+  assert.equal(JSON.stringify(forwarded).includes(token), false)
+  assert.equal(JSON.stringify(forwarded).includes('"environment"'), false)
+  const report = await tools.call(token, "agency_report", { ...scope, commandId: randomUUID(), assignmentId, attemptId, report: { status: "completed", summary: "Remote result", issues: [], validation: [], git: null } })
+  assert.equal(report.isError, false, JSON.stringify(report))
+  assert.equal(JSON.parse(report.content[0]!.text).state, "retained")
+  assert.equal((await journals.forRun(runId).retainedRead(0, 256)).entries.filter(entry => entry.kind === "report-retained").length, 1)
+  const forged = await tools.call(token, "agency_delegate", { ...scope, bindingEpoch: randomUUID(), commandId: randomUUID() })
+  assert.equal(forged.isError, true)
+})
+
+test("MCP schemas expose code assignments and full cross-host stop identity", () => {
+  const delegate = agencyToolSchemas.find(tool => tool.name === "agency_delegate")!.inputSchema as any
+  assert.deepEqual(delegate.properties.git.anyOf[1].required, ["remote", "repository", "baseOid"])
+  assert.equal(delegate.properties.git.anyOf[1].additionalProperties, false)
+  const stop = agencyToolSchemas.find(tool => tool.name === "agency_stop")!.inputSchema as any
+  assert.deepEqual(stop.properties.agent.required, ["hostId", "agentId"])
+  assert.deepEqual(stop.oneOf, [{ required: ["agent"], not: { required: ["agentId"] } }, { required: ["agentId"], not: { required: ["agent"] } }])
+  const report = agencyToolSchemas.find(tool => tool.name === "agency_report")!.inputSchema as any
+  assert.deepEqual(report.properties.report.properties.git.anyOf[1].properties.published, { const: false })
 })

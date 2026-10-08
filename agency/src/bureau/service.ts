@@ -15,6 +15,8 @@ import { canonicalDigest, boundedText, fail, parseAgentRef, parseExecutionRef, p
 import { parseBureauRecord, type AssignmentRecord, type AssignmentView, type AttemptRecord, type BureauRecord, type CommandRecord, type RunRecord, type RunView } from "./types.js"
 import type { BureauStore } from "./store.js"
 import type { HostSnapshot, Invocation, LaunchAssignment, LaunchReceipt, OrchestrationHost, RootLaunch, StopReceipt } from "./host.js"
+import { parseGitPreparation } from "../orchestration/git-worktree.js"
+import { createLocalOrigins, type OriginSource } from "./origins.js"
 import { transition, unresolved } from "./reducer.js"
 
 export type StartRunInput = { objective: string; hostId: string; cwd: string; backendId: ProviderId; modelId: string; overrides: AssignmentSpec["overrides"] }
@@ -29,7 +31,7 @@ export function invocationDigest(cwd: string, value: Invocation): string {
   const environment = parseLaunchEnvironment(value.environment), params = sessionInputs(cwd, value.nativeParams).params
   return canonicalDigest({ environmentDigest: launchEnvironmentDigest(environment), nativeParamsDigest: canonicalDigest(params) })
 }
-export function createBureauService(input: { store: BureauStore; journals: JournalPool; origins?: JournalPool; hosts: OrchestrationHost[]; notifications?: boolean }) {
+export function createBureauService(input: { store: BureauStore; journals: JournalPool; origins?: JournalPool; originSources?: OriginSource[]; hosts: OrchestrationHost[]; notifications?: boolean }) {
   const { store, journals } = input, queue = new MutationQueue()
   const recordRunId = (record: BureauRecord) => record.kind === "attempt" ? record.value.ref.runId : record.value.runId
   const journalFor = (runId: string) => journals.forRun(runId)
@@ -109,7 +111,11 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     return { ...record, assignments, nextAssignmentCursor, journalCursor: (await journalFor(record.runId).metadata()).lastSeq }
   }
   async function host(hostId: string): Promise<{ adapter: OrchestrationHost; snapshot: HostSnapshot }> {
-    for (const adapter of input.hosts) { const snapshot = await adapter.snapshot(); if (snapshot.hostId === hostId) return { adapter, snapshot } }
+    for (const adapter of input.hosts) {
+      if (adapter.hostId && adapter.hostId !== hostId) continue
+      try { const snapshot = await adapter.snapshot(); if (snapshot.hostId === hostId) return { adapter, snapshot } }
+      catch (error) { if (adapter.hostId === hostId || error instanceof Error && /ENOSPC|CORRUPT|STATE_CHANGED|STATE_REPLACED/.test(error.message)) throw error }
+    }
     return fail("HOST_UNAVAILABLE")
   }
   async function previous(commandId: string, digest: string): Promise<CommandRecord | null> {
@@ -129,9 +135,26 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     await saveCommand({ ...command, state: "completed", result }, command)
     return structuredClone(result)
   }
-  async function reconcile(): Promise<void> {
+  async function refreshOrigins(): Promise<Map<string, HostSnapshot>> {
     const snapshots = new Map<string, HostSnapshot>()
-    for (const adapter of input.hosts) { const snapshot = await adapter.snapshot(); snapshots.set(snapshot.hostId, snapshot) }
+    for (const adapter of input.hosts) {
+      try { const snapshot = await adapter.snapshot(); snapshots.set(snapshot.hostId, snapshot) }
+      catch (error) { if (error instanceof Error && /ENOSPC|CORRUPT|STATE_CHANGED|STATE_REPLACED|MISSING_ORIGIN/.test(error.message)) throw error }
+    }
+    for (const record of await store.listAssignments()) {
+      const current = await attempt(record)
+      if (current.execution || !unresolved(current.state)) continue
+      const snapshot = snapshots.get(current.child.hostId), receipt = snapshot?.receipts.find(value => value.commandId === current.launchCommandId)
+      if (!receipt || receipt.state !== "started") continue
+      validateReceipt(receipt, { commandId: current.launchCommandId, agent: current.child, handlerGeneration: current.handlerGeneration })
+      validateGitReceipt(record, current, receipt)
+      await saveAttempt({ ...current, execution: receipt.execution, effective: receipt.effective, state: transition(current.state, "uncertain"), ...(record.spec.git ? { git: receipt.git } : {}) }, current)
+    }
+    await replayOriginReports()
+    return snapshots
+  }
+  async function reconcile(): Promise<void> {
+    const snapshots = await refreshOrigins()
     for (const current of await store.listRuns()) {
       if (current.state !== "starting") continue
       const command = (await store.listCommands()).filter(command => command.runId === current.runId && ["start", "restore-root"].includes(command.op) && command.launchCommandId).sort((a, b) => (b.journal?.seq ?? 0) - (a.journal?.seq ?? 0))[0]
@@ -149,7 +172,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       const membership = await store.readRun(record.runId), snapshot = snapshots.get(current.child.hostId)
       let state = current.state
       if (membership?.state === "cancelled") state = "cancelled"
-      else if (!snapshot) state = "uncertain"
+      else if (!snapshot) continue
       else if (snapshot.handlerGeneration !== current.handlerGeneration) state = snapshot.replayFences.some(fence => fence.runId === record.runId) ? "interrupted" : "uncertain"
       else if (current.execution) {
         const observed = snapshot.agents.find(agent => isDeepStrictEqual(agent.agent, current.child))
@@ -182,7 +205,8 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
   }
   function validateReceipt<T extends Pick<RootLaunch, "commandId" | "agent" | "handlerGeneration">>(receipt: LaunchReceipt, command: T): void {
     try {
-      keys(object(receipt), ["commandId", "execution", "effective", "state"])
+      keys(object(receipt), ["commandId", "execution", "effective", "state", ...(Object.hasOwn(receipt, "git") ? ["git"] : [])])
+      if (receipt.git) parseGitPreparation(receipt.git)
       id(receipt.commandId)
       if (!["accepted", "started", "failed", "interrupted", "uncertain"].includes(receipt.state)) fail("INVALID_RECEIPT")
       if (receipt.execution !== null) parseExecutionRef(receipt.execution)
@@ -190,13 +214,17 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     } catch { fail("INVALID_RECEIPT") }
     if (receipt.commandId !== command.commandId || receipt.execution && (receipt.execution.agentId !== command.agent.agentId || receipt.execution.hostId !== command.agent.hostId || receipt.execution.handlerGeneration !== command.handlerGeneration) || receipt.state === "started" && (!receipt.execution || !receipt.effective)) fail("INVALID_RECEIPT")
   }
+  function validateGitReceipt(record: AssignmentRecord, current: AttemptRecord, receipt: LaunchReceipt): void {
+    if (record.spec.git && receipt.state === "started" && (!receipt.git || receipt.git.state !== "ready" || !isDeepStrictEqual(receipt.git.exchange, current.gitExchange) || receipt.git.commandId !== current.launchCommandId)) fail("INVALID_RECEIPT")
+  }
   async function dispatch(record: AssignmentRecord, current: AttemptRecord, invocation: Invocation, membership: RunRecord): Promise<AttemptRecord> {
     const { adapter } = await host(current.child.hostId)
-    const command: LaunchAssignment = { commandId: current.launchCommandId, runId: current.ref.runId, ref: current.ref, agent: current.child, handlerGeneration: current.handlerGeneration, bindingEpoch: membership.bindingEpoch, spec: record.spec, lineage: current.lineage, git: null, retryMode: current.retryMode, savedSettings: current.retryMode === "restore" ? current.effective : null }
+    const command: LaunchAssignment = { commandId: current.launchCommandId, runId: current.ref.runId, ref: current.ref, agent: current.child, handlerGeneration: current.handlerGeneration, bindingEpoch: membership.bindingEpoch, spec: record.spec, lineage: current.lineage, git: current.gitExchange ?? null, ...(record.spec.git ? { savedGit: current.retryMode === "restore" ? current.git ?? null : null } : {}), retryMode: current.retryMode, savedSettings: current.retryMode === "restore" ? current.effective : null }
     const receipt = await launchResult(adapter, command, invocation)
     validateReceipt(receipt, command)
+    validateGitReceipt(record, current, receipt)
     const state = receipt.state === "started" ? "running" : receipt.state === "accepted" ? "dispatch_pending" : receipt.state
-    const launched = await saveAttempt({ ...current, state: transition(current.state, state), execution: receipt.execution, effective: receipt.effective }, current)
+    const launched = await saveAttempt({ ...current, state: transition(current.state, state), execution: receipt.execution, effective: receipt.effective, ...(record.spec.git ? { git: receipt.git ?? current.git ?? null } : {}) }, current)
     if (state !== "running" || !launched.execution) return launched
     try { await adapter.submit(launched.execution, { submissionId: launched.submissionId, prompt: [{ type: "text", text: record.spec.description }] }) }
     catch { const observed = await adapter.submission(launched.execution, launched.submissionId); if (!observed) return saveAttempt({ ...launched, state: "uncertain" }, launched) }
@@ -220,10 +248,9 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     await run(report.runId)
     const current = await store.readAttempt(report.attemptId)
     if (!current || !isDeepStrictEqual(current.execution, report.execution) || !isDeepStrictEqual(current.ref, { runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId })) fail("STALE_EXECUTION")
-    const entries = input.origins ? await journalEntries(input.origins.forRun(report.runId)) : []
-    const source = entries.find(entry => entry.eventId === origin.eventId)
-    if (!source || source.kind !== "report-retained" || !isDeepStrictEqual(source.payload, report) || !isDeepStrictEqual(eventRef(source), origin)) fail("INVALID_ORIGIN")
-    await input.origins!.forRun(report.runId).append(source.eventId, source.kind, source.payload)
+    const source = input.originSources?.find(source => source.hostId === report.execution.hostId) ?? (input.origins ? createLocalOrigins(report.execution.hostId, input.origins) : null)
+    if (!source) fail("INVALID_ORIGIN")
+    await source.verify({ hostId: report.execution.hostId, runId: report.runId, streamId: report.runId }, origin, "report-retained", report)
     const retained = await store.readReport(report.attemptId)
     if (retained) {
       if (!isDeepStrictEqual(retained.input.report, report.report)) fail("REPORT_CONFLICT")
@@ -240,13 +267,27 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     } catch (error) { writeFailure = error; throw error }
   }
   async function replayOriginReports(): Promise<void> {
-    if (!input.origins) return
-    for (const runId of await input.origins.list()) for (const entry of await journalEntries(input.origins.forRun(runId))) if (entry.kind === "report-retained" && !await input.origins.forRun(runId).acknowledged("bureau", eventRef(entry))) {
+    if (input.origins) for (const runId of await input.origins.list()) for (const entry of await journalEntries(input.origins.forRun(runId))) if (entry.kind === "report-retained" && !await input.origins.forRun(runId).acknowledged("bureau", eventRef(entry))) {
       const receipt = await acceptReport({ input: parseReportInput(entry.payload), origin: eventRef(entry) })
       if (receipt.state !== "retained") await input.origins.forRun(runId).acknowledge("bureau", eventRef(entry))
     }
+    for (const source of input.originSources ?? []) for (const key of await source.list()) {
+      let after = 0
+      while (true) {
+        const page = await source.read(key, after, 256)
+        for (const entry of page.entries) if (entry.kind === "report-retained" && !await source.acknowledged(key, eventRef(entry))) {
+          const report = parseReportInput(entry.payload)
+          if (report.execution.hostId !== source.hostId || report.runId !== key.runId) fail("INVALID_ORIGIN")
+          const receipt = await acceptReport({ input: report, origin: eventRef(entry) })
+          if (receipt.state !== "retained") await source.acknowledge(key, eventRef(entry))
+        }
+        if (page.nextCursor >= page.lastSeq) break
+        if (page.nextCursor <= after) fail("MISSING_ORIGIN")
+        after = page.nextCursor
+      }
+    }
   }
-  async function refreshLocked(): Promise<void> { await replayOriginReports(); await reconcile(); await waits.recoverLocked() }
+  async function refreshLocked(): Promise<void> { await reconcile(); await waits.recoverLocked() }
   async function recover(): Promise<void> {
     if (closed) fail("BUREAU_UNAVAILABLE")
     try {
@@ -289,7 +330,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     for (const entry of await store.listInbox()) if (entry.runId === runId && !acknowledges(acknowledgments, runId, entry.source) && !deliveries.some(delivery => delivery.state === "delivered" && delivery.sources.some(source => isDeepStrictEqual(source, entry.source)))) fail("UNRESOLVED")
   }
   const inbox = createInbox({ store, journals, failed(error) { writeFailure = error } })
-  const waits = createWaits({ store, journals, queue, inbox, requireWrites, async beforeAdmission() { await replayOriginReports(); await reconcile() }, failed(error) { writeFailure = error },
+  const waits = createWaits({ store, journals, queue, inbox, requireWrites, async beforeAdmission() { await reconcile() }, failed(error) { writeFailure = error },
     async binding(parent, runId) {
       const membership = await run(runId)
       if (membership.state !== "active") return null
@@ -369,6 +410,23 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         current = edge.lineage.parent
       }
     }),
+    async agentRef(runId: string, agentId: string): Promise<AgentRef> {
+      await run(runId); id(agentId)
+      const candidates = [ ...(await store.listRuns()).filter(run => run.runId === runId).map(run => run.root), ...(await store.listAttempts()).filter(attempt => attempt.ref.runId === runId).map(attempt => attempt.child) ].filter(agent => agent.agentId === agentId)
+      const unique = [...new Map(candidates.map(agent => [agent.hostId + "/" + agent.agentId, agent])).values()]
+      if (unique.length !== 1) fail(unique.length ? "AMBIGUOUS_AGENT" : "INVALID_TARGET")
+      return unique[0]!
+    },
+    async executionFor(target: AgentRef): Promise<ExecutionRef> {
+      target = parseAgentRef(target)
+      const { snapshot } = await host(target.hostId), execution = snapshot.agents.find(agent => isDeepStrictEqual(agent.agent, target))?.execution
+      if (!execution) fail("STALE_EXECUTION")
+      return execution
+    },
+    async stopExecution(commandId: string, target: ExecutionRef): Promise<StopReceipt> {
+      const { adapter } = await host(parseExecutionRef(target).hostId)
+      return adapter.stop(id(commandId), target)
+    },
     async assertBinding(runId: string, bindingEpoch: string, parent: AgentRef) {
       const membership = await run(runId)
       if (membership.bindingEpoch !== bindingEpoch || membership.state !== "active") fail("STALE_BINDING")
@@ -424,7 +482,6 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     async delegate(commandId: string, runId: string, raw: AssignmentSpec, invocation: Invocation, authority?: { execution: ExecutionRef; bindingEpoch: string }): Promise<AssignmentView> {
       invocation = captureInvocation(invocation)
       const spec = parseAssignmentSpec(raw), digest = canonicalDigest({ op: "delegate", runId: id(runId), spec, invocation: invocationDigest(spec.cwd, invocation) })
-      if (spec.git !== null) fail("UNSUPPORTED_CAPABILITY")
       return queue.run(async () => {
         requireWrites(); if (authority) { const current = await run(runId); if (current.state !== "active" || current.bindingEpoch !== authority.bindingEpoch || authority.execution.agentId !== spec.parent.agentId || authority.execution.hostId !== spec.parent.hostId) fail("STALE_BINDING"); const { snapshot } = await host(authority.execution.hostId); if (!snapshot.agents.some(agent => agent.phase === "ready" && isDeepStrictEqual(agent.execution, authority.execution))) fail("STALE_EXECUTION") }; const prior = await previous(commandId, digest); if (prior) return prior.result as AssignmentView
         const membership = await run(runId)
@@ -435,7 +492,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         if (!snapshot.backendChoices.includes(spec.backendId)) fail("UNSUPPORTED_BACKEND")
         const assignmentId = randomUUID(), attemptId = randomUUID(), child = { hostId: spec.hostId, agentId: randomUUID() }, launchCommandId = randomUUID()
         const command = await acceptCommand(commandId, runId, "delegate", digest, assignmentId, snapshot.handlerGeneration, launchCommandId)
-        const current = await saveAttempt({ version: 1, ref: { runId, assignmentId, attemptId }, child, lineage: { runId, parent: spec.parent, assignmentId }, state: "dispatch_pending", launchCommandId, submissionId: randomUUID(), handlerGeneration: snapshot.handlerGeneration, execution: null, effective: null, retryMode: "new", journal: null }, null)
+        const current = await saveAttempt({ version: 1, ref: { runId, assignmentId, attemptId }, child, lineage: { runId, parent: spec.parent, assignmentId }, state: "dispatch_pending", launchCommandId, submissionId: randomUUID(), handlerGeneration: snapshot.handlerGeneration, execution: null, effective: null, retryMode: "new", ...(spec.git ? { gitExchange: { ...spec.git, branch: `moon/agency/${runId}/${assignmentId}/${attemptId}` }, git: null } : {}), journal: null }, null)
         const record = await saveAssignment({ version: 1, assignmentId, runId, spec, attemptIds: [attemptId], activeAttemptId: attemptId, journal: null }, null)
         await dispatch(record, current, invocation, membership)
         return complete(command, await assignmentView(record))
@@ -457,7 +514,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         }
         const child = mode === "restore" ? old.child : { hostId: record.spec.hostId, agentId: randomUUID() }, attemptId = randomUUID(), launchCommandId = randomUUID()
         const command = await acceptCommand(commandId, record.runId, "retry", digest, assignmentId, snapshot.handlerGeneration, launchCommandId)
-        const current = await saveAttempt({ version: 1, ref: { ...old.ref, attemptId }, child, lineage: old.lineage, state: "dispatch_pending", launchCommandId, submissionId: randomUUID(), handlerGeneration: snapshot.handlerGeneration, execution: null, effective: mode === "restore" ? old.effective : null, retryMode: mode, journal: null }, null)
+        const current = await saveAttempt({ version: 1, ref: { ...old.ref, attemptId }, child, lineage: old.lineage, state: "dispatch_pending", launchCommandId, submissionId: randomUUID(), handlerGeneration: snapshot.handlerGeneration, execution: null, effective: mode === "restore" ? old.effective : null, retryMode: mode, ...(record.spec.git ? { gitExchange: mode === "restore" ? old.gitExchange ?? null : { ...record.spec.git, branch: `moon/agency/${record.runId}/${assignmentId}/${attemptId}` }, git: mode === "restore" ? old.git ?? null : null } : {}), journal: null }, null)
         const next = await saveAssignment({ ...record, attemptIds: [...record.attemptIds, attemptId], activeAttemptId: attemptId }, record)
         await dispatch(next, current, invocation, membership)
         return complete(command, await assignmentView(next))

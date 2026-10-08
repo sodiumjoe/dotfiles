@@ -1,9 +1,11 @@
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { createHash } from "node:crypto"
 import { lstat, readFile, readdir, writeFile } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 
-export type BuildManifest = { version: 1; nodeVersion: string; sourceDigest: string; distDigest: string }
+export type BuildManifest = { version: 1; nodeVersion: string; sourceDigest: string; distDigest: string; sourceRevision?: string }
 async function digest(root: string, entries: string[]): Promise<string> {
   const hash = createHash("sha256")
   async function visit(path: string): Promise<void> {
@@ -36,5 +38,7 @@ export async function verifyBuildManifest(root: string): Promise<boolean> {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL("../../", import.meta.url))
   if (process.version !== "v24.13.0") throw new Error("NODE_VERSION")
-  await publishBuildManifest(root, await captureBuildManifest(root))
+  const sourceRevision = (await promisify(execFile)("git", ["rev-parse", "HEAD"], { cwd: root, timeout: 5000 })).stdout.trim()
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sourceRevision)) throw new Error("BUILD_REVISION")
+  await publishBuildManifest(root, { ...await captureBuildManifest(root), sourceRevision })
 }

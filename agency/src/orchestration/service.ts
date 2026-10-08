@@ -1,9 +1,10 @@
+import { prepareAssignmentGit, assignmentWorktreePath, type GitPreparation } from "./git-worktree.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { readBackendConfig } from "../agent/backend-config.js"
 import type { AgentService } from "../agent/service.js"
 import type { JsonObject } from "../agent/session-config.js"
-import type { AgentRecordV3, AgentTuple } from "../agent/types.js"
+import { AgentError, type AgentRecordV3, type AgentTuple } from "../agent/types.js"
 import { captureInvocation, invocationDigest } from "../bureau/service.js"
 import type { Invocation, LaunchAssignment, RootLaunch, LaunchReceipt, OrchestrationHost, HostAgent } from "../bureau/host.js"
 import type { JournalPool } from "./journal.js"
@@ -29,7 +30,13 @@ export function createOrchestrationService(input: { root: string; hostId: string
   }
   const outbox = createReportOutbox({ journals, relay: input.relay, retain: (execution, publish) => agents.withExecution(tuple(execution), publish), async validate(execution, report) {
     await validate(execution)
-    if (!(await preparations()).some(launch => isDeepStrictEqual(launch.execution, execution) && isDeepStrictEqual(launch.attempt, { runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId }))) fail("STALE_EXECUTION")
+    const prepared = (await preparations()).find(launch => isDeepStrictEqual(launch.execution, execution) && isDeepStrictEqual(launch.attempt, { runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId }))
+    if (!prepared) fail("STALE_EXECUTION")
+    if (prepared.git) {
+      if (report.report.git?.published) fail("GIT_PUBLICATION_UNAUTHORIZED")
+      if (report.report.status === "completed") fail("GIT_PUBLICATION_REQUIRED")
+      if (report.report.git) { const { resultOid, published, ...exchange } = report.report.git; if (!isDeepStrictEqual(exchange, prepared.git.exchange)) fail("INVALID_REPORT") }
+    }
   } })
   async function inspectCommand(commandId: string, handlerGeneration: string): Promise<LaunchReceipt | null> {
     const prepared = (await preparations()).find(launch => launch.commandId === commandId && launch.execution.handlerGeneration === handlerGeneration)
@@ -41,30 +48,39 @@ export function createOrchestrationService(input: { root: string; hostId: string
     if (!view) return { commandId, execution: prepared.execution, effective: prepared.settings, state: "uncertain" }
     const state = view.durability !== "verified" ? "uncertain" : view.command.state === "pending" ? "accepted" : view.command.result?.outcome === "started" || view.command.result?.outcome === "restored" ? "started" : view.command.result?.outcome === "interrupted" ? "interrupted" : "failed"
     const observed = await agents.sessionRecord(prepared.agent.agentId), effective = observed && isDeepStrictEqual(executionOf(observed.record), prepared.execution) ? observed.record.settings : prepared.settings
-    return { commandId, execution: prepared.execution, effective, state }
+    return { commandId, execution: prepared.execution, effective, state, ...(prepared.git ? { git: prepared.git } : {}) }
   }
   async function launch(command: LaunchAssignment | RootLaunch, raw: Invocation): Promise<LaunchReceipt> {
     if (command.handlerGeneration !== agents.handlerGeneration || command.agent.hostId !== input.hostId) fail("STALE_HANDLER")
     const invocation = captureInvocation(raw), spec = "spec" in command ? command.spec : command
-    if (spec && "git" in spec && spec.git !== null) fail("UNSUPPORTED_CAPABILITY")
+    if ("ref" in command && (command.spec.git === null) !== (command.git === null)) fail("INVALID_GIT_PREPARATION")
     const servers = invocation.nativeParams.mcpServers
     if (Array.isArray(servers) && servers.some(server => server && typeof server === "object" && !Array.isArray(server) && server.name === "agency")) fail("SESSION_INPUT_REQUIRED")
     const previous = await inspectCommand(command.commandId, command.handlerGeneration)
     if (previous) {
       const prepared = (await preparations()).find(launch => launch.commandId === command.commandId)!
+      if (prepared.launchDigest && prepared.launchDigest !== canonicalDigest(command)) fail("COMMAND_CONFLICT")
       if (prepared.invocationDigest !== invocationDigest(spec.cwd, invocation) || !isDeepStrictEqual(prepared.agent, command.agent) || prepared.runId !== command.runId) fail("COMMAND_CONFLICT")
       return previous
+    }
+    let git: GitPreparation | null = null
+    if ("ref" in command && command.git) {
+      const { branch: ignored, ...source } = command.git
+      if (!isDeepStrictEqual(source, command.spec.git)) fail("INVALID_GIT_PREPARATION")
+      if (command.retryMode === "restore" && !command.savedGit) fail("GIT_RESTORE_CONFLICT")
+      const cwd = command.retryMode === "restore" ? command.savedGit!.cwd : assignmentWorktreePath(input.root, command.ref.assignmentId, command.ref.attemptId)
+      git = await prepareAssignmentGit(command.git, cwd, { root: input.root, commandId: command.commandId, ...(command.retryMode === "restore" ? { restore: command.savedGit! } : {}) })
     }
     const kind = "retryMode" in command && command.retryMode === "restore" ? "restore" : "start"
     const choices = await agents.backendChoices(), backend = (choices.backends as JsonObject[]).find(backend => backend.id === spec.backendId), model = (backend?.models as JsonObject[] | undefined)?.find(model => model.id === spec.modelId)
     const selected = model?.selection as { modelId?: string; configValues?: Record<string, string | boolean> } | undefined
     if (selected?.configValues && Object.entries(selected.configValues).some(([key, value]) => spec.overrides.configValues?.[key] !== undefined && spec.overrides.configValues[key] !== value)) fail("INVALID_ORCHESTRATION")
     const selection = selected ? { ...selected, ...spec.overrides, ...(selected.configValues ? { configValues: { ...selected.configValues, ...spec.overrides.configValues } } : {}) } : { modelId: spec.modelId, ...spec.overrides }
-    const request = kind === "restore" ? { commandId: command.commandId, handlerGeneration: command.handlerGeneration, agentId: command.agent.agentId, environment: invocation.environment, nativeParams: invocation.nativeParams } : { commandId: command.commandId, cwd: spec.cwd, backendId: spec.backendId, selection, environment: invocation.environment, nativeParams: invocation.nativeParams }
+    const request = kind === "restore" ? { commandId: command.commandId, handlerGeneration: command.handlerGeneration, agentId: command.agent.agentId, environment: invocation.environment, nativeParams: invocation.nativeParams } : { commandId: command.commandId, cwd: git?.cwd ?? spec.cwd, backendId: spec.backendId, selection, environment: invocation.environment, nativeParams: invocation.nativeParams }
     let reserved: OriginLaunch | null = null
     await agents.launchSession(request, kind, { agentId: command.agent.agentId, mcpServerNames: ["agency"], async prepare(record, params) {
       const execution = executionOf(record)!, edge = "lineage" in command ? command.lineage : null
-      const preparation: OriginLaunch = { commandId: command.commandId, runId: command.runId, agent: command.agent, execution, launchAttemptId: record.launch.launchAttemptId, lineage: edge, attempt: "ref" in command ? command.ref : null, bindingEpoch: command.bindingEpoch, invocationDigest: invocationDigest(spec.cwd, invocation), toolsDigest: "0".repeat(64), settings: record.settings }
+      const preparation: OriginLaunch = { commandId: command.commandId, runId: command.runId, agent: command.agent, execution, launchAttemptId: record.launch.launchAttemptId, lineage: edge, attempt: "ref" in command ? command.ref : null, bindingEpoch: command.bindingEpoch, invocationDigest: invocationDigest(spec.cwd, invocation), toolsDigest: "0".repeat(64), settings: record.settings, launchDigest: canonicalDigest(command), ...(git ? { git } : {}) }
       reserved = preparation
       const definition = input.tools.definition(execution, preparation, invocation)
       preparation.toolsDigest = canonicalDigest({ ...definition, env: Array.isArray(definition.env) ? definition.env.map(value => value && typeof value === "object" && !Array.isArray(value) ? { name: value.name } : value) : [] })
@@ -77,10 +93,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
     while (true) {
       const receipt = await inspectCommand(command.commandId, command.handlerGeneration)
       if (receipt && receipt.state !== "accepted") {
-        const event = await journals.forRun(command.runId).append(randomUUID(), "origin-receipt", { runId: command.runId, receipt })
-        await journals.forRun(command.runId).acknowledge("bureau", { seq: event.seq, eventId: event.eventId, digest: event.digest })
-        const preparation = (await journalEntries(journals.forRun(command.runId))).find(entry => entry.eventId === command.commandId)!
-        await journals.forRun(command.runId).acknowledge("bureau", { seq: preparation.seq, eventId: preparation.eventId, digest: preparation.digest })
+        await journals.forRun(command.runId).append(randomUUID(), "origin-receipt", { runId: command.runId, receipt })
         return receipt
       }
       if (performance.now() >= deadline) return { commandId: command.commandId, execution: (reserved as OriginLaunch | null)?.execution ?? null, effective: null, state: "uncertain" }
@@ -88,7 +101,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
     }
   }
   const host: OrchestrationHost = {
-    launch, launchRoot: launch, inspectCommand,
+    hostId: input.hostId, launch, launchRoot: launch, inspectCommand,
     async restoreRoot(command, invocation) {
       const observed = await agents.sessionRecord(command.agent.agentId)
       if (!observed || observed.record.definition.hostId !== command.agent.hostId || !observed.record.session || !["stopped", "recoverable"].includes(observed.record.phase)) fail("NOT_RECOVERABLE")
@@ -108,11 +121,11 @@ export function createOrchestrationService(input: { root: string; hostId: string
         const command = snapshot.commands.find(view => view.command.commandId === launch.commandId && view.command.handlerGeneration === launch.execution.handlerGeneration)
         const state = !command || command.durability !== "verified" ? "uncertain" : command.command.state === "pending" ? "accepted" : command.command.result?.outcome === "started" || command.command.result?.outcome === "restored" ? "started" : command.command.result?.outcome === "interrupted" ? "interrupted" : "failed"
         const agent = snapshot.agents.find(view => view.record.definition.agentId === launch.agent.agentId && isDeepStrictEqual(executionOf(view.record), launch.execution))
-        receipts.push({ commandId: launch.commandId, execution: launch.execution, effective: agent?.record.settings ?? launch.settings, state })
+        receipts.push({ commandId: launch.commandId, execution: launch.execution, effective: agent?.record.settings ?? launch.settings, state, ...(launch.git ? { git: launch.git } : {}) })
       }
       const replayFences = []
-      for (const runId of await journals.list()) { const page = await journals.forRun(runId).metadata(); const reports = (await journalEntries(journals.forRun(runId))).filter(entry => entry.kind === "report-retained"); const acknowledged = await Promise.all(reports.map(report => journals.forRun(runId).acknowledged("bureau", report))); if (acknowledged.every(Boolean)) replayFences.push({ streamId: runId, runId, throughSeq: page.lastSeq, checkpoint: page.checkpoint }) }
-      return { hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root)).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
+      for (const runId of await journals.list()) { const page = await journals.forRun(runId).metadata(); replayFences.push({ streamId: runId, runId, throughSeq: page.lastSeq, checkpoint: page.checkpoint }) }
+      return { hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root).catch(error => { if (error instanceof AgentError && error.code === "UNAVAILABLE") return { backends: [] }; throw error })).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
     }) },
     submission(target, submissionId) { return agents.submission(tuple(target), submissionId) },
     submit(target, request, beforeAccepted) { return agents.submitAcp(tuple(target), request, beforeAccepted) },

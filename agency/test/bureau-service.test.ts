@@ -122,10 +122,10 @@ test("forget seals run and create-command identity against old retries", async t
   await assert.rejects(f.core.startRun(commandId, f.input.rootInput, f.invocation), /FORGOTTEN/)
 })
 
-test("non-null Git assignment is rejected before any host launch", async t => {
+test("Git launch without owned worktree evidence cannot publish a running attempt", async t => {
   const f = await bureauFixture(t), before = f.host.launchCalls
-  await assert.rejects(f.core.delegate(randomUUID(), f.input.runId, { ...f.input.assignment, git: { remote: "origin", repository: f.root, baseOid: "a".repeat(40) } }, f.invocation), /UNSUPPORTED_CAPABILITY/)
-  assert.equal(f.host.launchCalls, before)
+  await assert.rejects(f.core.delegate(randomUUID(), f.input.runId, { ...f.input.assignment, git: { remote: "origin", repository: f.root, baseOid: "a".repeat(40) } }, f.invocation), /INVALID_RECEIPT/)
+  assert.equal(f.host.launchCalls, before + 1)
 })
 
 test("Bureau persists invocation digests without environment or MCP credentials", async t => {

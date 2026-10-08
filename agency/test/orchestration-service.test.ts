@@ -61,6 +61,9 @@ test("local host binds launch lineage to the reserved execution before creation"
   assert.ok(!JSON.stringify(entries).includes('"environment":'))
   assert.equal(f.spawns(), 1)
   assert.deepEqual(await host.inspectCommand(command.commandId, command.handlerGeneration), receipt)
+  await assert.rejects(host.launch({ ...command, spec: { ...command.spec, description: "Changed assignment" } }, { environment: f.input.environment, nativeParams: {} }), /COMMAND_CONFLICT/)
+  await assert.rejects(host.launch({ ...command, ref: { ...command.ref, attemptId: randomUUID() } }, { environment: f.input.environment, nativeParams: {} }), /COMMAND_CONFLICT/)
+  assert.equal(f.spawns(), 1)
 })
 
 test("preparation failure revokes a generated tool binding even before its journal is published", async t => {
@@ -191,4 +194,16 @@ test("launch timeout revokes preparation before and after its asynchronous compl
   finally { release.resolve(); await f.context.mutations.queue.run(async () => undefined) }
   assert.ok(revocations > 1)
   assert.equal(f.spawns(), 0)
+})
+
+test("origin snapshots fence unacknowledged reports and launch records await recipient storage", async t => {
+  const f = await agentServiceFixture(t), hostId = f.context.paths.hostKey, journals = createJournalPool(f.root, undefined, Date.now, "origin"), runId = randomUUID()
+  const host = createOrchestrationService({ root: f.root, hostId, agents: f.service, journals, lineage: createLineageStore(f.root), tools: { definition() { return { name: "agency", command: "fixture-helper", args: [], env: [] } }, activate() {}, revoke() {} }, relay: async () => { throw new Error("offline") } })
+  await host.launchRoot({ commandId: randomUUID(), runId, agent: { hostId, agentId: randomUUID() }, handlerGeneration: f.service.handlerGeneration, bindingEpoch: randomUUID(), cwd: f.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {} }, { environment: f.input.environment, nativeParams: {} })
+  const journal = journals.forRun(runId), events = (await journal.retainedRead(0, 256)).entries
+  assert.equal(await journal.watermark("bureau"), 0)
+  const event = await journal.append(randomUUID(), "report-retained", { runId, assignmentId: randomUUID(), attemptId: randomUUID(), commandId: randomUUID(), execution: { hostId, agentId: randomUUID(), handlerGeneration: f.service.handlerGeneration, providerGeneration: randomUUID() }, report: { status: "completed", summary: "result", issues: [], validation: [], git: null } })
+  const snapshot = await host.snapshot()
+  assert.deepEqual(snapshot.replayFences, [{ runId, streamId: runId, throughSeq: event.seq, checkpoint: 0 }])
+  assert.equal(events.length, 2)
 })

@@ -455,7 +455,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUp
   return { connection, sent, permissionReplies, readable, writable, send, replaceOptions(values: import("../src/agent/session-config.js").JsonObject[]) { options.splice(0, options.length, ...structuredClone(values)) }, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { retirement?: import("../src/retention/store.js").RetirementView; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: RuntimeLaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { hostId?: string; retirement?: import("../src/retention/store.js").RetirementView; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: RuntimeLaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang" } = {}) {
   if (options.productionCatalog) options = { ...options, productionContract: true }
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
@@ -463,9 +463,9 @@ export async function agentServiceFixture(t: TestContext, options: { retirement?
   await mkdir(join(root, "launches"), { mode: 0o700 }); await mkdir(workspace, { mode: 0o700 })
   const forbidden = async (): Promise<never> => { throw new Error("unexpected process operation") }
   const context: LaunchContext = {
-    paths: { hostKey: "a".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
+    paths: { hostKey: options.hostId ?? "a".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") },
     adapter: { platform: "linux", bootId: async () => "boot-a", readProcess: forbidden, readGroup: forbidden, signalGroup: forbidden },
-    state: { hostId: "a".repeat(64), handlerGeneration: randomUUID(), phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
+    state: { hostId: options.hostId ?? "a".repeat(64), handlerGeneration: randomUUID(), phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
     mutations: { queue: new MutationQueue(), accepted: [] },
     shutdownPending: () => false,
   }

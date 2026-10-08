@@ -84,6 +84,13 @@ export function parseGitInput(value: unknown): GitInput {
   const v = object(value); keys(v, ["remote", "repository", "baseOid"])
   return { remote: text(v.remote, 4096), repository: absolutePath(v.repository), baseOid: oid(v.baseOid) }
 }
+export function parseGitExchange(value: unknown): GitExchange {
+  const v = object(value), { branch, ...input } = v
+  keys(v, ["remote", "repository", "baseOid", "branch"])
+  const result = { ...parseGitInput(input), branch: text(branch, 4096) }
+  if (!result.branch.startsWith("moon/agency/")) fail("INVALID_GIT_PREPARATION")
+  return result
+}
 export function parseAssignmentSpec(value: unknown): AssignmentSpec {
   const v = object(value); keys(v, ["parent", "description", "hostId", "cwd", "backendId", "modelId", "overrides", "git"])
   return { parent: parseAgentRef(v.parent), description: boundedText(v.description, 65536, false), hostId: hash(v.hostId), cwd: absolutePath(v.cwd), backendId: providerId(v.backendId), modelId: text(v.modelId), overrides: parseOverrides(v.overrides), git: v.git === null ? null : parseGitInput(v.git) }

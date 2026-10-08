@@ -426,7 +426,7 @@ test("terminal stop receipt durability blocks retirement until exact retry", asy
   f.failStopReceipt(true)
   const stop = { ...ready.command.target!, commandId: randomUUID() }
   await f.service.stop(stop)
-  await until(async () => (await f.store.readAgent(stop.agentId))?.phase === "stopped" ? true : undefined)
+  await until(async () => (await f.service.sessionRecord(stop.agentId))?.record.phase === "stopped" ? true : undefined)
   assert.deepEqual(f.retired(), [])
   f.failStopReceipt(false)
   assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")

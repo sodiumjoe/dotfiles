@@ -15,7 +15,7 @@ export function bridgeFixture(t: TestContext) {
   const agentId = randomUUID()
   function make() {
     const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough(), child = new EventEmitter()
-    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: observedHost, handlerGeneration: generation, connectionId: randomUUID(), sourceRevision: "c".repeat(40), nodeVersion: runtime, capabilities: ["snapshot", "launch", "submit"], outboxCursor: 0 }
+    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: observedHost, handlerGeneration: generation, connectionId: randomUUID(), sourceRevision: "c".repeat(40), nodeVersion: runtime, capabilities: ["snapshot", "launch", "launchRoot", "restoreRoot", "submit", "submission", "inspectCommand", "stop", "origin-read", "origin-retained", "origin-ack"], outboxCursor: 0 }
     const peer = createBridgePeer({ input: stdin, output: stdout, hello })
     peer.onRequest(async channel => {
       if (channel === "snapshot") return { hostId: observedHost, handlerGeneration: generation, backendChoices: ["codex-acp"], agents: [{ agent: { hostId: observedHost, agentId }, execution: null, phase: "stopped", toolsEnabled: false, lineage: null, membership: null, cwd: "/workspace", settings: { modelId: "model-a" } }], receipts: [], replayFences: [] }

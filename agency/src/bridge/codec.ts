@@ -25,7 +25,7 @@ export function decodeBridgeFrames(accept: (frame: BridgeFrame) => void) {
     end() { if (bytes.length) bridgeError("TRUNCATED_BRIDGE_FRAME") }
   }
 }
-export type RequestOptions = { beforeAccepted?: () => Promise<void>; timeoutMs?: number }
+export type RequestOptions = { signal?: AbortSignal; beforeAccepted?: () => Promise<void>; timeoutMs?: number }
 export type BridgeRequestHandler = (channel: string, payload: unknown, requestId: string, signal: AbortSignal) => Promise<unknown>
 type Pending = { resolve(value: unknown): void; reject(error: Error): void; admission: Admission | null; beforeAccepted?: () => Promise<void>; prepared: boolean; published: boolean; timer?: NodeJS.Timeout }
 type Preparing = { admission: Admission; resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }
@@ -98,6 +98,8 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
       if (frame.ok && value.beforeAccepted && !value.published) bridgeError("INVALID_ADMISSION")
       pending.delete(frame.requestId); clearTimeout(value.timer)
       if (frame.ok) value.resolve(frame.payload); else value.reject(new Error(frame.error))
+    } else if (frame.type === "request_cancel") {
+      incoming.get(frame.requestId)?.abort(new Error("TRANSPORT_DETACHED"))
     } else if (frame.type === "request") {
       if (!handler || incoming.has(frame.requestId)) bridgeError("INVALID_BRIDGE_REQUEST")
       const controller = new AbortController(); incoming.set(frame.requestId, controller)
@@ -136,14 +138,24 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
     async request(channel: string, payload: unknown, options: RequestOptions = {}): Promise<unknown> {
       await ready.promise
       if (stopped) throw closure
+      if (options.signal?.aborted) throw options.signal.reason
       const requestId = randomUUID()
       let binding: Admission | null = null
       if (options.beforeAccepted) { const p = object(payload), request = object(p.request); binding = parseAdmission({ execution: p.target, submissionId: request.submissionId, digest: canonicalDigest({ prompt: request.prompt }) }) }
       return new Promise((resolve, reject) => {
-        const value: Pending = { resolve, reject, admission: binding, prepared: false, published: false, ...(options.beforeAccepted ? { beforeAccepted: options.beforeAccepted } : {}) }
-        if ((options.timeoutMs ?? 60000) > 0) { value.timer = setTimeout(() => { pending.delete(requestId); reject(new Error("BRIDGE_TIMEOUT")); finish(new Error("BRIDGE_TIMEOUT")) }, options.timeoutMs ?? 60000); value.timer.unref() }
+        const cleanup = () => options.signal?.removeEventListener("abort", abort)
+        const resolved = (value: unknown) => { cleanup(); resolve(value) }, rejected = (error: unknown) => { cleanup(); reject(error) }
+        const abort = () => {
+          if (!pending.has(requestId)) return
+          if (binding) { finish(new Error("BRIDGE_CANCELLED")); return }
+          pending.delete(requestId); clearTimeout(value.timer); rejected(options.signal!.reason)
+          void send({ ...base(), type: "request_cancel", requestId }).catch(error => finish(error))
+        }
+        const value: Pending = { resolve: resolved, reject: rejected, admission: binding, prepared: false, published: false, ...(options.beforeAccepted ? { beforeAccepted: options.beforeAccepted } : {}) }
+        if ((options.timeoutMs ?? 60000) > 0) { value.timer = setTimeout(() => { pending.delete(requestId); rejected(new Error("BRIDGE_TIMEOUT")); finish(new Error("BRIDGE_TIMEOUT")) }, options.timeoutMs ?? 60000); value.timer.unref() }
         pending.set(requestId, value)
-        void send({ ...base(), type: "request", requestId, channel, payload }).catch(error => { clearTimeout(value.timer); pending.delete(requestId); reject(error) })
+        options.signal?.addEventListener("abort", abort, { once: true })
+        void send({ ...base(), type: "request", requestId, channel, payload }).catch(error => { clearTimeout(value.timer); pending.delete(requestId); rejected(error) })
       })
     },
     async prepareAdmission(requestId: string, raw: Admission): Promise<void> {

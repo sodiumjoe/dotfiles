@@ -1,3 +1,4 @@
+import type { RoutedToolCall } from "../bureau/tool-routing.js"
 import { randomBytes, randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { fileURLToPath } from "node:url"
@@ -13,10 +14,10 @@ import { parseStopCommand, parseStopReceipt, type StopCommand, type OriginLaunch
 import { journalEntries } from "./reports.js"
 import type { createOrchestrationService } from "./service.js"
 import { toolResult, type ToolResult } from "./mcp.js"
-import { canonicalDigest, fail, OrchestrationError, parseAssignmentSpec, parseExecutionRef, parseReport, type AgentRef, type AttemptRef, type ExecutionRef } from "./types.js"
+import { canonicalDigest, fail, OrchestrationError, parseAssignmentSpec, parseAgentRef, parseExecutionRef, parseReport, type AgentRef, type AttemptRef, type ExecutionRef } from "./types.js"
 
 type Binding = { execution: ExecutionRef; runId: string; bindingEpoch: string; attempt: AttemptRef | null; active: boolean; invocation: Invocation }
-export function createToolBindings(input: { socketPath: string; journals: JournalPool; bureau(): BureauService | undefined; host(): ReturnType<typeof createOrchestrationService> }) {
+export function createToolBindings(input: { socketPath: string; journals: JournalPool; bureau(): BureauService | undefined; host(): Pick<ReturnType<typeof createOrchestrationService>, "snapshot" | "stop" | "report">; route?(request: RoutedToolCall, signal?: AbortSignal): Promise<ToolResult>; cancelRoute?(request: { execution: ExecutionRef; runId: string; bindingEpoch: string; waitId: string }): Promise<void> }) {
   const bindings = new Map<string, Binding>(), stopQueue = new MutationQueue()
   let closed = false
   const logical = (execution: ExecutionRef): AgentRef => ({ hostId: execution.hostId, agentId: execution.agentId })
@@ -35,11 +36,12 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
     if (id(args.runId) !== value.runId || id(args.bindingEpoch) !== value.bindingEpoch) fail("STALE_BINDING")
     const core = input.bureau()
     if (!core) { if (allowOffline) return undefined; return fail("BUREAU_UNAVAILABLE") }
+    if (allowOffline && input.route && !(await core.list()).some(run => run.runId === value.runId)) return undefined
     await core.assertBinding(value.runId, value.bindingEpoch, logical(value.execution))
     return core
   }
-  async function descendant(core: BureauService, value: Binding, agentId: string): Promise<void> {
-    await core.assertDescendant(value.runId, logical(value.execution), { hostId: value.execution.hostId, agentId: id(agentId) })
+  async function descendant(core: BureauService, value: Binding, target: AgentRef): Promise<void> {
+    await core.assertDescendant(value.runId, logical(value.execution), target)
   }
   return {
     definition(execution: ExecutionRef, launch: OriginLaunch, invocation: Invocation): JsonObject {
@@ -55,7 +57,11 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
     revoke(execution: ExecutionRef) { for (const [token, value] of bindings) if (isDeepStrictEqual(value.execution, execution)) bindings.delete(token) },
     tokenFor(execution: ExecutionRef) { for (const [token, value] of bindings) if (isDeepStrictEqual(value.execution, execution)) return token; return null },
     async cancel(token: string, waitId: string) {
-      const value = await synchronize(structuredClone(binding(token))), core = input.bureau(); if (!core) fail("BUREAU_UNAVAILABLE")
+      const current = structuredClone(binding(token))
+      if (!current.active) fail("NOT_READY")
+      const value = await synchronize(current), core = input.bureau()
+      if (input.cancelRoute && (!core || !(await core.list()).some(run => run.runId === value.runId))) { if (!value.active) fail("NOT_READY"); return input.cancelRoute({ execution: value.execution, runId: value.runId, bindingEpoch: value.bindingEpoch, waitId: id(waitId) }) }
+      if (!core) fail("BUREAU_UNAVAILABLE")
       const wait = await core.waitRecord(id(waitId))
       if (!wait || !isDeepStrictEqual(wait.target, value.execution) || wait.input.runId !== value.runId) fail("INVALID_WAIT")
       await core.cancelWait(waitId)
@@ -68,10 +74,19 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
           const observed = value.active ? (await input.host().snapshot()).agents.find(agent => isDeepStrictEqual(agent.execution, value.execution)) : null
           return toolResult({ execution: value.execution, runId: value.runId, bindingEpoch: value.bindingEpoch, attempt: value.attempt, ready: value.active, effective: observed?.settings ?? null })
         }
+        if (!value.active) fail("NOT_READY")
+        if (input.route && name !== "agency_report") {
+          const core = input.bureau(), local = core && (await core.list()).some(run => run.runId === value.runId)
+          if (!local) {
+            if (!value.active) fail("NOT_READY")
+            if (id(args.runId) !== value.runId || name !== "agency_inspect" && id(args.bindingEpoch) !== value.bindingEpoch) fail("STALE_BINDING")
+            if (!(await input.host().snapshot()).agents.some(agent => agent.phase === "ready" && isDeepStrictEqual(agent.execution, value.execution))) fail("STALE_EXECUTION")
+            return await input.route({ kind: "call", execution: value.execution, runId: value.runId, bindingEpoch: value.bindingEpoch, name, args, nativeParams: value.invocation.nativeParams }, signal)
+          }
+        }
         if (name === "agency_delegate") {
           keys(args, ["commandId", "runId", "bindingEpoch", "description", "hostId", "cwd", "backendId", "modelId", "overrides", "git"])
           const core = (await authorized(value, args))!, spec = parseAssignmentSpec({ parent: sender, description: args.description, hostId: args.hostId, cwd: args.cwd, backendId: args.backendId, modelId: args.modelId, overrides: args.overrides, git: args.git })
-          if (spec.hostId !== value.execution.hostId) fail("UNSUPPORTED_CAPABILITY")
           return toolResult(await core.delegate(id(args.commandId), value.runId, spec, value.invocation, { execution: value.execution, bindingEpoch: value.bindingEpoch }))
         }
         if (name === "agency_report") {
@@ -95,7 +110,7 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
           const core = input.bureau(); if (!core) fail("BUREAU_UNAVAILABLE")
           if (args.assignmentId !== undefined) {
             const assignment = await core.assignment(id(args.assignmentId))
-            await descendant(core, value, assignment.agent.agentId)
+            await descendant(core, value, assignment.agent)
             const evidence = await core.assignmentEvidence(assignment.assignmentId, args.attemptId === undefined ? undefined : id(args.attemptId))
             const report = evidence?.input.report ?? null, serialized = Buffer.from(JSON.stringify(report))
             if (args.reportAfter !== undefined || serialized.length > 32768) {
@@ -111,23 +126,22 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
           return toolResult(page)
         }
         if (name === "agency_stop") {
-          keys(args, ["commandId", "runId", "bindingEpoch", "agentId"])
-          const core = (await authorized(value, args))!, commandId = id(args.commandId), agentId = id(args.agentId)
+          keys(args, ["commandId", "runId", "bindingEpoch", ...(Object.hasOwn(args, "agent") ? ["agent"] : ["agentId"])])
+          const core = (await authorized(value, args))!, commandId = id(args.commandId), agent = Object.hasOwn(args, "agent") ? parseAgentRef(args.agent) : await core.agentRef(value.runId, id(args.agentId))
           return await stopQueue.run(async () => {
-            await descendant(core, value, agentId)
+            await descendant(core, value, agent)
             const journal = input.journals.forRun(value.runId), events = await journalEntries(journal), prior = events.find(entry => entry.eventId === commandId)
             const retained = await core.reserveScopedStop(value.runId, value.bindingEpoch, value.execution, async () => {
               let command: StopCommand
               if (prior) {
                 if (prior.kind !== "scoped-stop") fail("COMMAND_CONFLICT")
                 command = parseStopCommand(prior.payload)
-                if (!isDeepStrictEqual(command.sender, value.execution) || command.bindingEpoch !== value.bindingEpoch || command.target.agentId !== agentId) fail("COMMAND_CONFLICT")
+                if (!isDeepStrictEqual(command.sender, value.execution) || command.bindingEpoch !== value.bindingEpoch || !isDeepStrictEqual(logical(command.target), agent)) fail("COMMAND_CONFLICT")
                 await journal.append(prior.eventId, prior.kind, prior.payload)
                 const receipt = events.find(entry => entry.kind === "scoped-stop-receipt" && isDeepStrictEqual(parseStopReceipt(entry.payload).command, command))
                 if (receipt) { await journal.append(receipt.eventId, receipt.kind, receipt.payload); return { command, receipt: parseStopReceipt(receipt.payload).receipt } }
               } else {
-                const target = (await input.host().snapshot()).agents.find(agent => agent.agent.agentId === agentId && agent.agent.hostId === value.execution.hostId)?.execution
-                if (!target) fail("STALE_EXECUTION")
+                const target = await core.executionFor(agent)
                 const payload = { commandId, runId: value.runId, bindingEpoch: value.bindingEpoch, sender: value.execution, target }
                 command = { ...payload, digest: canonicalDigest(payload) }
                 await journal.append(commandId, "scoped-stop", command)
@@ -135,7 +149,7 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
               return { command, receipt: null }
             })
             if (retained.receipt) return toolResult(retained.receipt)
-            const command = retained.command, receipt = await input.host().stop(commandId, command.target)
+            const command = retained.command, receipt = await core.stopExecution(commandId, command.target)
             await journal.append(randomUUID(), "scoped-stop-receipt", { command, receipt })
             return toolResult(receipt)
           })

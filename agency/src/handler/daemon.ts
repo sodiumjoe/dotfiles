@@ -1,10 +1,8 @@
-import { createOrchestrationService } from "../orchestration/service.js"
+import { createHostCoordination } from "./host-coordination.js"
+import { createHandlerBridge } from "../bridge/server.js"
 import { createToolBindings } from "../orchestration/tool-bindings.js"
 import { serveToolSocket } from "../orchestration/tool-client.js"
-import { createJournalPool } from "../orchestration/journal.js"
-import { createLineageStore } from "../orchestration/lineage.js"
-import { createBureauStore } from "../bureau/store.js"
-import { createBureauService, type BureauService } from "../bureau/service.js"
+import { type BureauService } from "../bureau/service.js"
 import { dispatchBureau } from "../bureau/client.js"
 import { parseBureauRequest } from "../bureau/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
@@ -112,6 +110,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let agents: AgentService | undefined
   let bureau: BureauService | undefined, toolBindings: ReturnType<typeof createToolBindings> | undefined
   let bureauServer: Server | undefined, toolsServer: Server | undefined
+  let coordination: Awaited<ReturnType<typeof createHostCoordination>> | undefined
+  let bridgeServer: Awaited<ReturnType<typeof createHandlerBridge>> | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
@@ -120,7 +120,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const close = async (): Promise<void> => {
     if (closing) return closed
     closing = true
-    await bureau?.close(); toolBindings?.close()
+    if (coordination) await coordination.close()
+    else { await bureau?.close(); toolBindings?.close() }
+    await bridgeServer?.close()
     await acpServer?.close()
     for (const socket of sockets) socket.destroy()
     for (const listener of [server, attachmentServer, bureauServer, toolsServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
@@ -266,12 +268,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
     await agents.initialize()
-    const origins = createJournalPool(root, undefined, Date.now, "origin"), journals = createJournalPool(root), lineage = createLineageStore(root)
-    let origin: ReturnType<typeof createOrchestrationService>
-    toolBindings = createToolBindings({ socketPath: join(options.paths.runtimeRoot, "orchestration.sock"), journals: origins, bureau: () => bureau, host: () => origin })
-    origin = createOrchestrationService({ root, hostId: options.paths.hostKey, agents, journals: origins, lineage, tools: toolBindings, relay: envelope => { if (!bureau) throw new Error("BUREAU_UNAVAILABLE"); return bureau.acceptReport(envelope) } })
-    bureau = createBureauService({ store: createBureauStore(root), journals, origins, hosts: [origin], notifications: true })
-    await bureau.initialize().catch(() => undefined)
+    coordination = await createHostCoordination({ root, runtimeRoot: options.paths.runtimeRoot, hostId: options.paths.hostKey, agents, coordinator: (payload, signal) => { if (!bridgeServer) throw new Error("BUREAU_UNAVAILABLE"); return bridgeServer.coordinatorRequest(payload, signal) } })
+    const { origin, origins } = coordination
+    toolBindings = coordination.tools; bureau = coordination.bureau
     const scopedTools = toolBindings, core = bureau
     toolsServer = await bindPrivateSocket(options.paths.runtimeRoot, "orchestration.sock", socket => {
       sockets.add(socket); socket.once("close", () => sockets.delete(socket))
@@ -289,6 +288,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     })
     toolsServer.on("error", () => toolBindings?.close())
     bureauServer.on("error", () => bureau?.close())
+    bridgeServer = await createHandlerBridge({ root: options.paths.runtimeRoot, host: origin, journals: origins, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
     coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()

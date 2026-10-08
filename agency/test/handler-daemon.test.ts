@@ -4,6 +4,7 @@ import { chmod, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import test from "node:test"
+import { connectHandlerBridge } from "../src/bridge/handler-client.js"
 import { assertRuntime } from "../src/handler/environment.js"
 import { receiveStart } from "../src/handler/daemon.js"
 import { readHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
@@ -176,4 +177,12 @@ test("termination during classification is deferred until the full inventory is 
   await assert.rejects(started)
   await until(async () => await f.observe(f.owned[0]!.pid) === null ? true : undefined)
   assert.equal(JSON.parse(await readFile(path, "utf8")).phase, "cleanup_verified")
+})
+
+test("production Handler publishes a private generation-bound bridge before readiness", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t), handler = await f.start().catch(async error => { throw new Error(await readFile(join(f.root, "failure"), "utf8").catch(() => String(error)), { cause: error }) }), peer = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: handler.record.generation })
+  f.beforeCleanup(async () => { peer.close(); await peer.closed })
+  const snapshot = await peer.request("snapshot", {}) as { hostId: string; handlerGeneration: string }
+  assert.equal(snapshot.hostId, f.paths.hostKey)
+  assert.equal(snapshot.handlerGeneration, handler.record.generation)
 })

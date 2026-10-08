@@ -1,6 +1,7 @@
+import { parseGitPreparation, type GitPreparation } from "../orchestration/git-worktree.js"
 import { parseRequestedSettings, type RequestedSettings } from "../agent/session-config.js"
 import { hash, id, keys, object, timestamp } from "../catalog/types.js"
-import { boundedText, enumValue, fail, parseAgentRef, parseEventRef, parseAssignmentSpec, parseAttemptRef, parseExecutionRef, parseLineage, boundedArray, type AssignmentSpec, type AttemptRef, type AttemptState, type ExecutionRef, type Lineage, type AgentRef, type EventRef } from "../orchestration/types.js"
+import { boundedText, enumValue, fail, parseAgentRef, parseGitExchange, type GitExchange, parseEventRef, parseAssignmentSpec, parseAttemptRef, parseExecutionRef, parseLineage, boundedArray, type AssignmentSpec, type AttemptRef, type AttemptState, type ExecutionRef, type Lineage, type AgentRef, type EventRef } from "../orchestration/types.js"
 
 export type RunRecord = { version: 1; runId: string; createCommandId: string; root: AgentRef; execution: ExecutionRef | null; objective: string; state: "starting" | "active" | "cancelled" | "completed" | "forgotten"; bindingEpoch: string; journal: EventRef | null }
 export function parseRunRecord(value: unknown): RunRecord {
@@ -10,7 +11,7 @@ export function parseRunRecord(value: unknown): RunRecord {
 }
 
 export type AssignmentRecord = { version: 1; assignmentId: string; runId: string; spec: AssignmentSpec; attemptIds: string[]; activeAttemptId: string; journal: EventRef | null }
-export type AttemptRecord = { version: 1; ref: AttemptRef; child: AgentRef; lineage: Lineage; state: AttemptState; launchCommandId: string; submissionId: string; handlerGeneration: string; execution: ExecutionRef | null; effective: RequestedSettings | null; retryMode: "new" | "restore" | "replace"; journal: EventRef | null }
+export type AttemptRecord = { version: 1; ref: AttemptRef; child: AgentRef; lineage: Lineage; state: AttemptState; launchCommandId: string; submissionId: string; handlerGeneration: string; execution: ExecutionRef | null; effective: RequestedSettings | null; retryMode: "new" | "restore" | "replace"; gitExchange?: GitExchange | null; git?: GitPreparation | null; journal: EventRef | null }
 export type AssignmentView = { assignmentId: string; runId: string; agent: AgentRef; spec: AssignmentSpec; lineage: Lineage; attempt: AttemptRecord; attemptIds: string[]; journalCursor: number }
 export type RunView = RunRecord & { assignments: AssignmentView[]; nextAssignmentCursor: string | null; journalCursor: number }
 export type CommandRecord = { version: 1; commandId: string; runId: string; op: "start" | "restore-root" | "begin" | "delegate" | "retry" | "cancel" | "close" | "forget"; digest: string; state: "pending" | "completed"; targetId: string; handlerGeneration: string | null; launchCommandId: string | null; result: RunView | AssignmentView | null; journal: EventRef | null }
@@ -24,11 +25,11 @@ export function parseAssignmentRecord(value: unknown): AssignmentRecord {
   return { version: 1, assignmentId: id(v.assignmentId), runId: id(v.runId), spec: parseAssignmentSpec(v.spec), attemptIds, activeAttemptId, journal: journalRef(v.journal) }
 }
 export function parseAttemptRecord(value: unknown): AttemptRecord {
-  const v = object(value); keys(v, ["version", "ref", "child", "lineage", "state", "launchCommandId", "submissionId", "handlerGeneration", "execution", "effective", "retryMode", "journal"])
+  const v = object(value); keys(v, ["version", "ref", "child", "lineage", "state", "launchCommandId", "submissionId", "handlerGeneration", "execution", "effective", "retryMode", "journal", ...["git", "gitExchange"].filter(key => Object.hasOwn(v, key))])
   if (v.version !== 1) fail()
   const ref = parseAttemptRef(v.ref), lineage = parseLineage(v.lineage), child = parseAgentRef(v.child), execution = v.execution === null ? null : parseExecutionRef(v.execution)
   if (lineage.runId !== ref.runId || lineage.assignmentId !== ref.assignmentId || execution && (execution.agentId !== child.agentId || execution.hostId !== child.hostId)) fail()
-  return { version: 1, ref, child, lineage, state: enumValue(v.state, ["dispatch_pending", "running", "awaiting_report", "completed", "failed", "interrupted", "cancelled", "uncertain"]), launchCommandId: id(v.launchCommandId), submissionId: id(v.submissionId), handlerGeneration: id(v.handlerGeneration), execution, effective: v.effective === null ? null : parseRequestedSettings(v.effective), retryMode: enumValue(v.retryMode, ["new", "restore", "replace"]), journal: journalRef(v.journal) }
+  return { version: 1, ref, child, lineage, state: enumValue(v.state, ["dispatch_pending", "running", "awaiting_report", "completed", "failed", "interrupted", "cancelled", "uncertain"]), launchCommandId: id(v.launchCommandId), submissionId: id(v.submissionId), handlerGeneration: id(v.handlerGeneration), execution, effective: v.effective === null ? null : parseRequestedSettings(v.effective), retryMode: enumValue(v.retryMode, ["new", "restore", "replace"]), ...(Object.hasOwn(v, "gitExchange") ? { gitExchange: v.gitExchange === null ? null : parseGitExchange(v.gitExchange) } : {}), ...(Object.hasOwn(v, "git") ? { git: v.git === null ? null : parseGitPreparation(v.git) } : {}), journal: journalRef(v.journal) }
 }
 export function parseAssignmentView(value: unknown): AssignmentView {
   const v = object(value); keys(v, ["assignmentId", "runId", "agent", "spec", "lineage", "attempt", "attemptIds", "journalCursor"])

@@ -27,7 +27,13 @@ export function createScheduler(input: { store: BureauStore; journals: JournalPo
   const { store, journals, queue, inbox } = input
   let closed = false, queued = false
   const active = new Map<string, Promise<void>>(), rerun = new Set<string>()
-  async function adapter(hostId: string): Promise<OrchestrationHost> { for (const host of input.hosts) if ((await host.snapshot()).hostId === hostId) return host; return fail("HOST_UNAVAILABLE") }
+  async function adapter(hostId: string): Promise<OrchestrationHost> {
+    for (const host of input.hosts) {
+      if (host.hostId) { if (host.hostId === hostId) return host; continue }
+      try { if ((await host.snapshot()).hostId === hostId) return host } catch (error) { if (error instanceof Error && /ENOSPC|CORRUPT|STATE_CHANGED|STATE_REPLACED/.test(error.message)) throw error }
+    }
+    return fail("HOST_UNAVAILABLE")
+  }
   async function source(delivery: Delivery): Promise<InboxEntry[]> {
     return Promise.all(delivery.sources.map(async ref => { const entry = await store.readInbox(ref.eventId); if (!entry || !isDeepStrictEqual(entry.source, ref) || entry.runId !== delivery.runId || !isDeepStrictEqual(entry.parent, delivery.parent)) fail("INVALID_DELIVERY"); return entry }))
   }
