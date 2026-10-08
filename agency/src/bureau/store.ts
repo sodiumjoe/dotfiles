@@ -40,6 +40,7 @@ export function createBureauStore(root: string, filesystem = defaultFileSystem) 
         for (const command of commands) await storage.publish(`forgotten/commands/${command.commandId}.json`, { recordId: command.commandId, runId, digest: command.digest }, null, true)
         for (const assignment of assignments) await storage.publish(`forgotten/assignments/${assignment.assignmentId}.json`, { recordId: assignment.assignmentId, runId, digest: null }, null, true)
         for (const wait of waits) await storage.publish(`forgotten/waits/${wait.input.waitId}.json`, { recordId: wait.input.waitId, runId, digest: wait.digest }, null, true)
+        for (const delivery of await createInboxStore(root, filesystem).listDeliveries()) if (delivery.runId === runId && delivery.channel === "prompt") await storage.publish(`forgotten/commands/${delivery.deliveryId}.json`, { recordId: delivery.deliveryId, runId, digest: null }, null, true)
         await storage.publish(`forgotten/commands/${forgetCommandId}.json`, { recordId: forgetCommandId, runId, digest: null }, null, true)
       })
     },

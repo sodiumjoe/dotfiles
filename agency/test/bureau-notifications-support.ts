@@ -18,10 +18,10 @@ export async function notificationsFixture(t: TestContext) {
   const parent = (await f.snapshot()).root
   const waitInput: WaitInput = { waitId: randomUUID(), parent, runId: f.input.runId, assignmentIds: [child.assignmentId], after: 0, timeoutMs: 10000 }
   return { ...f, child, parent, origins, waitInput, get core() { return core },
-    async report(target: AssignmentView = child) {
+    async report(target: AssignmentView = child, receiver = core) {
       const input = { ...target.attempt.ref, commandId: randomUUID(), execution: target.attempt.execution!, report: f.input.report }
       const event = await origins.forRun(f.input.runId).append(input.commandId, "report-retained", input)
-      return core.acceptReport({ input, origin: { seq: event.seq, eventId: event.eventId, digest: event.digest } })
+      return receiver.acceptReport({ input, origin: { seq: event.seq, eventId: event.eventId, digest: event.digest } })
     },
     async restart() { core.close(); core = make(); await core.initialize() }
   }

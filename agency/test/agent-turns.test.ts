@@ -148,3 +148,27 @@ test("stale accepted origin creates no receipt or submitted event", async () => 
   assert.equal(observation.snapshot.events.length, 0); observation.close()
   turns.close(null); conversation.close()
 })
+
+test("durable admission is awaited before routing, receipts and ACP dispatch", async () => {
+  const conversation = createConversation(target), publication = Promise.withResolvers<void>(), request = { submissionId: randomUUID(), prompt: [{ type: "text", text: "notification" }] }
+  let published = false, routed = 0, invoked = 0
+  const turns = createTurnCoordinator({ target, conversation, validate: async () => {}, cancel: async () => {}, beforeAccepted: async () => { await publication.promise; published = true }, onAccepted: () => { assert.equal(published, true); routed++ }, invokeAcp: async () => { assert.equal(published, true); invoked++; return { stopReason: "end_turn" } } } as Parameters<typeof createTurnCoordinator>[0])
+  const submitted = turns.submitAcp(request)
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(routed, 0); assert.equal(invoked, 0); assert.equal(turns.inspect(request.submissionId), null)
+  publication.resolve(); await submitted; await turns.settledAcp(request.submissionId)
+  assert.equal(routed, 1); assert.equal(invoked, 1)
+  turns.close(null); conversation.close()
+})
+
+test("failed durable admission leaves the turn and routing available for a human", async () => {
+  const conversation = createConversation(target)
+  let failure = true, routed = 0, invoked = 0
+  const turns = createTurnCoordinator({ target, conversation, validate: async () => {}, cancel: async () => {}, beforeAccepted: async () => { if (failure) throw new Error("fsync failure") }, onAccepted: () => { routed++ }, invokeAcp: async () => { invoked++; return { stopReason: "end_turn" } } } as Parameters<typeof createTurnCoordinator>[0])
+  const request = { submissionId: randomUUID(), prompt: [{ type: "text", text: "notification" }] }
+  await assert.rejects(turns.submitAcp(request), /fsync failure/)
+  assert.equal(turns.busy(), false); assert.equal(routed, 0); assert.equal(invoked, 0); assert.equal(turns.inspect(request.submissionId), null)
+  failure = false; await turns.submitAcp({ ...request, submissionId: randomUUID() })
+  assert.equal(routed, 1)
+  turns.close(null); conversation.close()
+})

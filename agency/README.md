@@ -178,3 +178,9 @@ An accepted report and its parent inbox entry derive from one journal event. Wai
 Wait deadlines use server timers. Timeout preserves reports that arrive afterward. Inbox report pages have a continuation cursor and bounded payloads. Run closure refuses unresolved attempts, pending reports and live wait routes. Saved waits and deliveries pin their parent and source evidence before ordinary retention sweeps.
 
 Terminal acknowledged runs can compact after seven days. Public replay cursors below the checkpoint expire, while internal recovery reads retained exact receipts. Explicit forget first publishes identifier tombstones and confirms the sealed run, then erases its orchestration payloads. Interrupted erasure resumes from that seal; old run, command, assignment and wait IDs return `FORGOTTEN`. Native provider records, lineage and processes remain subject to their existing lifecycle.
+
+### Idle report notifications
+
+The local scheduler batches pending reports through the normal Handler submission coordinator. Busy parents retain the same delivery ID until admission succeeds. Live waits claim reports first. Admission awaits a durable origin receipt before ACP dispatch, and a failed publication leaves the turn lock and editor routing available. Parent settlement and new report arrival trigger scheduling without polling a model.
+
+A lost control reply is reconciled against the same live execution's submission receipt. Provider retirement interrupts attempted notifications; explicit restoration does not replay them. Explicit notification retry creates a new delivery and submission ID while retaining the original target and outcome. Never-dispatched batches can follow the logical parent to a new execution. Automatic scheduling remains opt-in until operational composition enables it.

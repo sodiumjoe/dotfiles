@@ -1,3 +1,4 @@
+import { parseNotificationReceipt, parseNotificationRetry } from "./scheduler.js"
 import { parseDeliveryTransition, parseReportTransition } from "../bureau/inbox.js"
 import { parseWaitTransition } from "../bureau/waits.js"
 import { parseOriginLaunch, parseOriginReceipt } from "./receipts.js"
@@ -118,6 +119,8 @@ export function parseEventPayload(kind: string, value: unknown): unknown {
   if (kind === "origin-receipt") return parseOriginReceipt(value)
   if (kind === "bureau-report") return parseReportTransition(value)
   if (kind === "bureau-delivery") return parseDeliveryTransition(value)
+  if (kind === "notification-retry") return parseNotificationRetry(value)
+  if (kind === "notification-receipt") return parseNotificationReceipt(value)
   if (kind === "bureau-wait") return parseWaitTransition(value)
   if (kind === "bureau-record") {
     const v = object(value); keys(v, ["previousDigest", "record"])

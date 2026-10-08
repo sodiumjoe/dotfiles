@@ -14,6 +14,7 @@ import { canonicalDigest, fail, parseExecutionRef, type ExecutionRef } from "./t
 
 export type AgencyTools = { definition(execution: ExecutionRef, launch: OriginLaunch, invocation: Invocation): JsonObject; activate(execution: ExecutionRef): void; revoke(execution: ExecutionRef): void }
 export function createOrchestrationService(input: { root: string; hostId: string; agents: AgentService; journals: JournalPool; lineage: LineageStore; tools: AgencyTools; relay(envelope: ReportRelay): Promise<ReportReceipt> }) {
+  const settled = new Set<(parent: { hostId: string; agentId: string }) => void>()
   const { agents, journals, lineage } = input, transient = new Map<string, { execution: ExecutionRef; invocation: Invocation }>()
   const tuple = (execution: ExecutionRef): AgentTuple => { if (execution.hostId !== input.hostId) fail("STALE_EXECUTION"); return { agentId: execution.agentId, handlerGeneration: execution.handlerGeneration, providerGeneration: execution.providerGeneration } }
   const executionOf = (record: AgentRecordV3): ExecutionRef | null => record.launch ? { hostId: record.definition.hostId, agentId: record.definition.agentId, handlerGeneration: record.launch.handlerGeneration, providerGeneration: record.launch.providerGeneration } : null
@@ -67,7 +68,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
       await journals.forRun(command.runId).append(command.commandId, "origin-launch", preparation)
       transient.set(command.agent.agentId, { execution, invocation })
       return { ...params, mcpServers: [...(params.mcpServers as JsonObject[]), definition] }
-    }, ready(record) { input.tools.activate(executionOf(record)!) }, revoke() { if (reserved) input.tools.revoke(reserved.execution); transient.delete(command.agent.agentId) } })
+    }, ready(record) { input.tools.activate(executionOf(record)!) }, settled(record) { for (const listener of settled) listener({ hostId: record.definition.hostId, agentId: record.definition.agentId }) }, revoke() { if (reserved) input.tools.revoke(reserved.execution); transient.delete(command.agent.agentId) } })
     const deadline = performance.now() + 150000
     while (true) {
       const receipt = await inspectCommand(command.commandId, command.handlerGeneration)
@@ -84,6 +85,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
   }
   const host: OrchestrationHost = {
     launch, launchRoot: launch, inspectCommand,
+    onSettled(listener) { settled.add(listener); return () => { settled.delete(listener) } },
     snapshot() { return agents.orchestrationSnapshot(async snapshot => {
       const prepared = await preparations(), observed: HostAgent[] = [], receipts: LaunchReceipt[] = []
       for (const view of snapshot.agents) {
@@ -104,7 +106,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
       return { hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root)).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
     }) },
     submission(target, submissionId) { return agents.submission(tuple(target), submissionId) },
-    submit(target, request) { return agents.submitAcp(tuple(target), request) },
+    submit(target, request, beforeAccepted) { return agents.submitAcp(tuple(target), request, beforeAccepted) },
     async stop(commandId, target) {
       await validate(target)
       const command = await agents.stop({ ...tuple(target), commandId })

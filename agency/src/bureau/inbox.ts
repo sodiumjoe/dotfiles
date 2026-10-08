@@ -7,7 +7,7 @@ import { parseAcceptedReport, type AcceptedReport } from "../orchestration/repor
 import type { JournalPool } from "../orchestration/journal.js"
 
 export type InboxEntry = { version: 1; eventId: string; runId: string; parent: AgentRef; source: EventRef; report: ReportInput }
-export type Delivery = { version: 1; deliveryId: string; runId: string; parent: AgentRef; target: ExecutionRef; bindingEpoch: string; sources: EventRef[]; digest: string; channel: "wait" | "prompt"; routeId: string | null; state: "queued" | "claimed" | "dispatching" | "accepted" | "completed" | "interrupted" | "uncertain" | "delivered"; receiptId: string | null; journal: EventRef | null }
+export type Delivery = { version: 1; deliveryId: string; runId: string; parent: AgentRef; target: ExecutionRef; bindingEpoch: string; sources: EventRef[]; digest: string; channel: "wait" | "prompt"; routeId: string | null; state: "queued" | "claimed" | "dispatching" | "accepted" | "completed" | "interrupted" | "uncertain" | "delivered" | "superseded"; receiptId: string | null; journal: EventRef | null }
 export type InboxView = { entries: InboxEntry[]; pending: InboxEntry[]; deliveries: Delivery[]; nextCursor: number | null }
 export type ReportTransition = AcceptedReport & { recipient: AgentRef | null }
 export function parseReportTransition(raw: unknown): ReportTransition {
@@ -26,7 +26,7 @@ export function parseDelivery(raw: unknown): Delivery {
   const v = object(raw); keys(v, ["version", "deliveryId", "runId", "parent", "target", "bindingEpoch", "sources", "digest", "channel", "routeId", "state", "receiptId", "journal"])
   const parent = parseAgentRef(v.parent), target = parseExecutionRef(v.target), sources = boundedArray(v.sources, parseEventRef), channel = enumValue(v.channel, ["wait", "prompt"])
   if (v.version !== 1 || !sources.length || new Set(sources.map(source => source.eventId)).size !== sources.length || parent.hostId !== target.hostId || parent.agentId !== target.agentId || canonicalDigest(sources) !== v.digest || (channel === "wait") !== (v.routeId !== null)) fail("INVALID_DELIVERY")
-  return { version: 1, deliveryId: id(v.deliveryId), runId: id(v.runId), parent, target, bindingEpoch: id(v.bindingEpoch), sources, digest: hash(v.digest), channel, routeId: v.routeId === null ? null : id(v.routeId), state: enumValue(v.state, ["queued", "claimed", "dispatching", "accepted", "completed", "interrupted", "uncertain", "delivered"]), receiptId: v.receiptId === null ? null : id(v.receiptId), journal: v.journal === null ? null : parseEventRef(v.journal) }
+  return { version: 1, deliveryId: id(v.deliveryId), runId: id(v.runId), parent, target, bindingEpoch: id(v.bindingEpoch), sources, digest: hash(v.digest), channel, routeId: v.routeId === null ? null : id(v.routeId), state: enumValue(v.state, ["queued", "claimed", "dispatching", "accepted", "completed", "interrupted", "uncertain", "delivered", "superseded"]), receiptId: v.receiptId === null ? null : id(v.receiptId), journal: v.journal === null ? null : parseEventRef(v.journal) }
 }
 export function parseDeliveryTransition(raw: unknown): { previousDigest: string | null; delivery: Delivery } {
   const v = object(raw); keys(v, ["previousDigest", "delivery"])
@@ -76,7 +76,7 @@ export function createInbox(input: { store: InboxStore; journals: JournalPool; f
     catch (error) { input.failed(error); throw error }
   }
   const matches = (entry: InboxEntry, parent: AgentRef, runId: string) => entry.runId === runId && isDeepStrictEqual(entry.parent, parent)
-  const holds = (delivery: Delivery) => delivery.state !== "queued"
+  const holds = (delivery: Delivery) => !["queued", "superseded"].includes(delivery.state)
   async function entries(parent: AgentRef, runId: string): Promise<InboxEntry[]> { return (await store.listInbox()).filter(entry => matches(entry, parent, runId)).sort((a, b) => a.source.seq - b.source.seq) }
   async function inspect(parent: AgentRef, runId: string, after = 0): Promise<InboxView> {
     const all = (await entries(parent, runId)).filter(entry => entry.source.seq > after), deliveries = (await store.listDeliveries()).filter(delivery => delivery.runId === runId && isDeepStrictEqual(delivery.parent, parent)), page: InboxEntry[] = []
@@ -85,17 +85,17 @@ export function createInbox(input: { store: InboxStore; journals: JournalPool; f
     const visible = deliveries.filter(delivery => delivery.sources.some(source => page.some(entry => entry.eventId === source.eventId)))
     return { entries: page, pending: page.filter(entry => !deliveries.some(delivery => holds(delivery) && delivery.sources.some(source => source.eventId === entry.eventId))), deliveries: visible, nextCursor: page.length < all.length ? page.at(-1)!.source.seq : null }
   }
-  async function claim(parent: AgentRef, eventIds: string[], target: ExecutionRef, runId: string, bindingEpoch: string, channel: Delivery["channel"] = "prompt", routeId: string | null = null): Promise<Delivery | null> {
-    parseAgentRef(parent); parseExecutionRef(target); id(runId); id(bindingEpoch)
+  async function claim(parent: AgentRef, eventIds: string[], target: ExecutionRef, runId: string, bindingEpoch: string, channel: Delivery["channel"] = "prompt", routeId: string | null = null, requestedId?: string): Promise<Delivery | null> {
+    parseAgentRef(parent); parseExecutionRef(target); id(runId); id(bindingEpoch); if (requestedId) id(requestedId)
     if (!eventIds.length || eventIds.length > 128 || new Set(eventIds).size !== eventIds.length) fail("INVALID_DELIVERY")
     const available = await entries(parent, runId), deliveries = await store.listDeliveries()
     const requested = eventIds.map(eventId => { const entry = available.find(entry => entry.eventId === id(eventId)); if (!entry) fail("INVALID_DELIVERY"); return entry.source })
-    const existing = deliveries.find(delivery => delivery.runId === runId && delivery.channel === channel && delivery.routeId === routeId && isDeepStrictEqual(delivery.sources, requested) && isDeepStrictEqual(delivery.parent, parent))
+    const existing = deliveries.find(delivery => (!requestedId || delivery.deliveryId === requestedId) && delivery.runId === runId && delivery.channel === channel && delivery.routeId === routeId && isDeepStrictEqual(delivery.sources, requested) && isDeepStrictEqual(delivery.parent, parent))
     if (existing && existing.state !== "queued") { if (!isDeepStrictEqual(existing.target, target) || existing.bindingEpoch !== bindingEpoch) fail("STALE_BINDING"); return existing }
     const sources = requested.filter(source => !deliveries.some(delivery => holds(delivery) && delivery.sources.some(other => other.eventId === source.eventId)))
     if (!sources.length) return null
     const reusable = existing && isDeepStrictEqual(existing.sources, sources) ? existing : null
-    return save({ version: 1, deliveryId: reusable?.deliveryId ?? randomUUID(), runId, parent, target, bindingEpoch, sources, digest: canonicalDigest(sources), channel, routeId, state: "claimed", receiptId: null, journal: reusable?.journal ?? null }, reusable)
+    return save({ version: 1, deliveryId: reusable?.deliveryId ?? requestedId ?? randomUUID(), runId, parent, target, bindingEpoch, sources, digest: canonicalDigest(sources), channel, routeId, state: "claimed", receiptId: null, journal: reusable?.journal ?? null }, reusable)
   }
   async function delivered(deliveryId: string, channel: Delivery["channel"], receiptId: string): Promise<void> {
     const previous = await store.readDelivery(id(deliveryId)); if (!previous || previous.channel !== channel) fail("INVALID_DELIVERY")
