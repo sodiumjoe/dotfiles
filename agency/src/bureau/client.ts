@@ -15,6 +15,9 @@ export async function dispatchBureau(core: BureauService, generation: string, re
       case "run_inspect": result = await core.inspect(request.runId, request.after ?? null); break
       case "run_start": result = await core.startRun(request.commandId, request.input, request.invocation); break
       case "run_restore": result = await core.restoreRun(request.commandId, request.runId, request.invocation); break
+      case "report_acknowledge": result = await core.acknowledgeReports(request.commandId, request.runId, request.sources); break
+      case "stop_recover": result = await core.recoverScopedStop(request.runId, request.commandId); break
+      case "inbox_inspect": result = await core.inbox(request.parent, request.runId, request.after); break
       case "notification_retry": result = await core.retryNotification(request.commandId, request.deliveryId, request.target, request.bindingEpoch); break
       case "run_begin": result = await core.beginRun(request.commandId, request.root, request.objective); break
       case "run_cancel": result = await core.cancel(request.commandId, request.runId); break

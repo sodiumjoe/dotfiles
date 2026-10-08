@@ -23,6 +23,6 @@ export async function notificationsFixture(t: TestContext) {
       const event = await origins.forRun(f.input.runId).append(input.commandId, "report-retained", input)
       return receiver.acceptReport({ input, origin: { seq: event.seq, eventId: event.eventId, digest: event.digest } })
     },
-    async restart() { core.close(); core = make(); await core.initialize() }
+    async restart() { await core.close(); core = make(); await core.initialize() }
   }
 }

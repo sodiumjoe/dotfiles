@@ -47,7 +47,7 @@ export function createWaitStore(root: string, filesystem = defaultFileSystem) {
     async writeWait(raw: WaitRecord, previous: WaitRecord | null) { const wait = parseWaitRecord(raw); await queue.run(() => storage.publish(`waits/${wait.input.waitId}.json`, wait, previous)) }
   }
 }
-export function createWaits(input: { store: ReturnType<typeof createWaitStore> & InboxStore & { listAssignments(): Promise<AssignmentRecord[]>; readAttempt(attemptId: string): Promise<AttemptRecord | null> }; journals: JournalPool; queue: MutationQueue; inbox: ReturnType<typeof createInbox>; requireWrites(): void; failed(error: unknown): void; binding(parent: AgentRef, runId: string): Promise<{ target: ExecutionRef; bindingEpoch: string } | null>; validateAssignments(parent: AgentRef, runId: string, assignmentIds: string[]): Promise<void>; now?: () => number }) {
+export function createWaits(input: { store: ReturnType<typeof createWaitStore> & InboxStore & { listAssignments(): Promise<AssignmentRecord[]>; readAttempt(attemptId: string): Promise<AttemptRecord | null> }; journals: JournalPool; queue: MutationQueue; inbox: ReturnType<typeof createInbox>; requireWrites(): void; failed(error: unknown): void; binding(parent: AgentRef, runId: string): Promise<{ target: ExecutionRef; bindingEpoch: string } | null>; validateAssignments(parent: AgentRef, runId: string, assignmentIds: string[]): Promise<void>; now?: () => number; beforeAdmission?(): Promise<void> }) {
   const { store, journals, queue, inbox } = input, now = input.now ?? Date.now
   const transports = new Map<string, Set<{ resolve(result: WaitResult): void; reject(error: unknown): void }>>(), timers = new Map<string, NodeJS.Timeout>()
   let pumping = false
@@ -111,14 +111,16 @@ export function createWaits(input: { store: ReturnType<typeof createWaitStore> &
     pumping = true
     void queue.run(async () => { input.requireWrites(); await pump() }).catch(error => { if (!(error instanceof Error && ["BUREAU_DISABLED", "NOT_READY", "BUREAU_UNAVAILABLE"].includes(error.message))) input.failed(error); for (const transport of [...transports.values()].flatMap(value => [...value])) transport.reject(error); transports.clear() }).finally(() => { pumping = false })
   }
-  async function wait(raw: WaitInput, signal?: AbortSignal): Promise<WaitResult> {
+  async function wait(raw: WaitInput, signal?: AbortSignal, authority?: { execution: ExecutionRef; bindingEpoch: string }): Promise<WaitResult> {
     const requested = parseWaitInput(raw)
     const record = await queue.run(async () => {
       input.requireWrites()
+      await input.beforeAdmission?.()
       const previous = await store.readWait(requested.waitId)
-      if (previous) { if (!isDeepStrictEqual(previous.input, requested)) fail("COMMAND_CONFLICT"); return evaluate(previous) }
+      if (previous) { if (authority && (!isDeepStrictEqual(previous.target, authority.execution) || previous.bindingEpoch !== authority.bindingEpoch)) fail("STALE_BINDING"); if (!isDeepStrictEqual(previous.input, requested)) fail("COMMAND_CONFLICT"); return evaluate(previous) }
       const binding = await input.binding(requested.parent, requested.runId)
       if (!binding) fail("NOT_READY")
+      if (authority && (!isDeepStrictEqual(binding.target, authority.execution) || binding.bindingEpoch !== authority.bindingEpoch)) fail("STALE_EXECUTION")
       await input.validateAssignments(requested.parent, requested.runId, requested.assignmentIds)
       const value: WaitRecord = { version: 1, input: requested, target: binding.target, bindingEpoch: binding.bindingEpoch, digest: canonicalDigest({ input: requested, ...binding }), deadline: now() + requested.timeoutMs, ended: false, result: null, deliveryId: null, journal: null }
       return evaluate(await save(value, null))

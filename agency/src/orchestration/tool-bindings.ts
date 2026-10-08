@@ -84,7 +84,9 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
           keys(args, ["waitId", "runId", "bindingEpoch", "assignmentIds", "after", "timeoutMs"])
           const core = (await authorized(value, args))!
           const request = parseWaitInput({ waitId: args.waitId, runId: value.runId, parent: sender, assignmentIds: args.assignmentIds, after: args.after, timeoutMs: args.timeoutMs })
-          return toolResult(await core.wait(request, signal))
+          const result = await core.wait(request, signal, { execution: value.execution, bindingEpoch: value.bindingEpoch }), full = toolResult(result)
+          if (Buffer.byteLength(JSON.stringify(full)) <= 256 * 1024) return full
+          return toolResult({ ...result, reports: result.reports.map(entry => ({ ...entry, reportTruncated: true, report: { ...entry.report, report: { status: entry.report.report.status, summary: entry.report.report.summary.slice(0, 512), summaryTruncated: entry.report.report.summary.length > 512, issueCount: entry.report.report.issues.length, validationCount: entry.report.report.validation.length } } })) })
         }
         if (name === "agency_inspect") {
           keys(args, ["runId", ...["assignmentId", "attemptId", "after", "reportAfter"].filter(key => Object.hasOwn(args, key))])
@@ -121,7 +123,7 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
                 command = parseStopCommand(prior.payload)
                 if (!isDeepStrictEqual(command.sender, value.execution) || command.bindingEpoch !== value.bindingEpoch || command.target.agentId !== agentId) fail("COMMAND_CONFLICT")
                 await journal.append(prior.eventId, prior.kind, prior.payload)
-                const receipt = events.find(entry => entry.kind === "scoped-stop-receipt" && parseStopReceipt(entry.payload).command.commandId === commandId)
+                const receipt = events.find(entry => entry.kind === "scoped-stop-receipt" && isDeepStrictEqual(parseStopReceipt(entry.payload).command, command))
                 if (receipt) { await journal.append(receipt.eventId, receipt.kind, receipt.payload); return { command, receipt: parseStopReceipt(receipt.payload).receipt } }
               } else {
                 const target = (await input.host().snapshot()).agents.find(agent => agent.agent.agentId === agentId && agent.agent.hostId === value.execution.hostId)?.execution

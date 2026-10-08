@@ -1,3 +1,4 @@
+import { acknowledges } from "../bureau/inbox.js"
 import { isDeepStrictEqual } from "node:util"
 import { id, keys, object, hash } from "../catalog/types.js"
 import { parseRequestedSettings, type RequestedSettings } from "../agent/session-config.js"
@@ -27,12 +28,12 @@ export async function loadOrchestrationPins(root: string): Promise<{ paths: stri
   for (const run of runs.values()) if (!["completed", "forgotten"].includes(run.state)) pinAgent(run.root.agentId)
   for (const attempt of attempts) if (unresolved(attempt.state)) { pinAgent(attempt.child.agentId); paths.add(`agents/commands/${attempt.launchCommandId}.json`) }
   for (const command of commands) if (command.state === "pending" && command.launchCommandId) paths.add(`agents/commands/${command.launchCommandId}.json`)
-  const waits = await store.listWaits(), deliveries = await store.listDeliveries(), inbox = await store.listInbox()
+  const waits = await store.listWaits(), deliveries = await store.listDeliveries(), inbox = await store.listInbox(), acknowledgments = await store.listAcknowledgments()
   const referenced = new Set<string>()
   for (const wait of waits) if (!wait.ended) { pinAgent(wait.target.agentId); for (const assignmentId of wait.input.assignmentIds) for (const attempt of attempts) if (attempt.ref.assignmentId === assignmentId) referenced.add(attempt.ref.attemptId) }
   for (const entry of inbox) {
     const delivered = deliveries.some(delivery => delivery.runId === entry.runId && delivery.sources.some(source => source.eventId === entry.eventId && source.digest === entry.source.digest) && delivery.state === "delivered" && delivery.channel === "prompt")
-    if (!delivered) { pinAgent(entry.parent.agentId); referenced.add(entry.report.attemptId) }
+    if (!delivered && !acknowledges(acknowledgments, entry.runId, entry.source)) { pinAgent(entry.parent.agentId); referenced.add(entry.report.attemptId) }
   }
   for (const attempt of attempts) if (referenced.has(attempt.ref.attemptId)) { pinAgent(attempt.child.agentId); paths.add(`agents/commands/${attempt.launchCommandId}.json`) }
   const origins = createJournalPool(root, undefined, Date.now, "origin")

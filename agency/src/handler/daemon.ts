@@ -120,7 +120,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const close = async (): Promise<void> => {
     if (closing) return closed
     closing = true
-    bureau?.close(); toolBindings?.close()
+    await bureau?.close(); toolBindings?.close()
     await acpServer?.close()
     for (const socket of sockets) socket.destroy()
     for (const listener of [server, attachmentServer, bureauServer, toolsServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))

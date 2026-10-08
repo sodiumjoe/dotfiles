@@ -1,6 +1,6 @@
-import { pendingScopedStops } from "../orchestration/receipts.js"
+import { pendingScopedStops, parseStopCommand, parseStopReceipt } from "../orchestration/receipts.js"
 import { createScheduler, parseNotificationRetry } from "../orchestration/scheduler.js"
-import { createInbox, parseReportTransition } from "./inbox.js"
+import { createInbox, parseReportTransition, acknowledges, type ReportAcknowledgment } from "./inbox.js"
 import { createWaits } from "./waits.js"
 import { journalEntries, parseAcceptedReport, type ReportRelay, type ReportReceipt } from "../orchestration/reports.js"
 import type { JournalPool } from "../orchestration/journal.js"
@@ -14,7 +14,7 @@ import { MutationQueue } from "../handler/mutations.js"
 import { canonicalDigest, boundedText, fail, parseAgentRef, parseExecutionRef, parseAssignmentSpec, parseOverrides, type ExecutionRef, type AgentRef, type AssignmentSpec, type EventRef, type Journal, type JournalEntry, parseReportInput, parseEventRef } from "../orchestration/types.js"
 import { parseBureauRecord, type AssignmentRecord, type AssignmentView, type AttemptRecord, type BureauRecord, type CommandRecord, type RunRecord, type RunView } from "./types.js"
 import type { BureauStore } from "./store.js"
-import type { HostSnapshot, Invocation, LaunchAssignment, LaunchReceipt, OrchestrationHost, RootLaunch } from "./host.js"
+import type { HostSnapshot, Invocation, LaunchAssignment, LaunchReceipt, OrchestrationHost, RootLaunch, StopReceipt } from "./host.js"
 import { transition, unresolved } from "./reducer.js"
 
 export type StartRunInput = { objective: string; hostId: string; cwd: string; backendId: ProviderId; modelId: string; overrides: AssignmentSpec["overrides"] }
@@ -156,9 +156,16 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         if (observed?.execution && !isDeepStrictEqual(observed.execution, current.execution)) state = "interrupted"
         else if (!observed || !["ready", "starting", "restoring"].includes(observed.phase)) state = observed?.phase === "recoverable" || observed?.phase === "stopped" ? "interrupted" : "uncertain"
         else {
-          const adapter = (await host(current.child.hostId)).adapter, receipt = await adapter.submission(current.execution, current.submissionId)
-          if (receipt?.state === "completed") state = "awaiting_report"
-          else if (receipt?.state === "failed") state = "failed"
+          const adapter = (await host(current.child.hostId)).adapter
+          try {
+            const receipt = await adapter.submission(current.execution, current.submissionId)
+            if (receipt?.state === "completed") state = "awaiting_report"
+            else if (receipt?.state === "failed") state = "failed"
+          } catch (error) {
+            const code = error instanceof Error ? (error as { code?: string }).code ?? error.message : null
+            if (!["NOT_READY", "STALE_EXECUTION", "STALE_HANDLER", "STALE_PROVIDER", "UNAVAILABLE", "HOST_UNAVAILABLE"].includes(code ?? "")) throw error
+            state = "uncertain"
+          }
         }
       }
       if (state !== current.state) await saveAttempt({ ...current, state: transition(current.state, state) }, current)
@@ -232,6 +239,14 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       return await applyReport(entry)
     } catch (error) { writeFailure = error; throw error }
   }
+  async function replayOriginReports(): Promise<void> {
+    if (!input.origins) return
+    for (const runId of await input.origins.list()) for (const entry of await journalEntries(input.origins.forRun(runId))) if (entry.kind === "report-retained" && !await input.origins.forRun(runId).acknowledged("bureau", eventRef(entry))) {
+      const receipt = await acceptReport({ input: parseReportInput(entry.payload), origin: eventRef(entry) })
+      if (receipt.state !== "retained") await input.origins.forRun(runId).acknowledge("bureau", eventRef(entry))
+    }
+  }
+  async function refreshLocked(): Promise<void> { await replayOriginReports(); await reconcile(); await waits.recoverLocked() }
   async function recover(): Promise<void> {
     if (closed) fail("BUREAU_UNAVAILABLE")
     try {
@@ -242,7 +257,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
           const page = await journalFor(runId).retainedRead(after, 256)
           for (const entry of page.entries) {
             await journalFor(runId).append(entry.eventId, entry.kind, entry.payload)
-            if (entry.kind === "bureau-report") await applyReport(entry); else if (entry.kind === "bureau-delivery") await inbox.apply(entry); else if (entry.kind === "bureau-wait") await waits.apply(entry); else if (entry.kind === "notification-retry") await applyNotificationRetry(entry); else if (entry.kind === "bureau-record") {
+            if (entry.kind === "report-acknowledgment") await inbox.applyAcknowledgment(entry); else if (entry.kind === "bureau-report") await applyReport(entry); else if (entry.kind === "bureau-delivery") await inbox.apply(entry); else if (entry.kind === "bureau-wait") await waits.apply(entry); else if (entry.kind === "notification-retry") await applyNotificationRetry(entry); else if (entry.kind === "bureau-record") {
             const record = parseBureauRecord(object(entry.payload).record)
             if (recordRunId(record) !== runId) fail("CORRUPT_BUREAU")
             await apply(entry)
@@ -252,11 +267,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         }
       }
       enabled = await store.readEnabled()
-      if (input.origins) for (const runId of await input.origins.list()) for (const entry of await journalEntries(input.origins.forRun(runId))) if (entry.kind === "report-retained") {
-        const receipt = await acceptReport({ input: parseReportInput(entry.payload), origin: eventRef(entry) })
-        if (receipt.state !== "retained") await input.origins.forRun(runId).acknowledge("bureau", eventRef(entry))
-      }
-      await reconcile(); await waits.recoverLocked(); initialized = true; writeFailure = null; scheduler.notify()
+      await refreshLocked(); initialized = true; writeFailure = null; scheduler.notify()
     } catch (error) { writeFailure = error; throw error }
   }
   async function applyNotificationRetry(entry: JournalEntry): Promise<void> {
@@ -273,11 +284,12 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     if (input.origins && pendingScopedStops(await journalEntries(input.origins.forRun(runId))).length) fail("UNRESOLVED")
     if ((await store.listWaits()).some(wait => wait.input.runId === runId && !wait.ended)) fail("UNRESOLVED")
     const deliveries = (await store.listDeliveries()).filter(delivery => delivery.runId === runId)
-    if (deliveries.some(delivery => !["queued", "delivered", "superseded"].includes(delivery.state))) fail("UNRESOLVED")
-    for (const entry of await store.listInbox()) if (entry.runId === runId && !deliveries.some(delivery => delivery.state === "delivered" && delivery.sources.some(source => isDeepStrictEqual(source, entry.source)))) fail("UNRESOLVED")
+    const acknowledgments = await store.listAcknowledgments()
+    if (deliveries.some(delivery => !["queued", "delivered", "superseded"].includes(delivery.state) && !delivery.sources.every(source => acknowledges(acknowledgments, runId, source)))) fail("UNRESOLVED")
+    for (const entry of await store.listInbox()) if (entry.runId === runId && !acknowledges(acknowledgments, runId, entry.source) && !deliveries.some(delivery => delivery.state === "delivered" && delivery.sources.some(source => isDeepStrictEqual(source, entry.source)))) fail("UNRESOLVED")
   }
   const inbox = createInbox({ store, journals, failed(error) { writeFailure = error } })
-  const waits = createWaits({ store, journals, queue, inbox, requireWrites, failed(error) { writeFailure = error },
+  const waits = createWaits({ store, journals, queue, inbox, requireWrites, async beforeAdmission() { await replayOriginReports(); await reconcile() }, failed(error) { writeFailure = error },
     async binding(parent, runId) {
       const membership = await run(runId)
       if (membership.state !== "active") return null
@@ -304,7 +316,10 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       }
     }
   })
-  const scheduler = createScheduler({ store, journals: input.origins ?? journals, queue, inbox, hosts: input.hosts, requireWrites, failed(error) { writeFailure = error }, beforeClaim: waits.recoverLocked, automatic: input.notifications ?? false })
+  const scheduler = createScheduler({ store, journals: input.origins ?? journals, queue, inbox, hosts: input.hosts, requireWrites, failed(error) { writeFailure = error }, beforeClaim: refreshLocked, automatic: input.notifications ?? false })
+  const unsubscribe = input.hosts.flatMap(adapter => adapter.onSettled ? [adapter.onSettled(() => {
+    void queue.run(async () => { requireWrites(); await refreshLocked() }).then(() => scheduler.notify()).catch(error => { if (initialized && enabled && !closed) writeFailure = error })
+  })] : [])
   return {
     schedule: scheduler.schedule,
     reserveScopedStop: <T>(runId: string, bindingEpoch: string, execution: ExecutionRef, publish: () => Promise<T>): Promise<T> => queue.run(async () => {
@@ -314,8 +329,8 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       if (!snapshot.agents.some(agent => agent.phase === "ready" && isDeepStrictEqual(agent.execution, execution))) fail("STALE_EXECUTION")
       return publish()
     }),
-    async wait(raw: Parameters<typeof waits.wait>[0], signal?: AbortSignal) { await checkForgotten("waits", raw.waitId); return waits.wait(raw, signal) },
-    async cancelWait(waitId: string) { await checkForgotten("waits", waitId); return waits.cancel(waitId) }, close() { closed = true; waits.close(); scheduler.close() },
+    async wait(raw: Parameters<typeof waits.wait>[0], signal?: AbortSignal, authority?: { execution: ExecutionRef; bindingEpoch: string }) { await checkForgotten("waits", raw.waitId); return waits.wait(raw, signal, authority) },
+    async cancelWait(waitId: string) { await checkForgotten("waits", waitId); return waits.cancel(waitId) }, close() { closed = true; for (const stop of unsubscribe) stop(); waits.close(); scheduler.close(); return queue.run(async () => undefined) },
     waitRecord: (waitId: string) => queue.run(async () => { await checkForgotten("waits", waitId); return store.readWait(id(waitId)) }),
     inbox: (parent: AgentRef, runId: string, after = 0) => queue.run(async () => { await run(runId); return inbox.inspect(parseAgentRef(parent), runId, after) }),
     acceptReport: (envelope: ReportRelay) => queue.run(async () => { requireWrites(); return acceptReport(envelope) }),
@@ -329,9 +344,9 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     },
     async disable() { await queue.run(async () => { if (closed) fail("BUREAU_UNAVAILABLE"); await store.writeEnabled(false, enabled); enabled = false }) },
     async status() { return { enabled, ready: initialized, writeAvailable: !closed && writeFailure === null } },
-    reconcile: () => queue.run(async () => { await reconcile(); await waits.recoverLocked() }),
-    async inspect(runId: string, after: string | null = null) { return queue.run(async () => view(await run(runId), after)) },
-    async assignment(assignmentId: string) { return queue.run(async () => assignmentView(await assignment(assignmentId))) },
+    reconcile: () => queue.run(refreshLocked),
+    async inspect(runId: string, after: string | null = null) { return queue.run(async () => { if (initialized && enabled && !closed && writeFailure === null) await refreshLocked(); return view(await run(runId), after) }) },
+    async assignment(assignmentId: string) { return queue.run(async () => { if (initialized && enabled && !closed && writeFailure === null) await refreshLocked(); return assignmentView(await assignment(assignmentId)) }) },
     async command(commandId: string) { return queue.run(async () => { await checkForgotten("commands", commandId); const value = await store.readCommand(id(commandId)); if (!value) fail("COMMAND_NOT_FOUND"); await run(value.runId); return value }) },
     async list() { return queue.run(async () => (await store.listRuns()).filter(value => value.state !== "forgotten")) },
     assignmentEvidence: (assignmentId: string, attemptId?: string) => queue.run(async () => {
@@ -430,7 +445,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       invocation = captureInvocation(invocation)
       if (mode !== "restore" && mode !== "replace") fail()
       return queue.run(async () => {
-        requireWrites(); const record = await assignment(assignmentId), digest = canonicalDigest({ op: "retry", assignmentId, mode, invocation: invocationDigest(record.spec.cwd, invocation) })
+        requireWrites(); await refreshLocked(); const record = await assignment(assignmentId), digest = canonicalDigest({ op: "retry", assignmentId, mode, invocation: invocationDigest(record.spec.cwd, invocation) })
         const prior = await previous(commandId, digest); if (prior) return prior.result as AssignmentView
         const membership = await run(record.runId), old = await attempt(record)
         if (membership.state !== "active") fail("RUN_CANCELLED")
@@ -470,6 +485,42 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         const closed = await saveRun({ ...current, state: "completed", bindingEpoch: randomUUID() }, current)
         return complete(command, await view(closed))
       })
+    },
+    async acknowledgeReports(commandId: string, runId: string, sources: EventRef[]): Promise<ReportAcknowledgment> {
+      return queue.run(async () => {
+        requireWrites(); await checkForgotten("commands", commandId); await run(runId)
+        if (await store.readCommand(commandId) || await store.readDelivery(commandId)) fail("COMMAND_CONFLICT")
+        const receipt = await inbox.acknowledge(commandId, runId, sources)
+        scheduler.notify()
+        return receipt
+      })
+    },
+    async recoverScopedStop(runId: string, commandId: string): Promise<StopReceipt> {
+      id(runId); id(commandId)
+      const reserved = await queue.run(async () => {
+        requireWrites(); await run(runId)
+        if (!input.origins) fail("UNSUPPORTED_CAPABILITY")
+        const journal = input.origins.forRun(runId), events = await journalEntries(journal), intent = events.find(entry => entry.eventId === commandId)
+        if (!intent || intent.kind !== "scoped-stop") fail("COMMAND_NOT_FOUND")
+        const command = parseStopCommand(intent.payload)
+        if (command.runId !== runId) fail("INVALID_STOP")
+        await journal.append(intent.eventId, intent.kind, intent.payload)
+        const retained = events.find(entry => entry.kind === "scoped-stop-receipt" && isDeepStrictEqual(parseStopReceipt(entry.payload).command, command))
+        if (retained) { await journal.append(retained.eventId, retained.kind, retained.payload); return { command, receipt: parseStopReceipt(retained.payload).receipt } }
+        return { command, receipt: null }
+      })
+      if (reserved.receipt) return reserved.receipt
+      const { adapter } = await host(reserved.command.target.hostId)
+      let receipt: StopReceipt
+      try { receipt = await adapter.stop(commandId, reserved.command.target) }
+      catch (error) {
+        const code = error instanceof Error ? (error as { code?: string }).code ?? error.message : null
+        if (!["STALE_EXECUTION", "STALE_HANDLER", "STALE_PROVIDER"].includes(code ?? "")) throw error
+        receipt = { commandId, execution: reserved.command.target, state: "stale" }
+      }
+      const saved = parseStopReceipt({ command: reserved.command, receipt })
+      await queue.run(async () => { requireWrites(); await input.origins!.forRun(runId).append(randomUUID(), "scoped-stop-receipt", saved); await refreshLocked() })
+      return saved.receipt
     },
     async retryNotification(commandId: string, deliveryId: string, rawTarget: Parameters<typeof parseExecutionRef>[0], bindingEpoch: string) {
       const target = parseExecutionRef(rawTarget); id(commandId); id(deliveryId); id(bindingEpoch)

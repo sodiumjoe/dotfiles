@@ -19,12 +19,12 @@ import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 
 export async function toolsFixture(t: TestContext, filesystem?: StorageFileSystem) {
+  let core: ReturnType<typeof createBureauService>, host: ReturnType<typeof createOrchestrationService>, tools: ReturnType<typeof createToolBindings>, online = true
+  t.after(async () => { await core?.close(); tools?.close() })
   const f = await agentServiceFixture(t), origins = createJournalPool(f.root, filesystem, Date.now, "origin"), journals = createJournalPool(f.root), lineage = createLineageStore(f.root), store = createBureauStore(f.root)
-  let core: ReturnType<typeof createBureauService>, host: ReturnType<typeof createOrchestrationService>, online = true
-  const tools = createToolBindings({ socketPath: join(f.root, "tools.sock"), journals: origins, bureau: () => online ? core : undefined, host: () => host })
+  tools = createToolBindings({ socketPath: join(f.root, "tools.sock"), journals: origins, bureau: () => online ? core : undefined, host: () => host })
   host = createOrchestrationService({ root: f.root, hostId: f.context.paths.hostKey, agents: f.service, journals: origins, lineage, tools, relay: envelope => online ? core.acceptReport(envelope) : Promise.reject(new Error("BUREAU_UNAVAILABLE")) })
   core = createBureauService({ store, journals, origins, hosts: [host] })
-  t.after(() => { core.close(); tools.close() })
   await core.initialize(); await core.enable()
   const invocation = { environment: f.input.environment, nativeParams: { mcpServers: [{ name: "external", command: "external-helper", args: [], env: [{ name: "SECRET", value: "external-secret" }] }] } }
   const root = await core.startRun(randomUUID(), { hostId: f.context.paths.hostKey, cwd: f.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {}, objective: "Inspect delegation" }, invocation)
@@ -47,6 +47,8 @@ test("scoped tools infer the reserved parent and reject forged sender and human 
     assert.equal((await f.call("agency_delegate", { ...f.scope, commandId: randomUUID(), ...f.spec, ...args })).isError, true)
   }
   assert.equal((await f.call("agency_permission_decide", {})).isError, true)
+  assert.equal((await f.call("agency_acknowledge_reports", {})).isError, true)
+  assert.equal((await f.call("agency_recover_stop", {})).isError, true)
   const child = await f.delegate()
   assert.deepEqual(child.value.lineage.parent, f.root.root)
   assert.deepEqual(child.value.attempt.effective, f.root.execution && (await f.service.sessionRecord(child.value.agent.agentId))!.record.settings)
@@ -389,4 +391,109 @@ test("stop retry reverifies a visible but unconfirmed receipt before acknowledgm
   const result = await f.call("agency_stop", args)
   assert.equal(result.isError, false)
   assert.equal(JSON.parse(result.content[0]!.text).state, "stopped")
+})
+
+test("human scoped-stop recovery survives sender retirement and returns the original receipt", async t => {
+  const f = await toolsFixture(t), child = await f.delegate(), commandId = randomUUID(), journal = f.origins.forRun(f.root.runId)
+  const command = { commandId, runId: f.root.runId, bindingEpoch: f.root.bindingEpoch, sender: f.root.execution!, target: child.value.attempt.execution }
+  const { canonicalDigest } = await import("../src/orchestration/types.js")
+  await journal.append(commandId, "scoped-stop", { ...command, digest: canonicalDigest(command) })
+  f.tools.revoke(f.root.execution!)
+  const recover = () => (f.core as unknown as { recoverScopedStop(runId: string, commandId: string): Promise<unknown> }).recoverScopedStop(f.root.runId, commandId)
+  const receipt = await recover()
+  assert.deepEqual(receipt, { commandId, execution: child.value.attempt.execution, state: "stopped" })
+  assert.deepEqual(await recover(), receipt)
+  assert.equal((await loadOrchestrationPins(f.fixtureRoot)).paths.includes(`agents/commands/${commandId}.json`), false)
+  assert.equal((await f.service.sessionRecord(child.value.agent.agentId))!.record.phase, "stopped")
+})
+
+test("queued tool wait cannot acquire a replacement provider execution", async t => {
+  const f = await toolsFixture(t), child = await f.delegate(), waitId = randomUUID(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), asserted = f.core.assertBinding
+  const invocation = await f.host.invocation(f.root.execution!)
+  f.core.assertBinding = async (...args) => { await asserted(...args); entered.resolve(); await release.promise }
+  const waiting = f.call("agency_wait", { ...f.scope, waitId, assignmentIds: [child.value.assignmentId], after: 0, timeoutMs: 0 })
+  await entered.promise
+  await f.host.stop(randomUUID(), f.root.execution!)
+  const restored = await f.core.restoreRun(randomUUID(), f.root.runId, invocation)
+  assert.notDeepEqual(restored.execution, f.root.execution)
+  release.resolve()
+  const result = await waiting
+  assert.equal(result.isError, true)
+  assert.match(result.content[0]!.text, /STALE_EXECUTION|STALE_BINDING/)
+  assert.equal(await f.core.waitRecord(waitId), null)
+})
+
+test("large tool wait results preserve report references within the MCP response bound", async t => {
+  const f = await toolsFixture(t), child = await f.delegate(), waitId = randomUUID()
+  const report = { status: "completed" as const, summary: "Large findings", issues: Array.from({ length: 12 }, () => '"'.repeat(30000)), validation: [], git: null }
+  assert.equal((await f.call("agency_report", { ...f.scope, commandId: randomUUID(), assignmentId: child.value.assignmentId, attemptId: child.value.attempt.ref.attemptId, report }, child.token)).isError, false)
+  const args = { ...f.scope, waitId, assignmentIds: [child.value.assignmentId], after: 0, timeoutMs: 0 }
+  const first = await f.call("agency_wait", args)
+  assert.equal(first.isError, false)
+  assert.ok(Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", id: "result", result: first })) < 1024 * 1024)
+  const response = JSON.parse(first.content[0]!.text)
+  assert.equal(response.reports[0].reportTruncated, true)
+  assert.equal(response.reports[0].report.assignmentId, child.value.assignmentId)
+  assert.equal(response.reports[0].report.attemptId, child.value.attempt.ref.attemptId)
+  assert.equal(response.reports[0].report.report.issueCount, 12)
+  assert.deepEqual(await f.call("agency_wait", args), first)
+  const input = new PassThrough(), output = new PassThrough(), frames: any[] = []
+  output.on("data", bytes => { for (const line of bytes.toString().trim().split("\n")) frames.push(JSON.parse(line)) })
+  const serving = serveMcp({ input, output, call: (name, args, signal) => f.call(name, args, f.token, signal), cancel: id => f.core.cancelWait(id).then(() => {}) })
+  input.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } }) + "\n")
+  await until(async () => frames.length === 1 ? true : undefined)
+  input.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n")
+  input.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "agency_wait", arguments: args } }) + "\n")
+  await until(async () => frames.length === 2 ? true : undefined)
+  input.end(); await serving
+  assert.deepEqual(frames[1].result, first)
+  assert.equal(frames[1].error, undefined)
+  const evidence = JSON.parse((await f.call("agency_inspect", { runId: f.root.runId, assignmentId: child.value.assignmentId, attemptId: child.value.attempt.ref.attemptId })).content[0]!.text)
+  assert.equal(evidence.reportAttemptId, child.value.attempt.ref.attemptId)
+  assert.notEqual(evidence.reportPage.nextCursor, null)
+  assert.deepEqual((await f.core.waitRecord(waitId))!.result!.reports[0]!.report.report, report)
+  assert.equal((await f.core.inbox(f.root.root, f.root.runId)).pending.length, 0)
+})
+
+test("operational scoped stop updates attempts and waits without restarting Bureau", async t => {
+  const f = await toolsFixture(t), child = await f.delegate()
+  await until(async () => (await f.store.readAttempt(child.value.attempt.ref.attemptId))?.state === "awaiting_report" ? true : undefined)
+  const result = await f.call("agency_stop", { ...f.scope, commandId: randomUUID(), agentId: child.value.agent.agentId })
+  assert.equal(result.isError, false)
+  await until(async () => (await f.store.readAttempt(child.value.attempt.ref.attemptId))?.state === "interrupted" ? true : undefined)
+  assert.equal((await f.core.assignment(child.value.assignmentId)).attempt.state, "interrupted")
+  const wait = await f.core.wait({ waitId: randomUUID(), runId: f.root.runId, parent: f.root.root, assignmentIds: [child.value.assignmentId], after: 0, timeoutMs: 0 })
+  assert.equal(wait.kind, "terminal_failure")
+  const retry = await f.core.retry(randomUUID(), child.value.assignmentId, "replace", { environment: f.input.environment, nativeParams: { mcpServers: [] } })
+  assert.notEqual(retry.agent.agentId, child.value.agent.agentId)
+})
+
+test("human scoped-stop recovery never stops a replacement target", async t => {
+  const f = await toolsFixture(t), child = await f.delegate(), commandId = randomUUID(), original = child.value.attempt.execution
+  const { canonicalDigest } = await import("../src/orchestration/types.js")
+  const command = { commandId, runId: f.root.runId, bindingEpoch: f.root.bindingEpoch, sender: f.root.execution!, target: original }
+  await f.origins.forRun(f.root.runId).append(commandId, "scoped-stop", { ...command, digest: canonicalDigest(command) })
+  const invocation = await f.host.invocation(original)
+  await f.host.stop(randomUUID(), original)
+  const restored = await f.core.retry(randomUUID(), child.value.assignmentId, "restore", invocation)
+  const receipt = await f.core.recoverScopedStop(f.root.runId, commandId)
+  assert.equal(receipt.state, "stale")
+  assert.deepEqual(receipt.execution, original)
+  assert.notDeepEqual(restored.attempt.execution, original)
+  assert.equal((await f.service.sessionRecord(restored.agent.agentId))!.record.phase, "ready")
+  assert.deepEqual(await f.core.recoverScopedStop(f.root.runId, commandId), receipt)
+})
+
+test("replacement credentials cannot replay a wait admitted by an older execution", async t => {
+  const f = await toolsFixture(t), child = await f.delegate(), waitId = randomUUID()
+  await f.call("agency_report", { ...f.scope, commandId: randomUUID(), assignmentId: child.value.assignmentId, attemptId: child.value.attempt.ref.attemptId, report: { status: "completed", summary: "Finished", issues: [], validation: [], git: null } }, child.token)
+  const args = { ...f.scope, waitId, assignmentIds: [child.value.assignmentId], after: 0, timeoutMs: 0 }
+  assert.equal((await f.call("agency_wait", args)).isError, false)
+  const invocation = await f.host.invocation(f.root.execution!)
+  await f.host.stop(randomUUID(), f.root.execution!)
+  const restored = await f.core.restoreRun(randomUUID(), f.root.runId, invocation)
+  const result = await f.call("agency_wait", args, f.tools.tokenFor(restored.execution!)!)
+  assert.equal(result.isError, true)
+  assert.match(result.content[0]!.text, /STALE_BINDING/)
+  assert.deepEqual((await f.core.waitRecord(waitId))!.target, f.root.execution)
 })

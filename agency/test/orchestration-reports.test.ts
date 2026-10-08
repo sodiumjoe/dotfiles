@@ -57,7 +57,9 @@ test("forged report origin or execution cannot terminate an attempt", async t =>
   const origin = { seq: entry.seq, eventId: entry.eventId, digest: entry.digest }
   await assert.rejects(f.bureau.acceptReport({ input: { ...f.reportInput, execution: { ...f.reportInput.execution, providerGeneration: randomUUID() } }, origin }), /INVALID_ORIGIN|STALE_EXECUTION/)
   await assert.rejects(f.bureau.acceptReport({ input: f.reportInput, origin: { ...origin, digest: "b".repeat(64) } }), /INVALID_ORIGIN/)
-  assert.equal((await f.bureau.assignment(f.child.assignmentId)).attempt.state, "running")
+  assert.equal((await f.store.readAttempt(f.child.attempt.ref.attemptId))!.state, "running")
+  assert.equal(await f.store.readReport(f.child.attempt.ref.attemptId), null)
+  assert.equal((await f.bureau.assignment(f.child.assignmentId)).attempt.state, "completed")
 })
 
 test("origin disk failure cannot return a retained acknowledgment", async t => {
@@ -88,6 +90,12 @@ test("visible report after failed publication must reverify origin fsync before 
   await assert.rejects(f.outbox.report(f.reportInput), /ENOSPC/)
   f.failAt("directory-sync", "journal/entries")
   await assert.rejects(f.outbox.report(f.reportInput), /ENOSPC/)
-  assert.equal((await f.bureau.assignment(f.child.assignmentId)).attempt.state, "running")
+  assert.equal((await f.store.readAttempt(f.child.attempt.ref.attemptId))!.state, "running")
+  assert.equal(await f.store.readReport(f.child.attempt.ref.attemptId), null)
+  f.failAt("directory-sync", "journal/entries")
+  await assert.rejects(f.bureau.assignment(f.child.assignmentId), /ENOSPC/)
+  assert.equal((await f.store.readAttempt(f.child.attempt.ref.attemptId))!.state, "running")
+  assert.equal(await f.store.readReport(f.child.attempt.ref.attemptId), null)
   assert.equal((await f.outbox.report(f.reportInput)).state, "accepted")
+  assert.equal((await f.bureau.assignment(f.child.assignmentId)).attempt.state, "completed")
 })

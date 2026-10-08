@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto"
 import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { bureauFixture } from "./bureau-support.js"
+import { createBureauService } from "../src/bureau/service.js"
+import { createJournalPool } from "../src/orchestration/journal.js"
 
 test("Bureau allocates durable root, child and grandchild lineage before dispatch", async t => {
   const f = await bureauFixture(t), child = await f.delegate(f.input.commandId)
@@ -266,4 +268,32 @@ test("malformed host receipt cannot publish a running attempt", async t => {
     f.host.raw.launch = async (command, invocation) => ({ ...await original(command, invocation), ...change }) as Awaited<ReturnType<typeof original>>
     await assert.rejects(f.delegate(), /INVALID_RECEIPT/)
   }
+})
+
+test("lifecycle receipt observation races retain uncertainty without disabling Bureau", async t => {
+  const f = await bureauFixture(t), child = await f.delegate(), original = f.host.raw.submission
+  f.host.raw.submission = async () => { throw Object.assign(new Error("not ready"), { code: "NOT_READY" }) }
+  const pending = await f.core.inspect(f.input.runId)
+  assert.equal(pending.assignments[0]!.attempt.state, "uncertain")
+  assert.equal((await f.core.status()).writeAvailable, true)
+  f.host.raw.submission = original
+  f.host.agents.get(child.agent.agentId)!.phase = "recoverable"
+  assert.equal((await f.core.assignment(child.assignmentId)).attempt.state, "interrupted")
+})
+
+test("Bureau close drains an admitted lifecycle refresh before storage teardown", async t => {
+  const f = await bureauFixture(t), child = await f.delegate(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let settle = () => {}, closed = false
+  f.host.raw.onSettled = listener => { settle = () => listener(f.input.assignment.parent); return () => { settle = () => {} } }
+  const core = createBureauService({ store: f.store, journals: createJournalPool(f.root, f.filesystem, f.clock.now), hosts: [f.host.raw] })
+  await core.initialize()
+  const snapshot = f.host.raw.snapshot
+  f.host.raw.snapshot = async () => { entered.resolve(); await release.promise; return snapshot() }
+  f.host.agents.get(child.agent.agentId)!.phase = "stopped"
+  settle(); await entered.promise
+  const closing = Promise.resolve(core.close()).then(() => { closed = true })
+  await new Promise(resolve => setImmediate(resolve))
+  try { assert.equal(closed, false) } finally { release.resolve(); await closing }
+  assert.equal((await f.store.readAttempt(child.attempt.ref.attemptId))!.state, "interrupted")
+  assert.equal((await core.status()).writeAvailable, false)
 })

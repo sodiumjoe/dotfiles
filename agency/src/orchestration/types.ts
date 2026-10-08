@@ -1,6 +1,6 @@
 import { parseStopCommand, parseStopReceipt } from "./receipts.js"
 import { parseNotificationReceipt, parseNotificationRetry } from "./scheduler.js"
-import { parseDeliveryTransition, parseReportTransition } from "../bureau/inbox.js"
+import { parseDeliveryTransition, parseReportTransition, parseReportAcknowledgment } from "../bureau/inbox.js"
 import { parseWaitTransition } from "../bureau/waits.js"
 import { parseOriginLaunch, parseOriginReceipt } from "./receipts.js"
 import { parseAcceptedReport } from "./reports.js"
@@ -120,6 +120,7 @@ export function parseEventPayload(kind: string, value: unknown): unknown {
   if (kind === "scoped-stop-receipt") return parseStopReceipt(value)
   if (kind === "origin-launch") return parseOriginLaunch(value)
   if (kind === "origin-receipt") return parseOriginReceipt(value)
+  if (kind === "report-acknowledgment") return parseReportAcknowledgment(value)
   if (kind === "bureau-report") return parseReportTransition(value)
   if (kind === "bureau-delivery") return parseDeliveryTransition(value)
   if (kind === "notification-retry") return parseNotificationRetry(value)

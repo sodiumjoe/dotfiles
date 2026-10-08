@@ -4,7 +4,7 @@ import { hash, id, keys, object } from "../catalog/types.js"
 import type { MutationQueue } from "../handler/mutations.js"
 import type { BureauStore } from "../bureau/store.js"
 import type { OrchestrationHost } from "../bureau/host.js"
-import { parseDelivery, type createInbox, type Delivery, type InboxEntry } from "../bureau/inbox.js"
+import { parseDelivery, type createInbox, type Delivery, type InboxEntry, acknowledges } from "../bureau/inbox.js"
 import type { JournalPool } from "./journal.js"
 import { journalEntries } from "./reports.js"
 import { canonicalDigest, enumValue, fail, parseExecutionRef, type AgentRef, type ExecutionRef } from "./types.js"
@@ -66,8 +66,8 @@ export function createScheduler(input: { store: BureauStore; journals: JournalPo
     const selected = await queue.run(async () => {
       input.requireWrites(); await input.beforeClaim()
       const entries = (await store.listInbox()).filter(entry => isDeepStrictEqual(entry.parent, parent)).sort((a, b) => a.source.seq - b.source.seq)
-      const deliveries = await store.listDeliveries()
-      const pending = entries.filter(entry => !deliveries.some(delivery => !["queued", "superseded"].includes(delivery.state) && delivery.runId === entry.runId && delivery.sources.some(source => source.eventId === entry.eventId)))
+      const deliveries = await store.listDeliveries(), acknowledgments = await store.listAcknowledgments()
+      const pending = entries.filter(entry => !acknowledges(acknowledgments, entry.runId, entry.source) && !deliveries.some(delivery => !["queued", "superseded"].includes(delivery.state) && delivery.runId === entry.runId && delivery.sources.some(source => source.eventId === entry.eventId)))
       const first = pending[0]
       if (!first) return null
       const run = await store.readRun(first.runId)
@@ -90,6 +90,8 @@ export function createScheduler(input: { store: BureauStore; journals: JournalPo
       await host.submit(delivery.target, { submissionId: delivery.deliveryId, prompt }, async () => {
         const run = await store.readRun(delivery.runId)
         if (!run || run.state !== "active" || run.bindingEpoch !== delivery.bindingEpoch) fail("STALE_BINDING")
+        const acknowledgments = await store.listAcknowledgments()
+        if (delivery.sources.some(source => acknowledges(acknowledgments, delivery.runId, source))) fail("STALE_BINDING")
         await publish(delivery, "accepted")
       })
     } catch (error) {
@@ -115,8 +117,8 @@ export function createScheduler(input: { store: BureauStore; journals: JournalPo
       queued = false
       if (closed) return
       void (async () => {
-        const deliveries = await store.listDeliveries(), entries = await store.listInbox(), parents = new Map<string, AgentRef>()
-        for (const entry of entries) if (!deliveries.some(delivery => delivery.runId === entry.runId && delivery.state === "delivered" && delivery.sources.some(source => source.eventId === entry.eventId))) parents.set(entry.parent.hostId + "/" + entry.parent.agentId, entry.parent)
+        const deliveries = await store.listDeliveries(), entries = await store.listInbox(), acknowledgments = await store.listAcknowledgments(), parents = new Map<string, AgentRef>()
+        for (const entry of entries) if (!acknowledges(acknowledgments, entry.runId, entry.source) && !deliveries.some(delivery => delivery.runId === entry.runId && delivery.state === "delivered" && delivery.sources.some(source => source.eventId === entry.eventId))) parents.set(entry.parent.hostId + "/" + entry.parent.agentId, entry.parent)
         for (const parent of parents.values()) await schedule(parent)
       })().catch(() => undefined)
     })

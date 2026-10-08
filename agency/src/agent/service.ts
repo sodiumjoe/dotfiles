@@ -247,7 +247,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     else if (!isDeepStrictEqual(op.terminalAgent, { next, expected })) throw new AgentError("INVALID_AGENT_STATE")
     await publishAgent(op.terminalAgent.next, op.terminalAgent.expected)
     if (!isDeepStrictEqual(records.get(next.definition.agentId), next) || dirtyAgents.has(next.definition.agentId)) throw new AgentError("INCOMPLETE")
-    if (!op.terminalAgentDurable) op.conversation.append({ kind: "lifecycle", phase: next.phase, failure: next.failure })
+    if (!op.terminalAgentDurable) { op.conversation.append({ kind: "lifecycle", phase: next.phase, failure: next.failure }); op.hooks?.settled?.(next) }
     op.terminalAgentDurable = true
     retire(op)
   }

@@ -40,6 +40,7 @@ export function createBureauStore(root: string, filesystem = defaultFileSystem) 
         for (const command of commands) await storage.publish(`forgotten/commands/${command.commandId}.json`, { recordId: command.commandId, runId, digest: command.digest }, null, true)
         for (const assignment of assignments) await storage.publish(`forgotten/assignments/${assignment.assignmentId}.json`, { recordId: assignment.assignmentId, runId, digest: null }, null, true)
         for (const wait of waits) await storage.publish(`forgotten/waits/${wait.input.waitId}.json`, { recordId: wait.input.waitId, runId, digest: wait.digest }, null, true)
+        for (const ack of await createInboxStore(root, filesystem).listAcknowledgments()) if (ack.runId === runId) await storage.publish(`forgotten/commands/${ack.commandId}.json`, { recordId: ack.commandId, runId, digest: null }, null, true)
         for (const delivery of await createInboxStore(root, filesystem).listDeliveries()) if (delivery.runId === runId && delivery.channel === "prompt") await storage.publish(`forgotten/commands/${delivery.deliveryId}.json`, { recordId: delivery.deliveryId, runId, digest: null }, null, true)
         await storage.publish(`forgotten/commands/${forgetCommandId}.json`, { recordId: forgetCommandId, runId, digest: null }, null, true)
       })
@@ -47,7 +48,7 @@ export function createBureauStore(root: string, filesystem = defaultFileSystem) 
     async eraseRun(runId: string): Promise<void> {
       id(runId)
       await queue.run(async () => {
-        for (const area of ["commands", "assignments", "attempts", "reports", "inbox", "deliveries", "waits"]) for (const name of await storage.names(area)) {
+        for (const area of ["commands", "assignments", "attempts", "reports", "inbox", "deliveries", "waits", "acknowledgments"]) for (const name of await storage.names(area)) {
           const raw = object(await storage.read(`${area}/${name}`)), actual = area === "attempts" ? object(raw.ref).runId : area === "reports" ? object(raw.input).runId : area === "waits" ? object(raw.input).runId : raw.runId
           if (actual === runId) await storage.remove(`${area}/${name}`)
         }

@@ -15,3 +15,15 @@ test("Bureau mutation IDs are UUIDs independent of transport request IDs", () =>
   assert.throws(() => parseBureauRequest({ ...request, commandId: undefined }))
   assert.throws(() => parseBureauRequest({ ...request, commandId: "1" }))
 })
+
+test("human recovery requests carry exact report sources or the original stop command", () => {
+  const base = { protocol: BUREAU_PROTOCOL, requestId: randomUUID(), handlerGeneration: randomUUID(), commandId: randomUUID(), runId: randomUUID() }
+  const source = { eventId: randomUUID(), seq: 1, digest: "a".repeat(64) }
+  const ack = { ...base, op: "report_acknowledge", sources: [source] }
+  assert.deepEqual(parseBureauRequest(ack), ack)
+  assert.throws(() => parseBureauRequest({ ...ack, sources: [{ ...source, digest: "wrong" }] }))
+  assert.throws(() => parseBureauRequest({ ...ack, sender: {} }))
+  const stop = { ...base, op: "stop_recover" }
+  assert.deepEqual(parseBureauRequest(stop), stop)
+  assert.throws(() => parseBureauRequest({ ...stop, target: {} }))
+})
