@@ -22,8 +22,16 @@ function recipientName(recipient: string): string {
   text(recipient, 64); if (!/^[a-zA-Z0-9_-]+$/.test(recipient)) fail()
   return recipient
 }
-export function createJournal(root: string, filesystem = defaultFileSystem, now = Date.now): Journal {
-  const storage = createStorage(root, "orchestration", filesystem), queue = storageQueue(root)
+export function createJournal(root: string, filesystem = defaultFileSystem, now = Date.now, scope?: { runId: string; kind: "bureau" | "origin" }): Journal {
+  const backing = createStorage(root, "orchestration", filesystem), queue = storageQueue(root)
+  const prefix = scope ? `${scope.kind}-runs/${id(scope.runId)}/` : ""
+  const storage = {
+    read: (key: string) => backing.read(prefix + key),
+    names: (key: string) => backing.names(prefix + key),
+    publish: (key: string, value: unknown, expected: unknown | null, immutable = false) => backing.publish(prefix + key, value, expected, immutable),
+    remove: (key: string) => backing.remove(prefix + key),
+    sync: (key: string) => backing.sync(prefix + key)
+  }
   const key = (kind: string, seq: number) => `journal/${kind}/${name(seq)}`
   async function saved(kind: "entries" | "receipts", seq: number): Promise<Saved | null> {
     const raw = await storage.read(key(kind, seq)); if (raw === null) return null
@@ -188,3 +196,17 @@ export function createJournal(root: string, filesystem = defaultFileSystem, now 
     }
   }
 }
+
+export function createJournalPool(root: string, filesystem = defaultFileSystem, now = Date.now, kind: "bureau" | "origin" = "bureau") {
+  const storage = createStorage(root, "orchestration", filesystem), journals = new Map<string, Journal>()
+  return {
+    async list(): Promise<string[]> { return (await storage.directories(`${kind}-runs`)).map(id) },
+    forRun(runId: string): Journal {
+      id(runId)
+      let journal = journals.get(runId)
+      if (!journal) { journal = createJournal(root, filesystem, now, { runId, kind }); journals.set(runId, journal) }
+      return journal
+    }
+  }
+}
+export type JournalPool = ReturnType<typeof createJournalPool>

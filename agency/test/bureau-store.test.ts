@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
+import { writeFile, mkdir } from "node:fs/promises"
+import { join } from "node:path"
 import { coreFixture } from "./orchestration-support.js"
 
-const record = (f: Awaited<ReturnType<typeof coreFixture>>) => ({ version: 1 as const, runId: f.input.runId, createCommandId: randomUUID(), root: f.input.agent, objective: "Inspect local work", state: "active" as const, bindingEpoch: randomUUID(), journal: null })
+const record = (f: Awaited<ReturnType<typeof coreFixture>>) => ({ version: 1 as const, runId: f.input.runId, createCommandId: randomUUID(), root: f.input.agent, execution: null, objective: "Inspect local work", state: "active" as const, bindingEpoch: randomUUID(), journal: null })
 
 test("Bureau run CAS persists versions and rejects stale replacement", async t => {
   const f = await coreFixture(t), first = record(f)
@@ -40,4 +42,11 @@ test("Bureau and lineage schemas reject credentials and forged host identities",
   await assert.rejects(f.store.writeRun({ ...first, environment: { TOKEN: "secret" } } as typeof first, null))
   await assert.rejects(f.store.writeRun({ ...first, root: { ...first.root, hostId: "host" } }, null))
   await assert.rejects(f.lineage.publish(f.input.agent, { runId: f.input.runId, assignmentId: f.input.assignmentId, parent: { hostId: "host", agentId: randomUUID() } }, null))
+})
+
+test("Bureau inventory rejects a run record stored under another UUID", async t => {
+  const f = await coreFixture(t), first = record(f)
+  await f.store.writeRun(first, null)
+  await writeFile(join(f.root, "bureau", "runs", randomUUID() + ".json"), JSON.stringify(first), { mode: 0o600 })
+  await assert.rejects(f.store.listRuns(), /INVALID_BUREAU/)
 })

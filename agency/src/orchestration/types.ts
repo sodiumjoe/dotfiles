@@ -1,3 +1,4 @@
+import { parseBureauRecord } from "../bureau/types.js"
 import { createHash } from "node:crypto"
 import { absolutePath, hash, id, keys, object, providerId, text, timestamp, type ProviderId } from "../catalog/types.js"
 import { canonicalJson } from "../agent/session-config.js"
@@ -109,6 +110,10 @@ export function encode(value: unknown): Buffer {
 }
 export const canonicalDigest = (value: unknown): string => createHash("sha256").update(encode(value)).digest("hex")
 export function parseEventPayload(kind: string, value: unknown): unknown {
+  if (kind === "bureau-record") {
+    const v = object(value); keys(v, ["previousDigest", "record"])
+    return { previousDigest: v.previousDigest === null ? null : hash(v.previousDigest), record: parseBureauRecord(v.record) }
+  }
   if (kind === "report") return parseReport(value)
   if (kind === "report-retained") return parseReportInput(value)
   if (kind === "lineage") {

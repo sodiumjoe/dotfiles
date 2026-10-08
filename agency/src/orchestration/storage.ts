@@ -61,6 +61,13 @@ export function createStorage(root: string, area: "orchestration" | "bureau", fi
   return {
     base,
     async read(key: string): Promise<unknown | null> { const bytes = await readBytes(pathFor(key)); return bytes === null ? null : decodeJson(bytes) },
+    async directories(key: string): Promise<string[]> {
+      const path = pathFor(key)
+      if (!await directory(path, false)) return []
+      const names = await readdir(path)
+      for (const name of names) await directory(join(path, name), false)
+      return names.sort()
+    },
     async names(key: string): Promise<string[]> {
       const path = pathFor(key)
       if (!await directory(path, false)) return []
