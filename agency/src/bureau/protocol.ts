@@ -2,7 +2,7 @@ import type { Socket } from "node:net"
 import { id, keys, object, text } from "../catalog/types.js"
 import { parseLaunchEnvironment } from "../agent/environment.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
-import { boundedText, fail, parseAgentRef, parseAssignmentSpec, type AgentRef, type AssignmentSpec } from "../orchestration/types.js"
+import { boundedText, fail, parseExecutionRef, parseAgentRef, parseAssignmentSpec, type ExecutionRef, type AgentRef, type AssignmentSpec } from "../orchestration/types.js"
 import { parseStartRunInput, type StartRunInput } from "./service.js"
 import type { Invocation } from "./host.js"
 
@@ -15,6 +15,8 @@ export type BureauRequest = Base & (
   { op: "command_inspect"; commandId: string } |
   { op: "run_cancel" | "run_close" | "run_forget"; commandId: string; runId: string } |
   { op: "run_start"; commandId: string; input: StartRunInput; invocation: Invocation } |
+  { op: "run_restore"; commandId: string; runId: string; invocation: Invocation } |
+  { op: "notification_retry"; commandId: string; deliveryId: string; target: ExecutionRef; bindingEpoch: string } |
   { op: "run_begin"; commandId: string; root: AgentRef; objective: string } |
   { op: "assignment_create"; commandId: string; runId: string; input: AssignmentSpec; invocation: Invocation } |
   { op: "assignment_retry"; commandId: string; assignmentId: string; mode: "restore" | "replace"; invocation: Invocation }
@@ -35,6 +37,8 @@ export function parseBureauRequest(raw: unknown): BureauRequest {
     case "assignment_inspect": exact("assignmentId"); return { ...base, op, assignmentId: id(v.assignmentId) }
     case "run_cancel": case "run_close": case "run_forget": exact("commandId", "runId"); return { ...base, op, commandId: id(v.commandId), runId: id(v.runId) }
     case "run_start": exact("commandId", "input", "invocation"); return { ...base, op, commandId: id(v.commandId), input: parseStartRunInput(v.input), invocation: parseInvocation(v.invocation) }
+    case "run_restore": exact("commandId", "runId", "invocation"); return { ...base, op, commandId: id(v.commandId), runId: id(v.runId), invocation: parseInvocation(v.invocation) }
+    case "notification_retry": exact("commandId", "deliveryId", "target", "bindingEpoch"); return { ...base, op, commandId: id(v.commandId), deliveryId: id(v.deliveryId), target: parseExecutionRef(v.target), bindingEpoch: id(v.bindingEpoch) }
     case "run_begin": exact("commandId", "root", "objective"); return { ...base, op, commandId: id(v.commandId), root: parseAgentRef(v.root), objective: boundedText(v.objective, 65536, false) }
     case "assignment_create": exact("commandId", "runId", "input", "invocation"); return { ...base, op, commandId: id(v.commandId), runId: id(v.runId), input: parseAssignmentSpec(v.input), invocation: parseInvocation(v.invocation) }
     case "assignment_retry": {

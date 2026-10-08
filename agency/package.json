@@ -29,7 +29,8 @@
     "test:orchestration": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-service.test.js dist/test/orchestration-reports.test.js dist/test/orchestration-retention.test.js",
     "test:orchestration-scheduling": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-scheduler.test.js dist/test/handler-orchestration.test.js dist/test/agent-turns.test.js",
     "test:bureau-notifications": "npm run build && node --test --test-concurrency=1 dist/test/bureau-inbox.test.js dist/test/bureau-waits.test.js dist/test/bureau-retention.test.js dist/test/orchestration-retention.test.js",
-    "test:bureau": "npm run build && node --test --test-concurrency=1 dist/test/bureau-service.test.js dist/test/bureau-protocol.test.js dist/test/handler-bureau.test.js dist/test/bureau-store.test.js dist/test/orchestration-journal.test.js"
+    "test:bureau": "npm run build && node --test --test-concurrency=1 dist/test/bureau-service.test.js dist/test/bureau-protocol.test.js dist/test/handler-bureau.test.js dist/test/bureau-store.test.js dist/test/orchestration-journal.test.js",
+    "test:orchestration-tools": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-mcp.test.js dist/test/agency-delegation.test.js dist/test/bureau-cli.test.js dist/test/orchestration-scheduler.test.js"
   },
   "devDependencies": {
     "@types/node": "24.10.0",

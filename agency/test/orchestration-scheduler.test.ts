@@ -172,3 +172,13 @@ test("report arrival during a lost control reply is scheduled after the in-fligh
   await until(async () => f.calls === 2 ? true : undefined, 5000)
   assert.equal(f.calls, 2)
 })
+
+test("a large valid report produces a bounded notification without disabling Bureau writes", async t => {
+  const f = await fixture(t)
+  const input = { ...f.child.attempt.ref, commandId: randomUUID(), execution: f.child.attempt.execution!, report: { status: "completed" as const, summary: "large", issues: Array.from({ length: 12 }, () => '"'.repeat(30000)), validation: [], git: null } }
+  const event = await f.origins.forRun(f.input.runId).append(input.commandId, "report-retained", input)
+  await f.core.acceptReport({ input, origin: { seq: event.seq, eventId: event.eventId, digest: event.digest } })
+  await f.schedule()
+  assert.equal(f.calls, 1)
+  assert.equal((await f.core.status()).writeAvailable, true)
+})

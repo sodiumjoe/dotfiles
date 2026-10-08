@@ -155,13 +155,13 @@ The test scripts do not invoke a real model, paid prompt, login, deployment, or 
 
 The delegation core stores orchestration envelopes separately from native sessions. The journal publishes private immutable events under a serialized mutation queue, fsyncs files and parent directories before returning receipts, and rejects conflicting event IDs. Per-event recipient acknowledgements advance only a contiguous watermark. Seven-day acknowledged report compaction publishes a hashed summary and durable checkpoint before deleting the replay prefix. A cursor below that checkpoint returns `CURSOR_EXPIRED`; exact event replies remain retained for retry. Missing unexpired events, changed bytes, replaced files and unsafe state fail closed.
 
-Records are bounded to 1 MiB, transport queues to 2 MiB and pages to 256 entries. Description, summary and validation output fields are bounded to 64 KiB; arrays to 128 entries; arguments and paths to 4096 bytes. Creation lineage is immutable and separate from provider generation. These storage primitives do not start providers or expose delegation commands yet.
+Records are bounded to 1 MiB, transport queues to 2 MiB and pages to 256 entries. Description, summary and validation output fields are bounded to 64 KiB; arrays to 128 entries; arguments and paths to 4096 bytes. Creation lineage is immutable and separate from provider generation. These storage primitives support the Bureau and scoped tools described below.
 
 ### Local Bureau core
 
 The Bureau retains runs, assignment attempts and exact command replies in per-run journals. Root and child identities are published before host dispatch. A lost launch reply is inspected under its original command ID; startup never redispatches a prompt. Commands with an uncertain outcome expose their reserved target and launch IDs through command inspection. Replacement retry allocates a new child and uses current configured defaults. Restore retry retains the logical child and saved settings.
 
-Run inspection uses bounded assignment pages with a continuation cursor. Run closure rotates relationship authority and leaves providers running. Cancellation ends orchestration attempts without stopping providers. Git assignments are rejected before launch in this local milestone. CLI and daemon composition follow the scoped-tool integration; the current core socket tests use deterministic fake hosts.
+Run inspection uses bounded assignment pages with a continuation cursor. Run closure rotates relationship authority and leaves providers running. Cancellation ends orchestration attempts without stopping providers. Git assignments are rejected before launch in this local milestone. The local CLI and Handler compose this service; core socket tests also use deterministic fake hosts.
 
 ### Local launch and report integration
 
@@ -169,7 +169,7 @@ Orchestrated launches reserve their logical agent and execution before provider 
 
 Report retention and host snapshot replay fences share the Handler mutation queue. Reports are retained in the origin journal before Bureau relay; visible records from a failed publication reverify fsync before relay. Offline reports remain replayable after the reporting generation retires. Recovery relays retained reports before deriving interruptions from host snapshots. Each attempt accepts one immutable terminal report; completed reports complete the attempt, while blocked and failed reports retain their category and fail it. Reports for superseded attempts remain late evidence. Origin event identity, digest and historical execution are checked before acknowledgment.
 
-Bootstrap loads orchestration pins before resuming cleanup intents. Unresolved dispatch and unacknowledged report evidence prevents retirement. Unreadable references pause cleanup while ordinary local agents remain available. Reobserving a cleaned launch preserves its file identity so a blocked cleanup intent retains valid witnesses. No conversation archive is added. Operational scoped tools and delivery scheduling remain staged for the following integration tasks.
+Bootstrap loads orchestration pins before resuming cleanup intents. Unresolved dispatch and unacknowledged report evidence prevents retirement. Unreadable references pause cleanup while ordinary local agents remain available. Reobserving a cleaned launch preserves its file identity so a blocked cleanup intent retains valid witnesses. No conversation archive is added. Operational scoped tools and delivery scheduling use these publication and retention contracts.
 
 ### Durable waits and parent inbox
 
@@ -184,3 +184,34 @@ Terminal acknowledged runs can compact after seven days. Public replay cursors b
 The local scheduler batches pending reports through the normal Handler submission coordinator. Busy parents retain the same delivery ID until admission succeeds. Live waits claim reports first. Admission awaits a durable origin receipt before ACP dispatch, and a failed publication leaves the turn lock and editor routing available. Parent settlement and new report arrival trigger scheduling without polling a model.
 
 A lost control reply is reconciled against the same live execution's submission receipt. Provider retirement interrupts attempted notifications; explicit restoration does not replay them. Explicit notification retry creates a new delivery and submission ID while retaining the original target and outcome. Never-dispatched batches can follow the logical parent to a new execution. Automatic scheduling remains opt-in until operational composition enables it.
+
+### Local delegation tools and commands
+
+The Handler composes an optional local Bureau, disabled by default. Start the Handler with `agy status`, then enable orchestration with `agy bureau enable --json`. `agy bureau status --json` reports readiness and write availability. A Bureau initialization failure leaves ordinary Agency sessions available. Bureau and tool sockets are private companions of the Handler socket; stale-generation cleanup covers all companions.
+
+Create a supervisor with an explicit backend and model:
+
+```sh
+agy run start --command-id <uuid> --input-json '{"objective":"Review the local changes","backendId":"codex-acp","modelId":"<advertised-model-id>","overrides":{}}' --json
+agy run list --json
+agy run inspect <run-uuid> --json
+agy assignment inspect <assignment-uuid> --json
+```
+
+The command uses the caller's cwd, host, home and environment. Empty overrides use configured effort and permission defaults. Starting the run creates its supervisor without submitting the objective as a prompt. Submit work through the existing attached conversation. Multiple agents can share a directory.
+
+An orchestrated provider receives an `agency` stdio MCP server bound to its reserved execution. Initialization and tool discovery work during bootstrap, while side effects require the normal provider ready transition. Its six tools expose context, run/assignment inspection, local delegation, durable waits, terminal reports and graceful descendant stop. Tool callers cannot provide a different sender or report execution, stop an ancestor or unrelated agent, or resolve human permission requests.
+
+Call `agency_context` to obtain the current run ID, binding epoch and assigned attempt. Retain a UUID command ID before delegate/report/stop calls and reuse it only for an exact retry. A wait uses its own retained wait ID. JSON-RPC request IDs only correlate exchanges. Helper restart preserves the execution credential and exact command receipts; provider restart requires explicit restore and rotates that credential. A supervisor can begin another run after its old run closes; old-epoch calls remain invalid.
+
+`agency_inspect` returns bounded assignment pages. Assignment inspection includes one report body or, for a large report, `reportPage` with a UTF-8 byte offset, JSON text fragment and `nextCursor`. Continue with `reportAfter`; concatenate fragments before parsing the report JSON. Pass `attemptId` to inspect a historical attempt. Notifications contain bounded summaries and report references, so inspection supplies long issue and validation details.
+
+An explicit MCP cancellation ends the durable wait route. Helper EOF or socket loss detaches the caller and retains the wait for reconnect. Reports remain retained at the local origin if Bureau relay is unavailable; new delegation, waits and stops require Bureau availability. Notifications enter normal Handler admission when the parent is idle. Interrupted delivery requires explicit human retry rather than automatic prompt replay.
+
+Human lifecycle commands are `agy run restore <run-uuid>`, `agy assignment retry <assignment-uuid> --mode restore|replace`, `agy run cancel <run-uuid>`, `agy run close <run-uuid>` and `agy run forget <run-uuid>`. Mutating commands accept `--command-id`; `agy bureau command <command-uuid>` inspects a retained Bureau command. Run cancellation releases logical orchestration without stopping providers. Closing requires resolved assignments and routes; forgetting a closed run erases orchestration payloads while retaining identifier tombstones for retry classification.
+
+Pass caller-owned external MCP definitions with `--mcp-servers-json`. Restore reconstructs the internal Agency server, preserves saved settings, and requires any previously required external definitions again. Environment values, editor addresses and generated credentials remain transient; only digests and server-name requirements are retained. Changing external definitions under the same command ID conflicts. Restoration submits no saved prompt.
+
+`agy bureau retry-notification <delivery-uuid> --command-id <uuid> --target-json '<execution-ref>' --binding-epoch <uuid>` creates a fresh delivery for an interrupted or uncertain notification. Inspect the parent execution and current run epoch before invoking it. The prior receipt and delivery evidence remain retained.
+
+This milestone supports local delegation only. Cross-host transport, devbox provisioning, remote permission routing, Git preparation/publication and Neovim orchestration UI remain separate work. Local acceptance uses fake providers that launch the injected helper; it does not qualify live provider delegation. Run `npm run test:orchestration-tools` for the scoped tool and operational fixtures.

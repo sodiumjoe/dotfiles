@@ -21,7 +21,7 @@ export function parseNotificationRetry(raw: unknown): { commandId: string; previ
   return { commandId, previousDeliveryId: id(v.previousDeliveryId), result }
 }
 export function notificationPrompt(entries: InboxEntry[]) {
-  return [{ type: "text", text: "Delegated assignments reported:\n" + JSON.stringify(entries.map(entry => ({ eventId: entry.eventId, assignmentId: entry.report.assignmentId, attemptId: entry.report.attemptId, report: entry.report.report }))) }]
+  return [{ type: "text", text: "Delegated assignments reported:\n" + JSON.stringify(entries.map(entry => ({ eventId: entry.eventId, assignmentId: entry.report.assignmentId, attemptId: entry.report.attemptId, report: { status: entry.report.report.status, summary: entry.report.report.summary.slice(0, 4096), summaryTruncated: entry.report.report.summary.length > 4096, issueCount: entry.report.report.issues.length, validationCount: entry.report.report.validation.length } }))) }]
 }
 export function createScheduler(input: { store: BureauStore; journals: JournalPool; queue: MutationQueue; inbox: ReturnType<typeof createInbox>; hosts: OrchestrationHost[]; requireWrites(): void; failed(error: unknown): void; beforeClaim(): Promise<void>; automatic?: boolean }) {
   const { store, journals, queue, inbox } = input

@@ -1,3 +1,13 @@
+import { createOrchestrationService } from "../orchestration/service.js"
+import { createToolBindings } from "../orchestration/tool-bindings.js"
+import { serveToolSocket } from "../orchestration/tool-client.js"
+import { createJournalPool } from "../orchestration/journal.js"
+import { createLineageStore } from "../orchestration/lineage.js"
+import { createBureauStore } from "../bureau/store.js"
+import { createBureauService, type BureauService } from "../bureau/service.js"
+import { dispatchBureau } from "../bureau/client.js"
+import { parseBureauRequest } from "../bureau/protocol.js"
+import { encodeFrame, receiveFrame } from "../control/wire.js"
 import { loadOrchestrationPins } from "../orchestration/receipts.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
@@ -100,6 +110,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
+  let bureau: BureauService | undefined, toolBindings: ReturnType<typeof createToolBindings> | undefined
+  let bureauServer: Server | undefined, toolsServer: Server | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
@@ -108,9 +120,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const close = async (): Promise<void> => {
     if (closing) return closed
     closing = true
+    bureau?.close(); toolBindings?.close()
     await acpServer?.close()
     for (const socket of sockets) socket.destroy()
-    for (const listener of [server, attachmentServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
+    for (const listener of [server, attachmentServer, bureauServer, toolsServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
     resolveClosed()
   }
   const terminate = async (): Promise<void> => {
@@ -253,6 +266,29 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
     await agents.initialize()
+    const origins = createJournalPool(root, undefined, Date.now, "origin"), journals = createJournalPool(root), lineage = createLineageStore(root)
+    let origin: ReturnType<typeof createOrchestrationService>
+    toolBindings = createToolBindings({ socketPath: join(options.paths.runtimeRoot, "orchestration.sock"), journals: origins, bureau: () => bureau, host: () => origin })
+    origin = createOrchestrationService({ root, hostId: options.paths.hostKey, agents, journals: origins, lineage, tools: toolBindings, relay: envelope => { if (!bureau) throw new Error("BUREAU_UNAVAILABLE"); return bureau.acceptReport(envelope) } })
+    bureau = createBureauService({ store: createBureauStore(root), journals, origins, hosts: [origin], notifications: true })
+    await bureau.initialize().catch(() => undefined)
+    const scopedTools = toolBindings, core = bureau
+    toolsServer = await bindPrivateSocket(options.paths.runtimeRoot, "orchestration.sock", socket => {
+      sockets.add(socket); socket.once("close", () => sockets.delete(socket))
+      void serveToolSocket(socket, scopedTools).catch(() => socket.destroy())
+    })
+    bureauServer = await bindPrivateSocket(options.paths.runtimeRoot, "bureau.sock", socket => {
+      sockets.add(socket); socket.once("close", () => sockets.delete(socket)); socket.allowHalfOpen = true
+      socket.on("error", () => undefined)
+      void (async () => {
+        try {
+          const request = parseBureauRequest(await receiveFrame(socket)), reply = await dispatchBureau(core, options.generation, request)
+          await new Promise<void>(resolve => socket.end(encodeFrame(reply), resolve))
+        } catch { socket.destroy() } finally { socket.destroy() }
+      })()
+    })
+    toolsServer.on("error", () => toolBindings?.close())
+    bureauServer.on("error", () => bureau?.close())
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
     coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()

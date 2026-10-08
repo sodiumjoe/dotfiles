@@ -1,3 +1,4 @@
+import { parseStopCommand, parseStopReceipt } from "./receipts.js"
 import { parseNotificationReceipt, parseNotificationRetry } from "./scheduler.js"
 import { parseDeliveryTransition, parseReportTransition } from "../bureau/inbox.js"
 import { parseWaitTransition } from "../bureau/waits.js"
@@ -115,6 +116,8 @@ export function encode(value: unknown): Buffer {
 }
 export const canonicalDigest = (value: unknown): string => createHash("sha256").update(encode(value)).digest("hex")
 export function parseEventPayload(kind: string, value: unknown): unknown {
+  if (kind === "scoped-stop") return parseStopCommand(value)
+  if (kind === "scoped-stop-receipt") return parseStopReceipt(value)
   if (kind === "origin-launch") return parseOriginLaunch(value)
   if (kind === "origin-receipt") return parseOriginReceipt(value)
   if (kind === "bureau-report") return parseReportTransition(value)

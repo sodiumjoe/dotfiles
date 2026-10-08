@@ -1,10 +1,11 @@
+import { isDeepStrictEqual } from "node:util"
 import { id, keys, object, hash } from "../catalog/types.js"
 import { parseRequestedSettings, type RequestedSettings } from "../agent/session-config.js"
 import { createBureauStore } from "../bureau/store.js"
 import { unresolved } from "../bureau/reducer.js"
 import { createJournalPool } from "./journal.js"
 import { journalEntries } from "./reports.js"
-import { enumValue, fail, parseAgentRef, parseAttemptRef, parseExecutionRef, parseLineage, type AgentRef, type AttemptRef, type ExecutionRef, type Lineage } from "./types.js"
+import { canonicalDigest, enumValue, fail, parseAgentRef, parseAttemptRef, parseExecutionRef, parseLineage, type AgentRef, type AttemptRef, type ExecutionRef, type Lineage, type JournalEntry } from "./types.js"
 import type { LaunchReceipt } from "../bureau/host.js"
 
 export type OriginLaunch = { commandId: string; runId: string; agent: AgentRef; execution: ExecutionRef; launchAttemptId: string; lineage: Lineage | null; attempt: AttemptRef | null; bindingEpoch: string; invocationDigest: string; toolsDigest: string; settings: RequestedSettings }
@@ -38,6 +39,7 @@ export async function loadOrchestrationPins(root: string): Promise<{ paths: stri
   for (const runId of await origins.list()) {
     const journal = origins.forRun(runId), entries = await journalEntries(journal), unacknowledged = new Set<number>()
     for (const entry of entries) if (entry.kind === "report-retained" && !await journal.acknowledged("bureau", entry)) unacknowledged.add(entry.seq)
+    for (const command of pendingScopedStops(entries)) { pinAgent(command.sender.agentId); pinAgent(command.target.agentId); paths.add(`agents/commands/${command.commandId}.json`) }
     for (const entry of entries) if (entry.kind === "origin-launch") {
       const launch = parseOriginLaunch(entry.payload), run = runs.get(runId), attempt = launch.attempt && attempts.find(attempt => attempt.ref.attemptId === launch.attempt!.attemptId)
       const pendingReport = entries.some(event => event.kind === "report-retained" && unacknowledged.has(event.seq) && object(event.payload).execution && object(object(event.payload).execution).providerGeneration === launch.execution.providerGeneration)
@@ -47,4 +49,22 @@ export async function loadOrchestrationPins(root: string): Promise<{ paths: stri
     }
   }
   return { paths: [...paths].sort() }
+}
+
+export type StopCommand = { commandId: string; runId: string; bindingEpoch: string; sender: ExecutionRef; target: ExecutionRef; digest: string }
+export function parseStopCommand(raw: unknown): StopCommand {
+  const v = object(raw); keys(v, ["commandId", "runId", "bindingEpoch", "sender", "target", "digest"])
+  const { digest: ignored, ...payload } = v
+  if (v.digest !== canonicalDigest(payload)) fail("INVALID_STOP")
+  return { commandId: id(v.commandId), runId: id(v.runId), bindingEpoch: id(v.bindingEpoch), sender: parseExecutionRef(v.sender), target: parseExecutionRef(v.target), digest: canonicalDigest(payload) }
+}
+export function parseStopReceipt(raw: unknown) {
+  const v = object(raw); keys(v, ["command", "receipt"])
+  const command = parseStopCommand(v.command), r = object(v.receipt); keys(r, ["commandId", "execution", "state"])
+  if (r.commandId !== command.commandId || !isDeepStrictEqual(parseExecutionRef(r.execution), command.target) || !["stopped", "uncertain", "stale"].includes(r.state as string)) fail("INVALID_STOP")
+  return { command, receipt: { commandId: command.commandId, execution: command.target, state: r.state as "stopped" | "uncertain" | "stale" } }
+}
+export function pendingScopedStops(entries: JournalEntry[]): StopCommand[] {
+  const receipts = entries.filter(entry => entry.kind === "scoped-stop-receipt").map(entry => parseStopReceipt(entry.payload))
+  return entries.filter(entry => entry.kind === "scoped-stop").map(entry => parseStopCommand(entry.payload)).filter(command => !receipts.some(receipt => isDeepStrictEqual(receipt.command, command)))
 }

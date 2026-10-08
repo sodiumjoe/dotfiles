@@ -1,3 +1,4 @@
+import { pendingScopedStops } from "../orchestration/receipts.js"
 import { createScheduler, parseNotificationRetry } from "../orchestration/scheduler.js"
 import { createInbox, parseReportTransition } from "./inbox.js"
 import { createWaits } from "./waits.js"
@@ -10,7 +11,7 @@ import { parseLaunchEnvironment, launchEnvironmentDigest } from "../agent/enviro
 import { parseRequestedSettings } from "../agent/session-config.js"
 import { sessionInputs } from "../agent/service.js"
 import { MutationQueue } from "../handler/mutations.js"
-import { canonicalDigest, boundedText, fail, parseAgentRef, parseExecutionRef, parseAssignmentSpec, parseOverrides, type AgentRef, type AssignmentSpec, type EventRef, type Journal, type JournalEntry, parseReportInput, parseEventRef } from "../orchestration/types.js"
+import { canonicalDigest, boundedText, fail, parseAgentRef, parseExecutionRef, parseAssignmentSpec, parseOverrides, type ExecutionRef, type AgentRef, type AssignmentSpec, type EventRef, type Journal, type JournalEntry, parseReportInput, parseEventRef } from "../orchestration/types.js"
 import { parseBureauRecord, type AssignmentRecord, type AssignmentView, type AttemptRecord, type BureauRecord, type CommandRecord, type RunRecord, type RunView } from "./types.js"
 import type { BureauStore } from "./store.js"
 import type { HostSnapshot, Invocation, LaunchAssignment, LaunchReceipt, OrchestrationHost, RootLaunch } from "./host.js"
@@ -32,8 +33,8 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
   const { store, journals } = input, queue = new MutationQueue()
   const recordRunId = (record: BureauRecord) => record.kind === "attempt" ? record.value.ref.runId : record.value.runId
   const journalFor = (runId: string) => journals.forRun(runId)
-  let enabled = false, initialized = false, writeFailure: unknown = null
-  const requireWrites = (): void => { if (!initialized) fail("NOT_READY"); if (writeFailure !== null) fail("BUREAU_UNAVAILABLE"); if (!enabled) fail("BUREAU_DISABLED") }
+  let enabled = false, initialized = false, closed = false, writeFailure: unknown = null
+  const requireWrites = (): void => { if (closed) fail("BUREAU_UNAVAILABLE"); if (!initialized) fail("NOT_READY"); if (writeFailure !== null) fail("BUREAU_UNAVAILABLE"); if (!enabled) fail("BUREAU_DISABLED") }
   const eventRef = (entry: JournalEntry): EventRef => ({ seq: entry.seq, eventId: entry.eventId, digest: entry.digest })
   async function readRecord(record: BureauRecord): Promise<BureauRecord["value"] | null> {
     switch (record.kind) {
@@ -133,7 +134,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     for (const adapter of input.hosts) { const snapshot = await adapter.snapshot(); snapshots.set(snapshot.hostId, snapshot) }
     for (const current of await store.listRuns()) {
       if (current.state !== "starting") continue
-      const command = await store.readCommand(current.createCommandId)
+      const command = (await store.listCommands()).filter(command => command.runId === current.runId && ["start", "restore-root"].includes(command.op) && command.launchCommandId).sort((a, b) => (b.journal?.seq ?? 0) - (a.journal?.seq ?? 0))[0]
       if (!command?.launchCommandId || !command.handlerGeneration) continue
       const snapshot = snapshots.get(current.root.hostId)
       if (!snapshot) continue
@@ -232,6 +233,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     } catch (error) { writeFailure = error; throw error }
   }
   async function recover(): Promise<void> {
+    if (closed) fail("BUREAU_UNAVAILABLE")
     try {
       for (const run of await store.listRuns()) if (run.state === "forgotten") { await store.writeRun(run, run); await eraseForgotten(run.runId) }
       for (const runId of await journals.list()) {
@@ -268,6 +270,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     await store.eraseRun(runId); await journals.erase(runId); await input.origins?.erase(runId)
   }
   async function assertNoRoutes(runId: string): Promise<void> {
+    if (input.origins && pendingScopedStops(await journalEntries(input.origins.forRun(runId))).length) fail("UNRESOLVED")
     if ((await store.listWaits()).some(wait => wait.input.runId === runId && !wait.ended)) fail("UNRESOLVED")
     const deliveries = (await store.listDeliveries()).filter(delivery => delivery.runId === runId)
     if (deliveries.some(delivery => !["queued", "delivered", "superseded"].includes(delivery.state))) fail("UNRESOLVED")
@@ -304,8 +307,15 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
   const scheduler = createScheduler({ store, journals: input.origins ?? journals, queue, inbox, hosts: input.hosts, requireWrites, failed(error) { writeFailure = error }, beforeClaim: waits.recoverLocked, automatic: input.notifications ?? false })
   return {
     schedule: scheduler.schedule,
+    reserveScopedStop: <T>(runId: string, bindingEpoch: string, execution: ExecutionRef, publish: () => Promise<T>): Promise<T> => queue.run(async () => {
+      requireWrites()
+      const membership = await run(runId), { snapshot } = await host(execution.hostId)
+      if (membership.state !== "active" || membership.bindingEpoch !== bindingEpoch) fail("STALE_BINDING")
+      if (!snapshot.agents.some(agent => agent.phase === "ready" && isDeepStrictEqual(agent.execution, execution))) fail("STALE_EXECUTION")
+      return publish()
+    }),
     async wait(raw: Parameters<typeof waits.wait>[0], signal?: AbortSignal) { await checkForgotten("waits", raw.waitId); return waits.wait(raw, signal) },
-    async cancelWait(waitId: string) { await checkForgotten("waits", waitId); return waits.cancel(waitId) }, close() { waits.close(); scheduler.close() },
+    async cancelWait(waitId: string) { await checkForgotten("waits", waitId); return waits.cancel(waitId) }, close() { closed = true; waits.close(); scheduler.close() },
     waitRecord: (waitId: string) => queue.run(async () => { await checkForgotten("waits", waitId); return store.readWait(id(waitId)) }),
     inbox: (parent: AgentRef, runId: string, after = 0) => queue.run(async () => { await run(runId); return inbox.inspect(parseAgentRef(parent), runId, after) }),
     acceptReport: (envelope: ReportRelay) => queue.run(async () => { requireWrites(); return acceptReport(envelope) }),
@@ -317,13 +327,33 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         catch (error) { writeFailure = error; throw error }
       })
     },
-    async disable() { await queue.run(async () => { await store.writeEnabled(false, enabled); enabled = false }) },
-    async status() { return { enabled, ready: initialized, writeAvailable: writeFailure === null } },
+    async disable() { await queue.run(async () => { if (closed) fail("BUREAU_UNAVAILABLE"); await store.writeEnabled(false, enabled); enabled = false }) },
+    async status() { return { enabled, ready: initialized, writeAvailable: !closed && writeFailure === null } },
     reconcile: () => queue.run(async () => { await reconcile(); await waits.recoverLocked() }),
     async inspect(runId: string, after: string | null = null) { return queue.run(async () => view(await run(runId), after)) },
     async assignment(assignmentId: string) { return queue.run(async () => assignmentView(await assignment(assignmentId))) },
     async command(commandId: string) { return queue.run(async () => { await checkForgotten("commands", commandId); const value = await store.readCommand(id(commandId)); if (!value) fail("COMMAND_NOT_FOUND"); await run(value.runId); return value }) },
     async list() { return queue.run(async () => (await store.listRuns()).filter(value => value.state !== "forgotten")) },
+    assignmentEvidence: (assignmentId: string, attemptId?: string) => queue.run(async () => {
+      const record = await assignment(assignmentId); await run(record.runId)
+      const selected = attemptId === undefined ? record.activeAttemptId : id(attemptId), attempt = await store.readAttempt(selected)
+      if (!attempt || attempt.ref.assignmentId !== assignmentId || attempt.ref.runId !== record.runId) fail("INVALID_REPORT")
+      return store.readReport(selected)
+    }),
+    assertDescendant: (runId: string, parent: AgentRef, target: AgentRef) => queue.run(async () => {
+      await run(runId); parseAgentRef(parent); parseAgentRef(target)
+      if (isDeepStrictEqual(parent, target)) fail("INVALID_TARGET")
+      let current = target
+      const attempts = (await store.listAttempts()).filter(attempt => attempt.ref.runId === runId), seen = new Set<string>()
+      while (!isDeepStrictEqual(current, parent)) {
+        const key = current.hostId + "/" + current.agentId
+        if (seen.has(key)) fail("INVALID_TARGET")
+        seen.add(key)
+        const edge = attempts.find(attempt => isDeepStrictEqual(attempt.child, current))
+        if (!edge) fail("INVALID_TARGET")
+        current = edge.lineage.parent
+      }
+    }),
     async assertBinding(runId: string, bindingEpoch: string, parent: AgentRef) {
       const membership = await run(runId)
       if (membership.bindingEpoch !== bindingEpoch || membership.state !== "active") fail("STALE_BINDING")
@@ -345,6 +375,23 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         return complete(command, await view(current))
       })
     },
+    async restoreRun(commandId: string, runId: string, invocation: Invocation): Promise<RunView> {
+      invocation = captureInvocation(invocation)
+      return queue.run(async () => {
+        requireWrites(); const current = await run(runId), { adapter, snapshot } = await host(current.root.hostId), observed = snapshot.agents.find(agent => isDeepStrictEqual(agent.agent, current.root))
+        if (!observed || !adapter.restoreRoot) fail("UNSUPPORTED_CAPABILITY")
+        const digest = canonicalDigest({ op: "restore-root", runId, invocation: invocationDigest(observed.cwd, invocation) }), previousResult = await previous(commandId, digest)
+        if (previousResult) return previousResult.result as RunView
+        if (!["active", "starting"].includes(current.state) || !["stopped", "recoverable"].includes(observed.phase)) fail("NOT_RECOVERABLE")
+        const launchCommandId = randomUUID(), command = await acceptCommand(commandId, runId, "restore-root", digest, runId, snapshot.handlerGeneration, launchCommandId)
+        let receipt: LaunchReceipt
+        try { receipt = await adapter.restoreRoot({ commandId: launchCommandId, runId, agent: current.root, handlerGeneration: snapshot.handlerGeneration, bindingEpoch: current.bindingEpoch }, invocation) }
+        catch { receipt = await adapter.inspectCommand(launchCommandId, snapshot.handlerGeneration) ?? { commandId: launchCommandId, execution: null, effective: null, state: "uncertain" } }
+        validateReceipt(receipt, { commandId: launchCommandId, agent: current.root, handlerGeneration: snapshot.handlerGeneration })
+        const next = await saveRun({ ...current, execution: receipt.execution ?? current.execution, state: receipt.state === "started" ? "active" : "starting" }, current)
+        return complete(command, await view(next))
+      })
+    },
     async beginRun(commandId: string, rawRoot: AgentRef, objective: string): Promise<RunView> {
       const root = parseAgentRef(rawRoot), description = boundedText(objective, 65536, false), digest = canonicalDigest({ op: "begin", root, objective: description })
       return queue.run(async () => {
@@ -359,12 +406,12 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         return complete(command, await view(current))
       })
     },
-    async delegate(commandId: string, runId: string, raw: AssignmentSpec, invocation: Invocation): Promise<AssignmentView> {
+    async delegate(commandId: string, runId: string, raw: AssignmentSpec, invocation: Invocation, authority?: { execution: ExecutionRef; bindingEpoch: string }): Promise<AssignmentView> {
       invocation = captureInvocation(invocation)
       const spec = parseAssignmentSpec(raw), digest = canonicalDigest({ op: "delegate", runId: id(runId), spec, invocation: invocationDigest(spec.cwd, invocation) })
       if (spec.git !== null) fail("UNSUPPORTED_CAPABILITY")
       return queue.run(async () => {
-        requireWrites(); const prior = await previous(commandId, digest); if (prior) return prior.result as AssignmentView
+        requireWrites(); if (authority) { const current = await run(runId); if (current.state !== "active" || current.bindingEpoch !== authority.bindingEpoch || authority.execution.agentId !== spec.parent.agentId || authority.execution.hostId !== spec.parent.hostId) fail("STALE_BINDING"); const { snapshot } = await host(authority.execution.hostId); if (!snapshot.agents.some(agent => agent.phase === "ready" && isDeepStrictEqual(agent.execution, authority.execution))) fail("STALE_EXECUTION") }; const prior = await previous(commandId, digest); if (prior) return prior.result as AssignmentView
         const membership = await run(runId)
         if (membership.state === "cancelled") fail("RUN_CANCELLED")
         if (membership.state !== "active") fail("NOT_READY")

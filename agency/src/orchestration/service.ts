@@ -56,7 +56,11 @@ export function createOrchestrationService(input: { root: string; hostId: string
       return previous
     }
     const kind = "retryMode" in command && command.retryMode === "restore" ? "restore" : "start"
-    const request = kind === "restore" ? { commandId: command.commandId, handlerGeneration: command.handlerGeneration, agentId: command.agent.agentId, environment: invocation.environment, nativeParams: invocation.nativeParams } : { commandId: command.commandId, cwd: spec.cwd, backendId: spec.backendId, selection: { modelId: spec.modelId, ...spec.overrides }, environment: invocation.environment, nativeParams: invocation.nativeParams }
+    const choices = await agents.backendChoices(), backend = (choices.backends as JsonObject[]).find(backend => backend.id === spec.backendId), model = (backend?.models as JsonObject[] | undefined)?.find(model => model.id === spec.modelId)
+    const selected = model?.selection as { modelId?: string; configValues?: Record<string, string | boolean> } | undefined
+    if (selected?.configValues && Object.entries(selected.configValues).some(([key, value]) => spec.overrides.configValues?.[key] !== undefined && spec.overrides.configValues[key] !== value)) fail("INVALID_ORCHESTRATION")
+    const selection = selected ? { ...selected, ...spec.overrides, ...(selected.configValues ? { configValues: { ...selected.configValues, ...spec.overrides.configValues } } : {}) } : { modelId: spec.modelId, ...spec.overrides }
+    const request = kind === "restore" ? { commandId: command.commandId, handlerGeneration: command.handlerGeneration, agentId: command.agent.agentId, environment: invocation.environment, nativeParams: invocation.nativeParams } : { commandId: command.commandId, cwd: spec.cwd, backendId: spec.backendId, selection, environment: invocation.environment, nativeParams: invocation.nativeParams }
     let reserved: OriginLaunch | null = null
     await agents.launchSession(request, kind, { agentId: command.agent.agentId, mcpServerNames: ["agency"], async prepare(record, params) {
       const execution = executionOf(record)!, edge = "lineage" in command ? command.lineage : null
@@ -85,6 +89,11 @@ export function createOrchestrationService(input: { root: string; hostId: string
   }
   const host: OrchestrationHost = {
     launch, launchRoot: launch, inspectCommand,
+    async restoreRoot(command, invocation) {
+      const observed = await agents.sessionRecord(command.agent.agentId)
+      if (!observed || observed.record.definition.hostId !== command.agent.hostId || !observed.record.session || !["stopped", "recoverable"].includes(observed.record.phase)) fail("NOT_RECOVERABLE")
+      return launch({ ...command, cwd: observed.record.definition.cwd, backendId: observed.record.definition.backendId, modelId: "saved", overrides: {}, retryMode: "restore" }, invocation)
+    },
     onSettled(listener) { settled.add(listener); return () => { settled.delete(listener) } },
     snapshot() { return agents.orchestrationSnapshot(async snapshot => {
       const prepared = await preparations(), observed: HostAgent[] = [], receipts: LaunchReceipt[] = []
@@ -108,9 +117,16 @@ export function createOrchestrationService(input: { root: string; hostId: string
     submission(target, submissionId) { return agents.submission(tuple(target), submissionId) },
     submit(target, request, beforeAccepted) { return agents.submitAcp(tuple(target), request, beforeAccepted) },
     async stop(commandId, target) {
-      await validate(target)
-      const command = await agents.stop({ ...tuple(target), commandId })
-      return { commandId, execution: target, state: command.command.result?.outcome === "stopped" ? "stopped" : "uncertain" }
+      const previous = await agents.commandReceipt(commandId, target.handlerGeneration)
+      if (previous && (!isDeepStrictEqual(previous.command.target, tuple(target)) || previous.command.op !== "stop")) fail("COMMAND_CONFLICT")
+      if (!previous) await validate(target)
+      let command = await agents.stop({ ...tuple(target), commandId })
+      const deadline = performance.now() + 150000
+      while (command.command.state === "pending" && performance.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        command = await agents.commandReceipt(commandId, target.handlerGeneration) ?? command
+      }
+      return { commandId, execution: target, state: command.durability === "verified" && command.command.result?.outcome === "stopped" ? "stopped" : "uncertain" }
     }
   }
   return { ...host, report: outbox.report, replay: outbox.replay, pins: () => loadOrchestrationPins(input.root), async invocation(target: ExecutionRef): Promise<Invocation> { await validate(target); const saved = transient.get(target.agentId); if (!saved || !isDeepStrictEqual(saved.execution, target)) fail("SESSION_INPUT_REQUIRED"); return captureInvocation(saved.invocation) } }

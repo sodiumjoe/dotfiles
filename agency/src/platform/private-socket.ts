@@ -76,7 +76,7 @@ export async function unlinkStalePrivateSocket(root: string, name: string, inspe
   await assertPrivateDirectory(root)
   const path = socketPath(root, name)
   if (inspection.disposition !== "stale") throw new Error("only a proven stale generation authorizes socket removal")
-  const companion = name === "attachment.sock" || name === "acp.sock"
+  const companion = name === "attachment.sock" || name === "acp.sock" || name === "bureau.sock" || name === "orchestration.sock"
   if (inspection.record.socketPath !== (companion ? socketPath(root, "handler.sock") : path)) throw new Error("stale generation socket is outside the qualified root")
   if (await missing(path)) return
   const stats = await lstat(path)

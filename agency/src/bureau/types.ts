@@ -13,7 +13,7 @@ export type AssignmentRecord = { version: 1; assignmentId: string; runId: string
 export type AttemptRecord = { version: 1; ref: AttemptRef; child: AgentRef; lineage: Lineage; state: AttemptState; launchCommandId: string; submissionId: string; handlerGeneration: string; execution: ExecutionRef | null; effective: RequestedSettings | null; retryMode: "new" | "restore" | "replace"; journal: EventRef | null }
 export type AssignmentView = { assignmentId: string; runId: string; agent: AgentRef; spec: AssignmentSpec; lineage: Lineage; attempt: AttemptRecord; attemptIds: string[]; journalCursor: number }
 export type RunView = RunRecord & { assignments: AssignmentView[]; nextAssignmentCursor: string | null; journalCursor: number }
-export type CommandRecord = { version: 1; commandId: string; runId: string; op: "start" | "begin" | "delegate" | "retry" | "cancel" | "close" | "forget"; digest: string; state: "pending" | "completed"; targetId: string; handlerGeneration: string | null; launchCommandId: string | null; result: RunView | AssignmentView | null; journal: EventRef | null }
+export type CommandRecord = { version: 1; commandId: string; runId: string; op: "start" | "restore-root" | "begin" | "delegate" | "retry" | "cancel" | "close" | "forget"; digest: string; state: "pending" | "completed"; targetId: string; handlerGeneration: string | null; launchCommandId: string | null; result: RunView | AssignmentView | null; journal: EventRef | null }
 export type BureauRecord = { kind: "run"; value: RunRecord } | { kind: "assignment"; value: AssignmentRecord } | { kind: "attempt"; value: AttemptRecord } | { kind: "command"; value: CommandRecord }
 const journalRef = (v: unknown) => v === null ? null : parseEventRef(v)
 export function parseAssignmentRecord(value: unknown): AssignmentRecord {
@@ -44,7 +44,7 @@ export function parseCommandRecord(value: unknown): CommandRecord {
   const result = v.result === null ? null : Object.hasOwn(object(v.result), "assignmentId") ? parseAssignmentView(v.result) : parseRunView(v.result)
   const state = enumValue(v.state, ["pending", "completed"])
   if ((state === "completed") !== (result !== null)) fail()
-  return { version: 1, commandId: id(v.commandId), runId: id(v.runId), op: enumValue(v.op, ["start", "begin", "delegate", "retry", "cancel", "close", "forget"]), digest: hash(v.digest), state, targetId: id(v.targetId), handlerGeneration: v.handlerGeneration === null ? null : id(v.handlerGeneration), launchCommandId: v.launchCommandId === null ? null : id(v.launchCommandId), result, journal: journalRef(v.journal) }
+  return { version: 1, commandId: id(v.commandId), runId: id(v.runId), op: enumValue(v.op, ["start", "restore-root", "begin", "delegate", "retry", "cancel", "close", "forget"]), digest: hash(v.digest), state, targetId: id(v.targetId), handlerGeneration: v.handlerGeneration === null ? null : id(v.handlerGeneration), launchCommandId: v.launchCommandId === null ? null : id(v.launchCommandId), result, journal: journalRef(v.journal) }
 }
 export function parseBureauRecord(value: unknown): BureauRecord {
   const v = object(value); keys(v, ["kind", "value"])

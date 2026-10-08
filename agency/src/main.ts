@@ -1,5 +1,8 @@
 process.umask(0o077)
-if (process.argv[2] === "internal-handler") {
+if (process.argv[2] === "internal-agency-tools") {
+  try { const { runAgencyTools } = await import("./orchestration/tool-client.js"); await runAgencyTools() }
+  catch { process.stderr.write("Agency tool helper failed\n"); process.exitCode = 70 }
+} else if (process.argv[2] === "internal-handler") {
   try {
     const { fstatSync } = await import("node:fs")
     const { Socket } = await import("node:net")

@@ -289,10 +289,14 @@ export async function startOrConnect(options: StartOrConnectOptions): Promise<Ha
       await unlinkStalePrivateSocket(options.root, "handler.sock", settled)
       await unlinkStalePrivateSocket(options.root, "attachment.sock", settled)
       await unlinkStalePrivateSocket(options.root, "acp.sock", settled)
+      await unlinkStalePrivateSocket(options.root, "bureau.sock", settled)
+      await unlinkStalePrivateSocket(options.root, "orchestration.sock", settled)
     } else if (existing?.disposition === "stale") {
       await unlinkStalePrivateSocket(options.root, "handler.sock", existing)
       await unlinkStalePrivateSocket(options.root, "attachment.sock", existing)
       await unlinkStalePrivateSocket(options.root, "acp.sock", existing)
+      await unlinkStalePrivateSocket(options.root, "bureau.sock", existing)
+      await unlinkStalePrivateSocket(options.root, "orchestration.sock", existing)
     }
     const launchOptions = {
       root: options.root,
