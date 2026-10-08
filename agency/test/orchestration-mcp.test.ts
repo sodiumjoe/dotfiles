@@ -13,11 +13,13 @@ import { createBureauService } from "../src/bureau/service.js"
 import { createBureauStore } from "../src/bureau/store.js"
 import { createJournalPool } from "../src/orchestration/journal.js"
 import { createLineageStore } from "../src/orchestration/lineage.js"
+import { coreFixture } from "./orchestration-support.js"
+import type { StorageFileSystem } from "../src/orchestration/storage.js"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 
-export async function toolsFixture(t: TestContext) {
-  const f = await agentServiceFixture(t), origins = createJournalPool(f.root, undefined, Date.now, "origin"), journals = createJournalPool(f.root), lineage = createLineageStore(f.root), store = createBureauStore(f.root)
+export async function toolsFixture(t: TestContext, filesystem?: StorageFileSystem) {
+  const f = await agentServiceFixture(t), origins = createJournalPool(f.root, filesystem, Date.now, "origin"), journals = createJournalPool(f.root), lineage = createLineageStore(f.root), store = createBureauStore(f.root)
   let core: ReturnType<typeof createBureauService>, host: ReturnType<typeof createOrchestrationService>, online = true
   const tools = createToolBindings({ socketPath: join(f.root, "tools.sock"), journals: origins, bureau: () => online ? core : undefined, host: () => host })
   host = createOrchestrationService({ root: f.root, hostId: f.context.paths.hostKey, agents: f.service, journals: origins, lineage, tools, relay: envelope => online ? core.acceptReport(envelope) : Promise.reject(new Error("BUREAU_UNAVAILABLE")) })
@@ -359,4 +361,32 @@ test("MCP bounds retained in-flight request bytes", async () => {
   send({ jsonrpc: "2.0", method: "notifications/initialized" })
   for (let id = 2; id < 5; id++) send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "agency_context", arguments: { payload: "x".repeat(800000) } } })
   input.end(); await assert.rejects(running, /QUEUE_TOO_LARGE/)
+})
+
+test("stop retry reverifies a visible but unconfirmed intent before issuing stop", async t => {
+  const disk = await coreFixture(t), f = await toolsFixture(t, disk.filesystem), child = await f.delegate(), original = f.host.stop
+  let calls = 0
+  f.host.stop = async (...args) => { calls++; return original(...args) }
+  const args = { ...f.scope, commandId: randomUUID(), agentId: child.value.agent.agentId }
+  for (let n = 0; n < 2; n++) {
+    disk.failAt("directory-sync", "journal/commits")
+    assert.equal((await f.call("agency_stop", args)).isError, true)
+    assert.equal(calls, 0)
+  }
+  assert.equal((await f.call("agency_stop", args)).isError, false)
+  assert.equal(calls, 1)
+})
+
+test("stop retry reverifies a visible but unconfirmed receipt before acknowledgment", async t => {
+  const disk = await coreFixture(t), f = await toolsFixture(t, disk.filesystem), child = await f.delegate(), original = f.host.stop
+  f.host.stop = async (...args) => { const receipt = await original(...args); disk.failAt("directory-sync", "journal/commits"); return receipt }
+  const args = { ...f.scope, commandId: randomUUID(), agentId: child.value.agent.agentId }
+  assert.equal((await f.call("agency_stop", args)).isError, true)
+  const journal = f.origins.forRun(f.root.runId), append = journal.append
+  let failReceipt = true
+  journal.append = async (...args) => { if (args[1] === "scoped-stop-receipt" && failReceipt) { failReceipt = false; disk.failAt("directory-sync", "journal/commits") }; return append(...args) }
+  assert.equal((await f.call("agency_stop", args)).isError, true)
+  const result = await f.call("agency_stop", args)
+  assert.equal(result.isError, false)
+  assert.equal(JSON.parse(result.content[0]!.text).state, "stopped")
 })

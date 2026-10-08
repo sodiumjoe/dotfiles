@@ -120,8 +120,9 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
                 if (prior.kind !== "scoped-stop") fail("COMMAND_CONFLICT")
                 command = parseStopCommand(prior.payload)
                 if (!isDeepStrictEqual(command.sender, value.execution) || command.bindingEpoch !== value.bindingEpoch || command.target.agentId !== agentId) fail("COMMAND_CONFLICT")
+                await journal.append(prior.eventId, prior.kind, prior.payload)
                 const receipt = events.find(entry => entry.kind === "scoped-stop-receipt" && parseStopReceipt(entry.payload).command.commandId === commandId)
-                if (receipt) return { command, receipt: parseStopReceipt(receipt.payload).receipt }
+                if (receipt) { await journal.append(receipt.eventId, receipt.kind, receipt.payload); return { command, receipt: parseStopReceipt(receipt.payload).receipt } }
               } else {
                 const target = (await input.host().snapshot()).agents.find(agent => agent.agent.agentId === agentId && agent.agent.hostId === value.execution.hostId)?.execution
                 if (!target) fail("STALE_EXECUTION")
