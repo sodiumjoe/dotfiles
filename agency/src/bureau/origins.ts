@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from "node:util"
+import { createHash } from "node:crypto"
+import { canonicalJson } from "../agent/session-config.js"
 import { hash, id, object, timestamp } from "../catalog/types.js"
 import { createStorage, defaultFileSystem, storageQueue } from "../orchestration/storage.js"
-import { canonicalDigest, fail, parseEventRef, parseJournalEntry, type EventRef, type JournalEntry, type JournalPage } from "../orchestration/types.js"
+import { fail, parseEventRef, parseJournalEntry, type EventRef, type JournalEntry, type JournalPage } from "../orchestration/types.js"
 import type { JournalPool } from "../orchestration/journal.js"
 import type { HostSnapshot } from "./host.js"
 
@@ -64,7 +66,8 @@ export function createRemoteOrigins(root: string, hostId: string, filesystem = d
       for (let i = 0; i < seqs.length; i++) if (seqs[i] !== i + 1 || !await entryAt(key, i + 1)) fail("MISSING_ORIGIN")
     }
   }
-  const binding = (snapshot: HostSnapshot, connectionId: string) => canonicalDigest({ snapshot, connectionId: id(connectionId) })
+  const binding = (snapshot: HostSnapshot, connectionId: string) => createHash("sha256").update(canonicalJson({ snapshot, connectionId: id(connectionId) })).digest("hex")
+  const completedRecord = (snapshot: HostSnapshot, connectionId: string, digest: string) => ({ version: 2, digest, hostId: snapshot.hostId, handlerGeneration: snapshot.handlerGeneration, connectionId })
   return {
     hostId,
     async list(): Promise<OriginKey[]> {
@@ -101,8 +104,8 @@ export function createRemoteOrigins(root: string, hostId: string, filesystem = d
       }
       return through
     }) },
-    complete(snapshot: HostSnapshot, connectionId: string) { return queue.run(async () => { await ensure(snapshot); const digest = binding(snapshot, connectionId); await storage.publish(`origin-fences/${hostId}/${digest}.json`, { digest, snapshot, connectionId }, null, true) }) },
-    completed(snapshot: HostSnapshot, connectionId: string) { return queue.run(async () => { const digest = binding(snapshot, connectionId), raw = await storage.read(`origin-fences/${hostId}/${digest}.json`); if (raw === null) return false; if (!isDeepStrictEqual(raw, { digest, snapshot, connectionId })) fail("INVALID_ORIGIN"); await ensure(snapshot); return true }) }
+    complete(snapshot: HostSnapshot, connectionId: string) { return queue.run(async () => { await ensure(snapshot); const digest = binding(snapshot, connectionId), path = `origin-fences/${hostId}/${digest}.json`, prior = await storage.read(path); if (prior !== null && !isDeepStrictEqual(prior, completedRecord(snapshot, connectionId, digest)) && !isDeepStrictEqual(prior, { digest, snapshot, connectionId })) fail("INVALID_ORIGIN"); await storage.publish(path, prior ?? completedRecord(snapshot, connectionId, digest), null, true) }) },
+    completed(snapshot: HostSnapshot, connectionId: string) { return queue.run(async () => { const digest = binding(snapshot, connectionId), raw = await storage.read(`origin-fences/${hostId}/${digest}.json`); if (raw === null) return false; if (!isDeepStrictEqual(raw, completedRecord(snapshot, connectionId, digest)) && !isDeepStrictEqual(raw, { digest, snapshot, connectionId })) fail("INVALID_ORIGIN"); await ensure(snapshot); return true }) }
   }
 }
 export type RemoteOrigins = ReturnType<typeof createRemoteOrigins>

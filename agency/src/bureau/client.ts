@@ -8,6 +8,8 @@ export async function dispatchBureau(core: BureauService, generation: string, re
     if (request.handlerGeneration !== generation) fail("STALE_HANDLER")
     let result: unknown
     switch (request.op) {
+      case "bureau_hosts": result = await core.enrolledHosts(); break
+      case "bureau_enroll": result = await core.enroll(request.enrollment); break
       case "bureau_status": result = await core.status(); break
       case "bureau_enable": await core.enable(); result = await core.status(); break
       case "bureau_disable": await core.disable(); result = await core.status(); break

@@ -172,6 +172,7 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
   }
 }
 function errorText(error: unknown): string {
-  const message = error instanceof Error ? error.message : "BRIDGE_REQUEST_FAILED"
+  const code = error instanceof Error ? (error as { code?: unknown }).code : undefined
+  const message = typeof code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(code) ? code : error instanceof Error ? error.message : "BRIDGE_REQUEST_FAILED"
   return message.replace(/[\x00-\x1f\x7f-\x9f]/gu, " ").slice(0, 512) || "BRIDGE_REQUEST_FAILED"
 }

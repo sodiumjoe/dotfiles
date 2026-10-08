@@ -4,6 +4,7 @@ import { inspectHandlerGeneration } from "../platform/singleton.js"
 import { productionEnvironment } from "../handler/environment.js"
 import { createBridgePeer } from "./codec.js"
 import { bridgeError } from "./protocol.js"
+import { requestBridgeRead } from "./paging.js"
 
 export async function connectHandlerBridge(input: { root: string; hostId: string; handlerGeneration: string }) {
   const socket = createConnection(await assertPrivateSocket(input.root, "bridge.sock")), peer = createBridgePeer({ input: socket, output: socket })
@@ -14,7 +15,7 @@ export async function connectHandlerBridge(input: { root: string; hostId: string
     if (hello.hostId !== input.hostId) bridgeError("HOST_IDENTITY_CHANGED")
     if (hello.handlerGeneration !== input.handlerGeneration) bridgeError("STALE_HANDLER")
     if (hello.nodeVersion !== "v24.13.0") bridgeError("UNSUPPORTED_RUNTIME")
-    return peer
+    return { ...peer, request: (channel: string, payload: unknown, options?: import("./codec.js").RequestOptions) => requestBridgeRead(peer, channel, payload, options) }
   } catch (error) { peer.close(); socket.destroy(); throw error }
   finally { clearTimeout(timer) }
 }

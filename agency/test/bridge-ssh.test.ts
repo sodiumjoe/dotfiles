@@ -172,3 +172,47 @@ test("laptop SSH preserves its authentication agent without transmitting source 
   assert.equal(sanitizedBootstrapEnvironment(process.env).SSH_AUTH_SOCK, undefined)
   assert.ok(f.calls[0]!.argv.every(arg => !arg.includes(process.env.SSH_AUTH_SOCK!)))
 })
+
+test("origin reads and acknowledgments do not refresh the entire host snapshot", async t => {
+  const f = bridgeFixture(t), connection = await connectHost(f.enrollment, f.spawn)
+  t.after(() => connection.close())
+  let snapshots = 0
+  f.processes[0]!.peer.onRequest(async channel => { if (channel === "snapshot") { snapshots++; return connection.snapshot }; return { acknowledged: true } })
+  await connection.request("origin-read", {})
+  await connection.request("origin-ack", {})
+  assert.equal(snapshots, 0)
+  await connection.request("snapshot", {})
+  assert.equal(snapshots, 1)
+})
+
+test("public bridge cancellation releases the forwarded local request", async t => {
+  const f = bridgeFixture(t), child = f.spawn("unused", [], { env: {}, stdio: ["pipe", "pipe", "pipe"] }), local = createBridgePeer({ input: child.stdout, output: child.stdin }), input = new PassThrough(), output = new PassThrough()
+  const entered = Promise.withResolvers<void>(), cancelled = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  f.processes.at(-1)!.peer.onRequest(async (_channel, _payload, _requestId, signal) => { entered.resolve(); signal.addEventListener("abort", () => { cancelled.resolve(); release.resolve() }, { once: true }); await release.promise; return { done: true } })
+  const running = runHostBridgeCli(["--agy-path", f.enrollment.agyPath, "--login-shell", f.enrollment.loginShell], { input, output, environment: {}, connect: async () => local })
+  const client = createBridgePeer({ input: output, output: input })
+  t.after(async () => { release.resolve(); client.close(); await running })
+  await client.ready
+  const controller = new AbortController(), pending = client.request("submission", {}, { timeoutMs: 0, signal: controller.signal })
+  await entered.promise; controller.abort(new Error("TRANSPORT_DETACHED"))
+  await assert.rejects(pending, /TRANSPORT_DETACHED/)
+  const { setTimeout } = await import("node:timers/promises")
+  assert.equal(await Promise.race([cancelled.promise.then(() => true), setTimeout(1000, false)]), true)
+  assert.deepEqual(await client.request("snapshot", {}), { done: true })
+})
+
+test("SSH freshness checks do not consume the submission admission callback", async t => {
+  const { canonicalDigest } = await import("../src/orchestration/types.js")
+  const f = bridgeFixture(t), connection = await connectHost(f.enrollment, f.spawn)
+  t.after(() => connection.close())
+  const execution = { hostId: f.enrollment.hostId, agentId: randomUUID(), handlerGeneration: connection.hello.handlerGeneration, providerGeneration: randomUUID() }, submissionId = randomUUID(), prompt = [{ type: "text", text: "admitted prompt" }]
+  let accepted = 0
+  f.processes[0]!.peer.onRequest(async (channel, _payload, requestId) => {
+    if (channel === "snapshot") return connection.snapshot
+    assert.equal(channel, "submit")
+    await f.processes[0]!.peer.prepareAdmission(requestId, { execution, submissionId, digest: canonicalDigest({ prompt }) })
+    return { state: "accepted" }
+  })
+  assert.deepEqual(await connection.request("submit", { target: execution, request: { submissionId, prompt }, admissionRequired: true }, { beforeAccepted: async () => { accepted++ } }), { state: "accepted" })
+  assert.equal(accepted, 1)
+})

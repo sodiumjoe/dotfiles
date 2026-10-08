@@ -34,6 +34,7 @@ function parseCancel(raw: unknown): RoutedWaitCancel {
 }
 export function createRoutedToolOutbox(input: { root: string; filesystem?: StorageFileSystem; send(request: RoutedToolCall | RoutedWaitCancel, signal?: AbortSignal): Promise<unknown> }) {
   const storage = createStorage(input.root, "orchestration", input.filesystem ?? defaultFileSystem), queue = storageQueue(input.root), pending = new Map<string, RoutedToolCall | RoutedWaitCancel>(), sending = new Map<string, Promise<ToolResult>>()
+  const terminal = new Set(["STALE_EXECUTION", "STALE_BINDING", "INVALID_CREDENTIAL", "STALE_HANDLER", "STALE_PROVIDER", "FORGOTTEN"])
   async function deliver(request: RoutedToolCall | RoutedWaitCancel, signal?: AbortSignal): Promise<ToolResult> {
     const commandId = request.kind === "cancel" ? request.waitId : id(request.args.commandId)
     const saved = await storage.read(`routed-tool-results/${commandId}.json`)
@@ -41,10 +42,15 @@ export function createRoutedToolOutbox(input: { root: string; filesystem?: Stora
     let result: ToolResult
     try { result = parseToolResult(await input.send(request, signal)) }
     catch (error) {
-      if (!(error instanceof Error) || !/BRIDGE_|HOST_UNAVAILABLE|BUREAU_UNAVAILABLE/.test(error.message)) throw error
-      return toolResult({ commandId, state: "pending" })
+      if (!(error instanceof Error)) throw error
+      if (/BRIDGE_|HOST_UNAVAILABLE|BUREAU_UNAVAILABLE/.test(error.message)) return toolResult({ commandId, state: "pending" })
+      const code = String((error as { code?: unknown }).code ?? error.message)
+      if (!terminal.has(code)) throw error
+      result = toolResult({ error: code }, true)
     }
-    if (!result.isError) { await queue.run(() => storage.publish(`routed-tool-results/${commandId}.json`, result, null, true)); pending.delete(commandId) }
+    let code: unknown
+    if (result.isError) { try { code = object(JSON.parse(result.content[0]!.text)).error } catch {} }
+    if (!result.isError || typeof code === "string" && terminal.has(code)) { await queue.run(() => storage.publish(`routed-tool-results/${commandId}.json`, result, null, true)); pending.delete(commandId) }
     return result
   }
   async function call(raw: RoutedToolCall | RoutedWaitCancel, signal?: AbortSignal): Promise<ToolResult> {
@@ -58,7 +64,7 @@ export function createRoutedToolOutbox(input: { root: string; filesystem?: Stora
     if (!delivery) { delivery = deliver(request, signal).finally(() => sending.delete(commandId)); sending.set(commandId, delivery) }
     return delivery
   }
-  return { call, async replay() { for (const request of [...pending.values()]) await call(request) } }
+  return { call, async replay() { const failures = []; for (const request of [...pending.values()]) { try { await call(request) } catch (error) { failures.push(error) } }; if (failures.length) throw new AggregateError(failures, "ROUTED_REPLAY_FAILED") } }
 }
 export function createToolRouter(input: { root: string; bureau: BureauService; hosts: OrchestrationHost[]; origins: OriginSource[]; journals: JournalPool; environment?: NodeJS.ProcessEnv }) {
   async function authorize(request: RoutedToolCall | RoutedWaitCancel) {

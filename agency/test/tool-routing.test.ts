@@ -150,3 +150,23 @@ test("lost coordinator replies replay the retained delegation without creating a
   assert.equal(f.host.launchCalls, 2)
   assert.equal(f.host.promptCount, 1)
 })
+
+test("one uncertain routed failure does not prevent another retained control from replaying", async t => {
+  const f = await bureauFixture(t), first = request(f), second = { ...first, args: { ...first.args, commandId: randomUUID(), description: "Independent pending delegation" } }
+  let online = false, failed = true
+  const outbox = createRoutedToolOutbox({ root: f.root, async send(raw) {
+    if (!online) throw new Error("BRIDGE_EOF")
+    const call = raw as typeof first
+    if (call.args.commandId === first.args.commandId && failed) throw new Error("ENOSPC")
+    return toolResult(await f.core.delegate(call.args.commandId, call.runId, { ...f.input.assignment, description: call.args.description }, f.invocation))
+  } })
+  await outbox.call(first); await outbox.call(second); online = true
+  await outbox.replay().catch(() => undefined)
+  assert.equal((await f.core.inspect(first.runId)).assignments.length, 1)
+  assert.equal(f.host.promptCount, 1)
+  await assert.rejects(readFile(join(f.root, "orchestration/routed-tool-results", first.args.commandId + ".json")), (error: unknown) => (error as { code?: string }).code === "ENOENT")
+  failed = false
+  await outbox.replay()
+  assert.equal((await f.core.inspect(first.runId)).assignments.length, 2)
+  assert.equal(f.host.promptCount, 2)
+})

@@ -1,3 +1,4 @@
+import type { HostEnrollment } from "./hosts.js"
 import { pendingScopedStops, parseStopCommand, parseStopReceipt } from "../orchestration/receipts.js"
 import { createScheduler, parseNotificationRetry } from "../orchestration/scheduler.js"
 import { createInbox, parseReportTransition, acknowledges, type ReportAcknowledgment } from "./inbox.js"
@@ -31,7 +32,7 @@ export function invocationDigest(cwd: string, value: Invocation): string {
   const environment = parseLaunchEnvironment(value.environment), params = sessionInputs(cwd, value.nativeParams).params
   return canonicalDigest({ environmentDigest: launchEnvironmentDigest(environment), nativeParamsDigest: canonicalDigest(params) })
 }
-export function createBureauService(input: { store: BureauStore; journals: JournalPool; origins?: JournalPool; originSources?: OriginSource[]; hosts: OrchestrationHost[]; notifications?: boolean }) {
+export function createBureauService(input: { store: BureauStore; journals: JournalPool; origins?: JournalPool; originSources?: OriginSource[]; hosts: OrchestrationHost[]; notifications?: boolean; enrollment?: { enroll(value: HostEnrollment): Promise<void>; list(): Promise<unknown[]> } }) {
   const { store, journals } = input, queue = new MutationQueue()
   const recordRunId = (record: BureauRecord) => record.kind === "attempt" ? record.value.ref.runId : record.value.runId
   const journalFor = (runId: string) => journals.forRun(runId)
@@ -177,7 +178,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       else if (current.execution) {
         const observed = snapshot.agents.find(agent => isDeepStrictEqual(agent.agent, current.child))
         if (observed?.execution && !isDeepStrictEqual(observed.execution, current.execution)) state = "interrupted"
-        else if (!observed || !["ready", "starting", "restoring"].includes(observed.phase)) state = observed?.phase === "recoverable" || observed?.phase === "stopped" ? "interrupted" : "uncertain"
+        else if (!observed || !["ready", "starting", "restoring"].includes(observed.phase)) state = observed?.phase === "failed" ? "failed" : observed?.phase === "recoverable" || observed?.phase === "stopped" ? "interrupted" : "uncertain"
         else {
           const adapter = (await host(current.child.hostId)).adapter
           try {
@@ -308,6 +309,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         }
       }
       enabled = await store.readEnabled()
+      for (const adapter of input.hosts) adapter.setEnabled?.(enabled)
       await refreshLocked(); initialized = true; writeFailure = null; scheduler.notify()
     } catch (error) { writeFailure = error; throw error }
   }
@@ -358,9 +360,14 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     }
   })
   const scheduler = createScheduler({ store, journals: input.origins ?? journals, queue, inbox, hosts: input.hosts, requireWrites, failed(error) { writeFailure = error }, beforeClaim: refreshLocked, automatic: input.notifications ?? false })
-  const unsubscribe = input.hosts.flatMap(adapter => adapter.onSettled ? [adapter.onSettled(() => {
+  const subscriptions = new Map<OrchestrationHost, () => void>()
+  function subscribeHosts() {
+    for (const [adapter, unsubscribe] of subscriptions) if (!input.hosts.includes(adapter)) { unsubscribe(); subscriptions.delete(adapter) }
+    for (const adapter of input.hosts) if (adapter.onSettled && !subscriptions.has(adapter)) subscriptions.set(adapter, adapter.onSettled(() => {
     void queue.run(async () => { requireWrites(); await refreshLocked() }).then(() => scheduler.notify()).catch(error => { if (initialized && enabled && !closed) writeFailure = error })
-  })] : [])
+  }))
+  }
+  subscribeHosts()
   return {
     schedule: scheduler.schedule,
     reserveScopedStop: <T>(runId: string, bindingEpoch: string, execution: ExecutionRef, publish: () => Promise<T>): Promise<T> => queue.run(async () => {
@@ -371,19 +378,21 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       return publish()
     }),
     async wait(raw: Parameters<typeof waits.wait>[0], signal?: AbortSignal, authority?: { execution: ExecutionRef; bindingEpoch: string }) { await checkForgotten("waits", raw.waitId); return waits.wait(raw, signal, authority) },
-    async cancelWait(waitId: string) { await checkForgotten("waits", waitId); return waits.cancel(waitId) }, close() { closed = true; for (const stop of unsubscribe) stop(); waits.close(); scheduler.close(); return queue.run(async () => undefined) },
+    async cancelWait(waitId: string) { await checkForgotten("waits", waitId); return waits.cancel(waitId) }, close() { closed = true; for (const stop of subscriptions.values()) stop(); subscriptions.clear(); waits.close(); scheduler.close(); return queue.run(async () => undefined) },
     waitRecord: (waitId: string) => queue.run(async () => { await checkForgotten("waits", waitId); return store.readWait(id(waitId)) }),
     inbox: (parent: AgentRef, runId: string, after = 0) => queue.run(async () => { await run(runId); return inbox.inspect(parseAgentRef(parent), runId, after) }),
     acceptReport: (envelope: ReportRelay) => queue.run(async () => { requireWrites(); return acceptReport(envelope) }),
+    async enrolledHosts() { return queue.run(async () => input.enrollment ? input.enrollment.list() : []) },
+    async enroll(value: HostEnrollment) { return queue.run(async () => { if (closed || !initialized || writeFailure !== null || !input.enrollment) fail("BUREAU_UNAVAILABLE"); await input.enrollment.enroll(value); subscribeHosts(); for (const adapter of input.hosts) adapter.setEnabled?.(enabled); return input.enrollment.list() }) },
     async initialize() { await queue.run(recover) },
     async enable() {
       await queue.run(async () => {
         await recover()
-        try { await store.writeEnabled(true, enabled); enabled = true }
+        try { await store.writeEnabled(true, enabled); enabled = true; for (const adapter of input.hosts) adapter.setEnabled?.(true) }
         catch (error) { writeFailure = error; throw error }
       })
     },
-    async disable() { await queue.run(async () => { if (closed) fail("BUREAU_UNAVAILABLE"); await store.writeEnabled(false, enabled); enabled = false }) },
+    async disable() { await queue.run(async () => { if (closed) fail("BUREAU_UNAVAILABLE"); await store.writeEnabled(false, enabled); enabled = false; for (const adapter of input.hosts) adapter.setEnabled?.(false) }) },
     async status() { return { enabled, ready: initialized, writeAvailable: !closed && writeFailure === null } },
     reconcile: () => queue.run(refreshLocked),
     async inspect(runId: string, after: string | null = null) { return queue.run(async () => { if (initialized && enabled && !closed && writeFailure === null) await refreshLocked(); return view(await run(runId), after) }) },

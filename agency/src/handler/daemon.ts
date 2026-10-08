@@ -288,7 +288,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     })
     toolsServer.on("error", () => toolBindings?.close())
     bureauServer.on("error", () => bureau?.close())
-    bridgeServer = await createHandlerBridge({ root: options.paths.runtimeRoot, host: origin, journals: origins, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
+    bridgeServer = await createHandlerBridge({ root: options.paths.runtimeRoot, host: origin, journals: origins, replay: () => coordination!.replay(), identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
     coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()

@@ -10,6 +10,7 @@ import { parseHostEnrollment, type HostEnrollment } from "../bureau/hosts.js"
 import { createBridgePeer, type RequestOptions } from "./codec.js"
 import { bridgeError, type BridgeHello } from "./protocol.js"
 import { destinationShellCommand, sanitizedBootstrapEnvironment } from "./invocation.js"
+import { requestBridgeRead } from "./paging.js"
 
 export type BridgeProcess = EventEmitter & { stdin: Writable; stdout: Readable; stderr: Readable; kill(): boolean }
 export type BridgeProcessFactory = (file: string, argv: string[], options: { env: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"] }) => BridgeProcess
@@ -52,14 +53,14 @@ export async function connectHost(raw: HostEnrollment, processFactory: BridgePro
     if (hello.hostId !== enrollment.hostId) bridgeError("HOST_IDENTITY_CHANGED")
     if (hello.nodeVersion !== "v24.13.0") bridgeError("UNSUPPORTED_RUNTIME")
     if (!hello.capabilities.includes("snapshot")) bridgeError("UNSUPPORTED_CAPABILITY")
-    let snapshot = parseHostSnapshot(await peer.request("snapshot", {}), hello)
+    let snapshot = parseHostSnapshot(await requestBridgeRead(peer, "snapshot", {}), hello)
     return {
       hello, get snapshot() { return structuredClone(snapshot) }, get diagnostics() { return stderr.toString("utf8") },
       async request(channel, payload, options) {
         if (!hello.capabilities.includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
-        snapshot = parseHostSnapshot(await peer.request("snapshot", {}), hello)
+        if (["snapshot", "launch", "launchRoot", "restoreRoot", "submit", "stop"].includes(channel)) snapshot = parseHostSnapshot(await requestBridgeRead(peer, "snapshot", {}, { ...(options?.signal ? { signal: options.signal } : {}), ...(options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) }), hello)
         if (channel === "snapshot") return structuredClone(snapshot)
-        return peer.request(channel, payload, options)
+        return requestBridgeRead(peer, channel, payload, options)
       },
       subscribe: peer.subscribe, onRequest: peer.onRequest, prepareAdmission: peer.prepareAdmission, sendEvent: peer.sendEvent, closed: peer.closed, close
     }

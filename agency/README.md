@@ -260,3 +260,17 @@ Remote reports are retained before relay. The laptop imports each origin stream 
 Offline delegation and stop calls retain stable intents and return pending. Reconnect can replay them while their transient session parameters remain available. After Handler restart, an exact explicit retry supplies those parameters again. Wait transport detachment preserves the durable waiter and leaves shared transport usable; explicit cancellation ends the stored wait route separately.
 
 Code assignments prepare an owned `moon/agency/` worktree from a fetchable immutable base. Restore validates the retained preparation and existing worktree, records HEAD and preserves partial edits. Replacement allocates a distinct branch and path. This transport increment grants no result-publication capability. Completed code reports are rejected until that capability exists; unpublished code results can be reported blocked.
+
+### Enrollment and recovery
+
+Enroll each existing destination using its exact inventory ID, Agency host ID, hostname, executable and login shell. `agy bureau enroll --input-json '<enrollment JSON>'` persists the endpoint without discovery. `agy bureau hosts --json` reads cached observations while disabled. Enable starts the enrolled bridges; disable closes those bridges and preserves the destination providers.
+
+A managed bridge has one active or connecting peer. Reconnect uses exponential delay with jitter, capped at thirty seconds, and resets after a validated snapshot. Dispatch requires a fresh imported origin fence. Cached phases and observation times remain visible during outages. A changed host identity rejects the connection, and a replaced Handler generation fences stale actions without automatic restore or prompt replay. Provider failure marks an assignment failed; loss of SSH alone preserves its last observed state.
+
+Reconnect first reconciles the coordinating Bureau's owned streams, then requests the remote control/report outbox replay. Unrelated local runs on the enrolled Handler do not enter that Bureau's mirror or acquire its acknowledgment. Remote BUSY errors keep notification delivery queued; settlement triggers one delivery with the same retained identity.
+
+### Bounded cross-host acceptance
+
+`node dist/scripts/accept-cross-host.js --check --config /absolute/reviewed-config.json` validates the proposed live configuration. It requires laptop/A/B identities and inventory IDs, exact source revision and source/build digests, Node v24.13.0, destination executable/shell/cwd paths, explicit Codex models and settings, stable command IDs, two exact prompt texts, editor detach/reattach, one bridge interruption and two scoped stop/readback passes. The closed schema rejects inferred targets, extra prompt budget, Git publication, restore, reboot and installation authority. `test/cross-host-acceptance.test.ts` contains the configuration shape.
+
+This command performs configuration validation only. Its result sets `acceptanceVerified: false`; it does not run SSH, start providers or establish live acceptance. The actual live milestone remains a separately reviewed operation batch after concrete targets and staging details are supplied. Retain the observed run, assignment and exact execution refs from that batch, current Linux qualification evidence on both destinations, prompt/report/wait receipts, editor observations, interruption observations and independent cleanup readback. Deterministic Handler generation replacement is a recovery simulation, not a physical reboot result.

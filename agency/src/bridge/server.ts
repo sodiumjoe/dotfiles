@@ -12,6 +12,8 @@ import type { AcpSubmissionRequest } from "../agent/turns.js"
 import { createBridgePeer } from "./codec.js"
 import { BRIDGE_PROTOCOL, parseAdmission, type BridgeHello } from "./protocol.js"
 import { parseHostCall } from "./invocation.js"
+import { createPagedReads } from "./paging.js"
+import { BRIDGE_FRAME_BYTES } from "./protocol.js"
 
 function parseLaunch(channel: string, raw: unknown): LaunchAssignment | RootLaunch {
   const v = object(raw), common = ["commandId", "runId", "agent", "handlerGeneration", "bindingEpoch"]
@@ -29,19 +31,23 @@ function parseLaunch(channel: string, raw: unknown): LaunchAssignment | RootLaun
   if (ref.runId !== base.runId || lineage.runId !== base.runId || lineage.assignmentId !== ref.assignmentId || spec.hostId !== base.agent.hostId || JSON.stringify(spec.parent) !== JSON.stringify(lineage.parent)) fail("INVALID_LAUNCH")
   return { ...base, spec, ref, lineage, git, retryMode: enumValue(v.retryMode, ["new", "restore", "replace"]), savedSettings: v.savedSettings === null ? null : parseRequestedSettings(v.savedSettings), ...(Object.hasOwn(v, "savedGit") ? { savedGit: v.savedGit === null ? null : parseGitPreparation(v.savedGit) } : {}) }
 }
-export async function createHandlerBridge(input: { root: string; host: OrchestrationHost; journals: JournalPool; sourceRevision?: string; identity?: { hostId: string; handlerGeneration: string } }) {
+export async function createHandlerBridge(input: { root: string; host: OrchestrationHost; journals: JournalPool; replay?(): Promise<void>; sourceRevision?: string; identity?: { hostId: string; handlerGeneration: string } }) {
   const snapshot = input.identity ?? await input.host.snapshot(), revision = input.sourceRevision ?? text(JSON.parse(await readFile(new URL("../../build-manifest.json", import.meta.url), "utf8")).sourceRevision)
   const peers = new Set<ReturnType<typeof createBridgePeer>>()
   let coordinator: ReturnType<typeof createBridgePeer> | undefined
   const server = await bindPrivateSocket(input.root, "bridge.sock", socket => {
-    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: snapshot.hostId, handlerGeneration: snapshot.handlerGeneration, connectionId: randomUUID(), sourceRevision: revision, nodeVersion: process.version, capabilities: ["snapshot", "launch", "launchRoot", "restoreRoot", "invoke", "inspectCommand", "submission", "submit", "stop", "origin-read", "origin-retained", "origin-ack", "coordinate"], outboxCursor: 0 }
+    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: snapshot.hostId, handlerGeneration: snapshot.handlerGeneration, connectionId: randomUUID(), sourceRevision: revision, nodeVersion: process.version, capabilities: ["snapshot", "launch", "launchRoot", "restoreRoot", "invoke", "inspectCommand", "submission", "submit", "stop", "origin-read", "origin-retained", "origin-ack", "coordinate", "read-pages", "read-open", "read-page", "read-close", ...(input.replay ? ["replay"] : [])], outboxCursor: 0 }
     const peer = createBridgePeer({ input: socket, output: socket, hello }); peers.add(peer)
     void peer.closed.then(() => { peers.delete(peer); if (coordinator === peer) coordinator = undefined; socket.destroy() })
     const target = (raw: unknown) => { const execution = parseExecutionRef(raw); if (execution.hostId !== hello.hostId || execution.handlerGeneration !== hello.handlerGeneration) fail("STALE_HANDLER"); return execution }
     const origin = (raw: unknown) => { const key = object(raw); keys(key, ["hostId", "runId", "streamId"]); if (hash(key.hostId) !== hello.hostId || id(key.runId) !== id(key.streamId)) fail("INVALID_ORIGIN"); return input.journals.forRun(id(key.runId)) }
-    peer.onRequest(async (channel, raw, requestId, signal) => {
+    const reads = createPagedReads((channel, payload, signal) => handle(channel, payload, "", signal))
+    void peer.closed.then(() => reads.close())
+    async function handle(channel: string, raw: unknown, requestId: string, signal: AbortSignal): Promise<unknown> {
       const p = object(raw)
+      if (["read-open", "read-page", "read-close"].includes(channel)) return reads.request(channel, p, signal)
       if (channel === "coordinate") { keys(p, []); if (coordinator && coordinator !== peer) fail("COORDINATOR_EXISTS"); coordinator = peer; return { connected: true } }
+      if (channel === "replay") { keys(p, []); if (coordinator !== peer || !input.replay) fail("UNSUPPORTED_CAPABILITY"); await input.replay(); return { replayed: true } }
       if (channel === "snapshot") { keys(p, []); return input.host.snapshot() }
       if (channel === "invoke") {
         keys(p, ["channel", "payload", "invocation"])
@@ -65,10 +71,17 @@ export async function createHandlerBridge(input: { root: string; host: Orchestra
         const admission = parseAdmission({ execution, submissionId: request.submissionId, digest: canonicalDigest({ prompt: request.prompt }) })
         return input.host.submit(execution, request, async () => { if (signal.aborted) throw signal.reason; if (p.admissionRequired) await peer.prepareAdmission(requestId, admission); if (signal.aborted) throw signal.reason })
       }
-      if (channel === "origin-read" || channel === "origin-retained") { keys(p, ["key", "after", "limit"]); const journal = origin(p.key); return (channel === "origin-read" ? journal.read : journal.retainedRead)(timestamp(p.after), timestamp(p.limit)) }
+      if (channel === "origin-read" || channel === "origin-retained") {
+        keys(p, ["key", "after", "limit"])
+        const journal = origin(p.key), after = timestamp(p.after), page = await (channel === "origin-read" ? journal.read : journal.retainedRead)(after, timestamp(p.limit)), entries = []
+        let bytes = 1024
+        for (const entry of page.entries) { const size = Buffer.byteLength(JSON.stringify(entry)) + 1; if (entries.length && bytes + size > BRIDGE_FRAME_BYTES - 1024) break; entries.push(entry); bytes += size }
+        return { ...page, entries, nextCursor: entries.at(-1)?.seq ?? after }
+      }
       if (channel === "origin-ack") { keys(p, ["key", "ref"]); await origin(p.key).acknowledge("bureau", parseEventRef(p.ref)); return { acknowledged: true } }
       fail("UNSUPPORTED_CAPABILITY")
-    })
+    }
+    peer.onRequest(handle)
     peer.sendHello()
   })
   const unsubscribe = input.host.onSettled?.(parent => { void coordinator?.request("settled", { parent }).catch(() => undefined) })

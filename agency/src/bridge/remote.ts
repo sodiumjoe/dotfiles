@@ -32,17 +32,17 @@ export async function runHostBridgeCli(argv: readonly string[], deps: HostBridge
         peer.subscribe(frame => local.sendEvent({ ...frame, connectionId: localHello.connectionId }))
         void local.closed.then(error => peer.close(error))
       },
-      async call(channel, payload, requestId) {
+      async call(channel, payload, requestId, signal) {
         if (!hello.capabilities.includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
         if (channel === "launch" || channel === "launchRoot" || channel === "restoreRoot") return invokeDestination(enrollment, parseHostCall({ channel, payload }), { environment: deps.environment })
         if (channel === "submit") {
           const p = object(payload)
           if (p.admissionRequired === true) {
             const request = object(p.request), admission = parseAdmission({ execution: p.target, submissionId: request.submissionId, digest: canonicalDigest({ prompt: request.prompt }) })
-            return local.request(channel, payload, { beforeAccepted: () => publicPeer.prepareAdmission(requestId, admission) })
+            return local.request(channel, payload, { beforeAccepted: () => publicPeer.prepareAdmission(requestId, admission), signal })
           }
         }
-        return local.request(channel, payload, { timeoutMs: 0 })
+        return local.request(channel, payload, { timeoutMs: 0, signal })
       }
     })
   } finally { local.close() }
