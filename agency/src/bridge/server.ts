@@ -1,3 +1,4 @@
+import { parsePermissionRef } from "../orchestration/permission-routing.js"
 import { readFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { absolutePath, hash, id, keys, object, providerId, text, timestamp } from "../catalog/types.js"
@@ -36,7 +37,7 @@ export async function createHandlerBridge(input: { root: string; host: Orchestra
   const peers = new Set<ReturnType<typeof createBridgePeer>>()
   let coordinator: ReturnType<typeof createBridgePeer> | undefined
   const server = await bindPrivateSocket(input.root, "bridge.sock", socket => {
-    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: snapshot.hostId, handlerGeneration: snapshot.handlerGeneration, connectionId: randomUUID(), sourceRevision: revision, nodeVersion: process.version, capabilities: ["snapshot", "launch", "launchRoot", "restoreRoot", "invoke", "inspectCommand", "submission", "submit", "stop", "origin-read", "origin-retained", "origin-ack", "coordinate", "read-pages", "read-open", "read-page", "read-close", ...(input.replay ? ["replay"] : [])], outboxCursor: 0 }
+    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: snapshot.hostId, handlerGeneration: snapshot.handlerGeneration, connectionId: randomUUID(), sourceRevision: revision, nodeVersion: process.version, capabilities: ["snapshot", "launch", "launchRoot", "restoreRoot", "invoke", "inspectCommand", "submission", "submit", "stop", "origin-read", "origin-retained", "origin-ack", "coordinate", "read-pages", "read-open", "read-page", "read-close", ...(input.host.permissionDecide ? ["permission-decide", "permission-inspect", "permission-read", "permission-ack"] : []), ...(input.replay ? ["replay"] : [])], outboxCursor: 0 }
     const peer = createBridgePeer({ input: socket, output: socket, hello }); peers.add(peer)
     void peer.closed.then(() => { peers.delete(peer); if (coordinator === peer) coordinator = undefined; socket.destroy() })
     const target = (raw: unknown) => { const execution = parseExecutionRef(raw); if (execution.hostId !== hello.hostId || execution.handlerGeneration !== hello.handlerGeneration) fail("STALE_HANDLER"); return execution }
@@ -48,6 +49,10 @@ export async function createHandlerBridge(input: { root: string; host: Orchestra
       if (["read-open", "read-page", "read-close"].includes(channel)) return reads.request(channel, p, signal)
       if (channel === "coordinate") { keys(p, []); if (coordinator && coordinator !== peer) fail("COORDINATOR_EXISTS"); coordinator = peer; return { connected: true } }
       if (channel === "replay") { keys(p, []); if (coordinator !== peer || !input.replay) fail("UNSUPPORTED_CAPABILITY"); await input.replay(); return { replayed: true } }
+      if (channel === "permission-decide" && input.host.permissionDecide) { keys(p, ["commandId", "ref", "optionId"]); const ref = parsePermissionRef(p.ref); if (ref.hostId !== hello.hostId) fail("INVALID_ORIGIN"); return input.host.permissionDecide(id(p.commandId), ref, text(p.optionId)) }
+      if (channel === "permission-inspect" && input.host.permissionInspect) { keys(p, ["commandId"]); return input.host.permissionInspect(id(p.commandId)) }
+      if (channel === "permission-read" && input.host.permissionRead) { keys(p, ["after", "limit"]); return input.host.permissionRead(timestamp(p.after), timestamp(p.limit)) }
+      if (channel === "permission-ack" && input.host.permissionAcknowledge) { keys(p, ["event"]); await input.host.permissionAcknowledge(parseEventRef(p.event)); return { acknowledged: true } }
       if (channel === "snapshot") { keys(p, []); return input.host.snapshot() }
       if (channel === "invoke") {
         keys(p, ["channel", "payload", "invocation"])
@@ -85,5 +90,5 @@ export async function createHandlerBridge(input: { root: string; host: Orchestra
     peer.sendHello()
   })
   const unsubscribe = input.host.onSettled?.(parent => { void coordinator?.request("settled", { parent }).catch(() => undefined) })
-  return { async coordinatorRequest(payload: unknown, signal?: AbortSignal) { if (!coordinator) fail("BUREAU_UNAVAILABLE"); return coordinator.request("tool", payload, { timeoutMs: 0, ...(signal ? { signal } : {}) }) }, async close() { unsubscribe?.(); for (const peer of peers) peer.close(); await new Promise<void>(resolve => server.close(() => resolve())) } }
+  return { async coordinatorRequest(payload: unknown, signal?: AbortSignal) { if (!coordinator) fail("BUREAU_UNAVAILABLE"); return coordinator.request(object(payload).kind === "human" ? "human" : "tool", payload, { timeoutMs: 0, ...(signal ? { signal } : {}) }) }, async close() { unsubscribe?.(); for (const peer of peers) peer.close(); await new Promise<void>(resolve => server.close(() => resolve())) } }
 }

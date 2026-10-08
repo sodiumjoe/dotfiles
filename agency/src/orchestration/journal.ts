@@ -22,9 +22,9 @@ function recipientName(recipient: string): string {
   text(recipient, 64); if (!/^[a-zA-Z0-9_-]+$/.test(recipient)) fail()
   return recipient
 }
-export function createJournal(root: string, filesystem = defaultFileSystem, now = Date.now, scope?: { runId: string; kind: "bureau" | "origin" }): Journal {
+export function createJournal(root: string, filesystem = defaultFileSystem, now = Date.now, scope?: { runId: string; kind: "bureau" | "origin" } | { hostId: string; kind: "permissions" }): Journal {
   const backing = createStorage(root, "orchestration", filesystem), queue = storageQueue(root)
-  const prefix = scope ? `${scope.kind}-runs/${id(scope.runId)}/` : ""
+  const prefix = scope ? scope.kind === "permissions" ? `permissions/${hash(scope.hostId)}/` : `${scope.kind}-runs/${id(scope.runId)}/` : ""
   const storage = {
     read: (key: string) => backing.read(prefix + key),
     names: (key: string) => backing.names(prefix + key),

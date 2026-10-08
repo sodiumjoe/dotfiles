@@ -1,3 +1,4 @@
+import { runBureauWatch } from "./watch-client.js"
 import { randomUUID } from "node:crypto"
 import { createConnection } from "node:net"
 import { assertPrivateSocket } from "../platform/private-socket.js"
@@ -7,6 +8,7 @@ import { BUREAU_PROTOCOL, exchangeBureau, parseBureauRequest, type BureauRequest
 import { id } from "../catalog/types.js"
 
 export async function runBureauClient(argv: readonly string[], deps: ControlDependencies): Promise<number> {
+  if (argv[1] === "watch") return runBureauWatch(argv, deps)
   try {
     const group = argv[0], action = argv[1], position: string[] = [], flags = new Map<string, string>()
     for (let i = 2; i < argv.length; i++) {
@@ -16,7 +18,7 @@ export async function runBureauClient(argv: readonly string[], deps: ControlDepe
       if (!["--command-id", "--handler-generation", "--input-json", "--mcp-servers-json", "--after", "--mode", "--objective", "--parent-id", "--run-id", "--target-json", "--binding-epoch"].includes(arg) || flags.has(arg) || argv[i + 1] === undefined) throw new Error("invalid flag")
       flags.set(arg, argv[++i]!)
     }
-    const operations: Record<string, string> = { "bureau enroll": "bureau_enroll", "bureau hosts": "bureau_hosts", "bureau enable": "bureau_enable", "bureau disable": "bureau_disable", "bureau status": "bureau_status", "run list": "run_list", "run start": "run_start", "run begin": "run_begin", "run inspect": "run_inspect", "run cancel": "run_cancel", "run close": "run_close", "run forget": "run_forget", "assignment create": "assignment_create", "assignment inspect": "assignment_inspect", "assignment retry": "assignment_retry", "run restore": "run_restore", "bureau command": "command_inspect", "bureau retry-notification": "notification_retry", "bureau acknowledge-reports": "report_acknowledge", "bureau recover-stop": "stop_recover", "bureau inbox": "inbox_inspect" }
+    const operations: Record<string, string> = { "permission list": "permission_snapshot", "permission decide": "permission_decide", "permission inspect": "permission_inspect", "bureau enroll": "bureau_enroll", "bureau hosts": "bureau_hosts", "bureau enable": "bureau_enable", "bureau disable": "bureau_disable", "bureau status": "bureau_status", "run list": "run_list", "run start": "run_start", "run begin": "run_begin", "run inspect": "run_inspect", "run cancel": "run_cancel", "run close": "run_close", "run forget": "run_forget", "assignment create": "assignment_create", "assignment inspect": "assignment_inspect", "assignment retry": "assignment_retry", "run restore": "run_restore", "bureau command": "command_inspect", "bureau retry-notification": "notification_retry", "bureau acknowledge-reports": "report_acknowledge", "bureau recover-stop": "stop_recover", "bureau inbox": "inbox_inspect" }
     const op = operations[group + " " + action]
     if (!op) throw new Error("unsupported Bureau command")
     const env = await deps.environment(), expected = flags.get("--handler-generation"), commandId = flags.has("--command-id") ? id(flags.get("--command-id")) : randomUUID()
@@ -24,6 +26,8 @@ export async function runBureauClient(argv: readonly string[], deps: ControlDepe
     const invocation = { environment: snapshotLaunchEnvironment(process.env), nativeParams: { mcpServers: JSON.parse(flags.get("--mcp-servers-json") ?? "[]") } }
     const input = () => JSON.parse(flags.get("--input-json") ?? "null")
     if (["run_start", "run_cancel", "run_close", "run_forget", "run_begin", "assignment_create", "assignment_retry", "run_restore", "notification_retry", "report_acknowledge", "stop_recover"].includes(op)) raw.commandId = commandId
+    if (op === "permission_decide") { raw.commandId = commandId; const value = input(); raw.ref = value?.ref; raw.optionId = value?.optionId }
+    if (op === "permission_inspect") raw.commandId = position[0]
     if (op === "bureau_enroll") raw.enrollment = input()
     if (op === "run_start") { raw.input = { hostId: env.paths.hostKey, cwd: deps.cwd(), ...input() }; raw.invocation = invocation }
     if (op === "run_begin") { raw.root = { hostId: env.paths.hostKey, agentId: position[0] }; raw.objective = flags.get("--objective") }

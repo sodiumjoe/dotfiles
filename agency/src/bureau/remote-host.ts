@@ -1,3 +1,4 @@
+import { parsePermissionReceipt } from "../orchestration/permission-routing.js"
 import type { HostEnrollment } from "./hosts.js"
 import type { Invocation, LaunchAssignment, RootLaunch, OrchestrationHost, LaunchReceipt, StopReceipt, HostSnapshot } from "./host.js"
 import { connectHost, parseHostSnapshot, type BridgeConnection } from "../bridge/ssh.js"
@@ -8,7 +9,7 @@ import { object } from "../catalog/types.js"
 import type { RemoteOrigins, OriginSource, OriginKey } from "./origins.js"
 import { replayOriginSnapshot } from "../bridge/replay.js"
 
-export function createRemoteHost(input: { enrollment: HostEnrollment; connect?: () => Promise<BridgeConnection>; origins?: RemoteOrigins; onTool?(payload: unknown, signal?: AbortSignal): Promise<unknown>; managed?: boolean; now?: () => number; random?: () => number; schedule?(delay: number, task: () => void): () => void; onReady?(peer: BridgeConnection): Promise<void>; ownsRun?(runId: string): Promise<boolean> }) {
+export function createRemoteHost(input: { enrollment: HostEnrollment; connect?: () => Promise<BridgeConnection>; origins?: RemoteOrigins; onTool?(payload: unknown, signal?: AbortSignal): Promise<unknown>; onHuman?(payload: unknown): Promise<unknown>; managed?: boolean; now?: () => number; random?: () => number; schedule?(delay: number, task: () => void): () => void; onReady?(peer: BridgeConnection): Promise<void>; ownsRun?(runId: string): Promise<boolean> }) {
   const { enrollment } = input
   const settled = new Set<Parameters<NonNullable<OrchestrationHost["onSettled"]>>[0]>()
   let connection: BridgeConnection | undefined, connecting: Promise<BridgeConnection> | undefined
@@ -42,6 +43,7 @@ export function createRemoteHost(input: { enrollment: HostEnrollment; connect?: 
       if (peer.hello.nodeVersion !== "v24.13.0") { peer.close(); fail("UNSUPPORTED_RUNTIME") }
       connection = peer; delivered.clear()
       peer.onRequest(async (channel, payload, _requestId, signal) => {
+        if (channel === "human" && input.onHuman) return input.onHuman(payload)
         if (channel === "tool" && input.onTool) return input.onTool(payload, signal)
         if (channel === "settled") { const parent = parseAgentRef(object(payload).parent); if (parent.hostId !== enrollment.hostId) fail("STALE_EXECUTION"); for (const listener of settled) listener(parent); return { observed: true } }
         fail("UNSUPPORTED_CAPABILITY")
@@ -110,6 +112,10 @@ export function createRemoteHost(input: { enrollment: HostEnrollment; connect?: 
   }
   const host: OrchestrationHost & { hostId: string } = {
     hostId: enrollment.hostId,
+    async permissionDecide(commandId, ref, optionId) { return parsePermissionReceipt(await request("permission-decide", { commandId, ref, optionId })) },
+    async permissionInspect(commandId) { const receipt = await request("permission-inspect", { commandId }); return receipt === null ? null : parsePermissionReceipt(receipt) },
+    async permissionRead(after, limit) { return request("permission-read", { after, limit }) as Promise<import("../orchestration/types.js").JournalPage> },
+    async permissionAcknowledge(event) { await request("permission-ack", { event: { seq: event.seq, eventId: event.eventId, digest: event.digest } }) },
     onSettled(listener) { settled.add(listener); return () => { settled.delete(listener) } },
     async snapshot(): Promise<HostSnapshot> {
       const peer = await connected()

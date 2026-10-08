@@ -1,3 +1,6 @@
+import { createBureauPermissions } from "../bureau/permissions.js"
+import { parseHumanControl } from "../bureau/human-controls.js"
+import { object, keys } from "../catalog/types.js"
 import { storageQueue } from "../orchestration/storage.js"
 import { isDeepStrictEqual } from "node:util"
 import { join } from "node:path"
@@ -30,7 +33,7 @@ export async function createHostCoordination(input: { root: string; runtimeRoot:
   const ownsRun = (runId: string) => storageQueue(input.root).run(async () => !!await store.readRun(runId))
   const attach = (enrollment: HostEnrollment) => {
     const mirror = createRemoteOrigins(input.root, enrollment.hostId)
-    const host = createRemoteHost({ enrollment, origins: mirror, managed: true, ownsRun, ...(input.connect ? { connect: () => input.connect!(enrollment) } : {}), onTool: (payload, signal) => router.dispatch(payload, signal, enrollment.hostId), async onReady(peer) {
+    const host = createRemoteHost({ enrollment, onHuman: async payload => { const v = object(payload); keys(v, ["kind", "operation"]); if (v.kind !== "human") throw new Error("UNSUPPORTED_HUMAN_CONTROL"); return human(v.operation) }, origins: mirror, managed: true, ownsRun, ...(input.connect ? { connect: () => input.connect!(enrollment) } : {}), onTool: (payload, signal) => router.dispatch(payload, signal, enrollment.hostId), async onReady(peer) {
       if (!(await bureau.status()).enabled) return
       await bureau.reconcile()
       if (peer.hello.capabilities.includes("replay")) await peer.request("replay", {}, { timeoutMs: 0 })
@@ -55,7 +58,19 @@ export async function createHostCoordination(input: { root: string; runtimeRoot:
     },
     async list() { return (await inventory.list()).map(enrollment => ({ enrollment, observation: remote.find(host => host.hostId === enrollment.hostId)!.observation() })) }
   } })
+  let humanEnabled = false
+  const permissions = createBureauPermissions({ root: input.root, hosts, enabled: () => humanEnabled })
+  async function human(raw: unknown): Promise<unknown> {
+    const operation = parseHumanControl(raw), status = await bureau.status()
+    humanEnabled = status.enabled && status.ready && status.writeAvailable
+    if (!humanEnabled) return input.coordinator({ kind: "human", operation })
+    switch (operation.op) {
+      case "permission_snapshot": return permissions.snapshot()
+      case "permission_decide": return permissions.decide(operation.commandId, operation.ref, operation.optionId)
+      case "permission_inspect": return permissions.inspect(operation.commandId)
+    }
+  }
   router = createToolRouter({ root: input.root, bureau, hosts, origins: sources, journals: origins })
   await bureau.initialize().catch(() => undefined)
-  return { bureau, origin, origins, tools, remote, async replay() { try { await outbox.replay() } finally { await origin.replay() } }, async close() { await bureau.close(); tools.close(); await Promise.all(remote.map(host => host.close())) } }
+  return { bureau, origin, origins, tools, remote, human, async replay() { try { await outbox.replay() } finally { await origin.replay() } }, async close() { await bureau.close(); tools.close(); await Promise.all(remote.map(host => host.close())) } }
 }

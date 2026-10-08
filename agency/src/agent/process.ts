@@ -16,7 +16,7 @@ import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js
 import { AgentError, agentFailure, splitLaunchSpec, type AgentRecordV3, type SessionStart, type AgentFailure, type LaunchSpec, type PromptResult } from "./types.js"
 import type { JsonObject, SessionConfiguration } from "./session-config.js"
 
-export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): void; snapshot(): SessionConfiguration; prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
+export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): Promise<void>; snapshot(): SessionConfiguration; prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
 export type AgentProcessSpec = Pick<LaunchSpec, "agentId" | "handlerGeneration" | "providerGeneration" | "launchAttemptId" | "cwd" | "limits">
 export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
 
@@ -186,7 +186,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
     record: snapshot, fault, cleanup,
     request(method, params, signal) { if (!initialized || !connection || stopping || disposed || terminal || closed) return Promise.reject(new AgentError("NOT_READY")); return connection.request(method, params, signal) },
     notify(method, params) { if (!initialized || !connection || stopping || disposed || terminal || closed) throw new AgentError("NOT_READY"); connection.notify(method, params) },
-    respond(id, result) { if (!initialized || !connection || stopping || disposed || terminal || closed) throw new AgentError("NOT_READY"); connection.respond(id, result) },
+    respond(id, result) { if (!initialized || !connection || stopping || disposed || terminal || closed) throw new AgentError("NOT_READY"); return connection.respond(id, result) },
     snapshot() { if (!connection) throw new AgentError("NOT_READY"); return connection.snapshot() },
     prompt(text, signal, limits) {
       if (!initialized || !connection || stopping || disposed || terminal || closed) return Promise.reject(new AgentError("NOT_READY"))

@@ -1,3 +1,4 @@
+import { parsePermissionSnapshot } from "../orchestration/permission-routing.js"
 import { spawn } from "node:child_process"
 import type { Readable, Writable } from "node:stream"
 import type { EventEmitter } from "node:events"
@@ -19,7 +20,7 @@ export function buildSshCommand(raw: HostEnrollment) {
   return { file: "ssh", argv: ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "--", enrollment.hostname, destinationShellCommand(enrollment, "internal-host-bridge")] }
 }
 export function parseHostSnapshot(raw: unknown, hello: BridgeHello): HostSnapshot {
-  const v = object(raw); keys(v, ["hostId", "handlerGeneration", "backendChoices", "agents", "receipts", "replayFences"])
+  const v = object(raw); keys(v, ["hostId", "handlerGeneration", "backendChoices", "agents", "receipts", "replayFences", ...(v.permissions === undefined ? [] : ["permissions"])])
   if (hash(v.hostId) !== hello.hostId) bridgeError("HOST_IDENTITY_CHANGED")
   if (id(v.handlerGeneration) !== hello.handlerGeneration) bridgeError("STALE_HANDLER")
   if (!Array.isArray(v.backendChoices) || !Array.isArray(v.agents) || !Array.isArray(v.receipts) || !Array.isArray(v.replayFences)) bridgeError("INVALID_HOST_SNAPSHOT")
@@ -38,7 +39,9 @@ export function parseHostSnapshot(raw: unknown, hello: BridgeHello): HostSnapsho
     return { streamId: id(f.streamId), runId: id(f.runId), throughSeq, checkpoint }
   })
   if (new Set(agents.map(value => value.agent.agentId)).size !== agents.length) bridgeError("INVALID_HOST_SNAPSHOT")
-  return { hostId: hello.hostId, handlerGeneration: hello.handlerGeneration, backendChoices: v.backendChoices.map(providerId), agents, receipts, replayFences }
+  const permissions = v.permissions === undefined ? undefined : parsePermissionSnapshot(v.permissions)
+  if (permissions && (permissions.hostId !== hello.hostId || permissions.handlerGeneration !== hello.handlerGeneration)) bridgeError("INVALID_HOST_SNAPSHOT")
+  return { ...(permissions ? { permissions } : {}), hostId: hello.hostId, handlerGeneration: hello.handlerGeneration, backendChoices: v.backendChoices.map(providerId), agents, receipts, replayFences }
 }
 export async function connectHost(raw: HostEnrollment, processFactory: BridgeProcessFactory = (file, argv, options) => spawn(file, argv, options)): Promise<BridgeConnection> {
   const enrollment = parseHostEnrollment(raw), command = buildSshCommand(enrollment), child = processFactory(command.file, command.argv, { env: { ...sanitizedBootstrapEnvironment(process.env), ...(process.env.SSH_AUTH_SOCK ? { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK } : {}) }, stdio: ["pipe", "pipe", "pipe"] })

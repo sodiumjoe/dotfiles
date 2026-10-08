@@ -1,3 +1,4 @@
+import { createPermissionRouting, type PermissionRouting } from "../orchestration/permission-routing.js"
 import { startEditorRouting, type EditorRouting } from "./editor-routing.js"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
@@ -56,6 +57,7 @@ export function sessionInputs(cwd: string, raw: JsonObject | undefined, required
 
 export type AcpSessionObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
 export type AgentService = {
+  readonly permissionRouting: PermissionRouting
   withExecution<T>(target: AgentTuple, publish: () => Promise<T>): Promise<T>
   orchestrationSnapshot<T>(observe: (snapshot: { agents: AgentView[]; commands: CommandView[] }) => Promise<T>): Promise<T>
   commandReceipt(commandId: string, expectedGeneration: string): Promise<CommandView | null>
@@ -107,10 +109,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const importIntents = new Map<string, AgentCommandV3>()
   const dirty = new Set<string>(), dirtyAgents = new Set<string>(), stops = new Map<string, Promise<void>>()
-  const permissions = createPermissionBroker({ respond(target, requestId, result) {
+  const permissionRouting = createPermissionRouting({ root, hostId: context.paths.hostKey, handlerGeneration: generation, queue })
+  const permissions = createPermissionBroker({ routing: permissionRouting, cwd: target => operations.get(target.agentId)!.initial.definition.cwd, respond(target, requestId, result) {
     const op = operations.get(target.agentId)
     if (!op?.owner || op.controller.signal.aborted || !isDeepStrictEqual(agentTuple(op.initial), target)) throw new AgentError("STALE_ATTACHMENT")
-    op.owner.respond(requestId, result)
+    return op.owner.respond(requestId, result)
   } })
   const recoveryRepairs = new Map<string, AgentRecoveryRepair>()
   const configuring = new Set<string>()
@@ -385,7 +388,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.evidence.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
           await requireTarget(agentTuple(op.initial))
           if (!op.turns?.busy()) throw new AgentError("INVALID_PROTOCOL")
-          permissions.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
+          await permissions.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
         }).catch(error => { void failOperation(op, error).catch(error => noteOperation(op, error)) }) }, revalidate: () => revalidate(op) }) }
         finally { op.environment = null }
         void op.owner.fault.then(failure => { if (!closed && !op.controller.signal.aborted) void failOperation(op, new AgentError(failure.code)).catch(error => noteOperation(op, error)) })
@@ -858,6 +861,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     },
     launchSession: (request, kind, hooks) => acceptLaunch(request, kind, hooks),
     handlerGeneration: generation,
+    permissionRouting,
     attachPermissions(target, client, current) { return queue.run(async () => { await requireTarget(target); if (current && !current()) throw new AgentError("STALE_ATTACHMENT"); permissions.attach(target, client) }) },
     attachEditor(target, connectionId, address, token) {
       const op = operations.get(target.agentId)
@@ -867,7 +871,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     detachEditor(connectionId, target, expectedToken) {
       for (const op of operations.values()) if (!target || isDeepStrictEqual(agentTuple(op.initial), target)) op.editor?.detach(connectionId, expectedToken)
     },
-    permissionDecision(connectionId, requestId, result) { return queue.run(() => permissions.decision(connectionId, requestId, result)) },
+    permissionDecision(connectionId, requestId, result) { return permissions.decision(connectionId, requestId, result) },
     detachPermissions: (connectionId, target) => permissions.detach(connectionId, target),
     async backendChoices() {
       const config = await readBackendConfig(root), profiles = await readProfiles(root)
@@ -997,6 +1001,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     submission(target, submissionId) { id(submissionId); return queue.run(async () => (await requireTarget(target)).turns!.inspect(submissionId)) },
     async cancel(target, submissionId) { const op = await queue.run(() => requireTarget(target)); return op.turns!.cancel(submissionId) },
     async initialize() {
+      await permissionRouting.initialize()
       const recovered = await recoverAgents({ context, store })
       for (const record of recovered.inventory.agents) records.set(record.definition.agentId, record)
       for (const command of recovered.inventory.commands) commands.set(command.commandId, command)

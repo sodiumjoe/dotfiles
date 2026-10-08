@@ -82,6 +82,7 @@ end
 local function lifecycle(manager, callback, ...)
     local depth = manager._agency_depth or 0
     if depth == 0 then
+        if manager._agency_routed_permissions then manager._agency_routed_permissions.close(); manager._agency_routed_permissions = nil end
         manager._agency_epoch = (manager._agency_epoch or 0) + 1
         manager._agency_binding, manager._agency_turn_id = nil, nil
         manager._agency_local_submission, manager._agency_permissions = nil, {}

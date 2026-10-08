@@ -209,3 +209,19 @@ test("failed enrollment publication cannot mutate adapters or start transport", 
   assert.equal(f.connections.length, count)
   assert.equal(f.c.fixture.spawns(), 0)
 })
+
+test("human permissions from remote parent A route through laptop Bureau to origin B", { timeout: 30000 }, async t => {
+  const f = await cluster(t), execution = f.child.attempt.execution
+  let responses = 0
+  const ref = await f.b.fixture.service.permissionRouting.open({ agentId: execution.agentId, handlerGeneration: execution.handlerGeneration, providerGeneration: execution.providerGeneration },
+    { toolCall: { toolCallId: "same-native-tool", title: "Child B edit" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] },
+    f.b.fixture.workspace, async () => { responses++ })
+  const snapshot = await f.a.coordination.human({ op: "permission_snapshot" }) as { pending: Array<{ ref: unknown }> }
+  assert.deepEqual(snapshot.pending.map(offer => offer.ref), [ref])
+  const commandId = randomUUID()
+  const receipt = await f.a.coordination.human({ op: "permission_decide", commandId, ref, optionId: "allow" }) as { state: string }
+  assert.equal(receipt.state, "applied")
+  assert.equal((await f.a.coordination.human({ op: "permission_decide", commandId, ref, optionId: "allow" }) as { state: string }).state, "applied")
+  assert.equal(responses, 1)
+  await assert.rejects(f.a.coordination.human({ op: "delegate", commandId }), /UNSUPPORTED_HUMAN_CONTROL/)
+})

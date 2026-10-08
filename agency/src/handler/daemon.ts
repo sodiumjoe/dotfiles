@@ -281,7 +281,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       socket.on("error", () => undefined)
       void (async () => {
         try {
-          const request = parseBureauRequest(await receiveFrame(socket)), reply = await dispatchBureau(core, options.generation, request)
+          const request = parseBureauRequest(await receiveFrame(socket)), reply = await dispatchBureau(core, options.generation, request, coordination!.human)
           await new Promise<void>(resolve => socket.end(encodeFrame(reply), resolve))
         } catch { socket.destroy() } finally { socket.destroy() }
       })()

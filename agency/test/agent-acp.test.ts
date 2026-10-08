@@ -657,7 +657,7 @@ for (const kind of ["allow_once", "allow_always", "reject_once", "reject_always"
   const pending = peer.connection.prompt("challenge", new AbortController().signal)
   assert.deepEqual(requests, [request])
   assert.deepEqual(peer.permissionReplies, [])
-  peer.connection.respond("permission-1", { outcome: { outcome: "selected", optionId: kind } })
+  await peer.connection.respond("permission-1", { outcome: { outcome: "selected", optionId: kind } })
   peer.send({ jsonrpc: "2.0", id: prompt.id, result: { stopReason: "end_turn" } })
   assert.equal((await pending).stopReason, "end_turn")
   assert.deepEqual(peer.permissionReplies, [{ jsonrpc: "2.0", id: "permission-1", result: { outcome: { outcome: "selected", optionId: kind } } }])

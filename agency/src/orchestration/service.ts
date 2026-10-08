@@ -102,6 +102,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
   }
   const host: OrchestrationHost = {
     hostId: input.hostId, launch, launchRoot: launch, inspectCommand,
+    permissionDecide: agents.permissionRouting.decide, permissionInspect: agents.permissionRouting.inspect, permissionRead: agents.permissionRouting.read, permissionAcknowledge: agents.permissionRouting.acknowledge,
     async restoreRoot(command, invocation) {
       const observed = await agents.sessionRecord(command.agent.agentId)
       if (!observed || observed.record.definition.hostId !== command.agent.hostId || !observed.record.session || !["stopped", "recoverable"].includes(observed.record.phase)) fail("NOT_RECOVERABLE")
@@ -125,7 +126,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
       }
       const replayFences = []
       for (const runId of await journals.list()) { const page = await journals.forRun(runId).metadata(); replayFences.push({ streamId: runId, runId, throughSeq: page.lastSeq, checkpoint: page.checkpoint }) }
-      return { hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root).catch(error => { if (error instanceof AgentError && error.code === "UNAVAILABLE") return { backends: [] }; throw error })).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
+      return { permissions: await agents.permissionRouting.snapshot(), hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root).catch(error => { if (error instanceof AgentError && error.code === "UNAVAILABLE") return { backends: [] }; throw error })).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
     }) },
     submission(target, submissionId) { return agents.submission(tuple(target), submissionId) },
     submit(target, request, beforeAccepted) { return agents.submitAcp(tuple(target), request, beforeAccepted) },

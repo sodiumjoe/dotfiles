@@ -12,7 +12,7 @@ export type AcpConnection = {
   initialize(record: AgentRecord | AgentRecordV3, contract: ConfiguredLaunchContract, session: SessionStart, signal: AbortSignal): Promise<ProviderSession>
   request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>
   notify(method: string, params: JsonObject): void
-  respond(id: string | number, result: JsonObject): void
+  respond(id: string | number, result: JsonObject): Promise<void>
   snapshot(): SessionConfiguration
   prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>
   cancelPrompt(): Promise<void>
@@ -174,7 +174,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   return {
     fault: faultDeferred.promise, request,
     notify(method, params) { void write({ method, params: withoutAgencyMetadata(params) }).catch(fail) },
-    respond(id, result) { if (!providerRequests.delete(id)) throw new AgentError("INVALID_PROTOCOL"); void write({ id, result }).catch(fail) },
+    respond(id, result) { if (!providerRequests.delete(id)) throw new AgentError("INVALID_PROTOCOL"); return write({ id, result }).catch(error => { fail(error); throw error }) },
     snapshot: () => structuredClone(configuration),
     initialize(raw, contract, session, signal) {
       return initialization ??= (async () => {

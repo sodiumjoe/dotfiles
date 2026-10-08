@@ -1,3 +1,5 @@
+import type { Writable } from "node:stream"
+import type { BureauReply, BureauRequest } from "../bureau/protocol.js"
 import { runBureauClient } from "../bureau/cli.js"
 import { randomUUID } from "node:crypto"
 import { runAgentClient } from "../agent/client.js"
@@ -23,6 +25,8 @@ import { DarwinObservationUnavailable } from "../platform/darwin.js"
 import { LinuxObservationUnavailable } from "../platform/linux.js"
 
 export type ControlDependencies = {
+  watch?: { stdout: Writable; onSignal(signal: "SIGINT" | "SIGTERM", callback: () => void): () => void }
+  callBureau?(env: HandlerEnvironment, request: BureauRequest, timeoutMs?: number): Promise<BureauReply>
   attachment?: Omit<AttachmentDependencies, "environment" | "inspect" | "stderr">
   environment(): Promise<HandlerEnvironment>
   start(env: HandlerEnvironment): Promise<HandlerInspection>
@@ -43,6 +47,7 @@ export type ControlDependencies = {
 export function productionControlDependencies(): ControlDependencies {
   return {
     attachment: productionAttachmentStreams(),
+    watch: { stdout: process.stdout, onSignal(signal, callback) { process.on(signal, callback); return () => { process.off(signal, callback) } } },
     environment: productionEnvironment,
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
@@ -116,7 +121,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
-  if (["bureau", "run", "assignment"].includes(argv[0] ?? "")) return runBureauClient(argv, dependencies)
+  if (["bureau", "run", "assignment", "permission"].includes(argv[0] ?? "")) return runBureauClient(argv, dependencies)
   if (argv[0] === "model" && argv[1] === "recover-probe") return runProbeRecovery(argv, dependencies)
   if (argv[0] === "agent" && argv[1] === "attach") return runAttachmentClient(argv, { ...productionAttachmentStreams(), ...dependencies.attachment, environment: dependencies.environment, inspect: dependencies.inspect, stderr: dependencies.stderr })
   if (argv[0] === "agent") return runAgentClient(argv, { ...dependencies, callAgent: dependencies.callAgent ?? (async () => { throw new ControlError("UNAVAILABLE") }), agentStore: dependencies.agentStore ?? (env => createAgentStore(env.paths.persistentRoot)) })

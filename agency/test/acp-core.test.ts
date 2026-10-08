@@ -152,7 +152,7 @@ test("native turns and permission deliberation remain pending beyond ninety seco
   assert.equal(settled, false)
   assert.equal(permissions.length, 1)
   assert.deepEqual(peer.permissionReplies, [])
-  peer.connection.respond("permission-1", { outcome: { outcome: "selected", optionId: "allow" } })
+  await peer.connection.respond("permission-1", { outcome: { outcome: "selected", optionId: "allow" } })
   peer.send({ jsonrpc: "2.0", id: prompt.id, result: { stopReason: "end_turn" } })
   assert.equal((await turn).stopReason, "end_turn")
   await new Promise<void>(resolve => setImmediate(resolve))

@@ -787,7 +787,7 @@ end
 return {
     "carlos-algms/agentic.nvim",
     -- dir = vim.fn.expand("~/home/agentic.nvim"),
-    cmd = { "Agency", "AgencyCurrent", "AgencyNew", "AgencyOpen", "AgencyAttach", "AgencyRestore",
+    cmd = { "AgencyPermissions", "Agency", "AgencyCurrent", "AgencyNew", "AgencyOpen", "AgencyAttach", "AgencyRestore",
         "AgencySettings", "AgencyDetach", "AgencyCancel", "AgencyStop", "AgencyInspect" },
     config = function()
         local utils = require("sodium.utils")

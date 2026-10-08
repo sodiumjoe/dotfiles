@@ -1,3 +1,4 @@
+import { parseHumanControl, type HumanControl } from "./human-controls.js"
 import { parseHostEnrollment, type HostEnrollment } from "./hosts.js"
 import type { Socket } from "node:net"
 import { id, keys, object, text } from "../catalog/types.js"
@@ -9,7 +10,7 @@ import type { Invocation } from "./host.js"
 
 export const BUREAU_PROTOCOL = "agency-bureau-v1"
 type Base = { protocol: typeof BUREAU_PROTOCOL; requestId: string; handlerGeneration: string }
-export type BureauRequest = Base & (
+export type BureauRequest = Base & (HumanControl |
   { op: "bureau_enable" | "bureau_disable" | "bureau_status" | "bureau_hosts" | "run_list" } |
   { op: "bureau_enroll"; enrollment: HostEnrollment } |
   { op: "run_inspect"; runId: string; after?: string } |
@@ -36,6 +37,7 @@ export function parseBureauRequest(raw: unknown): BureauRequest {
   if (v.protocol !== BUREAU_PROTOCOL) fail("INVALID_PROTOCOL")
   const exact = (...fields: string[]) => keys(v, ["protocol", "requestId", "handlerGeneration", "op", ...fields])
   switch (op) {
+    case "permission_snapshot": case "permission_decide": case "permission_inspect": { const { protocol: _p, requestId: _r, handlerGeneration: _g, ...control } = v; return { ...base, ...parseHumanControl(control) } }
     case "bureau_enable": case "bureau_disable": case "bureau_status": case "bureau_hosts": case "run_list": exact(); return { ...base, op }
     case "bureau_enroll": exact("enrollment"); return { ...base, op, enrollment: parseHostEnrollment(v.enrollment) }
     case "run_inspect": exact("runId", ...(v.after === undefined ? [] : ["after"])); return { ...base, op, runId: id(v.runId), ...(v.after === undefined ? {} : { after: id(v.after) }) }

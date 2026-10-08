@@ -208,8 +208,15 @@ function M.setup(deps)
             end
         end
     end
+    function api.permissions()
+        local manager = local_manager()
+        if not manager then api.notify("A local Agency attachment is required"); return end
+        manager._agency_routed_permissions = manager._agency_routed_permissions or require("sodium.agency.permissions").new({ notify = api.notify })
+        manager._agency_routed_permissions.subscribe()
+        manager._agency_routed_permissions.open()
+    end
     controller = api
-    local commands = { Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
+    local commands = { AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
         AgencyOpen = { "open", 0 }, AgencyAttach = { "attach", 1 }, AgencyRestore = { "restore", 1 },
         AgencySettings = { "settings", 0 }, AgencyDetach = { "detach", 0 }, AgencyCancel = { "cancel", 0 }, AgencyStop = { "stop", 0 }, AgencyInspect = { "inspect_delivery", 0 } }
     for name, spec in pairs(commands) do

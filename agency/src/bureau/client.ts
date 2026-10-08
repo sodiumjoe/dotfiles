@@ -1,13 +1,15 @@
+import type { HumanControl } from "./human-controls.js"
 import type { BureauService } from "./service.js"
 import type { BureauReply, BureauRequest } from "./protocol.js"
 import { fail, OrchestrationError } from "../orchestration/types.js"
 
-export async function dispatchBureau(core: BureauService, generation: string, request: BureauRequest): Promise<BureauReply> {
+export async function dispatchBureau(core: BureauService, generation: string, request: BureauRequest, human?: (request: HumanControl) => Promise<unknown>): Promise<BureauReply> {
   const base = { protocol: request.protocol, requestId: request.requestId, handlerGeneration: generation }
   try {
     if (request.handlerGeneration !== generation) fail("STALE_HANDLER")
     let result: unknown
     switch (request.op) {
+      case "permission_snapshot": case "permission_decide": case "permission_inspect": { if (!human) fail("UNSUPPORTED_HUMAN_CONTROL"); const { protocol: _p, requestId: _r, handlerGeneration: _g, ...control } = request; result = await human(control); break }
       case "bureau_hosts": result = await core.enrolledHosts(); break
       case "bureau_enroll": result = await core.enroll(request.enrollment); break
       case "bureau_status": result = await core.status(); break
