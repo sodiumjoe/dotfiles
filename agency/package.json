@@ -19,7 +19,7 @@
     "test:agent": "npm run build && node --test --test-concurrency=1 dist/test/agent-types.test.js dist/test/agent-v3.test.js dist/test/agent-contracts.test.js dist/test/agent-environment.test.js dist/test/agent-production-contracts.test.js dist/test/agent-store.test.js dist/test/agent-acp.test.js dist/test/acp-core.test.js dist/test/agent-process.test.js dist/test/agent-conversation.test.js dist/test/agent-turns.test.js dist/test/editor-routing.test.js dist/test/agent-service.test.js dist/test/agent-queries.test.js dist/test/agent-protocol.test.js dist/test/agent-cli.test.js",
     "test:catalog-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-catalog.test.js",
     "test:catalog": "npm run build && node --test --test-concurrency=1 dist/test/catalog-types.test.js dist/test/catalog-config.test.js dist/test/catalog-store.test.js dist/test/catalog-probes.test.js dist/test/catalog-drivers.test.js dist/test/catalog-service.test.js dist/test/catalog-protocol.test.js dist/test/catalog-cli.test.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node dist/scripts/build-manifest.js",
     "test:control": "npm run build && node --test --test-concurrency=1 dist/test/control-protocol.test.js dist/test/handler-inventory.test.js dist/test/handler-daemon.test.js dist/test/handler-shutdown.test.js dist/test/control-cli.test.js",
     "test:control-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-control-plane.test.js",
     "qualify:linux": "npm run build && node dist/scripts/qualify-linux.js",
@@ -30,7 +30,8 @@
     "test:orchestration-scheduling": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-scheduler.test.js dist/test/handler-orchestration.test.js dist/test/agent-turns.test.js",
     "test:bureau-notifications": "npm run build && node --test --test-concurrency=1 dist/test/bureau-inbox.test.js dist/test/bureau-waits.test.js dist/test/bureau-retention.test.js dist/test/orchestration-retention.test.js",
     "test:bureau": "npm run build && node --test --test-concurrency=1 dist/test/bureau-service.test.js dist/test/bureau-protocol.test.js dist/test/handler-bureau.test.js dist/test/bureau-store.test.js dist/test/orchestration-journal.test.js",
-    "test:orchestration-tools": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-mcp.test.js dist/test/agency-delegation.test.js dist/test/bureau-cli.test.js dist/test/orchestration-scheduler.test.js"
+    "test:orchestration-tools": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-mcp.test.js dist/test/agency-delegation.test.js dist/test/bureau-cli.test.js dist/test/orchestration-scheduler.test.js",
+    "accept:linux-stack": "npm run build && node dist/scripts/accept-linux-stack.js"
   },
   "devDependencies": {
     "@types/node": "24.10.0",

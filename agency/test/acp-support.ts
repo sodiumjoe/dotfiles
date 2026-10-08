@@ -1,3 +1,4 @@
+import { fixtureLaunch, fixtureSpawn } from "./fixtures/ownership.js"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
@@ -131,7 +132,7 @@ export async function acpFixture(t: TestContext, options: AgentHandlerOptions = 
   })
   const f = await agentHandlerFixture(context, { ...options, nativeAcp: true }), peers = new Set<AcpPeer>()
   context.after(() => { for (const peer of peers) peer.close() })
-  const environment = { PATH: process.env.PATH!, HOME: join(f.root, "home") }
+  const environment = { PATH: process.env.PATH!, HOME: join(f.root, "home"), ...Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key.startsWith("AGENCY_TEST_") && value !== undefined)) }
   const tuple = async (sessionId: string) => {
     assert.ok(sessionId.startsWith("agency:"))
     const record = await createAgentStore(f.paths.persistentRoot).readAgent(sessionId.slice(7))
@@ -165,21 +166,23 @@ export type EditorFixture = { lua(expression: string): Promise<JsonValue>; close
 const exec = promisify(execFile)
 
 export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
-  const repo = fileURLToPath(new URL("../../../", import.meta.url)), root = join(f.root, "editor-" + randomUUID())
+  const repo = fileURLToPath(new URL("../../../", import.meta.url)), root = join(f.root, "editor-" + randomUUID().slice(0, 8))
   await mkdir(root, { mode: 0o700 })
   const config = join(root, "endpoint.json"), socket = join(root, "nvim.sock")
   await writeFile(config, JSON.stringify({ paths: f.paths, environment: f.environment }), { mode: 0o600 })
   const executable = process.env.NVIM_TEST_EXECUTABLE ?? "/opt/homebrew/bin/nvim"
+  const launch = fixtureLaunch("editor")
   const child = spawn(executable, ["--headless", "-i", "NONE", "--listen", socket, "-u", join(repo, "tests/neovim/acp_minimal_init.lua")], {
-    cwd: f.workspace, env: { ...process.env, HOME: f.environment.HOME, XDG_STATE_HOME: join(root, "state"), XDG_CACHE_HOME: join(root, "cache"),
+    detached: true, cwd: f.workspace, env: { ...process.env, HOME: f.environment.HOME, XDG_STATE_HOME: join(root, "state"), XDG_CACHE_HOME: join(root, "cache"),
       XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"), DOTFILES_TEST_ROOT: repo,
-      AGENCY_FIXTURE_PLUGIN_ROOT: join(process.env.HOME!, ".local/share/nvim/lazy/agentic.nvim"), AGENCY_FIXTURE_NODE: process.execPath,
+      AGENCY_FIXTURE_PLUGIN_ROOT: process.env.AGENCY_FIXTURE_PLUGIN_ROOT ?? join(process.env.HOME!, ".local/share/nvim/lazy/agentic.nvim"), AGENCY_FIXTURE_NODE: process.execPath,
       AGENCY_FIXTURE_ENDPOINT: fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)),
       AGENCY_FIXTURE_CONTROL: fileURLToPath(new URL("./fixtures/acp-control.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
   })
   let closed = false, exited = false, stderr = ""
   const endpoints = new Set<number>()
   child.once("exit", () => { exited = true })
+  await fixtureSpawn(launch, child.pid)
   child.stderr.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-8192) })
   const lua = async (expression: string): Promise<JsonValue> => {
     const source = `(function() local value = ${expression}; local endpoints = {}; for _,client in pairs(require('agentic.acp.agent_instance')._instances) do if client.transport and client.transport.pid then endpoints[#endpoints+1]=client.transport.pid end end; return vim.json.encode({value=value == nil and vim.NIL or value,endpoints=endpoints}) end)()`

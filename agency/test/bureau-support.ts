@@ -43,6 +43,7 @@ export async function bureauFixture(t: TestContext) {
     async stop(commandId, execution) { stopCalls++; agents.get(execution.agentId)!.phase = "stopped"; return { commandId, execution, state: "stopped" } }
   }
   let core = createBureauService({ store: f.store, journals, hosts: [host] })
+  f.beforeCleanup(() => core.close())
   await core.initialize(); await core.enable()
   const rootInput = { objective: "Review the local implementation", hostId, cwd: f.root, backendId: "codex-acp" as const, modelId: "model-a", overrides: {} }
   const run = await core.startRun(randomUUID(), rootInput, invocation)

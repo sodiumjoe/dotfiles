@@ -1,3 +1,4 @@
+import { fixtureIdentity } from "./fixtures/ownership.js"
 import { PassThrough } from "node:stream"
 import { isDeepStrictEqual } from "node:util"
 import { EventEmitter } from "node:events"
@@ -59,6 +60,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
         assert.equal(identity.pid, identity.processGroupId); assert.equal(identity.pid, identity.sessionId)
         assert.equal(identity.uid, process.getuid!()); assert.equal(identity.gid, process.getgid!())
         const members = await f.adapter.readGroup(hint.pid)
+        for (const member of members) fixtureIdentity("provider-group", member)
         assert.deepEqual(await f.adapter.readGroup(hint.pid), members); if (options.delegationHelpers) {
           assert.ok(members.some(member => member.pid === identity.pid))
           for (const member of members) { assert.equal(member.processGroupId, identity.pid); assert.equal(member.sessionId, identity.pid); assert.equal(member.uid, identity.uid); assert.equal(member.gid, identity.gid) }
@@ -165,7 +167,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   const startAt = async (cwd: string, selection: Partial<StartSelection> = {}) => commandView(await call({ op: "agent_start", input: { commandId: randomUUID(), handlerGeneration: (await handler()).generation, cwd, selection: { ...sampleSpec().selection, ...selection }, environment: providerEnvironment() } }))
   const command = async (commandId: string, commandGeneration: string) => commandView(await call({ op: "agent_command", commandId, commandGeneration }))
   const currentAt = async (cwd: string) => { const result = await call({ op: "agent_current", cwd }); assert.equal(result.state, "current"); if (result.state !== "current") throw new Error("wrong reply"); return result }
-  return { root: f.root, configPath: f.configPath, paths: f.paths, workspace, otherWorkspace, inventory, startAt, currentAt, command, releaseBarrier,
+  return { root: f.root, configPath: f.configPath, paths: f.paths, owned: f.owned, observe: f.observe, workspace, otherWorkspace, inventory, startAt, currentAt, command, releaseBarrier,
     async choices() { const result = await call({ op: "agent_choices" }); if (result.state !== "choices") throw new Error("wrong reply"); return result },
     async page(input: import("../src/agent/queries.js").PageInput) { const result = await call({ op: "agent_page", input }); if (result.state !== "page") throw new Error("wrong reply"); return result },
     start: (selection?: Partial<StartSelection>) => startAt(workspace, selection),
@@ -209,7 +211,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
       }
     },
     verifyZeroSurvivors: cleanupOwned,
-    async cleanupEvidence() { return JSON.parse(await readFile(join(f.root, "agent-cleanup.json"), "utf8")) as { providers: LaunchRecord[]; launches: Array<{ path: string; record: LaunchRecord }>; survivors: unknown[] } },
+    async cleanupEvidence() { return JSON.parse(await readFile(join(f.root, "agent-cleanup.json"), "utf8")) as { handlers: ProcessIdentity[]; providers: LaunchRecord[]; launches: Array<{ path: string; record: LaunchRecord }>; survivors: unknown[] } },
   }
 }
 

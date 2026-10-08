@@ -1,3 +1,4 @@
+import { fixtureLaunch, fixtureSpawn } from "./fixtures/ownership.js"
 import { mkdtemp, realpath, rm, mkdir, readFile, writeFile, chown } from "node:fs/promises"
 import { join } from "node:path"
 import type { TestContext } from "node:test"
@@ -56,7 +57,7 @@ export function failFixtureBatch(error: unknown): Error {
 
 export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
   assertFixtureBatchHealthy()
-  const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))
+  const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   const paths: PlatformPaths = { hostKey: "a".repeat(64), persistentRoot: join(root, "state"), runtimeRoot: join(root, "run"), handlerSocketPath: join(root, "run/handler.sock") }
   const owned: ProcessIdentity[] = [], pending: Array<{ pid: number; marker: string }> = [], starts: Promise<unknown>[] = []
@@ -152,12 +153,13 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   await writeFile(configPath, JSON.stringify({ paths, ...overrides }), { mode: 0o600 })
   const start = async (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
     assertFixtureBatchHealthy()
-    let marker: string | undefined
+    let marker: string | undefined, launch: ReturnType<typeof fixtureLaunch> | undefined
     const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath], ...(handlerEnv === undefined ? {} : { env: handlerEnv }) }, onTransition: async (transition, pid) => {
-      if (transition === "launch_pending_written") marker = `agy-handler:${(await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))).launchAttemptId}`
+      if (transition === "launch_pending_written") { launch = fixtureLaunch("handler"); marker = `agy-handler:${(await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))).launchAttemptId}` }
       if (transition === "handler_spawned" && pid !== undefined) {
         assert.notEqual(marker, undefined)
         pending.push({ pid, marker: marker! })
+        await fixtureSpawn(launch!, pid)
         const identity = await observe(pid)
         if (identity !== null) { assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), marker); owned.push(identity) }
       }
@@ -224,7 +226,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
 }
 
 export async function privateRoot(t: TestContext): Promise<string> {
-  const root = await mkdtemp(join(await realpath("/tmp"), "agy-control-"))
+  const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
   t.after(async () => { await rm(root, { recursive: true, force: true }) })
   return root
 }

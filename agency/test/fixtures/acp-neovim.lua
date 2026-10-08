@@ -1,4 +1,15 @@
 AgencyFixture = {}
+function AgencyFixture.endpoint_intent()
+    if not vim.env.AGENCY_TEST_EVIDENCE_ROOT then return end
+    local launch = { launchId = vim.fn.sha256(tostring(vim.uv.hrtime()) .. tostring(vim.fn.getpid())), role = "acp-endpoint" }
+    local fd = assert(vim.uv.fs_open(vim.env.AGENCY_TEST_EVIDENCE_ROOT .. "/ownership.jsonl", "a", 384))
+    assert(vim.uv.fs_write(fd, vim.json.encode(vim.tbl_extend("force", launch, { type = "intent" })) .. "\n"))
+    assert(vim.uv.fs_fsync(fd))
+    assert(vim.uv.fs_close(fd))
+    local config = vim.json.decode(table.concat(vim.fn.readfile(vim.env.AGENCY_FIXTURE_CONFIG), "\n"))
+    config.ownershipLaunch = launch
+    vim.fn.writefile({ vim.json.encode(config) }, vim.env.AGENCY_FIXTURE_CONFIG)
+end
 function AgencyFixture.commands()
     local control = require("sodium.agency.control").new({ system = function(argv, opts, callback)
         local args = { assert(vim.env.AGENCY_FIXTURE_NODE), assert(vim.env.AGENCY_FIXTURE_CONTROL), assert(vim.env.AGENCY_FIXTURE_CONFIG) }
@@ -11,10 +22,12 @@ function AgencyFixture.commands()
     return true
 end
 function AgencyFixture.new(opts)
+    AgencyFixture.endpoint_intent()
     _G.fixture_manager = require("sodium.agency.agentic").new_session(opts)
     return true
 end
 function AgencyFixture.open(view)
+    AgencyFixture.endpoint_intent()
     _G.fixture_manager = require("sodium.agency.agentic").open(view)
     return true
 end

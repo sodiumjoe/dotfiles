@@ -21,7 +21,7 @@ async function fixture(t: TestContext) {
   f.host.raw.submission = async (execution, submissionId) => execution.agentId === f.parent.agentId ? turns.inspect(submissionId) : null
   t.after(() => { turns.close(null); conversation.close() })
   const schedule = () => (f.core as unknown as { schedule(parent: AgentRef): Promise<void> }).schedule(f.parent)
-  return { ...f, get core() { return f.core }, schedule, target, turns, answer, get calls() { return calls }, failProvider() { providerFailure = true }, automatic() { f.core.close(); const core = createBureauService({ store: f.store, journals: createJournalPool(f.root, f.filesystem, f.clock.now), origins: f.origins, hosts: [f.host.raw], notifications: true }); t.after(() => core.close()); return core }, async human() { return turns.submitAcp({ submissionId: randomUUID(), prompt: [{ type: "text", text: "human" }] }) } }
+  return { ...f, get core() { return f.core }, schedule, target, turns, answer, get calls() { return calls }, failProvider() { providerFailure = true }, automatic() { f.core.close(); const core = createBureauService({ store: f.store, journals: createJournalPool(f.root, f.filesystem, f.clock.now), origins: f.origins, hosts: [f.host.raw], notifications: true }); f.beforeCleanup(() => core.close()); return core }, async human() { return turns.submitAcp({ submissionId: randomUUID(), prompt: [{ type: "text", text: "human" }] }) } }
 }
 
 test("busy parent keeps a stable queued delivery and batches both reports after idle", async t => {

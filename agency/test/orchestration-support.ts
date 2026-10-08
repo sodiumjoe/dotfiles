@@ -11,7 +11,8 @@ import type { StorageFileSystem } from "../src/orchestration/storage.js"
 
 export async function coreFixture(t: TestContext) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "agy-orchestration-")))
-  t.after(() => rm(root, { recursive: true, force: true }))
+  const cleanup: Array<() => Promise<unknown>> = []
+  t.after(async () => { for (const drain of [...cleanup].reverse()) await drain(); await rm(root, { recursive: true, force: true }) })
   let lastRename = ""
   let time = 1000, fault: { operation: string; match: string; after: boolean } | null = null
   const trip = (operation: string, path: string, after: boolean) => {
@@ -46,7 +47,7 @@ export async function coreFixture(t: TestContext) {
   let journal = createJournal(root, filesystem, () => time)
   const store = createBureauStore(root, filesystem), lineage = createLineageStore(root, filesystem)
   return {
-    root, input, filesystem, store, lineage,
+    root, input, filesystem, store, lineage, beforeCleanup(action: () => Promise<unknown>) { cleanup.push(action) },
     get journal() { return journal },
     clock: { advance(ms: number) { time += ms }, now: () => time },
     failAt(operation: string, match = "", after = false) { fault = { operation, match, after } },

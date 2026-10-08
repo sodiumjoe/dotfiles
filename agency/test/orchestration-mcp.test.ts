@@ -497,3 +497,15 @@ test("replacement credentials cannot replay a wait admitted by an older executio
   assert.match(result.content[0]!.text, /STALE_BINDING/)
   assert.deepEqual((await f.core.waitRecord(waitId))!.target, f.root.execution)
 })
+
+test("disabled Bureau retains a locally authenticated report and replays it after enable", async t => {
+  const f = await toolsFixture(t), child = await f.delegate()
+  const args = { ...f.scope, commandId: randomUUID(), assignmentId: child.value.assignmentId, attemptId: child.value.attempt.ref.attemptId, report: { status: "completed", summary: "Offline completed", issues: [], validation: [], git: null } }
+  await f.core.disable()
+  const retained = await f.call("agency_report", args, child.token)
+  assert.equal(retained.isError, false, JSON.stringify(retained))
+  assert.equal(JSON.parse(retained.content[0]!.text).state, "retained")
+  await f.core.enable()
+  assert.equal((await f.core.assignment(child.value.assignmentId)).attempt.state, "completed")
+  assert.equal((await f.store.readReport(child.value.attempt.ref.attemptId))!.input.report.summary, "Offline completed")
+})

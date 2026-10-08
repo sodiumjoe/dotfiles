@@ -1,3 +1,4 @@
+import { fixtureLaunch, fixtureSpawn } from "./ownership.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { spawn } from "node:child_process"
@@ -86,11 +87,16 @@ try {
         if (next.op === "stop" && next.state === "pending") await pause("stop-intent")
         if (next.op === "stop" && next.state === "completed") await pause("stop-receipt-after")
       } } }, { processFactory(options) {
+        let ownership: Promise<unknown> = Promise.resolve()
         const owner = createAgentProcess(options, { spawn: ((...args: Parameters<typeof spawn>) => {
+          const launch = fixtureLaunch("provider")
           const child = spawn(...args)
+          ownership = fixtureSpawn(launch, child.pid)
+          void ownership.catch(() => undefined)
           writeFileSync(join(root, `spawn-${options.spec.launchAttemptId}.json`), JSON.stringify({ pid: child.pid ?? null, agentId: options.spec.agentId, attempt: options.spec.launchAttemptId }), { mode: 0o600 })
           return child
         }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
+          await ownership
           await writeLaunchRecord(path, record)
           if (record.launchAttempted && record.provider === null) await pause("attempted")
           if (record.provider !== null) await pause("identity")

@@ -221,3 +221,20 @@ Inspect retained reports with `agy bureau inbox <run-uuid> --parent-id <agent-uu
 `agy bureau recover-stop <run-uuid> --command-id <original-stop-uuid>` resolves a retained scoped-stop intent after its sender retires. It reuses the original complete command and exact target. An existing stop receipt is reconfirmed; a retired target returns a retained stale result without stopping a replacement execution. Lost publication remains retryable. These recovery operations are human CLI authority and are absent from the model tool surface.
 
 Wait admission checks the calling credential's execution and binding epoch under the Bureau mutation queue. A queued request from a retired execution cannot register against its replacement. Large MCP wait responses contain bounded summaries with `reportTruncated: true`; inspect their run, assignment and attempt references for the full report. Exact wait retry returns the same bounded response while the complete report remains in the durable result. Turn settlement and durable provider retirement trigger assignment reconciliation, and inspection/wait/retry admission refresh observations without replaying work. Retained origin reports are replayed before an unfinished attempt is classified as interrupted.
+
+### Current Linux stack acceptance
+
+`npm run build` publishes `dist/build-manifest.json` after compilation. The manifest hashes the current TypeScript source, lockfile, compiler configuration, editor fixtures, Neovim configuration and compiled files. Acceptance independently verifies those bytes, Git HEAD and the Node executable. Dirty source remains identified by its content digests and is reported as dirty.
+
+Run `npm run accept:linux-stack -- --revision <full-oid> --node <absolute-node> --fixtures <private-directory> --evidence <private-directory> --scenario deterministic` on Linux with Node 24.13.0. The fixture and evidence directories must be canonical, private and disjoint. Keep the fixture directory path at most 37 UTF-8 bytes so native Unix socket paths fit. Set `NVIM_TEST_EXECUTABLE` to the destination Neovim executable and `AGENCY_FIXTURE_PLUGIN_ROOT` to its installed agentic.nvim checkout. The runner starts private production Handler compositions and native fixture providers; it does not contact a model service. `live` is rejected until a reviewed configuration is supplied by the later cross-host acceptance flow.
+
+| Case | Coverage |
+| --- | --- |
+| root-tools-report-wait | MCP bootstrap, offline report, replayed wait |
+| notification-admission | Durable acceptance before notification dispatch |
+| headless-permission | Pending permission and later human attachment |
+| shared-observers-detach-cancel | Shared session, detach and explicit cancellation |
+| handler-reconcile-restore | Handler death, cleanup and explicit native restore |
+| editor-replacement | Editor replacement preserves provider identity |
+
+Every launched Handler, provider, MCP helper, editor and ACP endpoint has retained fixture ownership evidence. The acceptance parent independently reobserves exact process identities and owned process groups after cleanup. Failed observations, missing evidence, skipped cases, changed builds and survivors fail acceptance. Reports, test output and ownership records remain in a unique evidence directory after fixture state is deleted. No unverified process is signaled by the runner. Darwin can run the same fixtures for development; it cannot establish Linux acceptance. Historical `qualify-linux.ts` remains unchanged.
