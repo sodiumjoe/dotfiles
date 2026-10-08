@@ -148,7 +148,8 @@ test("receipt publication failure after a successful write cannot reopen the cla
   let writes = 0
   const ref = await origin.open(f.target, params, "/workspace", async () => { writes++ })
   assert.equal((await origin.decide(randomUUID(), ref, "allow")).state, "uncertain")
-  await assert.rejects(origin.decide(randomUUID(), ref, "deny"), /ENOSPC/)
+  await assert.rejects(origin.decide(randomUUID(), ref, "deny"), /PERMISSIONS_UNAVAILABLE/)
+  assert.deepEqual(origin.status(), { available: false, issue: "ENOSPC" })
   const recovered = createPermissionRouting({ root: f.root, hostId: f.hostId, handlerGeneration: randomUUID(), queue: new MutationQueue() }); await recovered.initialize()
   assert.equal((await recovered.snapshot()).pending.length, 0); assert.equal(writes, 1)
 })
