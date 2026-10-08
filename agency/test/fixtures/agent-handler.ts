@@ -111,6 +111,6 @@ try {
     },
   })
 } catch (error) {
-  await writeFile(join(root, "failure"), String(error).slice(0, 2048), { mode: 0o600 })
+  await writeFile(join(root, "failure"), (error instanceof Error ? error.stack ?? error.message : String(error)).slice(0, 4096), { mode: 0o600 })
   process.exitCode = 1
 }

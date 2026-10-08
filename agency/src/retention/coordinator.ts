@@ -13,7 +13,7 @@ import { forgetRemovedLaunch, type HandlerMutations, type MutationQueue } from "
 import { readShutdownInventory } from "../handler/receipt.js"
 import { assertPrivateDirectory, parseLaunchRecord } from "../platform/private-state.js"
 import { sameProcessGeneration, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
-import { expiredFailure, reclaimable, type RetentionNode } from "./policy.js"
+import { expiredFailure, reclaimable, type RetentionNode, type RetentionPins } from "./policy.js"
 import type { CleanupIntent, RemovalEvidence, RetentionStore, RetirementView } from "./store.js"
 
 export type RetentionCoordinator = { initialize(): Promise<void>; sweepLocked(): Promise<void>; request(): void; diagnostics(): readonly string[] }
@@ -23,6 +23,7 @@ const commandPath = (id: string) => "agents/commands/" + id + ".json"
 const launchPath = (id: string) => "launches/" + id + ".json"
 const snapshotPath = (id: string) => "catalog/snapshots/" + id + ".json"
 const cleanupError = (): never => { throw new Error("cleanup authorization is unverified") }
+export class RetirementBlocked extends Error {}
 export function authorizedRetirementView(store: RetentionStore, authorize: (intent: CleanupIntent) => Promise<void>): RetirementView {
   const view = store.view
   let authorized = false
@@ -30,7 +31,7 @@ export function authorizedRetirementView(store: RetentionStore, authorize: (inte
     authorized = false
     await view.validate()
     const intent = await store.pending()
-    if (intent) await authorize(intent)
+    if (intent) { try { await authorize(intent) } catch (error) { if (error instanceof RetirementBlocked) return; throw error } }
     authorized = true
   }, hides: path => authorized && view.hides(path) }
 }
@@ -60,7 +61,8 @@ export async function verifyRetirementAbsence(adapter: PlatformAdapter, launches
 export async function authorizeRetirement(input: { root: string; hostId: string; generation: string; adapter: PlatformAdapter; pins?: readonly string[] }, intent: CleanupIntent): Promise<void> {
   const targets = new Set(intent.entries.map(entry => entry.path)), witnesses = new Map(intent.launches.map(entry => [entry.record.launchAttemptId, entry]))
   const lifecycleTargets = [...targets].some(path => path.startsWith("agents/") || path.startsWith("launches/")), catalogTargets = [...targets].some(path => path.startsWith("catalog/"))
-  if (intent.hostId !== input.hostId || input.pins?.some(path => targets.has(path))) cleanupError()
+  if (intent.hostId !== input.hostId) cleanupError()
+  if (input.pins?.some(path => targets.has(path))) throw new RetirementBlocked("cleanup is pinned by unresolved references")
   await verifyRetirementAbsence(input.adapter, intent.launches, intent.handlers)
   const references: string[] = []
   async function records(directory: string, consume: (raw: unknown) => void): Promise<void> {
@@ -118,13 +120,13 @@ export async function authorizeRetirement(input: { root: string; hostId: string;
   if (intent.entries.some(entry => (entry.path.startsWith("launches/") || entry.path.startsWith("catalog/probe-launches/")) && !covered.has(entry.path))) cleanupError()
 }
 
-export function createRetentionCoordinator(input: { root: string; hostId: string; generation: string; queue: MutationQueue; adapter: PlatformAdapter; store: RetentionStore; catalogStore: CatalogStore; agentStore: AgentStore; mutations: HandlerMutations; catalog: CatalogService; agents: AgentService; now?: () => number }): RetentionCoordinator {
+export function createRetentionCoordinator(input: { root: string; hostId: string; generation: string; queue: MutationQueue; adapter: PlatformAdapter; store: RetentionStore; catalogStore: CatalogStore; agentStore: AgentStore; mutations: HandlerMutations; catalog: CatalogService; agents: AgentService; orchestrationPins?: () => Promise<RetentionPins>; now?: () => number }): RetentionCoordinator {
   const issues = new Set<string>()
   let requested = false
   const note = (error: unknown) => { const message = String(error); issues.add(/^[\x20-\x7e]+$/.test(message) ? message.slice(0, 480) : "unsafe cleanup evidence") }
-  const pins = () => [...input.catalog.retentionPins().paths, ...input.agents.retentionPins().paths]
+  const pins = async () => [...input.catalog.retentionPins().paths, ...input.agents.retentionPins().paths, ...((await input.orchestrationPins?.())?.paths ?? [])]
   const removed = (entry: RemovalEvidence) => { input.catalogStore.forgetRemoved(entry); input.agentStore.forgetRemoved(entry); input.catalog.forgetRemoved(entry); input.agents.forgetRemoved(entry); forgetRemovedLaunch(input.mutations, entry) }
-  const resume = () => input.store.resume({ authorize: intent => authorizeRetirement({ ...input, pins: pins() }, intent), removed })
+  const resume = () => input.store.resume({ authorize: async intent => authorizeRetirement({ ...input, pins: await pins() }, intent), removed })
   async function sweepLocked(): Promise<void> {
     issues.clear()
     try { await resume() } catch (error) { note(error); return }
@@ -203,7 +205,7 @@ export function createRetentionCoordinator(input: { root: string; hostId: string
         try { await verifyRetirementAbsence(input.adapter, [], [receipt.handlerIdentity]); safe = true } catch { }
         add("shutdown/" + receipt.commandId + ".json", [], receipt.handlerGeneration === input.generation || !safe, safe)
       }
-      const knownPins = pins().filter(path => nodes.has(path))
+      const knownPins = (await pins()).filter(path => nodes.has(path))
       const candidates = new Set(reclaimable([...nodes.values()], knownPins)), neighbors = new Map([...candidates].map(path => [path, new Set<string>()]))
       for (const path of candidates) for (const ref of nodes.get(path)!.references) if (candidates.has(ref)) { neighbors.get(path)!.add(ref); neighbors.get(ref)!.add(path) }
       while (candidates.size) {

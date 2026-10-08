@@ -1,3 +1,5 @@
+import { parseOriginLaunch, parseOriginReceipt } from "./receipts.js"
+import { parseAcceptedReport } from "./reports.js"
 import { parseBureauRecord } from "../bureau/types.js"
 import { createHash } from "node:crypto"
 import { absolutePath, hash, id, keys, object, providerId, text, timestamp, type ProviderId } from "../catalog/types.js"
@@ -110,6 +112,9 @@ export function encode(value: unknown): Buffer {
 }
 export const canonicalDigest = (value: unknown): string => createHash("sha256").update(encode(value)).digest("hex")
 export function parseEventPayload(kind: string, value: unknown): unknown {
+  if (kind === "origin-launch") return parseOriginLaunch(value)
+  if (kind === "origin-receipt") return parseOriginReceipt(value)
+  if (kind === "bureau-report") return parseAcceptedReport(value)
   if (kind === "bureau-record") {
     const v = object(value); keys(v, ["previousDigest", "record"])
     return { previousDigest: v.previousDigest === null ? null : hash(v.previousDigest), record: parseBureauRecord(v.record) }

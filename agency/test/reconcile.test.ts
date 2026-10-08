@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -543,4 +543,16 @@ test("marker-bound provider semantic UUID failure remains checkout-scoped", asyn
     assert.deepEqual(results, ["quarantined", "released"])
     assert.deepEqual(adapter.signals, [])
   })
+})
+
+test("reobserving a cleaned launch preserves its retained file identity", async t => {
+  const starting = record({ phase: "cleanup_verified" }), path = await recordFixture(t, starting)
+  const before = await stat(path, { bigint: true })
+  const adapter = new FakeAdapter({ leader: null, group: [] })
+  const result = await reconcileRecord(path, adapter, starting)
+  const after = await stat(path, { bigint: true })
+  assert.equal(result.disposition, "released")
+  assert.deepEqual(result.record, starting)
+  assert.deepEqual([after.ino, after.ctimeNs, after.mtimeNs], [before.ino, before.ctimeNs, before.mtimeNs])
+  assert.deepEqual(adapter.signals, [])
 })

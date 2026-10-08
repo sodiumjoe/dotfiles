@@ -1,3 +1,4 @@
+import { parseAcceptedReport, type AcceptedReport } from "../orchestration/reports.js"
 import { id, keys, object } from "../catalog/types.js"
 import { createStorage, storageQueue, defaultFileSystem } from "../orchestration/storage.js"
 import { parseRunRecord, parseAssignmentRecord, parseAttemptRecord, parseCommandRecord, type AssignmentRecord, type AttemptRecord, type CommandRecord, type RunRecord } from "./types.js"
@@ -22,6 +23,8 @@ export function createBureauStore(root: string, filesystem = defaultFileSystem) 
     return records
   }
   return {
+    async readReport(attemptId: string): Promise<AcceptedReport | null> { const raw = await storage.read(`reports/${id(attemptId)}.json`); if (raw === null) return null; const report = parseAcceptedReport(raw); if (report.input.attemptId !== attemptId) throw new Error("INVALID_REPORT"); return report },
+    async writeReport(value: AcceptedReport) { const report = parseAcceptedReport(value); await queue.run(() => storage.publish(`reports/${report.input.attemptId}.json`, report, null, true)) },
     readAssignment: (assignmentId: string) => read("assignments", assignmentId, parseAssignmentRecord),
     readAttempt: (attemptId: string) => read("attempts", attemptId, parseAttemptRecord),
     readCommand: (commandId: string) => read("commands", commandId, parseCommandRecord),

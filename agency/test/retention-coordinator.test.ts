@@ -29,6 +29,7 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
   const mutations: HandlerMutations = { queue, accepted: [], root, retirement: retention.view }
   const paths = { persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock"), hostKey: hostId }
   const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable: "/fixture/native", adapterPackageJson: "/fixture/adapter.json", sdkPackageJson: null, configurationFiles: [] }
+  let orchestrationPins = async (): Promise<{ paths: string[] }> => ({ paths: [] })
   let coordinator: ReturnType<typeof createRetentionCoordinator>
   const catalog = createCatalogService({ paths, generation, queue, store: catalogStore, retirement: retention.view, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [profile], observeConfig: async () => ({ providerId: "codex-acp", scope: "declared-config-v1", fingerprint: "b".repeat(64), adapterVersion: "1", sdkVersion: null }), clock: { now: () => now, every: (_ms, callback) => { tick = callback; return () => { tick = undefined } } }, onTerminal: () => coordinator?.request(), probes: {
     retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined,
@@ -46,11 +47,12 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
   } })
   const state: HandlerStatus = { hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const agents = createAgentService({ context: { paths, adapter, mutations, state, shutdownPending: () => false }, catalog, contracts: [], store: agentStore, retirement: retention.view })
-  coordinator = createRetentionCoordinator({ root, hostId, generation, queue, adapter, store: retention, catalogStore, agentStore, mutations, catalog, agents, now: () => now })
+  const coordination = { root, hostId, generation, queue, adapter, store: retention, catalogStore, agentStore, mutations, catalog, agents, now: () => now, orchestrationPins: () => orchestrationPins() }
+  coordinator = createRetentionCoordinator(coordination)
   await catalog.initialize()
   t.after(() => { agents.close(); catalog.close() })
   const record = (attempt: string, handler: string, owner: string): ManagedLaunchRecord => ({ version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: owner }, handlerGeneration: handler, launchAttemptId: attempt, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
-  return { root, hostId, generation, queue, adapter, retention, catalogStore, agentStore, catalog, agents, mutations, coordinator, setTime(value: number) { now = value }, setFailure(value: boolean) { fail = value }, advance() { now += 600001; tick?.() }, invocations: () => invocations }
+  return { root, hostId, generation, queue, adapter, retention, catalogStore, agentStore, catalog, agents, mutations, coordinator, setOrchestrationPins(loader: typeof orchestrationPins) { orchestrationPins = loader }, setTime(value: number) { now = value }, setFailure(value: boolean) { fail = value }, advance() { now += 600001; tick?.() }, invocations: () => invocations }
 }
 
 test("imported native history retains its creation receipt without invented launch evidence", async t => {
@@ -233,4 +235,37 @@ test("malformed catalog evidence cannot strand unrelated lifecycle retirement", 
   await f.coordinator.initialize()
   assert.equal(await f.retention.pending(), null)
   assert.equal(await f.agentStore.readAgent(initial.definition.agentId), null)
+})
+
+test("durable orchestration pins precede both cleanup resume and new sweep", async t => {
+  const f = await fixture(t), { initial, command, launch } = await failedAgent(f)
+  f.setTime(1000000 + FAILED_START_TTL_MS)
+  const path = `agents/commands/${command.commandId}.json`
+  f.setOrchestrationPins(async () => ({ paths: [path] }))
+  await f.coordinator.initialize()
+  assert.ok(await f.agentStore.readAgent(initial.definition.agentId))
+  await f.retention.prepare({ paths: [path], launches: [], handlers: [] })
+  await f.coordinator.initialize()
+  assert.ok(await f.retention.pending())
+  assert.ok(await f.agentStore.readCommand(command.commandId))
+})
+
+test("unreadable orchestration references pause retirement while ordinary inventory stays readable", async t => {
+  const f = await fixture(t), { initial } = await failedAgent(f)
+  f.setTime(1000000 + FAILED_START_TTL_MS)
+  f.setOrchestrationPins(async () => { throw new Error("unreadable orchestration pins") })
+  await f.coordinator.initialize()
+  assert.ok(f.coordinator.diagnostics().some(issue => issue.includes("orchestration")))
+  assert.ok(await f.agentStore.readAgent(initial.definition.agentId))
+  assert.ok((await f.agents.list()).agents.length)
+})
+
+test("pinned cleanup intent keeps evidence visible to ordinary service readers", async t => {
+  const f = await fixture(t), { command } = await failedAgent(f)
+  const path = `agents/commands/${command.commandId}.json`
+  await f.retention.prepare({ paths: [path], launches: [], handlers: [] })
+  const view = authorizedRetirementView(f.retention, intent => authorizeRetirement({ ...f, pins: [path] }, intent))
+  await view.validate()
+  assert.equal(view.hides(path), false)
+  assert.ok(await f.agentStore.readCommand(command.commandId))
 })

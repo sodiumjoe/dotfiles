@@ -43,7 +43,8 @@ async function persist(path: string, record: LaunchRecord, disposition: Reconcil
 }
 
 async function release(path: string, record: LaunchRecord): Promise<ReconcileResult> {
-  return persist(path, clone(record, { phase: "cleanup_verified", provider: record.launchAttempted ? record.provider : null, reason: null }), "released")
+  const released = clone(record, { phase: "cleanup_verified", provider: record.launchAttempted ? record.provider : null, reason: null })
+  return isDeepStrictEqual(record, released) ? { record, disposition: "released" } : persist(path, released, "released")
 }
 
 async function cleaned(path: string, record: LaunchRecord): Promise<ReconcileResult> {

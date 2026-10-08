@@ -35,6 +35,7 @@ import { backendSelection } from "./backend-selection.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
+export type AgentLaunchHooks = { agentId: string; mcpServerNames?: string[]; prepare(record: OwnedAgentRecord, params: JsonObject): Promise<JsonObject>; ready?(record: AgentRecord): void; revoke?(): void }
 type BackendEvidence = { profile: ProviderProfile; configuration: ConfigEvidence; backend: Backend }
 
 export function sessionInputs(cwd: string, raw: JsonObject | undefined, required: string[] = []): { params: JsonObject; names: string[] } {
@@ -55,6 +56,10 @@ export function sessionInputs(cwd: string, raw: JsonObject | undefined, required
 
 export type AcpSessionObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
 export type AgentService = {
+  withExecution<T>(target: AgentTuple, publish: () => Promise<T>): Promise<T>
+  orchestrationSnapshot<T>(observe: (snapshot: { agents: AgentView[]; commands: CommandView[] }) => Promise<T>): Promise<T>
+  commandReceipt(commandId: string, expectedGeneration: string): Promise<CommandView | null>
+  launchSession(input: CreateSessionInput | RestoreRequest, kind: "start" | "restore", hooks: AgentLaunchHooks): Promise<CommandView>
   importSession(input: ImportInput): Promise<CommandView>
   readonly handlerGeneration: string
   backendChoices(): Promise<JsonObject>
@@ -69,7 +74,7 @@ export type AgentService = {
   createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
 type LivePrompt = { controller: AbortController; promise: Promise<TurnResult | JsonObject> }
-type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; declaration: LaunchContract; contract: ConfiguredLaunchContract; evidence: BackendEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { hooks: AgentLaunchHooks | undefined; initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; declaration: LaunchContract; contract: ConfiguredLaunchContract; evidence: BackendEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
@@ -293,6 +298,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     retire(op)
   }
   function cleanup(op: Live): Promise<void> {
+    op.hooks?.revoke?.()
     op.editor?.close()
     permissions.invalidate(agentTuple(op.initial))
     if (op.cleanup) return op.cleanup
@@ -352,6 +358,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
     op.ready = true
+    op.hooks?.ready?.(record)
     clearTimeout(op.watchdog)
     op.deadline = Infinity
     op.result = { outcome: op.accepted.op === "restore" ? "restored" : "started", target: agentTuple(record), failure: null, session: record.session }
@@ -435,7 +442,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       return view(commands.get(commandId)!)
     })
   }
-  async function acceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore"): Promise<CommandView> {
+  async function acceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore", hooks?: AgentLaunchHooks): Promise<CommandView> {
+    if (hooks) id(hooks.agentId)
     const native = kind === "start" && !("handlerGeneration" in raw)
     const request = native ? { ...raw, commandId: id(raw.commandId), handlerGeneration: generation, environment: parseLaunchEnvironment(raw.environment) } : kind === "start" ? parseStartInput(raw) : parseRestoreRequest(raw)
     accepting++
@@ -475,7 +483,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         if (selected[field] !== undefined && selected.configValues?.[option] === undefined && merged.configValues) delete merged.configValues[option]
       }
       const settings = previousAgent?.settings ?? merged
-      const { params, names } = sessionInputs(cwd, "nativeParams" in raw ? raw.nativeParams : undefined, previousAgent?.inputRequirements.mcpServerNames)
+      const external = sessionInputs(cwd, "nativeParams" in raw ? raw.nativeParams : undefined, previousAgent?.inputRequirements.mcpServerNames.filter(name => !hooks?.mcpServerNames?.includes(name)))
+      const names = [...new Set([...external.names, ...(hooks?.mcpServerNames ?? [])])].sort()
+      let params = external.params
       const selectionDigest = kind === "start" ? native ? requestedSettingsDigest(settings) : startSelectionDigest((raw as StartInput).selection) : null
       const durableInput: JsonObject = kind === "start" ? { cwd, backendId, selectionDigest, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names } : { agentId: (request as RestoreRequest).agentId, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names }
       if (existing) {
@@ -498,7 +508,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           return view(commands.get(request.commandId) ?? previous)
         }
         checkRestorable()
-        const agentId = previousAgent?.definition.agentId ?? randomUUID()
+        const agentId = previousAgent?.definition.agentId ?? hooks?.agentId ?? randomUUID()
+        if (hooks && agentId !== hooks.agentId || !previousAgent && records.has(agentId)) throw new AgentError("COMMAND_CONFLICT")
         const record = ownedRecord(parseAgentRecordV3({
           version: 3, definition: previousAgent?.definition ?? { hostId: context.paths.hostKey, agentId, createdCommandId: request.commandId, cwd, backendId, origin: "new" },
           launch: { handlerGeneration: generation, providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId, configuration, backendFingerprint: backendFingerprint(backend, contract), compatibilityId: declaration.id, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS },
@@ -506,10 +517,14 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           settings, inputRequirements: { mcpServerNames: names }, configurationState: previousAgent?.configurationState ?? { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }
         }))
         if (previousAgent && (assessment.configurationPending.get(agentId)?.length ?? 0) > 0 && record.configurationState.verification.kind === "verified") record.configurationState.verification = { kind: "unknown" }
+        if (hooks) {
+          try { params = sessionInputs(cwd, await hooks.prepare(record, structuredClone(params)), names).params }
+          catch (error) { hooks.revoke?.(); throw error }
+        }
         const accepted = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: kind, input: durableInput, agentId, target: agentTuple(record), state: "pending", result: null })
         const conversation = createConversation(agentTuple(record))
         conversation.append({ kind: "lifecycle", phase: record.phase, cwd, session: record.session })
-        const op: Live = { initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, declaration, contract, evidence, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
+        const op: Live = { hooks, initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, declaration, contract, evidence, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
         op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invoke: (text, limits) => invoke(op, text, limits), invokeAcp: params => invokeAcp(op, params), onAccepted: request => {
           if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
           op.editor!.begin(request.submissionId, request.originConnectionId ? { connectionId: request.originConnectionId, attachment: request.originAttachment!, ...(request.editorAddress === undefined ? {} : { address: request.editorAddress }) } : undefined)
@@ -518,12 +533,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         operations.set(agentId, op); intents.set(request.commandId, op)
         const durableRecord = previousAgent ? record : parseAgentRecordV3({ ...record, settings: {} })
         try { await publishCommand(accepted, null); checkCommandDeadline(); await publishAgent(durableRecord, previousAgent ?? null) }
-        catch (error) { if (error instanceof AgentError && error.code === "STARTUP_TIMEOUT") throw error; throw new AgentError("INCOMPLETE") }
+        catch (error) { if (hooks) { hooks.revoke?.(); op.fault = agentFailure(new AgentError("STARTUP_FAILED")); op.controller.abort() }; if (error instanceof AgentError && error.code === "STARTUP_TIMEOUT") throw error; throw new AgentError("INCOMPLETE") }
         checkCommandDeadline(); launch(op); return view(accepted)
-      })
+      }).catch(error => { hooks?.revoke?.(); throw error })
       try {
         return await Promise.race([acceptance, new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; acceptingOperation?.controller.abort(); reject(new AgentError("STARTUP_TIMEOUT")) }, Math.max(1, commandDeadline - performance.now())) })])
-      } finally { clearTimeout(timer) }
+      } catch (error) { hooks?.revoke?.(); throw error }
+      finally { clearTimeout(timer) }
     } finally { accepting-- }
   }
   const start = (request: StartInput): Promise<CommandView> => acceptLaunch(request, "start")
@@ -766,6 +782,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const op = candidate && isDeepStrictEqual(agentTuple(candidate.initial), command.target) ? candidate : undefined
     if (op) intents.set(command.commandId, op)
     const activePrompt = op?.prompt?.promise
+    op?.hooks?.revoke?.()
     op?.editor?.close()
     op?.controller.abort()
     if (op) permissions.invalidate(agentTuple(op.initial))
@@ -822,6 +839,24 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   return {
     start, restore, stop, prompt, command, setSession, importSession,
+    withExecution: (target, publish) => queue.run(async () => { await requireTarget(target); return publish() }),
+    orchestrationSnapshot: observe => queue.run(async () => {
+      await verify()
+      const retained = new Map<string, AgentCommand>([...intents].map(([commandId, op]) => [commandId, op.accepted]))
+      for (const [commandId, command] of commands) retained.set(commandId, command)
+      return observe({ agents: pageAgents(false), commands: [...retained.values()].map(view) })
+    }),
+    async commandReceipt(commandId, expectedGeneration) {
+      id(commandId); id(expectedGeneration)
+      return queue.run(async () => {
+        await verify()
+        const saved = commands.get(commandId) ?? intents.get(commandId)?.accepted
+        if (!saved) return null
+        if (saved.handlerGeneration !== expectedGeneration) throw new AgentError("COMMAND_CONFLICT")
+        return view(saved)
+      })
+    },
+    launchSession: (request, kind, hooks) => acceptLaunch(request, kind, hooks),
     handlerGeneration: generation,
     attachPermissions(target, client, current) { return queue.run(async () => { await requireTarget(target); if (current && !current()) throw new AgentError("STALE_ATTACHMENT"); permissions.attach(target, client) }) },
     attachEditor(target, connectionId, address, token) {
@@ -1020,6 +1055,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { await verify(); ordinary(); if (dirty.size || dirtyAgents.size || assessment.unavailable.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },
-    close() { closed = true; frozen = true; for (const op of new Set([...operations.values(), ...intents.values()])) { op.editor?.close(); clearTimeout(op.watchdog); op.prompt?.controller.abort(); op.owner?.dispose(); op.controller.abort(); op.turns?.close(op.fault); op.conversation.close() } },
+    close() { closed = true; frozen = true; for (const op of new Set([...operations.values(), ...intents.values()])) { op.hooks?.revoke?.(); op.editor?.close(); clearTimeout(op.watchdog); op.prompt?.controller.abort(); op.owner?.dispose(); op.controller.abort(); op.turns?.close(op.fault); op.conversation.close() } },
   }
 }

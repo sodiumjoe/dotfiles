@@ -1,3 +1,4 @@
+import { journalEntries, parseAcceptedReport, type ReportRelay, type ReportReceipt } from "../orchestration/reports.js"
 import type { JournalPool } from "../orchestration/journal.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
@@ -6,7 +7,7 @@ import { parseLaunchEnvironment, launchEnvironmentDigest } from "../agent/enviro
 import { parseRequestedSettings } from "../agent/session-config.js"
 import { sessionInputs } from "../agent/service.js"
 import { MutationQueue } from "../handler/mutations.js"
-import { canonicalDigest, boundedText, fail, parseAgentRef, parseExecutionRef, parseAssignmentSpec, parseOverrides, type AgentRef, type AssignmentSpec, type EventRef, type Journal, type JournalEntry } from "../orchestration/types.js"
+import { canonicalDigest, boundedText, fail, parseAgentRef, parseExecutionRef, parseAssignmentSpec, parseOverrides, type AgentRef, type AssignmentSpec, type EventRef, type Journal, type JournalEntry, parseReportInput, parseEventRef } from "../orchestration/types.js"
 import { parseBureauRecord, type AssignmentRecord, type AssignmentView, type AttemptRecord, type BureauRecord, type CommandRecord, type RunRecord, type RunView } from "./types.js"
 import type { BureauStore } from "./store.js"
 import type { HostSnapshot, Invocation, LaunchAssignment, LaunchReceipt, OrchestrationHost, RootLaunch } from "./host.js"
@@ -24,7 +25,7 @@ export function invocationDigest(cwd: string, value: Invocation): string {
   const environment = parseLaunchEnvironment(value.environment), params = sessionInputs(cwd, value.nativeParams).params
   return canonicalDigest({ environmentDigest: launchEnvironmentDigest(environment), nativeParamsDigest: canonicalDigest(params) })
 }
-export function createBureauService(input: { store: BureauStore; journals: JournalPool; hosts: OrchestrationHost[] }) {
+export function createBureauService(input: { store: BureauStore; journals: JournalPool; origins?: JournalPool; hosts: OrchestrationHost[] }) {
   const { store, journals } = input, queue = new MutationQueue()
   const recordRunId = (record: BureauRecord) => record.kind === "attempt" ? record.value.ref.runId : record.value.runId
   const journalFor = (runId: string) => journals.forRun(runId)
@@ -182,24 +183,67 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     catch { const observed = await adapter.submission(launched.execution, launched.submissionId); if (!observed) return saveAttempt({ ...launched, state: "uncertain" }, launched) }
     return launched
   }
+  async function applyReport(entry: JournalEntry): Promise<ReportReceipt> {
+    const report = parseAcceptedReport(entry.payload), current = await store.readAttempt(report.input.attemptId)
+    if (!current || !isDeepStrictEqual(current.execution, report.input.execution) || !isDeepStrictEqual(current.ref, { runId: report.input.runId, assignmentId: report.input.assignmentId, attemptId: report.input.attemptId })) fail("STALE_EXECUTION")
+    await store.writeReport(report)
+    if (report.receipt.state === "accepted" && unresolved(current.state)) {
+      const state = report.input.report.status === "completed" ? "completed" : "failed"
+      await store.writeAttempt({ ...current, state, journal: eventRef(entry) }, current)
+    }
+    return report.receipt
+  }
+  async function acceptReport(raw: ReportRelay): Promise<ReportReceipt> {
+    const value = object(raw); keys(value, ["input", "origin"])
+    const report = parseReportInput(value.input), origin = parseEventRef(value.origin)
+    const current = await store.readAttempt(report.attemptId)
+    if (!current || !isDeepStrictEqual(current.execution, report.execution) || !isDeepStrictEqual(current.ref, { runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId })) fail("STALE_EXECUTION")
+    const entries = input.origins ? await journalEntries(input.origins.forRun(report.runId)) : []
+    const source = entries.find(entry => entry.eventId === origin.eventId)
+    if (!source || source.kind !== "report-retained" || !isDeepStrictEqual(source.payload, report) || !isDeepStrictEqual(eventRef(source), origin)) fail("INVALID_ORIGIN")
+    await input.origins!.forRun(report.runId).append(source.eventId, source.kind, source.payload)
+    const retained = await store.readReport(report.attemptId)
+    if (retained) {
+      if (!isDeepStrictEqual(retained.input.report, report.report)) fail("REPORT_CONFLICT")
+      await store.writeReport(retained)
+      return retained.receipt
+    }
+    const assignment = await store.readAssignment(report.assignmentId), membership = await store.readRun(report.runId)
+    if (!assignment || !membership) fail("INVALID_REPORT")
+    const state = assignment.activeAttemptId !== report.attemptId || membership.state !== "active" || !unresolved(current.state) ? "late" : "accepted"
+    const receipt: ReportReceipt = { commandId: report.commandId, runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId, digest: canonicalDigest(report.report), originSeq: origin.seq, state }
+    try {
+      const entry = await journalFor(report.runId).append(report.commandId, "bureau-report", { input: report, origin, receipt })
+      return await applyReport(entry)
+    } catch (error) { writeFailure = error; throw error }
+  }
   async function recover(): Promise<void> {
     try {
       for (const runId of await journals.list()) {
         let after = 0
         while (true) {
           const page = await journalFor(runId).read(after, 256)
-          for (const entry of page.entries) if (entry.kind === "bureau-record") {
+          for (const entry of page.entries) {
+            await journalFor(runId).append(entry.eventId, entry.kind, entry.payload)
+            if (entry.kind === "bureau-report") await applyReport(entry); else if (entry.kind === "bureau-record") {
             const record = parseBureauRecord(object(entry.payload).record)
             if (recordRunId(record) !== runId) fail("CORRUPT_BUREAU")
             await apply(entry)
+            }
           }
           after = page.nextCursor; if (after >= page.lastSeq) break
         }
       }
-      enabled = await store.readEnabled(); await reconcile(); initialized = true; writeFailure = null
+      enabled = await store.readEnabled()
+      if (input.origins) for (const runId of await input.origins.list()) for (const entry of await journalEntries(input.origins.forRun(runId))) if (entry.kind === "report-retained") {
+        const receipt = await acceptReport({ input: parseReportInput(entry.payload), origin: eventRef(entry) })
+        if (receipt.state !== "retained") await input.origins.forRun(runId).acknowledge("bureau", eventRef(entry))
+      }
+      await reconcile(); initialized = true; writeFailure = null
     } catch (error) { writeFailure = error; throw error }
   }
   return {
+    acceptReport: (envelope: ReportRelay) => queue.run(async () => { requireWrites(); return acceptReport(envelope) }),
     async initialize() { await queue.run(recover) },
     async enable() {
       await queue.run(async () => {
