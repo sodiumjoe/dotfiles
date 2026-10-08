@@ -224,8 +224,14 @@ function M.setup(deps)
         manager._agency_routed_permissions.subscribe()
         manager._agency_routed_permissions.open()
     end
+    function api.verify_result(report_id)
+        vim.ui.input({ prompt = "Bureau destination checkout: ", default = vim.g.agency_git_destination or vim.fn.getcwd() }, function(destination)
+            if not destination or destination == "" then return end
+            operations.verify_result(report_id, destination, function(err, receipt) report(err); if receipt then api.notify(vim.inspect(receipt)) end end)
+        end)
+    end
     controller = api
-    local commands = { AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
+    local commands = { AgencyGitVerify = { "verify_result", 1 }, AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
         AgencyOpen = { "open", 0 }, AgencyAttach = { "attach", 1 }, AgencyRestore = { "restore", 1 },
         AgencySettings = { "settings", 0 }, AgencyDetach = { "detach", 0 }, AgencyCancel = { "cancel", 0 }, AgencyStop = { "stop", 0 }, AgencyInspect = { "inspect_delivery", 0 } }
     for name, spec in pairs(commands) do

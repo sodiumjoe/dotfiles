@@ -1,3 +1,4 @@
+import { parsePublicationReceipt } from "../orchestration/git-publication.js"
 import { parseEntryIntent } from "./entry.js"
 import { parsePermissionReceipt } from "../orchestration/permission-routing.js"
 import type { HostEnrollment } from "./hosts.js"
@@ -113,6 +114,7 @@ export function createRemoteHost(input: { enrollment: HostEnrollment; connect?: 
   }
   const host: OrchestrationHost & { hostId: string } = {
     hostId: enrollment.hostId,
+    async publicationInspect(commandId) { const receipt = await request("publication-inspect", { commandId }); return receipt === null ? null : parsePublicationReceipt(receipt) },
     async entryPrepare(commandId, ref) { return parseEntryIntent(await request("entry-prepare", { commandId, ref })) },
     async entryInspect(commandId) { const value = await request("entry-inspect", { commandId }); return value === null ? null : parseEntryIntent(value) },
     async permissionDecide(commandId, ref, optionId) { return parsePermissionReceipt(await request("permission-decide", { commandId, ref, optionId })) },

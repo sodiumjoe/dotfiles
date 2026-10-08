@@ -17,7 +17,7 @@ import { toolResult, type ToolResult } from "./mcp.js"
 import { canonicalDigest, fail, OrchestrationError, parseAssignmentSpec, parseAgentRef, parseExecutionRef, parseReport, type AgentRef, type AttemptRef, type ExecutionRef } from "./types.js"
 
 type Binding = { execution: ExecutionRef; runId: string; bindingEpoch: string; attempt: AttemptRef | null; active: boolean; invocation: Invocation }
-export function createToolBindings(input: { socketPath: string; journals: JournalPool; bureau(): BureauService | undefined; host(): Pick<ReturnType<typeof createOrchestrationService>, "snapshot" | "stop" | "report">; route?(request: RoutedToolCall, signal?: AbortSignal): Promise<ToolResult>; cancelRoute?(request: { execution: ExecutionRef; runId: string; bindingEpoch: string; waitId: string }): Promise<void> }) {
+export function createToolBindings(input: { socketPath: string; journals: JournalPool; bureau(): BureauService | undefined; host(): Pick<ReturnType<typeof createOrchestrationService>, "snapshot" | "stop" | "report"> & Partial<Pick<ReturnType<typeof createOrchestrationService>, "publish">>; route?(request: RoutedToolCall, signal?: AbortSignal): Promise<ToolResult>; cancelRoute?(request: { execution: ExecutionRef; runId: string; bindingEpoch: string; waitId: string }): Promise<void> }) {
   const bindings = new Map<string, Binding>(), stopQueue = new MutationQueue()
   let closed = false
   const logical = (execution: ExecutionRef): AgentRef => ({ hostId: execution.hostId, agentId: execution.agentId })
@@ -75,7 +75,7 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
           return toolResult({ execution: value.execution, runId: value.runId, bindingEpoch: value.bindingEpoch, attempt: value.attempt, ready: value.active, effective: observed?.settings ?? null })
         }
         if (!value.active) fail("NOT_READY")
-        if (input.route && name !== "agency_report") {
+        if (input.route && name !== "agency_report" && name !== "agency_publish") {
           const core = input.bureau(), local = core && (await core.list()).some(run => run.runId === value.runId)
           if (!local) {
             if (!value.active) fail("NOT_READY")
@@ -88,6 +88,12 @@ export function createToolBindings(input: { socketPath: string; journals: Journa
           keys(args, ["commandId", "runId", "bindingEpoch", "description", "hostId", "cwd", "backendId", "modelId", "overrides", "git"])
           const core = (await authorized(value, args))!, spec = parseAssignmentSpec({ parent: sender, description: args.description, hostId: args.hostId, cwd: args.cwd, backendId: args.backendId, modelId: args.modelId, overrides: args.overrides, git: args.git })
           return toolResult(await core.delegate(id(args.commandId), value.runId, spec, value.invocation, { execution: value.execution, bindingEpoch: value.bindingEpoch }))
+        }
+        if (name === "agency_publish") {
+          keys(args, ["commandId", "runId", "bindingEpoch", "resultOid", "expectedRemoteOid"])
+          await authorized(value, args, true)
+          if (!value.attempt || !input.host().publish) fail("GIT_PUBLICATION_UNAUTHORIZED")
+          return toolResult(await input.host().publish!(id(args.commandId), value.execution, args.resultOid as string, args.expectedRemoteOid as string | null))
         }
         if (name === "agency_report") {
           keys(args, ["commandId", "runId", "bindingEpoch", "assignmentId", "attemptId", "report"])

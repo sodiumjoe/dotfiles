@@ -540,5 +540,5 @@ test("MCP schemas expose code assignments and full cross-host stop identity", ()
   assert.deepEqual(stop.properties.agent.required, ["hostId", "agentId"])
   assert.deepEqual(stop.oneOf, [{ required: ["agent"], not: { required: ["agentId"] } }, { required: ["agentId"], not: { required: ["agent"] } }])
   const report = agencyToolSchemas.find(tool => tool.name === "agency_report")!.inputSchema as any
-  assert.deepEqual(report.properties.report.properties.git.anyOf[1].properties.published, { const: false })
+  assert.deepEqual(report.properties.report.properties.git.anyOf[1].properties.published, { type: "boolean" })
 })

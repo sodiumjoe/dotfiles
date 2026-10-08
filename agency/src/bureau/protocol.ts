@@ -37,7 +37,7 @@ export function parseBureauRequest(raw: unknown): BureauRequest {
   if (v.protocol !== BUREAU_PROTOCOL) fail("INVALID_PROTOCOL")
   const exact = (...fields: string[]) => keys(v, ["protocol", "requestId", "handlerGeneration", "op", ...fields])
   switch (op) {
-    case "entry_prepare": case "entry_consume": case "entry_inspect": case "roster_snapshot": case "permission_snapshot": case "permission_decide": case "permission_inspect": { const { protocol: _p, requestId: _r, handlerGeneration: _g, ...control } = v; return { ...base, ...parseHumanControl(control) } }
+    case "git_configure": case "git_verify": case "git_proposal": case "git_integrate": case "git_inspect": case "entry_prepare": case "entry_consume": case "entry_inspect": case "roster_snapshot": case "permission_snapshot": case "permission_decide": case "permission_inspect": { const { protocol: _p, requestId: _r, handlerGeneration: _g, ...control } = v; return { ...base, ...parseHumanControl(control) } }
     case "bureau_enable": case "bureau_disable": case "bureau_status": case "bureau_hosts": case "run_list": exact(); return { ...base, op }
     case "bureau_enroll": exact("enrollment"); return { ...base, op, enrollment: parseHostEnrollment(v.enrollment) }
     case "run_inspect": exact("runId", ...(v.after === undefined ? [] : ["after"])); return { ...base, op, runId: id(v.runId), ...(v.after === undefined ? {} : { after: id(v.after) }) }

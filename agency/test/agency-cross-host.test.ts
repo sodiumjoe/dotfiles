@@ -10,7 +10,7 @@ import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 
 type Node = { fixture: Awaited<ReturnType<typeof agentServiceFixture>>; coordination: Awaited<ReturnType<typeof createHostCoordination>>; server: Awaited<ReturnType<typeof createHandlerBridge>> }
-async function cluster(t: TestContext) {
+async function cluster(t: TestContext, publication?: import("../src/bureau/publication-policy.js").PublicationPolicy) {
   const nodes: Node[] = [], connections: BridgeConnection[] = []
   t.after(async () => { for (const connection of connections) connection.close(); for (const node of nodes) await node.coordination.close(); for (const node of nodes) await node.server.close(); for (const node of nodes) { await node.fixture.service.freezeAndDrain(true); await node.fixture.service.verifyDischarged() }; t.diagnostic("cross-host fixture cleanup: zero owned survivors") })
   async function mount(fixture: Node["fixture"]) {
@@ -39,7 +39,7 @@ async function cluster(t: TestContext) {
   for (const node of [a, b, c]) await laptop.coordination.bureau.enroll({ inventoryId: randomUUID(), hostId: node.fixture.context.paths.hostKey, hostname: "fixture-" + node.fixture.context.paths.hostKey[0], agyPath: "/opt/agency/agy", loginShell: "/bin/bash" })
   await laptop.coordination.bureau.enable()
   const invocation = { environment: laptop.fixture.input.environment, nativeParams: { mcpServers: [] } }
-  const root = await laptop.coordination.bureau.startRun(randomUUID(), { hostId: a.fixture.context.paths.hostKey, cwd: a.fixture.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {}, objective: "Coordinate A, B and C" }, invocation)
+  const root = await laptop.coordination.bureau.startRun(randomUUID(), { hostId: a.fixture.context.paths.hostKey, cwd: a.fixture.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {}, objective: "Coordinate A, B and C", ...(publication ? { publication } : {}) }, invocation)
   const scope = { runId: root.runId, bindingEpoch: root.bindingEpoch }, rootToken = a.coordination.tools.tokenFor(root.execution!)!
   const delegate = async (node: Node, token: string, destination: Node, description: string, commandId = randomUUID()) => {
     const args = { ...scope, commandId, description, hostId: destination.fixture.context.paths.hostKey, cwd: destination.fixture.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {}, git: null }
@@ -243,4 +243,30 @@ test("four Handler roster and entry route from remote parent through Bureau to t
   assert.equal(consumed.state, "consumed")
   await assert.rejects(f.a.coordination.human({ op: "entry_consume", commandId: prepared.intent.commandId, digest: prepared.intent.digest, hostId: ref.hostId, inventoryId: ref.inventoryId }), /HOST_IDENTITY_CHANGED/)
   assert.equal(f.a.fixture.spawns(), 1); assert.equal(f.b.fixture.spawns(), 1); assert.equal(f.c.fixture.spawns(), 1)
+})
+
+test("remote code publication, offline report replay and human immutable integration compose", { timeout: 45000 }, async t => {
+  const { gitFixture, git } = await import("./git-support.js"), g = await gitFixture(t)
+  const f = await cluster(t, { destinations: [{ hostId: "c".repeat(64), repository: g.repository, remote: g.remote }] })
+  const result = await f.a.coordination.tools.call(f.rootToken, "agency_delegate", { ...f.scope, commandId: randomUUID(), description: "Implement code", hostId: "c".repeat(64), cwd: g.repository, backendId: "codex-acp", modelId: "model-a", overrides: {}, git: { repository: g.repository, remote: g.remote, baseOid: g.baseOid } })
+  assert.equal(result.isError, false, JSON.stringify(result))
+  const assignment = JSON.parse(result.content[0]!.text), token = f.b.coordination.tools.tokenFor(assignment.attempt.execution)!, preparation = assignment.attempt.git
+  const oid = await g.commit("code", "verified", preparation.cwd)
+  const publishId = randomUUID(), published = await f.b.coordination.tools.call(token, "agency_publish", { ...f.scope, commandId: publishId, resultOid: oid, expectedRemoteOid: null })
+  assert.equal(published.isError, false, JSON.stringify(published)); assert.equal(JSON.parse(published.content[0]!.text).state, "published")
+  await f.laptop.coordination.bureau.disable()
+  const report = await f.b.coordination.tools.call(token, "agency_report", { ...f.scope, commandId: randomUUID(), assignmentId: assignment.assignmentId, attemptId: assignment.attempt.ref.attemptId,
+    report: { status: "completed", summary: "Code complete", issues: [], validation: [{ argv: ["sh", "-c", "worker claim"], cwd: preparation.cwd, exitCode: 0, result: "Claim only" }], git: { ...preparation.exchange, resultOid: oid, published: true, publicationCommandId: publishId } } })
+  assert.equal(report.isError, false, JSON.stringify(report)); assert.equal(JSON.parse(report.content[0]!.text).state, "retained")
+  await f.laptop.coordination.bureau.enable()
+  await until(async () => (await f.laptop.coordination.bureau.assignment(assignment.assignmentId)).attempt.state === "completed" ? true : undefined, 15000)
+  await f.laptop.coordination.human({ op: "git_configure", destinationCwd: g.destination, remote: g.remote, validations: [[process.execPath, "-e", "process.stdout.write(require('node:fs').readFileSync('code.txt','utf8'))"]] })
+  const proposal = await f.a.coordination.human({ op: "git_verify", reportId: assignment.attempt.ref.attemptId, destinationCwd: g.destination }) as import("../src/bureau/git-results.js").ResultProposal
+  assert.deepEqual(proposal.issues, []); assert.equal(proposal.validations[0]!.result, "verified")
+  const newer = await g.commit("later", "later", preparation.cwd)
+  assert.equal((await f.b.coordination.origin.publish(randomUUID(), assignment.attempt.execution, newer, oid)).state, "published")
+  const receipt = await f.a.coordination.human({ op: "git_integrate", commandId: randomUUID(), proposalId: proposal.proposalId, expectedHead: proposal.destination.head, strategy: "merge" }) as { state: string }
+  assert.equal(receipt.state, "integrated")
+  await git(["merge-base", "--is-ancestor", oid, "HEAD"], g.destination)
+  await assert.rejects(git(["merge-base", "--is-ancestor", newer, "HEAD"], g.destination))
 })

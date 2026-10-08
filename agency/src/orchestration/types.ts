@@ -1,3 +1,4 @@
+import { parsePublicationReceipt, type PublicationReceipt } from "./git-publication.js"
 import { parsePermissionEvent } from "./permission-routing.js"
 import { parseStopCommand, parseStopReceipt } from "./receipts.js"
 import { parseNotificationReceipt, parseNotificationRetry } from "./scheduler.js"
@@ -21,7 +22,7 @@ export type GitInput = { remote: string; repository: string; baseOid: string }
 export type GitExchange = GitInput & { branch: string }
 export type AssignmentSpec = { parent: AgentRef; description: string; hostId: string; cwd: string; backendId: ProviderId; modelId: string; overrides: { modeId?: string; configValues?: Record<string, string | boolean> }; git: GitInput | null }
 export type Validation = { argv: string[]; cwd: string; exitCode: number; result: string }
-export type Report = { status: "completed" | "blocked" | "failed"; summary: string; issues: string[]; validation: Validation[]; git: (GitExchange & { resultOid: string; published: boolean }) | null }
+export type Report = { status: "completed" | "blocked" | "failed"; summary: string; issues: string[]; validation: Validation[]; git: (GitExchange & { resultOid: string; published: boolean; publication?: PublicationReceipt; publicationCommandId?: string }) | null }
 export type AttemptState = "dispatch_pending" | "running" | "awaiting_report" | "completed" | "failed" | "interrupted" | "cancelled" | "uncertain"
 export type AttemptRef = { runId: string; assignmentId: string; attemptId: string }
 export type ReportInput = AttemptRef & { commandId: string; execution: ExecutionRef; report: Report }
@@ -105,9 +106,9 @@ export function parseReport(value: unknown): Report {
   })
   let git: Report["git"] = null
   if (v.git !== null) {
-    const g = object(v.git); keys(g, ["remote", "repository", "baseOid", "branch", "resultOid", "published"])
+    const g = object(v.git); keys(g, ["remote", "repository", "baseOid", "branch", "resultOid", "published", ...["publication", "publicationCommandId"].filter(key => Object.hasOwn(g, key))])
     if (typeof g.published !== "boolean") fail()
-    git = { remote: text(g.remote, 4096), repository: absolutePath(g.repository), baseOid: oid(g.baseOid), branch: text(g.branch, 4096), resultOid: oid(g.resultOid), published: g.published }
+    git = { remote: text(g.remote, 4096), repository: absolutePath(g.repository), baseOid: oid(g.baseOid), branch: text(g.branch, 4096), resultOid: oid(g.resultOid), published: g.published, ...(Object.hasOwn(g, "publicationCommandId") ? { publicationCommandId: id(g.publicationCommandId) } : {}), ...(Object.hasOwn(g, "publication") ? { publication: parsePublicationReceipt(g.publication) } : {}) }
   }
   const result: Report = { status: enumValue(v.status, ["completed", "blocked", "failed"]), summary: boundedText(v.summary), issues: boundedArray(v.issues, entry => boundedText(entry)), validation, git }
   encode(result)

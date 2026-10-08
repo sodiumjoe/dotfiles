@@ -17,6 +17,37 @@ local function tuple_of(view)
     }
 end
 
+function M.git_preview(proposal, strategy)
+    local lines = {
+        "Strategy: " .. strategy,
+        "Destination: " .. proposal.destination.cwd,
+        "Destination ref: " .. tostring(proposal.destination.ref),
+        "Destination HEAD: " .. proposal.destination.head,
+        "Remote: " .. proposal.remoteUrl,
+        "Base OID: " .. proposal.baseOid,
+        "Result OID: " .. proposal.resultOid,
+        "Result tree: " .. tostring(proposal.tree),
+        "", "Ordered source commits",
+    }
+    vim.list_extend(lines, proposal.sourceOids)
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Worker validation claims"
+    for _, value in ipairs(proposal.claimedValidations) do
+        lines[#lines + 1] = table.concat(value.argv, " ") .. " · exit " .. value.exitCode
+        vim.list_extend(lines, vim.split(value.result, "\n", { plain = true }))
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Configured validation results"
+    for _, value in ipairs(proposal.validations) do
+        lines[#lines + 1] = table.concat(value.argv, " ") .. " · exit " .. value.exitCode
+        vim.list_extend(lines, vim.split(value.result, "\n", { plain = true }))
+    end
+    lines[#lines + 1] = ""
+    vim.list_extend(lines, vim.split(proposal.diffSummary, "\n", { plain = true }))
+    for _, issue in ipairs(proposal.issues) do lines[#lines + 1] = "Issue: " .. issue end
+    return lines
+end
+
 function M.new(deps)
     deps = deps or {}
     local client = deps.client or require("sodium.agency.control").new()
@@ -462,6 +493,38 @@ function M.new(deps)
                 end
             )
         end
+    end
+    function api.verify_result(report_id, destination, callback)
+        local operation, cwd = begin(), vim.fn.getcwd()
+        local choose = deps.select_git_strategy or function(proposal, done)
+            vim.ui.select(proposal.linear and { "merge", "cherry-pick" } or { "merge" }, { prompt = "Integrate verified result" }, done)
+        end
+        local confirm = deps.confirm_git or function(proposal, strategy, done)
+            require("sodium.agency.picker").git_result(proposal, strategy, done)
+        end
+        command({ "git", "verify", report_id, "--destination", destination }, cwd, function(err, envelope)
+            if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
+            if err then callback(err); return end
+            local proposal = envelope.result
+            if #proposal.issues > 0 then
+                report({ proposal = proposal, preview = M.git_preview(proposal, "merge") })
+                callback(error_value("GIT_PROPOSAL_REJECTED"), proposal); return
+            end
+            choose(proposal, function(strategy)
+                if not strategy or not valid_operation(operation) then callback(error_value("CANCELLED")); return end
+                if strategy ~= "merge" and (strategy ~= "cherry-pick" or not proposal.linear) then callback(error_value("MERGE_REQUIRED")); return end
+                confirm(proposal, strategy, function(approved)
+                    if not approved or not valid_operation(operation) then callback(error_value("CANCELLED")); return end
+                    local command_id = uuid()
+                    command({ "git", "integrate", proposal.proposalId, "--command-id", command_id,
+                        "--expected-head", proposal.destination.head, "--strategy", strategy }, cwd, function(failure, result)
+                        if failure then report({ commandId = command_id, error = failure, inspect = "agy git inspect " .. command_id }); callback(failure); return end
+                        report({ commandId = command_id, receipt = result.result })
+                        callback(nil, result.result)
+                    end, 150000)
+                end)
+            end)
+        end, 150000)
     end
     function api.attachment()
         return active

@@ -9,7 +9,7 @@ export async function dispatchBureau(core: BureauService, generation: string, re
     if (request.handlerGeneration !== generation) fail("STALE_HANDLER")
     let result: unknown
     switch (request.op) {
-      case "entry_prepare": case "entry_consume": case "entry_inspect": case "roster_snapshot": case "permission_snapshot": case "permission_decide": case "permission_inspect": { if (!human) fail("UNSUPPORTED_HUMAN_CONTROL"); const { protocol: _p, requestId: _r, handlerGeneration: _g, ...control } = request; result = await human(control); break }
+      case "git_configure": case "git_verify": case "git_proposal": case "git_integrate": case "git_inspect": case "entry_prepare": case "entry_consume": case "entry_inspect": case "roster_snapshot": case "permission_snapshot": case "permission_decide": case "permission_inspect": { if (!human) fail("UNSUPPORTED_HUMAN_CONTROL"); const { protocol: _p, requestId: _r, handlerGeneration: _g, ...control } = request; result = await human(control); break }
       case "bureau_hosts": result = await core.enrolledHosts(); break
       case "bureau_enroll": result = await core.enroll(request.enrollment); break
       case "bureau_status": result = await core.status(); break

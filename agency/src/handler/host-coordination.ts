@@ -1,3 +1,5 @@
+import { createGitResults } from "../bureau/git-results.js"
+import { createGitIntegration } from "../bureau/git-integration.js"
 import { createEntryController, type EntryDriver } from "../bureau/entry.js"
 import { createTmuxEntryDriver } from "../bureau/entry-editor.js"
 import { canonicalDigest, fail } from "../orchestration/types.js"
@@ -66,6 +68,8 @@ export async function createHostCoordination(input: { root: string; runtimeRoot:
     },
     async list() { return (await inventory.list()).map(enrollment => ({ enrollment, observation: remote.find(host => host.hostId === enrollment.hostId)!.observation() })) }
   } })
+  const gitResults = createGitResults({ root: input.root, report: reportId => storageQueue(input.root).run(() => store.readReport(reportId)) })
+  const gitIntegration = createGitIntegration({ root: input.root, results: gitResults })
   let humanEnabled = false
   const permissions = createBureauPermissions({ root: input.root, hosts, enabled: () => humanEnabled })
   const roster = createBureauRoster({ root: input.root, bureauId: input.hostId, hosts, store, enabled: () => humanEnabled, enrollments: inventory.list })
@@ -82,6 +86,11 @@ export async function createHostCoordination(input: { root: string; runtimeRoot:
     humanEnabled = status.enabled && status.ready && status.writeAvailable
     if (!humanEnabled) return input.coordinator({ kind: "human", operation })
     switch (operation.op) {
+      case "git_configure": return gitResults.configure(operation)
+      case "git_verify": return gitResults.verifyResult(operation.reportId, operation.destinationCwd)
+      case "git_proposal": return gitResults.proposal(operation.proposalId)
+      case "git_integrate": return gitIntegration.integrate(operation.commandId, operation.proposalId, operation.expectedHead, operation.strategy)
+      case "git_inspect": return gitIntegration.inspect(operation.commandId)
       case "entry_prepare": case "entry_inspect": {
         const enrollment = (await inventory.list()).find(value => value.inventoryId === operation.ref.inventoryId && value.hostId === operation.ref.hostId)
         if (!enrollment) fail("HOST_IDENTITY_CHANGED")

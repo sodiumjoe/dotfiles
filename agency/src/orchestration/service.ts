@@ -1,3 +1,5 @@
+import { createPublicationController, grantPublication } from "./git-publication.js"
+import { parsePublicationDestination } from "../bureau/publication-policy.js"
 import { prepareAssignmentGit, assignmentWorktreePath, type GitPreparation } from "./git-worktree.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
@@ -28,14 +30,19 @@ export function createOrchestrationService(input: { root: string; hostId: string
     const target = parseExecutionRef(execution), observed = await agents.sessionRecord(target.agentId)
     if (!observed?.live || observed.record.phase !== "ready" || !isDeepStrictEqual(executionOf(observed.record), target)) fail("STALE_EXECUTION")
   }
+  const publication = createPublicationController({ root: input.root, capability: async execution => (await preparations()).find(launch => isDeepStrictEqual(launch.execution, execution))?.publication ?? null, validate: async execution => { try { await validate(execution); return true } catch { return false } } })
   const outbox = createReportOutbox({ journals, relay: input.relay, retain: (execution, publish) => agents.withExecution(tuple(execution), publish), async validate(execution, report) {
     await validate(execution)
     const prepared = (await preparations()).find(launch => isDeepStrictEqual(launch.execution, execution) && isDeepStrictEqual(launch.attempt, { runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId }))
     if (!prepared) fail("STALE_EXECUTION")
     if (prepared.git) {
-      if (report.report.git?.published) fail("GIT_PUBLICATION_UNAUTHORIZED")
-      if (report.report.status === "completed") fail("GIT_PUBLICATION_REQUIRED")
-      if (report.report.git) { const { resultOid, published, ...exchange } = report.report.git; if (!isDeepStrictEqual(exchange, prepared.git.exchange)) fail("INVALID_REPORT") }
+      if (report.report.status === "completed" || report.report.git?.published) {
+        const evidence = report.report.git?.publication
+        if (!evidence || !prepared.publication) fail("GIT_PUBLICATION_REQUIRED")
+        const retained = await publication.inspect(evidence.commandId)
+        if (!retained || retained.state !== "published" || !isDeepStrictEqual(retained, evidence) || !isDeepStrictEqual(retained.capability, prepared.publication) || evidence.resultOid !== report.report.git!.resultOid) fail("GIT_PUBLICATION_REQUIRED")
+      }
+      if (report.report.git) { const { resultOid, published, publication: _publication, publicationCommandId: _command, ...exchange } = report.report.git; if (!isDeepStrictEqual(exchange, prepared.git.exchange)) fail("INVALID_REPORT") }
     }
   } })
   async function inspectCommand(commandId: string, handlerGeneration: string): Promise<LaunchReceipt | null> {
@@ -82,6 +89,11 @@ export function createOrchestrationService(input: { root: string; hostId: string
       const execution = executionOf(record)!, edge = "lineage" in command ? command.lineage : null
       const preparation: OriginLaunch = { commandId: command.commandId, runId: command.runId, agent: command.agent, execution, launchAttemptId: record.launch.launchAttemptId, lineage: edge, attempt: "ref" in command ? command.ref : null, bindingEpoch: command.bindingEpoch, invocationDigest: invocationDigest(spec.cwd, invocation), toolsDigest: "0".repeat(64), settings: record.settings, launchDigest: canonicalDigest(command), ...(git ? { git } : {}) }
       reserved = preparation
+      if ("ref" in command && command.publication) {
+        const authority = parsePublicationDestination(command.publication)
+        if (!git || authority.hostId !== input.hostId || authority.repository !== git.exchange.repository || authority.remote !== git.exchange.remote) fail("GIT_PUBLICATION_UNAUTHORIZED")
+        preparation.publication = await grantPublication({ attempt: command.ref, execution, preparation: git })
+      }
       const definition = input.tools.definition(execution, preparation, invocation)
       preparation.toolsDigest = canonicalDigest({ ...definition, env: Array.isArray(definition.env) ? definition.env.map(value => value && typeof value === "object" && !Array.isArray(value) ? { name: value.name } : value) : [] })
       if (edge) await lineage.publish(command.agent, edge, await lineage.read(command.agent))
@@ -101,7 +113,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
     }
   }
   const host: OrchestrationHost = {
-    hostId: input.hostId, launch, launchRoot: launch, inspectCommand,
+    hostId: input.hostId, launch, launchRoot: launch, inspectCommand, publicationInspect: publication.inspect,
     permissionDecide: agents.permissionRouting.decide, permissionInspect: agents.permissionRouting.inspect, permissionRead: agents.permissionRouting.read, permissionAcknowledge: agents.permissionRouting.acknowledge,
     async restoreRoot(command, invocation) {
       const observed = await agents.sessionRecord(command.agent.agentId)
@@ -143,5 +155,13 @@ export function createOrchestrationService(input: { root: string; hostId: string
       return { commandId, execution: target, state: command.durability === "verified" && command.command.result?.outcome === "stopped" ? "stopped" : "uncertain" }
     }
   }
-  return { ...host, report: outbox.report, replay: outbox.replay, pins: () => loadOrchestrationPins(input.root), async invocation(target: ExecutionRef): Promise<Invocation> { await validate(target); const saved = transient.get(target.agentId); if (!saved || !isDeepStrictEqual(saved.execution, target)) fail("SESSION_INPUT_REQUIRED"); return captureInvocation(saved.invocation) } }
+  return { ...host, publish: publication.publish, async report(raw: Parameters<typeof outbox.report>[0]) {
+    const value = structuredClone(raw), result = value.report.git
+    if (result?.publicationCommandId) {
+      const evidence = await publication.inspect(result.publicationCommandId)
+      if (!evidence || evidence.state !== "published" || !isDeepStrictEqual(evidence.capability.execution, value.execution) || !isDeepStrictEqual(evidence.capability.attempt, { runId: value.runId, assignmentId: value.assignmentId, attemptId: value.attemptId }) || evidence.resultOid !== result.resultOid || result.publication && !isDeepStrictEqual(evidence, result.publication)) fail("GIT_PUBLICATION_REQUIRED")
+      result.publication = evidence
+    }
+    return outbox.report(value)
+  }, replay: outbox.replay, pins: () => loadOrchestrationPins(input.root), async invocation(target: ExecutionRef): Promise<Invocation> { await validate(target); const saved = transient.get(target.agentId); if (!saved || !isDeepStrictEqual(saved.execution, target)) fail("SESSION_INPUT_REQUIRED"); return captureInvocation(saved.invocation) } }
 }

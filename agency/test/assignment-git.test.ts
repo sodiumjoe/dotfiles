@@ -127,7 +127,7 @@ test("origin launches code workers in a retained exact-base worktree and restore
   const reportInput = { ...command.ref, commandId: randomUUID(), execution: receipt.execution!, report: { status: "completed" as const, summary: "Code changes finished", issues: [], validation: [], git: null } }
   await assert.rejects(host.report(reportInput), /GIT_PUBLICATION_REQUIRED/)
   const result = { ...exchange, resultOid: baseOid, published: false }
-  await assert.rejects(host.report({ ...reportInput, report: { ...reportInput.report, status: "blocked", git: { ...result, published: true } } }), /GIT_PUBLICATION_UNAUTHORIZED/)
+  await assert.rejects(host.report({ ...reportInput, report: { ...reportInput.report, status: "blocked", git: { ...result, published: true } } }), /GIT_PUBLICATION_REQUIRED/)
   await assert.rejects(host.report({ ...reportInput, report: { ...reportInput.report, status: "blocked", git: { ...result, branch: "moon/agency/unrelated" } } }), /INVALID_REPORT/)
   assert.equal((await host.report({ ...reportInput, report: { ...reportInput.report, status: "blocked", git: result } })).state, "retained")
   await writeFile(join(preparation.cwd, "code.txt"), "partial worker edits")

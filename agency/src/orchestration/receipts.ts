@@ -1,3 +1,4 @@
+import { parsePublicationCapability, type PublicationCapability } from "./git-publication.js"
 import { parseGitPreparation, type GitPreparation } from "./git-worktree.js"
 import { acknowledges } from "../bureau/inbox.js"
 import { isDeepStrictEqual } from "node:util"
@@ -10,12 +11,13 @@ import { journalEntries } from "./reports.js"
 import { canonicalDigest, enumValue, fail, parseAgentRef, parseAttemptRef, parseExecutionRef, parseLineage, type AgentRef, type AttemptRef, type ExecutionRef, type Lineage, type JournalEntry } from "./types.js"
 import type { LaunchReceipt } from "../bureau/host.js"
 
-export type OriginLaunch = { commandId: string; runId: string; agent: AgentRef; execution: ExecutionRef; launchAttemptId: string; lineage: Lineage | null; attempt: AttemptRef | null; bindingEpoch: string; invocationDigest: string; toolsDigest: string; settings: RequestedSettings; launchDigest?: string; git?: GitPreparation | null }
+export type OriginLaunch = { commandId: string; runId: string; agent: AgentRef; execution: ExecutionRef; launchAttemptId: string; lineage: Lineage | null; attempt: AttemptRef | null; bindingEpoch: string; invocationDigest: string; toolsDigest: string; settings: RequestedSettings; launchDigest?: string; git?: GitPreparation | null; publication?: PublicationCapability }
 export function parseOriginLaunch(raw: unknown): OriginLaunch {
-  const v = object(raw); keys(v, ["commandId", "runId", "agent", "execution", "launchAttemptId", "lineage", "attempt", "bindingEpoch", "invocationDigest", "toolsDigest", "settings", ...["git", "launchDigest"].filter(key => Object.hasOwn(v, key))])
+  const v = object(raw); keys(v, ["commandId", "runId", "agent", "execution", "launchAttemptId", "lineage", "attempt", "bindingEpoch", "invocationDigest", "toolsDigest", "settings", ...["git", "launchDigest", "publication"].filter(key => Object.hasOwn(v, key))])
   const agent = parseAgentRef(v.agent), execution = parseExecutionRef(v.execution), runId = id(v.runId), lineage = v.lineage === null ? null : parseLineage(v.lineage), attempt = v.attempt === null ? null : parseAttemptRef(v.attempt)
   if (agent.agentId !== execution.agentId || agent.hostId !== execution.hostId || lineage && lineage.runId !== runId || attempt && (attempt.runId !== runId || attempt.assignmentId !== lineage?.assignmentId)) fail("INVALID_ORIGIN")
-  return { commandId: id(v.commandId), runId, agent, execution, launchAttemptId: id(v.launchAttemptId), lineage, attempt, bindingEpoch: id(v.bindingEpoch), invocationDigest: hash(v.invocationDigest), toolsDigest: hash(v.toolsDigest), settings: parseRequestedSettings(v.settings), ...(Object.hasOwn(v, "launchDigest") ? { launchDigest: hash(v.launchDigest) } : {}), ...(Object.hasOwn(v, "git") ? { git: v.git === null ? null : parseGitPreparation(v.git) } : {}) }
+  if (v.publication !== undefined) { const capability = parsePublicationCapability(v.publication); if (!isDeepStrictEqual(capability.execution, execution) || !isDeepStrictEqual(capability.attempt, attempt) || !isDeepStrictEqual(capability.preparation, v.git)) fail("INVALID_ORIGIN") }
+  return { commandId: id(v.commandId), runId, agent, execution, launchAttemptId: id(v.launchAttemptId), lineage, attempt, bindingEpoch: id(v.bindingEpoch), invocationDigest: hash(v.invocationDigest), toolsDigest: hash(v.toolsDigest), settings: parseRequestedSettings(v.settings), ...(Object.hasOwn(v, "publication") ? { publication: parsePublicationCapability(v.publication) } : {}), ...(Object.hasOwn(v, "launchDigest") ? { launchDigest: hash(v.launchDigest) } : {}), ...(Object.hasOwn(v, "git") ? { git: v.git === null ? null : parseGitPreparation(v.git) } : {}) }
 }
 export function parseOriginReceipt(raw: unknown): { runId: string; receipt: LaunchReceipt } {
   const v = object(raw); keys(v, ["runId", "receipt"])

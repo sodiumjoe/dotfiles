@@ -26,7 +26,7 @@ test("operational Bureau launches a provider that uses the injected MCP helper",
   const run = (reply as any).result
   assert.equal(run.state, "active", JSON.stringify({ run, agents: await f.list() }))
   const bootstrap = JSON.parse(await readFile(join(f.root, "tools-bootstrap-" + run.root.agentId + ".json"), "utf8"))
-  assert.equal(bootstrap.list.result.tools.length, 6)
+  assert.equal(bootstrap.list.result.tools.length, 7)
   assert.equal(bootstrap.denied.result.isError, true)
   assert.match(bootstrap.denied.result.content[0].text, /NOT_READY/)
   await writeFile(join(f.root, "tool-action.json"), JSON.stringify({ name: "agency_delegate", arguments: { commandId: randomUUID(), runId: run.runId, bindingEpoch: run.bindingEpoch, description: "Child fixture", hostId: f.paths.hostKey, cwd: f.workspace, backendId: "codex-acp", modelId: "model-a", overrides: {}, git: null } }), { mode: 0o600 })

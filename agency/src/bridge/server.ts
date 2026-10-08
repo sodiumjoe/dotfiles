@@ -1,3 +1,4 @@
+import { parsePublicationDestination } from "../bureau/publication-policy.js"
 import { parseEntryRef } from "../bureau/entry.js"
 import { parsePermissionRef } from "../orchestration/permission-routing.js"
 import { readFile } from "node:fs/promises"
@@ -26,19 +27,19 @@ function parseLaunch(channel: string, raw: unknown): LaunchAssignment | RootLaun
     if (v.retryMode !== undefined && v.retryMode !== "restore") fail("INVALID_LAUNCH")
     return { ...base, cwd: absolutePath(v.cwd), backendId: providerId(v.backendId), modelId: text(v.modelId), overrides: parseOverrides(v.overrides), ...(v.retryMode ? { retryMode: "restore" as const } : {}) }
   }
-  keys(v, [...common, "ref", "spec", "lineage", "git", "retryMode", "savedSettings", ...(Object.hasOwn(v, "savedGit") ? ["savedGit"] : [])])
+  keys(v, [...common, "ref", "spec", "lineage", "git", "retryMode", "savedSettings", ...["savedGit", "publication"].filter(key => Object.hasOwn(v, key))])
   const spec = parseAssignmentSpec(v.spec), ref = parseAttemptRef(v.ref), lineage = parseLineage(v.lineage)
   const g = v.git === null ? null : object(v.git), git = g === null ? null : { ...parseGitInput({ remote: g.remote, repository: g.repository, baseOid: g.baseOid }), branch: text(g.branch) }
   if (g) keys(g, ["remote", "repository", "baseOid", "branch"])
   if (ref.runId !== base.runId || lineage.runId !== base.runId || lineage.assignmentId !== ref.assignmentId || spec.hostId !== base.agent.hostId || JSON.stringify(spec.parent) !== JSON.stringify(lineage.parent)) fail("INVALID_LAUNCH")
-  return { ...base, spec, ref, lineage, git, retryMode: enumValue(v.retryMode, ["new", "restore", "replace"]), savedSettings: v.savedSettings === null ? null : parseRequestedSettings(v.savedSettings), ...(Object.hasOwn(v, "savedGit") ? { savedGit: v.savedGit === null ? null : parseGitPreparation(v.savedGit) } : {}) }
+  return { ...base, spec, ref, lineage, git, ...(Object.hasOwn(v, "publication") ? { publication: parsePublicationDestination(v.publication) } : {}), retryMode: enumValue(v.retryMode, ["new", "restore", "replace"]), savedSettings: v.savedSettings === null ? null : parseRequestedSettings(v.savedSettings), ...(Object.hasOwn(v, "savedGit") ? { savedGit: v.savedGit === null ? null : parseGitPreparation(v.savedGit) } : {}) }
 }
 export async function createHandlerBridge(input: { root: string; host: OrchestrationHost; journals: JournalPool; replay?(): Promise<void>; sourceRevision?: string; identity?: { hostId: string; handlerGeneration: string } }) {
   const snapshot = input.identity ?? await input.host.snapshot(), revision = input.sourceRevision ?? text(JSON.parse(await readFile(new URL("../../build-manifest.json", import.meta.url), "utf8")).sourceRevision)
   const peers = new Set<ReturnType<typeof createBridgePeer>>()
   let coordinator: ReturnType<typeof createBridgePeer> | undefined
   const server = await bindPrivateSocket(input.root, "bridge.sock", socket => {
-    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: snapshot.hostId, handlerGeneration: snapshot.handlerGeneration, connectionId: randomUUID(), sourceRevision: revision, nodeVersion: process.version, capabilities: ["snapshot", "launch", "launchRoot", "restoreRoot", "invoke", "inspectCommand", "submission", "submit", "stop", "origin-read", "origin-retained", "origin-ack", "coordinate", "read-pages", "read-open", "read-page", "read-close", ...(input.host.entryPrepare ? ["entry-prepare", "entry-inspect"] : []), ...(input.host.permissionDecide ? ["permission-decide", "permission-inspect", "permission-read", "permission-ack"] : []), ...(input.replay ? ["replay"] : [])], outboxCursor: 0 }
+    const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, hostId: snapshot.hostId, handlerGeneration: snapshot.handlerGeneration, connectionId: randomUUID(), sourceRevision: revision, nodeVersion: process.version, capabilities: ["snapshot", "launch", "launchRoot", "restoreRoot", "invoke", "inspectCommand", "submission", "submit", "stop", "origin-read", "origin-retained", "origin-ack", "coordinate", "read-pages", "read-open", "read-page", "read-close", ...(input.host.publicationInspect ? ["publication-inspect"] : []), ...(input.host.entryPrepare ? ["entry-prepare", "entry-inspect"] : []), ...(input.host.permissionDecide ? ["permission-decide", "permission-inspect", "permission-read", "permission-ack"] : []), ...(input.replay ? ["replay"] : [])], outboxCursor: 0 }
     const peer = createBridgePeer({ input: socket, output: socket, hello }); peers.add(peer)
     void peer.closed.then(() => { peers.delete(peer); if (coordinator === peer) coordinator = undefined; socket.destroy() })
     const target = (raw: unknown) => { const execution = parseExecutionRef(raw); if (execution.hostId !== hello.hostId || execution.handlerGeneration !== hello.handlerGeneration) fail("STALE_HANDLER"); return execution }
@@ -56,6 +57,7 @@ export async function createHandlerBridge(input: { root: string; host: Orchestra
       if (channel === "permission-inspect" && input.host.permissionInspect) { keys(p, ["commandId"]); return input.host.permissionInspect(id(p.commandId)) }
       if (channel === "permission-read" && input.host.permissionRead) { keys(p, ["after", "limit"]); return input.host.permissionRead(timestamp(p.after), timestamp(p.limit)) }
       if (channel === "permission-ack" && input.host.permissionAcknowledge) { keys(p, ["event"]); await input.host.permissionAcknowledge(parseEventRef(p.event)); return { acknowledged: true } }
+      if (channel === "publication-inspect" && input.host.publicationInspect) { keys(p, ["commandId"]); return input.host.publicationInspect(id(p.commandId)) }
       if (channel === "snapshot") { keys(p, []); return input.host.snapshot() }
       if (channel === "invoke") {
         keys(p, ["channel", "payload", "invocation"])

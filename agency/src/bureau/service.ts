@@ -1,3 +1,4 @@
+import { parsePublicationPolicy, type PublicationPolicy } from "./publication-policy.js"
 import type { HostEnrollment } from "./hosts.js"
 import { pendingScopedStops, parseStopCommand, parseStopReceipt } from "../orchestration/receipts.js"
 import { createScheduler, parseNotificationRetry } from "../orchestration/scheduler.js"
@@ -20,10 +21,10 @@ import { parseGitPreparation } from "../orchestration/git-worktree.js"
 import { createLocalOrigins, type OriginSource } from "./origins.js"
 import { transition, unresolved } from "./reducer.js"
 
-export type StartRunInput = { objective: string; hostId: string; cwd: string; backendId: ProviderId; modelId: string; overrides: AssignmentSpec["overrides"] }
+export type StartRunInput = { objective: string; hostId: string; cwd: string; backendId: ProviderId; modelId: string; overrides: AssignmentSpec["overrides"]; publication?: PublicationPolicy }
 export function parseStartRunInput(value: unknown): StartRunInput {
-  const v = object(value); keys(v, ["objective", "hostId", "cwd", "backendId", "modelId", "overrides"])
-  return { objective: boundedText(v.objective, 65536, false), hostId: hash(v.hostId), cwd: absolutePath(v.cwd), backendId: providerId(v.backendId), modelId: text(v.modelId), overrides: parseOverrides(v.overrides) }
+  const v = object(value); keys(v, ["objective", "hostId", "cwd", "backendId", "modelId", "overrides", ...(Object.hasOwn(v, "publication") ? ["publication"] : [])])
+  return { objective: boundedText(v.objective, 65536, false), hostId: hash(v.hostId), cwd: absolutePath(v.cwd), backendId: providerId(v.backendId), modelId: text(v.modelId), overrides: parseOverrides(v.overrides), ...(Object.hasOwn(v, "publication") ? { publication: parsePublicationPolicy(v.publication) } : {}) }
 }
 export function captureInvocation(value: Invocation): Invocation {
   return { environment: parseLaunchEnvironment(value.environment), nativeParams: structuredClone(value.nativeParams) }
@@ -220,7 +221,8 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
   }
   async function dispatch(record: AssignmentRecord, current: AttemptRecord, invocation: Invocation, membership: RunRecord): Promise<AttemptRecord> {
     const { adapter } = await host(current.child.hostId)
-    const command: LaunchAssignment = { commandId: current.launchCommandId, runId: current.ref.runId, ref: current.ref, agent: current.child, handlerGeneration: current.handlerGeneration, bindingEpoch: membership.bindingEpoch, spec: record.spec, lineage: current.lineage, git: current.gitExchange ?? null, ...(record.spec.git ? { savedGit: current.retryMode === "restore" ? current.git ?? null : null } : {}), retryMode: current.retryMode, savedSettings: current.retryMode === "restore" ? current.effective : null }
+    const publication = record.spec.git && membership.publication?.destinations.find(value => value.hostId === current.child.hostId && value.repository === record.spec.git!.repository && value.remote === record.spec.git!.remote)
+    const command: LaunchAssignment = { ...(publication ? { publication } : {}), commandId: current.launchCommandId, runId: current.ref.runId, ref: current.ref, agent: current.child, handlerGeneration: current.handlerGeneration, bindingEpoch: membership.bindingEpoch, spec: record.spec, lineage: current.lineage, git: current.gitExchange ?? null, ...(record.spec.git ? { savedGit: current.retryMode === "restore" ? current.git ?? null : null } : {}), retryMode: current.retryMode, savedSettings: current.retryMode === "restore" ? current.effective : null }
     const receipt = await launchResult(adapter, command, invocation)
     validateReceipt(receipt, command)
     validateGitReceipt(record, current, receipt)
@@ -260,6 +262,12 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     }
     const assignment = await store.readAssignment(report.assignmentId), membership = await store.readRun(report.runId)
     if (!assignment || !membership) fail("INVALID_REPORT")
+    if (assignment.spec.git && (report.report.status === "completed" || report.report.git?.published)) {
+      const evidence = report.report.git?.publication, authority = membership.publication?.destinations.find(value => value.hostId === current.child.hostId && value.repository === assignment.spec.git!.repository && value.remote === assignment.spec.git!.remote)
+      if (!authority || !evidence || !report.report.git?.published || evidence.state !== "published" || evidence.resultOid !== report.report.git.resultOid || !isDeepStrictEqual(evidence.capability.attempt, current.ref) || !isDeepStrictEqual(evidence.capability.execution, current.execution) || !isDeepStrictEqual(evidence.capability.preparation, current.git)) fail("GIT_PUBLICATION_REQUIRED")
+      const { resultOid: _oid, published: _published, publication: _receipt, publicationCommandId: _command, ...exchange } = report.report.git
+      if (!isDeepStrictEqual(exchange, current.gitExchange)) fail("INVALID_REPORT")
+    }
     const state = assignment.activeAttemptId !== report.attemptId || membership.state !== "active" || !unresolved(current.state) ? "late" : "accepted"
     const receipt: ReportReceipt = { commandId: report.commandId, runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId, digest: canonicalDigest(report.report), originSeq: origin.seq, state }
     try {
@@ -450,7 +458,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         if (!snapshot.backendChoices.includes(spec.backendId)) fail("UNSUPPORTED_BACKEND")
         const runId = randomUUID(), agent = { hostId: spec.hostId, agentId: randomUUID() }, launchCommandId = randomUUID()
         const command = await acceptCommand(commandId, runId, "start", digest, runId, snapshot.handlerGeneration, launchCommandId)
-        const pending = await saveRun({ version: 1, runId, createCommandId: commandId, root: agent, execution: null, objective: spec.objective, state: "starting", bindingEpoch: randomUUID(), journal: null }, null)
+        const pending = await saveRun({ version: 1, runId, createCommandId: commandId, root: agent, execution: null, objective: spec.objective, ...(spec.publication ? { publication: spec.publication } : {}), state: "starting", bindingEpoch: randomUUID(), journal: null }, null)
         const receipt = await launchResult(adapter, { commandId: launchCommandId, runId, agent, handlerGeneration: snapshot.handlerGeneration, bindingEpoch: pending.bindingEpoch, cwd: spec.cwd, backendId: spec.backendId, modelId: spec.modelId, overrides: spec.overrides }, invocation)
         validateReceipt(receipt, { commandId: launchCommandId, runId, agent, handlerGeneration: snapshot.handlerGeneration, bindingEpoch: pending.bindingEpoch, cwd: spec.cwd, backendId: spec.backendId, modelId: spec.modelId, overrides: spec.overrides })
         const current = await saveRun({ ...pending, execution: receipt.execution, state: receipt.state === "started" ? "active" : "starting" }, pending)
