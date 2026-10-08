@@ -19,17 +19,17 @@ export function buildSshCommand(raw: HostEnrollment) {
   const enrollment = parseHostEnrollment(raw)
   return { file: "ssh", argv: ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "--", enrollment.hostname, destinationShellCommand(enrollment, "internal-host-bridge")] }
 }
-export function parseHostSnapshot(raw: unknown, hello: BridgeHello): HostSnapshot {
+export function parseHostSnapshot(raw: unknown, hello: Pick<BridgeHello, "hostId" | "handlerGeneration">): HostSnapshot {
   const v = object(raw); keys(v, ["hostId", "handlerGeneration", "backendChoices", "agents", "receipts", "replayFences", ...(v.permissions === undefined ? [] : ["permissions"])])
   if (hash(v.hostId) !== hello.hostId) bridgeError("HOST_IDENTITY_CHANGED")
   if (id(v.handlerGeneration) !== hello.handlerGeneration) bridgeError("STALE_HANDLER")
   if (!Array.isArray(v.backendChoices) || !Array.isArray(v.agents) || !Array.isArray(v.receipts) || !Array.isArray(v.replayFences)) bridgeError("INVALID_HOST_SNAPSHOT")
   const agents = v.agents.map(value => {
-    const a = object(value); keys(a, ["agent", "execution", "phase", "toolsEnabled", "lineage", "membership", "cwd", "settings"])
+    const a = object(value); keys(a, ["agent", "execution", "phase", "toolsEnabled", "lineage", "membership", "cwd", "settings", ...["backendId", "title"].filter(key => Object.hasOwn(a, key))])
     const agent = parseAgentRef(a.agent), execution = a.execution === null ? null : parseExecutionRef(a.execution), membership = a.membership === null ? null : object(a.membership)
     if (membership) keys(membership, ["runId", "bindingEpoch"])
     if (agent.hostId !== hello.hostId || execution && (execution.agentId !== agent.agentId || execution.hostId !== agent.hostId) || typeof a.toolsEnabled !== "boolean") bridgeError("INVALID_HOST_SNAPSHOT")
-    return { agent, execution, phase: text(a.phase), toolsEnabled: a.toolsEnabled, lineage: a.lineage === null ? null : parseLineage(a.lineage), membership: membership === null ? null : { runId: id(membership.runId), bindingEpoch: id(membership.bindingEpoch) }, cwd: absolutePath(a.cwd), settings: parseRequestedSettings(a.settings) }
+    return { ...(a.backendId === undefined ? {} : { backendId: providerId(a.backendId) }), ...(a.title === undefined ? {} : { title: text(a.title, 65536) }), agent, execution, phase: text(a.phase), toolsEnabled: a.toolsEnabled, lineage: a.lineage === null ? null : parseLineage(a.lineage), membership: membership === null ? null : { runId: id(membership.runId), bindingEpoch: id(membership.bindingEpoch) }, cwd: absolutePath(a.cwd), settings: parseRequestedSettings(a.settings) }
   })
   const receipts = v.receipts.map(value => parseOriginReceipt({ runId: hello.handlerGeneration, receipt: value }).receipt)
   const replayFences = v.replayFences.map(value => {

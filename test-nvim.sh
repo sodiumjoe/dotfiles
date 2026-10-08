@@ -10,7 +10,7 @@ target="${1:-$DOTFILES/tests/neovim/}"
 test_runtime_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-nvim.XXXXXX")"
 test_state_home="$test_runtime_root/state"
 test_cache_home="$test_runtime_root/cache"
-mkdir -p "$test_state_home" "$test_cache_home"
+mkdir -p "$test_state_home/nvim/swap" "$test_state_home/nvim/backup" "$test_cache_home"
 trap 'rm -rf "$test_runtime_root"' EXIT
 
 export DOTFILES_TEST_ROOT="$DOTFILES"

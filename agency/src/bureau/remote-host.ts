@@ -1,3 +1,4 @@
+import { parseEntryIntent } from "./entry.js"
 import { parsePermissionReceipt } from "../orchestration/permission-routing.js"
 import type { HostEnrollment } from "./hosts.js"
 import type { Invocation, LaunchAssignment, RootLaunch, OrchestrationHost, LaunchReceipt, StopReceipt, HostSnapshot } from "./host.js"
@@ -112,6 +113,8 @@ export function createRemoteHost(input: { enrollment: HostEnrollment; connect?: 
   }
   const host: OrchestrationHost & { hostId: string } = {
     hostId: enrollment.hostId,
+    async entryPrepare(commandId, ref) { return parseEntryIntent(await request("entry-prepare", { commandId, ref })) },
+    async entryInspect(commandId) { const value = await request("entry-inspect", { commandId }); return value === null ? null : parseEntryIntent(value) },
     async permissionDecide(commandId, ref, optionId) { return parsePermissionReceipt(await request("permission-decide", { commandId, ref, optionId })) },
     async permissionInspect(commandId) { const receipt = await request("permission-inspect", { commandId }); return receipt === null ? null : parsePermissionReceipt(receipt) },
     async permissionRead(after, limit) { return request("permission-read", { after, limit }) as Promise<import("../orchestration/types.js").JournalPage> },

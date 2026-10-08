@@ -16,7 +16,8 @@ async function cluster(t: TestContext) {
   async function mount(fixture: Node["fixture"]) {
     const hostId = fixture.context.paths.hostKey
     let server: Node["server"]
-    const coordination = await createHostCoordination({ root: fixture.root, runtimeRoot: fixture.root, hostId, agents: fixture.service, coordinator: (payload, signal) => server.coordinatorRequest(payload, signal), async connect(enrollment) {
+    let attached: import("../src/bureau/entry.js").EditorReceipt | null = null
+    const coordination = await createHostCoordination({ entryDriver: { async ensure() { return { editorId: randomUUID(), session: "owned-entry", pane: "%1" } }, async activate(_intent, editor) { attached = editor }, async inspect() { return attached } }, root: fixture.root, runtimeRoot: fixture.root, hostId, agents: fixture.service, coordinator: (payload, signal) => server.coordinatorRequest(payload, signal), async connect(enrollment) {
       const destination = nodes.find(node => node.fixture.context.paths.hostKey === enrollment.hostId)!
       const peer = await connectHandlerBridge({ root: destination.fixture.root, hostId: enrollment.hostId, handlerGeneration: destination.fixture.service.handlerGeneration }), hello = await peer.ready
       await peer.request("coordinate", {})
@@ -224,4 +225,22 @@ test("human permissions from remote parent A route through laptop Bureau to orig
   assert.equal((await f.a.coordination.human({ op: "permission_decide", commandId, ref, optionId: "allow" }) as { state: string }).state, "applied")
   assert.equal(responses, 1)
   await assert.rejects(f.a.coordination.human({ op: "delegate", commandId }), /UNSUPPORTED_HUMAN_CONTROL/)
+})
+
+test("four Handler roster and entry route from remote parent through Bureau to the exact origin", { timeout: 30000 }, async t => {
+  const f = await cluster(t), grandchild = await f.delegate(f.b, f.childToken, f.c, "Worker C")
+  assert.equal(grandchild.result.isError, false)
+  const roster = await f.a.coordination.human({ op: "roster_snapshot" }) as import("../src/bureau/roster.js").RosterSnapshot
+  assert.equal(roster.hosts.length, 4)
+  const child = roster.agents.find(row => row.agent.agentId === f.child.agent.agentId)!, deepest = roster.agents.find(row => row.agent.agentId === grandchild.value.agent.agentId)!
+  assert.equal(child.depth, 1); assert.equal(deepest.depth, 2)
+  assert.equal(child.providerPhase, "ready"); assert.equal(child.attempt!.state, "running"); assert.equal(child.connectivity, "connected")
+  const execution = child.execution!, ref = { inventoryId: child.inventoryId!, hostId: child.agent.hostId,
+    target: { agentId: execution.agentId, handlerGeneration: execution.handlerGeneration, providerGeneration: execution.providerGeneration } }
+  const prepared = await f.a.coordination.human({ op: "entry_prepare", commandId: randomUUID(), ref }) as { intent: import("../src/bureau/entry.js").EntryIntent; enrollment: { hostId: string } }
+  assert.deepEqual(prepared.intent.ref, ref); assert.equal(prepared.enrollment.hostId, ref.hostId)
+  const consumed = await f.b.coordination.human({ op: "entry_consume", commandId: prepared.intent.commandId, digest: prepared.intent.digest, hostId: ref.hostId, inventoryId: ref.inventoryId }) as { state: string }
+  assert.equal(consumed.state, "consumed")
+  await assert.rejects(f.a.coordination.human({ op: "entry_consume", commandId: prepared.intent.commandId, digest: prepared.intent.digest, hostId: ref.hostId, inventoryId: ref.inventoryId }), /HOST_IDENTITY_CHANGED/)
+  assert.equal(f.a.fixture.spawns(), 1); assert.equal(f.b.fixture.spawns(), 1); assert.equal(f.c.fixture.spawns(), 1)
 })

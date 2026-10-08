@@ -114,7 +114,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
       for (const view of snapshot.agents) {
         if (view.record.version !== 3) continue
         const record = view.record, matches = prepared.filter(launch => launch.agent.agentId === record.definition.agentId), current = matches.find(launch => isDeepStrictEqual(launch.execution, executionOf(record))) ?? matches.at(-1)
-        observed.push({ agent: { hostId: record.definition.hostId, agentId: record.definition.agentId }, execution: executionOf(record), phase: record.phase, toolsEnabled: !!current, lineage: current?.lineage ?? await lineage.read({ hostId: record.definition.hostId, agentId: record.definition.agentId }), membership: current ? { runId: current.runId, bindingEpoch: current.bindingEpoch } : null, cwd: record.definition.cwd, settings: record.settings })
+        observed.push({ backendId: record.definition.backendId, ...(view.display?.title ? { title: view.display.title } : {}), agent: { hostId: record.definition.hostId, agentId: record.definition.agentId }, execution: executionOf(record), phase: record.phase, toolsEnabled: !!current, lineage: current?.lineage ?? await lineage.read({ hostId: record.definition.hostId, agentId: record.definition.agentId }), membership: current ? { runId: current.runId, bindingEpoch: current.bindingEpoch } : null, cwd: record.definition.cwd, settings: record.settings })
       }
       for (const launch of prepared) {
         const events = await journalEntries(journals.forRun(launch.runId)), retained = events.find(event => event.kind === "origin-receipt" && parseOriginReceipt(event.payload).receipt.commandId === launch.commandId)

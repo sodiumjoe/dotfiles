@@ -1,3 +1,7 @@
+import { createEntryController, type EntryDriver } from "../bureau/entry.js"
+import { createTmuxEntryDriver } from "../bureau/entry-editor.js"
+import { canonicalDigest, fail } from "../orchestration/types.js"
+import { createBureauRoster } from "../bureau/roster.js"
 import { createBureauPermissions } from "../bureau/permissions.js"
 import { parseHumanControl } from "../bureau/human-controls.js"
 import { object, keys } from "../catalog/types.js"
@@ -18,16 +22,20 @@ import { createOrchestrationService } from "../orchestration/service.js"
 import { createToolBindings } from "../orchestration/tool-bindings.js"
 import { parseAcceptedReport } from "../orchestration/reports.js"
 
-export async function createHostCoordination(input: { root: string; runtimeRoot: string; hostId: string; agents: AgentService; coordinator(payload: unknown, signal?: AbortSignal): Promise<unknown>; connect?(enrollment: HostEnrollment): Promise<BridgeConnection> }) {
+export async function createHostCoordination(input: { root: string; runtimeRoot: string; hostId: string; agents: AgentService; coordinator(payload: unknown, signal?: AbortSignal): Promise<unknown>; entryDriver?: EntryDriver; connect?(enrollment: HostEnrollment): Promise<BridgeConnection> }) {
   const origins = createJournalPool(input.root, undefined, Date.now, "origin"), journals = createJournalPool(input.root), store = createBureauStore(input.root)
-  let bureau: ReturnType<typeof createBureauService>, origin: ReturnType<typeof createOrchestrationService>, router: ReturnType<typeof createToolRouter>
+  let bureau: ReturnType<typeof createBureauService>, origin: ReturnType<typeof createOrchestrationService> & Pick<import("../bureau/host.js").OrchestrationHost, "entryPrepare" | "entryInspect">, router: ReturnType<typeof createToolRouter>
   const outbox = createRoutedToolOutbox({ root: input.root, send: input.coordinator })
   const tools = createToolBindings({ socketPath: join(input.runtimeRoot, "orchestration.sock"), journals: origins, bureau: () => bureau, host: () => origin, route: outbox.call, cancelRoute: async request => { const result = await outbox.call({ kind: "cancel", ...request }); if (result.isError) throw new Error(result.content[0]!.text) } })
+  const entry = createEntryController({ root: input.root, hostId: input.hostId, handlerGeneration: input.agents.handlerGeneration,
+    validate: async target => { try { await input.agents.sessionSnapshot(target); return true } catch { return false } },
+    driver: input.entryDriver ?? createTmuxEntryDriver({ runtimeRoot: input.runtimeRoot }) })
   origin = createOrchestrationService({ root: input.root, hostId: input.hostId, agents: input.agents, journals: origins, lineage: createLineageStore(input.root), tools, async relay(envelope) {
     if ((await bureau.list()).some(run => run.runId === envelope.input.runId)) return bureau.acceptReport(envelope)
     const receipt = await input.coordinator({ kind: "report", envelope })
     return parseAcceptedReport({ ...envelope, receipt }).receipt
   } })
+  Object.assign(origin, { entryPrepare: entry.prepare, entryInspect: entry.inspect })
   const localSource = createLocalOrigins(input.hostId, origins), sources: OriginSource[] = [{ ...localSource, async list() { const keys = await localSource.list(); const owned = await Promise.all(keys.map(async key => await ownsRun(key.runId) ? key : null)); return owned.filter((key): key is NonNullable<typeof key> => key !== null) } }]
   const inventory = createHostInventory(input.root), remote: ReturnType<typeof createRemoteHost>[] = [], hosts = [origin] as import("../bureau/host.js").OrchestrationHost[]
   const ownsRun = (runId: string) => storageQueue(input.root).run(async () => !!await store.readRun(runId))
@@ -60,11 +68,31 @@ export async function createHostCoordination(input: { root: string; runtimeRoot:
   } })
   let humanEnabled = false
   const permissions = createBureauPermissions({ root: input.root, hosts, enabled: () => humanEnabled })
+  const roster = createBureauRoster({ root: input.root, bureauId: input.hostId, hosts, store, enabled: () => humanEnabled, enrollments: inventory.list })
   async function human(raw: unknown): Promise<unknown> {
-    const operation = parseHumanControl(raw), status = await bureau.status()
+    const operation = parseHumanControl(raw)
+    if (operation.op === "entry_consume") {
+      const intent = await entry.inspect(operation.commandId)
+      if (operation.hostId !== input.hostId || !intent || intent.ref.inventoryId !== operation.inventoryId || intent.ref.hostId !== operation.hostId) fail("HOST_IDENTITY_CHANGED")
+      const receipt = await entry.consume(operation.commandId, operation.digest)
+      if (receipt.state === "consumed" && !await entry.verify(operation.commandId, operation.digest)) fail("EDITOR_ATTACHMENT_UNCERTAIN")
+      return receipt
+    }
+    const status = await bureau.status()
     humanEnabled = status.enabled && status.ready && status.writeAvailable
     if (!humanEnabled) return input.coordinator({ kind: "human", operation })
     switch (operation.op) {
+      case "entry_prepare": case "entry_inspect": {
+        const enrollment = (await inventory.list()).find(value => value.inventoryId === operation.ref.inventoryId && value.hostId === operation.ref.hostId)
+        if (!enrollment) fail("HOST_IDENTITY_CHANGED")
+        const host = hosts.find(value => value.hostId === enrollment.hostId)
+        if (!host?.entryPrepare || !host.entryInspect) fail("UNSUPPORTED_CAPABILITY")
+        if (operation.op === "entry_inspect") return host.entryInspect(operation.commandId)
+        const row = (await roster.snapshot()).agents.find(value => value.inventoryId === enrollment.inventoryId && value.execution && canonicalDigest(value.execution) === canonicalDigest({ hostId: operation.ref.hostId, ...operation.ref.target }))
+        if (!row?.dispatchable) fail("STALE_EXECUTION")
+        return { intent: await host.entryPrepare(operation.commandId, operation.ref), enrollment }
+      }
+      case "roster_snapshot": return roster.snapshot()
       case "permission_snapshot": return permissions.snapshot()
       case "permission_decide": return permissions.decide(operation.commandId, operation.ref, operation.optionId)
       case "permission_inspect": return permissions.inspect(operation.commandId)

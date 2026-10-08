@@ -8,6 +8,7 @@ import { BUREAU_PROTOCOL, exchangeBureau, parseBureauRequest, type BureauRequest
 import { id } from "../catalog/types.js"
 
 export async function runBureauClient(argv: readonly string[], deps: ControlDependencies): Promise<number> {
+  if (argv[0] === "roster" && !(["watch", "list"].includes(argv[1] ?? ""))) argv = ["roster", "list", ...argv.slice(1)]
   if (argv[1] === "watch") return runBureauWatch(argv, deps)
   try {
     const group = argv[0], action = argv[1], position: string[] = [], flags = new Map<string, string>()
@@ -15,10 +16,10 @@ export async function runBureauClient(argv: readonly string[], deps: ControlDepe
       const arg = argv[i]!
       if (arg === "--json") { if (flags.has(arg)) throw new Error("duplicate flag"); flags.set(arg, "true"); continue }
       if (!arg.startsWith("--")) { position.push(arg); continue }
-      if (!["--command-id", "--handler-generation", "--input-json", "--mcp-servers-json", "--after", "--mode", "--objective", "--parent-id", "--run-id", "--target-json", "--binding-epoch"].includes(arg) || flags.has(arg) || argv[i + 1] === undefined) throw new Error("invalid flag")
+      if (!["--command-id", "--handler-generation", "--input-json", "--mcp-servers-json", "--after", "--mode", "--objective", "--parent-id", "--run-id", "--target-json", "--binding-epoch", "--digest", "--host-id", "--inventory-id"].includes(arg) || flags.has(arg) || argv[i + 1] === undefined) throw new Error("invalid flag")
       flags.set(arg, argv[++i]!)
     }
-    const operations: Record<string, string> = { "permission list": "permission_snapshot", "permission decide": "permission_decide", "permission inspect": "permission_inspect", "bureau enroll": "bureau_enroll", "bureau hosts": "bureau_hosts", "bureau enable": "bureau_enable", "bureau disable": "bureau_disable", "bureau status": "bureau_status", "run list": "run_list", "run start": "run_start", "run begin": "run_begin", "run inspect": "run_inspect", "run cancel": "run_cancel", "run close": "run_close", "run forget": "run_forget", "assignment create": "assignment_create", "assignment inspect": "assignment_inspect", "assignment retry": "assignment_retry", "run restore": "run_restore", "bureau command": "command_inspect", "bureau retry-notification": "notification_retry", "bureau acknowledge-reports": "report_acknowledge", "bureau recover-stop": "stop_recover", "bureau inbox": "inbox_inspect" }
+    const operations: Record<string, string> = { "entry prepare": "entry_prepare", "entry consume": "entry_consume", "entry inspect": "entry_inspect", "roster list": "roster_snapshot", "permission list": "permission_snapshot", "permission decide": "permission_decide", "permission inspect": "permission_inspect", "bureau enroll": "bureau_enroll", "bureau hosts": "bureau_hosts", "bureau enable": "bureau_enable", "bureau disable": "bureau_disable", "bureau status": "bureau_status", "run list": "run_list", "run start": "run_start", "run begin": "run_begin", "run inspect": "run_inspect", "run cancel": "run_cancel", "run close": "run_close", "run forget": "run_forget", "assignment create": "assignment_create", "assignment inspect": "assignment_inspect", "assignment retry": "assignment_retry", "run restore": "run_restore", "bureau command": "command_inspect", "bureau retry-notification": "notification_retry", "bureau acknowledge-reports": "report_acknowledge", "bureau recover-stop": "stop_recover", "bureau inbox": "inbox_inspect" }
     const op = operations[group + " " + action]
     if (!op) throw new Error("unsupported Bureau command")
     const env = await deps.environment(), expected = flags.get("--handler-generation"), commandId = flags.has("--command-id") ? id(flags.get("--command-id")) : randomUUID()
@@ -26,6 +27,8 @@ export async function runBureauClient(argv: readonly string[], deps: ControlDepe
     const invocation = { environment: snapshotLaunchEnvironment(process.env), nativeParams: { mcpServers: JSON.parse(flags.get("--mcp-servers-json") ?? "[]") } }
     const input = () => JSON.parse(flags.get("--input-json") ?? "null")
     if (["run_start", "run_cancel", "run_close", "run_forget", "run_begin", "assignment_create", "assignment_retry", "run_restore", "notification_retry", "report_acknowledge", "stop_recover"].includes(op)) raw.commandId = commandId
+    if (op === "entry_prepare" || op === "entry_inspect") { raw.commandId = op === "entry_prepare" ? commandId : position[0]; raw.ref = input() }
+    if (op === "entry_consume") { raw.commandId = position[0]; raw.digest = flags.get("--digest"); raw.hostId = flags.get("--host-id"); raw.inventoryId = flags.get("--inventory-id") }
     if (op === "permission_decide") { raw.commandId = commandId; const value = input(); raw.ref = value?.ref; raw.optionId = value?.optionId }
     if (op === "permission_inspect") raw.commandId = position[0]
     if (op === "bureau_enroll") raw.enrollment = input()
@@ -47,7 +50,7 @@ export async function runBureauClient(argv: readonly string[], deps: ControlDepe
     const handler = await deps.inspect(env)
     if (!handler || handler.disposition !== "live" || handler.record.phase !== "ready") { deps.stderr("Bureau requires a ready Handler\n"); return 69 }
     request = { ...request, handlerGeneration: expected ?? handler.record.generation }
-    const response = await exchangeBureau(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "bureau.sock")), request, 150000)
+    const response = deps.callBureau ? await deps.callBureau(env, request, 150000) : await exchangeBureau(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "bureau.sock")), request, 150000)
     deps.stdout(JSON.stringify({ ...response, ...(raw.commandId ? { commandId: raw.commandId } : {}) }) + "\n")
     return response.ok ? 0 : ["STALE_HANDLER", "STALE_EXECUTION", "BUREAU_DISABLED", "BUREAU_UNAVAILABLE"].includes(response.error.code) ? 69 : 75
   } catch { deps.stderr("Bureau command failed\n"); return 64 }

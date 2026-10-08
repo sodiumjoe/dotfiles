@@ -6,7 +6,9 @@ import { BUREAU_PROTOCOL, exchangeBureau, parseBureauRequest } from "./protocol.
 import { createSnapshotWatch, writeWatchFrame } from "./watch.js"
 
 export async function runBureauWatch(argv: readonly string[], deps: ControlDependencies): Promise<number> {
-  if (!deps.watch || argv[0] !== "permission" || argv[1] !== "watch" || argv.slice(2).some(flag => flag !== "--json") || argv.length > 3) return 64
+  const flags = argv.slice(2)
+  const valid = flags.length === 0 || flags.length === 1 && flags[0] === "--json" || flags.length === 2 && flags[0] === "--format" && flags[1] === "ndjson"
+  if (!deps.watch || !["permission", "roster"].includes(argv[0] ?? "") || argv[1] !== "watch" || !valid) return 64
   const output = deps.watch.stdout, controller = new AbortController(), removers: Array<() => void> = []
   const cancel = () => controller.abort()
   output.once("close", cancel); output.once("error", cancel)
@@ -16,7 +18,7 @@ export async function runBureauWatch(argv: readonly string[], deps: ControlDepen
       async read() {
         const env = await deps.environment(), handler = await deps.inspect(env)
         if (!handler || handler.disposition !== "live" || handler.record.phase !== "ready") throw new Error("BUREAU_UNAVAILABLE")
-        const request = parseBureauRequest({ protocol: BUREAU_PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "permission_snapshot" })
+        const request = parseBureauRequest({ protocol: BUREAU_PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.record.generation, op: argv[0] === "permission" ? "permission_snapshot" : "roster_snapshot" })
         const socket = deps.callBureau ? null : createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "bureau.sock"))
         const abort = () => socket?.destroy()
         controller.signal.addEventListener("abort", abort, { once: true })
