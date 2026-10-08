@@ -39,6 +39,15 @@ function M.setup(deps)
         report = api.notify, new_session = create, confirm_stop = deps.confirm_stop,
         roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
+    api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
+    api.watch_roster = deps.watch_roster
+    if not api.watch_roster and not deps.client then
+        api.watch_roster = function(update, unavailable)
+            local watch = require("sodium.agency.watch").new()
+            watch.start({ "roster", "watch" }, update, unavailable)
+            return watch
+        end
+    end
     function api.snapshot()
         local manager = local_manager()
         if not manager or not manager._agency_binding then return end
