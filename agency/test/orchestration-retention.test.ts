@@ -29,3 +29,15 @@ test("cancelled closed runs release completed relationship pins without forgetti
   assert.equal((await loadOrchestrationPins(f.root)).paths.includes(`agents/records/${child.agent.agentId}.json`), false)
   assert.equal(f.host.stopCalls, 0)
 })
+
+test("saved wait delivery pins both parent and report source after run sealing", async t => {
+  const { notificationsFixture } = await import("./bureau-notifications-support.js")
+  const f = await notificationsFixture(t)
+  await f.report(); await f.core.wait(f.waitInput)
+  const run = (await f.store.readRun(f.input.runId))!
+  await f.store.writeRun({ ...run, state: "completed" }, run)
+  const pins = await loadOrchestrationPins(f.root)
+  assert.ok(pins.paths.includes(`agents/records/${f.parent.agentId}.json`))
+  assert.ok(pins.paths.includes(`agents/records/${f.child.agent.agentId}.json`))
+  assert.ok(pins.paths.includes(`agents/commands/${f.child.attempt.launchCommandId}.json`))
+})

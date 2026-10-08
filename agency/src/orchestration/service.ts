@@ -100,7 +100,7 @@ export function createOrchestrationService(input: { root: string; hostId: string
         receipts.push({ commandId: launch.commandId, execution: launch.execution, effective: agent?.record.settings ?? launch.settings, state })
       }
       const replayFences = []
-      for (const runId of await journals.list()) { const page = await journals.forRun(runId).read(0, 1); const reports = (await journalEntries(journals.forRun(runId))).filter(entry => entry.kind === "report-retained"); const watermark = await journals.forRun(runId).watermark("bureau"); if (reports.every(report => report.seq <= watermark)) replayFences.push({ streamId: runId, runId, throughSeq: page.lastSeq, checkpoint: page.checkpoint }) }
+      for (const runId of await journals.list()) { const page = await journals.forRun(runId).metadata(); const reports = (await journalEntries(journals.forRun(runId))).filter(entry => entry.kind === "report-retained"); const acknowledged = await Promise.all(reports.map(report => journals.forRun(runId).acknowledged("bureau", report))); if (acknowledged.every(Boolean)) replayFences.push({ streamId: runId, runId, throughSeq: page.lastSeq, checkpoint: page.checkpoint }) }
       return { hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root)).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
     }) },
     submission(target, submissionId) { return agents.submission(tuple(target), submissionId) },

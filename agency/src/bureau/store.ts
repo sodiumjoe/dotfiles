@@ -1,5 +1,7 @@
+import { createInboxStore } from "./inbox.js"
+import { createWaitStore } from "./waits.js"
 import { parseAcceptedReport, type AcceptedReport } from "../orchestration/reports.js"
-import { id, keys, object } from "../catalog/types.js"
+import { hash, id, keys, object } from "../catalog/types.js"
 import { createStorage, storageQueue, defaultFileSystem } from "../orchestration/storage.js"
 import { parseRunRecord, parseAssignmentRecord, parseAttemptRecord, parseCommandRecord, type AssignmentRecord, type AttemptRecord, type CommandRecord, type RunRecord } from "./types.js"
 
@@ -23,6 +25,34 @@ export function createBureauStore(root: string, filesystem = defaultFileSystem) 
     return records
   }
   return {
+    async readForgotten(kind: "commands" | "assignments" | "waits", recordId: string): Promise<string | null> {
+      const raw = await storage.read(`forgotten/${kind}/${id(recordId)}.json`)
+      if (raw === null) return null
+      const value = object(raw); keys(value, ["recordId", "runId", "digest"])
+      if (value.recordId !== recordId) throw new Error("INVALID_BUREAU")
+      if (value.digest !== null) hash(value.digest)
+      return id(value.runId)
+    },
+    async sealIds(runId: string, forgetCommandId: string): Promise<void> {
+      id(runId); id(forgetCommandId)
+      await queue.run(async () => {
+        const commands = (await list("commands", parseCommandRecord)).filter(value => value.runId === runId), assignments = (await list("assignments", parseAssignmentRecord)).filter(value => value.runId === runId), waits = (await createWaitStore(root, filesystem).listWaits()).filter(value => value.input.runId === runId)
+        for (const command of commands) await storage.publish(`forgotten/commands/${command.commandId}.json`, { recordId: command.commandId, runId, digest: command.digest }, null, true)
+        for (const assignment of assignments) await storage.publish(`forgotten/assignments/${assignment.assignmentId}.json`, { recordId: assignment.assignmentId, runId, digest: null }, null, true)
+        for (const wait of waits) await storage.publish(`forgotten/waits/${wait.input.waitId}.json`, { recordId: wait.input.waitId, runId, digest: wait.digest }, null, true)
+        await storage.publish(`forgotten/commands/${forgetCommandId}.json`, { recordId: forgetCommandId, runId, digest: null }, null, true)
+      })
+    },
+    async eraseRun(runId: string): Promise<void> {
+      id(runId)
+      await queue.run(async () => {
+        for (const area of ["commands", "assignments", "attempts", "reports", "inbox", "deliveries", "waits"]) for (const name of await storage.names(area)) {
+          const raw = object(await storage.read(`${area}/${name}`)), actual = area === "attempts" ? object(raw.ref).runId : area === "reports" ? object(raw.input).runId : area === "waits" ? object(raw.input).runId : raw.runId
+          if (actual === runId) await storage.remove(`${area}/${name}`)
+        }
+      })
+    },
+    ...createInboxStore(root, filesystem), ...createWaitStore(root, filesystem),
     async readReport(attemptId: string): Promise<AcceptedReport | null> { const raw = await storage.read(`reports/${id(attemptId)}.json`); if (raw === null) return null; const report = parseAcceptedReport(raw); if (report.input.attemptId !== attemptId) throw new Error("INVALID_REPORT"); return report },
     async writeReport(value: AcceptedReport) { const report = parseAcceptedReport(value); await queue.run(() => storage.publish(`reports/${report.input.attemptId}.json`, report, null, true)) },
     readAssignment: (assignmentId: string) => read("assignments", assignmentId, parseAssignmentRecord),

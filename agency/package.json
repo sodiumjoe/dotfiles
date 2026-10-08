@@ -27,6 +27,7 @@
     "test:unit": "npm run build && node --test --test-concurrency=1 dist/test/contracts.test.js dist/test/private-state.test.js dist/test/paths.test.js dist/test/reconcile.test.js dist/test/singleton.test.js",
     "test:orchestration-storage": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-journal.test.js dist/test/bureau-store.test.js",
     "test:orchestration": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-service.test.js dist/test/orchestration-reports.test.js dist/test/orchestration-retention.test.js",
+    "test:bureau-notifications": "npm run build && node --test --test-concurrency=1 dist/test/bureau-inbox.test.js dist/test/bureau-waits.test.js dist/test/bureau-retention.test.js dist/test/orchestration-retention.test.js",
     "test:bureau": "npm run build && node --test --test-concurrency=1 dist/test/bureau-service.test.js dist/test/bureau-protocol.test.js dist/test/handler-bureau.test.js dist/test/bureau-store.test.js dist/test/orchestration-journal.test.js"
   },
   "devDependencies": {

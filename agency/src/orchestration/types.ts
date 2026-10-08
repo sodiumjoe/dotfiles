@@ -1,3 +1,5 @@
+import { parseDeliveryTransition, parseReportTransition } from "../bureau/inbox.js"
+import { parseWaitTransition } from "../bureau/waits.js"
 import { parseOriginLaunch, parseOriginReceipt } from "./receipts.js"
 import { parseAcceptedReport } from "./reports.js"
 import { parseBureauRecord } from "../bureau/types.js"
@@ -23,7 +25,7 @@ export type ReportInput = AttemptRef & { commandId: string; execution: Execution
 export type EventRef = { seq: number; eventId: string; digest: string }
 export type JournalEntry = EventRef & { kind: string; payload: unknown }
 export type JournalPage = { checkpoint: number; lastSeq: number; entries: JournalEntry[]; nextCursor: number }
-export type Journal = { append(eventId: string, kind: string, payload: unknown): Promise<JournalEntry>; read(after: number, limit: number): Promise<JournalPage>; acknowledge(recipient: string, entry: EventRef): Promise<void>; watermark(recipient: string): Promise<number>; compact(now: number): Promise<void> }
+export type Journal = { append(eventId: string, kind: string, payload: unknown): Promise<JournalEntry>; read(after: number, limit: number): Promise<JournalPage>; retainedRead(after: number, limit: number): Promise<JournalPage>; metadata(): Promise<{ checkpoint: number; lastSeq: number }>; acknowledged(recipient: string, entry: EventRef): Promise<boolean>; acknowledge(recipient: string, entry: EventRef): Promise<void>; watermark(recipient: string): Promise<number>; compact(now: number): Promise<void>; compactTerminal(now: number): Promise<void> }
 export class OrchestrationError extends Error {
   constructor(readonly code: string, readonly detail: unknown = null) { super(code); this.name = "OrchestrationError" }
 }
@@ -114,7 +116,9 @@ export const canonicalDigest = (value: unknown): string => createHash("sha256").
 export function parseEventPayload(kind: string, value: unknown): unknown {
   if (kind === "origin-launch") return parseOriginLaunch(value)
   if (kind === "origin-receipt") return parseOriginReceipt(value)
-  if (kind === "bureau-report") return parseAcceptedReport(value)
+  if (kind === "bureau-report") return parseReportTransition(value)
+  if (kind === "bureau-delivery") return parseDeliveryTransition(value)
+  if (kind === "bureau-wait") return parseWaitTransition(value)
   if (kind === "bureau-record") {
     const v = object(value); keys(v, ["previousDigest", "record"])
     return { previousDigest: v.previousDigest === null ? null : hash(v.previousDigest), record: parseBureauRecord(v.record) }

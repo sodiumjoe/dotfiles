@@ -121,6 +121,35 @@ export function createJournal(root: string, filesystem = defaultFileSystem, now 
       await storage.remove(key("entries", seq))
     }
   }
+  async function compact(time: number, terminal = false): Promise<void> {
+    timestamp(time)
+    await queue.run(async () => {
+      const view = await inventory(); await cleanup(view.checkpoint)
+      const recipients = new Set<string>(["bureau"])
+      for (const filename of await storage.names("journal/recipients")) {
+        const raw = object(await storage.read(`journal/recipients/${filename}`)); keys(raw, ["recipient"])
+        const recipient = recipientName(text(raw.recipient, 64))
+        if (filename !== recipient + ".json") fail("CORRUPT_JOURNAL")
+        recipients.add(recipient)
+      }
+      const prefix: Saved[] = []
+      for (const record of view.records) {
+        if (prefix.length === PAGE_LIMIT || (!terminal && record.entry.kind !== "report") || time < record.createdAt || time - record.createdAt < TERMINAL_AGE ) break
+        let acknowledged = true
+        for (const recipient of recipients) if (!await acknowledgeRecord(recipient, record.entry)) { acknowledged = false; break }
+        if (!acknowledged) break
+        prefix.push(record)
+      }
+      if (!prefix.length) return
+      const epoch = randomUUID(), through = prefix.at(-1)!.entry.seq
+      for (const record of prefix) await storage.publish(key("receipts", record.entry.seq), record, null, true)
+      const summary: Summary = { version: 1, epoch, from: prefix[0]!.entry.seq, through, previous: view.checkpoint, entries: prefix.map(({ entry }) => ({ seq: entry.seq, eventId: entry.eventId, digest: entry.digest })) }
+      await storage.publish(`journal/summaries/${epoch}.json`, summary, null, true)
+      const next: Checkpoint = { epoch, compactedThrough: through, summaryDigest: canonicalDigest(summary) }
+      await storage.publish("journal/checkpoint.json", next, view.checkpoint)
+      await cleanup(next)
+    })
+  }
   return {
     async append(eventId, kind, raw) {
       id(eventId)
@@ -145,6 +174,17 @@ export function createJournal(root: string, filesystem = defaultFileSystem, now 
         return { checkpoint: cp, lastSeq: view.lastSeq, entries: structuredClone(entries), nextCursor: entries.at(-1)?.seq ?? after }
       })
     },
+    async retainedRead(after, limit) {
+      timestamp(after); if (!Number.isSafeInteger(limit) || limit < 1 || limit > PAGE_LIMIT) fail("INVALID_PAGE")
+      return queue.run(async () => {
+        const view = await inventory(), entries: JournalEntry[] = []
+        for (let seq = after + 1; seq <= view.lastSeq && entries.length < limit; seq++) entries.push((await recordAt(seq, view)).entry)
+        return { checkpoint: view.checkpoint?.compactedThrough ?? 0, lastSeq: view.lastSeq, entries: structuredClone(entries), nextCursor: entries.at(-1)?.seq ?? after }
+      })
+    },
+    async metadata() { return queue.run(async () => { const view = await inventory(); return { checkpoint: view.checkpoint?.compactedThrough ?? 0, lastSeq: view.lastSeq } }) },
+    async acknowledged(recipient, ref) { return queue.run(async () => { const record = await recordAt(ref.seq, await inventory()); if (!matches(record.entry, ref)) fail("ACKNOWLEDGMENT_CONFLICT"); return acknowledgeRecord(recipient, record.entry) }) },
+    compact: time => compact(time), compactTerminal: time => compact(time, true),
     async acknowledge(recipient, input) {
       const ref = parseEventRef({ seq: input.seq, eventId: input.eventId, digest: input.digest })
       await queue.run(async () => {
@@ -165,35 +205,7 @@ export function createJournal(root: string, filesystem = defaultFileSystem, now 
         return through
       })
     },
-    async compact(time) {
-      timestamp(time)
-      await queue.run(async () => {
-        const view = await inventory(); await cleanup(view.checkpoint)
-        const recipients = new Set<string>(["bureau"])
-        for (const filename of await storage.names("journal/recipients")) {
-          const raw = object(await storage.read(`journal/recipients/${filename}`)); keys(raw, ["recipient"])
-          const recipient = recipientName(text(raw.recipient, 64))
-          if (filename !== recipient + ".json") fail("CORRUPT_JOURNAL")
-          recipients.add(recipient)
-        }
-        const prefix: Saved[] = []
-        for (const record of view.records) {
-          if (prefix.length === PAGE_LIMIT || record.entry.kind !== "report" || time < record.createdAt || time - record.createdAt < TERMINAL_AGE ) break
-          let acknowledged = true
-          for (const recipient of recipients) if (!await acknowledgeRecord(recipient, record.entry)) { acknowledged = false; break }
-          if (!acknowledged) break
-          prefix.push(record)
-        }
-        if (!prefix.length) return
-        const epoch = randomUUID(), through = prefix.at(-1)!.entry.seq
-        for (const record of prefix) await storage.publish(key("receipts", record.entry.seq), record, null, true)
-        const summary: Summary = { version: 1, epoch, from: prefix[0]!.entry.seq, through, previous: view.checkpoint, entries: prefix.map(({ entry }) => ({ seq: entry.seq, eventId: entry.eventId, digest: entry.digest })) }
-        await storage.publish(`journal/summaries/${epoch}.json`, summary, null, true)
-        const next: Checkpoint = { epoch, compactedThrough: through, summaryDigest: canonicalDigest(summary) }
-        await storage.publish("journal/checkpoint.json", next, view.checkpoint)
-        await cleanup(next)
-      })
-    }
+
   }
 }
 
@@ -201,6 +213,7 @@ export function createJournalPool(root: string, filesystem = defaultFileSystem, 
   const storage = createStorage(root, "orchestration", filesystem), journals = new Map<string, Journal>()
   return {
     async list(): Promise<string[]> { return (await storage.directories(`${kind}-runs`)).map(id) },
+    async erase(runId: string): Promise<void> { id(runId); await storageQueue(root).run(() => storage.removeTree(`${kind}-runs/${runId}`)); journals.delete(runId) },
     forRun(runId: string): Journal {
       id(runId)
       let journal = journals.get(runId)

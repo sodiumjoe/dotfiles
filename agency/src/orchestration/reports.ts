@@ -19,7 +19,7 @@ export async function journalEntries(journal: Journal): Promise<JournalEntry[]> 
   let after = 0
   const entries: JournalEntry[] = []
   while (true) {
-    const page = await journal.read(after, 256)
+    const page = await journal.retainedRead(after, 256)
     entries.push(...page.entries)
     after = page.nextCursor
     if (after >= page.lastSeq) return entries

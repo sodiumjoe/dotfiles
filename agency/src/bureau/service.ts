@@ -1,3 +1,5 @@
+import { createInbox, parseReportTransition } from "./inbox.js"
+import { createWaits } from "./waits.js"
 import { journalEntries, parseAcceptedReport, type ReportRelay, type ReportReceipt } from "../orchestration/reports.js"
 import type { JournalPool } from "../orchestration/journal.js"
 import { randomUUID } from "node:crypto"
@@ -60,7 +62,9 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
   async function persist(record: BureauRecord, previous: BureauRecord["value"] | null): Promise<BureauRecord["value"]> {
     try {
       const entry = await journalFor(recordRunId(record)).append(randomUUID(), "bureau-record", { previousDigest: previous === null ? null : canonicalDigest(previous), record })
-      return await apply(entry)
+      const saved = await apply(entry)
+      waits.notify()
+      return saved
     } catch (error) { writeFailure = error; throw error }
   }
   const saveRun = (value: RunRecord, previous: RunRecord | null) => persist({ kind: "run", value }, previous) as Promise<RunRecord>
@@ -71,7 +75,12 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     const value = await store.readRun(id(runId)); if (!value) fail("RUN_NOT_FOUND"); if (value.state === "forgotten") fail("FORGOTTEN")
     return value
   }
+  async function checkForgotten(kind: "commands" | "assignments" | "waits", recordId: string): Promise<void> {
+    const runId = await store.readForgotten(kind, id(recordId))
+    if (runId && (await store.readRun(runId))?.state === "forgotten") fail("FORGOTTEN")
+  }
   async function assignment(assignmentId: string): Promise<AssignmentRecord> {
+    await checkForgotten("assignments", assignmentId)
     const value = await store.readAssignment(id(assignmentId)); if (!value) fail("ASSIGNMENT_NOT_FOUND")
     await run(value.runId)
     return value
@@ -83,7 +92,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
   }
   async function assignmentView(record: AssignmentRecord): Promise<AssignmentView> {
     const current = await attempt(record)
-    return { assignmentId: record.assignmentId, runId: record.runId, agent: current.child, spec: record.spec, lineage: current.lineage, attempt: current, attemptIds: record.attemptIds, journalCursor: (await journalFor(record.runId).read(0, 1)).lastSeq }
+    return { assignmentId: record.assignmentId, runId: record.runId, agent: current.child, spec: record.spec, lineage: current.lineage, attempt: current, attemptIds: record.attemptIds, journalCursor: (await journalFor(record.runId).metadata()).lastSeq }
   }
   async function view(record: RunRecord, after: string | null = null): Promise<RunView> {
     if (after !== null) id(after)
@@ -95,13 +104,14 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
       if (assignments.length && (assignments.length === 256 || bytes + size > 256 * 1024)) { nextAssignmentCursor = assignments.at(-1)!.assignmentId; break }
       assignments.push(item); bytes += size
     }
-    return { ...record, assignments, nextAssignmentCursor, journalCursor: (await journalFor(record.runId).read(0, 1)).lastSeq }
+    return { ...record, assignments, nextAssignmentCursor, journalCursor: (await journalFor(record.runId).metadata()).lastSeq }
   }
   async function host(hostId: string): Promise<{ adapter: OrchestrationHost; snapshot: HostSnapshot }> {
     for (const adapter of input.hosts) { const snapshot = await adapter.snapshot(); if (snapshot.hostId === hostId) return { adapter, snapshot } }
     return fail("HOST_UNAVAILABLE")
   }
   async function previous(commandId: string, digest: string): Promise<CommandRecord | null> {
+    await checkForgotten("commands", commandId)
     const command = await store.readCommand(id(commandId))
     if (!command) return null
     if (command.digest !== digest) fail("COMMAND_CONFLICT")
@@ -184,18 +194,21 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     return launched
   }
   async function applyReport(entry: JournalEntry): Promise<ReportReceipt> {
-    const report = parseAcceptedReport(entry.payload), current = await store.readAttempt(report.input.attemptId)
+    const report = parseReportTransition(entry.payload), current = await store.readAttempt(report.input.attemptId)
     if (!current || !isDeepStrictEqual(current.execution, report.input.execution) || !isDeepStrictEqual(current.ref, { runId: report.input.runId, assignmentId: report.input.assignmentId, attemptId: report.input.attemptId })) fail("STALE_EXECUTION")
-    await store.writeReport(report)
+    await store.writeReport({ input: report.input, origin: report.origin, receipt: report.receipt })
+    if (report.recipient) await store.writeInbox({ version: 1, eventId: report.input.commandId, runId: report.input.runId, parent: report.recipient, source: eventRef(entry), report: report.input })
     if (report.receipt.state === "accepted" && unresolved(current.state)) {
       const state = report.input.report.status === "completed" ? "completed" : "failed"
       await store.writeAttempt({ ...current, state, journal: eventRef(entry) }, current)
     }
+    waits.notify()
     return report.receipt
   }
   async function acceptReport(raw: ReportRelay): Promise<ReportReceipt> {
     const value = object(raw); keys(value, ["input", "origin"])
     const report = parseReportInput(value.input), origin = parseEventRef(value.origin)
+    await run(report.runId)
     const current = await store.readAttempt(report.attemptId)
     if (!current || !isDeepStrictEqual(current.execution, report.execution) || !isDeepStrictEqual(current.ref, { runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId })) fail("STALE_EXECUTION")
     const entries = input.origins ? await journalEntries(input.origins.forRun(report.runId)) : []
@@ -213,19 +226,20 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     const state = assignment.activeAttemptId !== report.attemptId || membership.state !== "active" || !unresolved(current.state) ? "late" : "accepted"
     const receipt: ReportReceipt = { commandId: report.commandId, runId: report.runId, assignmentId: report.assignmentId, attemptId: report.attemptId, digest: canonicalDigest(report.report), originSeq: origin.seq, state }
     try {
-      const entry = await journalFor(report.runId).append(report.commandId, "bureau-report", { input: report, origin, receipt })
+      const entry = await journalFor(report.runId).append(report.commandId, "bureau-report", { input: report, origin, receipt, recipient: state === "late" ? null : current.lineage.parent })
       return await applyReport(entry)
     } catch (error) { writeFailure = error; throw error }
   }
   async function recover(): Promise<void> {
     try {
+      for (const run of await store.listRuns()) if (run.state === "forgotten") { await store.writeRun(run, run); await eraseForgotten(run.runId) }
       for (const runId of await journals.list()) {
         let after = 0
         while (true) {
-          const page = await journalFor(runId).read(after, 256)
+          const page = await journalFor(runId).retainedRead(after, 256)
           for (const entry of page.entries) {
             await journalFor(runId).append(entry.eventId, entry.kind, entry.payload)
-            if (entry.kind === "bureau-report") await applyReport(entry); else if (entry.kind === "bureau-record") {
+            if (entry.kind === "bureau-report") await applyReport(entry); else if (entry.kind === "bureau-delivery") await inbox.apply(entry); else if (entry.kind === "bureau-wait") await waits.apply(entry); else if (entry.kind === "bureau-record") {
             const record = parseBureauRecord(object(entry.payload).record)
             if (recordRunId(record) !== runId) fail("CORRUPT_BUREAU")
             await apply(entry)
@@ -239,10 +253,51 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         const receipt = await acceptReport({ input: parseReportInput(entry.payload), origin: eventRef(entry) })
         if (receipt.state !== "retained") await input.origins.forRun(runId).acknowledge("bureau", eventRef(entry))
       }
-      await reconcile(); initialized = true; writeFailure = null
+      await reconcile(); await waits.recoverLocked(); initialized = true; writeFailure = null
     } catch (error) { writeFailure = error; throw error }
   }
+  async function eraseForgotten(runId: string): Promise<void> {
+    await store.eraseRun(runId); await journals.erase(runId); await input.origins?.erase(runId)
+  }
+  async function assertNoRoutes(runId: string): Promise<void> {
+    if ((await store.listWaits()).some(wait => wait.input.runId === runId && !wait.ended)) fail("UNRESOLVED")
+    const deliveries = (await store.listDeliveries()).filter(delivery => delivery.runId === runId)
+    if (deliveries.some(delivery => !["queued", "delivered"].includes(delivery.state))) fail("UNRESOLVED")
+    for (const entry of await store.listInbox()) if (entry.runId === runId && !deliveries.some(delivery => delivery.state === "delivered" && delivery.sources.some(source => isDeepStrictEqual(source, entry.source)))) fail("UNRESOLVED")
+  }
+  const inbox = createInbox({ store, journals, failed(error) { writeFailure = error } })
+  const waits = createWaits({ store, journals, queue, inbox, requireWrites, failed(error) { writeFailure = error },
+    async binding(parent, runId) {
+      const membership = await run(runId)
+      if (membership.state !== "active") return null
+      const { snapshot } = await host(parent.hostId), observed = snapshot.agents.find(agent => isDeepStrictEqual(agent.agent, parent))
+      if (!observed || !observed.execution || observed.phase !== "ready") return null
+      if (!isDeepStrictEqual(parent, membership.root) && !(await store.listAttempts()).some(attempt => attempt.ref.runId === runId && isDeepStrictEqual(attempt.child, parent))) fail("INVALID_PARENT")
+      return { target: observed.execution, bindingEpoch: membership.bindingEpoch }
+    },
+    async validateAssignments(parent, runId, assignmentIds) {
+      const attempts = await store.listAttempts()
+      for (const assignmentId of assignmentIds) {
+        const assignment = await store.readAssignment(assignmentId)
+        if (!assignment || assignment.runId !== runId) fail("INVALID_WAIT")
+        let ancestor = assignment.spec.parent
+        const seen = new Set<string>()
+        while (!isDeepStrictEqual(ancestor, parent)) {
+          const key = ancestor.hostId + "/" + ancestor.agentId
+          if (seen.has(key)) fail("INVALID_WAIT")
+          seen.add(key)
+          const edge = attempts.find(attempt => attempt.ref.runId === runId && isDeepStrictEqual(attempt.child, ancestor))
+          if (!edge) fail("INVALID_WAIT")
+          ancestor = edge.lineage.parent
+        }
+      }
+    }
+  })
   return {
+    async wait(raw: Parameters<typeof waits.wait>[0], signal?: AbortSignal) { await checkForgotten("waits", raw.waitId); return waits.wait(raw, signal) },
+    async cancelWait(waitId: string) { await checkForgotten("waits", waitId); return waits.cancel(waitId) }, close: waits.close,
+    waitRecord: (waitId: string) => queue.run(async () => { await checkForgotten("waits", waitId); return store.readWait(id(waitId)) }),
+    inbox: (parent: AgentRef, runId: string, after = 0) => queue.run(async () => { await run(runId); return inbox.inspect(parseAgentRef(parent), runId, after) }),
     acceptReport: (envelope: ReportRelay) => queue.run(async () => { requireWrites(); return acceptReport(envelope) }),
     async initialize() { await queue.run(recover) },
     async enable() {
@@ -254,10 +309,10 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     },
     async disable() { await queue.run(async () => { await store.writeEnabled(false, enabled); enabled = false }) },
     async status() { return { enabled, ready: initialized, writeAvailable: writeFailure === null } },
-    reconcile: () => queue.run(reconcile),
+    reconcile: () => queue.run(async () => { await reconcile(); await waits.recoverLocked() }),
     async inspect(runId: string, after: string | null = null) { return queue.run(async () => view(await run(runId), after)) },
     async assignment(assignmentId: string) { return queue.run(async () => assignmentView(await assignment(assignmentId))) },
-    async command(commandId: string) { return queue.run(async () => { const value = await store.readCommand(id(commandId)); if (!value) fail("COMMAND_NOT_FOUND"); await run(value.runId); return value }) },
+    async command(commandId: string) { return queue.run(async () => { await checkForgotten("commands", commandId); const value = await store.readCommand(id(commandId)); if (!value) fail("COMMAND_NOT_FOUND"); await run(value.runId); return value }) },
     async list() { return queue.run(async () => (await store.listRuns()).filter(value => value.state !== "forgotten")) },
     async assertBinding(runId: string, bindingEpoch: string, parent: AgentRef) {
       const membership = await run(runId)
@@ -353,18 +408,39 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
         const current = await run(runId)
         for (const record of await store.listAssignments()) if (record.runId === runId && unresolved((await attempt(record)).state)) fail("UNRESOLVED")
         if (current.state === "starting" || (await store.listCommands()).some(value => value.runId === runId && value.state === "pending")) fail("UNRESOLVED")
+        await assertNoRoutes(runId)
         const command = await acceptCommand(commandId, runId, "close", digest, runId)
         const closed = await saveRun({ ...current, state: "completed", bindingEpoch: randomUUID() }, current)
         return complete(command, await view(closed))
+      })
+    },
+    async compact(runId: string, time: number): Promise<void> {
+      await queue.run(async () => {
+        requireWrites(); const current = await run(runId)
+        if (current.state !== "completed") fail("UNRESOLVED")
+        await assertNoRoutes(runId)
+        for (const pool of [journals, input.origins].filter((pool): pool is JournalPool => !!pool)) {
+          const journal = pool.forRun(runId), entries = await journalEntries(journal)
+          if (pool === input.origins) for (const entry of entries) if (entry.kind === "report-retained" && !await journal.acknowledged("bureau", entry)) fail("UNRESOLVED")
+          for (const entry of entries) await journal.acknowledge("bureau", entry)
+          let before: number
+          do { before = (await journal.metadata()).checkpoint; await journal.compactTerminal(time) } while ((await journal.metadata()).checkpoint > before)
+        }
       })
     },
     async forget(commandId: string, runId: string): Promise<RunView> {
       return queue.run(async () => {
         requireWrites(); const current = await run(runId)
         if (current.state !== "completed") fail("UNRESOLVED")
-        const digest = canonicalDigest({ op: "forget", runId }), command = await acceptCommand(commandId, runId, "forget", digest, runId)
-        const sealed = await saveRun({ ...current, state: "forgotten", objective: "Forgotten run", bindingEpoch: randomUUID() }, current)
-        return complete(command, { ...sealed, assignments: [], nextAssignmentCursor: null, journalCursor: (await journalFor(runId).read(0, 1)).lastSeq })
+        await assertNoRoutes(runId)
+        if (input.origins) for (const entry of await journalEntries(input.origins.forRun(runId))) if (entry.kind === "report-retained" && !await input.origins.forRun(runId).acknowledged("bureau", entry)) fail("UNRESOLVED")
+        try {
+          await store.sealIds(runId, commandId)
+          const sealed: RunRecord = { ...current, state: "forgotten", objective: "Forgotten run", execution: null, bindingEpoch: randomUUID(), journal: null }
+          await store.writeRun(sealed, current)
+          await eraseForgotten(runId)
+          return { ...sealed, assignments: [], nextAssignmentCursor: null, journalCursor: 0 }
+        } catch (error) { writeFailure = error; throw error }
       })
     }
   }

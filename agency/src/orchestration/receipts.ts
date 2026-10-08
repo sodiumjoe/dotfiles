@@ -21,17 +21,27 @@ export function parseOriginReceipt(raw: unknown): { runId: string; receipt: Laun
 }
 export async function loadOrchestrationPins(root: string): Promise<{ paths: string[] }> {
   const store = createBureauStore(root), runs = new Map((await store.listRuns()).map(run => [run.runId, run])), attempts = await store.listAttempts(), commands = await store.listCommands(), paths = new Set<string>()
+  for (const run of runs.values()) if (run.state === "forgotten") await store.writeRun(run, run)
   const pinAgent = (agentId: string) => paths.add(`agents/records/${agentId}.json`)
   for (const run of runs.values()) if (!["completed", "forgotten"].includes(run.state)) pinAgent(run.root.agentId)
   for (const attempt of attempts) if (unresolved(attempt.state)) { pinAgent(attempt.child.agentId); paths.add(`agents/commands/${attempt.launchCommandId}.json`) }
   for (const command of commands) if (command.state === "pending" && command.launchCommandId) paths.add(`agents/commands/${command.launchCommandId}.json`)
+  const waits = await store.listWaits(), deliveries = await store.listDeliveries(), inbox = await store.listInbox()
+  const referenced = new Set<string>()
+  for (const wait of waits) if (!wait.ended) { pinAgent(wait.target.agentId); for (const assignmentId of wait.input.assignmentIds) for (const attempt of attempts) if (attempt.ref.assignmentId === assignmentId) referenced.add(attempt.ref.attemptId) }
+  for (const entry of inbox) {
+    const delivered = deliveries.some(delivery => delivery.runId === entry.runId && delivery.sources.some(source => source.eventId === entry.eventId && source.digest === entry.source.digest) && delivery.state === "delivered" && delivery.channel === "prompt")
+    if (!delivered) { pinAgent(entry.parent.agentId); referenced.add(entry.report.attemptId) }
+  }
+  for (const attempt of attempts) if (referenced.has(attempt.ref.attemptId)) { pinAgent(attempt.child.agentId); paths.add(`agents/commands/${attempt.launchCommandId}.json`) }
   const origins = createJournalPool(root, undefined, Date.now, "origin")
   for (const runId of await origins.list()) {
-    const journal = origins.forRun(runId), entries = await journalEntries(journal), watermark = await journal.watermark("bureau")
+    const journal = origins.forRun(runId), entries = await journalEntries(journal), unacknowledged = new Set<number>()
+    for (const entry of entries) if (entry.kind === "report-retained" && !await journal.acknowledged("bureau", entry)) unacknowledged.add(entry.seq)
     for (const entry of entries) if (entry.kind === "origin-launch") {
       const launch = parseOriginLaunch(entry.payload), run = runs.get(runId), attempt = launch.attempt && attempts.find(attempt => attempt.ref.attemptId === launch.attempt!.attemptId)
-      const pendingReport = entries.some(event => event.kind === "report-retained" && event.seq > watermark && object(event.payload).execution && object(object(event.payload).execution).providerGeneration === launch.execution.providerGeneration)
-      if (!run || !["completed", "forgotten"].includes(run.state) || attempt && unresolved(attempt.state) || commands.some(command => command.launchCommandId === launch.commandId && command.state === "pending") || pendingReport) {
+      const pendingReport = entries.some(event => event.kind === "report-retained" && unacknowledged.has(event.seq) && object(event.payload).execution && object(object(event.payload).execution).providerGeneration === launch.execution.providerGeneration)
+      if (!run || !["completed", "forgotten"].includes(run.state) || attempt && unresolved(attempt.state) || commands.some(command => command.launchCommandId === launch.commandId && command.state === "pending") || referenced.has(launch.attempt?.attemptId ?? "") || pendingReport) {
         pinAgent(launch.agent.agentId); paths.add(`agents/commands/${launch.commandId}.json`); paths.add(`launches/${launch.launchAttemptId}.json`)
       }
     }

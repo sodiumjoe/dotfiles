@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises"
+import { lstat, mkdir, open, readdir, rename, rm, rmdir, type FileHandle } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { basename, dirname, join, relative } from "node:path"
 import { isDeepStrictEqual } from "node:util"
@@ -106,6 +106,22 @@ export function createStorage(root: string, area: "orchestration" | "bureau", fi
       await filesystem.rm(path)
       identities.delete(path); accepted.delete(path)
       await sync(dirname(path))
+    },
+    async removeTree(key: string): Promise<void> {
+      const path = pathFor(key)
+      async function erase(current: string): Promise<void> {
+        if (!await directory(current, false)) return
+        for (const name of await readdir(current)) {
+          const child = join(current, name), stat = await lstat(child)
+          if (stat.isDirectory() && !stat.isSymbolicLink()) await erase(child)
+          else {
+            if (!name.endsWith(".json") && !/^\.[a-zA-Z0-9_-]+\.json\.[a-f0-9-]{36}\.tmp$/.test(name)) fail("UNEXPLAINED_STATE")
+            await readBytes(child); await filesystem.rm(child); identities.delete(child); accepted.delete(child); await sync(current)
+          }
+        }
+        await rmdir(current); identities.delete(current); await sync(dirname(current))
+      }
+      await erase(path)
     },
     async sync(key: string): Promise<void> { const path = pathFor(key); if (await directory(path, false)) await sync(path) }
   }
