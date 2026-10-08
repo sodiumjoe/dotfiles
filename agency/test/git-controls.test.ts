@@ -22,6 +22,7 @@ test("Git configuration, verification and integration have explicit human protoc
     { op: "git_verify", reportId: randomUUID(), destinationCwd: "/tmp/repo" },
     { op: "git_proposal", proposalId: "a".repeat(64) },
     { op: "git_integrate", commandId: randomUUID(), proposalId: "a".repeat(64), expectedHead: "b".repeat(40), strategy: "merge" },
+    { op: "git_abandon", commandId: randomUUID(), proposalId: "a".repeat(64), expectedHead: "b".repeat(40) },
     { op: "git_inspect", commandId: randomUUID() }
   ]) assert.deepEqual(parseHumanControl(input), input)
 })
@@ -56,6 +57,16 @@ test("MCP publication uses origin authority offline and model tools cannot reach
   tools.activate(execution); const token = tools.tokenFor(execution)!, scope = { runId: attempt.runId, bindingEpoch }
   assert.equal((await tools.call(token, "agency_publish", { ...scope, commandId: randomUUID(), resultOid: "c".repeat(40), expectedRemoteOid: null })).isError, false)
   assert.equal(published, 1); assert.equal(routed, 0)
-  for (const name of ["agency_git_configure", "agency_git_integrate", "git_configure", "git_integrate"]) assert.equal((await tools.call(token, name, {})).isError, true)
+  for (const name of ["agency_git_configure", "agency_git_integrate", "git_configure", "git_integrate", "git_abandon", "agency_git_abandon"]) assert.equal((await tools.call(token, name, {})).isError, true)
   tools.close()
+})
+
+test("Git abandonment CLI reaches only the explicit human controller", async () => {
+  const { runBureauClient } = await import("../src/bureau/cli.js"), { dispatchBureau } = await import("../src/bureau/client.js")
+  const generation = randomUUID(), commandId = randomUUID(), proposalId = "a".repeat(64), expectedHead = "b".repeat(40), controls: unknown[] = []
+  const deps = { environment: async () => ({ paths: { hostKey: "c".repeat(64), runtimeRoot: "/fixture" } }), inspect: async () => ({ disposition: "live", record: { generation, phase: "ready" } }),
+    callBureau: async (_env: unknown, request: import("../src/bureau/protocol.js").BureauRequest) => dispatchBureau({} as import("../src/bureau/service.js").BureauService, generation, request, async control => { controls.push(control); return { state: "abandoned" } }),
+    stdout() {}, stderr() {}, cwd: () => "/fixture" } as unknown as import("../src/cli/control.js").ControlDependencies
+  assert.equal(await runBureauClient(["git", "abandon", commandId, proposalId, "--expected-head", expectedHead], deps), 0)
+  assert.deepEqual(controls, [{ op: "git_abandon", commandId, proposalId, expectedHead }])
 })

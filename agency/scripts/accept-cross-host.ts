@@ -1,3 +1,4 @@
+import { gitOid } from "../src/bureau/git-identity.js"
 import { readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { absolutePath, hash, id, keys, object, text } from "../src/catalog/types.js"
@@ -74,7 +75,7 @@ export function parseControlsAcceptancePlan(raw: unknown) {
     }
     const deployment = { laptop: paths("laptop"), a: paths("a"), b: paths("b") }
     const settings = object(v.settings); keys(settings, ["supervisor", "worker"])
-    const names = ["start", "delegate", "supervisorSubmission", "workerSubmission", "permissionA", "permissionB", "publish", "report", "integrate", "stopSupervisor", "stopWorker", "shutdown"]
+    const names = ["start", "delegate", "supervisorSubmission", "wait", "permissionA", "permissionB", "publish", "publishAdvance", "report", "integrate", "stopSupervisor", "stopWorker", "shutdown"]
     const c = object(v.commands); keys(c, names)
     const commands = Object.fromEntries(names.map(name => [name, id(c[name])]))
     if (new Set(Object.values(commands)).size !== names.length) throw new Error()
@@ -83,11 +84,11 @@ export function parseControlsAcceptancePlan(raw: unknown) {
     const permission = object(v.permission); keys(permission, ["outsideFile", "deciders"])
     if (JSON.stringify(permission.deciders) !== '["a","b"]') throw new Error()
     const git = object(v.git)
-    keys(git, ["sourceRepository", "remote", "fetchUrl", "destinationCwd", "destinationRef", "publicationRef", "strategy", "validations", "publicationCount", "branchMovement"])
-    const sourceRepository = absolutePath(git.sourceRepository), remote = absolutePath(git.remote), destinationCwd = absolutePath(git.destinationCwd), outsideFile = absolutePath(permission.outsideFile)
-    if (![sourceRepository, remote, outsideFile].every(path => path.startsWith(deployment.b.root + "/")) || !destinationCwd.startsWith(deployment.laptop.root + "/") || sourceRepository === remote || sourceRepository === outsideFile) throw new Error()
+    keys(git, ["baseOid", "sourceRepository", "remote", "fetchUrl", "destinationCwd", "destinationRef", "publicationRef", "strategy", "validations", "publicationCount", "branchMovement"])
+    const baseOid = gitOid(git.baseOid), sourceRepository = absolutePath(git.sourceRepository), remote = text(git.remote, 4096), destinationCwd = absolutePath(git.destinationCwd), outsideFile = absolutePath(permission.outsideFile)
+    if (![sourceRepository, outsideFile].every(path => path.startsWith(deployment.b.root + "/")) || !destinationCwd.startsWith(deployment.laptop.root + "/") || sourceRepository === outsideFile) throw new Error()
     const fetchUrl = text(git.fetchUrl, 4096), destinationRef = text(git.destinationRef, 1024)
-    if (fetchUrl !== "ssh://" + observedHosts.b.hostname + remote || !/^refs\/heads\/[a-zA-Z0-9][a-zA-Z0-9/._-]*$/.test(destinationRef) || destinationRef.includes("..") || destinationRef.endsWith(".lock") || destinationRef.endsWith("/") || git.publicationRef !== "allocated-attempt" || git.strategy !== "merge" || git.publicationCount !== 2 || git.branchMovement !== true) throw new Error()
+    if (fetchUrl !== remote || !remote.trim() || remote.startsWith("-") || remote.startsWith("ext::") || /[\x00-\x1f\x7f]/u.test(remote) || !/^refs\/heads\/[a-zA-Z0-9][a-zA-Z0-9/._-]*$/.test(destinationRef) || destinationRef.includes("..") || destinationRef.endsWith(".lock") || destinationRef.endsWith("/") || git.publicationRef !== "allocated-attempt" || git.strategy !== "merge" || git.publicationCount !== 2 || git.branchMovement !== true) throw new Error()
     if (!Array.isArray(git.validations) || !git.validations.length || git.validations.length > 32) throw new Error()
     const validations = git.validations.map(raw => {
       if (!Array.isArray(raw) || !raw.length || raw.length > 128) throw new Error()
@@ -102,7 +103,7 @@ export function parseControlsAcceptancePlan(raw: unknown) {
     return { protocol: "agency-controls-acceptance/1", approval: "pending", source: { revision: text(source.revision), sourceDigest: hash(source.sourceDigest), distDigest: hash(source.distDigest), nodeVersion: "v24.13.0" },
       observedHosts, deployment, settings: { supervisor: selection(settings.supervisor), worker: selection(settings.worker) }, commands,
       prompts: { supervisor: text(prompts.supervisor, 65536), worker: text(prompts.worker, 65536) }, promptBudget: 2,
-      permission: { outsideFile, deciders: ["a", "b"] }, git: { sourceRepository, remote, fetchUrl, destinationCwd, destinationRef, publicationRef: "allocated-attempt", strategy: "merge", validations, publicationCount: 2, branchMovement: true },
+      permission: { outsideFile, deciders: ["a", "b"] }, git: { baseOid, sourceRepository, remote, fetchUrl, destinationCwd, destinationRef, publicationRef: "allocated-attempt", strategy: "merge", validations, publicationCount: 2, branchMovement: true },
       editors: { a: absolutePath(editors.a), b: absolutePath(editors.b) }, cleanup, authority, evidenceRoot: absolutePath(v.evidenceRoot) }
   } catch { throw new Error("INVALID_CONTROLS_ACCEPTANCE_PLAN") }
 }

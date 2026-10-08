@@ -10,10 +10,10 @@ function plan() {
   return { protocol: "agency-controls-acceptance/1", approval: "pending", source: { revision: "d".repeat(40), sourceDigest: "e".repeat(64), distDigest: "f".repeat(64), nodeVersion: "v24.13.0" },
     observedHosts: { laptop: host("a", "darwin"), a: host("b", "linux"), b: host("c", "linux") },
     deployment: { laptop: deployment("laptop"), a: deployment("a"), b: deployment("b") }, settings: { supervisor: selection, worker: selection },
-    commands: Object.fromEntries(["start", "delegate", "supervisorSubmission", "workerSubmission", "permissionA", "permissionB", "publish", "report", "integrate", "stopSupervisor", "stopWorker", "shutdown"].map(key => [key, randomUUID()])),
+    commands: Object.fromEntries(["start", "delegate", "supervisorSubmission", "wait", "permissionA", "permissionB", "publish", "publishAdvance", "report", "integrate", "stopSupervisor", "stopWorker", "shutdown"].map(key => [key, randomUUID()])),
     prompts: { supervisor: "Delegate one child; await its report.", worker: "Request approval, edit, publish and report once." }, promptBudget: 2,
     permission: { outsideFile: "/controls/b/outside.txt", deciders: ["a", "b"] },
-    git: { sourceRepository: "/controls/b/repository", remote: "/controls/b/exchange.git", fetchUrl: "ssh://controls-c/controls/b/exchange.git", destinationCwd: "/controls/laptop/destination", destinationRef: "refs/heads/controls-acceptance", publicationRef: "allocated-attempt", strategy: "merge", validations: [["node", "--test"]], publicationCount: 2, branchMovement: true },
+    git: { baseOid: "a".repeat(40), sourceRepository: "/controls/b/repository", remote: "git@github.com:owner/repository.git", fetchUrl: "git@github.com:owner/repository.git", destinationCwd: "/controls/laptop/destination", destinationRef: "refs/heads/controls-acceptance", publicationRef: "allocated-attempt", strategy: "merge", validations: [["node", "--test"]], publicationCount: 2, branchMovement: true },
     editors: { a: "/tmp/controls-a/editor.sock", b: "/tmp/controls-b/editor.sock" },
     cleanup: { stopSupervisor: true, stopWorker: true, closeOwnedEditors: true, stopOwnedCoordinator: true, readbackPasses: 2, retainGitEvidence: true },
     authority: { ssh: true, install: true, prompts: true, remoteEditors: true, publication: true, integration: true, scopedStops: true, restartExistingHandlers: false, restore: false, reboot: false, retire: false }, evidenceRoot: "/controls/evidence" }
@@ -24,7 +24,7 @@ test("controls acceptance proposal pins live scope without changing the transpor
   assert.deepEqual(parseControlsAcceptancePlan(input), input)
 })
 
-for (const change of ["approved", "budget", "duplicate-command", "missing-host", "duplicate-host", "runtime", "missing-model", "source", "wildcard-ref", "unscoped-destination", "worker-validation", "extra-publication", "restore", "retire", "restart-existing", "unscoped-cleanup", "existing-install", "unknown"] as const) test(`controls acceptance refuses ${change}`, () => {
+for (const change of ["approved", "budget", "duplicate-command", "missing-host", "duplicate-host", "runtime", "missing-model", "source", "wildcard-ref", "unscoped-destination", "worker-validation", "extra-publication", "restore", "retire", "restart-existing", "unscoped-cleanup", "existing-install", "bad-base", "changed-remote", "unknown"] as const) test(`controls acceptance refuses ${change}`, () => {
   const input: any = plan()
   if (change === "approved") input.approval = "approved"
   if (change === "budget") input.promptBudget = 3
@@ -43,6 +43,19 @@ for (const change of ["approved", "budget", "duplicate-command", "missing-host",
   if (change === "restart-existing") input.authority.restartExistingHandlers = true
   if (change === "unscoped-cleanup") input.cleanup.stopAll = true
   if (change === "existing-install") input.deployment.b.agyPath = input.observedHosts.b.agyPath
+  if (change === "bad-base") input.git.baseOid = "master"
+  if (change === "changed-remote") input.git.fetchUrl = "ssh://different/repository.git"
   if (change === "unknown") input.execute = true
   assert.throws(() => parseControlsAcceptancePlan(input), /INVALID_CONTROLS_ACCEPTANCE_PLAN/)
+})
+
+test("controls acceptance requires one exact remote identity for publication and verification", () => {
+  const input = plan(); input.git.fetchUrl = "ssh://another/repository.git"
+  assert.throws(() => parseControlsAcceptancePlan(input), /INVALID_CONTROLS_ACCEPTANCE_PLAN/)
+})
+
+test("controls acceptance binds allocated worker submission and both publication command IDs", () => {
+  const input: any = plan(); delete input.commands.workerSubmission
+  input.commands.wait = randomUUID(); input.commands.publishAdvance = randomUUID(); input.git.baseOid = "a".repeat(40)
+  assert.deepEqual(parseControlsAcceptancePlan(input), input)
 })

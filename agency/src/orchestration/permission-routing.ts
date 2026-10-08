@@ -110,7 +110,7 @@ export function createPermissionRouting(input: { root: string; hostId: string; h
     reduce(event); throughSeq = entry.seq
     for (const listener of listeners) { try { listener(structuredClone(event)) } catch {} }
   }
-  function ready(): void { if (!initialized) fail("PERMISSIONS_UNAVAILABLE"); if (failure) throw failure }
+  function ready(): void { if (!initialized || failure) fail("PERMISSIONS_UNAVAILABLE") }
   function receiptFor(commandId: string, ref: PermissionRef, optionId: string, state: PermissionReceipt["state"]): PermissionReceipt {
     const value = { commandId, ref, optionId }; return { ...value, digest: canonicalDigest(value), state }
   }
@@ -129,13 +129,14 @@ export function createPermissionRouting(input: { root: string; hostId: string; h
   }
   return {
     async initialize(): Promise<void> {
-      await stateQueue.run(async () => {
+      try { await stateQueue.run(async () => {
         await refresh(); await persist({ kind: "owner", hostId, handlerGeneration })
         for (const receipt of [...receipts.values()]) if (receipt.state === "claimed") await persist({ kind: "receipt", receipt: { ...receipt, state: "uncertain" } })
         for (const offer of offers.values()) if (!consumed.has(permissionKey(offer.ref))) await persist({ kind: "withdraw", ref: offer.ref })
         initialized = true
-      })
+      }) } catch (error) { failure = error }
     },
+    status() { return { available: initialized && !failure, issue: failure instanceof Error ? failure.message : failure ? String(failure) : initialized ? null : "PERMISSIONS_UNAVAILABLE" } },
     async open(target: AgentTuple, params: JsonObject, originCwd: string, respond: (optionId: string) => Promise<void>): Promise<PermissionRef> {
       ready(); target = parseAgentTuple(target)
       if (target.handlerGeneration !== handlerGeneration) fail("STALE_HANDLER")
@@ -186,7 +187,7 @@ export function createPermissionRouting(input: { root: string; hostId: string; h
         ready(); await refresh()
         const pending = [...live.values()].filter(r => !r.cancelled && !consumed.has(permissionKey(r.offer.ref))).map(r => structuredClone(r.offer))
         return parsePermissionSnapshot({ hostId, handlerGeneration, throughSeq, pending, receipts: [...receipts.values()] })
-      })
+      }).catch(error => { failure ??= error; return fail("PERMISSIONS_UNAVAILABLE") })
     },
     inspect(commandId: string): Promise<PermissionReceipt | null> { id(commandId); return stateQueue.run(async () => { ready(); await refresh(); return structuredClone(receipts.get(commandId) ?? null) }) },
     read(after: number, limit: number): Promise<import("./types.js").JournalPage> { ready(); return journal.read(after, limit) },

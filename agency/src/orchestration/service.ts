@@ -138,7 +138,8 @@ export function createOrchestrationService(input: { root: string; hostId: string
       }
       const replayFences = []
       for (const runId of await journals.list()) { const page = await journals.forRun(runId).metadata(); replayFences.push({ streamId: runId, runId, throughSeq: page.lastSeq, checkpoint: page.checkpoint }) }
-      return { permissions: await agents.permissionRouting.snapshot(), hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root).catch(error => { if (error instanceof AgentError && error.code === "UNAVAILABLE") return { backends: [] }; throw error })).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
+      const permissions = await agents.permissionRouting.snapshot().catch(() => undefined)
+      return { ...(permissions ? { permissions } : {}), hostId: input.hostId, handlerGeneration: agents.handlerGeneration, backendChoices: (await readBackendConfig(input.root).catch(error => { if (error instanceof AgentError && error.code === "UNAVAILABLE") return { backends: [] }; throw error })).backends.map(backend => backend.id), agents: observed, receipts, replayFences }
     }) },
     submission(target, submissionId) { return agents.submission(tuple(target), submissionId) },
     submit(target, request, beforeAccepted) { return agents.submitAcp(tuple(target), request, beforeAccepted) },

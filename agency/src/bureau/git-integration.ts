@@ -5,12 +5,12 @@ import { createStorage, storageQueue } from "../orchestration/storage.js"
 import { captureGitIdentity, gitOid, gitOperation, nativeGit, resolveGitRemote, sameGitIdentity, type GitRunner } from "./git-identity.js"
 import { type createGitResults, type ResultProposal } from "./git-results.js"
 
-export type IntegrationReceipt = { commandId: string; proposalId: string; expectedHead: string; strategy: "merge" | "cherry-pick"; digest: string; state: "prepared" | "applying" | "integrated" | "conflict" | "uncertain" | "rejected"; sourceOids: string[]; results: { sourceOid: string; resultOid: string }[]; resultingHead: string | null; issue: string | null }
+export type IntegrationReceipt = { commandId: string; proposalId: string; expectedHead: string; strategy: "merge" | "cherry-pick"; digest: string; state: "prepared" | "applying" | "integrated" | "conflict" | "uncertain" | "rejected" | "abandoned"; sourceOids: string[]; results: { sourceOid: string; resultOid: string }[]; resultingHead: string | null; issue: string | null }
 export function parseIntegrationReceipt(raw: unknown): IntegrationReceipt {
   const v = object(raw); keys(v, ["commandId", "proposalId", "expectedHead", "strategy", "digest", "state", "sourceOids", "results", "resultingHead", "issue"])
   const commandId = id(v.commandId), proposalId = hash(v.proposalId), expectedHead = gitOid(v.expectedHead), strategy = enumValue(v.strategy, ["merge", "cherry-pick"])
   const sourceOids = boundedArray(v.sourceOids, gitOid, 8192), results = boundedArray(v.results, raw => { const r = object(raw); keys(r, ["sourceOid", "resultOid"]); return { sourceOid: gitOid(r.sourceOid), resultOid: gitOid(r.resultOid) } }, 8192)
-  const digest = hash(v.digest), state = enumValue(v.state, ["prepared", "applying", "integrated", "conflict", "uncertain", "rejected"])
+  const digest = hash(v.digest), state = enumValue(v.state, ["prepared", "applying", "integrated", "conflict", "uncertain", "rejected", "abandoned"])
   if (digest !== canonicalDigest({ commandId, proposalId, expectedHead, strategy }) || results.some((r, i) => r.sourceOid !== sourceOids[i])) fail("INVALID_INTEGRATION")
   return { commandId, proposalId, expectedHead, strategy, digest, state, sourceOids, results, resultingHead: v.resultingHead === null ? null : gitOid(v.resultingHead), issue: v.issue === null ? null : text(v.issue, 4096) }
 }
@@ -18,8 +18,29 @@ const operations = new Map<string, MutationQueue>()
 export function createGitIntegration(input: { root: string; results: ReturnType<typeof createGitResults>; git?: GitRunner }) {
   const git = input.git ?? nativeGit, storage = createStorage(input.root, "bureau"), writes = storageQueue(input.root)
   const key = (commandId: string) => `git-integrations/${id(commandId)}.json`
-  const read = async (commandId: string) => { const raw = await storage.read(key(commandId)); return raw === null ? null : parseIntegrationReceipt(raw) }
+  const read = async (commandId: string) => { const raw = await storage.read(key(commandId)); if (raw === null) return null; const receipt = parseIntegrationReceipt(raw); if (receipt.commandId !== commandId) fail("INVALID_INTEGRATION"); return receipt }
   const save = async (prior: IntegrationReceipt, change: Partial<IntegrationReceipt>) => { const next = parseIntegrationReceipt({ ...prior, ...change }); await writes.run(() => storage.publish(key(prior.commandId), next, prior)); return next }
+  const terminal = (receipt: IntegrationReceipt) => ["integrated", "rejected", "abandoned"].includes(receipt.state)
+  const activeKey = (proposal: ResultProposal) => `git-active/${canonicalDigest(proposal.destination.cwd)}.json`
+  const queueFor = (proposal: ResultProposal) => { if (!operations.has(proposal.destination.cwd)) operations.set(proposal.destination.cwd, new MutationQueue()); return operations.get(proposal.destination.cwd)! }
+  function marker(raw: unknown) { const value = object(raw); keys(value, ["commandId", "proposalId"]); return { commandId: id(value.commandId), proposalId: hash(value.proposalId) } }
+  async function release(receipt: IntegrationReceipt, proposal: ResultProposal) {
+    if (!terminal(receipt)) return
+    await writes.run(async () => {
+      const raw = await storage.read(activeKey(proposal)); if (raw === null) return
+      const active = marker(raw)
+      if (active.commandId === receipt.commandId && active.proposalId === receipt.proposalId) await storage.remove(activeKey(proposal))
+    })
+  }
+  async function clearTerminalFence(proposal: ResultProposal) {
+    const raw = await writes.run(() => storage.read(activeKey(proposal))); if (raw === null) return
+    const active = marker(raw), owner = await writes.run(() => read(active.commandId))
+    if (!owner || owner.proposalId !== active.proposalId) fail("GIT_INTEGRATION_PENDING")
+    const ownedProposal = await input.results.proposal(owner.proposalId)
+    if (!ownedProposal || ownedProposal.destination.cwd !== proposal.destination.cwd) fail("GIT_INTEGRATION_PENDING")
+    if (!terminal(owner)) fail("GIT_INTEGRATION_PENDING")
+    await release(owner, ownedProposal)
+  }
   async function check(proposal: ResultProposal, expectedHead: string) {
     const config = await input.results.configuration(proposal.destination.cwd), current = await captureGitIdentity(proposal.destination.cwd, git)
     if (proposal.issues.length || !proposal.tree) fail("GIT_PROPOSAL_REJECTED")
@@ -63,32 +84,49 @@ export function createGitIntegration(input: { root: string; results: ReturnType<
   }
   return {
     inspect(commandId: string) { return writes.run(() => read(commandId)) },
+    async abandon(commandId: string, proposalId: string, expectedHead: string): Promise<IntegrationReceipt> {
+      commandId = id(commandId); proposalId = hash(proposalId); expectedHead = gitOid(expectedHead)
+      const proposal = await input.results.proposal(proposalId); if (!proposal) fail("UNKNOWN_PROPOSAL")
+      return queueFor(proposal).run(async () => {
+        const receipt = await writes.run(() => read(commandId)); if (!receipt) fail("UNKNOWN_INTEGRATION")
+        if (receipt.proposalId !== proposalId) fail("COMMAND_CONFLICT")
+        if (receipt.state === "abandoned") { if (receipt.resultingHead !== expectedHead) fail("COMMAND_CONFLICT"); await release(receipt, proposal); return receipt }
+        if (terminal(receipt)) fail("GIT_INTEGRATION_TERMINAL")
+        const current = await captureGitIdentity(proposal.destination.cwd, git)
+        if (!sameGitIdentity(current, proposal.destination, false) || current.head !== expectedHead) fail("GIT_DESTINATION_CHANGED")
+        if (await gitOperation(current)) fail("GIT_OPERATION_IN_PROGRESS")
+        if (await git(["status", "--porcelain=v1", "--untracked-files=all"], current.cwd)) fail("GIT_DESTINATION_DIRTY")
+        const raw = await writes.run(() => storage.read(activeKey(proposal)))
+        if (raw === null) fail("GIT_INTEGRATION_PENDING")
+        const active = marker(raw)
+        if (active.commandId !== commandId || active.proposalId !== proposalId) fail("GIT_INTEGRATION_PENDING")
+        const abandoned = await save(receipt, { state: "abandoned", resultingHead: expectedHead, issue: "HUMAN_ABANDONED" })
+        await release(abandoned, proposal); return abandoned
+      })
+    },
     async integrate(commandId: string, proposalId: string, expectedHead: string, strategy: IntegrationReceipt["strategy"]): Promise<IntegrationReceipt> {
       commandId = id(commandId); proposalId = hash(proposalId); expectedHead = gitOid(expectedHead); strategy = enumValue(strategy, ["merge", "cherry-pick"])
       const proposal = await input.results.proposal(proposalId); if (!proposal) fail("UNKNOWN_PROPOSAL")
-      const destinationKey = canonicalDigest(proposal.destination.cwd)
-      if (!operations.has(proposal.destination.cwd)) operations.set(proposal.destination.cwd, new MutationQueue())
-      return operations.get(proposal.destination.cwd)!.run(async () => {
-        const digest = canonicalDigest({ commandId, proposalId, expectedHead, strategy }), activeKey = `git-active/${destinationKey}.json`
+      return queueFor(proposal).run(async () => {
+        const digest = canonicalDigest({ commandId, proposalId, expectedHead, strategy }), fenceKey = activeKey(proposal)
         let receipt = await writes.run(() => read(commandId))
         if (receipt) {
           if (receipt.digest !== digest) fail("COMMAND_CONFLICT")
-          if (["integrated", "rejected"].includes(receipt.state)) return receipt
+          if (terminal(receipt)) { await release(receipt, proposal); return receipt }
           const recovered = await recover(receipt, proposal)
-          if (recovered.state === "integrated") await writes.run(() => storage.remove(activeKey))
+          await release(recovered, proposal)
           return recovered
         }
         receipt = { commandId, proposalId, expectedHead, strategy, digest, state: "prepared", sourceOids: proposal.sourceOids, results: [], resultingHead: null, issue: null }
         await writes.run(() => storage.publish(key(commandId), receipt, null, true))
         try {
-          const active = await writes.run(() => storage.read(activeKey))
-          if (active) fail("GIT_INTEGRATION_PENDING")
+          await clearTerminalFence(proposal)
           await check(proposal, expectedHead)
           if (strategy === "cherry-pick" && !proposal.linear) fail("MERGE_REQUIRED")
         } catch (error) { return save(receipt, { state: "rejected", issue: error instanceof Error ? error.message : "GIT_INTEGRATION_REJECTED" }) }
-        await writes.run(() => storage.publish(activeKey, { commandId, proposalId }, null, true))
+        await writes.run(() => storage.publish(fenceKey, { commandId, proposalId }, null, true))
         receipt = await save(receipt, { state: "applying", resultingHead: expectedHead })
-        try { await check(proposal, expectedHead) } catch (error) { const rejected = await save(receipt, { state: "rejected", issue: error instanceof Error ? error.message : "GIT_DESTINATION_CHANGED" }); await writes.run(() => storage.remove(activeKey)); return rejected }
+        try { await check(proposal, expectedHead) } catch (error) { const rejected = await save(receipt, { state: "rejected", issue: error instanceof Error ? error.message : "GIT_DESTINATION_CHANGED" }); await release(rejected, proposal); return rejected }
         const cwd = proposal.destination.cwd
         try {
           if (strategy === "merge") await git(["merge", "--no-ff", "--no-edit", "--", proposal.resultOid], cwd)
@@ -100,7 +138,7 @@ export function createGitIntegration(input: { root: string; results: ReturnType<
             receipt = await save(receipt, { results: [...receipt.results, { sourceOid, resultOid }], resultingHead: resultOid })
           }
           const recovered = await recover(receipt, proposal)
-          if (recovered.state === "integrated") await writes.run(() => storage.remove(activeKey))
+          await release(recovered, proposal)
           return recovered
         } catch {
           let resultingHead = receipt.resultingHead, conflict = false

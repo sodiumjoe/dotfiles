@@ -90,6 +90,7 @@ export async function createHostCoordination(input: { root: string; runtimeRoot:
       case "git_verify": return gitResults.verifyResult(operation.reportId, operation.destinationCwd)
       case "git_proposal": return gitResults.proposal(operation.proposalId)
       case "git_integrate": return gitIntegration.integrate(operation.commandId, operation.proposalId, operation.expectedHead, operation.strategy)
+      case "git_abandon": return gitIntegration.abandon(operation.commandId, operation.proposalId, operation.expectedHead)
       case "git_inspect": return gitIntegration.inspect(operation.commandId)
       case "entry_prepare": case "entry_inspect": {
         const enrollment = (await inventory.list()).find(value => value.inventoryId === operation.ref.inventoryId && value.hostId === operation.ref.hostId)

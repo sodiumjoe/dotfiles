@@ -61,7 +61,7 @@ export function createBureauPermissions(input: { root: string; hosts: Orchestrat
     available()
     const result = await Promise.allSettled(input.hosts.map(async host => {
       const snapshot = await host.snapshot()
-      if (!snapshot.permissions) return null
+      if (!snapshot.permissions) { if (host.permissionRead) fail("PERMISSIONS_UNAVAILABLE"); return null }
       const permissions = parsePermissionSnapshot(snapshot.permissions)
       if (permissions.handlerGeneration !== snapshot.handlerGeneration) fail("STALE_HANDLER")
       let captureQueue = captureQueues.get(host)
