@@ -1438,6 +1438,7 @@ qualificationTest("provider missing acknowledgement descriptor self-cleans the u
   const child = spawn(node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe"] })
   if (child.pid === undefined) throw new Error("acknowledgement-missing provider pid is unavailable")
   scope.track("acknowledgement-missing provider", marker, child.pid)
+  const structural = await readProviderStructural(child, "acknowledgement-missing provider")
   const leader = await waitFor(() => adapter.readProcess(child.pid!), "acknowledgement-missing provider leader was not observable")
   const members = await waitFor(async () => {
     const current = await stableGroup(leader.processGroupId)
@@ -1445,7 +1446,6 @@ qualificationTest("provider missing acknowledgement descriptor self-cleans the u
   }, "acknowledgement-missing provider descendant was not observable")
   const evidence = scope.register("acknowledgement-missing provider", marker, leader, members)
   assertLeader(evidence.leader, marker)
-  const structural = await readProviderStructural(child, "acknowledgement-missing provider")
   assert.equal(structural.leaderPid, evidence.leader.pid)
   assert.equal(evidence.members.some(member => member.pid === structural.descendantPid), true)
   childPipe(child, 3).destroy()

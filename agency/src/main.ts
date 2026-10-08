@@ -1,5 +1,11 @@
 process.umask(0o077)
-if (process.argv[2] === "internal-agency-tools") {
+if (process.argv[2] === "internal-host-bridge" || process.argv[2] === "internal-host-call") {
+  try {
+    const { runHostBridgeCli, runHostCallCli, productionHostBridgeDependencies } = await import("./bridge/remote.js")
+    const run = process.argv[2] === "internal-host-bridge" ? runHostBridgeCli : runHostCallCli
+    await run(process.argv.slice(3), productionHostBridgeDependencies())
+  } catch { process.stderr.write("Agency host helper failed\n"); process.exitCode = 70 }
+} else if (process.argv[2] === "internal-agency-tools") {
   try { const { runAgencyTools } = await import("./orchestration/tool-client.js"); await runAgencyTools() }
   catch { process.stderr.write("Agency tool helper failed\n"); process.exitCode = 70 }
 } else if (process.argv[2] === "internal-handler") {
