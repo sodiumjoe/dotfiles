@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec, parseSession, parseAgentFailure, startCommand } from "../src/agent/types.js"
+import { AgentError, normalizeAgentRecord, parseAgentRecordV3, agentFailure, parseAgentCommand, parseAgentRecord, parseLaunchSpec, parseSession, parseAgentFailure, startCommand } from "../src/agent/types.js"
 import { launchEnvironmentDigest } from "../src/agent/environment.js"
 import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
 
@@ -77,4 +77,33 @@ test("commands bind operation, identity, result, and original generation", () =>
   assert.throws(() => parseAgentCommand({ ...completed, result: { ...completed.result, session: null } }))
   assert.throws(() => parseAgentCommand({ ...completed, state: "interrupted" }))
   assert.equal(agentFailure(new Error("secret-token")).message.includes("secret-token"), false)
+})
+
+test("failure diagnostics are optional, copied and preserved by records and commands", () => {
+  const diagnostic = { boundary: "permission_request", causeCode: "INVALID_CATALOG" }, failure = { code: "STARTUP_FAILED", message: "startup failed", diagnostic }
+  const parsed = parseAgentFailure(failure)
+  assert.deepEqual(parsed, failure)
+  diagnostic.causeCode = "MUTATED"
+  assert.deepEqual((parsed as any).diagnostic, { boundary: "permission_request", causeCode: "INVALID_CATALOG" })
+  const error = Reflect.construct(AgentError, ["STARTUP_FAILED", (parsed as any).diagnostic]) as AgentError
+  assert.deepEqual(agentFailure(error), parsed)
+  const source = (parsed as any).diagnostic
+  source.causeCode = "CHANGED"
+  assert.equal((agentFailure(error) as any).diagnostic.causeCode, "INVALID_CATALOG")
+  const retained = agentFailure(error), record = { ...sampleAgent(), phase: "failed", failure: retained }
+  assert.deepEqual(parseAgentRecord(record).failure, retained)
+  assert.deepEqual(parseAgentRecordV3({ ...normalizeAgentRecord(sampleAgent()), phase: "failed", failure: retained }).failure, retained)
+  const command = sampleCommand()
+  assert.deepEqual(parseAgentCommand({ ...command, state: "completed", result: { outcome: "failed", target: command.target, session: null, failure: retained } }).result!.failure, retained)
+  assert.deepEqual(agentFailure(new AgentError("STARTUP_FAILED")), { code: "STARTUP_FAILED", message: "startup failed" })
+})
+
+test("failure diagnostic schema rejects unknown fields and malformed bounded process evidence", () => {
+  const process = { boundary: "provider_process", event: "stderr_limit", causeCode: null, exitCode: null, signal: null, stderrBytes: 8193, stderrTailBase64: Buffer.alloc(2048, 255).toString("base64") }
+  const failure = { code: "STARTUP_FAILED", message: "startup failed", diagnostic: process }
+  assert.deepEqual(parseAgentFailure(failure), failure)
+  for (const diagnostic of [{ boundary: "acp_transport", causeCode: "INVALID_PROTOCOL" }, { boundary: "provider_initialize", causeCode: null }, { boundary: "permission_request", causeCode: "x".repeat(128) }]) assert.deepEqual((parseAgentFailure({ ...failure, diagnostic }) as any).diagnostic, diagnostic)
+  for (const change of [{ boundary: "unknown" }, { event: "unknown" }, { causeCode: "secret value" }, { causeCode: "x".repeat(129) }, { causeCode: 1 }, { signal: "bad\n" }, { signal: "x".repeat(129) }, { exitCode: 1.5 }, { exitCode: "1" }, { stderrBytes: -1 }, { stderrBytes: Number.MAX_SAFE_INTEGER + 1 }, { stderrTailBase64: "YQ" }, { stderrTailBase64: "YR==" }, { stderrTailBase64: "a".repeat(2733) }, { stderrTailBase64: Buffer.alloc(2049).toString("base64") }, { extra: true }]) assert.throws(() => parseAgentFailure({ ...failure, diagnostic: { ...process, ...change } }), { code: "INVALID_AGENT_STATE" })
+  for (const diagnostic of [null, {}, { boundary: "permission_request", causeCode: null, extra: true }, { boundary: "permission_request" }, { boundary: "provider_process", event: "exit" }]) assert.throws(() => parseAgentFailure({ ...failure, diagnostic }), { code: "INVALID_AGENT_STATE" })
+  assert.throws(() => parseAgentFailure({ ...failure, message: "raw private error" }), { code: "INVALID_AGENT_STATE" })
 })

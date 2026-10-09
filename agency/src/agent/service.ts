@@ -1,3 +1,4 @@
+import { underlyingFailureCode } from "./failure-diagnostics.js"
 import { createPermissionRouting, type PermissionRouting } from "../orchestration/permission-routing.js"
 import { startEditorRouting, type EditorRouting } from "./editor-routing.js"
 import { randomUUID } from "node:crypto"
@@ -389,9 +390,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           await requireTarget(agentTuple(op.initial))
           if (!op.turns?.busy()) throw new AgentError("INVALID_PROTOCOL")
           await permissions.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
-        }).catch(error => { void failOperation(op, error).catch(error => noteOperation(op, error)) }) }, revalidate: () => revalidate(op) }) }
+        }).catch(error => { void failOperation(op, new AgentError(errorFor(error).code, error instanceof AgentError && error.diagnostic ? error.diagnostic : { boundary: "permission_request", causeCode: underlyingFailureCode(error) })).catch(error => noteOperation(op, error)) }) }, revalidate: () => revalidate(op) }) }
         finally { op.environment = null }
-        void op.owner.fault.then(failure => { if (!closed && !op.controller.signal.aborted) void failOperation(op, new AgentError(failure.code)).catch(error => noteOperation(op, error)) })
+        void op.owner.fault.then(failure => { if (!closed && !op.controller.signal.aborted) void failOperation(op, new AgentError(failure.code, failure.diagnostic)).catch(error => noteOperation(op, error)) })
         if (op.controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
         const session = await op.owner.initialize(op.controller.signal)
         op.providerSession = session

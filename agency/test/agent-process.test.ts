@@ -17,6 +17,7 @@ test("owned provider forwards observations and nonfatal cancellation through its
 import { lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
+import { agentFailure } from "../src/agent/types.js"
 import { syntheticAgentProcess } from "./agent-support.js"
 
 test("agent process publishes a managed launch and spawns in the exact caller directory with profile-derived adapter routing", async t => {
@@ -176,4 +177,90 @@ test("changed process generation does not acquire signal authority", async t => 
   f.replaceIdentity()
   await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
   assert.deepEqual(f.signals, [])
+})
+
+test("stderr boundary preserves the existing threshold and bounded byte-exact failure diagnostic", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  const first = Buffer.alloc(8192, 255), last = Buffer.from([0])
+  f.emitStderr(first)
+  assert.deepEqual(await f.owner.prompt("still ready", new AbortController().signal), { stopReason: "end_turn", text: "still ready" })
+  assert.deepEqual(f.signals, [])
+  f.emitStderr(last)
+  const failure = await f.owner.fault
+  assert.deepEqual(failure, { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "provider_process", event: "stderr_limit", causeCode: null, exitCode: null, signal: null, stderrBytes: 8193, stderrTailBase64: Buffer.concat([first, last]).subarray(-2048).toString("base64") } })
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.deepEqual(await f.owner.fault, failure)
+})
+
+test("stderr boundary bounds one huge binary chunk before diagnostic capture", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  const bytes = Buffer.alloc(200000, 255)
+  f.emitStderr(bytes)
+  const diagnostic = (await f.owner.fault as any).diagnostic
+  assert.equal(diagnostic.stderrBytes, bytes.length)
+  assert.equal(diagnostic.stderrTailBase64, bytes.subarray(-2048).toString("base64"))
+  assert.ok(diagnostic.stderrTailBase64.length <= 2732)
+  await f.owner.cleanup()
+})
+
+for (const event of ["exit", "close"] as const) test("process failure provenance retains " + event + " metadata before cleanup events", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  f.emitStderr(Buffer.from("warning\n"))
+  f.emitProcess(event, 13, "SIGABRT")
+  const failure = await f.owner.fault
+  if (event === "close") f.emitProcess("exit", 99, "SIGKILL")
+  else f.emitProcess("close", 99, "SIGKILL")
+  assert.deepEqual((failure as any).diagnostic, { boundary: "provider_process", event, causeCode: null, exitCode: 13, signal: "SIGABRT", stderrBytes: 8, stderrTailBase64: Buffer.from("warning\n").toString("base64") })
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(await f.owner.fault, failure)
+})
+
+for (const event of ["error", "stdin_error", "stdout_error", "stderr_error"] as const) test("process failure provenance retains " + event + " machine code without raw messages", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  f.emitError(event, Object.assign(new Error("private error message"), { code: "EPIPE" }))
+  const failure = await f.owner.fault
+  assert.equal((failure as any).diagnostic.event, event); assert.equal((failure as any).diagnostic.causeCode, "EPIPE")
+  assert.equal(JSON.stringify(failure).includes("private error message"), false)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
+for (const code of ["private code with spaces", "x".repeat(129), 1, undefined]) test("process failure provenance discards unsafe runtime code " + String(code).slice(0, 30), async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  f.emitError("stderr_error", Object.assign(new Error("private error"), { code }))
+  assert.equal((await f.owner.fault as any).diagnostic.causeCode, null)
+  await f.owner.cleanup()
+})
+
+test("initialization diagnostic rejection preserves the first observer fault over a later check error", async t => {
+  const f = await syntheticAgentProcess(t, "identity-publication-paused"), pending = f.owner.initialize(new AbortController().signal)
+  void pending.catch(() => undefined)
+  await f.beforeSpawn.promise
+  f.emitError("stdout_error", Object.assign(new Error("private initial error"), { code: "EIO" }))
+  const first = await f.owner.fault
+  assert.equal((first as any).diagnostic.event, "stdout_error")
+  f.releasePublication()
+  await assert.rejects(pending, error => { assert.deepEqual(agentFailure(error), first); return true })
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
+test("initialization diagnostic labels a synchronous spawn failure without raw exception content", async t => {
+  const f = await syntheticAgentProcess(t, "spawn-throws")
+  await assert.rejects(f.owner.initialize(new AbortController().signal), error => {
+    assert.deepEqual((agentFailure(error) as any).diagnostic, { boundary: "provider_initialize", causeCode: null }); return true
+  })
+  assert.equal(JSON.stringify(await f.owner.fault).includes("spawn invocation failed"), false)
+})
+
+test("ACP transport diagnostic retains its protocol failure boundary", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  f.eof()
+  assert.deepEqual((await f.owner.fault as any).diagnostic, { boundary: "acp_transport", causeCode: "STARTUP_FAILED" })
+  await f.owner.cleanup()
 })

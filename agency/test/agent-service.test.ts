@@ -849,3 +849,46 @@ test("long permission labels reach a native decision and leave the ready provide
   await completed(f.service, (await f.service.stop({ ...target, commandId: randomUUID() })).command)
   assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
 })
+
+for (const retry of [false, true]) test("permission failure provenance survives " + (retry ? "publication retry and restart" : "cleanup and restart"), async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" }), ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!, seen: any[] = []
+  await f.service.observe(target, event => seen.push(event))
+  await f.service.submit(target, { submissionId: randomUUID(), text: "oversized label", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } })
+  await f.promptEntered
+  if (retry) f.failTerminalBeforeRename(true)
+  f.requestPermission(target.agentId, "invalid-label", { sessionId: "fixture-session", toolCall: { toolCallId: "tool", title: "Edit" }, options: [{ optionId: "allow", name: "x".repeat(65537), kind: "allow_once" }] })
+  if (retry) {
+    await until(async () => f.terminalWriteFailures() > 0 ? true : undefined)
+    f.failTerminalBeforeRename(false)
+    await f.service.command(f.input.commandId, f.input.handlerGeneration)
+  }
+  const view = await until(async () => { const value = (await f.service.list()).agents[0]!; return value.record.phase === "failed" && value.cleanup === "verified" ? value : undefined })
+  const expected = { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "permission_request", causeCode: "INVALID_CATALOG" } }
+  assert.deepEqual(view.record.failure, expected)
+  assert.deepEqual(seen.find(event => event.kind === "event" && event.event.kind === "lifecycle" && event.event.phase === "failed")?.event.failure, expected)
+  assert.equal((await f.service.permissionRouting.snapshot()).pending.length, 0)
+  assert.deepEqual(f.permissionReplies(target.agentId), [])
+  assert.deepEqual((await f.store.readAgent(target.agentId))!.failure, expected)
+  const restarted = await f.restart()
+  assert.deepEqual((await restarted.list()).agents[0]!.record.failure, expected)
+})
+
+test("provider process diagnostic survives owner fault forwarding and service restart", async t => {
+  const f = await agentServiceFixture(t), ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  f.emitStderr(target.agentId, Buffer.from("warn\n")); f.exit(target.agentId)
+  const view = await until(async () => { const value = (await f.service.list()).agents[0]!; return value.record.phase === "failed" && value.cleanup === "verified" ? value : undefined })
+  const expected = { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "provider_process", event: "exit", causeCode: null, exitCode: 1, signal: null, stderrBytes: 5, stderrTailBase64: Buffer.from("warn\n").toString("base64") } }
+  assert.deepEqual(view.record.failure, expected)
+  assert.deepEqual((await (await f.restart()).list()).agents[0]!.record.failure, expected)
+})
+
+test("startup diagnostic receipt retains the first child exit through initialization and restart", async t => {
+  const f = await agentServiceFixture(t, { exitDuringInitialize: true }), accepted = await f.service.start(f.input), failed = await completed(f.service, accepted.command)
+  const expected = { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "provider_process", event: "exit", causeCode: null, exitCode: 7, signal: "SIGABRT", stderrBytes: 0, stderrTailBase64: "" } }
+  assert.equal(failed.command.result!.outcome, "failed")
+  assert.deepEqual(failed.command.result!.failure, expected)
+  assert.deepEqual((await f.service.list()).agents[0]!.record.failure, expected)
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
+  const restarted = await f.restart()
+  assert.deepEqual((await restarted.command(accepted.command.commandId, accepted.command.handlerGeneration)).command.result!.failure, expected)
+})

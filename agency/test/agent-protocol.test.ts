@@ -202,3 +202,12 @@ test("optional conversation display frames titles and activity without changing 
     assert.throws(() => parseAgentReply(envelope(display)), { code: "INVALID_PROTOCOL" })
   }
 })
+
+test("optional failure diagnostics survive error and inventory wire parsing", () => {
+  const r = request(), error = { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "permission_request", causeCode: "INVALID_CATALOG" } }
+  const reply = { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, commandId: agentId(6), ok: false, error }
+  assert.deepEqual(parseAgentReply(reply), reply)
+  const record = { ...normalizeAgentRecord(sampleAgent()), phase: "failed", failure: error }
+  const inventory = { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record, launch: null, live: false, cleanup: "not_launched", unavailable: null }], issues: [] } }
+  assert.deepEqual(parseAgentReply(inventory), inventory)
+})

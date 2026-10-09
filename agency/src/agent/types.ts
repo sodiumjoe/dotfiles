@@ -1,3 +1,4 @@
+import { parseFailureDiagnostic, type FailureDiagnostic } from "./failure-diagnostics.js"
 import { isDeepStrictEqual } from "node:util"
 import { absolutePath, hash, id, keys, object, parseProviderSnapshot, providerId, text, type ConfigEvidence, type ProviderId, type ProviderSnapshot } from "../catalog/types.js"
 import type { LaunchRecord } from "../platform/types.js"
@@ -53,11 +54,17 @@ export type AgentList = { state: "agents"; agents: Array<AgentView | LegacyAgent
 export type CurrentAgents = { state: "current"; cwd: string; agents: AgentView[] }
 export const AGENT_CODES = ["STALE_ATTACHMENT", "BUSY", "UNSUPPORTED_SESSION_FEATURE", "SESSION_INPUT_REQUIRED", "RESYNC_REQUIRED", "USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "RESTORE_UNSUPPORTED", "SESSION_UNAVAILABLE", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL", "INPUT_TOO_LARGE", "OUTPUT_TOO_LARGE", "ACP_FRAME_LIMIT", "ACP_HISTORY_LIMIT"] as const
 export type AgentErrorCode = typeof AGENT_CODES[number]
-export type AgentFailure = { code: AgentErrorCode; message: string }
-export class AgentError extends Error { constructor(readonly code: AgentErrorCode) { super(code.replaceAll("_", " ").toLowerCase()) } }
+export type AgentFailure = { code: AgentErrorCode; message: string; diagnostic?: FailureDiagnostic }
+export class AgentError extends Error {
+  readonly diagnostic?: FailureDiagnostic
+  constructor(readonly code: AgentErrorCode, diagnostic?: FailureDiagnostic) {
+    super(code.replaceAll("_", " ").toLowerCase())
+    if (diagnostic !== undefined) this.diagnostic = parseFailureDiagnostic(diagnostic)
+  }
+}
 export function invalidAgent(): never { throw new AgentError("INVALID_AGENT_STATE") }
 export function parsePermissionEvidence(value: unknown): PermissionEvidence { if (value !== "fixture-contract-v1" && value !== "agency-deny-all-v1") invalidAgent(); return value }
-export function agentFailure(error: unknown): AgentFailure { const code = error instanceof AgentError ? error.code : "INTERNAL"; return { code, message: new AgentError(code).message } }
+export function agentFailure(error: unknown): AgentFailure { const code = error instanceof AgentError ? error.code : "INTERNAL"; return { code, message: new AgentError(code).message, ...(error instanceof AgentError && error.diagnostic !== undefined ? { diagnostic: parseFailureDiagnostic(error.diagnostic) } : {}) } }
 function checked<T>(operation: () => T): T { try { return operation() } catch { return invalidAgent() } }
 export function agentText(value: unknown, max = 256): string { return checked(() => { const result = text(value, max); if (!result.trim()) invalidAgent(); return result }) }
 export function parseReasoning(input: unknown): Reasoning { return checked(() => { const v = object(input); if (v.kind === "none") { keys(v, ["kind"]); return { kind: "none" } } keys(v, ["kind", "value"]); if (v.kind !== "value") invalidAgent(); return { kind: "value", value: agentText(v.value) } }) }
@@ -80,7 +87,7 @@ export function parseStopInput(input: unknown): StopInput { return checked(() =>
 function promptText(value: unknown): string { if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value) > 4096 || !value.isWellFormed()) invalidAgent(); return value }
 export function parsePromptInput(input: unknown): PromptInput { return checked(() => { const v = object(input); keys(v, ["agentId", "handlerGeneration", "providerGeneration", "text"]); return { ...parseTuple({ agentId: v.agentId, handlerGeneration: v.handlerGeneration, providerGeneration: v.providerGeneration }), text: promptText(v.text) } }) }
 export function parsePromptView(input: unknown): PromptView { return checked(() => { const v = object(input); keys(v, ["state", "target", "stopReason", "text"]); if (v.state !== "prompt" || v.stopReason !== "end_turn") invalidAgent(); return { state: "prompt", target: parseTuple(v.target), stopReason: "end_turn", text: promptText(v.text) } }) }
-export function parseAgentFailure(input: unknown): AgentFailure { return checked(() => { const v = object(input); keys(v, ["code", "message"]); if (!AGENT_CODES.some(code => code === v.code)) invalidAgent(); const code = v.code as AgentErrorCode; if (v.message !== new AgentError(code).message) invalidAgent(); return { code, message: new AgentError(code).message } }) }
+export function parseAgentFailure(input: unknown): AgentFailure { return checked(() => { const v = object(input); keys(v, ["code", "message", ...(Object.hasOwn(v, "diagnostic") ? ["diagnostic"] : [])]); if (!AGENT_CODES.some(code => code === v.code)) invalidAgent(); const code = v.code as AgentErrorCode; if (v.message !== new AgentError(code).message) invalidAgent(); return { code, message: new AgentError(code).message, ...(Object.hasOwn(v, "diagnostic") ? { diagnostic: parseFailureDiagnostic(v.diagnostic) } : {}) } }) }
 export function parseSession(input: unknown): SessionEvidence { return checked(() => { const v = object(input); keys(v, ["sessionId", "sessionGeneration", "protocolVersion", "modelId", "reasoning", "mode", "permissionProfile", "permissionEvidence"]); if (v.protocolVersion !== 1) invalidAgent(); return { sessionId: agentText(v.sessionId, 1024), sessionGeneration: id(v.sessionGeneration), protocolVersion: 1, modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: agentText(v.mode), permissionProfile: agentText(v.permissionProfile), permissionEvidence: parsePermissionEvidence(v.permissionEvidence) } }) }
 function sessionMatches(session: SessionEvidence, selection: StartSelection): boolean { return session.modelId === selection.modelId && isDeepStrictEqual(session.reasoning, selection.reasoning) && (selection.mode === null || session.mode === selection.mode) && session.permissionProfile === selection.permissionProfile }
 export function parseNativeIdentity(input: unknown): NativeSessionIdentity { return checked(() => { const v = object(input); keys(v, ["sessionId", "protocolVersion"]); if (v.protocolVersion !== 1) invalidAgent(); return { sessionId: agentText(v.sessionId, 1024), protocolVersion: 1 } }) }

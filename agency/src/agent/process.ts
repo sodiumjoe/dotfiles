@@ -1,3 +1,4 @@
+import { STDERR_TAIL_BYTES, failureIdentifier, underlyingFailureCode, type ProcessFailureEvent } from "./failure-diagnostics.js"
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
@@ -61,12 +62,20 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
     finally { current = snapshot() }
   }
   function registerChildObservers(value: ChildProcess): void {
-    value.on("error", () => { terminal = true; resolveTerminal(); if (!stopping) fail(new AgentError("STARTUP_FAILED")) })
-    value.once("exit", () => { terminal = true; resolveTerminal(); if (!stopping) fail(new AgentError("STARTUP_FAILED")) })
-    value.once("close", () => { closed = true; resolveClose(); if (!stopping) fail(new AgentError("STARTUP_FAILED")) })
-    let stderrBytes = 0
-    value.stderr?.on("data", (bytes: Buffer) => { stderrBytes += bytes.length; if (stderrBytes > spec.limits.stderrBytes && !stopping) fail(new AgentError("STARTUP_FAILED")) })
-    for (const stream of [value.stdin, value.stdout, value.stderr]) stream?.on("error", () => { if (!stopping) fail(new AgentError("STARTUP_FAILED")) })
+    let stderrBytes = 0, stderrTail: Buffer = Buffer.alloc(0)
+    const processFailure = (event: ProcessFailureEvent, error?: unknown, exitCode: number | null = null, signal: string | null = null): void => {
+      if (!stopping) fail(new AgentError("STARTUP_FAILED", { boundary: "provider_process", event, causeCode: underlyingFailureCode(error), exitCode, signal: failureIdentifier(signal), stderrBytes, stderrTailBase64: stderrTail.toString("base64") }))
+    }
+    value.on("error", error => { terminal = true; resolveTerminal(); processFailure("error", error) })
+    value.once("exit", (code, signal) => { terminal = true; resolveTerminal(); processFailure("exit", undefined, code, signal) })
+    value.once("close", (code, signal) => { closed = true; resolveClose(); processFailure("close", undefined, code, signal) })
+    value.stderr?.on("data", (bytes: Buffer) => {
+      if (stopping) return
+      stderrBytes = Math.min(Number.MAX_SAFE_INTEGER, stderrBytes + bytes.length)
+      stderrTail = bytes.length >= STDERR_TAIL_BYTES ? Buffer.from(bytes.subarray(-STDERR_TAIL_BYTES)) : Buffer.concat([stderrTail.subarray(Math.max(0, stderrTail.length + bytes.length - STDERR_TAIL_BYTES)), bytes])
+      if (stderrBytes > spec.limits.stderrBytes) processFailure("stderr_limit")
+    })
+    for (const [stream, event] of [[value.stdin, "stdin_error"], [value.stdout, "stdout_error"], [value.stderr, "stderr_error"]] as const) stream?.on("error", error => processFailure(event, error))
   }
   let spawnOptions: SpawnOptions | undefined = {
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
@@ -245,10 +254,13 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
           await bounded(() => preparation!, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
           connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), ...(input.onUpdate ? { onUpdate: input.onUpdate } : {}), ...(input.onRequest ? { onRequest: input.onRequest } : {}), now })
-          void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code)) })
+          void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code, error.diagnostic ?? { boundary: "acp_transport", causeCode: error.code })) })
           const evidence = await connection.initialize(input.agentRecord ?? { version: 2, ...splitLaunchSpec(spec as LaunchSpec), phase: "starting", session: null, failure: null }, contract, session ?? { kind: "new", params: {} }, controller.signal)
           check(); initialized = true; if (!isReady) overallDeadline = Infinity; return evidence
-        } catch (error) { fail(error); throw error }
+        } catch (error) {
+          fail(new AgentError(error instanceof AgentError ? error.code : "INTERNAL", error instanceof AgentError && error.diagnostic ? error.diagnostic : { boundary: "provider_initialize", causeCode: underlyingFailureCode(error) }))
+          throw new AgentError(failure!.code, failure!.diagnostic)
+        }
         finally { signal.removeEventListener("abort", abort) }
       })()
       return initialization
