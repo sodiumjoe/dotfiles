@@ -827,3 +827,25 @@ test("stop revokes editor channels before publishing its receipt", async t => {
   finally { release.resolve(); await stopping }
   assert.equal(socket.destroyed, true)
 })
+
+test("long permission labels reach a native decision and leave the ready provider healthy", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" }), ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!, submissionId = randomUUID()
+  const request = JSON.parse(await readFile(new URL("../../test/fixtures/codex-long-permission.json", import.meta.url), "utf8"))
+  await f.service.submit(target, { submissionId, text: "request permission", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } })
+  await f.promptEntered
+  f.requestPermission(target.agentId, "long-permission", request)
+  const offer = await until(async () => {
+    const pending = (await f.service.permissionRouting.snapshot()).pending[0]
+    const record = (await f.service.list()).agents.find(agent => agent.record.version === 3 && agent.record.definition.agentId === target.agentId)!.record
+    assert.notEqual(record.phase, "failed")
+    return pending
+  })
+  assert.deepEqual(offer.options, request.options); assert.deepEqual(offer.subject, request.toolCall)
+  assert.equal((await f.service.permissionRouting.decide(randomUUID(), offer.ref, "allow_once")).state, "applied")
+  assert.deepEqual(f.permissionReplies(target.agentId), [{ jsonrpc: "2.0", id: "long-permission", result: { outcome: { outcome: "selected", optionId: "allow_once" } } }])
+  f.completePrompt(target.agentId)
+  await f.service.settledAcp(target, submissionId)
+  assert.equal((await f.service.current(f.input.cwd)).agents[0]!.record.phase, "ready")
+  await completed(f.service, (await f.service.stop({ ...target, commandId: randomUUID() })).command)
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "verified")
+})

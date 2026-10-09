@@ -630,8 +630,8 @@ export async function agentServiceFixture(t: TestContext, options: { hostId?: st
     failReceipt(value: boolean) { failReceipt = value }, receiptFailures() { return receiptFailures }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value }, failInitialCommand(value: boolean) { failInitialCommand = value },
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures, failTerminalBeforeRename(value: boolean) { failTerminalBeforeRename = value }, terminalWriteFailures: () => terminalWriteFailures, retired: () => structuredClone(retired),
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,
-    requestPermission(agent: string, requestId: string) {
-      peers.get(agent)!.send({ jsonrpc: "2.0", id: requestId, method: "session/request_permission", params: { sessionId: "fixture-session",
+    requestPermission(agent: string, requestId: string, params?: import("../src/agent/session-config.js").JsonObject) {
+      peers.get(agent)!.send({ jsonrpc: "2.0", id: requestId, method: "session/request_permission", params: params ?? { sessionId: "fixture-session",
         toolCall: { toolCallId: "native-child-tool", title: "Child code edit" },
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } })
     },

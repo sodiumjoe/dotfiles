@@ -24,7 +24,7 @@ export function parsePermissionRef(raw: unknown): PermissionRef {
 export function parsePermissionOffer(raw: unknown): PermissionOffer {
   const v = object(raw); keys(v, ["ref", "title", "subject", "options", "originCwd", "toolCallId"])
   if (!Array.isArray(v.options) || !v.options.length || v.options.length > 128) fail("INVALID_PERMISSION")
-  const options = v.options.map(raw => { const o = object(raw); text(o.optionId); text(o.name); enumValue(o.kind, ["allow_once", "allow_always", "reject_once", "reject_always"]); return structuredClone(o) as JsonObject })
+  const options = v.options.map(raw => { const o = object(raw); text(o.optionId); text(o.name, 65536); enumValue(o.kind, ["allow_once", "allow_always", "reject_once", "reject_always"]); return structuredClone(o) as JsonObject })
   if (new Set(options.map(o => o.optionId)).size !== options.length) fail("INVALID_PERMISSION")
   const offer = { ref: parsePermissionRef(v.ref), title: text(v.title, 65536), subject: structuredClone(object(v.subject)) as JsonObject, options, originCwd: absolutePath(v.originCwd), toolCallId: text(v.toolCallId) }
   encode(offer); return offer

@@ -1,0 +1,47 @@
+{
+  "sessionId": "fixture-session",
+  "toolCall": {
+    "toolCallId": "fixture-shell-tool",
+    "kind": "execute",
+    "status": "pending",
+    "title": "Run command",
+    "rawInput": {
+      "command": "python3 /pay/home/owner/agy-controls-20261009-context/approval-gate.py '{\"execution\":{\"hostId\":\"ed5630d360d78ea58541fb727f019705ba508d1dad11f77d15a61df35db89325\",\"agentId\":\"2b3c7d66-b109-44d0-8451-2b0c66166798\",\"handlerGeneration\":\"00ff7d86-7bb0-4994-a2c4-017b665fa4b5\",\"providerGeneration\":\"3a47bc38-da9f-43ed-810c-67800921d6e6\"},\"runId\":\"da9b666c-74ec-40fc-992a-e5742120a7b3\",\"bindingEpoch\":\"f9acc81a-cbb4-4020-9381-629c27de653f\",\"attempt\":{\"runId\":\"da9b666c-74ec-40fc-992a-e5742120a7b3\",\"assignmentId\":\"ce58a0cf-07b2-4a44-a310-210253ed7811\",\"attemptId\":\"800472bb-0733-49fd-8295-3b8266ec510e\"},\"ready\":true,\"effective\":{\"modelId\":\"gpt-5.6-sol[high]\",\"modeId\":\"read-only\",\"configValues\":{\"mode\":\"read-only\",\"collaboration_mode\":\"default\",\"model\":\"gpt-5.6-sol\",\"reasoning_effort\":\"high\",\"fast-mode\":\"off\"}}}'",
+      "cwd": "/pay/home/owner/agy-controls-20261009-context/state/worktrees/ce58a0cf-07b2-4a44-a310-210253ed7811/800472bb-0733-49fd-8295-3b8266ec510e"
+    }
+  },
+  "options": [
+    {
+      "optionId": "allow_once",
+      "name": "Yes, proceed",
+      "kind": "allow_once"
+    },
+    {
+      "optionId": "allow_for_session",
+      "name": "Yes, and don't ask again for this command in this session",
+      "kind": "allow_always"
+    },
+    {
+      "optionId": "accept_execpolicy_amendment",
+      "name": "Yes, and don't ask again for commands that start with `python3 /pay/home/owner/agy-controls-20261009-context/approval-gate.py '{\"execution\":{\"hostId\":\"ed5630d360d78ea58541fb727f019705ba508d1dad11f77d15a61df35db89325\",\"agentId\":\"2b3c7d66-b109-44d0-8451-2b0c66166798\",\"handlerGeneration\":\"00ff7d86-7bb0-4994-a2c4-017b665fa4b5\",\"providerGeneration\":\"3a47bc38-da9f-43ed-810c-67800921d6e6\"},\"runId\":\"da9b666c-74ec-40fc-992a-e5742120a7b3\",\"bindingEpoch\":\"f9acc81a-cbb4-4020-9381-629c27de653f\",\"attempt\":{\"runId\":\"da9b666c-74ec-40fc-992a-e5742120a7b3\",\"assignmentId\":\"ce58a0cf-07b2-4a44-a310-210253ed7811\",\"attemptId\":\"800472bb-0733-49fd-8295-3b8266ec510e\"},\"ready\":true,\"effective\":{\"modelId\":\"gpt-5.6-sol[high]\",\"modeId\":\"read-only\",\"configValues\":{\"mode\":\"read-only\",\"collaboration_mode\":\"default\",\"model\":\"gpt-5.6-sol\",\"reasoning_effort\":\"high\",\"fast-mode\":\"off\"}}}'`",
+      "kind": "allow_always"
+    },
+    {
+      "optionId": "decline",
+      "name": "No, continue without running it",
+      "kind": "reject_once"
+    },
+    {
+      "optionId": "cancel",
+      "name": "No, and tell Codex what to do differently",
+      "kind": "reject_once"
+    }
+  ],
+  "_meta": {
+    "permission": {
+      "version": 1,
+      "title": "Run command?",
+      "description": "Allow this exact helper command once, with the unchanged decoded Agency context, to perform its controlled outside-worktree write and wait for the receipt-bound release?"
+    }
+  }
+}
