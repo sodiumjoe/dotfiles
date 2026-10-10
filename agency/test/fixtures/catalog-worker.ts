@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url"
 import { runWorker } from "../../src/catalog/worker.js"
 
 await runWorker(async context => {
-  const child = context.spawnNative(process.execPath, [fileURLToPath(new URL("./catalog-native.js", import.meta.url)), ...(context.request.profile.configurationFiles.length ? ["--ignore-term"] : [])])
+  const child = context.spawnNative(process.execPath, [fileURLToPath(new URL("./catalog-native.js", import.meta.url)), ...(context.request.profile.configurationFiles.length === 1 ? ["--ignore-term"] : []), ...(context.request.profile.configurationFiles.length === 2 ? ["--verbose-stderr"] : [])])
   const response = new Promise<void>((resolve, reject) => {
     child.stdout.once("data", () => resolve())
     child.stdout.once("error", reject)

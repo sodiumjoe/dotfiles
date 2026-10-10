@@ -30,8 +30,9 @@ export async function runWorker(discover: (context: DriverContext) => Promise<Pr
     child.on("error", failure)
     child.on("exit", () => { exit = true; send({ type: "native-terminal" }); finishTerm() })
     child.on("close", () => { close = true; rejectRegistration?.(); finishTerm() })
-    let stderr = 0, stdout = 0
-    child.stderr!.on("data", (bytes: Buffer) => { stderr += bytes.length; if (stderr > 8192) failure() })
+    let stdout = 0
+    child.stderr!.on("error", failure)
+    child.stderr!.resume()
     child.stdout!.on("data", (bytes: Buffer) => { stdout += bytes.length; if (stdout > 1048576) failure() })
     const facade = new NativeFacade(child, registration, () => send({ type: "cancel" }))
     if (child.pid === undefined) failure()

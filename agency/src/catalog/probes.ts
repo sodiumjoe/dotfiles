@@ -184,11 +184,10 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         child.on("exit", () => { facts.exit = true; if (!finished) fail(new CatalogError("PROBE_FAILED")) })
         child.on("close", () => { facts.close = true; if (!finished) fail(new CatalogError("PROBE_FAILED")) })
         child.on("disconnect", () => { if (!finished) fail(new CatalogError("PROBE_FAILED")) })
-        for (const [stream, limit] of [[child.stdout, 65536], [child.stderr, 8192]] as const) {
-          let total = 0
-          stream?.on("data", (bytes: Buffer) => { total += bytes.length; if (total > limit) fail(new CatalogError("PROBE_FAILED")) })
-          stream?.on("error", fail)
-        }
+        let stdoutBytes = 0
+        child.stdout?.on("data", (bytes: Buffer) => { stdoutBytes += bytes.length; if (stdoutBytes > 65536) fail(new CatalogError("PROBE_FAILED")) })
+        child.stderr?.resume()
+        for (const stream of [child.stdout, child.stderr]) stream?.on("error", fail)
         child.on("message", raw => {
           try {
             messages += Buffer.byteLength(JSON.stringify(raw))

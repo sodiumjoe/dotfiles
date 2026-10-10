@@ -154,9 +154,10 @@ test("receipt publication failure after a successful write cannot reopen the cla
   assert.equal((await recovered.snapshot()).pending.length, 0); assert.equal(writes, 1)
 })
 
-test("long permission labels from the pinned adapter synthetic fixture survive replay and one native decision", async t => {
+for (const expanded of [false, true]) test("long permission labels " + (expanded ? "beyond the former cap" : "from the pinned adapter synthetic fixture") + " survive replay and one native decision", async t => {
   const f = await fixture(t), request = JSON.parse(await readFile(new URL("../../test/fixtures/codex-long-permission.json", import.meta.url), "utf8"))
   assert.equal(Buffer.byteLength(request.options[2].name), 864)
+  if (expanded) request.options[2].name = "é".repeat(65537)
   const frames: JsonObject[] = []
   f.broker.attach(f.target, { connectionId: "editor", send: frame => { frames.push(frame) } })
   await f.broker.open(f.target, 1, request)
@@ -175,17 +176,17 @@ test("long permission labels from the pinned adapter synthetic fixture survive r
   assert.equal((await recovered.snapshot()).pending.length, 0); assert.equal(f.replies(), 1)
 })
 
-test("permission display labels enforce UTF-8 display and aggregate bounds with unchanged option IDs", async t => {
+test("permission display labels have no field-length cap and preserve aggregate bounds with unchanged option IDs", async t => {
   const f = await fixture(t), offer = { ref: { hostId: f.hostId, target: f.target, permissionId: randomUUID(), revision: 1 }, title: "Permission", subject: {}, originCwd: "/workspace", toolCallId: "tool", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] }
-  for (const name of ["a".repeat(65536), "é".repeat(32768)]) {
-    assert.equal(Buffer.byteLength(name), 65536)
+  for (const name of ["a".repeat(65536), "a".repeat(65537), "é".repeat(65537), "x".repeat(524288)]) {
     assert.equal(parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], name }] }).options[0]!.name, name)
   }
-  for (const name of ["a".repeat(65537), "é".repeat(32768) + "x", "", "bad\u0000", "bad\n", "bad\u009f", "\ud800"]) assert.throws(() => parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], name }] }), { code: "INVALID_CATALOG" })
+  for (const name of [null, 42, "", "bad\u0000", "bad\n", "bad\u009f", "\ud800"]) assert.throws(() => parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], name }] }), { code: "INVALID_CATALOG" })
   assert.equal(parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], optionId: "x".repeat(256) }] }).options[0]!.optionId, "x".repeat(256))
   assert.throws(() => parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], optionId: "x".repeat(257) }] }), { code: "INVALID_CATALOG" })
   assert.throws(() => parsePermissionOffer({ ...offer, options: [offer.options[0], offer.options[0]] }), /INVALID_PERMISSION/)
   const oversized = { ...offer, options: Array.from({ length: 17 }, (_, i) => ({ optionId: String(i), name: "x".repeat(65536), kind: "allow_once" })) }
   assert.throws(() => parsePermissionOffer(oversized), /RECORD_TOO_LARGE/)
+  assert.throws(() => parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], name: "x".repeat(1048576) }] }), /RECORD_TOO_LARGE/)
   assert.throws(() => parsePermissionSnapshot({ hostId: f.hostId, handlerGeneration: f.generation, throughSeq: 0, pending: Array.from({ length: 17 }, () => parsePermissionOffer({ ...offer, ref: { ...offer.ref, permissionId: randomUUID() }, options: [{ ...offer.options[0], name: "x".repeat(65536) }] })), receipts: [] }), /RECORD_TOO_LARGE/)
 })

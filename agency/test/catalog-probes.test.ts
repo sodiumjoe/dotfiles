@@ -79,7 +79,7 @@ test("probe worker and native gates follow durable independent identity registra
   await f.runtime.verifyDischarged()
 })
 
-for (const scenario of ["timeout", "closed", "malformed", "stdout", "stderr", "ipc", "double", "early-exit", "cleanup-failure", "missing-close"]) test(`probe ${scenario} cannot publish a successful candidate`, async t => {
+for (const scenario of ["timeout", "closed", "malformed", "stdout", "ipc", "double", "early-exit", "cleanup-failure", "missing-close"]) test(`probe ${scenario} cannot publish a successful candidate`, async t => {
   const f = await syntheticProbeFixture(t, scenario)
   await f.runtime.recover()
   const operation = f.runtime.run(f.request, new AbortController().signal)
@@ -92,6 +92,21 @@ for (const scenario of ["timeout", "closed", "malformed", "stdout", "stderr", "i
   assert.notEqual(outcome.error, null)
   if (["early-exit", "cleanup-failure", "missing-close"].includes(scenario)) await assert.rejects(f.runtime.verifyDischarged())
   else await f.runtime.verifyDischarged()
+})
+
+test("probe stderr output beyond the former threshold preserves a successful candidate", async t => {
+  const f = await syntheticProbeFixture(t, "stderr")
+  await f.runtime.recover()
+  const operation = f.runtime.run(f.request, new AbortController().signal)
+  await f.workerObserved.promise
+  f.releaseWorkerIdentity()
+  await f.nativeRegistered.promise
+  f.releaseResult()
+  const outcome = await operation
+  assert.equal(outcome.error, null)
+  assert.deepEqual(outcome.result, { models: [], providerVersion: null, providerVersionSource: "unknown" })
+  assert.equal(outcome.record.phase, "cleanup_verified")
+  await f.runtime.verifyDischarged()
 })
 
 test("cancellation discards output after verified cleanup", async t => {
@@ -209,7 +224,8 @@ for (const scenario of ["worker-error", "worker-mismatch", "native-death", "nati
   assert.notEqual(outcome.error, null)
 })
 
-for (const ignoreTerm of [false, true]) test(`gated worker owns a real native fixture through independent group cleanup, ignore TERM=${ignoreTerm}`, { timeout: 60000 }, async t => {
+for (const scenario of ["normal", "ignore-term", "verbose-stderr"]) test(`gated worker owns a real native fixture through independent group cleanup, ${scenario}`, { timeout: 60000 }, async t => {
+  const ignoreTerm = scenario === "ignore-term"
   if (catalogFixtureFailure) throw catalogFixtureFailure
   const root = await mkdtemp(join(await realpath("/tmp"), "agy-catalog-")), adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   let pid: number | undefined, operation: Promise<unknown> | undefined
@@ -236,7 +252,7 @@ for (const ignoreTerm of [false, true]) test(`gated worker owns a real native fi
   const adapterPath = join(root, "adapter.json"), adapterEntry = join(root, "adapter.mjs")
   await writeFile(adapterPath, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.7.0", main: "adapter.mjs" }), { mode: 0o600 })
   await writeFile(adapterEntry, "throw new Error('adapter fixture metadata only')", { mode: 0o600 })
-  const profile = { id: "codex-acp" as const, enabled: true, executable: process.execPath, adapterPackageJson: adapterPath, sdkPackageJson: null, configurationFiles: ignoreTerm ? [adapterPath] : [] }
+  const profile = { id: "codex-acp" as const, enabled: true, executable: process.execPath, adapterPackageJson: adapterPath, sdkPackageJson: null, configurationFiles: ignoreTerm ? [adapterPath] : scenario === "verbose-stderr" ? [adapterPath, adapterEntry] : [] }
   const evidence = await observeConfig(profile), store = createCatalogStore(root)
   const request: ProbeRequest = { profile, evidence, meta: { version: 2, hostId, handlerGeneration: generation, commandId, providerId: profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(root, "catalog/work", attemptId) } }
   await store.writeCommand({ version: 1, commandId, hostId, handlerGeneration: generation, batchId: randomUUID(), fingerprints: [{ providerId: profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: profile.id, attemptId }], state: "pending", snapshotId: null }, null)

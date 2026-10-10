@@ -73,7 +73,6 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       if (stopping) return
       stderrBytes = Math.min(Number.MAX_SAFE_INTEGER, stderrBytes + bytes.length)
       stderrTail = bytes.length >= STDERR_TAIL_BYTES ? Buffer.from(bytes.subarray(-STDERR_TAIL_BYTES)) : Buffer.concat([stderrTail.subarray(Math.max(0, stderrTail.length + bytes.length - STDERR_TAIL_BYTES)), bytes])
-      if (stderrBytes > spec.limits.stderrBytes) processFailure("stderr_limit")
     })
     for (const [stream, event] of [[value.stdin, "stdin_error"], [value.stdout, "stdout_error"], [value.stderr, "stderr_error"]] as const) stream?.on("error", error => processFailure(event, error))
   }

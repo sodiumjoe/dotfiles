@@ -146,7 +146,7 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
         if (scenario === "closed") { child.emit("disconnect"); return }
         if (scenario === "malformed") { child.emit("message", { type: "result", attemptId: "bad" }); return }
         if (scenario === "stdout") stdout.write(Buffer.alloc(65537))
-        if (scenario === "stderr") stderr.write(Buffer.alloc(8193))
+        if (scenario === "stderr") { stderr.write(Buffer.alloc(8192)); stderr.write(Buffer.alloc(131072)) }
         if (scenario === "ipc") child.emit("message", { type: "bad", padding: "x".repeat(1048577) })
         child.emit("message", { type: "result", attemptId, generation, result })
         if (scenario === "double") child.emit("message", { type: "result", attemptId, generation, result })

@@ -44,6 +44,9 @@ if (process.argv.includes("app-server") || process.argv.includes("--agency-fixtu
       }).catch(() => process.exit(1))
     }
   })
-} else process.stdin.once("data", () => process.stdout.write("registered\n"))
+} else process.stdin.once("data", () => {
+  if (process.argv.includes("--verbose-stderr")) process.stderr.write(Buffer.alloc(2097152, 255), () => process.stdout.write("registered\n"))
+  else process.stdout.write("registered\n")
+})
 if (process.argv.includes("--ignore-term")) process.on("SIGTERM", () => undefined)
 setInterval(() => undefined, 1000)

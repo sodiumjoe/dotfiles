@@ -179,31 +179,48 @@ test("changed process generation does not acquire signal authority", async t => 
   assert.deepEqual(f.signals, [])
 })
 
-test("stderr boundary preserves the existing threshold and bounded byte-exact failure diagnostic", async t => {
+test("stderr output beyond the former lifetime threshold leaves prompts ready and retains later exit diagnostics", async t => {
   const f = await syntheticAgentProcess(t, "normal")
   await f.owner.initialize(new AbortController().signal)
   const first = Buffer.alloc(8192, 255), last = Buffer.from([0])
-  f.emitStderr(first)
+  f.emitStderr(first); f.emitStderr(last)
+  for (let i = 0; i < 32; i++) f.emitStderr(Buffer.from("warning\n"))
   assert.deepEqual(await f.owner.prompt("still ready", new AbortController().signal), { stopReason: "end_turn", text: "still ready" })
   assert.deepEqual(f.signals, [])
-  f.emitStderr(last)
+  f.emitProcess("exit", 13, "SIGABRT")
   const failure = await f.owner.fault
-  assert.deepEqual(failure, { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "provider_process", event: "stderr_limit", causeCode: null, exitCode: null, signal: null, stderrBytes: 8193, stderrTailBase64: Buffer.concat([first, last]).subarray(-2048).toString("base64") } })
+  const all = Buffer.concat([first, last, Buffer.from("warning\n".repeat(32))])
+  assert.deepEqual(failure, { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "provider_process", event: "exit", causeCode: null, exitCode: 13, signal: "SIGABRT", stderrBytes: 8449, stderrTailBase64: all.subarray(-2048).toString("base64") } })
   assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
-  assert.deepEqual(f.signals, ["SIGTERM"])
   assert.deepEqual(await f.owner.fault, failure)
 })
 
-test("stderr boundary bounds one huge binary chunk before diagnostic capture", async t => {
+test("stderr output drains a huge binary chunk with only a bounded tail on a later stream error", async t => {
   const f = await syntheticAgentProcess(t, "normal")
   await f.owner.initialize(new AbortController().signal)
-  const bytes = Buffer.alloc(200000, 255)
-  f.emitStderr(bytes)
+  const bytes = Buffer.alloc(2097152, 255), last = Buffer.from([0, 128, 254])
+  f.emitStderr(bytes); f.emitStderr(last)
+  assert.deepEqual(await f.owner.prompt("still ready", new AbortController().signal), { stopReason: "end_turn", text: "still ready" })
+  assert.deepEqual(f.signals, [])
+  f.emitError("stderr_error", Object.assign(new Error("private error"), { code: "EIO" }))
   const diagnostic = (await f.owner.fault as any).diagnostic
-  assert.equal(diagnostic.stderrBytes, bytes.length)
-  assert.equal(diagnostic.stderrTailBase64, bytes.subarray(-2048).toString("base64"))
+  assert.equal(diagnostic.event, "stderr_error"); assert.equal(diagnostic.causeCode, "EIO")
+  assert.equal(diagnostic.stderrBytes, 2097155)
+  assert.equal(diagnostic.stderrTailBase64, Buffer.concat([bytes.subarray(-2045), last]).toString("base64"))
   assert.ok(diagnostic.stderrTailBase64.length <= 2732)
-  await f.owner.cleanup()
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
+test("stderr output during startup does not abort provider initialization", async t => {
+  const f = await syntheticAgentProcess(t, "identity-publication-paused"), pending = f.owner.initialize(new AbortController().signal)
+  void pending.catch(() => undefined)
+  await f.beforeSpawn.promise
+  f.emitStderr(Buffer.alloc(131072, 255))
+  f.releasePublication()
+  assert.equal((await pending).sessionId, "fixture-session")
+  assert.deepEqual(await f.owner.prompt("after startup", new AbortController().signal), { stopReason: "end_turn", text: "after startup" })
+  assert.deepEqual(f.signals, [])
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
 })
 
 for (const event of ["exit", "close"] as const) test("process failure provenance retains " + event + " metadata before cleanup events", async t => {
@@ -255,6 +272,7 @@ test("initialization diagnostic labels a synchronous spawn failure without raw e
     assert.deepEqual((agentFailure(error) as any).diagnostic, { boundary: "provider_initialize", causeCode: null }); return true
   })
   assert.equal(JSON.stringify(await f.owner.fault).includes("spawn invocation failed"), false)
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
 })
 
 test("ACP transport diagnostic retains its protocol failure boundary", async t => {

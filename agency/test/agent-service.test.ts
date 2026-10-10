@@ -828,9 +828,10 @@ test("stop revokes editor channels before publishing its receipt", async t => {
   assert.equal(socket.destroyed, true)
 })
 
-test("long permission labels reach a native decision and leave the ready provider healthy", async t => {
+for (const expanded of [false, true]) test("long permission labels " + (expanded ? "beyond the former cap" : "from the synthetic adapter fixture") + " reach a native decision and leave the ready provider healthy", async t => {
   const f = await agentServiceFixture(t, { prompt: "hang" }), ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!, submissionId = randomUUID()
   const request = JSON.parse(await readFile(new URL("../../test/fixtures/codex-long-permission.json", import.meta.url), "utf8"))
+  if (expanded) request.options[2].name = "é".repeat(65537)
   await f.service.submit(target, { submissionId, text: "request permission", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } })
   await f.promptEntered
   f.requestPermission(target.agentId, "long-permission", request)
@@ -853,10 +854,10 @@ test("long permission labels reach a native decision and leave the ready provide
 for (const retry of [false, true]) test("permission failure provenance survives " + (retry ? "publication retry and restart" : "cleanup and restart"), async t => {
   const f = await agentServiceFixture(t, { prompt: "hang" }), ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!, seen: any[] = []
   await f.service.observe(target, event => seen.push(event))
-  await f.service.submit(target, { submissionId: randomUUID(), text: "oversized label", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } })
+  await f.service.submit(target, { submissionId: randomUUID(), text: "invalid label", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } })
   await f.promptEntered
   if (retry) f.failTerminalBeforeRename(true)
-  f.requestPermission(target.agentId, "invalid-label", { sessionId: "fixture-session", toolCall: { toolCallId: "tool", title: "Edit" }, options: [{ optionId: "allow", name: "x".repeat(65537), kind: "allow_once" }] })
+  f.requestPermission(target.agentId, "invalid-label", { sessionId: "fixture-session", toolCall: { toolCallId: "tool", title: "Edit" }, options: [{ optionId: "allow", name: "invalid\u0000label", kind: "allow_once" }] })
   if (retry) {
     await until(async () => f.terminalWriteFailures() > 0 ? true : undefined)
     f.failTerminalBeforeRename(false)
