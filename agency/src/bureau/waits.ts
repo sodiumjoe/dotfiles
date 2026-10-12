@@ -80,7 +80,9 @@ export function createWaits(input: { store: ReturnType<typeof createWaitStore> &
   }
   async function evaluate(wait: WaitRecord): Promise<WaitRecord> {
     if (wait.ended) { await inbox.releaseRoute(wait.input.waitId); respond(wait); return wait }
-    const binding = await input.binding(wait.input.parent, wait.input.runId)
+    let binding: Awaited<ReturnType<typeof input.binding>>
+    try { binding = await input.binding(wait.input.parent, wait.input.runId) }
+    catch (error) { if (error instanceof Error && ((error as { code?: string }).code ?? error.message) === "HOST_UNAVAILABLE") return wait; throw error }
     if (!binding || !isDeepStrictEqual(binding.target, wait.target) || binding.bindingEpoch !== wait.bindingEpoch) return end(wait)
     if (wait.result) { if (wait.deliveryId) await inbox.delivered(wait.deliveryId, "wait", wait.input.waitId); respond(wait); return wait }
     const selected: InboxEntry[] = [], candidates = (await store.listInbox()).filter(entry => entry.runId === wait.input.runId && wait.input.assignmentIds.includes(entry.report.assignmentId) && entry.source.seq > wait.input.after).sort((a, b) => a.source.seq - b.source.seq)

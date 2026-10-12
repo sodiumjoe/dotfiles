@@ -141,7 +141,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     const snapshots = new Map<string, HostSnapshot>()
     for (const adapter of input.hosts) {
       try { const snapshot = await adapter.snapshot(); snapshots.set(snapshot.hostId, snapshot) }
-      catch (error) { if (error instanceof Error && /ENOSPC|CORRUPT|STATE_CHANGED|STATE_REPLACED|MISSING_ORIGIN/.test(error.message)) throw error }
+      catch (error) { if (error instanceof Error && /ENOSPC|CORRUPT|STATE_CHANGED|STATE_REPLACED|MISSING_ORIGIN|HOST_IDENTITY_CHANGED|UNSUPPORTED_RUNTIME/.test(error.message)) throw error }
     }
     for (const record of await store.listAssignments()) {
       const current = await attempt(record)
@@ -297,7 +297,7 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     }
   }
   async function refreshLocked(): Promise<void> { await reconcile(); await waits.recoverLocked() }
-  async function recover(): Promise<void> {
+  async function recover(enableRequested = false): Promise<void> {
     if (closed) fail("BUREAU_UNAVAILABLE")
     try {
       for (const run of await store.listRuns()) if (run.state === "forgotten") { await store.writeRun(run, run); await eraseForgotten(run.runId) }
@@ -316,9 +316,12 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
           after = page.nextCursor; if (after >= page.lastSeq) break
         }
       }
+      await store.listWaits()
       enabled = await store.readEnabled()
+      if (enableRequested) { await store.writeEnabled(true, enabled); enabled = true }
       for (const adapter of input.hosts) adapter.setEnabled?.(enabled)
-      await refreshLocked(); initialized = true; writeFailure = null; scheduler.notify()
+      if (enabled) await refreshLocked()
+      initialized = true; writeFailure = null; scheduler.notify()
     } catch (error) { writeFailure = error; throw error }
   }
   async function applyNotificationRetry(entry: JournalEntry): Promise<void> {
@@ -393,16 +396,10 @@ export function createBureauService(input: { store: BureauStore; journals: Journ
     async enrolledHosts() { return queue.run(async () => input.enrollment ? input.enrollment.list() : []) },
     async enroll(value: HostEnrollment) { return queue.run(async () => { if (closed || !initialized || writeFailure !== null || !input.enrollment) fail("BUREAU_UNAVAILABLE"); await input.enrollment.enroll(value); subscribeHosts(); for (const adapter of input.hosts) adapter.setEnabled?.(enabled); return input.enrollment.list() }) },
     async initialize() { await queue.run(recover) },
-    async enable() {
-      await queue.run(async () => {
-        await recover()
-        try { await store.writeEnabled(true, enabled); enabled = true; for (const adapter of input.hosts) adapter.setEnabled?.(true) }
-        catch (error) { writeFailure = error; throw error }
-      })
-    },
+    async enable() { await queue.run(() => recover(true)) },
     async disable() { await queue.run(async () => { if (closed) fail("BUREAU_UNAVAILABLE"); await store.writeEnabled(false, enabled); enabled = false; for (const adapter of input.hosts) adapter.setEnabled?.(false) }) },
     async status() { return { enabled, ready: initialized, writeAvailable: !closed && writeFailure === null } },
-    reconcile: () => queue.run(refreshLocked),
+    reconcile: () => queue.run(async () => { requireWrites(); await refreshLocked() }),
     async inspect(runId: string, after: string | null = null) { return queue.run(async () => { if (initialized && enabled && !closed && writeFailure === null) await refreshLocked(); return view(await run(runId), after) }) },
     async assignment(assignmentId: string) { return queue.run(async () => { if (initialized && enabled && !closed && writeFailure === null) await refreshLocked(); return assignmentView(await assignment(assignmentId)) }) },
     async command(commandId: string) { return queue.run(async () => { await checkForgotten("commands", commandId); const value = await store.readCommand(id(commandId)); if (!value) fail("COMMAND_NOT_FOUND"); await run(value.runId); return value }) },

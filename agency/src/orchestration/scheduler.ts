@@ -68,6 +68,7 @@ export function createScheduler(input: { store: BureauStore; journals: JournalPo
   }
   async function work(parent: AgentRef): Promise<void> {
     if (closed) return
+    await queue.run(async () => { input.requireWrites() })
     await reconcile(parent)
     const selected = await queue.run(async () => {
       input.requireWrites(); await input.beforeClaim()
