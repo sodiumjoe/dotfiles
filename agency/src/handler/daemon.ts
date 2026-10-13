@@ -1,4 +1,6 @@
-import { dispatchRuntimeHuman, isRuntimeHumanRequest } from "../agent/human-controls.js"
+import { dispatchAgentRequest } from "../agent/dispatch.js"
+import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
+import { registerRuntimeEndpoint } from "../hosts/runtime.js"
 import { startTaskServices, type TaskServices, type CoordinationFactory } from "./task-services.js"
 import { loadOrchestrationPins } from "../orchestration/receipts.js"
 import { join } from "node:path"
@@ -6,8 +8,7 @@ import { startAcpServer } from "../acp/server.js"
 import { createAgentService, type AgentService } from "../agent/service.js"
 import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
-import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../agent/protocol.js"
-import { AgentError } from "../agent/types.js"
+import { type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { serveAttachment } from "../agent/attachment-server.js"
 import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
@@ -103,6 +104,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
+  let bridge: HandlerBridge | undefined
   let taskServices: TaskServices | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
@@ -114,6 +116,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (closing) return closed
     closing = true
     await taskServices?.close()
+    await bridge?.close()
     await acpServer?.close()
     for (const socket of sockets) socket.destroy()
     for (const listener of [server, attachmentServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
@@ -177,29 +180,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       try { return { protocol: CATALOG_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: request.op === "model_list" ? await catalog.list() : await catalog.refresh(request.commandId, request.handlerGeneration) } }
       catch (error) { return catalogErrorReply(bound, error) }
     }
-    const dispatchAgent = async (request: AgentRequest): Promise<AgentReply> => {
-      const bound = { ...request, handlerGeneration: options.generation }
-      if (request.handlerGeneration !== options.generation) return agentErrorReply(bound, new AgentError("STALE_HANDLER"))
-      if (!agents || state.phase !== "ready") return agentErrorReply(bound, new AgentError("NOT_READY"))
-      try {
-        let result: Extract<AgentReply, { ok: true }>["result"]
-        if (isRuntimeHumanRequest(request)) result = await dispatchRuntimeHuman(agents, request)
-        else switch (request.op) {
-          case "agent_import": result = await agents.importSession(request.input); break
-          case "agent_choices": result = await agents.choices(); break
-          case "agent_page": result = await agents.page(request.input); break
-          case "agent_start": result = await agents.start(request.input); break
-          case "agent_restore": result = await agents.restore(request.input); break
-          case "agent_stop": result = await agents.stop(request.input); break
-          case "agent_prompt": result = await agents.prompt(request.input); break
-          case "agent_command": result = await agents.command(request.commandId, request.commandGeneration); break
-          case "agent_current": result = await agents.current(request.cwd); break
-          case "agent_list": result = await agents.list(); break
-          default: throw new AgentError("INVALID_PROTOCOL")
-        }
-        return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ...(request.op === "agent_command" ? { commandId: request.commandId } : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" || request.op === "agent_import" ? { commandId: request.input.commandId } : {}), ok: true, result }
-      } catch (error) { return agentErrorReply(bound, error) }
-    }
+    const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => dispatchAgentRequest({ agents, generation: options.generation, ready: () => state.phase === "ready" && !closing }, request)
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
@@ -273,6 +254,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
     await agents.initialize()
+    bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
+    registerRuntimeEndpoint(bridge, dispatchAgent)
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
     coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()
@@ -285,7 +268,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
     if (!termination && !closing) {
-      taskServices = startTaskServices({ root, paths: options.paths, generation: options.generation, agents, ...(options.coordinationFactory ? { coordinationFactory: options.coordinationFactory } : {}),
+      taskServices = startTaskServices({ root, paths: options.paths, generation: options.generation, agents, bridge, ...(options.coordinationFactory ? { coordinationFactory: options.coordinationFactory } : {}),
         issue: error => { taskIssues.push({ path: join(root, "bureau"), launchAttemptId: null, message: String(error) }) } })
       catalog.startScheduling()
     }

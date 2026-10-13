@@ -2,6 +2,10 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
 import { isAbsolute, join } from "node:path"
+import { assertPrivateSocket } from "../src/platform/private-socket.js"
+import { connectHandlerBridge } from "../src/bridge/handler-client.js"
+import { AGENT_PROTOCOL, parseAgentReply } from "../src/agent/protocol.js"
+import { readHandlerRecord } from "../src/platform/private-state.js"
 import type { RuntimeHumanResult } from "../src/agent/human-controls.js"
 import { PROTOCOL, parseReply } from "../src/control/protocol.js"
 import { productionControlDependencies, runControl } from "../src/cli/control.js"
@@ -20,6 +24,12 @@ for (const coordination of ["reject", "hold"] as const) test(`local runtime rema
     assert.equal(reply.ok, true)
     return reply.result as RuntimeHumanResult
   }
+  assert.equal(await assertPrivateSocket(f.paths.runtimeRoot, "bridge.sock"), join(f.paths.runtimeRoot, "bridge.sock"))
+  const identity = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  const bridge = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: identity.generation })
+  t.after(() => bridge.close())
+  const remoteRoster = parseAgentReply(await bridge.request("runtime-read", { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: identity.generation, op: "agent_roster", input: { limit: 100 } }))
+  assert.ok(remoteRoster.ok && remoteRoster.result.state === "page")
   assert.equal((await f.choices()).state, "choices")
   await peer.request("initialize", { protocolVersion: 1 })
   const session = await peer.request("session/new", { cwd: f.workspace, mcpServers: [] })

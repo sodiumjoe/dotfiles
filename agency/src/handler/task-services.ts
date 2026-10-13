@@ -3,7 +3,8 @@ import type { AgentService } from "../agent/service.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
 import { createHostCoordination } from "./host-coordination.js"
-import { createHandlerBridge } from "../bridge/server.js"
+import type { HandlerBridge } from "../bridge/server.js"
+import { attachTaskBridge } from "../bridge/task-server.js"
 import { serveToolSocket } from "../orchestration/tool-client.js"
 import { dispatchBureau } from "../bureau/client.js"
 import { parseBureauRequest } from "../bureau/protocol.js"
@@ -17,13 +18,14 @@ export function startTaskServices(input: {
   paths: PlatformPaths
   generation: string
   agents: AgentService
+  bridge: HandlerBridge
   coordinationFactory?: CoordinationFactory
   issue(error: unknown): void
 }): TaskServices {
   const controller = new AbortController(), sockets = new Set<Socket>()
   const factory = input.coordinationFactory ?? createHostCoordination
   let coordination: Awaited<ReturnType<CoordinationFactory>> | undefined
-  let bridge: Awaited<ReturnType<typeof createHandlerBridge>> | undefined
+  let bridge: Awaited<ReturnType<typeof attachTaskBridge>> | undefined
   let toolsServer: Server | undefined, bureauServer: Server | undefined
   let closing = false, cleanup: Promise<void> | undefined
   const closeListener = (server: Server) => new Promise<void>(resolve => server.close(() => resolve()))
@@ -71,7 +73,7 @@ export function startTaskServices(input: {
     if (closing) { await closeListener(bureau); return }
     bureauServer = bureau
     bureau.on("error", failed)
-    const connected = await createHandlerBridge({ root: input.paths.runtimeRoot, host: value.origin, journals: value.origins, replay: value.replay, identity: { hostId: input.paths.hostKey, handlerGeneration: input.generation } })
+    const connected = await attachTaskBridge({ bridge: input.bridge, host: value.origin, journals: value.origins, replay: value.replay })
     if (closing) { await connected.close(); return }
     bridge = connected
   })()
