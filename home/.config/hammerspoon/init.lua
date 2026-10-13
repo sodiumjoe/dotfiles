@@ -403,6 +403,8 @@ local function layoutWindows()
     end
 end
 
+_G.windowLayoutWatcher = require("auto_layout").start(layoutWindows)
+
 local function layout()
     local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
         or hs.audiodevice.findOutputByName("MacBook Pro Speakers")
