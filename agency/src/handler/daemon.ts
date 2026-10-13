@@ -1,3 +1,4 @@
+import { dispatchRuntimeHuman, isRuntimeHumanRequest } from "../agent/human-controls.js"
 import { createHostCoordination } from "./host-coordination.js"
 import { createHandlerBridge } from "../bridge/server.js"
 import { createToolBindings } from "../orchestration/tool-bindings.js"
@@ -191,7 +192,21 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       if (request.handlerGeneration !== options.generation) return agentErrorReply(bound, new AgentError("STALE_HANDLER"))
       if (!agents || state.phase !== "ready") return agentErrorReply(bound, new AgentError("NOT_READY"))
       try {
-        const result = request.op === "agent_import" ? await agents.importSession(request.input) : request.op === "agent_choices" ? await agents.choices() : request.op === "agent_page" ? await agents.page(request.input) : request.op === "agent_start" ? await agents.start(request.input) : request.op === "agent_restore" ? await agents.restore(request.input) : request.op === "agent_stop" ? await agents.stop(request.input) : request.op === "agent_prompt" ? await agents.prompt(request.input) : request.op === "agent_command" ? await agents.command(request.commandId, request.commandGeneration) : request.op === "agent_current" ? await agents.current(request.cwd) : await agents.list()
+        let result: Extract<AgentReply, { ok: true }>["result"]
+        if (isRuntimeHumanRequest(request)) result = await dispatchRuntimeHuman(agents, request)
+        else switch (request.op) {
+          case "agent_import": result = await agents.importSession(request.input); break
+          case "agent_choices": result = await agents.choices(); break
+          case "agent_page": result = await agents.page(request.input); break
+          case "agent_start": result = await agents.start(request.input); break
+          case "agent_restore": result = await agents.restore(request.input); break
+          case "agent_stop": result = await agents.stop(request.input); break
+          case "agent_prompt": result = await agents.prompt(request.input); break
+          case "agent_command": result = await agents.command(request.commandId, request.commandGeneration); break
+          case "agent_current": result = await agents.current(request.cwd); break
+          case "agent_list": result = await agents.list(); break
+          default: throw new AgentError("INVALID_PROTOCOL")
+        }
         return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ...(request.op === "agent_command" ? { commandId: request.commandId } : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" || request.op === "agent_import" ? { commandId: request.input.commandId } : {}), ok: true, result }
       } catch (error) { return agentErrorReply(bound, error) }
     }

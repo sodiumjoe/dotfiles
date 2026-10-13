@@ -1,6 +1,6 @@
 import type { Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
-import { absolutePath, hash, id, keys, object, providerId } from "../catalog/types.js"
+import { absolutePath, hash, id, keys, object, providerId, text } from "../catalog/types.js"
 import { CURSOR_BYTES, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
 import { parseImportInput, parseSelection, startSelectionDigest, type ImportInput } from "./types.js"
 import { ControlError, UUID } from "../control/protocol.js"
@@ -11,11 +11,15 @@ import type { AgentStateIssue } from "./store.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
 import { launchEnvironmentDigest } from "./environment.js"
 
+import type { RuntimeHumanRequest, RuntimeHumanResult } from "./human-controls.js"
+import { parsePermissionRef, parsePermissionReceipt, parsePermissionSnapshot } from "../orchestration/permission-routing.js"
+
 export const AGENT_PROTOCOL = "agency-agent/3" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (
+  | RuntimeHumanRequest
   | { op: "agent_import"; input: ImportInput } | { op: "agent_choices" } | { op: "agent_page"; input: PageInput } | { op: "agent_start"; input: StartInput } | { op: "agent_restore"; input: RestoreRequest } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
 )
-export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgents | PromptView | AgentChoices | AgentPage } | { ok: false; error: AgentFailure })
+export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgents | PromptView | AgentChoices | AgentPage | RuntimeHumanResult } | { ok: false; error: AgentFailure })
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
 const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" || request.op === "agent_import" ? request.input.commandId : undefined
 function identity(input: unknown): ProcessIdentity {
@@ -88,7 +92,15 @@ export function parseAgentRequest(input: unknown): AgentRequest {
     if (v.protocol !== AGENT_PROTOCOL) invalid()
     const common = { protocol: AGENT_PROTOCOL, requestId: id(v.requestId), handlerGeneration: id(v.handlerGeneration) }
     if (v.op === "agent_choices") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: "agent_choices" } }
-    if (v.op === "agent_page") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"]); return { ...common, op: "agent_page", input: parsePageInput(v.input) } }
+    if (v.op === "agent_page" || v.op === "agent_roster") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"]); return { ...common, op: v.op, input: parsePageInput(v.input) } }
+    if (v.op === "agent_permissions") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: v.op } }
+    if (v.op === "agent_permission_inspect") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId"]); return { ...common, op: v.op, commandId: id(v.commandId) } }
+    if (v.op === "agent_permission_decide") {
+      keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "ref", "optionId"])
+      const ref = parsePermissionRef(v.ref)
+      if (ref.target.handlerGeneration !== common.handlerGeneration) invalid()
+      return { ...common, op: v.op, commandId: id(v.commandId), ref, optionId: text(v.optionId) }
+    }
     if (v.op === "agent_list") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: "agent_list" } }
     if (v.op === "agent_current") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "cwd"]); return { ...common, op: "agent_current", cwd: absolutePath(v.cwd) } }
     if (v.op === "agent_command") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "commandGeneration"]); return { ...common, op: "agent_command", commandId: id(v.commandId), commandGeneration: id(v.commandGeneration) } }
@@ -116,6 +128,16 @@ export function parseAgentReply(input: unknown): AgentReply {
       return { ...common, ok: true, result: { state: "command", command, durability: r.durability as CommandView["durability"] } }
     }
     if (common.commandId) invalid()
+    if (r.state === "permissions") {
+      keys(r, ["state", "snapshot"])
+      const snapshot = parsePermissionSnapshot(r.snapshot)
+      if (snapshot.handlerGeneration !== common.handlerGeneration) invalid()
+      return { ...common, ok: true, result: { state: "permissions", snapshot } }
+    }
+    if (r.state === "permission") {
+      keys(r, ["state", "receipt"])
+      return { ...common, ok: true, result: { state: "permission", receipt: r.receipt === null ? null : parsePermissionReceipt(r.receipt) } }
+    }
     if (r.state === "choices") {
       keys(r, ["state", "choices", "unavailable"])
       if (!Array.isArray(r.choices) || r.choices.length > 4096 || !Array.isArray(r.unavailable) || r.unavailable.length > 2 || Buffer.byteLength(JSON.stringify(r)) > QUERY_BYTES) invalid()
@@ -154,10 +176,19 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   if (!reply.ok) return
   const result = reply.result
   if (request.op === "agent_choices") { if (result.state !== "choices") invalid(); return }
-  if (request.op === "agent_page") {
+  if (request.op === "agent_page" || request.op === "agent_roster") {
     if (result.state !== "page" || result.agents.length + result.issues.length > request.input.limit) invalid()
     if (request.input.cwd && result.agents.some(a => (a.record.version === 3 ? a.record.definition.cwd : a.record.spec.checkout.root.path) !== request.input.cwd)) invalid()
-    if (request.input.activeOnly && result.agents.some(a => a.record.version !== 3 || a.record.launch?.handlerGeneration !== request.handlerGeneration || !["starting", "ready", "restoring", "stopping"].includes(a.record.phase))) invalid()
+    if ((request.input.activeOnly || request.op === "agent_roster") && result.agents.some(a => a.record.version !== 3 || a.record.launch?.handlerGeneration !== request.handlerGeneration || !["starting", "ready", "restoring", "stopping"].includes(a.record.phase))) invalid()
+    return
+  }
+  if (request.op === "agent_permissions") { if (result.state !== "permissions") invalid(); return }
+  if (request.op === "agent_permission_decide") {
+    if (result.state !== "permission" || !result.receipt || result.receipt.commandId !== request.commandId || result.receipt.optionId !== request.optionId || !isDeepStrictEqual(result.receipt.ref, request.ref)) invalid()
+    return
+  }
+  if (request.op === "agent_permission_inspect") {
+    if (result.state !== "permission" || result.receipt && result.receipt.commandId !== request.commandId) invalid()
     return
   }
   if (request.op === "agent_list") { if (result.state !== "agents") invalid(); return }

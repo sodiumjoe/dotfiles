@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { readdir } from "node:fs/promises"
 import { AGENT_PROTOCOL, agentErrorReply, agentExchangeTimeout, exchangeAgent, parseAgentReply, parseAgentRequest, validateAgentReply, type AgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { AgentError, normalizeAgentRecord, parsePromptInput, type PromptView } from "../src/agent/types.js"
+import { canonicalDigest } from "../src/orchestration/types.js"
 import { projectRestoreInput } from "../src/agent/types.js"
 import { parseRequest, parseReply } from "../src/control/protocol.js"
 import { serveProtocols } from "../src/control/wire.js"
@@ -210,4 +211,53 @@ test("optional failure diagnostics survive error and inventory wire parsing", ()
   const record = { ...normalizeAgentRecord(sampleAgent()), phase: "failed", failure: error }
   const inventory = { protocol: AGENT_PROTOCOL, requestId: r.requestId, handlerGeneration: r.handlerGeneration, ok: true, result: { state: "agents", agents: [{ record, launch: null, live: false, cleanup: "not_launched", unavailable: null }], issues: [] } }
   assert.deepEqual(parseAgentReply(inventory), inventory)
+})
+
+test("local human operations round trip through the runtime protocol", () => {
+  const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2) }
+  const ref = { hostId: "a".repeat(64), target: { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3) }, permissionId: agentId(7), revision: 1 }
+  const operations = [
+    { op: "agent_roster", input: { limit: 100 } },
+    { op: "agent_permissions" },
+    { op: "agent_permission_decide", commandId: agentId(8), ref, optionId: "allow" },
+    { op: "agent_permission_inspect", commandId: agentId(8) }
+  ]
+  const results = [
+    { state: "page", revision: agentId(9), agents: [], issues: [], nextCursor: null },
+    { state: "permissions", snapshot: { hostId: ref.hostId, handlerGeneration: base.handlerGeneration, throughSeq: 0, pending: [], receipts: [] } },
+    { state: "permission", receipt: null }
+  ]
+  for (const operation of operations) assert.deepEqual(parseAgentRequest({ ...base, ...operation }), { ...base, ...operation })
+  for (const result of results) {
+    const reply = { ...base, ok: true, result }
+    assert.deepEqual(parseAgentReply(reply), reply)
+    assert.throws(() => parseAgentReply({ ...reply, commandId: agentId(8) }), { code: "INVALID_PROTOCOL" })
+  }
+  assert.throws(() => parseAgentRequest({ ...base, ...operations[2], ref: { ...ref, target: { ...ref.target, handlerGeneration: agentId(99) } } }), { code: "INVALID_PROTOCOL" })
+})
+
+test("local human replies correlate decision identity and snapshot generation", () => {
+  const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2) }
+  const ref = { hostId: "a".repeat(64), target: { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3) }, permissionId: agentId(7), revision: 1 }
+  const request = parseAgentRequest({ ...base, op: "agent_permission_decide", commandId: agentId(8), ref, optionId: "allow" })
+  const receipt = (changes: object = {}) => {
+    const value = { commandId: agentId(8), ref, optionId: "allow", ...changes }
+    return { ...value, digest: canonicalDigest(value), state: "applied" }
+  }
+  const reply = (value: unknown) => parseAgentReply({ ...base, ok: true, result: { state: "permission", receipt: value } })
+  validateAgentReply(reply(receipt()), request)
+  for (const changed of [receipt({ commandId: agentId(90) }), receipt({ optionId: "deny" }), receipt({ ref: { ...ref, revision: 2 } }), null]) {
+    assert.throws(() => validateAgentReply(reply(changed), request), { code: "INVALID_PROTOCOL" })
+  }
+  assert.throws(() => validateAgentReply({ ...reply(receipt()), requestId: agentId(91) }, request), { code: "INVALID_PROTOCOL" })
+  assert.throws(() => validateAgentReply({ ...reply(receipt()), handlerGeneration: agentId(91) }, request), { code: "STALE_HANDLER" })
+  const snapshot = { hostId: ref.hostId, handlerGeneration: base.handlerGeneration, throughSeq: 0, pending: [], receipts: [] }
+  const permissions = parseAgentRequest({ ...base, op: "agent_permissions" })
+  validateAgentReply(parseAgentReply({ ...base, ok: true, result: { state: "permissions", snapshot } }), permissions)
+  assert.throws(() => parseAgentReply({ ...base, ok: true, result: { state: "permissions", snapshot: { ...snapshot, handlerGeneration: agentId(91) } } }), { code: "INVALID_PROTOCOL" })
+  assert.throws(() => validateAgentReply(reply(null), permissions), { code: "INVALID_PROTOCOL" })
+  const historical = receipt({ ref: { ...ref, target: { ...ref.target, handlerGeneration: agentId(91) } } })
+  const inspect = parseAgentRequest({ ...base, op: "agent_permission_inspect", commandId: agentId(8) })
+  validateAgentReply(reply(historical), inspect)
+  assert.throws(() => validateAgentReply(reply(receipt({ commandId: agentId(90) })), inspect), { code: "INVALID_PROTOCOL" })
 })
