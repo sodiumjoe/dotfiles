@@ -24,7 +24,7 @@ import { createOrchestrationService } from "../orchestration/service.js"
 import { createToolBindings } from "../orchestration/tool-bindings.js"
 import { parseAcceptedReport } from "../orchestration/reports.js"
 
-export async function createHostCoordination(input: { root: string; runtimeRoot: string; hostId: string; agents: AgentService; coordinator(payload: unknown, signal?: AbortSignal): Promise<unknown>; entryDriver?: EntryDriver; signal?: AbortSignal; connect?(enrollment: HostEnrollment): Promise<BridgeConnection> }) {
+export async function createHostCoordination(input: { root: string; runtimeRoot: string; hostId: string; agents: AgentService; coordinator(payload: unknown, signal?: AbortSignal): Promise<unknown>; entryDriver?: EntryDriver; signal?: AbortSignal; issue?(error: unknown): void; connect?(enrollment: HostEnrollment): Promise<BridgeConnection> }) {
   input.signal?.throwIfAborted()
   const origins = createJournalPool(input.root, undefined, Date.now, "origin"), journals = createJournalPool(input.root), store = createBureauStore(input.root)
   let bureau: ReturnType<typeof createBureauService>, origin: ReturnType<typeof createOrchestrationService> & Pick<import("../bureau/host.js").OrchestrationHost, "entryPrepare" | "entryInspect">, router: ReturnType<typeof createToolRouter>
@@ -129,7 +129,7 @@ export async function createHostCoordination(input: { root: string; runtimeRoot:
       }
     }
     router = createToolRouter({ root: input.root, bureau, hosts, origins: sources, journals: origins })
-    await bureau.initialize().catch(() => undefined)
+    await bureau.initialize().catch(error => input.issue?.(error))
     input.signal?.throwIfAborted()
     return { bureau, origin, origins, tools, remote, human, async replay() { try { await outbox.replay() } finally { await origin.replay() } }, close }
   } catch (error) {

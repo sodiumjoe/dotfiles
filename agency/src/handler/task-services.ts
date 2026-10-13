@@ -47,7 +47,7 @@ export function startTaskServices(input: {
   }
   const failed = (error: unknown) => { input.issue(error); void close().catch(input.issue) }
   const startup = (async () => {
-    const value = await factory({ root: input.root, runtimeRoot: input.paths.runtimeRoot, hostId: input.paths.hostKey, agents: input.agents, signal: controller.signal,
+    const value = await factory({ root: input.root, runtimeRoot: input.paths.runtimeRoot, hostId: input.paths.hostKey, agents: input.agents, signal: controller.signal, issue: input.issue,
       coordinator: (payload, signal) => { if (!bridge) throw new Error("BUREAU_UNAVAILABLE"); return bridge.coordinatorRequest(payload, signal) } })
     if (closing) { void value.close().catch(input.issue); return }
     coordination = value

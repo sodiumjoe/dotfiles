@@ -1,12 +1,14 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { chmod, lstat, readFile, writeFile } from "node:fs/promises"
+import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import test from "node:test"
 import { connectHandlerBridge } from "../src/bridge/handler-client.js"
 import { assertRuntime } from "../src/handler/environment.js"
 import { receiveStart } from "../src/handler/daemon.js"
+import { productionControlDependencies, runControl } from "../src/cli/control.js"
+import { inspectHandlerGeneration } from "../src/platform/singleton.js"
 import { readHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import { controlFixture, fileExists, until, launch } from "./control-support.js"
 
@@ -187,4 +189,25 @@ test("production Handler eventually publishes a private generation-bound bridge 
   const snapshot = await peer.request("snapshot", {}) as { hostId: string; handlerGeneration: string }
   assert.equal(snapshot.hostId, f.paths.hostKey)
   assert.equal(snapshot.handlerGeneration, handler.record.generation)
+})
+
+test("malformed Bureau settings remain visible in ready Handler status and doctor", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t), settings = join(f.paths.persistentRoot, "bureau/settings/state.json")
+  const content = JSON.stringify({ enabled: "invalid" })
+  await mkdir(join(f.paths.persistentRoot, "bureau/settings"), { recursive: true, mode: 0o700 })
+  await writeFile(settings, content, { mode: 0o600 })
+  const handler = await f.start()
+  assert.equal(handler.record.phase, "ready")
+  await until(async () => await lstat(join(f.paths.runtimeRoot, "bridge.sock")).then(stat => stat.isSocket(), () => false) ? true : undefined)
+  const reply = await f.call()
+  assert.ok(reply.ok && "phase" in reply.result)
+  assert.equal(reply.result.phase, "ready")
+  const issue = reply.result.issues?.find(issue => issue.message.includes("INVALID_BUREAU"))
+  assert.ok(issue)
+  assert.equal(issue.path, join(f.paths.persistentRoot, "bureau"))
+  const output: string[] = []
+  assert.equal(await runControl(["doctor", "--json"], { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter), call: (_env, request) => f.call(request), stdout: text => output.push(text) }), 0)
+  const diagnostic = JSON.parse(output.join(""))
+  assert.ok(diagnostic.result.runtimeIssues.some((runtimeIssue: { path: string; message: string }) => runtimeIssue.path === issue.path && runtimeIssue.message.includes("INVALID_BUREAU")))
+  assert.equal(await readFile(settings, "utf8"), content)
 })

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { lstat } from "node:fs/promises"
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import { startTaskServices, type CoordinationFactory } from "../src/handler/task-services.js"
 import { createHostCoordination } from "../src/handler/host-coordination.js"
+import { connectHandlerBridge } from "../src/bridge/handler-client.js"
 import { bindPrivateSocket } from "../src/platform/private-socket.js"
 import { BUREAU_PROTOCOL, exchangeBureau } from "../src/bureau/protocol.js"
 import { agentServiceFixture } from "./agent-support.js"
@@ -87,4 +88,25 @@ test("normal optional services eventually expose a working Bureau endpoint", asy
   const reply = await exchangeBureau(createConnection(join(f.root, "bureau.sock")), { protocol: BUREAU_PROTOCOL, requestId: randomUUID(), handlerGeneration: f.service.handlerGeneration, op: "bureau_status" })
   assert.equal(reply.ok, true)
   assert.deepEqual(issues, [])
+})
+
+test("malformed Bureau settings report a diagnostic while the bridge remains usable", async t => {
+  const f = await agentServiceFixture(t), issues: unknown[] = []
+  const settings = join(f.root, "bureau/settings/state.json"), content = JSON.stringify({ enabled: "invalid" })
+  await mkdir(join(f.root, "bureau/settings"), { recursive: true, mode: 0o700 })
+  await writeFile(settings, content, { mode: 0o600 })
+  const services = startTaskServices({ root: f.root, paths: f.context.paths, generation: f.service.handlerGeneration, agents: f.service, issue: error => issues.push(error) })
+  t.after(() => services.close())
+  await until(async () => await lstat(join(f.root, "bridge.sock")).then(stat => stat.isSocket(), () => false) ? true : undefined)
+  const peer = await connectHandlerBridge({ root: f.root, hostId: f.context.paths.hostKey, handlerGeneration: f.service.handlerGeneration })
+  t.after(async () => { peer.close(); await peer.closed })
+  const snapshot = await peer.request("snapshot", {}) as { hostId: string; handlerGeneration: string }
+  assert.equal(snapshot.hostId, f.context.paths.hostKey)
+  assert.equal(snapshot.handlerGeneration, f.service.handlerGeneration)
+  const reply = await exchangeBureau(createConnection(join(f.root, "bureau.sock")), { protocol: BUREAU_PROTOCOL, requestId: randomUUID(), handlerGeneration: f.service.handlerGeneration, op: "bureau_status" })
+  assert.equal(reply.ok, true)
+  assert.deepEqual(reply.result, { enabled: false, ready: false, writeAvailable: false })
+  assert.equal(await readFile(settings, "utf8"), content)
+  assert.equal(issues.length, 1)
+  assert.match(String(issues[0]), /INVALID_BUREAU/)
 })
