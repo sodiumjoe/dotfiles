@@ -283,6 +283,23 @@ Reconnect first reconciles the coordinating Bureau's owned streams, then request
 
 This command performs configuration validation only. Its result sets `acceptanceVerified: false`; it does not run SSH, start providers or establish live acceptance. The actual live milestone remains a separately reviewed operation batch after concrete targets and staging details are supplied. Retain the observed run, assignment and exact execution refs from that batch, current Linux qualification evidence on both destinations, prompt/report/wait receipts, editor observations, interruption observations and independent cleanup readback. Deterministic Handler generation replacement is a recovery simulation, not a physical reboot result.
 
+## Local human controls
+
+Local controls require the updated Handler and a live, unambiguous, ready generation. They use the existing runtime socket. They do not start a Handler, read the caller's working directory or contact Bureau.
+
+```bash
+agy roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]
+agy permission list --local [--json]
+agy permission decide --local --input-json '{"commandId":"UUID","ref":<permission-ref>,"optionId":"OPTION"}' [--json]
+agy permission inspect COMMAND_UUID --local [--json]
+```
+
+The roster contains active local sessions, including sessions still starting. A starting row can have `live: false`. Permission refs come from the owner snapshot and identify the exact Handler and provider generation. Select the command UUID before sending a decision. A decision is submitted once. If the reply is lost or cannot be validated, the client exits 75 with `INCOMPLETE` and that command ID. Inspect the command before deciding how to recover; a null inspection does not prove that the earlier decision failed. An `applied` decision exits 0, while `claimed`, `uncertain`, `stale` and `withdrawn` exit 75. Inspection itself is a read and returns historical receipts as observations.
+
+Core readiness covers local ACP sessions and controls. Task services initialize afterward in one background attempt, so their endpoints can be unavailable after the Handler becomes ready. Failed optional startup appears in status and doctor runtime diagnostics. Global commands without `--local` remain dependent on task coordination during migration. Local watch is not available in this increment; use explicit list and inspect.
+
+The owner still uses the existing durable permission arbiter because remote consumers read its history. Owner permission-storage failure can therefore disable local permissions while ordinary sessions remain usable. Moving that arbiter to memory and replacing remote consumers are later migration steps. Legacy task mutation-publication hooks also remain coupled to the runtime queue; task snapshot consumers now run outside it.
+
 ## Routed human approvals
 
 `agy permission list --json` returns pending origin offers and unavailable hosts. `agy permission watch --json` streams complete replacement snapshots with consecutive sequence numbers and a stream generation. Disconnects withdraw decision freshness; stream gaps require a new initial snapshot. Neovim exposes this collection through `:AgencyPermissions`, including full origin identities, origin directory, opaque tool subject and the provider's advertised options in the preview. Attachment replacement closes the collection and its watch process.

@@ -2,6 +2,7 @@ import type { Writable } from "node:stream"
 import type { BureauReply, BureauRequest } from "../bureau/protocol.js"
 import { runBureauClient } from "../bureau/cli.js"
 import { randomUUID } from "node:crypto"
+import { runLocalHumanClient } from "../agent/human-client.js"
 import { runAgentClient } from "../agent/client.js"
 import { runAttachmentClient, productionAttachmentStreams, type AttachmentDependencies } from "../agent/attachment-client.js"
 import { exchangeAgent, type AgentRequest, type AgentReply } from "../agent/protocol.js"
@@ -121,6 +122,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
+  if (argv.includes("--local")) return runLocalHumanClient(argv, dependencies)
   if (["bureau", "run", "assignment", "permission", "roster", "entry", "git"].includes(argv[0] ?? "")) return runBureauClient(argv, dependencies)
   if (argv[0] === "model" && argv[1] === "recover-probe") return runProbeRecovery(argv, dependencies)
   if (argv[0] === "agent" && argv[1] === "attach") return runAttachmentClient(argv, { ...productionAttachmentStreams(), ...dependencies.attachment, environment: dependencies.environment, inspect: dependencies.inspect, stderr: dependencies.stderr })
@@ -137,7 +139,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
