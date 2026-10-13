@@ -22,6 +22,7 @@ export type HandlerStatus = {
   capabilities: ["status", "doctor", "shutdown"]
 }
 export type DoctorDiagnostic = {
+  runtimeIssues?: StatusIssue[]
   node: string
   platform: "darwin" | "linux"
   hostId: string

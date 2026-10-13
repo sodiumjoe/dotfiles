@@ -1,12 +1,5 @@
 import { dispatchRuntimeHuman, isRuntimeHumanRequest } from "../agent/human-controls.js"
-import { createHostCoordination } from "./host-coordination.js"
-import { createHandlerBridge } from "../bridge/server.js"
-import { createToolBindings } from "../orchestration/tool-bindings.js"
-import { serveToolSocket } from "../orchestration/tool-client.js"
-import { type BureauService } from "../bureau/service.js"
-import { dispatchBureau } from "../bureau/client.js"
-import { parseBureauRequest } from "../bureau/protocol.js"
-import { encodeFrame, receiveFrame } from "../control/wire.js"
+import { startTaskServices, type TaskServices, type CoordinationFactory } from "./task-services.js"
 import { loadOrchestrationPins } from "../orchestration/receipts.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
@@ -50,6 +43,7 @@ export type HandlerOptions = {
   catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; store: CatalogStore; retirement: RetirementView; onTerminal(): void; cleanupIssues(): readonly string[]; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
   agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
   launchContracts?: readonly LaunchContract[]
+  coordinationFactory?: CoordinationFactory
   retention?: { now?: () => number; filesystem?: RetentionFileSystem }
 }
 
@@ -109,24 +103,20 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
-  let bureau: BureauService | undefined, toolBindings: ReturnType<typeof createToolBindings> | undefined
-  let bureauServer: Server | undefined, toolsServer: Server | undefined
-  let coordination: Awaited<ReturnType<typeof createHostCoordination>> | undefined
-  let bridgeServer: Awaited<ReturnType<typeof createHandlerBridge>> | undefined
+  let taskServices: TaskServices | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
+  const taskIssues: NonNullable<HandlerStatus["issues"]> = []
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject })
   void closed.catch(() => undefined)
   const close = async (): Promise<void> => {
     if (closing) return closed
     closing = true
-    if (coordination) await coordination.close()
-    else { await bureau?.close(); toolBindings?.close() }
-    await bridgeServer?.close()
+    await taskServices?.close()
     await acpServer?.close()
     for (const socket of sockets) socket.destroy()
-    for (const listener of [server, attachmentServer, bureauServer, toolsServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
+    for (const listener of [server, attachmentServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
     resolveClosed()
   }
   const terminate = async (): Promise<void> => {
@@ -178,7 +168,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const dispatch = async (request: ControlRequest): Promise<ControlReply> => {
       if (request.handlerGeneration !== options.generation) return errorReply({ ...request, handlerGeneration: options.generation }, new ControlError("STALE_HANDLER"))
       if (request.op === "shutdown") return shutdown === undefined ? errorReply(request, new ControlError("INCOMPLETE", "Handler has not completed startup")) : shutdownHandler(request, shutdown)
-      return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone(state) }
+      return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone({ ...state, issues: [...(state.issues ?? []), ...taskIssues] }) }
     }
     const dispatchCatalog = async (request: CatalogRequest): Promise<CatalogReply> => {
       const bound = { ...request, handlerGeneration: options.generation }
@@ -283,27 +273,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
     await agents.initialize()
-    coordination = await createHostCoordination({ root, runtimeRoot: options.paths.runtimeRoot, hostId: options.paths.hostKey, agents, coordinator: (payload, signal) => { if (!bridgeServer) throw new Error("BUREAU_UNAVAILABLE"); return bridgeServer.coordinatorRequest(payload, signal) } })
-    const { origin, origins } = coordination
-    toolBindings = coordination.tools; bureau = coordination.bureau
-    const scopedTools = toolBindings, core = bureau
-    toolsServer = await bindPrivateSocket(options.paths.runtimeRoot, "orchestration.sock", socket => {
-      sockets.add(socket); socket.once("close", () => sockets.delete(socket))
-      void serveToolSocket(socket, scopedTools).catch(() => socket.destroy())
-    })
-    bureauServer = await bindPrivateSocket(options.paths.runtimeRoot, "bureau.sock", socket => {
-      sockets.add(socket); socket.once("close", () => sockets.delete(socket)); socket.allowHalfOpen = true
-      socket.on("error", () => undefined)
-      void (async () => {
-        try {
-          const request = parseBureauRequest(await receiveFrame(socket)), reply = await dispatchBureau(core, options.generation, request, coordination!.human)
-          await new Promise<void>(resolve => socket.end(encodeFrame(reply), resolve))
-        } catch { socket.destroy() } finally { socket.destroy() }
-      })()
-    })
-    toolsServer.on("error", () => toolBindings?.close())
-    bureauServer.on("error", () => bureau?.close())
-    bridgeServer = await createHandlerBridge({ root: options.paths.runtimeRoot, host: origin, journals: origins, replay: () => coordination!.replay(), identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
     coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()
@@ -315,7 +284,11 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (termination) await terminate()
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
-    if (!termination && !closing) catalog.startScheduling()
+    if (!termination && !closing) {
+      taskServices = startTaskServices({ root, paths: options.paths, generation: options.generation, agents, ...(options.coordinationFactory ? { coordinationFactory: options.coordinationFactory } : {}),
+        issue: error => { taskIssues.push({ path: join(root, "bureau"), launchAttemptId: null, message: String(error) }) } })
+      catalog.startScheduling()
+    }
     await closed
   } catch (error) {
     if (current !== undefined) {

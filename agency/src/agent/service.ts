@@ -845,12 +845,15 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   return {
     start, restore, stop, prompt, command, setSession, importSession,
     withExecution: (target, publish) => queue.run(async () => { await requireTarget(target); return publish() }),
-    orchestrationSnapshot: observe => queue.run(async () => {
-      await verify()
-      const retained = new Map<string, AgentCommand>([...intents].map(([commandId, op]) => [commandId, op.accepted]))
-      for (const [commandId, command] of commands) retained.set(commandId, command)
-      return observe({ agents: pageAgents(false), commands: [...retained.values()].map(view) })
-    }),
+    orchestrationSnapshot: async observe => {
+      const snapshot = await queue.run(async () => {
+        await verify()
+        const retained = new Map<string, AgentCommand>([...intents].map(([commandId, op]) => [commandId, op.accepted]))
+        for (const [commandId, command] of commands) retained.set(commandId, command)
+        return structuredClone({ agents: pageAgents(false), commands: [...retained.values()].map(view) })
+      })
+      return observe(snapshot)
+    },
     async commandReceipt(commandId, expectedGeneration) {
       id(commandId); id(expectedGeneration)
       return queue.run(async () => {

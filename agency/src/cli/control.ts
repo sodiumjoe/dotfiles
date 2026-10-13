@@ -145,7 +145,15 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       const launches = await dependencies.inventory(join(env.paths.persistentRoot, "launches"))
       const agents = await createAgentStore(env.paths.persistentRoot).inventory()
       const catalog = await createCatalogStore(env.paths.persistentRoot).inventory()
+      let runtimeIssues: DoctorDiagnostic["runtimeIssues"]
+      if (handler?.disposition === "live" && handler.record.phase === "ready") {
+        try {
+          const reply = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "status" })
+          if (reply.ok && "phase" in reply.result && reply.result.issues?.length) runtimeIssues = reply.result.issues
+        } catch {}
+      }
       const result: DoctorDiagnostic = {
+        ...(runtimeIssues ? { runtimeIssues } : {}),
         node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler,
         launches: summarizeLaunches(launches.records.map(entry => entry.record)),
         agents: { records: [...agents.agents.map(record => ({ id: record.definition.agentId, phase: record.phase })), ...agents.legacyAgents.map(record => ({ id: record.spec.agentId, phase: record.phase }))], commands: agents.commands.map(command => ({ id: command.commandId, op: command.op, state: command.state })), issues: agents.issues.map(issue => ({ path: issue.path, message: issue.message })) },

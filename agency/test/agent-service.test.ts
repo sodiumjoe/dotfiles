@@ -893,3 +893,22 @@ test("startup diagnostic receipt retains the first child exit through initializa
   const restarted = await f.restart()
   assert.deepEqual((await restarted.command(accepted.command.commandId, accepted.command.handlerGeneration)).command.result!.failure, expected)
 })
+
+test("task snapshot observation cannot hold the runtime mutation queue", async t => {
+  const f = await agentServiceFixture(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const observed = f.service.orchestrationSnapshot(async snapshot => {
+    entered.resolve()
+    await release.promise
+    return snapshot
+  })
+  await entered.promise
+  try {
+    const read = await Promise.race([f.service.current(f.workspace), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("runtime blocked by task consumer")), 1000))])
+    assert.equal(read.agents.length, 0)
+    const ready = await completed(f.service, (await f.service.start(f.input)).command)
+    await completed(f.service, (await f.service.stop({ ...ready.command.target!, commandId: randomUUID() })).command)
+    release.resolve()
+    assert.equal((await observed).agents.length, 0)
+    assert.equal((await observed).commands.length, 0)
+  } finally { release.resolve(); await observed }
+})

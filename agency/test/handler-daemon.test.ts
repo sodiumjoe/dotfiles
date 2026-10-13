@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { chmod, readFile, writeFile } from "node:fs/promises"
+import { chmod, lstat, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import test from "node:test"
@@ -179,8 +179,10 @@ test("termination during classification is deferred until the full inventory is 
   assert.equal(JSON.parse(await readFile(path, "utf8")).phase, "cleanup_verified")
 })
 
-test("production Handler publishes a private generation-bound bridge before readiness", { timeout: 20000 }, async t => {
-  const f = await controlFixture(t), handler = await f.start().catch(async error => { throw new Error(await readFile(join(f.root, "failure"), "utf8").catch(() => String(error)), { cause: error }) }), peer = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: handler.record.generation })
+test("production Handler eventually publishes a private generation-bound bridge after readiness", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t), handler = await f.start().catch(async error => { throw new Error(await readFile(join(f.root, "failure"), "utf8").catch(() => String(error)), { cause: error }) })
+  await until(async () => await lstat(join(f.paths.runtimeRoot, "bridge.sock")).then(stat => stat.isSocket(), () => false) ? true : undefined)
+  const peer = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: handler.record.generation })
   f.beforeCleanup(async () => { peer.close(); await peer.closed })
   const snapshot = await peer.request("snapshot", {}) as { hostId: string; handlerGeneration: string }
   assert.equal(snapshot.hostId, f.paths.hostKey)

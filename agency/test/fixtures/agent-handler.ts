@@ -6,6 +6,7 @@ import { readFile, writeFile, mkdir, open, rename, rm } from "node:fs/promises"
 import { writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Socket } from "node:net"
+import { createHostCoordination } from "../../src/handler/host-coordination.js"
 import { runHandler } from "../../src/handler/daemon.js"
 import { createAgentService } from "../../src/agent/service.js"
 import { createAgentProcess } from "../../src/agent/process.js"
@@ -44,7 +45,18 @@ const contract: LaunchContract = {
   permissionEvidence: "fixture-contract-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
 }
 try {
-  await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
+  await runHandler({ coordinationFactory: async input => {
+    if (config.coordination === "reject") throw new Error("fixture coordination unavailable")
+    if (config.coordination === "hold") {
+      await writeFile(join(root, "coordination-entered"), "entered", { mode: 0o600 })
+      while (true) {
+        input.signal?.throwIfAborted()
+        try { await readFile(join(root, "release-coordination")); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
+    }
+    return createHostCoordination(input)
+  }, paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: config.nativeAcp ? [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }] : [contract],
     catalogFactory(context) {
       const store = context.store
