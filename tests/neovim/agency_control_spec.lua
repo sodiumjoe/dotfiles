@@ -110,3 +110,33 @@ describe("Agency owner envelopes", function()
         assert.is_nil(failure)
     end)
 end)
+describe("Agency runtime entry envelope", function()
+    local id = "00000000-0000-4000-8000-000000000001"
+    local host = string.rep("a", 64)
+    local target = { agentId = id, handlerGeneration = id, providerGeneration = id }
+    local function exchange(argv, value)
+        local failure
+        local client = require("sodium.agency.control").new({ system = function(_, _, cb)
+            cb({ code = 0, stdout = vim.json.encode(value) }); return { kill = function() end }
+        end, schedule = function(cb) cb() end })
+        client.command(argv, {}, function(err) failure = err end); client.close(); return failure
+    end
+    it("rejects a valid host result for a different operation", function()
+        local err = exchange({ "permission", "list", "--host", host }, { protocol = "agency-host/1", requestId = id, hostId = host,
+            handlerGeneration = id, ok = true, result = { state = "page", revision = id, agents = {}, issues = {}, nextCursor = vim.NIL } })
+        assert.are.equal("INVALID_PROTOCOL", err.code)
+    end)
+    it("rejects substituted commands and exact provider tuples", function()
+        local argv = { "entry", "open", "--input-json", vim.json.encode({ commandId = id, hostId = host, target = target }) }
+        local value = { protocol = "agency-host/1", requestId = id, hostId = host, handlerGeneration = id, commandId = id,
+            ok = true, result = { state = "entry", enrollment = vim.NIL, receipt = { commandId = id, ref = { hostId = host, target = target },
+                state = "opened", editor = { editorId = id, session = "entry", pane = "%1", tmuxSocketPath = "/fixture/socket" } } } }
+        assert.is_nil(exchange(argv, value))
+        value.result.receipt = vim.deepcopy(value.result.receipt)
+        value.result.receipt.ref.target.providerGeneration = "00000000-0000-4000-8000-000000000002"
+        assert.are.equal("INVALID_PROTOCOL", exchange(argv, value).code)
+        value.result.receipt.ref.target = target
+        value.result.receipt.commandId = "00000000-0000-4000-8000-000000000002"
+        assert.are.equal("INVALID_PROTOCOL", exchange(argv, value).code)
+    end)
+end)

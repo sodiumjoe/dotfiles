@@ -23,7 +23,7 @@ export type HostIdentity = { hostId: string; handlerGeneration: string }
 export type HostRuntimeClient = { identity(hostId: string, signal?: AbortSignal): Promise<HostIdentity>; human(hostId: string, operation: import("../agent/human-controls.js").RuntimeHumanRequest, signal?: AbortSignal): Promise<import("../agent/human-controls.js").RuntimeHumanResult> }
 export class RuntimeOutcomeUnknown extends Error {
   readonly code = "OUTCOME_UNKNOWN"
-  constructor(readonly reference: { hostId: string; commandId: string }, cause: unknown) { super("Outcome unknown; inspect the command on its owner before another decision", { cause }) }
+  constructor(readonly reference: { hostId: string; commandId: string }, cause: unknown) { super("Outcome unknown; inspect the command on its owner before repeating the operation", { cause }) }
 }
 export function createHostRuntimeClient(input: { localHostId: string; route(route: import("./router.js").HostRoute, signal?: AbortSignal): Promise<unknown> }): HostRuntimeClient {
   const identity = async (hostId: string, signal?: AbortSignal): Promise<HostIdentity> => {

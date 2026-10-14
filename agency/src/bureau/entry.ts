@@ -4,18 +4,13 @@ import { canonicalDigest, fail } from "../orchestration/types.js"
 import { createStorage, storageQueue } from "../orchestration/storage.js"
 
 export type EntryRef = { inventoryId: string; hostId: string; target: AgentTuple }
-export type EditorReceipt = { editorId: string; session: string; pane: string }
+import { parseEditorReceipt, type EditorReceipt } from "../entry/runtime.js"
+export { parseEditorReceipt, type EditorReceipt } from "../entry/runtime.js"
 export type EntryIntent = { commandId: string; ref: EntryRef; digest: string; expiresAt: number; state: "prepared" | "opening" | "consumed" | "uncertain" | "expired" | "stale"; editor: EditorReceipt | null }
 export type EntryDriver = { ensure(intent: EntryIntent): Promise<EditorReceipt>; activate(intent: EntryIntent, editor: EditorReceipt): Promise<void>; inspect(intent: EntryIntent): Promise<EditorReceipt | null> }
 export function parseEntryRef(raw: unknown): EntryRef {
   const v = object(raw); keys(v, ["inventoryId", "hostId", "target"])
   return { inventoryId: id(v.inventoryId), hostId: hash(v.hostId), target: parseTuple(v.target) }
-}
-export function parseEditorReceipt(raw: unknown): EditorReceipt {
-  const v = object(raw); keys(v, ["editorId", "session", "pane"])
-  const session = text(v.session), pane = text(v.pane)
-  if (!/^[a-zA-Z0-9_-]+$/.test(session) || !/^%[0-9]+$/.test(pane)) fail("INVALID_EDITOR")
-  return { editorId: id(v.editorId), session, pane }
 }
 export function parseEntryIntent(raw: unknown): EntryIntent {
   const v = object(raw); keys(v, ["commandId", "ref", "digest", "expiresAt", "state", "editor"])

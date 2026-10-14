@@ -8,7 +8,7 @@ import { connectHandlerBridge } from "../bridge/handler-client.js"
 import { connectBridge } from "../bridge/ssh.js"
 import type { ControlDependencies } from "../cli/control.js"
 import { createHostInventory, parseHostEnrollment } from "./inventory.js"
-import { createHostRouter } from "./router.js"
+import { createHostRouter, isRoutedRead } from "./router.js"
 import { createHostRuntimeClient, RuntimeOutcomeUnknown } from "./runtime.js"
 import { rosterView, permissionView } from "./views.js"
 import { HOST_PROTOCOL, type HostReply, type HostResult } from "./protocol.js"
@@ -68,19 +68,10 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
       operation = { op: "agent_permission_decide", commandId, ref, optionId: text(raw.optionId) }
     }
     executing = true
-    const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
-    let local: Awaited<ReturnType<typeof connectHandlerBridge>> | undefined
-    const router = createHostRouter({ hostId: env.paths.hostKey, inventory, async local(channel, payload, signal) {
-      if (!local) {
-        const owner = await deps.inspect(env)
-        if (!owner || owner.disposition !== "live" || owner.record.phase !== "ready") throw new AgentError("UNAVAILABLE")
-        local = await connectHandlerBridge({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, handlerGeneration: owner.record.generation })
-      }
-      return local.request(channel, payload, { timeoutMs: 10000, ...(signal ? { signal } : {}) })
-    }, connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
-    close = () => { local?.close(); router.close() }
+    const access = await openHostAccess(deps), { env, inventory } = access
+    close = access.close
     const client = createHostRuntimeClient({ localHostId: env.paths.hostKey, async route(route, signal) {
-      const result = await (deps.hostRoute ? deps.hostRoute(env, route, signal) : router.request(route, signal))
+      const result = await access.route(route, signal)
       if (route.channel === "host-identity" && operation) { const value = object(result); generation = id(value.handlerGeneration) }
       return result
     } })
@@ -99,4 +90,18 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
     emit({ ok: false, error: { code, message: error instanceof Error ? error.message : String(error), ...(error instanceof RuntimeOutcomeUnknown ? { reference: error.reference } : {}) } })
     return code === "USAGE" || code === "INVALID_PROTOCOL" ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
   } finally { close?.() }
+}
+export async function openHostAccess(deps: ControlDependencies) {
+  const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
+  let local: Awaited<ReturnType<typeof connectHandlerBridge>> | undefined
+  const router = createHostRouter({ hostId: env.paths.hostKey, inventory, async local(channel, payload, signal) {
+    if (!local) {
+      const owner = await deps.inspect(env)
+      if (!owner || owner.disposition !== "live" || owner.record.phase !== "ready") throw new AgentError("UNAVAILABLE")
+      local = await connectHandlerBridge({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, handlerGeneration: owner.record.generation })
+    }
+    return local.request(channel, payload, { timeoutMs: isRoutedRead(channel) ? 10000 : 60000, ...(signal ? { signal } : {}) })
+  }, connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
+  const close = () => { local?.close(); router.close() }
+  return { env, inventory, close, route: (route: import("./router.js").HostRoute, signal?: AbortSignal) => deps.hostRoute ? deps.hostRoute(env, route, signal) : router.request(route, signal) }
 }

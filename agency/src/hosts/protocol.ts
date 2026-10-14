@@ -1,3 +1,5 @@
+import { parseRuntimeEntry, type RuntimeEntry } from "../entry/runtime.js"
+import { parsePreparedWorktree, type PreparedWorktree } from "../git/worktree.js"
 import { isDeepStrictEqual } from "node:util"
 import { hash, id, keys, object, text } from "../catalog/types.js"
 import { AGENT_PROTOCOL, parseAgentReply } from "../agent/protocol.js"
@@ -11,7 +13,7 @@ export type OwnerRoster = { handlerGeneration: string; agents: AgentPage["agents
 export type RosterView = { state: "roster"; localHostId: string; hosts: HostObservation<OwnerRoster>[] }
 export type PermissionView = { state: "permissions"; hosts: HostObservation<PermissionSnapshot>[]; pending: PermissionOffer[] }
 export const HOST_PROTOCOL = "agency-host/1" as const
-export type HostResult = RosterView | PermissionView | RuntimeHumanResult | { state: "hosts"; hosts: HostEnrollment[] } | { state: "enrolled"; enrollment: HostEnrollment }
+export type HostResult = { state: "entry"; receipt: RuntimeEntry | null; enrollment: HostEnrollment | null } | { state: "worktree"; worktree: PreparedWorktree } | RosterView | PermissionView | RuntimeHumanResult | { state: "hosts"; hosts: HostEnrollment[] } | { state: "enrolled"; enrollment: HostEnrollment }
 export type HostReply = { protocol: typeof HOST_PROTOCOL; requestId: string; hostId: string | null; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: HostResult } | { ok: false; error: { code: string; message: string; reference?: { hostId: string; commandId: string } } })
 export function parseHostReply(raw: unknown): HostReply {
   const value = object(raw)
@@ -60,6 +62,15 @@ export function parseHostReply(raw: unknown): HostReply {
       if (!isDeepStrictEqual(pending, owners.flatMap(host => host.state === "available" ? host.value.pending : []))) throw new Error("INVALID_PROTOCOL")
       result = { state: "permissions", hosts: owners, pending }
     }
+  } else if (r.state === "entry") {
+    keys(r, ["state", "receipt", "enrollment"])
+    if (common.hostId === null || !common.commandId) throw new Error("INVALID_PROTOCOL")
+    const receipt = r.receipt === null ? null : parseRuntimeEntry(r.receipt), enrollment = r.enrollment === null ? null : parseHostEnrollment(r.enrollment)
+    if (receipt && (receipt.commandId !== common.commandId || receipt.ref.hostId !== common.hostId || receipt.state !== "stale" && receipt.ref.target.handlerGeneration !== common.handlerGeneration) || enrollment && enrollment.hostId !== common.hostId) throw new Error("INVALID_PROTOCOL")
+    result = { state: "entry", receipt, enrollment }
+  } else if (r.state === "worktree") {
+    keys(r, ["state", "worktree"]); if (common.hostId !== null) throw new Error("INVALID_PROTOCOL")
+    result = { state: "worktree", worktree: parsePreparedWorktree(r.worktree) }
   } else if (r.state === "hosts") { keys(r, ["state", "hosts"]); if (!Array.isArray(r.hosts) || common.hostId !== null) throw new Error("INVALID_PROTOCOL"); result = { state: "hosts", hosts: r.hosts.map(parseHostEnrollment) } }
   else if (r.state === "enrolled") { keys(r, ["state", "enrollment"]); if (common.hostId !== null) throw new Error("INVALID_PROTOCOL"); result = { state: "enrolled", enrollment: parseHostEnrollment(r.enrollment) } }
   else {

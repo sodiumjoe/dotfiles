@@ -40,7 +40,7 @@ function M.setup(deps)
         roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
-    api.roster = deps.roster or function(callback)
+    api.read_roster = deps.roster or function(callback)
         (deps.client or require("sodium.agency.control")).command({ "roster", "list" }, { timeout_ms = 10000 }, function(err, envelope)
             callback(err, envelope and envelope.result)
         end)

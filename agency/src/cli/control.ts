@@ -1,3 +1,5 @@
+import { runEntryClient } from "../entry/cli.js"
+import { runGitPrepare } from "../git/cli.js"
 import { runHostClient } from "../hosts/cli.js"
 import type { HostRoute } from "../hosts/router.js"
 import type { createHostInventory } from "../hosts/inventory.js"
@@ -127,6 +129,8 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
+  if (argv[0] === "entry") return runEntryClient(argv, dependencies)
+  if (argv[0] === "git" && argv[1] === "prepare") return runGitPrepare(argv, dependencies)
   if (argv.includes("--local")) return runLocalHumanClient(argv, dependencies)
   if (["host", "roster", "permission"].includes(argv[0] ?? "")) return runHostClient(argv, dependencies)
   if (["bureau", "run", "assignment", "permission", "roster", "entry", "git"].includes(argv[0] ?? "")) return runBureauClient(argv, dependencies)

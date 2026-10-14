@@ -12,7 +12,7 @@ export type HostRouter = {
   setRelay(send: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>): () => void
   close(): void
 }
-export function isRoutedRead(channel: string): boolean { return channel === "runtime-read" || channel === "host-identity" }
+export function isRoutedRead(channel: string): boolean { return channel === "runtime-read" || channel === "host-identity" || channel === "runtime-entry-inspect" }
 export function parseHostRoute(raw: unknown): HostRoute {
   const value = object(raw); keys(value, ["hostId", "channel", "payload"])
   const channel = text(value.channel)

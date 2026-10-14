@@ -46,3 +46,20 @@ test("new editor commands pass argv and stable IDs without task or shell interpo
   assert.equal(calls.some(call => call.includes("-c") || call.includes("kill-session")), false)
   assert.equal(calls.some(call => call.includes("--listen")), true)
 })
+import { createRuntimeEntryDriver } from "../src/entry/editor.js"
+
+test("runtime editors use host plus exact session identity without inventory or task state", async () => {
+  const ref = { hostId: "a".repeat(64), target: { agentId: randomUUID(), handlerGeneration: randomUUID(), providerGeneration: randomUUID() } }, identity = entryEditorIdentity(ref), calls: string[][] = []
+  let exists = false
+  const driver = createRuntimeEntryDriver({ runtimeRoot: "/fixture", socket: async () => "/fixture/nvim.sock", run: async (file, args) => {
+    calls.push([file, ...args]); if (args.includes("has-session") && !exists) throw new Error("absent")
+    if (args.includes("new-session")) { exists = true; return "%2" }
+    if (args.includes("show-options")) return identity.digest
+    if (file === "nvim") return JSON.stringify({ editorId: identity.editorId, target: ref.target })
+    return "%2"
+  } })
+  const receipt = await driver.ensure(ref); await driver.activate(ref, receipt)
+  assert.deepEqual(await driver.inspect(ref), receipt); assert.equal(receipt.tmuxSocketPath, "/fixture/entry-tmux.sock")
+  assert.equal(calls.filter(call => call.includes("new-session")).length, 1)
+  assert.equal(calls.some(call => call.includes("--remote-expr")), true)
+})

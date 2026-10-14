@@ -143,10 +143,10 @@ function M.open(controller)
         end)
     end
     local function refresh_owners()
-        if closed or owner_polling or not controller.roster then return end
+        if closed or owner_polling or not controller.read_roster then return end
         owner_polling = true
         local token = generation
-        controller.roster(function(err, result)
+        controller.read_roster(function(err, result)
             if closed or token ~= generation then return end
             owner_polling = false
             if err then roster, unavailable = nil, err.code

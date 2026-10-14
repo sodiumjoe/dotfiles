@@ -62,6 +62,12 @@ local function validate(value, argv)
     local result = value.result
     assert(type(result) == "table")
     if ordinary then
+        local expected_state = argv[1] == "host" and (argv[2] == "enroll" and "enrolled" or "hosts")
+            or argv[1] == "roster" and (flag(argv, "--host") and "page" or "roster")
+            or argv[1] == "permission" and (argv[2] == "list" and "permissions" or "permission")
+            or argv[1] == "entry" and "entry" or argv[1] == "git" and "worktree"
+        assert(result.state == expected_state)
+        assert((value.hostId == vim.NIL) == (value.handlerGeneration == vim.NIL))
         assert(value.hostId == vim.NIL or host_id(value.hostId))
         if flag(argv, "--host") then assert(value.hostId == flag(argv, "--host")) end
         if result.state == "roster" then
@@ -100,9 +106,15 @@ local function validate(value, argv)
             assert(value.commandId == expected.commandId)
             if receipt ~= vim.NIL then
                 assert(type(receipt) == "table" and receipt.commandId == expected.commandId and receipt.ref.hostId == value.hostId)
-                target(receipt.ref.target); assert(receipt.ref.target.handlerGeneration == value.handlerGeneration)
+                target(receipt.ref.target); assert(receipt.state == "stale" or receipt.ref.target.handlerGeneration == value.handlerGeneration)
                 if expected.target then assert(vim.deep_equal(receipt.ref, { hostId = expected.hostId, target = expected.target })) end
                 assert(vim.tbl_contains({ "opening", "opened", "uncertain", "stale" }, receipt.state))
+                if receipt.state == "opened" then
+                    assert(type(receipt.editor) == "table" and valid_id(receipt.editor.editorId)
+                        and type(receipt.editor.session) == "string" and receipt.editor.session:match("^[%w_-]+$")
+                        and type(receipt.editor.pane) == "string" and receipt.editor.pane:match("^%%[0-9]+$")
+                        and type(receipt.editor.tmuxSocketPath) == "string" and receipt.editor.tmuxSocketPath:sub(1, 1) == "/")
+                end
             end
         elseif result.state == "worktree" then assert(argv[1] == "git" and argv[2] == "prepare" and type(result.worktree.cwd) == "string")
         else error("Unexpected host result") end

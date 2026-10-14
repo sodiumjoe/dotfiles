@@ -56,7 +56,22 @@ try {
       }
     }
     return createHostCoordination(input)
-  }, paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
+  }, ...(config.entry === "synthetic" ? { entryDriver: (() => {
+    let creations = 0, activations = 0, binding: import("../../src/entry/runtime.js").RuntimeEditor | null = null
+    const editor = { editorId: randomUUID(), session: "synthetic-entry", pane: "%1", tmuxSocketPath: join(config.paths.runtimeRoot, "entry-tmux.sock") }
+    return {
+      async ensure() { await writeFile(join(root, "entry-creations"), String(++creations)); return editor },
+      async activate() {
+        await writeFile(join(root, "entry-activations"), String(++activations))
+        while (true) {
+          try { await readFile(join(root, "entry-release")); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+        binding = editor
+      },
+      async inspect() { return binding }
+    }
+  })() } : {}), paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: config.nativeAcp ? [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }] : [contract],
     catalogFactory(context) {
       const store = context.store

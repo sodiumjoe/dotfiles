@@ -1,15 +1,11 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
 import { lstat, realpath, access } from "node:fs/promises"
 import { join } from "node:path"
 import { absolutePath, keys, object, text } from "../catalog/types.js"
 import { canonicalDigest, fail } from "../orchestration/types.js"
 
-export type GitRunner = (args: string[], cwd: string) => Promise<string>
-const execute = promisify(execFile)
-export const nativeGit: GitRunner = async (args, cwd) => (await execute("git", args, { cwd, timeout: 60000, maxBuffer: 1048576, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: ":" } })).stdout.trim()
+import { gitOid, nativeGit, type GitRunner } from "../git/worktree.js"
+export { gitOid, nativeGit, type GitRunner } from "../git/worktree.js"
 export type GitIdentity = { cwd: string; commonDir: string; gitDir: string; cwdIdentity: string; commonIdentity: string; gitIdentity: string; objectFormat: "sha1" | "sha256"; ref: string | null; head: string }
-export function gitOid(value: unknown): string { const oid = text(value); if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(oid)) fail("GIT_OBJECT_FORMAT"); return oid }
 export function parseGitIdentity(raw: unknown): GitIdentity {
   const v = object(raw); keys(v, ["cwd", "commonDir", "gitDir", "cwdIdentity", "commonIdentity", "gitIdentity", "objectFormat", "ref", "head"])
   if (v.objectFormat !== "sha1" && v.objectFormat !== "sha256") fail("GIT_OBJECT_FORMAT")

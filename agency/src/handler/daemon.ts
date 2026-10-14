@@ -1,3 +1,7 @@
+import { AgentError } from "../agent/types.js"
+import { createRuntimeEntry, type RuntimeEntryDriver } from "../entry/runtime.js"
+import { createRuntimeEntryDriver } from "../entry/editor.js"
+import { id, keys, object } from "../catalog/types.js"
 import { createHostInventory } from "../hosts/inventory.js"
 import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
 import { connectBridge } from "../bridge/ssh.js"
@@ -47,6 +51,7 @@ export type HandlerOptions = {
   catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; store: CatalogStore; retirement: RetirementView; onTerminal(): void; cleanupIssues(): readonly string[]; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
   agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
   launchContracts?: readonly LaunchContract[]
+  entryDriver?: RuntimeEntryDriver
   coordinationFactory?: CoordinationFactory
   retention?: { now?: () => number; filesystem?: RetentionFileSystem }
 }
@@ -261,6 +266,15 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await agents.initialize()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     registerRuntimeEndpoint(bridge, dispatchAgent)
+    const ownerAgents = agents
+    const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
+      try { await ownerAgents.sessionSnapshot(target); return true }
+      catch (error) { if (error instanceof AgentError && ["STALE_HANDLER", "STALE_PROVIDER", "SESSION_UNAVAILABLE", "NOT_READY", "UNAVAILABLE"].includes(error.code)) return false; throw error }
+    } })
+    bridge.register(["entry-open", "runtime-entry-inspect"], async ({ channel, payload }) => {
+      const value = object(payload); keys(value, channel === "entry-open" ? ["commandId", "ref"] : ["commandId"])
+      return channel === "entry-open" ? entry.open(id(value.commandId), value.ref as never) : entry.inspect(id(value.commandId))
+    })
     const coreBridge = bridge
     router = createHostRouter({ hostId: options.paths.hostKey, inventory: createHostInventory(root), local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
     registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })

@@ -8,6 +8,10 @@ if (process.argv[2] === "internal-runtime-bridge") {
     const run = process.argv[2] === "internal-host-bridge" ? runHostBridgeCli : runHostCallCli
     await run(process.argv.slice(3), productionHostBridgeDependencies())
   } catch { process.stderr.write("Agency host helper failed\n"); process.exitCode = 70 }
+} else if (process.argv[2] === "internal-runtime-entry") {
+  const { runRuntimeEntryHelper } = await import("./entry/cli.js")
+  const { productionControlDependencies } = await import("./cli/control.js")
+  process.exitCode = await runRuntimeEntryHelper(process.argv.slice(3), productionControlDependencies())
 } else if (process.argv[2] === "internal-entry") {
   const { runEntryHelper } = await import("./bureau/entry-cli.js")
   const { productionControlDependencies } = await import("./cli/control.js")

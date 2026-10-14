@@ -39,3 +39,36 @@ for (const coordination of ["reject", "hold"] as const) test(`remote ordinary co
   assert.equal((await f.choices()).state, "choices")
   await f.stopSession(String(session.sessionId)); acp.close(); await f.verifyZeroSurvivors()
 })
+import { readFile, writeFile } from "node:fs/promises"
+import { runRuntimeEntryHelper } from "../src/entry/cli.js"
+
+for (const coordination of ["reject", "hold"] as const) test(`independent editor entry works with task startup ${coordination} and never blocks owner reads`, { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { coordination, entry: "synthetic" }), acp = await f.connect()
+  await acp.request("initialize", { protocolVersion: 1 })
+  const session = await acp.request("session/new", { cwd: f.workspace, mcpServers: [] }), target = await f.tuple(String(session.sessionId)), commandId = randomUUID(), ref = { hostId: f.paths.hostKey, target }
+  const transport = await connectBridge({ inventoryId: randomUUID(), hostId: ref.hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["entry-open", "runtime-entry-inspect"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: ref.hostId, handlerGeneration: target.handlerGeneration })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  t.after(() => transport.close())
+  const deps = { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env: unknown, route: import("../src/hosts/router.js").HostRoute) => transport.request(route.channel, route.payload), start: async () => { throw new Error("start forbidden") }, callBureau: async () => { throw new Error("Bureau forbidden") }, stderr() {} }
+  const call = async (argv: string[]) => {
+    const output: string[] = [], code = await runControl(argv, { ...deps, stdout: value => output.push(value) })
+    const reply = parseHostReply(JSON.parse(output.join(""))); assert.ok(reply.ok); return { code, result: reply.result }
+  }
+  const first = call(["entry", "open", "--input-json", JSON.stringify({ commandId, ...ref })]), second = call(["entry", "open", "--input-json", JSON.stringify({ commandId, ...ref })])
+  await until(async () => await fileExists(join(f.root, "entry-activations")) ? true : undefined)
+  const roster = await call(["roster", "list", "--host", ref.hostId]), permissions = await call(["permission", "list", "--host", ref.hostId])
+  assert.equal(roster.result.state, "page"); assert.equal(permissions.result.state, "permissions")
+  await writeFile(join(f.root, "entry-release"), "release")
+  const [a, b] = await Promise.all([first, second]); assert.deepEqual(a, b); assert.equal(a.code, 0)
+  const attached: string[][] = []
+  assert.equal(await runRuntimeEntryHelper([commandId, "--target-json", JSON.stringify(ref)], deps, async (file, argv) => { attached.push([file, ...argv]); return 0 }), 0)
+  assert.deepEqual(attached, [["tmux", "-S", join(f.paths.runtimeRoot, "entry-tmux.sock"), "attach-session", "-t", "=synthetic-entry"]])
+  assert.equal(await readFile(join(f.root, "entry-creations"), "utf8"), "1"); assert.equal(await readFile(join(f.root, "entry-activations"), "utf8"), "1")
+  const unknown = await call(["entry", "open", "--input-json", JSON.stringify({ commandId: randomUUID(), hostId: ref.hostId, target: { ...target, agentId: randomUUID() } })])
+  assert.ok(unknown.result.state === "entry" && unknown.result.receipt?.state === "stale")
+  await f.stopSession(String(session.sessionId))
+  const retired = await call(["entry", "inspect", commandId, "--host", ref.hostId])
+  assert.ok(retired.result.state === "entry" && retired.result.receipt?.state === "stale")
+  assert.equal(await runRuntimeEntryHelper([commandId, "--target-json", JSON.stringify(ref)], deps, async () => { throw new Error("retired terminal forbidden") }), 75)
+  assert.equal(await readFile(join(f.root, "entry-creations"), "utf8"), "1")
+  transport.close(); await transport.closed; acp.close(); await f.verifyZeroSurvivors()
+})
