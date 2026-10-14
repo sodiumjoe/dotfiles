@@ -170,3 +170,18 @@ describe("Agency aggregate transport", function()
         end
     end)
 end)
+
+describe("Agency retired protocol refusal", function()
+    it("rejects Bureau envelopes for an ordinary command", function()
+        local failure
+        local client = require("sodium.agency.control").new({ system = function(_, _, cb)
+            cb({ code = 0, stdout = vim.json.encode({ protocol = "agency-bureau-v1",
+                requestId = "00000000-0000-4000-8000-000000000001", handlerGeneration = vim.NIL,
+                ok = true, result = { state = "roster" } }) })
+            return { kill = function() end }
+        end, schedule = function(cb) cb() end })
+        client.command({ "roster", "list" }, {}, function(err) failure = err end)
+        assert.are.equal("INVALID_PROTOCOL", failure.code)
+        client.close()
+    end)
+end)

@@ -15,13 +15,6 @@ if (process.argv[2] === "internal-task-tools") {
   const { runRuntimeEntryHelper } = await import("./entry/cli.js")
   const { productionControlDependencies } = await import("./cli/control.js")
   process.exitCode = await runRuntimeEntryHelper(process.argv.slice(3), productionControlDependencies())
-} else if (process.argv[2] === "internal-entry") {
-  const { runEntryHelper } = await import("./bureau/entry-cli.js")
-  const { productionControlDependencies } = await import("./cli/control.js")
-  process.exitCode = await runEntryHelper(process.argv.slice(3), productionControlDependencies())
-} else if (process.argv[2] === "internal-agency-tools") {
-  try { const { runAgencyTools } = await import("./orchestration/tool-client.js"); await runAgencyTools() }
-  catch { process.stderr.write("Agency tool helper failed\n"); process.exitCode = 70 }
 } else if (process.argv[2] === "internal-handler") {
   try {
     const { fstatSync } = await import("node:fs")

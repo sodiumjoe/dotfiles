@@ -7,7 +7,6 @@ import type { HostRoute } from "../hosts/router.js"
 import type { createHostInventory } from "../hosts/inventory.js"
 import type { Writable } from "node:stream"
 import type { BureauReply, BureauRequest } from "../bureau/protocol.js"
-import { runBureauClient } from "../bureau/cli.js"
 import { randomUUID } from "node:crypto"
 import { runLocalHumanClient } from "../agent/human-client.js"
 import { runAgentClient } from "../agent/client.js"
@@ -137,7 +136,6 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
   if (argv[0] === "git" && argv[1] === "prepare") return runGitPrepare(argv, dependencies)
   if (argv.includes("--local")) return runLocalHumanClient(argv, dependencies)
   if (["host", "roster", "permission"].includes(argv[0] ?? "")) return runHostClient(argv, dependencies)
-  if (["bureau", "run", "assignment", "permission", "roster", "entry", "git"].includes(argv[0] ?? "")) return runBureauClient(argv, dependencies)
   if (argv[0] === "model" && argv[1] === "recover-probe") return runProbeRecovery(argv, dependencies)
   if (argv[0] === "agent" && argv[1] === "attach") return runAttachmentClient(argv, { ...productionAttachmentStreams(), ...dependencies.attachment, environment: dependencies.environment, inspect: dependencies.inspect, stderr: dependencies.stderr })
   if (argv[0] === "agent") return runAgentClient(argv, { ...dependencies, callAgent: dependencies.callAgent ?? (async () => { throw new ControlError("UNAVAILABLE") }), agentStore: dependencies.agentStore ?? (env => createAgentStore(env.paths.persistentRoot)) })

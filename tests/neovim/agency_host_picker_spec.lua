@@ -3,6 +3,7 @@ local fixture = require("fixtures.agency_control")
 describe("Agency owner picker", function()
     it("reads local ACP and owners independently and distinguishes equal UUIDs on different hosts", function()
         local original, opts, tick, callbacks, entered = Snacks, nil, nil, {}, {}
+        local layout = vim.fn.winlayout()
         Snacks = { picker = function(options)
             opts = options
             return { opts = options, find = function() end, close = function() options.on_close() end }
@@ -27,6 +28,9 @@ describe("Agency owner picker", function()
         assert.are.equal(3, #opts.items)
         assert.are_not.equal(opts.items[1].id, opts.items[2].id)
         assert.are.same({ hostId = string.rep("b", 64), target = fixture.target_a }, opts.items[2].remote_ref)
+        opts.confirm(picker, opts.items[3])
+        assert.are.equal(0, #entered)
+        assert.is_nil(callbacks.entry)
         opts.confirm(picker, opts.items[2]); vim.wait(100, function() return callbacks.entry ~= nil end)
         local ref = { hostId = string.rep("b", 64), target = fixture.target_a }
         assert.are.same({ commandId = fixture.id(9), hostId = ref.hostId, target = ref.target }, vim.json.decode(callbacks.argv[4]))
@@ -35,6 +39,7 @@ describe("Agency owner picker", function()
             enrollment = { hostId = ref.hostId, hostname = "worker", agyPath = "/opt/agy", loginShell = "/bin/bash" } } })
         assert.is_truthy(table.concat(entered[1], " "):find("internal-runtime-entry", 1, true))
         assert.are.equal(1, #entered)
+        assert.are.same(layout, vim.fn.winlayout())
         tick(); assert.are.equal(3, #opts.items)
         Snacks = original
     end)

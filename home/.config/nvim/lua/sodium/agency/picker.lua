@@ -198,26 +198,6 @@ function M.open(controller)
     return picker
 end
 
-function M.git_result(proposal, strategy, callback)
-    local preview = require("sodium.agency.operations").git_preview(proposal, strategy)
-    if not Snacks or not Snacks.picker then
-        vim.ui.select({ "Integrate", "Cancel" }, { prompt = table.concat(preview, "\n") }, function(value) callback(value == "Integrate") end)
-        return
-    end
-    local done = false
-    Snacks.picker.pick({ title = "Verified Git result", items = {
-        { text = "Integrate with " .. strategy, approved = true, preview = preview },
-        { text = "Cancel", approved = false, preview = preview },
-    }, format = "text", preview = agent_preview,
-        confirm = function(picker, item)
-            if done then return end
-            done = true
-            after_close(picker, function() return true end, function() callback(item and item.approved == true) end)
-        end,
-        on_close = function() if not done then done = true; callback(false) end end,
-    })
-end
-
 function M.choices(client, initial, info, callback, controller)
     local done, refreshing, picker = false, false, nil
     local function items(choices, unavailable)

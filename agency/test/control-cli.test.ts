@@ -297,3 +297,16 @@ test("doctor skips runtime status for an absent Handler", async () => {
   assert.deepEqual(m.state.calls, [])
   assert.equal(m.state.starts, 0)
 })
+
+test("retired commands return usage before resolving the environment", async () => {
+  for (const argv of [["bureau", "hosts"], ["run", "create"], ["assignment", "create"],
+    ["git", "configure"], ["git", "verify", randomUUID()], ["git", "inspect", randomUUID()],
+    ["git", "integrate"], ["entry", "prepare"], ["entry", "consume"]]) {
+    const m = model()
+    let accessed = false
+    m.deps.environment = async () => { accessed = true; throw new Error("unexpected owner access") }
+    assert.equal(await runControl([...argv, "--json"], m.deps), 64)
+    assert.equal(accessed, false)
+    assert.equal(m.output().error.code, "USAGE")
+  }
+})
