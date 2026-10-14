@@ -1,9 +1,6 @@
 import type { Readable, Writable } from "node:stream"
 import { randomUUID } from "node:crypto"
-import { isDeepStrictEqual } from "node:util"
-import { object } from "../catalog/types.js"
-import { canonicalDigest } from "../orchestration/types.js"
-import { BRIDGE_PROTOCOL, BRIDGE_FRAME_BYTES, bridgeError, encodeBridgeFrame, parseAdmission, parseBridgeFrame, type Admission, type BridgeFrame, type BridgeHello, type BridgeEvent, type BridgeAck } from "./protocol.js"
+import { BRIDGE_PROTOCOL, BRIDGE_FRAME_BYTES, bridgeError, encodeBridgeFrame, parseBridgeFrame, type BridgeFrame, type BridgeHello } from "./protocol.js"
 
 export function decodeBridgeFrames(accept: (frame: BridgeFrame) => void) {
   let bytes = Buffer.alloc(0)
@@ -25,13 +22,12 @@ export function decodeBridgeFrames(accept: (frame: BridgeFrame) => void) {
     end() { if (bytes.length) bridgeError("TRUNCATED_BRIDGE_FRAME") }
   }
 }
-export type RequestOptions = { signal?: AbortSignal; beforeAccepted?: () => Promise<void>; timeoutMs?: number }
+export type RequestOptions = { signal?: AbortSignal; timeoutMs?: number }
 export type BridgeRequestHandler = (channel: string, payload: unknown, requestId: string, signal: AbortSignal) => Promise<unknown>
-type Pending = { resolve(value: unknown): void; reject(error: Error): void; admission: Admission | null; beforeAccepted?: () => Promise<void>; prepared: boolean; published: boolean; timer?: NodeJS.Timeout }
-type Preparing = { admission: Admission; resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }
-export function createBridgePeer(input: { input: Readable; output: Writable; hello?: BridgeHello; writeQueueBytes?: number; readQueueBytes?: number; inboundWorkLimit?: number; admissionTimeoutMs?: number }) {
+type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer?: NodeJS.Timeout }
+export function createBridgePeer(input: { input: Readable; output: Writable; hello?: BridgeHello; writeQueueBytes?: number; readQueueBytes?: number; inboundWorkLimit?: number }) {
   let hello = input.hello, stopped = false, handler: BridgeRequestHandler | undefined, writing = false
-  const ready = Promise.withResolvers<BridgeHello>(), closed = Promise.withResolvers<Error>(), pending = new Map<string, Pending>(), preparing = new Map<string, Preparing>(), incoming = new Map<string, AbortController>(), listeners = new Set<(frame: BridgeEvent | BridgeAck) => Promise<void> | void>()
+  const ready = Promise.withResolvers<BridgeHello>(), closed = Promise.withResolvers<Error>(), pending = new Map<string, Pending>(), incoming = new Map<string, AbortController>()
   const writes: Array<{ bytes: Buffer; resolve(): void; reject(error: Error): void }> = []
   let retainedBytes = 0, retainedWork = 0
   let queuedBytes = 0, closure = new Error("BRIDGE_CLOSED")
@@ -41,10 +37,9 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
     if (stopped) return
     stopped = true; closure = error; ready.reject(error); closed.resolve(error)
     for (const value of pending.values()) { clearTimeout(value.timer); value.reject(error) }; pending.clear()
-    for (const value of preparing.values()) { clearTimeout(value.timer); value.reject(error) }; preparing.clear()
     for (const controller of incoming.values()) controller.abort(error); incoming.clear()
     for (const write of writes) write.reject(error); writes.length = 0; queuedBytes = 0
-    listeners.clear(); input.input.off("data", data); input.input.off("end", end); input.input.off("close", end)
+    input.input.off("data", data); input.input.off("end", end); input.input.off("close", end)
     if (!input.output.destroyed) input.output.end()
   }
   function pump() {
@@ -65,20 +60,6 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
     return new Promise((resolve, reject) => { writes.push({ bytes, resolve, reject }); queuedBytes += bytes.length; pump() })
   }
   const base = () => { if (!hello) bridgeError("BRIDGE_NOT_READY"); return { protocol: BRIDGE_PROTOCOL as typeof BRIDGE_PROTOCOL, connectionId: hello.connectionId } }
-  async function admission(frame: Extract<BridgeFrame, { type: "admission_prepare" }>) {
-    const value = pending.get(frame.requestId)
-    const binding = { execution: frame.execution, submissionId: frame.submissionId, digest: frame.digest }
-    if (!value || value.prepared || !value.beforeAccepted || !isDeepStrictEqual(value.admission, binding)) bridgeError("INVALID_ADMISSION")
-    value.prepared = true
-    try {
-      await value.beforeAccepted()
-      value.published = true
-      await send({ ...base(), type: "admission_result", requestId: frame.requestId, ...binding, ok: true, error: null })
-    } catch (error) {
-      await send({ ...base(), type: "admission_result", requestId: frame.requestId, ...binding, ok: false, error: errorText(error) }).catch(() => {})
-      value.reject(error instanceof Error ? error : new Error("ADMISSION_FAILED")); clearTimeout(value.timer); pending.delete(frame.requestId)
-    }
-  }
   function retain(frame: BridgeFrame, action: () => Promise<unknown>, units = 1) {
     const bytes = encodeBridgeFrame(frame).length * units
     if (retainedBytes + bytes > (input.readQueueBytes ?? 2 * BRIDGE_FRAME_BYTES) || retainedWork + units > (input.inboundWorkLimit ?? 64)) bridgeError("BRIDGE_BACKPRESSURE")
@@ -95,7 +76,6 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
     if (frame.type === "reply") {
       const value = pending.get(frame.requestId)
       if (!value) return
-      if (frame.ok && value.beforeAccepted && !value.published) bridgeError("INVALID_ADMISSION")
       pending.delete(frame.requestId); clearTimeout(value.timer)
       if (frame.ok) value.resolve(frame.payload); else value.reject(new Error(frame.error))
     } else if (frame.type === "request_cancel") {
@@ -111,16 +91,6 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
           await send({ ...base(), type: "reply", requestId: frame.requestId, ok: false, error: errorText(error) })
         } finally { incoming.delete(frame.requestId) }
       })
-    } else if (frame.type === "admission_prepare") {
-      retain(frame, () => admission(frame))
-    } else if (frame.type === "admission_result") {
-      const value = preparing.get(frame.requestId)
-      if (!value || !isDeepStrictEqual(value.admission, { execution: frame.execution, submissionId: frame.submissionId, digest: frame.digest })) bridgeError("INVALID_ADMISSION")
-      preparing.delete(frame.requestId); clearTimeout(value.timer)
-      if (frame.ok) value.resolve(); else value.reject(new Error(frame.error!))
-    } else {
-      const recipients = [...listeners]
-      if (recipients.length) retain(frame, async () => Promise.all(recipients.map(listener => listener(frame))), recipients.length)
     }
   }
   const decoder = decodeBridgeFrames(receive)
@@ -133,39 +103,24 @@ export function createBridgePeer(input: { input: Readable; output: Writable; hel
     ready: ready.promise, closed: closed.promise,
     sendHello() { if (!hello) bridgeError("BRIDGE_NOT_READY"); void send({ ...hello, type: "hello" }).catch(error => finish(error)) },
     onRequest(listener: BridgeRequestHandler) { handler = listener },
-    subscribe(listener: (frame: BridgeEvent | BridgeAck) => Promise<void> | void) { listeners.add(listener); return () => { listeners.delete(listener) } },
-    sendEvent(frame: BridgeEvent | BridgeAck) { return send(frame) },
     async request(channel: string, payload: unknown, options: RequestOptions = {}): Promise<unknown> {
       await ready.promise
       if (stopped) throw closure
       if (options.signal?.aborted) throw options.signal.reason
       const requestId = randomUUID()
-      let binding: Admission | null = null
-      if (options.beforeAccepted) { const p = object(payload), request = object(p.request); binding = parseAdmission({ execution: p.target, submissionId: request.submissionId, digest: canonicalDigest({ prompt: request.prompt }) }) }
       return new Promise((resolve, reject) => {
         const cleanup = () => options.signal?.removeEventListener("abort", abort)
         const resolved = (value: unknown) => { cleanup(); resolve(value) }, rejected = (error: unknown) => { cleanup(); reject(error) }
         const abort = () => {
           if (!pending.has(requestId)) return
-          if (binding) { finish(new Error("BRIDGE_CANCELLED")); return }
           pending.delete(requestId); clearTimeout(value.timer); rejected(options.signal!.reason)
           void send({ ...base(), type: "request_cancel", requestId }).catch(error => finish(error))
         }
-        const value: Pending = { resolve: resolved, reject: rejected, admission: binding, prepared: false, published: false, ...(options.beforeAccepted ? { beforeAccepted: options.beforeAccepted } : {}) }
+        const value: Pending = { resolve: resolved, reject: rejected }
         if ((options.timeoutMs ?? 60000) > 0) { value.timer = setTimeout(() => { pending.delete(requestId); rejected(new Error("BRIDGE_TIMEOUT")); finish(new Error("BRIDGE_TIMEOUT")) }, options.timeoutMs ?? 60000); value.timer.unref() }
         pending.set(requestId, value)
         options.signal?.addEventListener("abort", abort, { once: true })
         void send({ ...base(), type: "request", requestId, channel, payload }).catch(error => { clearTimeout(value.timer); pending.delete(requestId); rejected(error) })
-      })
-    },
-    async prepareAdmission(requestId: string, raw: Admission): Promise<void> {
-      const binding = parseAdmission(raw)
-      if (stopped) throw closure
-      if (!incoming.has(requestId) || preparing.has(requestId)) bridgeError("INVALID_ADMISSION")
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { preparing.delete(requestId); reject(new Error("ADMISSION_TIMEOUT")); finish(new Error("ADMISSION_TIMEOUT")) }, input.admissionTimeoutMs ?? 30000); timer.unref()
-        preparing.set(requestId, { admission: binding, resolve, reject, timer })
-        void send({ ...base(), type: "admission_prepare", requestId, ...binding }).catch(error => { clearTimeout(timer); preparing.delete(requestId); reject(error) })
       })
     },
     close: finish

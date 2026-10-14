@@ -36,7 +36,7 @@ import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentCommandV3, AgentRecord, AgentRecordV3, RuntimeLaunchSpec, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = RetentionFixtureOptions & { tasks?: "hold" | "reject"; entry?: "synthetic"; coordination?: "normal" | "reject" | "hold"; delegationHelpers?: boolean; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
+export type AgentHandlerOptions = RetentionFixtureOptions & { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
@@ -61,10 +61,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
         assert.equal(identity.uid, process.getuid!()); assert.equal(identity.gid, process.getgid!())
         const members = await f.adapter.readGroup(hint.pid)
         for (const member of members) fixtureIdentity("provider-group", member)
-        assert.deepEqual(await f.adapter.readGroup(hint.pid), members); if (options.delegationHelpers) {
-          assert.ok(members.some(member => member.pid === identity.pid))
-          for (const member of members) { assert.equal(member.processGroupId, identity.pid); assert.equal(member.sessionId, identity.pid); assert.equal(member.uid, identity.uid); assert.equal(member.gid, identity.gid) }
-        } else assert.deepEqual(members, [identity])
+        assert.deepEqual(await f.adapter.readGroup(hint.pid), members); assert.deepEqual(members, [identity])
         const record: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: hint.agentId, providerGeneration: agent.launch.providerGeneration }, handlerGeneration: agent.launch.handlerGeneration, launchAttemptId: hint.attempt, launchBootId: identity.bootId, launchAttempted: true, provider: { kind: "process-group", group: { leader: identity, observed: members } }, phase: "active", reason: null }
         await writeLaunchRecord(join(f.root, `owned-${hint.attempt}.json`), record)
         owned.set(hint.attempt, record)

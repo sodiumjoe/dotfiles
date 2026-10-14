@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { chmod, mkdir, open, readdir, rename, rmdir, unlink, utimes, writeFile } from "node:fs/promises"
+import { chmod, mkdir, open, readFile, readdir, stat, rename, rmdir, unlink, utimes, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
 import { createRetentionCoordinator, authorizeRetirement, authorizedRetirementView, verifyRetirementAbsence } from "../src/retention/coordinator.js"
@@ -29,7 +29,6 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
   const mutations: HandlerMutations = { queue, accepted: [], root, retirement: retention.view }
   const paths = { persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock"), hostKey: hostId }
   const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable: "/fixture/native", adapterPackageJson: "/fixture/adapter.json", sdkPackageJson: null, configurationFiles: [] }
-  let orchestrationPins = async (): Promise<{ paths: string[] }> => ({ paths: [] })
   let coordinator: ReturnType<typeof createRetentionCoordinator>
   const catalog = createCatalogService({ paths, generation, queue, store: catalogStore, retirement: retention.view, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [profile], observeConfig: async () => ({ providerId: "codex-acp", scope: "declared-config-v1", fingerprint: "b".repeat(64), adapterVersion: "1", sdkVersion: null }), clock: { now: () => now, every: (_ms, callback) => { tick = callback; return () => { tick = undefined } } }, onTerminal: () => coordinator?.request(), probes: {
     retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined,
@@ -47,12 +46,12 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
   } })
   const state: HandlerStatus = { hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const agents = createAgentService({ context: { paths, adapter, mutations, state, shutdownPending: () => false }, catalog, contracts: [], store: agentStore, retirement: retention.view })
-  const coordination = { root, hostId, generation, queue, adapter, store: retention, catalogStore, agentStore, mutations, catalog, agents, now: () => now, orchestrationPins: () => orchestrationPins() }
+  const coordination = { root, hostId, generation, queue, adapter, store: retention, catalogStore, agentStore, mutations, catalog, agents, now: () => now }
   coordinator = createRetentionCoordinator(coordination)
   await catalog.initialize()
   t.after(() => { agents.close(); catalog.close() })
   const record = (attempt: string, handler: string, owner: string): ManagedLaunchRecord => ({ version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: owner }, handlerGeneration: handler, launchAttemptId: attempt, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
-  return { root, hostId, generation, queue, adapter, retention, catalogStore, agentStore, catalog, agents, mutations, coordinator, setOrchestrationPins(loader: typeof orchestrationPins) { orchestrationPins = loader }, setTime(value: number) { now = value }, setFailure(value: boolean) { fail = value }, advance() { now += 600001; tick?.() }, invocations: () => invocations }
+  return { root, hostId, generation, queue, adapter, retention, catalogStore, agentStore, catalog, agents, mutations, coordinator, setTime(value: number) { now = value }, setFailure(value: boolean) { fail = value }, advance() { now += 600001; tick?.() }, invocations: () => invocations }
 }
 
 test("imported native history retains its creation receipt without invented launch evidence", async t => {
@@ -162,6 +161,9 @@ test("unknown same-boot process evidence is retained without signaling", async t
   const identity: ProcessIdentity = { bootId: "boot", birth: `100:agy-provider:${launch.launchAttemptId}`, pid: 12345, parentPid: 10, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
   const witnessed = { ...launch, launchAttempted: true, provider: { kind: "process-group" as const, group: { leader: identity, observed: [identity] } } }
   await writeLaunchRecord(join(f.root, "launches", launch.launchAttemptId + ".json"), witnessed)
+  f.adapter.readProcess = async () => identity
+  await f.coordinator.initialize()
+  assert.equal((await f.agentStore.inventory()).agents.length, 1)
   f.adapter.readProcess = async () => { throw new Error("unknown observation") }
   await f.coordinator.initialize()
   assert.equal((await f.agentStore.inventory()).agents.length, 1)
@@ -237,11 +239,11 @@ test("malformed catalog evidence cannot strand unrelated lifecycle retirement", 
   assert.equal(await f.agentStore.readAgent(initial.definition.agentId), null)
 })
 
-test("durable orchestration pins precede both cleanup resume and new sweep", async t => {
-  const f = await fixture(t), { initial, command, launch } = await failedAgent(f)
+test("ordinary runtime pins precede both cleanup resume and new sweep", async t => {
+  const f = await fixture(t), { initial, command } = await failedAgent(f)
   f.setTime(1000000 + FAILED_START_TTL_MS)
   const path = `agents/commands/${command.commandId}.json`
-  f.setOrchestrationPins(async () => ({ paths: [path] }))
+  f.agents.retentionPins = () => ({ paths: [path] })
   await f.coordinator.initialize()
   assert.ok(await f.agentStore.readAgent(initial.definition.agentId))
   await f.retention.prepare({ paths: [path], launches: [], handlers: [] })
@@ -250,14 +252,17 @@ test("durable orchestration pins precede both cleanup resume and new sweep", asy
   assert.ok(await f.agentStore.readCommand(command.commandId))
 })
 
-test("unreadable orchestration references pause retirement while ordinary inventory stays readable", async t => {
+test("unreadable legacy history cannot pause ordinary retirement", async t => {
   const f = await fixture(t), { initial } = await failedAgent(f)
   f.setTime(1000000 + FAILED_START_TTL_MS)
-  f.setOrchestrationPins(async () => { throw new Error("unreadable orchestration pins") })
+  const directory = join(f.root, "orchestration"), path = join(directory, "history.json")
+  await mkdir(directory, { mode: 0o700 }); await writeFile(path, "legacy history", { mode: 0o600 }); await chmod(path, 0)
+  await assert.rejects(readFile(path), { code: "EACCES" })
   await f.coordinator.initialize()
-  assert.ok(f.coordinator.diagnostics().some(issue => issue.includes("orchestration")))
-  assert.ok(await f.agentStore.readAgent(initial.definition.agentId))
-  assert.ok((await f.agents.list()).agents.length)
+  assert.deepEqual(f.coordinator.diagnostics(), [])
+  assert.equal(await f.agentStore.readAgent(initial.definition.agentId), null)
+  assert.equal((await stat(path)).mode & 0o777, 0)
+  await chmod(path, 0o600); assert.equal(await readFile(path, "utf8"), "legacy history")
 })
 
 test("pinned cleanup intent keeps evidence visible to ordinary service readers", async t => {

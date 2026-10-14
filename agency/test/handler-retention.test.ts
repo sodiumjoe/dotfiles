@@ -1,4 +1,3 @@
-import { createBureauStore } from "../src/bureau/store.js"
 import { inventoryLaunches } from "../src/handler/inventory.js"
 import assert from "node:assert/strict"
 import test from "node:test"
@@ -129,7 +128,7 @@ test("startup preserves large legacy receipt inventory and malformed evidence af
   await unlink(join(directory, malformed))
 })
 
-test("bootstrap cannot resume an old cleanup intent over pending Bureau dispatch evidence", { timeout: 60000 }, async t => {
+test("bootstrap resumes ordinary cleanup despite pending legacy dispatch evidence", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t), first = await f.waitCompleted(await f.start())
   await f.waitCompleted(await f.stop(first.command.target!))
   const historical = await f.waitCompleted(await f.restore(first.command.target!.agentId))
@@ -137,28 +136,32 @@ test("bootstrap cannot resume an old cleanup intent over pending Bureau dispatch
   const latest = await f.waitCompleted(await f.restore(first.command.target!.agentId))
   await f.waitCompleted(await f.stop(latest.command.target!))
   await f.list(); await f.crashHandler()
-  const runId = randomUUID(), commandId = randomUUID(), store = createBureauStore(f.paths.persistentRoot)
-  await store.writeRun({ version: 1, runId, createCommandId: commandId, root: { hostId: f.paths.hostKey, agentId: first.command.target!.agentId }, execution: { hostId: f.paths.hostKey, ...historical.command.target! }, objective: "Pending origin reply", state: "starting", bindingEpoch: randomUUID(), journal: null }, null)
-  await store.writeCommand({ version: 1, commandId, runId, op: "start", digest: "a".repeat(64), state: "pending", targetId: runId, handlerGeneration: historical.command.handlerGeneration, launchCommandId: historical.command.commandId, result: null, journal: null }, null)
+  const runId = randomUUID(), commandId = randomUUID()
+  const legacy = async (kind: string, key: string, value: unknown) => { const path = join(f.paths.persistentRoot, "bureau", kind); await mkdir(path, { recursive: true, mode: 0o700 }); await writeFile(join(path, key + ".json"), JSON.stringify(value), { mode: 0o600 }) }
+  await legacy("runs", runId, { version: 1, runId, createCommandId: commandId, root: { hostId: f.paths.hostKey, agentId: first.command.target!.agentId }, execution: { hostId: f.paths.hostKey, ...historical.command.target! }, objective: "Pending origin reply", state: "starting", bindingEpoch: randomUUID(), journal: null })
+  await legacy("commands", commandId, { version: 1, commandId, runId, op: "start", digest: "a".repeat(64), state: "pending", targetId: runId, handlerGeneration: historical.command.handlerGeneration, launchCommandId: historical.command.commandId, result: null, journal: null })
   const retention = createRetentionStore(f.paths.persistentRoot, f.paths.hostKey, historical.command.handlerGeneration), launches = await inventoryLaunches(join(f.paths.persistentRoot, "launches"))
   const selected = launches.filter(entry => entry.record.version === 2 && entry.record.owner.kind === "agent" && entry.record.owner.providerGeneration === historical.command.target!.providerGeneration)
   const commands = (await f.inventory()).commands.filter(command => command.target?.providerGeneration === historical.command.target!.providerGeneration)
   await retention.prepare({ paths: [...commands.map(command => `agents/commands/${command.commandId}.json`), ...selected.map(entry => `launches/${entry.record.launchAttemptId}.json`)], launches: selected, handlers: [] })
   try { await f.restart() } catch (error) { t.diagnostic(await readFile(join(f.root, "failure"), "utf8")); throw error }
-  assert.ok((await f.inventory()).commands.some(command => command.commandId === historical.command.commandId))
-  assert.ok(await createRetentionStore(f.paths.persistentRoot, f.paths.hostKey, randomUUID()).pending())
+  assert.equal((await f.inventory()).commands.some(command => command.commandId === historical.command.commandId), false)
+  assert.equal(await createRetentionStore(f.paths.persistentRoot, f.paths.hostKey, randomUUID()).pending(), null)
 })
 
-test("unreadable orchestration storage pauses cleanup without disabling ordinary agents", { timeout: 60000 }, async t => {
+test("malformed legacy storage is inert during ordinary cleanup", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t)
   await f.crashHandler()
   await mkdir(join(f.paths.persistentRoot, "bureau/runs"), { recursive: true, mode: 0o700 })
   const corrupt = join(f.paths.persistentRoot, "bureau/runs", randomUUID() + ".json")
   await writeFile(corrupt, "invalid", { mode: 0o600 })
+  const seeded = await disposableProbe(f, randomUUID())
   await f.restart()
+  const catalog = await createCatalogStore(f.paths.persistentRoot).inventory()
+  assert.equal(catalog.automatic.some(command => command.commandId === seeded.commandId), false)
   const agent = await f.waitCompleted(await f.start())
   assert.equal((await f.prompt(agent.command.target!, "ordinary operation")).text, "answer:ordinary operation")
-  assert.ok((await f.list()).issues.length)
+  assert.deepEqual((await f.list()).issues, [])
   assert.equal((await f.human({ op: "agent_roster", input: { limit: 100 } })).state, "page")
   assert.equal(await readFile(corrupt, "utf8"), "invalid")
 })

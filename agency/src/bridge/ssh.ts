@@ -10,11 +10,11 @@ import { requestBridgeRead } from "./paging.js"
 export type BridgeProcess = EventEmitter & { stdin: Writable; stdout: Readable; stderr: Readable; kill(): boolean }
 export type BridgeProcessFactory = (file: string, argv: string[], options: { env: NodeJS.ProcessEnv; stdio: ["pipe", "pipe", "pipe"] }) => BridgeProcess
 export type BridgeTransport = { hello: BridgeHello; peer: ReturnType<typeof createBridgePeer>; readonly diagnostics: string; request(channel: string, payload: unknown, options?: RequestOptions): Promise<unknown>; closed: Promise<Error>; close(): void }
-export function buildSshCommand(raw: HostEnrollment, action: "internal-host-bridge" | "internal-runtime-bridge" = "internal-host-bridge") {
+export function buildSshCommand(raw: HostEnrollment, action: "internal-runtime-bridge" = "internal-runtime-bridge") {
   const enrollment = parseHostEnrollment(raw)
   return { file: "ssh", argv: ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "--", enrollment.hostname, destinationShellCommand(enrollment, action)] }
 }
-export async function connectBridge(raw: HostEnrollment, options: { action: "internal-host-bridge" | "internal-runtime-bridge"; requiredCapabilities: readonly string[]; processFactory?: BridgeProcessFactory }): Promise<BridgeTransport> {
+export async function connectBridge(raw: HostEnrollment, options: { action: "internal-runtime-bridge"; requiredCapabilities: readonly string[]; processFactory?: BridgeProcessFactory }): Promise<BridgeTransport> {
   const enrollment = parseHostEnrollment(raw), command = buildSshCommand(enrollment, options.action)
   const child = (options.processFactory ?? ((file, argv, settings) => spawn(file, argv, settings)))(command.file, command.argv, { env: { ...sanitizedBootstrapEnvironment(process.env), ...(process.env.SSH_AUTH_SOCK ? { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK } : {}) }, stdio: ["pipe", "pipe", "pipe"] })
   const peer = createBridgePeer({ input: child.stdout, output: child.stdin }), timer = setTimeout(() => peer.close(new Error("BRIDGE_HELLO_TIMEOUT")), 15000)

@@ -120,11 +120,11 @@ export async function authorizeRetirement(input: { root: string; hostId: string;
   if (intent.entries.some(entry => (entry.path.startsWith("launches/") || entry.path.startsWith("catalog/probe-launches/")) && !covered.has(entry.path))) cleanupError()
 }
 
-export function createRetentionCoordinator(input: { root: string; hostId: string; generation: string; queue: MutationQueue; adapter: PlatformAdapter; store: RetentionStore; catalogStore: CatalogStore; agentStore: AgentStore; mutations: HandlerMutations; catalog: CatalogService; agents: AgentService; orchestrationPins?: () => Promise<RetentionPins>; now?: () => number }): RetentionCoordinator {
+export function createRetentionCoordinator(input: { root: string; hostId: string; generation: string; queue: MutationQueue; adapter: PlatformAdapter; store: RetentionStore; catalogStore: CatalogStore; agentStore: AgentStore; mutations: HandlerMutations; catalog: CatalogService; agents: AgentService; now?: () => number }): RetentionCoordinator {
   const issues = new Set<string>()
   let requested = false
   const note = (error: unknown) => { const message = String(error); issues.add(/^[\x20-\x7e]+$/.test(message) ? message.slice(0, 480) : "unsafe cleanup evidence") }
-  const pins = async () => [...input.catalog.retentionPins().paths, ...input.agents.retentionPins().paths, ...((await input.orchestrationPins?.())?.paths ?? [])]
+  const pins = async () => [...input.catalog.retentionPins().paths, ...input.agents.retentionPins().paths]
   const removed = (entry: RemovalEvidence) => { input.catalogStore.forgetRemoved(entry); input.agentStore.forgetRemoved(entry); input.catalog.forgetRemoved(entry); input.agents.forgetRemoved(entry); forgetRemovedLaunch(input.mutations, entry) }
   const resume = () => input.store.resume({ authorize: async intent => authorizeRetirement({ ...input, pins: await pins() }, intent), removed })
   async function sweepLocked(): Promise<void> {

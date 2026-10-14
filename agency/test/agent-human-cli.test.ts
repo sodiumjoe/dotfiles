@@ -5,8 +5,8 @@ import { runControl, type ControlDependencies } from "../src/cli/control.js"
 import { ControlError } from "../src/control/protocol.js"
 import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../src/agent/protocol.js"
 import { AgentError } from "../src/agent/types.js"
-import { canonicalDigest } from "../src/orchestration/types.js"
-import type { PermissionReceipt } from "../src/orchestration/permission-routing.js"
+import { permissionDigest as canonicalDigest } from "../src/agent/permission-types.js"
+import type { PermissionReceipt } from "../src/agent/permission-types.js"
 import type { HandlerInspection } from "../src/platform/types.js"
 import { unavailableControlDependencies } from "./control-support.js"
 
@@ -26,7 +26,7 @@ function fixture() {
       default: throw new Error("unexpected agent operation")
     }
   }
-  const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/handler.sock" }, adapter: { platform: "darwin", bootId: unavailable, readProcess: unavailable, readGroup: unavailable, signalGroup: unavailable } }), inspect: async () => inspection, start: unavailable, callBureau: unavailable, callAgent: async (_env, request) => { calls.push(request); return reply(request) }, stdout: text => out.push(text) }
+  const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/handler.sock" }, adapter: { platform: "darwin", bootId: unavailable, readProcess: unavailable, readGroup: unavailable, signalGroup: unavailable } }), inspect: async () => inspection, start: unavailable, callAgent: async (_env, request) => { calls.push(request); return reply(request) }, stdout: text => out.push(text) }
   return { deps, decision, receipt, inspection, calls, reply, output: () => JSON.parse(out.join("")), decide: ["permission", "decide", "--local", "--input-json", JSON.stringify(decision), "--json"] }
 }
 

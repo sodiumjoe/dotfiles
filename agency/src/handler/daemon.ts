@@ -13,8 +13,6 @@ import { connectBridge } from "../bridge/ssh.js"
 import { dispatchAgentRequest } from "../agent/dispatch.js"
 import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
 import { registerRuntimeEndpoint } from "../hosts/runtime.js"
-import { startTaskServices, type TaskServices, type CoordinationFactory } from "./task-services.js"
-import { loadOrchestrationPins } from "../orchestration/receipts.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
 import { createAgentService, type AgentService } from "../agent/service.js"
@@ -43,7 +41,7 @@ import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type Laun
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
 import { createRetentionStore, type RetirementView, type RetentionFileSystem } from "../retention/store.js"
-import { RetirementBlocked, authorizeRetirement, authorizedRetirementView, createRetentionCoordinator, type RetentionCoordinator } from "../retention/coordinator.js"
+import { authorizeRetirement, authorizedRetirementView, createRetentionCoordinator, type RetentionCoordinator } from "../retention/coordinator.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -58,7 +56,6 @@ export type HandlerOptions = {
   launchContracts?: readonly LaunchContract[]
   entryDriver?: RuntimeEntryDriver
   taskFactory?: (input: TaskServiceOptions) => Promise<TaskService>
-  coordinationFactory?: CoordinationFactory
   retention?: { now?: () => number; filesystem?: RetentionFileSystem }
 }
 
@@ -120,7 +117,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let agents: AgentService | undefined
   let router: HostRouter | undefined
   let bridge: HandlerBridge | undefined
-  let taskServices: TaskServices | undefined
   let ownerTasks: TaskService | undefined
   let unregisterTasks: (() => void) | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
@@ -134,7 +130,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     closing = true
     unregisterTasks?.()
     await ownerTasks?.close()
-    await taskServices?.close()
     router?.close()
     await bridge?.close()
     await acpServer?.close()
@@ -171,21 +166,13 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (!isDeepStrictEqual(published, expected) || !sameProcess(self, live)) throw new Error("Handler publication mismatch")
     current = published
     const root = options.paths.persistentRoot, retentionStore = createRetentionStore(root, options.paths.hostKey, options.generation, options.retention?.filesystem)
-    let pinIssue: string | undefined, initialPins: readonly string[] = []
-    try { initialPins = (await loadOrchestrationPins(root)).paths } catch (error) { pinIssue = String(error).slice(0, 480) }
-    const orchestrationPins = async () => {
-      try { const pins = await loadOrchestrationPins(root); pinIssue = undefined; return pins }
-      catch (error) { pinIssue = String(error).slice(0, 480); throw error }
-    }
     retentionStore.view = authorizedRetirementView(retentionStore, async intent => {
-      let pins
-      try { pins = await orchestrationPins() } catch (error) { throw new RetirementBlocked("orchestration references unavailable", { cause: error }) }
-      await authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter, pins: [...(catalog?.retentionPins().paths ?? []), ...(agents?.retentionPins().paths ?? []), ...pins.paths] }, intent)
+      await authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter, pins: [...(catalog?.retentionPins().paths ?? []), ...(agents?.retentionPins().paths ?? [])] }, intent)
     })
     let coordinator: RetentionCoordinator | undefined, bootstrapIssue: string | undefined
-    try { if (pinIssue) throw new Error(pinIssue); await retentionStore.resume({ authorize: intent => authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter, pins: initialPins }, intent), removed() {} }) }
+    try { await retentionStore.resume({ authorize: intent => authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter, pins: [] }, intent), removed() {} }) }
     catch (error) { bootstrapIssue = String(error).slice(0, 480) }
-    const cleanupIssues = () => [...(coordinator?.diagnostics() ?? (bootstrapIssue ? [bootstrapIssue] : [])), ...(pinIssue ? [pinIssue] : [])]
+    const cleanupIssues = () => [...(coordinator?.diagnostics() ?? (bootstrapIssue ? [bootstrapIssue] : []))]
     const onTerminal = () => coordinator?.request()
     await sendStatus(options.status, { type: "gate_released", generation: options.generation }).catch(() => undefined)
     const dispatch = async (request: ControlRequest): Promise<ControlReply> => {
@@ -290,7 +277,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     router = createHostRouter({ hostId: options.paths.hostKey, inventory: createHostInventory(root), local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
     registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
-    coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
+    coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()
     current = { ...current, phase: "ready" }
     await writeHandlerRecord(options.recordPath, current)
@@ -306,8 +293,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       void Promise.resolve().then(() => initializeTasks(taskInput)).then(async service => { if (closing) await service.close(); else ownerTasks = service }).catch(() => {
         if (!closing) taskIssues.push({ path: join(root, "tasks"), launchAttemptId: null, message: "Task service is unavailable" })
       })
-      taskServices = startTaskServices({ root, paths: options.paths, generation: options.generation, agents, bridge, ...(options.coordinationFactory ? { coordinationFactory: options.coordinationFactory } : {}),
-        issue: error => { taskIssues.push({ path: join(root, "bureau"), launchAttemptId: null, message: String(error) }) } })
       catalog.startScheduling()
     }
     await closed

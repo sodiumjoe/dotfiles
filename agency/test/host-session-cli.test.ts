@@ -18,7 +18,7 @@ async function fixture(t: TestContext) {
     traffic++
     if (route.channel === "host-identity") return { hostId, handlerGeneration: generation }
     return dispatchAgentRequest({ agents: f.service, generation, ready: () => true, environment: () => f.input.environment }, parseAgentRequest(route.payload))
-  }, start: async () => { throw new Error("automatic Handler start forbidden") }, callBureau: async () => { throw new Error("task coordination forbidden") }, stdout: value => { output += value } }
+  }, start: async () => { throw new Error("automatic Handler start forbidden") }, stdout: value => { output += value } }
   const call = async (args: string[], selector: string[] = ["--host", hostId]) => { output = ""; const code = await runControl(["session", ...args, ...selector, "--json"], deps); return { code, reply: parseHostReply(JSON.parse(output)) } }
   const startInput = { commandId: randomUUID(), handlerGeneration: generation, cwd: f.workspace, backendId: "codex-acp" }
   const ready = () => until(async () => { const r = await call(["command", startInput.commandId, "--input-json", JSON.stringify({ commandGeneration: generation })]); return r.reply.ok && r.reply.result.state === "session_command" && r.reply.result.receipt?.command.state === "completed" ? r.reply.result.receipt : undefined })
@@ -112,7 +112,7 @@ test("public worker session CLI uses local Handler relay and reconnects only to 
     if (request.op === "agent_session_submit") { writes++; if (drop && context.source === "peer") context.peer.close(new Error("BRIDGE_EOF")) }
     return reply
   })
-  const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: source.enrollment.hostId, persistentRoot: source.root, runtimeRoot: source.root, handlerSocketPath: source.root + "/handler.sock" }, adapter: {} as never }), inspect: async () => ({ disposition: "live", record: { phase: "ready", generation: source.generation } } as never), hostInventory: () => ({ list: async () => source.hosts, enroll: async () => { throw new Error("forbidden") } }), start: async () => { throw new Error("forbidden") }, callBureau: async () => { throw new Error("forbidden") }, stdout: value => { output += value } }
+  const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: source.enrollment.hostId, persistentRoot: source.root, runtimeRoot: source.root, handlerSocketPath: source.root + "/handler.sock" }, adapter: {} as never }), inspect: async () => ({ disposition: "live", record: { phase: "ready", generation: source.generation } } as never), hostInventory: () => ({ list: async () => source.hosts, enroll: async () => { throw new Error("forbidden") } }), start: async () => { throw new Error("forbidden") }, stdout: value => { output += value } }
   const call = async (argv: string[]) => { output = ""; const code = await runControl(["session", ...argv, "--host", owner.enrollment.hostId, "--json"], deps); return { code, reply: parseHostReply(JSON.parse(output)) } }
   const commandId = randomUUID(), input = { commandId, handlerGeneration: owner.generation, cwd: provider.workspace, backendId: "codex-acp" }
   assert.equal((await call(["start", "--input-json", JSON.stringify(input)])).code, 0)

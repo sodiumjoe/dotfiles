@@ -5,8 +5,6 @@ import { runGitPrepare } from "../git/cli.js"
 import { runHostClient } from "../hosts/cli.js"
 import type { HostRoute } from "../hosts/router.js"
 import type { createHostInventory } from "../hosts/inventory.js"
-import type { Writable } from "node:stream"
-import type { BureauReply, BureauRequest } from "../bureau/protocol.js"
 import { randomUUID } from "node:crypto"
 import { runLocalHumanClient } from "../agent/human-client.js"
 import { runAgentClient } from "../agent/client.js"
@@ -34,8 +32,6 @@ import { LinuxObservationUnavailable } from "../platform/linux.js"
 export type ControlDependencies = {
   hostInventory?(env: HandlerEnvironment): Pick<ReturnType<typeof createHostInventory>, "list" | "enroll">
   hostRoute?(env: HandlerEnvironment, route: HostRoute, signal?: AbortSignal): Promise<unknown>
-  watch?: { stdout: Writable; onSignal(signal: "SIGINT" | "SIGTERM", callback: () => void): () => void }
-  callBureau?(env: HandlerEnvironment, request: BureauRequest, timeoutMs?: number): Promise<BureauReply>
   attachment?: Omit<AttachmentDependencies, "environment" | "inspect" | "stderr">
   environment(): Promise<HandlerEnvironment>
   start(env: HandlerEnvironment): Promise<HandlerInspection>
@@ -56,7 +52,6 @@ export type ControlDependencies = {
 export function productionControlDependencies(): ControlDependencies {
   return {
     attachment: productionAttachmentStreams(),
-    watch: { stdout: process.stdout, onSignal(signal, callback) { process.on(signal, callback); return () => { process.off(signal, callback) } } },
     environment: productionEnvironment,
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),

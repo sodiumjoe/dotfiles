@@ -836,13 +836,13 @@ for (const expanded of [false, true]) test("long permission labels " + (expanded
   await f.promptEntered
   f.requestPermission(target.agentId, "long-permission", request)
   const offer = await until(async () => {
-    const pending = (await f.service.permissionRouting.snapshot()).pending[0]
+    const pending = (await f.service.permissions.snapshot()).pending[0]
     const record = (await f.service.list()).agents.find(agent => agent.record.version === 3 && agent.record.definition.agentId === target.agentId)!.record
     assert.notEqual(record.phase, "failed")
     return pending
   })
   assert.deepEqual(offer.options, request.options); assert.deepEqual(offer.subject, request.toolCall)
-  assert.equal((await f.service.permissionRouting.decide(randomUUID(), offer.ref, "allow_once")).state, "applied")
+  assert.equal((await f.service.permissions.decide(randomUUID(), offer.ref, "allow_once")).state, "applied")
   assert.deepEqual(f.permissionReplies(target.agentId), [{ jsonrpc: "2.0", id: "long-permission", result: { outcome: { outcome: "selected", optionId: "allow_once" } } }])
   f.completePrompt(target.agentId)
   await f.service.settledAcp(target, submissionId)
@@ -864,10 +864,10 @@ for (const retry of [false, true]) test("permission failure provenance survives 
     await f.service.command(f.input.commandId, f.input.handlerGeneration)
   }
   const view = await until(async () => { const value = (await f.service.list()).agents[0]!; return value.record.phase === "failed" && value.cleanup === "verified" ? value : undefined })
-  const expected = { code: "STARTUP_FAILED", message: "startup failed", diagnostic: { boundary: "permission_request", causeCode: "INVALID_CATALOG" } }
+  const expected = { code: "INVALID_PROTOCOL", message: "invalid protocol", diagnostic: { boundary: "permission_request", causeCode: "INVALID_PROTOCOL" } }
   assert.deepEqual(view.record.failure, expected)
   assert.deepEqual(seen.find(event => event.kind === "event" && event.event.kind === "lifecycle" && event.event.phase === "failed")?.event.failure, expected)
-  assert.equal((await f.service.permissionRouting.snapshot()).pending.length, 0)
+  assert.equal((await f.service.permissions.snapshot()).pending.length, 0)
   assert.deepEqual(f.permissionReplies(target.agentId), [])
   assert.deepEqual((await f.store.readAgent(target.agentId))!.failure, expected)
   const restarted = await f.restart()
@@ -894,21 +894,28 @@ test("startup diagnostic receipt retains the first child exit through initializa
   assert.deepEqual((await restarted.command(accepted.command.commandId, accepted.command.handlerGeneration)).command.result!.failure, expected)
 })
 
-test("task snapshot observation cannot hold the runtime mutation queue", async t => {
-  const f = await agentServiceFixture(t), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const observed = f.service.orchestrationSnapshot(async snapshot => {
-    entered.resolve()
-    await release.promise
-    return snapshot
-  })
+test("permission inspection does not hold the runtime mutation queue", async t => {
+  const f = await agentServiceFixture(t), gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+  const target = { agentId: randomUUID(), handlerGeneration: f.service.handlerGeneration, providerGeneration: randomUUID() }
+  const ref = await f.service.permissions.open(target, { toolCall: { toolCallId: "tool", title: "Execute" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] }, f.workspace, async () => { entered.resolve(); await gate.promise })
+  const decision = f.service.permissions.decide(randomUUID(), ref, "allow")
   await entered.promise
   try {
-    const read = await Promise.race([f.service.current(f.workspace), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("runtime blocked by task consumer")), 1000))])
-    assert.equal(read.agents.length, 0)
     const ready = await completed(f.service, (await f.service.start(f.input)).command)
     await completed(f.service, (await f.service.stop({ ...ready.command.target!, commandId: randomUUID() })).command)
-    release.resolve()
-    assert.equal((await observed).agents.length, 0)
-    assert.equal((await observed).commands.length, 0)
-  } finally { release.resolve(); await observed }
+    assert.equal((await f.service.permissions.snapshot()).pending.length, 0)
+  } finally { gate.resolve(); await decision }
+})
+
+test("closing with live permissions withdraws editors and closes the service", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" }), ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const turn = f.service.prompt({ ...target, text: "permission" }); void turn.catch(() => undefined)
+  await f.promptEntered
+  const frames: Record<string, unknown>[] = []
+  await f.service.attachPermissions(target, { connectionId: "closing-editor", send: frame => { frames.push(frame) } })
+  f.requestPermission(target.agentId, "closing-request", { sessionId: "fixture-session", toolCall: { toolCallId: "tool", title: "Execute" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] })
+  await until(async () => (await f.service.permissions.snapshot()).pending.length ? true : undefined)
+  assert.doesNotThrow(() => f.service.close())
+  assert.ok(frames.some(frame => frame.method === "agency/permission_withdrawn"))
+  await assert.rejects(f.service.permissions.snapshot(), { code: "UNAVAILABLE" })
 })

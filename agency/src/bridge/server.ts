@@ -27,7 +27,7 @@ export async function createHandlerBridge(input: { root: string; identity: { hos
   }
   const server = await bindPrivateSocket(input.root, "bridge.sock", socket => {
     const hello: BridgeHello = { protocol: BRIDGE_PROTOCOL, ...input.identity, connectionId: randomUUID(), sourceRevision: revision, nodeVersion: process.version,
-      capabilities: [...handlers.keys(), "read-pages", "read-open", "read-page", "read-close"], outboxCursor: 0 }
+      capabilities: [...handlers.keys(), "read-pages", "read-open", "read-page", "read-close"] }
     const peer = createBridgePeer({ input: socket, output: socket, hello })
     peers.add(peer)
     const context: BridgeContext = { source: "peer", peer }

@@ -48,6 +48,6 @@ test("held editor work does not occupy the real runtime mutation queue", async t
   const driver = fixture(), ref = { hostId: f.context.paths.hostKey, target: ready.command.target! }
   const entry = createRuntimeEntry({ hostId: ref.hostId, generation: ref.target.handlerGeneration, validate: async target => { await f.service.sessionSnapshot(target); return true }, driver: { ensure: async () => driver.editor, activate: async () => { await new Promise<void>(resolve => { t.after(() => resolve()); setTimeout(resolve, 200) }) }, inspect: async () => driver.editor } })
   const opening = entry.open(randomUUID(), ref)
-  const values = await Promise.race([Promise.all([f.service.roster({ limit: 100 }), f.service.permissionRouting.snapshot()]), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("runtime blocked")), 150))])
+  const values = await Promise.race([Promise.all([f.service.roster({ limit: 100 }), f.service.permissions.snapshot()]), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("runtime blocked")), 150))])
   assert.equal(values[0].agents.length, 1); await opening
 })

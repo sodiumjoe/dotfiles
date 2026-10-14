@@ -16,7 +16,7 @@ import { parseSubmissionReceipt } from "./attachment-protocol.js"
 import { parseTuple } from "./types.js"
 
 import type { RuntimeHumanRequest, RuntimeHumanResult } from "./human-controls.js"
-import { parsePermissionRef, parsePermissionReceipt, parsePermissionSnapshot } from "../orchestration/permission-routing.js"
+import { parsePermissionRef, parsePermissionReceipt, parsePermissionSnapshot } from "../agent/permission-types.js"
 
 export const AGENT_PROTOCOL = "agency-agent/3" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (

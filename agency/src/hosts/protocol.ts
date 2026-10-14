@@ -8,7 +8,7 @@ import { validateSessionOwner, type SessionMutationReference } from "./runtime.j
 import { AGENT_PROTOCOL, parseAgentReply } from "../agent/protocol.js"
 import type { AgentPage } from "../agent/queries.js"
 import type { RuntimeHumanResult } from "../agent/human-controls.js"
-import { parsePermissionOffer, parsePermissionSnapshot, type PermissionOffer, type PermissionSnapshot } from "../orchestration/permission-routing.js"
+import { parsePermissionOffer, parsePermissionSnapshot, type PermissionOffer, type PermissionSnapshot } from "../agent/permission-types.js"
 import { parseHostEnrollment, type HostEnrollment } from "./inventory.js"
 
 export type HostObservation<T> = { hostId: string; hostname: string; state: "available"; value: T } | { hostId: string; hostname: string; state: "unavailable"; code: string }

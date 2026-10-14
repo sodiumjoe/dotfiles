@@ -3,7 +3,10 @@ import test from "node:test"
 import { mkdtemp, realpath, rm, writeFile, readdir, mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { git } from "./git-support.js"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
+const execute = promisify(execFile)
+async function git(args: string[], cwd: string): Promise<string> { return (await execute("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", ...args], { cwd, timeout: 10000, maxBuffer: 1048576, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } })).stdout.trim() }
 import { prepareWorktree } from "../src/git/worktree.js"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -56,7 +59,7 @@ import { unavailableControlDependencies } from "./control-support.js"
 
 test("ordinary git prepare returns Host protocol without inspecting or starting Agency", async t => {
   const f = await fixture(t), output: string[] = []
-  const code = await runControl(["git", "prepare", "--input-json", JSON.stringify(f.input), "--json"], { ...unavailableControlDependencies(), environment: async () => { throw new Error("Agency environment forbidden") }, start: async () => { throw new Error("Agency start forbidden") }, callBureau: async () => { throw new Error("Bureau forbidden") }, stdout: value => output.push(value) })
+  const code = await runControl(["git", "prepare", "--input-json", JSON.stringify(f.input), "--json"], { ...unavailableControlDependencies(), environment: async () => { throw new Error("Agency environment forbidden") }, start: async () => { throw new Error("Agency start forbidden") }, stdout: value => output.push(value) })
   assert.equal(code, 0)
   const reply = parseHostReply(JSON.parse(output.join(""))); assert.ok(reply.ok && reply.result.state === "worktree")
   assert.equal(reply.hostId, null); assert.equal(reply.result.worktree.cwd, f.input.cwd)

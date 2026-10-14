@@ -9,7 +9,7 @@ import { until } from "./control-support.js"
 import { dispatchRuntimeHuman, isRuntimeHumanRequest, type RuntimeHumanRequest } from "../src/agent/human-controls.js"
 import { AGENT_PROTOCOL, agentErrorReply, exchangeAgent } from "../src/agent/protocol.js"
 import { serveProtocols } from "../src/control/wire.js"
-import { createPermissionRouting } from "../src/orchestration/permission-routing.js"
+import { createPermissionArbiter } from "../src/agent/permission-arbiter.js"
 import type { AgentService } from "../src/agent/service.js"
 
 async function wire(t: TestContext, root: string, service: AgentService) {
@@ -85,7 +85,7 @@ test("local and editor permission answers share one arbiter", async t => {
   assert.ok(local.ok && local.result.state === "permission")
   assert.ok(["applied", "withdrawn"].includes(local.result.receipt!.state))
   assert.equal(f.permissionReplies(f.target.agentId).length, 1)
-  assert.equal((await f.service.permissionRouting.snapshot()).pending.length, 0)
+  assert.equal((await f.service.permissions.snapshot()).pending.length, 0)
   await f.finish()
 })
 
@@ -100,7 +100,7 @@ test("stale provider and foreign host views cannot answer the current permission
     assert.equal(reply.result.receipt?.state, "stale")
   }
   assert.equal(f.permissionReplies(f.target.agentId).length, 0)
-  assert.equal((await f.service.permissionRouting.snapshot()).pending.length, 1)
+  assert.equal((await f.service.permissions.snapshot()).pending.length, 1)
   await f.call({ op: "agent_permission_decide", commandId: randomUUID(), ref: f.offer.ref, optionId: "allow" })
   await f.finish()
 })
@@ -129,10 +129,11 @@ test("stopping the owner withdraws a pending permission", async t => {
   await f.turn.catch(() => undefined)
 })
 
-test("unavailable owner permission storage is explicit on the agent protocol", async t => {
+test("closed owner permissions is explicit on the agent protocol", async t => {
   const f = await agentServiceFixture(t)
-  const routing = createPermissionRouting({ root: f.root, hostId: f.context.paths.hostKey, handlerGeneration: f.service.handlerGeneration })
-  const call = await wire(t, f.root, { ...f.service, permissionRouting: routing })
+  const routing = createPermissionArbiter({ hostId: f.context.paths.hostKey, handlerGeneration: f.service.handlerGeneration })
+  routing.close()
+  const call = await wire(t, f.root, { ...f.service, permissions: routing })
   const reply = await call({ op: "agent_permissions" })
   assert.ok(!reply.ok)
   assert.equal(reply.error.code, "UNAVAILABLE")

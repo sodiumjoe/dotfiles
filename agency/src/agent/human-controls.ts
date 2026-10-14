@@ -1,8 +1,6 @@
 import type { AgentService } from "./service.js"
 import type { AgentPage, PageInput } from "./queries.js"
-import { AgentError } from "./types.js"
-import { OrchestrationError } from "../orchestration/types.js"
-import type { PermissionRef, PermissionReceipt, PermissionSnapshot } from "../orchestration/permission-routing.js"
+import type { PermissionRef, PermissionReceipt, PermissionSnapshot } from "./permission-types.js"
 
 export type RuntimeHumanRequest =
   | { op: "agent_roster"; input: PageInput }
@@ -19,19 +17,10 @@ export function isRuntimeHumanRequest(request: { op: string }): request is Runti
 }
 
 export async function dispatchRuntimeHuman(service: AgentService, request: RuntimeHumanRequest): Promise<RuntimeHumanResult> {
-  try {
-    switch (request.op) {
-      case "agent_roster": return await service.roster(request.input)
-      case "agent_permissions": return { state: "permissions", snapshot: await service.permissionRouting.snapshot() }
-      case "agent_permission_decide": return { state: "permission", receipt: await service.permissionRouting.decide(request.commandId, request.ref, request.optionId) }
-      case "agent_permission_inspect": return { state: "permission", receipt: await service.permissionRouting.inspect(request.commandId) }
-    }
-  } catch (error) {
-    if (error instanceof OrchestrationError) {
-      if (error.code === "COMMAND_CONFLICT") throw new AgentError("COMMAND_CONFLICT")
-      if (error.code === "INVALID_OPTION") throw new AgentError("USAGE")
-      if (error.code === "PERMISSIONS_UNAVAILABLE") throw new AgentError("UNAVAILABLE")
-    }
-    throw error
+  switch (request.op) {
+    case "agent_roster": return await service.roster(request.input)
+    case "agent_permissions": return { state: "permissions", snapshot: await service.permissions.snapshot() }
+    case "agent_permission_decide": return { state: "permission", receipt: await service.permissions.decide(request.commandId, request.ref, request.optionId) }
+    case "agent_permission_inspect": return { state: "permission", receipt: await service.permissions.inspect(request.commandId) }
   }
 }

@@ -598,7 +598,7 @@ test("provider editor RPC follows the submitting attachment across editor replac
 })
 
 test("routed approval UI races an attached child UI without replying through the parent provider", { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { coordination: "reject" }), parent = await editorFixture(f), child = await editorFixture(f)
+  const f = await acpFixture(t, {  }), parent = await editorFixture(f), child = await editorFixture(f)
   const parentSession = await start(parent), childSession = await start(child)
   await run(parent, `AgencyFixture.commands(); _G.Snacks=nil; fixture_before_layout=vim.fn.winlayout(); fixture_selection=nil;
     vim.ui.select=function(items,opts,callback) fixture_selection={items=items,opts=opts,callback=callback} end;
@@ -626,7 +626,7 @@ test("routed approval UI races an attached child UI without replying through the
 })
 test("the shared runtime entry driver binds and inspects a real headless editor with Bureau unavailable", { timeout: 60000 }, async t => {
   const { createRuntimeEntryDriver, entryEditorIdentity } = await import("../src/entry/editor.js")
-  const f = await acpFixture(t, { coordination: "reject" }), acp = await f.connect(), e = await editorFixture(f)
+  const f = await acpFixture(t, {  }), acp = await f.connect(), e = await editorFixture(f)
   await acp.request("initialize", { protocolVersion: 1 })
   const session = await acp.request("session/new", { cwd: f.workspace, mcpServers: [] }), target = await f.tuple(String(session.sessionId)), ref = { hostId: f.paths.hostKey, target }, identity = entryEditorIdentity(ref)
   await run(e, "AgencyFixture.commands()")

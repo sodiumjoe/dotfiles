@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { runControl, type ControlDependencies } from "../src/cli/control.js"
 import { AGENT_PROTOCOL, type AgentRequest } from "../src/agent/protocol.js"
 import { parseHostReply } from "../src/hosts/protocol.js"
-import { canonicalDigest } from "../src/orchestration/types.js"
+import { permissionDigest as canonicalDigest } from "../src/agent/permission-types.js"
 import { unavailableControlDependencies } from "./control-support.js"
 
 function fixture() {
@@ -23,7 +23,7 @@ function fixture() {
       if (route.channel === "runtime-write" && drop) return null
       return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: generation, ok: true,
         result: request.op === "agent_roster" ? { state: "page", agents: [], issues: [], revision: randomUUID(), nextCursor: null } : request.op === "agent_permissions" ? { state: "permissions", snapshot: { hostId: route.hostId, handlerGeneration: generation, throughSeq: 0, pending: [], receipts: [] } } : { state: "permission", receipt: request.op === "agent_permission_inspect" ? null : receipt } }
-    }, start: async () => { throw new Error("start forbidden") }, callBureau: async () => { throw new Error("Bureau forbidden") }, stdout: value => output.push(value) }
+    }, start: async () => { throw new Error("start forbidden") }, stdout: value => output.push(value) }
   return { deps, decision, remoteId, hosts, calls, setDrop() { drop = true }, reply: () => parseHostReply(JSON.parse(output.join(""))) }
 }
 

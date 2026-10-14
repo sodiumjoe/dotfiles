@@ -50,7 +50,7 @@ test("real owner large permission snapshots use paging and compete with editor/l
   assert.equal(result.state, "permissions"); const ref = result.snapshot.pending[0]!.ref
   const frames: any[] = []; await f.service.attachPermissions(target, { connectionId: "editor", send: value => frames.push(value) })
   const offered = frames.find(value => value.method === "session/request_permission")
-  await Promise.all([client.human(hostId, { op: "agent_permission_decide", commandId: randomUUID(), ref, optionId: "allow" }), f.service.permissionRouting.decide(randomUUID(), ref, "allow"), f.service.permissionDecision("editor", offered.id, { outcome: { outcome: "selected", optionId: "allow" } })])
+  await Promise.all([client.human(hostId, { op: "agent_permission_decide", commandId: randomUUID(), ref, optionId: "allow" }), f.service.permissions.decide(randomUUID(), ref, "allow"), f.service.permissionDecision("editor", offered.id, { outcome: { outcome: "selected", optionId: "allow" } })])
   assert.equal(f.permissionReplies(target.agentId).length, 1)
   await assert.rejects(peer.request("read-open", { channel: "runtime-write", payload: {} }), /UNSUPPORTED_CAPABILITY/)
   f.completePrompt(target.agentId, "done"); await turn

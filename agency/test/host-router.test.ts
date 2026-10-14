@@ -1,3 +1,6 @@
+import { PassThrough } from "node:stream"
+import { EventEmitter } from "node:events"
+import { createHostRouter } from "../src/hosts/router.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
@@ -72,4 +75,20 @@ test("changed host identity and a restarted owner are rejected before controls",
   await assert.rejects(connectHandlerBridge({ root: f.worker.root, hostId: f.worker.enrollment.hostId, handlerGeneration: randomUUID() }), /STALE_HANDLER/)
   assert.equal(f.reads(), 0)
   assert.equal(f.writes(), 0)
+})
+
+test("bridge version mismatch refuses mutation without a fallback helper", async t => {
+  const enrollment = { inventoryId: randomUUID(), hostId: "b".repeat(64), hostname: "legacy", agyPath: "/opt/agy", loginShell: "/bin/sh" }
+  let attempts = 0, mutations = 0
+  const router = createHostRouter({ hostId: "a".repeat(64), inventory: { list: async () => [enrollment] }, local: async () => { mutations++; return {} }, connect: host => connectBridge(host, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-write"], processFactory: (_file, argv) => {
+    attempts++; assert.ok(argv.at(-1)!.includes("internal-runtime-bridge"))
+    const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough()
+    stdin.on("data", () => { mutations++ })
+    const child = Object.assign(new EventEmitter(), { stdin, stdout, stderr, kill() { stdin.end(); stdout.end(); return true } })
+    queueMicrotask(() => stdout.write(JSON.stringify({ type: "hello", protocol: "agency-bridge/1", connectionId: randomUUID(), hostId: host.hostId, handlerGeneration: randomUUID(), sourceRevision: "a".repeat(40), nodeVersion: "v24.13.0", capabilities: ["runtime-write"], outboxCursor: 0 }) + "\n"))
+    return child
+  } }) })
+  t.after(() => router.close())
+  await assert.rejects(router.request({ hostId: enrollment.hostId, channel: "runtime-write", payload: {} }), /UNSUPPORTED_BRIDGE_PROTOCOL/)
+  assert.equal(attempts, 1); assert.equal(mutations, 0)
 })

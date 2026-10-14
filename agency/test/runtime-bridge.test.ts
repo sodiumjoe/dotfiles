@@ -7,8 +7,6 @@ import { registerRuntimeEndpoint } from "../src/hosts/runtime.js"
 import { dispatchAgentRequest } from "../src/agent/dispatch.js"
 import { AGENT_PROTOCOL, parseAgentReply, validateAgentReply, type AgentRequest } from "../src/agent/protocol.js"
 import { agentServiceFixture } from "./agent-support.js"
-import { attachTaskBridge } from "../src/bridge/task-server.js"
-import { createHostCoordination } from "../src/handler/host-coordination.js"
 
 async function fixture(t: Parameters<typeof agentServiceFixture>[0]) {
   const f = await agentServiceFixture(t)
@@ -22,15 +20,12 @@ async function fixture(t: Parameters<typeof agentServiceFixture>[0]) {
   return { ...f, identity, bridge, peer, request, unavailable() { ready = false } }
 }
 
-test("runtime bridge is usable before optional attachment and after its removal", async t => {
+test("runtime bridge exposes ordinary controls without legacy composition", async t => {
   const f = await fixture(t), request = f.request()
   const first = parseAgentReply(await f.peer.request("runtime-read", request))
   validateAgentReply(first, request)
   assert.ok(first.ok && first.result.state === "page")
   assert.equal((await f.peer.ready).capabilities.includes("snapshot"), false)
-  const coordination = await createHostCoordination({ root: f.root, runtimeRoot: f.root, hostId: f.identity.hostId, agents: f.service, coordinator: async () => { throw new Error("BUREAU_UNAVAILABLE") } })
-  const tasks = await attachTaskBridge({ bridge: f.bridge, host: coordination.origin, journals: coordination.origins })
-  await tasks.close(); await coordination.close()
   const next = parseAgentReply(await f.peer.request("runtime-read", f.request()))
   assert.ok(next.ok && next.result.state === "page")
   await assert.rejects(f.peer.request("snapshot", {}), /UNSUPPORTED_CAPABILITY/)
@@ -47,7 +42,7 @@ test("runtime bridge rejects cross-channel operations and malformed requests bef
   assert.ok(!reply.ok && reply.error.code === "INVALID_PROTOCOL")
   const malformed = parseAgentReply(await f.peer.request("runtime-read", { ...request, input: { limit: 0 } }))
   assert.ok(!malformed.ok && malformed.error.code === "INVALID_PROTOCOL")
-  assert.equal((await f.service.permissionRouting.snapshot()).receipts.length, 0)
+  assert.equal((await f.service.permissions.snapshot()).receipts.length, 0)
   const absent = parseAgentReply(await f.peer.request("runtime-read", null))
   assert.ok(!absent.ok && absent.error.code === "INVALID_PROTOCOL")
   assert.equal(f.spawns(), 0)

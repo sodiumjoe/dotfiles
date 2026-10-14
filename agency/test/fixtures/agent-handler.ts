@@ -7,7 +7,6 @@ import { readFile, writeFile, mkdir, open, rename, rm } from "node:fs/promises"
 import { writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { Socket } from "node:net"
-import { createHostCoordination } from "../../src/handler/host-coordination.js"
 import { runHandler } from "../../src/handler/daemon.js"
 import { createAgentService } from "../../src/agent/service.js"
 import { createAgentProcess } from "../../src/agent/process.js"
@@ -55,17 +54,6 @@ try {
     }
     await input.store.initialize()
     return createTaskService(input)
-  }, coordinationFactory: async input => {
-    if (config.coordination === "reject") throw new Error("fixture coordination unavailable")
-    if (config.coordination === "hold") {
-      await writeFile(join(root, "coordination-entered"), "entered", { mode: 0o600 })
-      while (true) {
-        input.signal?.throwIfAborted()
-        try { await readFile(join(root, "release-coordination")); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
-        await new Promise(resolve => setTimeout(resolve, 20))
-      }
-    }
-    return createHostCoordination(input)
   }, ...(config.entry === "synthetic" ? { entryDriver: (() => {
     let creations = 0, activations = 0, binding: import("../../src/entry/runtime.js").RuntimeEditor | null = null
     const editor = { editorId: randomUUID(), session: "synthetic-entry", pane: "%1", tmuxSocketPath: join(config.paths.runtimeRoot, "entry-tmux.sock") }

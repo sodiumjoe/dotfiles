@@ -11,16 +11,16 @@ import { connectBridge } from "../src/bridge/ssh.js"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import { parseHostReply, type HostResult } from "../src/hosts/protocol.js"
 
-for (const coordination of ["reject", "hold"] as const) test(`remote ordinary controls work while task startup ${coordination}s`, { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { coordination, tasks: "reject" }), acp = await f.connect()
-  if (coordination === "hold") await until(async () => await fileExists(join(f.root, "coordination-entered")) ? true : undefined)
+for (const tasks of ["reject", "hold"] as const) test(`remote ordinary controls work while task startup ${tasks}s`, { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { tasks }), acp = await f.connect()
+  if (tasks === "hold") await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
   const enrollment = { inventoryId: randomUUID(), hostId: f.paths.hostKey, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }
   const transport = await connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
   const call = async (argv: string[]): Promise<HostResult> => {
     const output: string[] = []
-    assert.equal(await runControl([...argv, "--host", f.paths.hostKey, "--json"], { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env, route) => transport.request(route.channel, route.payload), start: async () => { throw new Error("start forbidden") }, callBureau: async () => { throw new Error("Bureau forbidden") }, stdout: value => output.push(value) }), 0)
+    assert.equal(await runControl([...argv, "--host", f.paths.hostKey, "--json"], { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env, route) => transport.request(route.channel, route.payload), start: async () => { throw new Error("start forbidden") }, stdout: value => output.push(value) }), 0)
     const reply = parseHostReply(JSON.parse(output.join(""))); assert.ok(reply.ok); return reply.result
   }
   await acp.request("initialize", { protocolVersion: 1 })
@@ -42,13 +42,13 @@ for (const coordination of ["reject", "hold"] as const) test(`remote ordinary co
 import { readFile, writeFile } from "node:fs/promises"
 import { runRuntimeEntryHelper } from "../src/entry/cli.js"
 
-for (const coordination of ["reject", "hold"] as const) test(`independent editor entry works with task startup ${coordination} and never blocks owner reads`, { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { coordination, entry: "synthetic" }), acp = await f.connect()
+for (const tasks of ["reject", "hold"] as const) test(`independent editor entry works with task startup ${tasks} and never blocks owner reads`, { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { tasks, entry: "synthetic" }), acp = await f.connect()
   await acp.request("initialize", { protocolVersion: 1 })
   const session = await acp.request("session/new", { cwd: f.workspace, mcpServers: [] }), target = await f.tuple(String(session.sessionId)), commandId = randomUUID(), ref = { hostId: f.paths.hostKey, target }
   const transport = await connectBridge({ inventoryId: randomUUID(), hostId: ref.hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["entry-open", "runtime-entry-inspect"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: ref.hostId, handlerGeneration: target.handlerGeneration })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
-  const deps = { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env: unknown, route: import("../src/hosts/router.js").HostRoute) => transport.request(route.channel, route.payload), start: async () => { throw new Error("start forbidden") }, callBureau: async () => { throw new Error("Bureau forbidden") }, stderr() {} }
+  const deps = { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env: unknown, route: import("../src/hosts/router.js").HostRoute) => transport.request(route.channel, route.payload), start: async () => { throw new Error("start forbidden") }, stderr() {} }
   const call = async (argv: string[]) => {
     const output: string[] = [], code = await runControl(argv, { ...deps, stdout: value => output.push(value) })
     const reply = parseHostReply(JSON.parse(output.join(""))); assert.ok(reply.ok); return { code, result: reply.result }

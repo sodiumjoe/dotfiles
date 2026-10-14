@@ -184,18 +184,17 @@ test("termination during classification is deferred until the full inventory is 
 test("production Handler eventually publishes a private generation-bound bridge after readiness", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), handler = await f.start().catch(async error => { throw new Error(await readFile(join(f.root, "failure"), "utf8").catch(() => String(error)), { cause: error }) })
   await until(async () => await lstat(join(f.paths.runtimeRoot, "bridge.sock")).then(stat => stat.isSocket(), () => false) ? true : undefined)
-  const peer = await until(async () => {
-    const candidate = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: handler.record.generation })
-    if ((await candidate.ready).capabilities.includes("snapshot")) return candidate
-    candidate.close(); return undefined
-  })
+  const peer = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: handler.record.generation })
   f.beforeCleanup(async () => { peer.close(); await peer.closed })
-  const snapshot = await peer.request("snapshot", {}) as { hostId: string; handlerGeneration: string }
-  assert.equal(snapshot.hostId, f.paths.hostKey)
-  assert.equal(snapshot.handlerGeneration, handler.record.generation)
+  const hello = await peer.ready
+  assert.ok(hello.capabilities.includes("runtime-read")); assert.ok(hello.capabilities.includes("runtime-write"))
+  assert.equal(hello.capabilities.includes("snapshot"), false)
+  const identity = await peer.request("host-identity", {}) as { hostId: string; handlerGeneration: string }
+  assert.equal(identity.hostId, f.paths.hostKey)
+  assert.equal(identity.handlerGeneration, handler.record.generation)
 })
 
-test("malformed Bureau settings remain visible in ready Handler status and doctor", { timeout: 20000 }, async t => {
+test("malformed legacy settings remain inert and byte-preserved", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), settings = join(f.paths.persistentRoot, "bureau/settings/state.json")
   const content = JSON.stringify({ enabled: "invalid" })
   await mkdir(join(f.paths.persistentRoot, "bureau/settings"), { recursive: true, mode: 0o700 })
@@ -203,18 +202,13 @@ test("malformed Bureau settings remain visible in ready Handler status and docto
   const handler = await f.start()
   assert.equal(handler.record.phase, "ready")
   await until(async () => await lstat(join(f.paths.runtimeRoot, "bridge.sock")).then(stat => stat.isSocket(), () => false) ? true : undefined)
-  const reply = await until(async () => {
-    const candidate = await f.call()
-    return candidate.ok && "phase" in candidate.result && candidate.result.issues?.some(issue => issue.message.includes("INVALID_BUREAU")) ? candidate : undefined
-  })
+  const reply = await f.call()
   assert.ok(reply.ok && "phase" in reply.result)
   assert.equal(reply.result.phase, "ready")
-  const issue = reply.result.issues?.find(issue => issue.message.includes("INVALID_BUREAU"))
-  assert.ok(issue)
-  assert.equal(issue.path, join(f.paths.persistentRoot, "bureau"))
+  assert.equal(reply.result.issues?.some(issue => issue.message.includes("BUREAU")), false)
   const output: string[] = []
   assert.equal(await runControl(["doctor", "--json"], { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter), call: (_env, request) => f.call(request), stdout: text => output.push(text) }), 0)
   const diagnostic = JSON.parse(output.join(""))
-  assert.ok(diagnostic.result.runtimeIssues.some((runtimeIssue: { path: string; message: string }) => runtimeIssue.path === issue.path && runtimeIssue.message.includes("INVALID_BUREAU")))
+  assert.deepEqual(diagnostic.result.runtimeIssues ?? [], [])
   assert.equal(await readFile(settings, "utf8"), content)
 })

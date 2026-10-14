@@ -1,7 +1,7 @@
 import { AgentError } from "../agent/types.js"
 import type { HostRuntimeClient } from "./runtime.js"
 import type { HostObservation, OwnerRoster, RosterView, PermissionView } from "./protocol.js"
-import type { PermissionSnapshot } from "../orchestration/permission-routing.js"
+import type { PermissionSnapshot } from "../agent/permission-types.js"
 
 type ViewInput = { client: Pick<HostRuntimeClient, "identity" | "human">; localHostId: string; localHostname: string; hosts: Array<{ hostId: string; hostname: string }>; cwd?: string }
 async function observe<T>(input: ViewInput, read: (hostId: string) => Promise<T>): Promise<HostObservation<T>[]> {
