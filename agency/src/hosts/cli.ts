@@ -93,15 +93,18 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
 }
 export async function openHostAccess(deps: ControlDependencies) {
   const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
-  let local: Awaited<ReturnType<typeof connectHandlerBridge>> | undefined
-  const router = createHostRouter({ hostId: env.paths.hostKey, inventory, async local(channel, payload, signal) {
-    if (!local) {
+  let local: Promise<Awaited<ReturnType<typeof connectHandlerBridge>>> | undefined
+  const localRequest = async (channel: string, payload: unknown, signal?: AbortSignal) => {
+    local ??= (async () => {
       const owner = await deps.inspect(env)
       if (!owner || owner.disposition !== "live" || owner.record.phase !== "ready") throw new AgentError("UNAVAILABLE")
-      local = await connectHandlerBridge({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, handlerGeneration: owner.record.generation })
-    }
-    return local.request(channel, payload, { timeoutMs: isRoutedRead(channel) ? 10000 : 60000, ...(signal ? { signal } : {}) })
-  }, connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
-  const close = () => { local?.close(); router.close() }
+      return connectHandlerBridge({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, handlerGeneration: owner.record.generation })
+    })()
+    return (await local).request(channel, payload, { timeoutMs: isRoutedRead(channel) || channel === "host-route-read" ? 10000 : 60000, ...(signal ? { signal } : {}) })
+  }
+  const router = createHostRouter({ hostId: env.paths.hostKey, inventory, local: localRequest,
+    connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
+  router.setRelay((route, signal) => localRequest(isRoutedRead(route.channel) ? "host-route-read" : "host-route", route, signal))
+  const close = () => { void local?.then(peer => peer.close(), () => undefined); router.close() }
   return { env, inventory, close, route: (route: import("./router.js").HostRoute, signal?: AbortSignal) => deps.hostRoute ? deps.hostRoute(env, route, signal) : router.request(route, signal) }
 }

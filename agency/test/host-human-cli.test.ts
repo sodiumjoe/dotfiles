@@ -85,3 +85,31 @@ test("explicit owner inspection returns a nullable receipt with command identity
   const reply = f.reply(); assert.ok(reply.ok); assert.equal(reply.commandId, commandId)
   assert.deepEqual(reply.result, { state: "permission", receipt: null })
 })
+
+import { runtimeNetwork } from "./host-runtime-support.js"
+
+test("public worker controls use the Handler relay without an injected host route or mutation replay", async t => {
+  const f = await runtimeNetwork(t), laptop = await f.add("laptop", "a"), source = await f.add("source", "b"), owner = await f.add("owner", "c")
+  laptop.hosts.push(source.enrollment, owner.enrollment)
+  source.bridge.register(["runtime-read"], async () => null)
+  await laptop.router.request({ hostId: source.enrollment.hostId, channel: "host-identity", payload: {} })
+  const commandId = randomUUID(), ref = { hostId: owner.enrollment.hostId, target: { agentId: randomUUID(), handlerGeneration: owner.generation, providerGeneration: randomUUID() }, permissionId: randomUUID(), revision: 1 }
+  const decision = { commandId, ref, optionId: "allow" }, receipt = { ...decision, digest: canonicalDigest(decision), state: "applied" }
+  let writes = 0, output = ""
+  owner.bridge.register(["runtime-read", "runtime-write"], async ({ channel, payload, context }) => {
+    const request = payload as AgentRequest
+    if (channel === "runtime-write") { writes++; if (context.source === "peer") context.peer.close(new Error("BRIDGE_EOF")); return null }
+    return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: owner.generation, ok: true, result: request.op === "agent_roster" ? { state: "page", revision: commandId, agents: [], issues: [], nextCursor: null } : { state: "permission", receipt } }
+  })
+  const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: source.enrollment.hostId, persistentRoot: source.root, runtimeRoot: source.root, handlerSocketPath: source.root + "/handler.sock" }, adapter: {} as never }),
+    inspect: async () => ({ disposition: "live", record: { phase: "ready", generation: source.generation } } as never), hostInventory: () => ({ list: async () => source.hosts, enroll: async () => { throw new Error("enrollment forbidden") } }), stdout: value => { output += value } }
+  assert.equal(await runControl(["roster", "list", "--host", owner.enrollment.hostId, "--json"], deps), 0)
+  const roster = parseHostReply(JSON.parse(output)); assert.ok(roster.ok && roster.result.state === "page"); assert.equal(roster.hostId, owner.enrollment.hostId)
+  output = ""
+  assert.equal(await runControl(["permission", "decide", "--input-json", JSON.stringify(decision), "--json"], deps), 75)
+  const lost = parseHostReply(JSON.parse(output)); assert.ok(!lost.ok); assert.equal(lost.error.code, "OUTCOME_UNKNOWN"); assert.deepEqual(lost.error.reference, { hostId: owner.enrollment.hostId, commandId }); assert.equal(writes, 1)
+  output = ""
+  assert.equal(await runControl(["permission", "inspect", commandId, "--host", owner.enrollment.hostId, "--json"], deps), 0)
+  const inspected = parseHostReply(JSON.parse(output)); assert.ok(inspected.ok && inspected.result.state === "permission"); assert.deepEqual(inspected.result.receipt, receipt); assert.equal(writes, 1)
+  assert.deepEqual(f.connections, ["source", "owner", "owner"])
+})

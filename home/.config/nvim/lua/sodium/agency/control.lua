@@ -196,6 +196,9 @@ function M.new(deps)
     local jobs, api = {}, { uuid = M.uuid }
     function api.command(argv, options, callback)
         options = options or {}
+        local snapshot_read = argv[1] == "host" and argv[2] == "list"
+            or argv[1] == "roster" and argv[2] == "list" and not vim.tbl_contains(argv, "--local")
+            or argv[1] == "permission" and argv[2] == "list" and not vim.tbl_contains(argv, "--local")
         local args = { deps.executable or "agy" }
         vim.list_extend(args, argv)
         args[#args + 1] = "--json"
@@ -219,13 +222,13 @@ function M.new(deps)
                 if err then fail("UNAVAILABLE"); return end
                 if chunk then
                     bytes = bytes + #chunk
-                    if bytes > 8388608 then fail("INVALID_PROTOCOL") else chunks[#chunks + 1] = chunk end
+                    if not snapshot_read and bytes > 8388608 then fail("INVALID_PROTOCOL") else chunks[#chunks + 1] = chunk end
                 end
             end, stderr = function() end }, function(result)
             if settled then return end
             local raw = #chunks > 0 and table.concat(chunks) or result.stdout or ""
             local valid, value = pcall(function()
-                assert(#raw <= 8388608)
+                assert(snapshot_read or #raw <= 8388608)
                 local decoded = vim.json.decode(raw)
                 validate(decoded, argv)
                 return decoded

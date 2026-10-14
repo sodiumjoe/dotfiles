@@ -64,4 +64,22 @@ describe("Agency routed human approvals", function()
         assert.is_truthy(rendered:find(a.ref.target.providerGeneration, 1, true))
         api.close(); _G.Snacks = original
     end)
+    it("keeps its caller-selected owner and command on a real consumer transport timeout", function()
+        local callback, calls, messages, applied, killed = nil, 0, {}, false, 0
+        local client = require("sodium.agency.control").new({ system = function(_, _, _)
+            calls = calls + 1; applied = true
+            return { kill = function() killed = killed + 1 end }
+        end, schedule = function(cb) cb() end })
+        local api = require("sodium.agency.permissions").new({ uuid = function() return fixture.id(99) end,
+            select = function(_, _, cb) callback = cb end, notify = function(value) messages[#messages + 1] = value end,
+            command = function(argv, _, cb) client.command(argv, { timeout_ms = 1 }, cb) end })
+        local a = offer("a", 1); api.update({ pending = { a } }); api.choose(a.ref); callback(a.options[1])
+        assert.is_true(vim.wait(200, function() return #messages == 1 end))
+        assert.is_true(applied); assert.are.equal(1, calls); assert.are.equal(1, killed)
+        assert.is_truthy(messages[1]:find(a.ref.hostId, 1, true))
+        assert.is_truthy(messages[1]:find(fixture.id(99), 1, true))
+        assert.is_truthy(messages[1]:lower():find("unknown", 1, true))
+        api.close(); client.close()
+    end)
+
 end)

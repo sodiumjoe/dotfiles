@@ -140,3 +140,33 @@ describe("Agency runtime entry envelope", function()
         assert.are.equal("INVALID_PROTOCOL", exchange(argv, value).code)
     end)
 end)
+
+describe("Agency aggregate transport", function()
+    it("accepts a legal permission aggregate above eight MiB in streamed and completed output", function()
+        local id, host = "00000000-0000-4000-8000-000000000001", string.rep("a", 64)
+        local pending = {}
+        for index = 1, 11 do
+            local permission_id = string.format("00000000-0000-4000-8000-%012d", index)
+            pending[index] = { ref = { hostId = host, target = { agentId = id, handlerGeneration = id, providerGeneration = id }, permissionId = permission_id, revision = 1 },
+                title = "Large", toolCallId = "tool-" .. index, originCwd = "/work", subject = vim.empty_dict(),
+                options = { { optionId = "allow", name = string.rep("x", 400000), kind = "allow_once" } } }
+            assert.is_true(#vim.json.encode(pending[index]) < 1048576)
+        end
+        local snapshot = { hostId = host, handlerGeneration = id, throughSeq = 11, pending = pending, receipts = {} }
+        local value = { protocol = "agency-host/1", requestId = id, hostId = vim.NIL, handlerGeneration = vim.NIL, ok = true,
+            result = { state = "permissions", hosts = { { hostId = host, hostname = "owner", state = "available", value = snapshot } }, pending = pending } }
+        local raw = vim.json.encode(value)
+        assert.is_true(#raw > 8388608)
+        for _, streamed in ipairs({ false, true }) do
+            local finish, options, failure, received, killed = nil, nil, nil, nil, 0
+            local client = require("sodium.agency.control").new({ system = function(_, opts, cb)
+                options, finish = opts, cb; return { kill = function() killed = killed + 1 end }
+            end, schedule = function(cb) cb() end })
+            client.command({ "permission", "list" }, {}, function(err, reply) failure, received = err, reply end)
+            if streamed then for offset = 1, #raw, 65536 do options.stdout(nil, raw:sub(offset, offset + 65535)) end end
+            finish({ code = 0, stdout = streamed and "" or raw })
+            assert.is_nil(failure); assert.are.equal(11, #received.result.pending); assert.are.equal(0, killed)
+            client.close()
+        end
+    end)
+end)

@@ -74,12 +74,13 @@ function M.new(deps)
             for _, value in ipairs(offer.options) do if vim.deep_equal(value, option) then advertised = true end end
             if not advertised then return end
             available = false
-            command({ "permission", "decide", "--command-id", uuid(), "--input-json", vim.json.encode({ ref = offer.ref, optionId = option.optionId }) },
+            local command_id = uuid()
+            command({ "permission", "decide", "--command-id", command_id, "--input-json", vim.json.encode({ ref = offer.ref, optionId = option.optionId }) },
                 { timeout_ms = 15000 }, function(err, envelope)
                     if closed then return end
                     if err then
-                        local reference = err.reference
-                        notify((err.message or err.code) .. (reference and " · owner " .. reference.hostId .. " · command " .. reference.commandId or ""))
+                        local outcome = vim.tbl_contains({ "OUTCOME_UNKNOWN", "UNAVAILABLE", "INVALID_PROTOCOL" }, err.code) and "Outcome unknown: " or ""
+                        notify(outcome .. (err.message or err.code) .. " · inspect owner " .. offer.ref.hostId .. " · command " .. command_id)
                         return
                     end
                     local state = envelope.result.receipt.state
