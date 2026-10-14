@@ -12,7 +12,7 @@ import { runControl, productionControlDependencies } from "../src/cli/control.js
 import { parseHostReply } from "../src/hosts/protocol.js"
 
 for (const coordination of ["reject", "hold"] as const) test(`ordinary host sessions run while task coordination ${coordination}s`, { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { coordination })
+  const f = await acpFixture(t, { coordination, tasks: "reject" })
   if (coordination === "hold") await until(async () => await fileExists(join(f.root, "coordination-entered")) ? true : undefined)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
   const transport = await connectBridge({ inventoryId: randomUUID(), hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })

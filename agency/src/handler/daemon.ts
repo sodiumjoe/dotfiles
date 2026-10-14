@@ -1,3 +1,4 @@
+import { taskToolDescriptor } from "../tasks/mcp.js"
 import { createTaskStore } from "../tasks/store.js"
 import { createTaskService, type TaskService, type TaskServiceOptions } from "../tasks/service.js"
 import { registerTaskEndpoint } from "../tasks/endpoint.js"
@@ -300,7 +301,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
     if (!termination && !closing) {
-      const taskInput: TaskServiceOptions = { store: createTaskStore({ root, hostId: options.paths.hostKey }), hostId: options.paths.hostKey, generation: options.generation, runtime: agents, environment: () => destinationEnvironment(process.env) }
+      const taskInput: TaskServiceOptions = { store: createTaskStore({ root, hostId: options.paths.hostKey }), hostId: options.paths.hostKey, generation: options.generation, runtime: agents, descriptor: taskToolDescriptor, environment: () => destinationEnvironment(process.env) }
       const initializeTasks = options.taskFactory ?? (async (input: TaskServiceOptions) => { await input.store.initialize(); return createTaskService(input) })
       void Promise.resolve().then(() => initializeTasks(taskInput)).then(async service => { if (closing) await service.close(); else ownerTasks = service }).catch(() => {
         if (!closing) taskIssues.push({ path: join(root, "tasks"), launchAttemptId: null, message: "Task service is unavailable" })

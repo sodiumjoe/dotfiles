@@ -12,7 +12,7 @@ import { runControl, productionControlDependencies } from "../src/cli/control.js
 import { parseHostReply, type HostResult } from "../src/hosts/protocol.js"
 
 for (const coordination of ["reject", "hold"] as const) test(`remote ordinary controls work while task startup ${coordination}s`, { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { coordination }), acp = await f.connect()
+  const f = await acpFixture(t, { coordination, tasks: "reject" }), acp = await f.connect()
   if (coordination === "hold") await until(async () => await fileExists(join(f.root, "coordination-entered")) ? true : undefined)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
   const enrollment = { inventoryId: randomUUID(), hostId: f.paths.hostKey, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }

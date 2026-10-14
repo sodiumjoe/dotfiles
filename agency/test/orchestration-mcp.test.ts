@@ -542,3 +542,15 @@ test("MCP schemas expose code assignments and full cross-host stop identity", ()
   const report = agencyToolSchemas.find(tool => tool.name === "agency_report")!.inputSchema as any
   assert.deepEqual(report.properties.report.properties.git.anyOf[1].properties.published, { type: "boolean" })
 })
+test("MCP cancellation aborts its controller when legacy cancellation fails", async () => {
+  const input = new PassThrough(), output = new PassThrough(), entered = Promise.withResolvers<AbortSignal>(), release = Promise.withResolvers<void>()
+  const { taskMcpPeer } = await import("./task-test-support.js"), peer = taskMcpPeer(output, input)
+  const serving = serveMcp({ input, output, call: async (_name, _args, signal) => { entered.resolve(signal!); await new Promise<void>(resolve => { signal!.addEventListener("abort", () => resolve(), { once: true }); void release.promise.then(resolve) }); return { content: [], isError: false } }, cancel: async () => { throw new Error("legacy cancellation failed") } })
+  await peer.initialize()
+  const request = peer.request("tools/call", { name: "agency_wait", arguments: { waitId: randomUUID() } }), signal = await entered.promise
+  peer.notify("notifications/cancelled", { requestId: request.id })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const aborted = signal.aborted
+  release.resolve(); await request.result; peer.close(); await serving
+  assert.equal(aborted, true)
+})
