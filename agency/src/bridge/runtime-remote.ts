@@ -19,7 +19,7 @@ export async function runRuntimeBridgeCli(argv: readonly string[], deps: Runtime
   const forward = createPagedReads((channel, payload, signal) => local.request(channel, payload, { signal }))
   try {
     const localHello = await local.ready
-    const allowed = ["runtime-read", "runtime-write", "host-route", "host-route-read", "host-identity", "entry-open", "runtime-entry-inspect", "read-pages", "read-open", "read-page", "read-close"]
+    const allowed = ["task-read", "task-write", "runtime-read", "runtime-write", "host-route", "host-route-read", "host-identity", "entry-open", "runtime-entry-inspect", "read-pages", "read-open", "read-page", "read-close"]
     const hello = { ...localHello, connectionId: randomUUID(), capabilities: localHello.capabilities.filter(channel => allowed.includes(channel)) }
     publicPeer = createBridgePeer({ input: deps.input, output: deps.output, hello })
     const peer = publicPeer

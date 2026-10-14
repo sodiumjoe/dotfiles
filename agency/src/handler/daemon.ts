@@ -1,3 +1,7 @@
+import { createTaskStore } from "../tasks/store.js"
+import { createTaskService, type TaskService, type TaskServiceOptions } from "../tasks/service.js"
+import { registerTaskEndpoint } from "../tasks/endpoint.js"
+import { destinationEnvironment } from "../agent/environment.js"
 import { AgentError } from "../agent/types.js"
 import { createRuntimeEntry, type RuntimeEntryDriver } from "../entry/runtime.js"
 import { createRuntimeEntryDriver } from "../entry/editor.js"
@@ -52,6 +56,7 @@ export type HandlerOptions = {
   agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
   launchContracts?: readonly LaunchContract[]
   entryDriver?: RuntimeEntryDriver
+  taskFactory?: (input: TaskServiceOptions) => Promise<TaskService>
   coordinationFactory?: CoordinationFactory
   retention?: { now?: () => number; filesystem?: RetentionFileSystem }
 }
@@ -115,6 +120,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let router: HostRouter | undefined
   let bridge: HandlerBridge | undefined
   let taskServices: TaskServices | undefined
+  let ownerTasks: TaskService | undefined
+  let unregisterTasks: (() => void) | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const taskIssues: NonNullable<HandlerStatus["issues"]> = []
@@ -124,6 +131,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const close = async (): Promise<void> => {
     if (closing) return closed
     closing = true
+    unregisterTasks?.()
+    await ownerTasks?.close()
     await taskServices?.close()
     router?.close()
     await bridge?.close()
@@ -265,6 +274,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
     await agents.initialize()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
+    unregisterTasks = registerTaskEndpoint({ bridge, hostId: options.paths.hostKey, generation: options.generation, ready: () => state.phase === "ready" && !closing, service: () => ownerTasks })
     registerRuntimeEndpoint(bridge, dispatchAgent)
     const ownerAgents = agents
     const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
@@ -290,6 +300,11 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
     if (!termination && !closing) {
+      const taskInput: TaskServiceOptions = { store: createTaskStore({ root, hostId: options.paths.hostKey }), hostId: options.paths.hostKey, generation: options.generation, runtime: agents, environment: () => destinationEnvironment(process.env) }
+      const initializeTasks = options.taskFactory ?? (async (input: TaskServiceOptions) => { await input.store.initialize(); return createTaskService(input) })
+      void Promise.resolve().then(() => initializeTasks(taskInput)).then(async service => { if (closing) await service.close(); else ownerTasks = service }).catch(() => {
+        if (!closing) taskIssues.push({ path: join(root, "tasks"), launchAttemptId: null, message: "Task service is unavailable" })
+      })
       taskServices = startTaskServices({ root, paths: options.paths, generation: options.generation, agents, bridge, ...(options.coordinationFactory ? { coordinationFactory: options.coordinationFactory } : {}),
         issue: error => { taskIssues.push({ path: join(root, "bureau"), launchAttemptId: null, message: String(error) }) } })
       catalog.startScheduling()
@@ -301,9 +316,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     throw error
   } finally {
+    await close()
     agents?.close()
     catalog?.close()
-    await close()
     process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal)
     options.status.destroy(); options.gate.destroy()
   }
