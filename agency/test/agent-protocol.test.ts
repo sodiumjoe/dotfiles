@@ -261,3 +261,23 @@ test("local human replies correlate decision identity and snapshot generation", 
   validateAgentReply(reply(historical), inspect)
   assert.throws(() => validateAgentReply(reply(receipt({ commandId: agentId(90) })), inspect), { code: "INVALID_PROTOCOL" })
 })
+
+test("ordinary session operations validate input before dispatch and bind nullable observations", () => {
+  const base = { protocol: AGENT_PROTOCOL, requestId: agentId(10), handlerGeneration: agentId(2) }
+  const target = { agentId: agentId(1), handlerGeneration: agentId(2), providerGeneration: agentId(3) }
+  const start = { ...base, op: "agent_session_start", input: { commandId: agentId(6), handlerGeneration: base.handlerGeneration, cwd: "/workspace/a", backendId: "codex-acp" } }
+  const operations = [start, { ...base, op: "agent_session_inspect", agentId: target.agentId }, { ...base, op: "agent_session_command", commandId: agentId(6), commandGeneration: agentId(4) }, { ...base, op: "agent_session_submit", target, submissionId: agentId(7), text: "hello" }, { ...base, op: "agent_session_submission", target, submissionId: agentId(7) }, { ...base, op: "agent_session_cancel", target, submissionId: agentId(7) }]
+  for (const operation of operations) {
+    assert.deepEqual(parseAgentRequest(operation), operation)
+    assert.throws(() => parseAgentRequest({ ...operation, extra: true }), { code: "INVALID_PROTOCOL" })
+  }
+  for (const input of [{ ...start.input, cwd: "relative" }, { ...start.input, backendId: "other" }, { ...start.input, settings: { unknown: true } }, { ...start.input, nativeParams: { mcpServers: [{ name: "tools", command: "x" }] } }, { ...start.input, nativeParams: { cwd: "/other" } }, { ...start.input, handlerGeneration: agentId(4) }, { ...start.input, environment: {} }]) assert.throws(() => parseAgentRequest({ ...start, input }), { code: "INVALID_PROTOCOL" })
+  for (const text of ["", "\ud800"]) assert.throws(() => parseAgentRequest({ ...operations[3], text }), { code: "INVALID_PROTOCOL" })
+  assert.throws(() => parseAgentRequest({ ...operations[3], text: "a".repeat(262145) }), { code: "INPUT_TOO_LARGE" })
+  for (const [operation, result] of [[operations[1], { state: "session", agentId: target.agentId, agent: null }], [operations[2], { state: "session_command", commandId: agentId(6), commandGeneration: agentId(4), receipt: null }], [operations[4], { state: "submission", target, submissionId: agentId(7), receipt: null }]] as const) {
+    const reply = parseAgentReply({ ...base, ...(result.state === "session_command" ? { commandId: result.commandId } : {}), ok: true, result })
+    validateAgentReply(reply, parseAgentRequest(operation))
+    assert.throws(() => validateAgentReply(reply, parseAgentRequest({ ...operation, ...(result.state === "session" ? { agentId: agentId(8) } : result.state === "session_command" ? { commandGeneration: agentId(8) } : { submissionId: agentId(8) }) })), { code: "INVALID_PROTOCOL" })
+  }
+  for (const operation of [operations[3], operations[5]]) assert.throws(() => validateAgentReply(parseAgentReply({ ...base, ok: true, result: { state: "submission", target, submissionId: agentId(7), receipt: null } }), parseAgentRequest(operation)), { code: "INVALID_PROTOCOL" })
+})

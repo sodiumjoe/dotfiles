@@ -74,6 +74,7 @@ export type AgentService = {
   permissionDecision(connectionId: string, requestId: string | number, result: JsonObject): Promise<boolean>
   detachPermissions(connectionId: string, target?: AgentTuple): void
   observeSession(target: AgentTuple, listener: ConversationListener, configuration: (snapshot: SessionConfiguration) => void): Promise<AcpSessionObservation>
+  beginSession(input: CreateSessionInput): Promise<CommandView>
   createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
 type LivePrompt = { controller: AbortController; promise: Promise<TurnResult | JsonObject> }
@@ -546,6 +547,14 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       finally { clearTimeout(timer) }
     } finally { accepting-- }
   }
+  const beginningSessions = new Set<string>()
+  async function beginSession(request: CreateSessionInput): Promise<CommandView> {
+    const commandId = id(request.commandId)
+    if (beginningSessions.has(commandId) || commands.has(commandId) || intents.has(commandId)) throw new AgentError("COMMAND_CONFLICT")
+    beginningSessions.add(commandId)
+    try { return await acceptLaunch(request, "start") }
+    finally { beginningSessions.delete(commandId) }
+  }
   const start = (request: StartInput): Promise<CommandView> => acceptLaunch(request, "start")
   const restore = (request: RestoreRequest): Promise<CommandView> => acceptLaunch(request, "restore")
   async function importSession(raw: ImportInput): Promise<CommandView> {
@@ -864,6 +873,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         return view(saved)
       })
     },
+    beginSession,
     launchSession: (request, kind, hooks) => acceptLaunch(request, kind, hooks),
     handlerGeneration: generation,
     permissionRouting,

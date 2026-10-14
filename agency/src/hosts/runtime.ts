@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { hash, id, keys, object } from "../catalog/types.js"
+import { isRuntimeSessionRequest, isRuntimeSessionMutation } from "../agent/session-controls.js"
 import { isRuntimeHumanRequest } from "../agent/human-controls.js"
 import { AGENT_PROTOCOL, parseAgentReply, validateAgentReply, parseAgentRequest, agentErrorReply, type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { AgentError } from "../agent/types.js"
@@ -10,7 +11,8 @@ export function registerRuntimeEndpoint(bridge: HandlerBridge, dispatch: (reques
     let request: AgentRequest | undefined
     try {
       request = parseAgentRequest(payload)
-      if (!isRuntimeHumanRequest(request) || (request.op === "agent_permission_decide") !== (channel === "runtime-write")) throw new AgentError("INVALID_PROTOCOL")
+      const mutation = isRuntimeSessionRequest(request) ? isRuntimeSessionMutation(request) : request.op === "agent_permission_decide"
+      if (!isRuntimeHumanRequest(request) && !isRuntimeSessionRequest(request) || mutation !== (channel === "runtime-write")) throw new AgentError("INVALID_PROTOCOL")
       return await dispatch(request)
     } catch (error) {
       if (request) return agentErrorReply(request, error)

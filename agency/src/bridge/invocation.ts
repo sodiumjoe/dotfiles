@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process"
 import { keys, object } from "../catalog/types.js"
-import { snapshotLaunchEnvironment } from "../agent/environment.js"
+import { destinationEnvironment } from "../agent/environment.js"
 import type { Invocation } from "../bureau/host.js"
 import { parseHostEnrollment, type HostEnrollment } from "../hosts/inventory.js"
 import { BRIDGE_FRAME_BYTES, bridgeError } from "./protocol.js"
+
+export { destinationEnvironment } from "../agent/environment.js"
 
 export type HostCall = { channel: "launch" | "launchRoot" | "restoreRoot"; payload: { command: Record<string, unknown>; nativeParams: Invocation["nativeParams"] } }
 export type HostCallHandler = (channel: HostCall["channel"], payload: HostCall["payload"], invocation: Invocation) => Promise<unknown>
@@ -15,9 +17,6 @@ export function parseHostCall(raw: unknown): HostCall {
 }
 export function sanitizedBootstrapEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(["HOME", "USER", "LOGNAME", "SHELL", "PATH", "TMPDIR", "LANG", "LC_ALL", "TERM", "XDG_STATE_HOME"].filter(key => source[key] !== undefined).map(key => [key, source[key]!]))
-}
-export function destinationEnvironment(source: NodeJS.ProcessEnv) {
-  return snapshotLaunchEnvironment(Object.fromEntries(Object.entries(source).filter(([key]) => !key.startsWith("AGENCY_") && !["NVIM", "NVIM_LISTEN_ADDRESS", "VIM", "VIMRUNTIME", "NODE_TEST_CONTEXT"].includes(key))))
 }
 export async function runHostCall(raw: unknown, deps: { environment: NodeJS.ProcessEnv; call: HostCallHandler }): Promise<unknown> {
   const request = parseHostCall(raw)

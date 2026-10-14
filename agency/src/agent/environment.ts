@@ -32,3 +32,7 @@ export function launchEnvironmentDigest(value: LaunchEnvironment): string {
   const entries = Object.entries(parseLaunchEnvironment(value)).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex")
 }
+
+export function destinationEnvironment(source: NodeJS.ProcessEnv) {
+  return snapshotLaunchEnvironment(Object.fromEntries(Object.entries(source).filter(([key]) => !key.startsWith("AGENCY_") && !["NVIM", "NVIM_LISTEN_ADDRESS", "VIM", "VIMRUNTIME", "NODE_TEST_CONTEXT"].includes(key))))
+}
