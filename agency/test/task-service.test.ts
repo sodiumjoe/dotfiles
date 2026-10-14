@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { randomUUID } from "node:crypto"
-import { readdir, readFile } from "node:fs/promises"
+import { readdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { agentServiceFixture } from "./agent-support.js"
 import { privateRoot, until } from "./control-support.js"
@@ -9,7 +9,8 @@ import { sampleTaskRecord, taskHost } from "./task-test-support.js"
 import { createTaskStore } from "../src/tasks/store.js"
 import { createTaskService, type TaskRuntime } from "../src/tasks/service.js"
 import type { TaskCreateInput, TaskRecord } from "../src/tasks/types.js"
-import { AgentError, type CommandView } from "../src/agent/types.js"
+import { waitForTask } from "../src/tasks/wait.js"
+import { AgentError, agentFailure, type CommandView } from "../src/agent/types.js"
 
 const input = (cwd: string): TaskCreateInput => ({ taskId: randomUUID(), description: "inspect fixture", cwd, backendId: "codex-acp", text: "held" })
 const unused = async (): Promise<never> => { throw new Error("unexpected runtime mutation") }
@@ -137,4 +138,74 @@ test("failed post-admission task publication prevents initial submission and shu
   assert.equal(f.methodHistory.filter(method => method === "session/prompt").length, 0)
   const reader = createTaskService({ store: base, hostId: taskHost, generation: f.context.state.handlerGeneration, runtime: inertRuntime(), environment: () => ({}) })
   assert.equal((await reader.inspect(request.taskId)).runtime, "unknown"); await reader.close()
+})
+
+for (const stage of ["launch", "submit"] as const) test(`persisted ${stage} rejection remains failed across restart without runtime history`, async t => {
+  const root = await privateRoot(t), store = createTaskStore({ root, hostId: taskHost }); await store.initialize()
+  const generation = randomUUID(), target = { agentId: randomUUID(), handlerGeneration: generation, providerGeneration: randomUUID() }
+  let launches = 0, submissions = 0, restoredCalls = 0
+  const runtime: TaskRuntime = { ...inertRuntime(), beginSession: async request => {
+    launches++
+    if (stage === "launch") throw new AgentError("MODEL_UNAVAILABLE")
+    return { state: "command", durability: "verified", command: { version: 3, hostId: taskHost, commandId: request.commandId, handlerGeneration: generation, op: "start", input: {}, agentId: target.agentId, target, state: "completed", result: { outcome: "started", target, failure: null, session: { sessionId: "native", protocolVersion: 1 } } } }
+  }, submit: async () => { submissions++; throw new AgentError("BUSY") } }
+  const tasks = createTaskService({ store, hostId: taskHost, generation, runtime, environment: () => ({}) }); t.after(() => tasks.close())
+  const request = input(root), ref = (await tasks.create(request)).ref
+  await until(async () => (await store.read(request.taskId))?.status === "failed" ? true : undefined)
+  assert.equal((await waitForTask({ inspect: ref => tasks.inspect(ref.taskId) }, ref, { timeoutMs: 0 })).state, "failed")
+  await tasks.close()
+  const recordPath = join(root, "tasks", ref.taskId, "record.json"), before = await readFile(recordPath)
+  const forbidden = async (): Promise<never> => { restoredCalls++; throw new Error("runtime access after retained failure") }
+  const restored = createTaskService({ store, hostId: taskHost, generation: randomUUID(), environment: () => ({}), runtime: { beginSession: forbidden, submit: forbidden, commandReceipt: forbidden, submission: forbidden, sessionRecord: forbidden } }); t.after(() => restored.close())
+  assert.equal((await restored.inspect(ref.taskId)).runtime, "failed")
+  for (let i = 0; i < 2; i++) assert.equal((await waitForTask({ inspect: ref => restored.inspect(ref.taskId) }, ref, { timeoutMs: 0 })).state, "failed")
+  assert.deepEqual(await readFile(recordPath), before)
+  await store.writeReport(ref.taskId, { outcome: "completed", summary: "retained report wins" })
+  const reported = await waitForTask({ inspect: ref => restored.inspect(ref.taskId) }, ref, { timeoutMs: 0 })
+  assert.equal(reported.state, "reported"); assert.ok("observation" in reported); assert.equal(reported.observation.report!.summary, "retained report wins")
+  assert.deepEqual(await readFile(recordPath), before)
+  assert.equal(launches, 1); assert.equal(submissions, stage === "submit" ? 1 : 0); assert.equal(restoredCalls, 0)
+})
+
+for (const backend of ["absent", "disabled"] as const) test(`definite ${backend} backend rejection ends the task without launching a provider`, async t => {
+  const f = await agentServiceFixture(t), store = createTaskStore({ root: f.context.paths.persistentRoot, hostId: taskHost }); await store.initialize()
+  if (backend === "disabled") await writeFile(join(f.root, "catalog", "providers.json"), JSON.stringify({ version: 1, providers: [{ ...f.profile, enabled: false }] }), { mode: 0o600 })
+  const tasks = createTaskService({ store, hostId: taskHost, generation: f.context.state.handlerGeneration, runtime: f.service, environment: () => f.input.environment }); t.after(() => tasks.close())
+  const request = { ...input(f.workspace), backendId: backend === "absent" ? "claude-agent-acp" as const : "codex-acp" as const }, ref = (await tasks.create(request)).ref
+  const record = await until(async () => { const value = await store.read(ref.taskId); return value && ["failed", "unknown"].includes(value.status) ? value : undefined })
+  assert.equal(record.status, "failed"); assert.equal(record.issue!.code, "UNAVAILABLE")
+  for (let i = 0; i < 2; i++) assert.equal((await waitForTask({ inspect: ref => tasks.inspect(ref.taskId) }, ref, { timeoutMs: 0 })).state, "failed")
+  assert.equal(f.spawns(), 0)
+})
+
+for (const operation of ["receipt-read", "receipt-failure", "submit"] as const) test(`unavailable ${operation} distinguishes unknown reads from terminal rejection`, async t => {
+  const root = await privateRoot(t), store = createTaskStore({ root, hostId: taskHost }); await store.initialize()
+  const generation = randomUUID(), target = { agentId: randomUUID(), handlerGeneration: generation, providerGeneration: randomUUID() }
+  let launches = 0, submissions = 0
+  const command = (commandId: string, pending: boolean): CommandView => ({ state: "command", durability: "verified", command: { version: 3, hostId: taskHost, commandId, handlerGeneration: generation, op: "start", input: {}, agentId: target.agentId, target, state: pending ? "pending" : "completed", result: pending ? null : { outcome: "started", target, failure: null, session: { sessionId: "native", protocolVersion: 1 } } } })
+  const runtime: TaskRuntime = { ...inertRuntime(), beginSession: async request => { launches++; return command(request.commandId, operation !== "submit") }, commandReceipt: async commandId => {
+    if (operation === "receipt-read") throw new AgentError("UNAVAILABLE")
+    const view = command(commandId, false)
+    return { ...view, command: { ...view.command, result: { outcome: "failed", target, failure: agentFailure(new AgentError("UNAVAILABLE")), session: null } } }
+  }, submit: async () => { submissions++; throw new AgentError("UNAVAILABLE") } }
+  const tasks = createTaskService({ store, hostId: taskHost, generation, runtime, environment: () => ({}) }); t.after(() => tasks.close())
+  const ref = (await tasks.create(input(root))).ref
+  const record = await until(async () => { const value = await store.read(ref.taskId); return value && ["failed", "unknown"].includes(value.status) ? value : undefined })
+  assert.equal(record.status, operation === "receipt-read" ? "unknown" : "failed")
+  assert.equal(record.issue!.code, operation === "receipt-read" ? "OUTCOME_UNKNOWN" : "UNAVAILABLE")
+  assert.equal((await waitForTask({ inspect: ref => tasks.inspect(ref.taskId) }, ref, { timeoutMs: 0 })).state, operation === "receipt-read" ? "pending" : "failed")
+  assert.equal(launches, 1); assert.equal(submissions, operation === "submit" ? 1 : 0)
+})
+
+for (const code of ["INCOMPLETE", "CLEANUP_UNVERIFIED"] as const) test(`verified terminal ${code} receipt remains a known failure after restart`, async t => {
+  const root = await privateRoot(t), store = createTaskStore({ root, hostId: taskHost }); await store.initialize()
+  const generation = randomUUID(), agentId = randomUUID()
+  const runtime: TaskRuntime = { ...inertRuntime(), beginSession: async request => ({ state: "command", durability: "verified", command: { version: 3, hostId: taskHost, commandId: request.commandId, handlerGeneration: generation, op: "start", input: {}, agentId, target: null, state: "completed", result: { outcome: "failed", target: null, failure: agentFailure(new AgentError(code)), session: null } } }) }
+  const tasks = createTaskService({ store, hostId: taskHost, generation, runtime, environment: () => ({}) }); t.after(() => tasks.close())
+  const ref = (await tasks.create(input(root))).ref
+  const record = await until(async () => { const value = await store.read(ref.taskId); return value && ["failed", "unknown"].includes(value.status) ? value : undefined })
+  assert.equal(record.status, "failed"); assert.equal(record.issue!.code, code)
+  await tasks.close()
+  const restored = createTaskService({ store, hostId: taskHost, generation: randomUUID(), runtime: inertRuntime(), environment: () => ({}) }); t.after(() => restored.close())
+  assert.equal((await waitForTask({ inspect: ref => restored.inspect(ref.taskId) }, ref, { timeoutMs: 0 })).state, "failed")
 })

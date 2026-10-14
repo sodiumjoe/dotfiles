@@ -104,7 +104,7 @@ test("expired failed worker retirement preserves task record and report bytes", 
   await f.waitBarrier()
   const agent = (await f.inventory()).agents[0]!; assert.ok(agent.launch)
   await f.killProvider({ agentId: agent.definition.agentId, handlerGeneration: agent.launch.handlerGeneration, providerGeneration: agent.launch.providerGeneration })
-  await until(async () => (await client.inspect(ref)).runtime === "failed" ? true : undefined)
+  await until(async () => (await client.inspect(ref)).record.status === "failed" ? true : undefined)
   await client.report(ref, { outcome: "failed", summary: "startup failed" })
   const directory = join(f.paths.persistentRoot, "tasks", ref.taskId), before = await Promise.all([readFile(join(directory, "record.json")), readFile(join(directory, "report.json"))])
   client.close(); local.close(); await f.crashHandler()

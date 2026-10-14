@@ -13,6 +13,7 @@ import type { LaunchEnvironment } from "../agent/environment.js"
 import type { JsonObject } from "../agent/session-config.js"
 import type { TaskStore } from "./store.js"
 import type { TaskRef, TaskCreateInput, TaskReport, TaskObservation } from "./types.js"
+class TaskRuntimeFailure extends AgentError {}
 export type TaskRuntime = Pick<AgentService, "beginSession" | "commandReceipt" | "submit" | "submission" | "sessionRecord">
 export type TaskService = { create(input: TaskCreateInput): Promise<TaskObservation>; inspect(taskId: string): Promise<TaskObservation>; report(taskId: string, report: TaskReport): Promise<TaskObservation>; close(): Promise<void> }
 export type TaskServiceOptions = { store: TaskStore; runtime: TaskRuntime; hostId: string; generation: string; environment(): LaunchEnvironment; descriptor?(ref: TaskRef): JsonObject }
@@ -58,7 +59,7 @@ export function createTaskService(input: TaskServiceOptions): TaskService {
     if (!view || view.durability !== "verified") throw new TaskError("OUTCOME_UNKNOWN")
     if (view.command.state === "pending") return null
     if (view.command.state !== "completed" || view.command.result?.outcome !== "started" || !view.command.result.target) {
-      if (view.command.result?.failure) throw new AgentError(view.command.result.failure.code)
+      if (view.command.result?.failure) throw new TaskRuntimeFailure(view.command.result.failure.code)
       throw new TaskError("OUTCOME_UNKNOWN")
     }
     const target = view.command.result.target
@@ -72,7 +73,7 @@ export function createTaskService(input: TaskServiceOptions): TaskService {
       let target = started(receipt)
       while (!target) {
         await delay(25, undefined, { signal: lifetime.signal })
-        const next = await bounded(() => runtime.commandReceipt(record.launch.commandId, generation))
+        const next = await bounded(() => runtime.commandReceipt(record.launch.commandId, generation)).catch(() => { throw new TaskError("OUTCOME_UNKNOWN") })
         target = started(next)
         if (next) receipt = next
       }
@@ -82,15 +83,16 @@ export function createTaskService(input: TaskServiceOptions): TaskService {
       await update(record.ref.taskId, { status: "running", stage: null, issue: null })
     } catch (error) {
       if (lifetime.signal.aborted) return
-      await update(record.ref.taskId, { status: error instanceof AgentError && !["INCOMPLETE", "UNAVAILABLE", "CLEANUP_UNVERIFIED"].includes(error.code) ? "failed" : "unknown", issue: issueFor(error) }).catch(() => undefined)
+      await update(record.ref.taskId, { status: error instanceof TaskRuntimeFailure || error instanceof AgentError && !["INCOMPLETE", "CLEANUP_UNVERIFIED"].includes(error.code) ? "failed" : "unknown", issue: issueFor(error) }).catch(() => undefined)
     }
   }
   async function inspect(raw: string): Promise<TaskObservation> {
     const task = taskId(raw), ref = { hostId, taskId: task }, report = await store.readReport(task), record = await store.read(task)
     if (!record) throw new TaskError("TASK_NOT_FOUND", ref)
     const observation: TaskObservation = { ref, record, report, runtime: "unknown", issue: record.issue }
-    if (report || lifetime.signal.aborted || record.launch.handlerGeneration !== generation) return observation
+    if (report) return observation
     if (record.status === "failed") return { ...observation, runtime: "failed" }
+    if (lifetime.signal.aborted || record.launch.handlerGeneration !== generation) return observation
     try {
       let target = record.session
       if (!target) {
