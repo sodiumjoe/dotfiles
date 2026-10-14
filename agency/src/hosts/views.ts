@@ -3,7 +3,7 @@ import type { HostRuntimeClient } from "./runtime.js"
 import type { HostObservation, OwnerRoster, RosterView, PermissionView } from "./protocol.js"
 import type { PermissionSnapshot } from "../orchestration/permission-routing.js"
 
-type ViewInput = { client: HostRuntimeClient; localHostId: string; localHostname: string; hosts: Array<{ hostId: string; hostname: string }>; cwd?: string }
+type ViewInput = { client: Pick<HostRuntimeClient, "identity" | "human">; localHostId: string; localHostname: string; hosts: Array<{ hostId: string; hostname: string }>; cwd?: string }
 async function observe<T>(input: ViewInput, read: (hostId: string) => Promise<T>): Promise<HostObservation<T>[]> {
   const hosts = [...new Map([{ hostId: input.localHostId, hostname: input.localHostname }, ...input.hosts].map(host => [host.hostId, { hostId: host.hostId, hostname: host.hostname }])).values()]
   const results = await Promise.allSettled(hosts.map(host => read(host.hostId)))

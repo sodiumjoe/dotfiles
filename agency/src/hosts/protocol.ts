@@ -2,6 +2,9 @@ import { parseRuntimeEntry, type RuntimeEntry } from "../entry/runtime.js"
 import { parsePreparedWorktree, type PreparedWorktree } from "../git/worktree.js"
 import { isDeepStrictEqual } from "node:util"
 import { hash, id, keys, object, text } from "../catalog/types.js"
+import { parseTuple } from "../agent/types.js"
+import type { RuntimeSessionResult } from "../agent/session-controls.js"
+import { validateSessionOwner, type SessionMutationReference } from "./runtime.js"
 import { AGENT_PROTOCOL, parseAgentReply } from "../agent/protocol.js"
 import type { AgentPage } from "../agent/queries.js"
 import type { RuntimeHumanResult } from "../agent/human-controls.js"
@@ -13,8 +16,8 @@ export type OwnerRoster = { handlerGeneration: string; agents: AgentPage["agents
 export type RosterView = { state: "roster"; localHostId: string; hosts: HostObservation<OwnerRoster>[] }
 export type PermissionView = { state: "permissions"; hosts: HostObservation<PermissionSnapshot>[]; pending: PermissionOffer[] }
 export const HOST_PROTOCOL = "agency-host/1" as const
-export type HostResult = { state: "entry"; receipt: RuntimeEntry | null; enrollment: HostEnrollment | null } | { state: "worktree"; worktree: PreparedWorktree } | RosterView | PermissionView | RuntimeHumanResult | { state: "hosts"; hosts: HostEnrollment[] } | { state: "enrolled"; enrollment: HostEnrollment }
-export type HostReply = { protocol: typeof HOST_PROTOCOL; requestId: string; hostId: string | null; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: HostResult } | { ok: false; error: { code: string; message: string; reference?: { hostId: string; commandId: string } } })
+export type HostResult = { state: "entry"; receipt: RuntimeEntry | null; enrollment: HostEnrollment | null } | { state: "worktree"; worktree: PreparedWorktree } | RosterView | PermissionView | RuntimeHumanResult | RuntimeSessionResult | { state: "hosts"; hosts: HostEnrollment[] } | { state: "enrolled"; enrollment: HostEnrollment }
+export type HostReply = { protocol: typeof HOST_PROTOCOL; requestId: string; hostId: string | null; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: HostResult } | { ok: false; error: { code: string; message: string; reference?: { hostId: string; commandId: string } | SessionMutationReference } })
 export function parseHostReply(raw: unknown): HostReply {
   const value = object(raw)
   if (value.protocol !== HOST_PROTOCOL || typeof value.ok !== "boolean") throw new Error("INVALID_PROTOCOL")
@@ -23,13 +26,25 @@ export function parseHostReply(raw: unknown): HostReply {
   keys(value, ["protocol", "requestId", "hostId", "handlerGeneration", ...(common.commandId ? ["commandId"] : []), "ok", value.ok ? "result" : "error"])
   if (!value.ok) {
     const error = object(value.error); keys(error, ["code", "message", ...(error.reference === undefined ? [] : ["reference"])])
-    const ref = error.reference === undefined ? undefined : object(error.reference)
-    if (ref) keys(ref, ["hostId", "commandId"])
-    return { ...common, ok: false, error: { code: text(error.code), message: text(error.message), ...(ref ? { reference: { hostId: hash(ref.hostId), commandId: id(ref.commandId) } } : {}) } }
+    let reference: Extract<HostReply, { ok: false }>["error"]["reference"]
+    if (error.reference !== undefined) {
+      const ref = object(error.reference), hostId = hash(ref.hostId)
+      if (ref.kind === "command") {
+        keys(ref, ["kind", "hostId", "handlerGeneration", "commandId"])
+        reference = { kind: "command", hostId, handlerGeneration: id(ref.handlerGeneration), commandId: id(ref.commandId) }
+        if (common.commandId && common.commandId !== reference.commandId) throw new Error("INVALID_PROTOCOL")
+      } else if (ref.kind === "submission") {
+        keys(ref, ["kind", "hostId", "target", "submissionId"])
+        reference = { kind: "submission", hostId, target: parseTuple(ref.target), submissionId: id(ref.submissionId) }
+        if (common.commandId) throw new Error("INVALID_PROTOCOL")
+      } else { keys(ref, ["hostId", "commandId"]); reference = { hostId, commandId: id(ref.commandId) } }
+      if (common.hostId !== null && common.hostId !== hostId) throw new Error("INVALID_PROTOCOL")
+    }
+    return { ...common, ok: false, error: { code: text(error.code), message: text(error.message), ...(reference ? { reference } : {}) } }
   }
   const r = object(value.result)
   const ownerReply = (result: unknown, generation = common.handlerGeneration) => {
-    const reply = parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: common.requestId, handlerGeneration: generation, ok: true, result })
+    const reply = parseAgentReply({ protocol: AGENT_PROTOCOL, requestId: common.requestId, handlerGeneration: generation, ...(common.commandId && ["command", "session_command"].includes(String(object(result).state)) ? { commandId: common.commandId } : {}), ok: true, result })
     if (!reply.ok) throw new Error("INVALID_PROTOCOL")
     return reply.result
   }
@@ -75,8 +90,13 @@ export function parseHostReply(raw: unknown): HostReply {
   else if (r.state === "enrolled") { keys(r, ["state", "enrollment"]); if (common.hostId !== null) throw new Error("INVALID_PROTOCOL"); result = { state: "enrolled", enrollment: parseHostEnrollment(r.enrollment) } }
   else {
     if (common.hostId === null) throw new Error("INVALID_PROTOCOL")
-    result = ownerReply(r) as RuntimeHumanResult
-    if (!["page", "permissions", "permission"].includes(result.state)) throw new Error("INVALID_PROTOCOL")
+    result = ownerReply(r) as RuntimeHumanResult | RuntimeSessionResult
+    if (!["page", "permissions", "permission", "command", "session", "session_command", "submission"].includes(result.state)) throw new Error("INVALID_PROTOCOL")
+    if (["command", "session", "session_command", "submission"].includes(result.state)) {
+      if (common.handlerGeneration === null) throw new Error("INVALID_PROTOCOL")
+      validateSessionOwner(result as RuntimeSessionResult, common.hostId)
+      if (result.state === "command" && result.command.handlerGeneration !== common.handlerGeneration) throw new Error("INVALID_PROTOCOL")
+    }
     if (result.state === "permissions" && result.snapshot.hostId !== common.hostId || result.state === "permission" && result.receipt && (result.receipt.commandId !== common.commandId || result.receipt.ref.hostId !== common.hostId)) throw new Error("INVALID_PROTOCOL")
   }
   return { ...common, ok: true, result }
