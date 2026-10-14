@@ -1,3 +1,5 @@
+import { destinationShellCommand, sanitizedBootstrapEnvironment } from "./bootstrap.js"
+export { destinationShellCommand, posixQuote, sanitizedBootstrapEnvironment } from "./bootstrap.js"
 import { spawn } from "node:child_process"
 import { keys, object } from "../catalog/types.js"
 import { destinationEnvironment } from "../agent/environment.js"
@@ -15,20 +17,9 @@ export function parseHostCall(raw: unknown): HostCall {
   const payload = object(v.payload); keys(payload, ["command", "nativeParams"])
   return { channel: v.channel, payload: { command: object(payload.command), nativeParams: object(payload.nativeParams) as Invocation["nativeParams"] } }
 }
-export function sanitizedBootstrapEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(["HOME", "USER", "LOGNAME", "SHELL", "PATH", "TMPDIR", "LANG", "LC_ALL", "TERM", "XDG_STATE_HOME"].filter(key => source[key] !== undefined).map(key => [key, source[key]!]))
-}
 export async function runHostCall(raw: unknown, deps: { environment: NodeJS.ProcessEnv; call: HostCallHandler }): Promise<unknown> {
   const request = parseHostCall(raw)
   return deps.call(request.channel, request.payload, { environment: destinationEnvironment(deps.environment), nativeParams: request.payload.nativeParams })
-}
-export function posixQuote(value: string): string {
-  if (!value.isWellFormed() || /[\x00-\x1f\x7f-\x9f]/u.test(value)) bridgeError("INVALID_SHELL_ARGUMENT")
-  return "'" + value.replaceAll("'", "'\\''") + "'"
-}
-export function destinationShellCommand(enrollment: HostEnrollment, action: "internal-host-call" | "internal-host-bridge" | "internal-runtime-bridge"): string {
-  const e = parseHostEnrollment(enrollment), args = action === "internal-host-bridge" ? ` --agy-path ${posixQuote(e.agyPath)} --login-shell ${posixQuote(e.loginShell)}` : "", command = `exec ${posixQuote(e.agyPath)} ${action}${args} >&3 3>&-`
-  return `exec 3>&1; exec ${posixQuote(e.loginShell)} -lc ${posixQuote(command)} 1>&2`
 }
 export async function invokeDestination(enrollment: HostEnrollment, raw: HostCall, options: { environment?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<unknown> {
   const request = parseHostCall(raw), bytes = Buffer.from(JSON.stringify(request) + "\n")

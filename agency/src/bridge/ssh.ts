@@ -4,7 +4,7 @@ import type { EventEmitter } from "node:events"
 import { parseHostEnrollment, type HostEnrollment } from "../hosts/inventory.js"
 import { createBridgePeer, type RequestOptions } from "./codec.js"
 import { bridgeError, type BridgeHello } from "./protocol.js"
-import { destinationShellCommand, sanitizedBootstrapEnvironment } from "./invocation.js"
+import { destinationShellCommand, sanitizedBootstrapEnvironment } from "./bootstrap.js"
 import { requestBridgeRead } from "./paging.js"
 
 export type BridgeProcess = EventEmitter & { stdin: Writable; stdout: Readable; stderr: Readable; kill(): boolean }
