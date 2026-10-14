@@ -18,7 +18,7 @@ describe("Agency routed human approvals", function()
         local calls, callback = {}, nil
         local api = require("sodium.agency.permissions").new({ uuid = function() return fixture.id(99) end,
             select = function(options, _, cb) assert.are.equal("deny", options[2].optionId); callback = cb end,
-            command = function(argv, _, cb) calls[#calls + 1] = argv; cb(nil, { result = { state = "applied" } }) end })
+            command = function(argv, _, cb) calls[#calls + 1] = argv; cb(nil, { result = argv[2] == "decide" and { state = "permission", receipt = { state = "applied" } } or { pending = {}, hosts = {} } }) end })
         local a = offer("a", 1); api.update({ pending = { a } }); api.choose(a.ref)
         callback(a.options[2])
         assert.are.same({ "permission", "decide" }, { calls[1][1], calls[1][2] })
@@ -33,15 +33,22 @@ describe("Agency routed human approvals", function()
         api.update({ pending = {} }); callback(a.options[1]); assert.are.equal(0, calls)
         api.update({ pending = { a } }); api.choose(a.ref); api.close(); callback(a.options[1]); assert.are.equal(0, calls)
     end)
-    it("stream loss invalidates an open decision even if the same offer later returns", function()
-        local update, lost, callback, calls, closed = nil, nil, nil, 0, false
-        local api = require("sodium.agency.permissions").new({ watch = function()
-            return { start = function(_, cb, failure) update, lost = cb, failure end, close = function() closed = true end }
-        end, select = function(_, _, cb) callback = cb end, command = function() calls = calls + 1 end })
-        local a = offer("a", 1); api.subscribe(); update({ pending = { a } }); api.choose(a.ref)
-        lost(); update({ pending = { a } }); callback(a.options[1]); assert.are.equal(0, calls)
-        api.close(); assert.is_true(closed)
-        update({ pending = { a } }); assert.are.equal(0, #api.pending())
+    it("failed refresh invalidates an open decision even if the offer returns", function()
+        local callback, calls = nil, 0
+        local api = require("sodium.agency.permissions").new({ select = function(_, _, cb) callback = cb end,
+            command = function(_, _, cb) calls = calls + 1; cb({ code = "UNAVAILABLE" }) end,
+            watch = function() error("watch forbidden") end })
+        local a = offer("a", 1); api.update({ pending = { a } }); api.choose(a.ref)
+        api.refresh(); api.update({ pending = { a } }); callback(a.options[1]); assert.are.equal(1, calls)
+        api.close()
+    end)
+    it("unknown outcome retains the owner and command without refresh or resend", function()
+        local callback, calls, messages = nil, 0, {}
+        local api = require("sodium.agency.permissions").new({ select = function(_, _, cb) callback = cb end,
+            uuid = function() return fixture.id(99) end, notify = function(value) messages[#messages + 1] = value end,
+            command = function(_, _, cb) calls = calls + 1; cb({ code = "OUTCOME_UNKNOWN", message = "unknown", reference = { hostId = string.rep("a", 64), commandId = fixture.id(99) } }) end })
+        local a = offer("a", 1); api.update({ pending = { a } }); api.choose(a.ref); callback(a.options[1])
+        assert.are.equal(1, calls); assert.is_truthy(messages[1]:find(fixture.id(99), 1, true)); api.close()
     end)
     it("renders full opaque subjects in the routed approval preview", function()
         local original, options = _G.Snacks, nil

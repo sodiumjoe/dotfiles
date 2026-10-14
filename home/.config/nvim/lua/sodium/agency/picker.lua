@@ -84,85 +84,87 @@ local function after_close(picker, valid, callback, notify)
     vim.schedule(finish)
 end
 
-local function bureau_item(row, local_rows, local_generation, active)
-    local execution = row.execution ~= vim.NIL and row.execution or nil
-    local local_row
-    if execution and execution.handlerGeneration == local_generation then
-        for _, candidate in ipairs(local_rows) do
-            local launch = candidate.record.launch
-            if launch and launch ~= vim.NIL and candidate.record.definition.agentId == execution.agentId
-                and launch.handlerGeneration == execution.handlerGeneration and launch.providerGeneration == execution.providerGeneration then
-                local_row = candidate; break
-            end
+local function owner_item(host, row, local_host, active)
+    local record, launch = row.record, row.record.launch
+    if record.version ~= 3 or not launch or launch == vim.NIL then return { issue = row, text = host.hostname .. " · unavailable session" } end
+    local item = row_item(row, local_host and active or nil)
+    item.id = host.hostId .. ":" .. record.definition.agentId
+    item.text = item.text .. " · " .. host.hostname
+    vim.list_extend(item.preview, { "Host: " .. host.hostname, "Host ID: " .. host.hostId })
+    if not local_host then
+        item.owner, item.view = vim.deepcopy(row), nil
+        if row.live and record.phase == "ready" and launch.handlerGeneration == host.value.handlerGeneration then
+            item.remote_ref = { hostId = host.hostId, target = { agentId = record.definition.agentId,
+                handlerGeneration = launch.handlerGeneration, providerGeneration = launch.providerGeneration } }
         end
-    end
-    local item = local_row and row_item(local_row, active) or {}
-    local title = require("sodium.agentic_sessions").parse_title(row.title ~= vim.NIL and row.title or row.attempt ~= vim.NIL and row.attempt and row.attempt.description or "New conversation", true)
-    title = vim.trim(title:gsub("%c", " "):gsub("%s+", " "))
-    if vim.fn.strchars(title) > 72 then title = vim.fn.strcharpart(title, 0, 71) .. "…" end
-    local backend = row.backendId ~= vim.NIL and row.backendId or "Provider"
-    local model = (row.settings.configValues or {}).model or row.settings.modelId or ""
-    local task = row.attempt ~= vim.NIL and row.attempt and row.attempt.state or "unassigned"
-    item.text = (local_row and item.text or table.concat({ title, backend .. (model ~= "" and "/" .. model or ""), row.cwd, row.providerPhase }, " · "))
-        .. " · " .. row.hostname .. " · " .. row.connectivity
-    item.roster = vim.deepcopy(row)
-    item.preview = item.preview or { title, "" }
-    vim.list_extend(item.preview, { "Host: " .. row.hostname, "Host ID: " .. row.agent.hostId,
-        "Agent ID: " .. row.agent.agentId, "Provider: " .. row.providerPhase, "Task: " .. task,
-        "Connectivity: " .. row.connectivity, "Observed at: " .. tostring(row.observedAt),
-        "Permission requests: " .. tostring(row.permissionCount), "Execution: " .. vim.inspect(execution),
-        "Lineage: " .. vim.inspect(row.lineage), "Parent: " .. vim.inspect(row.parent), "Depth: " .. tostring(row.depth),
-        "Lineage issue: " .. tostring(row.lineageIssue), "Assignment: " .. vim.inspect(row.attempt) })
-    if not local_row and execution and row.inventoryId and row.inventoryId ~= vim.NIL then
-        item.remote_ref = { inventoryId = row.inventoryId, hostId = row.agent.hostId,
-            target = { agentId = execution.agentId, handlerGeneration = execution.handlerGeneration, providerGeneration = execution.providerGeneration } }
     end
     return item
 end
 
 function M.open(controller)
-    local closed, polling, generation = false, false, 0
-    local picker, timer, watch, roster, unavailable, local_generation
+    local closed, polling, owner_polling, generation = false, false, false, 0
+    local picker, timer, roster, unavailable, local_generation
     local local_rows, local_issues = {}, {}
     local function render()
         if closed or not picker then return end
         local items, active = {}, controller.snapshot()
-        if roster then
-            for _, row in ipairs(roster.agents) do items[#items + 1] = bureau_item(row, local_rows, local_generation, active) end
-        else
-            if unavailable then items[#items + 1] = { text = "Bureau unavailable · local agents", issue = { code = unavailable } } end
-            for _, row in ipairs(local_rows) do
-                if row.record.version == 3
-                    and (row.record.phase == "ready" and row.live or vim.tbl_contains({ "starting", "restoring", "stopping" }, row.record.phase))
-                    and row.record.launch and row.record.launch ~= vim.NIL
-                    and row.record.launch.handlerGeneration == local_generation then items[#items + 1] = row_item(row, active) end
-            end
-            for _, issue in ipairs(local_issues) do items[#items + 1] = { issue = issue, text = "Issue: " .. (issue.path or "") .. " · " .. issue.message } end
+        for _, row in ipairs(local_rows) do
+            if row.record.version == 3
+                and (row.record.phase == "ready" and row.live or vim.tbl_contains({ "starting", "restoring", "stopping" }, row.record.phase))
+                and row.record.launch and row.record.launch ~= vim.NIL
+                and row.record.launch.handlerGeneration == local_generation then items[#items + 1] = row_item(row, active) end
         end
+        for _, issue in ipairs(local_issues) do items[#items + 1] = { issue = issue, text = "Issue: " .. (issue.path or "") .. " · " .. (issue.message or issue.code) } end
+        if roster then
+            for _, host in ipairs(roster.hosts) do
+                if host.state == "unavailable" then items[#items + 1] = { issue = host, text = host.hostname .. " · " .. host.code }
+                else
+                    local is_local = host.hostId == roster.localHostId
+                    if not is_local or #local_rows == 0 then
+                        for _, row in ipairs(host.value.agents) do items[#items + 1] = owner_item(host, row, is_local, active) end
+                    end
+                    for _, issue in ipairs(host.value.issues) do items[#items + 1] = { issue = issue, text = host.hostname .. " · " .. issue.message } end
+                end
+            end
+        elseif unavailable then items[#items + 1] = { issue = { code = unavailable }, text = "Owner reads unavailable · " .. unavailable } end
         picker.opts.items = items
         picker:find({ refresh = true })
     end
-    local function refresh()
+    local function refresh_local()
         if closed or polling then return end
-        polling, generation = true, generation + 1
+        polling = true
         local token = generation
         controller.page({ allow_issues = true, active = true }, function(err, result)
             if closed or token ~= generation then return end
             polling = false
-            if err then local_issues = { err }
+            if err then local_rows, local_issues = {}, { err }
             else local_rows, local_issues, local_generation = result.agents, result.issues, result.handlerGeneration end
             render()
         end)
     end
-    local function inspect(item) controller.notify(vim.inspect(item and (item.roster or item.view or item.issue))) end
+    local function refresh_owners()
+        if closed or owner_polling or not controller.roster then return end
+        owner_polling = true
+        local token = generation
+        controller.roster(function(err, result)
+            if closed or token ~= generation then return end
+            owner_polling = false
+            if err then roster, unavailable = nil, err.code
+            elseif type(result) ~= "table" or result.state ~= "roster" or type(result.hosts) ~= "table" then roster, unavailable = nil, "INVALID_PROTOCOL"
+            else roster, unavailable = result, nil end
+            render()
+        end)
+    end
+    local function refresh() refresh_local(); refresh_owners() end
+    local function inspect(item) controller.notify(vim.inspect(item and (item.owner or item.view or item.issue))) end
     local function actionable(item)
-        return item and (not item.roster or item.roster.dispatchable and item.roster.connectivity == "connected")
+        return item and (item.remote_ref ~= nil or item.view ~= nil)
     end
     local function attach(p, item)
         local row = item and item.view
         if not actionable(item) then inspect(item); return end
         if item.remote_ref or row and row.record.version == 3 and row.record.phase == "ready" and row.live then
-            local id, selected, ref = item.id, vim.deepcopy(row), vim.deepcopy(item.remote_ref)
+            local id, selected, ref = row and row.record.definition.agentId, vim.deepcopy(row), vim.deepcopy(item.remote_ref)
             local tab = vim.api.nvim_get_current_tabpage()
             local valid = controller.selection_guard and controller.selection_guard() or function() return true end
             after_close(p, function() return valid() and vim.api.nvim_tabpage_is_valid(tab) and vim.api.nvim_get_current_tabpage() == tab end,
@@ -188,20 +190,11 @@ function M.open(controller)
             if closed then return end
             closed, generation = true, generation + 1
             if timer then timer:stop(); timer:close() end
-            if watch then watch.close(); watch = nil end
         end,
     })
     timer = (controller.timer_factory or vim.uv.new_timer)()
     timer:start(5000, 5000, vim.schedule_wrap(refresh))
     refresh()
-    if controller.watch_roster then
-        watch = controller.watch_roster(function(value)
-            if closed then return end
-            if type(value.agents) ~= "table" or type(value.hosts) ~= "table" then roster, unavailable = nil, "INVALID_PROTOCOL"
-            else roster, unavailable = value, nil end
-            render()
-        end, function(code) if closed then return end; roster, unavailable = nil, code; render() end)
-    end
     return picker
 end
 

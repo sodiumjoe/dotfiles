@@ -40,13 +40,10 @@ function M.setup(deps)
         roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
-    api.watch_roster = deps.watch_roster
-    if not api.watch_roster and not deps.client then
-        api.watch_roster = function(update, unavailable)
-            local watch = require("sodium.agency.watch").new()
-            watch.start({ "roster", "watch" }, update, unavailable)
-            return watch
-        end
+    api.roster = deps.roster or function(callback)
+        (deps.client or require("sodium.agency.control")).command({ "roster", "list" }, { timeout_ms = 10000 }, function(err, envelope)
+            callback(err, envelope and envelope.result)
+        end)
     end
     function api.snapshot()
         local manager = local_manager()
@@ -221,7 +218,6 @@ function M.setup(deps)
         local manager = local_manager()
         if not manager then api.notify("A local Agency attachment is required"); return end
         manager._agency_routed_permissions = manager._agency_routed_permissions or require("sodium.agency.permissions").new({ notify = api.notify })
-        manager._agency_routed_permissions.subscribe()
         manager._agency_routed_permissions.open()
     end
     function api.verify_result(report_id)

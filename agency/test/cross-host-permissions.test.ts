@@ -176,7 +176,7 @@ for (const expanded of [false, true]) test("long permission labels " + (expanded
   assert.equal((await recovered.snapshot()).pending.length, 0); assert.equal(f.replies(), 1)
 })
 
-test("permission display labels have no field-length cap and preserve aggregate bounds with unchanged option IDs", async t => {
+test("permission display labels preserve offer bounds and allow paged snapshots with unchanged option IDs", async t => {
   const f = await fixture(t), offer = { ref: { hostId: f.hostId, target: f.target, permissionId: randomUUID(), revision: 1 }, title: "Permission", subject: {}, originCwd: "/workspace", toolCallId: "tool", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] }
   for (const name of ["a".repeat(65536), "a".repeat(65537), "é".repeat(65537), "x".repeat(524288)]) {
     assert.equal(parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], name }] }).options[0]!.name, name)
@@ -188,5 +188,7 @@ test("permission display labels have no field-length cap and preserve aggregate 
   const oversized = { ...offer, options: Array.from({ length: 17 }, (_, i) => ({ optionId: String(i), name: "x".repeat(65536), kind: "allow_once" })) }
   assert.throws(() => parsePermissionOffer(oversized), /RECORD_TOO_LARGE/)
   assert.throws(() => parsePermissionOffer({ ...offer, options: [{ ...offer.options[0], name: "x".repeat(1048576) }] }), /RECORD_TOO_LARGE/)
-  assert.throws(() => parsePermissionSnapshot({ hostId: f.hostId, handlerGeneration: f.generation, throughSeq: 0, pending: Array.from({ length: 17 }, () => parsePermissionOffer({ ...offer, ref: { ...offer.ref, permissionId: randomUUID() }, options: [{ ...offer.options[0], name: "x".repeat(65536) }] })), receipts: [] }), /RECORD_TOO_LARGE/)
+  const snapshot = { hostId: f.hostId, handlerGeneration: f.generation, throughSeq: 0, pending: Array.from({ length: 17 }, () => parsePermissionOffer({ ...offer, ref: { ...offer.ref, permissionId: randomUUID() }, options: [{ ...offer.options[0], name: "x".repeat(65536) }] })), receipts: [] }
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) > 1048576)
+  assert.deepEqual(parsePermissionSnapshot(snapshot), snapshot)
 })

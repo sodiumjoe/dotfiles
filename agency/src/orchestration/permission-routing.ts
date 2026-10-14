@@ -50,7 +50,7 @@ export function parsePermissionSnapshot(raw: unknown): PermissionSnapshot {
   if (!Array.isArray(v.pending) || !Array.isArray(v.receipts)) fail("INVALID_PERMISSION")
   const result = { hostId: hash(v.hostId), handlerGeneration: id(v.handlerGeneration), throughSeq: timestamp(v.throughSeq), pending: v.pending.map(parsePermissionOffer), receipts: v.receipts.map(parsePermissionReceipt) }
   if (result.pending.some(o => o.ref.hostId !== result.hostId || o.ref.target.handlerGeneration !== result.handlerGeneration) || result.receipts.some(r => r.ref.hostId !== result.hostId) || new Set(result.pending.map(o => permissionKey(o.ref))).size !== result.pending.length) fail("INVALID_PERMISSION")
-  encode(result); return result
+  return result
 }
 export function createPermissionHistory(hostId: string) {
   const offers = new Map<string, PermissionOffer>(), receipts = new Map<string, PermissionReceipt>(), consumed = new Set<string>()

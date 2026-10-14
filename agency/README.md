@@ -335,3 +335,13 @@ Conflicts preserve the destination and any partial progress. Agency does not res
 The controls have deterministic fixture coverage only until the separate live acceptance batch is approved. These commands do not grant deployment, provisioning, reboot, retirement or shared-checkout integration authority to an agent.
 
 The controls acceptance proposal uses the separate `agency-controls-acceptance/1` schema. `node dist/scripts/accept-cross-host.js --check --config PATH` validates its pending approval, observed host identities, candidate source/build, isolated deployment paths, two-prompt budget, exact common Git remote identity, immutable base, stable initial/advance publication commands, receipt-derived worker submission and publication ref, editor paths and scoped cleanup. This is configuration-only; it executes no live operation. The earlier transport schema continues to reject installation, publication and Git integration. Live controls acceptance requires its own reviewed approval batch and fresh candidate generation readback before any provider submission.
+
+### Independent host controls
+
+The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly, even when optional task coordination is unavailable. Configure destinations with `agy host enroll --input-json JSON --json` and inspect configuration with `agy host list --json`. Enrollment uses the existing host configuration files.
+
+`agy roster list --json` and `agy permission list --json` return `agency-host/1` aggregates with an available or unavailable observation per host. Roster aggregation reads every page from each owner; an unavailable observation is not a failed session. Use `--host HOST_ID` for a single owner, where roster limit/cursor filters are supported. Explicit `--local` roster and permission commands retain `agency-agent/3` output.
+
+A permission decision uses its exact host, Handler and provider generations. Supply a stable command ID in the JSON or through `--command-id`. Inspect with `agy permission inspect COMMAND_ID --host HOST_ID --json`; inspection requires an explicit owner. `OUTCOME_UNKNOWN` retains the owner and command reference and requires explicit inspection before another decision. Connections do not resend mutations. Ordinary permission/roster watch commands are excluded; the editor refreshes owner views explicitly.
+
+The task bridge, durable permission history and report-based Git commands remain compatibility APIs during migration. Owner permission history still depends on owner storage because legacy readers consume it. The host client does not mirror or replay that history.

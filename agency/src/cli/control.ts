@@ -1,3 +1,6 @@
+import { runHostClient } from "../hosts/cli.js"
+import type { HostRoute } from "../hosts/router.js"
+import type { createHostInventory } from "../hosts/inventory.js"
 import type { Writable } from "node:stream"
 import type { BureauReply, BureauRequest } from "../bureau/protocol.js"
 import { runBureauClient } from "../bureau/cli.js"
@@ -26,6 +29,8 @@ import { DarwinObservationUnavailable } from "../platform/darwin.js"
 import { LinuxObservationUnavailable } from "../platform/linux.js"
 
 export type ControlDependencies = {
+  hostInventory?(env: HandlerEnvironment): Pick<ReturnType<typeof createHostInventory>, "list" | "enroll">
+  hostRoute?(env: HandlerEnvironment, route: HostRoute, signal?: AbortSignal): Promise<unknown>
   watch?: { stdout: Writable; onSignal(signal: "SIGINT" | "SIGTERM", callback: () => void): () => void }
   callBureau?(env: HandlerEnvironment, request: BureauRequest, timeoutMs?: number): Promise<BureauReply>
   attachment?: Omit<AttachmentDependencies, "environment" | "inspect" | "stderr">
@@ -123,6 +128,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
   if (argv.includes("--local")) return runLocalHumanClient(argv, dependencies)
+  if (["host", "roster", "permission"].includes(argv[0] ?? "")) return runHostClient(argv, dependencies)
   if (["bureau", "run", "assignment", "permission", "roster", "entry", "git"].includes(argv[0] ?? "")) return runBureauClient(argv, dependencies)
   if (argv[0] === "model" && argv[1] === "recover-probe") return runProbeRecovery(argv, dependencies)
   if (argv[0] === "agent" && argv[1] === "attach") return runAttachmentClient(argv, { ...productionAttachmentStreams(), ...dependencies.attachment, environment: dependencies.environment, inspect: dependencies.inspect, stderr: dependencies.stderr })

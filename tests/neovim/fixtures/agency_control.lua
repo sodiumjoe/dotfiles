@@ -4,7 +4,7 @@ M.target_a = { agentId = M.id(1), handlerGeneration = M.id(2), providerGeneratio
 M.target_b = { agentId = M.id(4), handlerGeneration = M.id(2), providerGeneration = M.id(5) }
 M.selection = { providerId = "codex-acp", modelId = "model-a", reasoning = { kind = "value", value = "high" }, mode = "review", permissionProfile = "fixture" }
 function M.agent(target, phase)
-    return { record = { version = 3, definition = { agentId = target.agentId, cwd = "/work/a", backendId = "codex-acp" },
+    return { record = { version = 3, definition = { hostId = string.rep("a", 64), agentId = target.agentId, cwd = "/work/a", backendId = "codex-acp" },
         launch = vim.deepcopy(target), phase = phase or "ready", settings = { modelId = "model-a" } },
         live = (phase or "ready") == "ready", cleanup = phase == "stopped" and "verified" or "unverified" }
 end

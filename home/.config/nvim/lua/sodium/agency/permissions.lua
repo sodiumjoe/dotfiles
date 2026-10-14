@@ -25,7 +25,7 @@ function M.new(deps)
     end
     local uuid = deps.uuid or require("sodium.agency.control").uuid
     local notify = deps.notify or function(message) vim.notify("Agency: " .. message) end
-    local api, requests, closed, available, epoch, stream, unavailable = {}, {}, false, false, 0, nil, {}
+    local api, requests, closed, available, epoch, unavailable = {}, {}, false, false, 0, {}
     function api.update(snapshot)
         if closed then return end
         local next = {}
@@ -34,19 +34,13 @@ function M.new(deps)
             assert(not next[identity] and type(offer.options) == "table" and #offer.options > 0)
             next[identity] = vim.deepcopy(offer)
         end
-        requests, available, unavailable = next, true, snapshot.unavailable or {}
+        unavailable = {}
+        for _, host in ipairs(snapshot.hosts or {}) do if host.state == "unavailable" then unavailable[#unavailable + 1] = host end end
+        requests, available = next, true
     end
     function api.unavailable()
         if closed then return end
         available, epoch, requests = false, epoch + 1, {}
-    end
-    function api.subscribe()
-        if closed or stream then return end
-        stream = (deps.watch or require("sodium.agency.watch").new)()
-        stream.start({ "permission", "watch" }, function(snapshot)
-            local ok = pcall(api.update, snapshot)
-            if not ok then api.unavailable() end
-        end, api.unavailable)
     end
     function api.pending()
         local values = {}
@@ -83,8 +77,12 @@ function M.new(deps)
             command({ "permission", "decide", "--command-id", uuid(), "--input-json", vim.json.encode({ ref = offer.ref, optionId = option.optionId }) },
                 { timeout_ms = 15000 }, function(err, envelope)
                     if closed then return end
-                    if err then notify(err.message or err.code); return end
-                    local state = envelope.result.state
+                    if err then
+                        local reference = err.reference
+                        notify((err.message or err.code) .. (reference and " · owner " .. reference.hostId .. " · command " .. reference.commandId or ""))
+                        return
+                    end
+                    local state = envelope.result.receipt.state
                     requests[identity] = nil
                     notify("Approval " .. state .. " on " .. offer.ref.hostId:sub(1, 12))
                     api.refresh()
@@ -100,7 +98,7 @@ function M.new(deps)
             end, preview = api.preview }, function(offer) if offer then api.choose(offer.ref) end end)
         end)
     end
-    function api.close() closed, available, requests, epoch = true, false, {}, epoch + 1; if stream then stream.close(); stream = nil end end
+    function api.close() closed, available, requests, epoch = true, false, {}, epoch + 1 end
     return api
 end
 return M

@@ -76,3 +76,37 @@ describe("Agency control transport", function()
         assert.are.equal("INVALID_PROTOCOL", failure.code)
     end)
 end)
+
+describe("Agency owner envelopes", function()
+    local id = "00000000-0000-4000-8000-000000000001"
+    local host = string.rep("a", 64)
+    local function exchange(argv, value)
+        local failure, result
+        local client = require("sodium.agency.control").new({ system = function(_, _, cb)
+            cb({ code = 0, stdout = vim.json.encode(value) }); return { kill = function() end }
+        end, schedule = function(cb) cb() end })
+        client.command(argv, {}, function(err, reply) failure, result = err, reply end)
+        client.close(); return failure, result
+    end
+    it("accepts aggregate null identities and unavailable owners", function()
+        local failure, result = exchange({ "roster", "list" }, { protocol = "agency-host/1", requestId = id,
+            hostId = vim.NIL, handlerGeneration = vim.NIL, ok = true, result = { state = "roster", localHostId = host,
+                hosts = { { hostId = host, hostname = "local", state = "unavailable", code = "UNAVAILABLE" } } } })
+        assert.is_nil(failure); assert.are.equal("roster", result.result.state)
+    end)
+    it("rejects a substituted permission command and foreign owner", function()
+        local ref = { hostId = host, target = { agentId = id, handlerGeneration = id, providerGeneration = id }, permissionId = id, revision = 1 }
+        local value = { protocol = "agency-host/1", requestId = id, hostId = host, handlerGeneration = id, commandId = id,
+            ok = true, result = { state = "permission", receipt = { commandId = "00000000-0000-4000-8000-000000000002", ref = ref, optionId = "allow", state = "applied" } } }
+        local err = exchange({ "permission", "decide", "--input-json", vim.json.encode({ commandId = id, ref = ref, optionId = "allow" }) }, value)
+        assert.are.equal("INVALID_PROTOCOL", err.code)
+        value.result.receipt.commandId = id
+        err = exchange({ "permission", "inspect", id, "--host", string.rep("b", 64) }, value)
+        assert.are.equal("INVALID_PROTOCOL", err.code)
+    end)
+    it("preserves explicit local permission receipt envelopes", function()
+        local failure = exchange({ "permission", "inspect", id, "--local" }, { protocol = "agency-agent/3", requestId = id,
+            handlerGeneration = id, ok = true, result = { state = "permission", receipt = vim.NIL } })
+        assert.is_nil(failure)
+    end)
+end)

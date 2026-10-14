@@ -48,7 +48,7 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
     const enrollment = (await input.inventory.list()).find(host => host.hostId === route.hostId)
     if (enrollment) {
       const transport = await connected(enrollment)
-      try { return await transport.request(route.channel, route.payload, { ...(signal ? { signal } : {}) }) }
+      try { return await transport.request(route.channel, route.payload, { ...(isRoutedRead(route.channel) ? { timeoutMs: 10000 } : {}), ...(signal ? { signal } : {}) }) }
       catch (error) { transport.close(); throw error }
     }
     if (allowRelay && relay) return relay(route, signal)
