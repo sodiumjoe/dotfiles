@@ -143,6 +143,8 @@ Private agent, command, catalog, and launch records bind boot identity, PID gene
 
 Automatic retention preserves logical native-session records, current-generation explicit receipts, and unresolved recovery evidence. Unreferenced retired history is removed only after reconciliation and verified process absence. Failed starts without a native session can become eligible after seven days. Quiet Handlers can defer age-based cleanup until another operation or restart. Retention never deletes provider-native sessions, credentials, logs, caches, or separately retained evidence. There is no fixed total-storage cap or supported archive/prune command.
 
+Old Bureau/orchestration workflow files remain available for manual inspection and cleanup. Startup and retention neither resume nor rewrite them, and task records do not pin runtime history or worktrees. Companion names `bureau.sock` and `orchestration.sock` remain only in existing private-socket validation and proven-dead-generation cleanup. Live or ambiguous owners are never unlinked.
+
 The Handler does not persist an append-only transcript or environment values. Native providers retain their own state under caller configuration. Agentic debug logging is disabled; explicitly enabling it later can log ordinary ACP requests, including transient start metadata.
 
 ### Explicit probe recovery
@@ -153,15 +155,15 @@ Recovery preserves the original launch, metadata, command receipt, Handler recor
 
 ## Verification
 
-Run `npm run build`, `test:acp`, `test:neovim-acp`, `test:agent`, `test:agent-integration`, `test:retention`, `test:catalog`, `test:catalog-integration`, `test:control`, `test:control-integration`, `test:attachment`, and `test:attachment-integration` from `agency/`. Additional foundation gates are `test:unit`, `test:darwin`, `test:import`, `test:recovery`, and `test:codex-acceptance`. Run `./test-nvim.sh` from the repository root.
+Run `npm run build`, `test:acp`, `test:neovim-acp`, `test:agent`, `test:agent-integration`, `test:retention`, `test:catalog`, `test:catalog-integration`, `test:control`, `test:control-integration`, `test:attachment`, and `test:attachment-integration` from `agency/`. Additional foundation gates are `test:unit`, `test:darwin`, `test:import`, `test:recovery`, and `test:codex-acceptance`. Run the complete Node gate from `agency/` with `node --test --test-concurrency=1 dist/test/*.test.js`. The retained `test:hosts`, `test:hosts-integration` and `test:tasks` groups cover transport, host operations and worker-owned reports/waits. Run retained Agency/Agentic specs with `./test-nvim.sh tests/neovim/<spec>.lua` from the repository root, including `agency_replay_spec.lua` for ordinary history rendering.
 
 These tests use deterministic providers and isolated temporary roots. Fresh-process coverage loads the installed native Agentic classes in independent Neovim processes with private home/state/cache, explicit repository runtime paths, fixture-only endpoints, and no user startup configuration. `NVIM_TEST_EXECUTABLE` selects the binary; Darwin defaults to `/opt/homebrew/bin/nvim`. Teardown reports and independently verifies editor, endpoint, Handler, and provider absence.
 
-The test scripts do not invoke a real model, paid prompt, login, deployment, or `accept:codex`. Real-provider acceptance remains separate and requires an explicit prompt count, target directory, allowed edits, and exact cleanup targets. Historical plans and qualification evidence remain immutable descriptions of earlier architectures, not runtime inputs.
+The test scripts do not invoke a real model, paid prompt, login, deployment, or `accept:codex`. Live SSH, Linux and real-provider qualification remain separate. Real-provider acceptance requires an explicit prompt count, target directory, allowed edits, and exact cleanup targets. Historical plans and qualification evidence remain immutable descriptions of earlier architectures, not runtime inputs.
 
 ## Local human controls
 
-Local controls require the updated Handler and a live, unambiguous, ready generation. They use the existing runtime socket. They do not start a Handler, read the caller's working directory or contact Bureau.
+Local controls require the updated Handler and a live, unambiguous, ready generation. They use the existing runtime socket. They do not start a Handler or read the caller's working directory.
 
 ```bash
 agy roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]
@@ -170,21 +172,25 @@ agy permission decide --local --input-json '{"commandId":"UUID","ref":<permissio
 agy permission inspect COMMAND_UUID --local [--json]
 ```
 
-The roster contains active local sessions, including sessions still starting. A starting row can have `live: false`. Permission refs come from the owner snapshot and identify the exact Handler and provider generation. Select the command UUID before sending a decision. A decision is submitted once. If the reply is lost or cannot be validated, the client exits 75 with `INCOMPLETE` and that command ID. Inspect the command before deciding how to recover; a null inspection does not prove that the earlier decision failed. An `applied` decision exits 0, while `claimed`, `uncertain`, `stale` and `withdrawn` exit 75. Inspection itself is a read and returns historical receipts as observations.
+The roster contains active local sessions, including sessions still starting. A starting row can have `live: false`. Permission refs come from the owner snapshot and identify the exact Handler and provider generation. Select the command UUID before sending a decision. A decision is submitted once. If the reply is lost or cannot be validated, the client exits 75 with `INCOMPLETE` and that command ID. Inspect the command before deciding how to recover; a null inspection does not prove that the earlier decision failed. An `applied` decision exits 0, while `claimed`, `uncertain`, `stale` and `withdrawn` exit 75. Inspection is a read and returns current-generation receipts as observations.
 
 Core readiness covers local ACP sessions and controls. Task services initialize afterward in one background attempt, so their endpoints can be unavailable after the Handler becomes ready. Failed optional startup appears in status and doctor runtime diagnostics. Global commands read each configured session owner through the host client. Local watch is not available in this increment; use explicit list and inspect.
 
-The owner still uses the existing durable permission arbiter because remote consumers read its history. Owner permission-storage failure can therefore disable local permissions while ordinary sessions remain usable. Moving that arbiter to memory and replacing remote consumers are later migration steps. Legacy task mutation-publication hooks also remain coupled to the runtime queue; task snapshot consumers now run outside it.
+Permission offers, callbacks and decision receipts exist only in the owning Handler process. A valid decision claims the request before invoking its callback. Concurrent identical command IDs share one completion; conflicting reuse is rejected. Inspection can report `claimed` while the callback is pending. Success becomes `applied`, and a failed callback becomes `uncertain` without reopening the request. Other valid decisions return `withdrawn` until exact-session invalidation removes the offer metadata. Invalid options leave a pending request available.
+
+Restart clears pending permissions and receipts. Old refs are stale, and inspection of an old command returns null unless the current owner has recorded a new refusal for that command. The retained `throughSeq` field is a process-local change counter that resets with each Handler generation. It is never a journal cursor. Reconnecting views refresh current state; neither clients nor the owner reload or resend old decisions.
 
 ## Host controls
 
-The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly, even when optional task coordination is unavailable. Configure destinations with `agy host enroll --input-json JSON --json` and inspect configuration with `agy host list --json`. Enrollment uses the existing host configuration files.
+The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly, even when optional task coordination is unavailable. Configure destinations with `agy host enroll --input-json JSON --json` and inspect configuration with `agy host list --json`. Enrollment remains at `<persistentRoot>/bureau/hosts/<inventoryId>.json`. The directory name is retained for existing enrollments; it does not load Bureau settings or workflow state. Enrollment preserves trusted host/hostname identities and refuses conflicting replacements without rewriting existing bytes.
 
 `agy roster list --json` and `agy permission list --json` return `agency-host/1` aggregates with an available or unavailable observation per host. Roster aggregation reads every page from each owner; an unavailable observation is not a failed session. Use `--host HOST_ID` for a single owner, where roster limit/cursor filters are supported. Explicit `--local` roster and permission commands retain `agency-agent/3` output.
 
 A permission decision uses its exact host, Handler and provider generations. Supply a stable command ID in the JSON or through `--command-id`. Inspect with `agy permission inspect COMMAND_ID --host HOST_ID --json`; inspection requires an explicit owner. `OUTCOME_UNKNOWN` retains the owner and command reference and requires explicit inspection before another decision. Connections do not resend mutations. Ordinary permission/roster watch commands are excluded; the editor refreshes owner views explicitly.
 
 The host client does not mirror permission history or replay previous mutations.
+
+The bridge protocol is `agency-bridge/2`, with hello, request, reply and cancellation frames only. A version-1 peer fails explicitly with `UNSUPPORTED_BRIDGE_PROTOCOL` before any operation is dispatched. Both endpoints require a coordinated upgrade and explicit Handler restart; there is no alternate legacy helper or automatic mutation retry. SSH remains noninteractive, preserves destination login-shell quoting and protocol stdout isolation, and uses the local authentication agent without forwarding its socket path to the destination.
 
 ## Host sessions
 
@@ -218,11 +224,11 @@ Admission and cancellation acknowledgements exit 0. Command inspections exit 75 
 
 A lost or malformed mutation reply includes the original reference and is never resent automatically. For start/stop, use `session command` with the reference's command ID and original Handler generation. For submit/cancel, use `session submission` with the reference's target and submission ID. A null read or missing live tuple does not prove the earlier operation failed. Live submission state is unavailable after retirement or Handler restart; inspect state manually before choosing another operation.
 
-New starts use the filtered destination Handler process environment plus backend defaults. Caller environment is not transmitted, and a fresh login shell is not run per start. Credentials or shell environment changed after Handler startup require an explicit Handler restart or backend configuration edit. Legacy task launch still uses fresh-shell behavior. Local runtime command persistence/recovery is transitional; this host path adds no durable routing, mutation replay or automatic supervisor wakeups.
+New starts use the filtered destination Handler process environment plus backend defaults. Caller environment is not transmitted, and a fresh login shell is not run per start. Credentials or shell environment changed after Handler startup require an explicit Handler restart or backend configuration edit. Local runtime command persistence/recovery is transitional; this host path adds no durable routing, mutation replay or automatic supervisor wakeups.
 
 ## Entry and worktrees
 
-`agy entry open --input-json '{"commandId":"UUID","hostId":"HASH","target":{"agentId":"UUID","handlerGeneration":"UUID","providerGeneration":"UUID"}}' --json` opens an editor for an exact live session. `agy entry inspect COMMAND_UUID --host HOST_ID --json` (or `--local`) inspects its current attachment. Commands exist only in the owner Handler process. Identical concurrent opens share one action; inspection never creates or activates an editor. A restart clears command observations, so an unknown command leaves a lost open outcome unknown. Uncertain or stale entry does not launch a terminal. Inspect the owner and command before taking another action. Neovim's owner picker uses this path without enabling Bureau.
+`agy entry open --input-json '{"commandId":"UUID","hostId":"HASH","target":{"agentId":"UUID","handlerGeneration":"UUID","providerGeneration":"UUID"}}' --json` opens an editor for an exact live session. `agy entry inspect COMMAND_UUID --host HOST_ID --json` (or `--local`) inspects its current attachment. Commands exist only in the owner Handler process. Identical concurrent opens share one action; inspection never creates or activates an editor. A restart clears command observations, so an unknown command leaves a lost open outcome unknown. Uncertain or stale entry does not launch a terminal. Inspect the owner and command before taking another action. Neovim's owner picker uses the same live entry path.
 
 `agy git prepare --input-json '{"repository":"/absolute/repo","cwd":"/absolute/new-worktree","branch":"moon/custom","baseOid":"IMMUTABLE_COMMIT_OID","remote":"origin"}' --json` prepares an ordinary Git worktree and returns its cwd. The remote is optional. Existing destinations and branches are refused, and an interrupted Git operation leaves its state for inspection. Pass the returned cwd to ordinary session startup. No Agency record, publication grant, or integration receipt is involved.
 
