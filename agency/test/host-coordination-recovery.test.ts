@@ -8,7 +8,7 @@ import { createHostCoordination } from "../src/handler/host-coordination.js"
 import { createHostInventory, type HostEnrollment } from "../src/bureau/hosts.js"
 import { createTaskHandlerBridge as createHandlerBridge } from "./task-bridge-support.js"
 import { connectHandlerBridge } from "../src/bridge/handler-client.js"
-import type { BridgeConnection } from "../src/bridge/ssh.js"
+import type { BridgeConnection } from "../src/bridge/task-ssh.js"
 import { bindPrivateSocket } from "../src/platform/private-socket.js"
 import { exchangeTool, serveToolSocket } from "../src/orchestration/tool-client.js"
 import { journalEntries } from "../src/orchestration/reports.js"
@@ -59,7 +59,7 @@ async function composition(t: TestContext) {
     assert.deepEqual(enrollment, endpoint.enrollment)
     const peer = await connectHandlerBridge({ root: endpoint.fixture.root, hostId: enrollment.hostId, handlerGeneration: endpoint.fixture.service.handlerGeneration }), hello = await peer.ready
     await peer.request("coordinate", {})
-    const connection: BridgeConnection = { ...peer, hello, snapshot: await endpoint.origin.origin.snapshot(), diagnostics: "", request(channel, payload, options) {
+    const connection: BridgeConnection = { ...peer, peer, hello, snapshot: await endpoint.origin.origin.snapshot(), diagnostics: "", request(channel, payload, options) {
       if (["launch", "launchRoot", "restoreRoot"].includes(channel)) return peer.request("invoke", { channel, payload, invocation: { environment: endpoint.fixture.input.environment, nativeParams: (payload as { nativeParams: object }).nativeParams } }, options)
       return peer.request(channel, payload, options)
     } }

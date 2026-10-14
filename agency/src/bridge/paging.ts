@@ -4,7 +4,7 @@ import { bridgeError } from "./protocol.js"
 import type { createBridgePeer, RequestOptions } from "./codec.js"
 
 const PAGE_BYTES = 256 * 1024
-const channels = new Set(["snapshot", "origin-read", "origin-retained"])
+const channels = new Set(["snapshot", "origin-read", "origin-retained", "runtime-read", "host-route-read"])
 type Page = { transferId: string; index: number; data: string; done: boolean; digest: string | null }
 function* jsonParts(value: unknown): Generator<Buffer> {
   if (Array.isArray(value)) {

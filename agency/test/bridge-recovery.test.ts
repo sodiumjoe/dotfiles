@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { createRemoteHost } from "../src/bureau/remote-host.js"
-import { connectHost } from "../src/bridge/ssh.js"
+import { connectHost } from "../src/bridge/task-ssh.js"
 import { bridgeFixture } from "./bridge-support.js"
 import { until } from "./control-support.js"
 

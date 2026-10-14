@@ -1,3 +1,6 @@
+import { createHostInventory } from "../hosts/inventory.js"
+import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
+import { connectBridge } from "../bridge/ssh.js"
 import { dispatchAgentRequest } from "../agent/dispatch.js"
 import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
 import { registerRuntimeEndpoint } from "../hosts/runtime.js"
@@ -104,6 +107,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
+  let router: HostRouter | undefined
   let bridge: HandlerBridge | undefined
   let taskServices: TaskServices | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
@@ -116,6 +120,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (closing) return closed
     closing = true
     await taskServices?.close()
+    router?.close()
     await bridge?.close()
     await acpServer?.close()
     for (const socket of sockets) socket.destroy()
@@ -256,6 +261,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await agents.initialize()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     registerRuntimeEndpoint(bridge, dispatchAgent)
+    const coreBridge = bridge
+    router = createHostRouter({ hostId: options.paths.hostKey, inventory: createHostInventory(root), local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
+    registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
     coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
     await coordinator.initialize()

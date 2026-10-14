@@ -6,7 +6,7 @@ import { createBureauService } from "../src/bureau/service.js"
 import { createJournalPool } from "../src/orchestration/journal.js"
 import { createRemoteOrigins } from "../src/bureau/origins.js"
 import { createRemoteHost } from "../src/bureau/remote-host.js"
-import { connectHost } from "../src/bridge/ssh.js"
+import { connectHost } from "../src/bridge/task-ssh.js"
 import { bridgeFixture } from "./bridge-support.js"
 import { bureauFixture } from "./bureau-support.js"
 

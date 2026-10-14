@@ -1,5 +1,8 @@
 process.umask(0o077)
-if (process.argv[2] === "internal-host-bridge" || process.argv[2] === "internal-host-call") {
+if (process.argv[2] === "internal-runtime-bridge") {
+  try { const { runRuntimeBridgeCli, productionRuntimeBridgeDependencies } = await import("./bridge/runtime-remote.js"); await runRuntimeBridgeCli(process.argv.slice(3), productionRuntimeBridgeDependencies()) }
+  catch (error) { process.stderr.write(String(error) + "\n"); process.exitCode = 1 }
+} else if (process.argv[2] === "internal-host-bridge" || process.argv[2] === "internal-host-call") {
   try {
     const { runHostBridgeCli, runHostCallCli, productionHostBridgeDependencies } = await import("./bridge/remote.js")
     const run = process.argv[2] === "internal-host-bridge" ? runHostBridgeCli : runHostCallCli

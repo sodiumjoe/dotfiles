@@ -11,7 +11,7 @@ import { agentServiceFixture } from "./agent-support.js"
 import { createRemoteHost } from "../src/bureau/remote-host.js"
 import { createRemoteOrigins } from "../src/bureau/origins.js"
 import { BRIDGE_FRAME_BYTES } from "../src/bridge/protocol.js"
-import type { BridgeConnection } from "../src/bridge/ssh.js"
+import type { BridgeConnection } from "../src/bridge/task-ssh.js"
 
 async function fixture(t: Parameters<typeof agentServiceFixture>[0], builtRevision = false) {
   const f = await agentServiceFixture(t), hostId = f.context.paths.hostKey, journals = createJournalPool(f.root, undefined, Date.now, "origin")
@@ -80,7 +80,7 @@ test("remote replay transfers an oversized report backlog and a near-limit retai
   const large = await journal.append(commandId, "report-retained", payload)
   assert.ok(Buffer.byteLength(JSON.stringify(large)) > BRIDGE_FRAME_BYTES - 150)
   const mirror = createRemoteOrigins(f.root, f.hostId), hello = await f.peer.ready
-  const connection: BridgeConnection = { ...f.peer, hello, snapshot: await f.host.snapshot(), diagnostics: "" }
+  const connection: BridgeConnection = { ...f.peer, peer: f.peer, hello, snapshot: await f.host.snapshot(), diagnostics: "" }
   const remote = createRemoteHost({ enrollment: { inventoryId: randomUUID(), hostId: f.hostId, hostname: "fixture", agyPath: "/opt/agency/agy", loginShell: "/bin/bash" }, origins: mirror, managed: true, connect: async () => connection })
   t.after(() => remote.close())
   remote.setEnabled(true)
@@ -100,7 +100,7 @@ test("large host history reconstructs a coherent snapshot and a compact complete
   assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) > BRIDGE_FRAME_BYTES)
   f.host.snapshot = async () => { const current = await readSnapshot(); return { ...current, agents: [...structuredClone(snapshot.agents), ...current.agents] } }
   const hello = await f.peer.ready, mirror = createRemoteOrigins(f.root, f.hostId)
-  const connection: BridgeConnection = { ...f.peer, hello, snapshot, diagnostics: "", request: (channel, payload, options) => channel === "launchRoot" ? f.peer.request("invoke", { channel, payload, invocation: { environment: f.input.environment, nativeParams: {} } }, options) : f.peer.request(channel, payload, options) }
+  const connection: BridgeConnection = { ...f.peer, peer: f.peer, hello, snapshot, diagnostics: "", request: (channel, payload, options) => channel === "launchRoot" ? f.peer.request("invoke", { channel, payload, invocation: { environment: f.input.environment, nativeParams: {} } }, options) : f.peer.request(channel, payload, options) }
   const remote = createRemoteHost({ enrollment: { inventoryId: randomUUID(), hostId: f.hostId, hostname: "fixture", agyPath: "/opt/agency/agy", loginShell: "/bin/bash" }, origins: mirror, managed: true, connect: async () => connection })
   t.after(() => remote.close())
   remote.setEnabled(true)

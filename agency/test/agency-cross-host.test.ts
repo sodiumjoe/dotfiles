@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { createHostCoordination } from "../src/handler/host-coordination.js"
 import { createTaskHandlerBridge as createHandlerBridge } from "./task-bridge-support.js"
 import { connectHandlerBridge } from "../src/bridge/handler-client.js"
-import type { BridgeConnection } from "../src/bridge/ssh.js"
+import type { BridgeConnection } from "../src/bridge/task-ssh.js"
 import type { ExecutionRef } from "../src/orchestration/types.js"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -21,7 +21,7 @@ async function cluster(t: TestContext, publication?: import("../src/bureau/publi
       const destination = nodes.find(node => node.fixture.context.paths.hostKey === enrollment.hostId)!
       const peer = await connectHandlerBridge({ root: destination.fixture.root, hostId: enrollment.hostId, handlerGeneration: destination.fixture.service.handlerGeneration }), hello = await peer.ready
       await peer.request("coordinate", {})
-      const connection: BridgeConnection = { ...peer, hello, snapshot: await destination.coordination.origin.snapshot(), diagnostics: "", request(channel, payload, options) {
+      const connection: BridgeConnection = { ...peer, peer, hello, snapshot: await destination.coordination.origin.snapshot(), diagnostics: "", request(channel, payload, options) {
         if (["launch", "launchRoot", "restoreRoot"].includes(channel)) return peer.request("invoke", { channel, payload, invocation: { environment: destination.fixture.input.environment, nativeParams: (payload as { nativeParams: object }).nativeParams } }, options)
         return peer.request(channel, payload, options)
       } }

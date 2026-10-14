@@ -5,7 +5,7 @@ import { realpathSync } from "node:fs"
 import { join } from "node:path"
 import { createHostInventory, parseHostEnrollment } from "../src/bureau/hosts.js"
 import { inspectReadiness } from "../src/bureau/readiness.js"
-import { connectHost } from "../src/bridge/ssh.js"
+import { connectHost } from "../src/bridge/task-ssh.js"
 import { bridgeFixture } from "./bridge-support.js"
 
 test("enrollment persists trusted identities without silently adopting hostname replacements", async t => {

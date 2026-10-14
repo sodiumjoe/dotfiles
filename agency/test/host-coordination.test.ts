@@ -5,7 +5,7 @@ import { createHostCoordination } from "../src/handler/host-coordination.js"
 import { createHostInventory } from "../src/bureau/hosts.js"
 import { createTaskHandlerBridge as createHandlerBridge } from "./task-bridge-support.js"
 import { connectHandlerBridge } from "../src/bridge/handler-client.js"
-import type { BridgeConnection } from "../src/bridge/ssh.js"
+import type { BridgeConnection } from "../src/bridge/task-ssh.js"
 import { until } from "./control-support.js"
 import { agentServiceFixture } from "./agent-support.js"
 
@@ -22,7 +22,7 @@ test("Handler composition routes remote controls and reports through the persist
     assert.deepEqual(value, enrollment)
     const peer = await connectHandlerBridge({ root: b.root, hostId: value.hostId, handlerGeneration: b.service.handlerGeneration }), hello = await peer.ready
     await peer.request("coordinate", {})
-    const connection: BridgeConnection = { ...peer, hello, snapshot: await remote.origin.snapshot(), diagnostics: "", async request(channel, payload, options) {
+    const connection: BridgeConnection = { ...peer, peer, hello, snapshot: await remote.origin.snapshot(), diagnostics: "", async request(channel, payload, options) {
       if (["launch", "launchRoot", "restoreRoot"].includes(channel)) return peer.request("invoke", { channel, payload, invocation: { environment: b.input.environment, nativeParams: (payload as { nativeParams: object }).nativeParams } }, options)
       return peer.request(channel, payload, options)
     } }
