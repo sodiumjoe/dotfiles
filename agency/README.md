@@ -387,3 +387,18 @@ New starts use the filtered destination Handler process environment plus backend
 `agy git prepare --input-json '{"repository":"/absolute/repo","cwd":"/absolute/new-worktree","branch":"moon/custom","baseOid":"IMMUTABLE_COMMIT_OID","remote":"origin"}' --json` prepares an ordinary Git worktree and returns its cwd. The remote is optional. Existing destinations and branches are refused, and an interrupted Git operation leaves its state for inspection. Pass the returned cwd to ordinary session startup. No Agency record, publication grant, or integration receipt is involved.
 
 Use ordinary Git for collaboration: `git fetch origin COMMIT_OID`, `git show COMMIT_OID`, and `git merge COMMIT_OID` or `git cherry-pick COMMIT_OID` after review. The report/proposal-based `git verify`, `git inspect`, and `git integrate` commands remain transitional task conveniences. Durable entry prepare/consume is retained only by the internal task compatibility adapter; ordinary entry uses open/inspect.
+
+## Worker-owned tasks
+
+Select a task UUID and a destination before dispatch. The task adapter starts one ordinary session and submits the initial text once. Admission returns before provider readiness. A lost create or report reply returns `OUTCOME_UNKNOWN` with the original task reference; reconnect and inspect that reference before taking another action. Creates never replay, and a repeated task UUID is rejected even when its input is identical.
+
+```sh
+agy task create --host HASH --input-json '{"taskId":"UUID","description":"Run checks","cwd":"/repo","backendId":"codex-acp","text":"Run checks and report the result"}' --json
+agy task inspect UUID --host HASH --json
+agy task wait UUID --host HASH --input-json '{"timeoutMs":10000}' --json
+agy task report UUID --local --input-json '{"outcome":"completed","summary":"Checks passed"}' --json
+```
+
+Each command also accepts `--local` in place of `--host HASH`. Reports explicitly declare `completed`, `blocked`, or `failed`; ordinary `end_turn` remains pending. A report replaces the entire previous report. Inspect and wait repeatedly return the same retained result without consuming it. Waits run only in the caller, last at most 60 seconds, and cancellation leaves the worker running. Timeout zero performs one inspection, bounded by the ordinary 10-second read limit. A deadline with no observation returns unavailable; a deadline after an observation returns pending. Missing tasks and incomplete storage remain typed errors. A missing or replaced runtime session establishes an unknown outcome.
+
+Records and reports remain under `<persistentRoot>/tasks/<taskId>/` after runtime history is reclaimed. The report takes precedence if the record status update failed. Cleanup and repair are manual while the task service is inactive; tasks pin neither runtime history nor Git worktrees. There is no automatic replay, completion notification, or supervisor prompt.

@@ -12,11 +12,11 @@ export type HostRouter = {
   setRelay(send: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>): () => void
   close(): void
 }
-export function isRoutedRead(channel: string): boolean { return channel === "runtime-read" || channel === "host-identity" || channel === "runtime-entry-inspect" }
+export function isRoutedRead(channel: string): boolean { return channel === "task-read" || channel === "runtime-read" || channel === "host-identity" || channel === "runtime-entry-inspect" }
 export function parseHostRoute(raw: unknown): HostRoute {
   const value = object(raw); keys(value, ["hostId", "channel", "payload"])
   const channel = text(value.channel)
-  if (!["runtime-read", "runtime-write", "host-identity", "entry-open", "runtime-entry-inspect"].includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
+  if (!["task-read", "task-write", "runtime-read", "runtime-write", "host-identity", "entry-open", "runtime-entry-inspect"].includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
   return { hostId: hash(value.hostId), channel, payload: value.payload }
 }
 export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport> }): HostRouter {

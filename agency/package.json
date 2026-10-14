@@ -33,7 +33,8 @@
     "test:orchestration-tools": "npm run build && node --test --test-concurrency=1 dist/test/orchestration-mcp.test.js dist/test/agency-delegation.test.js dist/test/bureau-cli.test.js dist/test/orchestration-scheduler.test.js",
     "accept:linux-stack": "npm run build && node dist/scripts/accept-linux-stack.js",
     "test:hosts": "npm run build && node --test --test-concurrency=1 dist/test/agent-session-controls.test.js dist/test/host-session.test.js dist/test/host-session-cli.test.js dist/test/runtime-bridge.test.js dist/test/host-router.test.js dist/test/host-runtime.test.js dist/test/host-human-cli.test.js dist/test/runtime-entry.test.js dist/test/git-worktree.test.js dist/test/entry-cli.test.js dist/test/entry-editor.test.js",
-    "test:hosts-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-local-controls.test.js dist/test/handler-host-controls.test.js dist/test/handler-host-sessions.test.js"
+    "test:hosts-integration": "npm run build && node --test --test-concurrency=1 dist/test/handler-local-controls.test.js dist/test/handler-host-controls.test.js dist/test/handler-host-sessions.test.js",
+    "test:tasks": "npm run build && node --test --test-concurrency=1 dist/test/task-store.test.js dist/test/task-service.test.js dist/test/task-endpoint.test.js dist/test/task-client.test.js dist/test/task-wait.test.js dist/test/task-cli.test.js dist/test/task-mcp.test.js dist/test/handler-tasks.test.js"
   },
   "devDependencies": {
     "@types/node": "24.10.0",

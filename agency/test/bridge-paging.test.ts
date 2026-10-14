@@ -55,3 +55,15 @@ test("paged read receiver rejects a changed capture or invalid final digest", as
     assert.deepEqual(await client.request("read-close", { transferId }), { closed: true })
   }
 })
+test("task paging accepts reads, rejects writes, and cancellation bounds cleanup", async t => {
+  const left = new PassThrough(), right = new PassThrough(), hello = { protocol: BRIDGE_PROTOCOL as typeof BRIDGE_PROTOCOL, hostId: "a".repeat(64), handlerGeneration: randomUUID(), connectionId: randomUUID(), sourceRevision: "b".repeat(40), nodeVersion: "v24.13.0", capabilities: ["read-pages"], outboxCursor: 0 }
+  const client = createBridgePeer({ input: left, output: right, hello }), remote = createBridgePeer({ input: right, output: left, hello })
+  const reads = createPagedReads(async () => ({ report: "retained" })), controller = new AbortController(), closing = Promise.withResolvers<void>()
+  remote.onRequest(async (channel, payload, _id, signal) => { if (channel === "read-close") { closing.resolve(); await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true })); return {} }; return reads.request(channel, payload, signal) })
+  t.after(() => { reads.close(); client.close(); remote.close() })
+  for (const channel of ["task-write", "create", "report"]) await assert.rejects(client.request("read-open", { channel, payload: {} }), /UNSUPPORTED_CAPABILITY/)
+  const result = requestBridgeRead(client, "task-read", {}, { signal: controller.signal })
+  await closing.promise; controller.abort()
+  const bounded = await Promise.race([result, new Promise(resolve => setTimeout(() => resolve("cleanup hung"), 100))])
+  assert.deepEqual(bounded, { report: "retained" })
+})

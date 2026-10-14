@@ -1,3 +1,4 @@
+import { runTaskClient } from "../tasks/cli.js"
 import { runSessionClient } from "../hosts/session-cli.js"
 import { runEntryClient } from "../entry/cli.js"
 import { runGitPrepare } from "../git/cli.js"
@@ -130,6 +131,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
+  if (argv[0] === "task") return runTaskClient(argv, dependencies)
   if (argv[0] === "session") return runSessionClient(argv, dependencies)
   if (argv[0] === "entry") return runEntryClient(argv, dependencies)
   if (argv[0] === "git" && argv[1] === "prepare") return runGitPrepare(argv, dependencies)
