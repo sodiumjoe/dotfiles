@@ -171,6 +171,8 @@ export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
   const config = join(root, "endpoint.json"), socket = join(root, "nvim.sock")
   await writeFile(config, JSON.stringify({ paths: f.paths, environment: f.environment }), { mode: 0o600 })
   const executable = process.env.NVIM_TEST_EXECUTABLE ?? "/opt/homebrew/bin/nvim"
+  const ownershipPath = process.env.AGENCY_TEST_EVIDENCE_ROOT && join(process.env.AGENCY_TEST_EVIDENCE_ROOT, "ownership.jsonl")
+  const ownershipStart = ownershipPath ? (await readFile(ownershipPath, "utf8").catch(() => "")).split("\n").filter(Boolean).length : 0
   const launch = fixtureLaunch("editor")
   const child = spawn(executable, ["--headless", "-i", "NONE", "--listen", socket, "-u", join(repo, "tests/neovim/acp_minimal_init.lua")], {
     detached: true, cwd: f.workspace, env: { ...process.env, HOME: f.environment.HOME, XDG_STATE_HOME: join(root, "state"), XDG_CACHE_HOME: join(root, "cache"),
@@ -199,6 +201,10 @@ export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
       try { await until(async () => exited ? true : undefined, 5000) } catch { child.kill("SIGKILL"); await new Promise<void>(resolve => child.once("exit", () => resolve())) }
     }
     assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
+    if (ownershipPath) {
+      const rows = (await readFile(ownershipPath, "utf8")).split("\n").filter(Boolean).slice(ownershipStart).map(line => JSON.parse(line))
+      for (const row of rows.filter(row => row.type === "intent" && row.role === "acp-endpoint")) assert.ok(rows.some(value => value.launchId === row.launchId && (value.type === "spawn" || value.type === "no-process")), "unclassified endpoint intent " + row.launchId)
+    }
     f.diagnostic(`fixture editor cleanup verified: pid ${child.pid}`)
     for (const pid of endpoints) {
       await until(async () => { try { process.kill(pid, 0); return undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return true } }, 5000)
