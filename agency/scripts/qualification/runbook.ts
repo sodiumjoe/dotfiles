@@ -4,14 +4,20 @@ import { fileURLToPath } from "node:url"
 import { createHash } from "node:crypto"
 import { boundedBytes, parsePreflightRequest } from "./preflight.js"
 import { buildCollectorBootstrap } from "./bootstrap.js"
-import { freezePhase, verifyPhaseEvidence, writeFrozenPhase, type PhaseInput } from "./batch.js"
+import { freezePhase, verifyPhaseEvidence, verifyPhaseResult, writeFrozenPhase, type PhaseInput } from "./batch.js"
 import { posixQuote } from "../../src/bridge/bootstrap.js"
 export async function runRunbook(argv:string[],packageRoot:string):Promise<void>{
   const [mode,...args]=argv,values=new Map<string,string>()
   for(let n=0;n<args.length;n+=2){const key=args[n],value=args[n+1];if(!key||!value||values.has(key)||!key.startsWith("--"))throw new Error("CLI_ARGUMENTS");values.set(key,value)}
-  const expected=mode==="prepare-preflight"?["--input-json-file","--output"]:mode==="freeze"?["--input-json-file","--evidence-root","--output"]:[]
+  const expected=mode==="prepare-preflight"?["--input-json-file","--output"]:["freeze","verify-result"].includes(mode??"")?["--input-json-file","--evidence-root","--output"]:[]
   if(!expected.length||values.size!==expected.length||expected.some(k=>!values.has(k)))throw new Error("CLI_ARGUMENTS")
   const bytes=await boundedBytes(values.get("--input-json-file")!),raw:unknown=JSON.parse(bytes.toString("utf8")),output=values.get("--output")!
+  if(mode==="verify-result"){
+    const result=await verifyPhaseResult(raw,values.get("--evidence-root")!)
+    await mkdir(output,{mode:0o700});const marker=join(output,"incomplete-output.json");await writeFile(marker,JSON.stringify({state:"incomplete"}),{flag:"wx",mode:0o600})
+    try{await writeFile(join(output,"result.json"),JSON.stringify({result,verifiedAt:Date.now()}),{flag:"wx",mode:0o600});await unlink(marker)}catch{throw new Error("INCOMPLETE_OUTPUT")}
+    return
+  }
   if(mode==="freeze"){
     const parsed=freezePhase(raw,Date.now())
     await verifyPhaseEvidence(parsed.input,values.get("--evidence-root")!)

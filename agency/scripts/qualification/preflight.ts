@@ -63,7 +63,7 @@ export async function observeHandler(root:string,adapter:PlatformAdapter):Promis
 }
 export function parsePreflightRequest(raw:unknown):PreflightRequest{
   const v=object(raw);keys(v,["version","requestId","purpose","target","expectedBinding","issuedAt","deadline"])
-  if(v.version!==1||!(["install","observe"] as unknown[]).includes(v.purpose))throw new Error("REQUEST_VERSION")
+  if(v.version!==1||!(["install","observe","cleanup"] as unknown[]).includes(v.purpose))throw new Error("REQUEST_VERSION")
   id(v.requestId);timestamp(v.issuedAt);timestamp(v.deadline)
   const t=object(v.target);keys(t,["role","hostname","expectedHostId","platform","node","home","xdgStateHome","sourceAllocationRoot","packageRoot","persistentRoot","runtimeRoot","providerFiles","toolFiles"])
   if(!["laptop","A","B"].includes(String(t.role))||!["darwin","linux"].includes(String(t.platform))||typeof t.hostname!=="string"||!/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(t.hostname))throw new Error("TARGET")
@@ -104,9 +104,9 @@ async function collect(request:PreflightRequest):Promise<PreflightObservation>{
   }
   const production=await observeHandler(productionPaths.runtimeRoot,adapter),candidate=await observeHandler(target.runtimeRoot,adapter)
   let candidateBinding:CandidateBinding|null=null
-  if(request.purpose==="observe"){
-    candidateBinding=await verifyCandidateBuild(target.packageRoot,request.expectedBinding)
-    if(candidate.disposition==="live"&&candidate.record){const metadata=JSON.parse((await boundedBytes(join(target.runtimeRoot,`qualification-${candidate.record.generation}.json`),65536)).toString("utf8"));keys(object(metadata),["version","hostId","generation","binding"]);if(metadata.version!==1||metadata.hostId!==hostId||metadata.generation!==candidate.record.generation||!isDeepStrictEqual(metadata.binding,candidateBinding))throw new Error("OWNER_BINDING_CHANGED")}
+  if(request.purpose!=="install"){
+    try{candidateBinding=await verifyCandidateBuild(target.packageRoot,request.expectedBinding)}catch(error){if(request.purpose!=="cleanup")throw error}
+    if(candidateBinding&&candidate.disposition==="live"&&candidate.record){const metadata=JSON.parse((await boundedBytes(join(target.runtimeRoot,`qualification-${candidate.record.generation}.json`),65536)).toString("utf8"));keys(object(metadata),["version","hostId","generation","binding"]);if(metadata.version!==1||metadata.hostId!==hostId||metadata.generation!==candidate.record.generation||!isDeepStrictEqual(metadata.binding,candidateBinding))throw new Error("OWNER_BINDING_CHANGED")}
   }
   if(await adapter.bootId()!==bootId||Date.now()>request.deadline)throw new Error("OBSERVATION_EXPIRED")
   return {request,observedAt:Date.now(),hostname:hostname(),hostId,node,nodeVersion:"v24.13.0",bootId,productionPaths,production,candidatePaths,candidate,candidateBinding,files,proposedPathsAbsent}

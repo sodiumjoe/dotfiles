@@ -7,7 +7,7 @@ import { absolutePath, object, keys, hash, id, timestamp, text, providerId, pars
 import { canonicalJson, parseRequestedSettings, type RequestedSettings, type JsonObject } from "../../src/agent/session-config.js"
 import { parseTuple, type AgentTuple } from "../../src/agent/types.js"
 import { parsePermissionOffer, parsePermissionSnapshot, type PermissionOffer } from "../../src/agent/permission-types.js"
-import { parseTaskRef, type TaskRef } from "../../src/tasks/types.js"
+import { parseTaskRef, parseTaskRecord, type TaskRef } from "../../src/tasks/types.js"
 import { sameProcess, sameProcessGeneration, type HandlerGenerationRecord, type ProcessIdentity } from "../../src/platform/types.js"
 import type { PlatformPaths } from "../../src/platform/paths.js"
 import { parseBinding, parsePrivateConfig, inside, type CandidateBinding } from "./config.js"
@@ -34,7 +34,7 @@ export type TargetIntent = {
   providerFiles: string[]; toolFiles: string[]
 }
 export type PreflightRequest = {
-  version: 1; requestId: string; purpose: "install" | "observe"; target: TargetIntent
+  version: 1; requestId: string; purpose: "install" | "observe" | "cleanup"; target: TargetIntent
   expectedBinding: CandidateBinding; issuedAt: number; deadline: number
 }
 export type PreflightObservation = {
@@ -115,7 +115,7 @@ export type PhaseInput = {
   previous: PhaseResult[]; discovery: DiscoveryEvidence[]; prompts: PromptBudget[]
   taskId: string
   taskAllowance: null | { value: TaskAllowance; file: FileObservation; supervisorConfig: FileObservation; claimPath: string }
-  permission: null | { parentRealFile: string; parentRealDigest: string; offerFile: EvidenceFile; offer: PermissionOffer; observedAt: number; decisionId: string; optionId: string }
+  permission: null | { parentRealFile: string; parentRealDigest: string; ownerFile: EvidenceFile | null; offerFile: EvidenceFile; offer: PermissionOffer; observedAt: number; decisionId: string; optionId: string }
 }
 export type FrozenPhase = { input: PhaseInput; digest: string }
 import { parsePreflightRequest, boundedBytes, inspectPath, claimAbsencePath } from "./preflight.js"
@@ -146,7 +146,7 @@ const commandSchema:Schema={operationId:id,hostId:hash,file:absolutePath,argv:li
 const cleanupSchema:Schema={hostId:hash,paths:pathsSchema,handler:handlerSchema,sessions:list(parseTuple),processes:list(processSchema),editors:list({process:processSchema,serverPath:absolutePath,tmuxSocket:absolutePath,session:text}),allocatedRoots:list(absolutePath),exportDirectory:absolutePath,deadline:integer}
 const discoverySchema:Schema={hostId:hash,observedAt:integer,commandIds:list(id),publicTranscriptFile:text,publicTranscriptDigest:hash,policyFile:text,policyDigest:hash,executable:fileSchema,adapterPackage:fileSchema,configFingerprint:hash,provider:parseProviderSnapshot,selections:list(selectionSchema),maximumCommands:positive,consumedCommands:integer}
 const promptSchema:Schema={role:one("supervisor","worker"),hostId:hash,taskRef:nullable(parseTaskRef),cwd:absolutePath,text:text,selection:selectionSchema,allowedPaths:list(absolutePath),allowedEdits:list(absolutePath),deadline:integer}
-const inputSchema:Schema={version:one(1),evidenceKind:one("fixture","live"),batchId:id,phase:one("install","synthetic","discovery","real","decision","cleanup"),createdAt:integer,expiresAt:integer,intent:list(v=>{const t=object(v);parsePreflightRequest({version:1,requestId:"00000000-0000-4000-8000-000000000000",purpose:"install",target:t,expectedBinding:{sourceRevision:"a".repeat(40),sourceDigest:"a".repeat(64),distDigest:"a".repeat(64),nodeVersion:"v24.13.0",protocol:"agency-bridge/2"},issuedAt:0,deadline:1})}),preflight:list({request:parsePreflightRequest,observedAt:integer,hostname:text,hostId:hash,node:fileSchema,nodeVersion:one("v24.13.0"),bootId:text,productionPaths:pathsSchema,production:handlerSchema,candidatePaths:pathsSchema,candidate:handlerSchema,candidateBinding:nullable(parseBinding),files:list(fileSchema),proposedPathsAbsent:list(absolutePath)}),binding:parseBinding,archives:list({name:text,sha256:hash,bytes:positive}),files:list(fileSchema),commands:list(commandSchema),cleanup:list(cleanupSchema),previous:list(resultSchema),discovery:list(discoverySchema),prompts:list(promptSchema),taskId:id,taskAllowance:nullable({value:parseTaskAllowance,file:fileSchema,supervisorConfig:fileSchema,claimPath:absolutePath}),permission:nullable({parentRealFile:text,parentRealDigest:hash,offerFile:evidenceFileSchema,offer:parsePermissionOffer,observedAt:integer,decisionId:id,optionId:text})}
+const inputSchema:Schema={version:one(1),evidenceKind:one("fixture","live"),batchId:id,phase:one("install","synthetic","discovery","real","decision","cleanup"),createdAt:integer,expiresAt:integer,intent:list(v=>{const t=object(v);parsePreflightRequest({version:1,requestId:"00000000-0000-4000-8000-000000000000",purpose:"install",target:t,expectedBinding:{sourceRevision:"a".repeat(40),sourceDigest:"a".repeat(64),distDigest:"a".repeat(64),nodeVersion:"v24.13.0",protocol:"agency-bridge/2"},issuedAt:0,deadline:1})}),preflight:list({request:parsePreflightRequest,observedAt:integer,hostname:text,hostId:hash,node:fileSchema,nodeVersion:one("v24.13.0"),bootId:text,productionPaths:pathsSchema,production:handlerSchema,candidatePaths:pathsSchema,candidate:handlerSchema,candidateBinding:nullable(parseBinding),files:list(fileSchema),proposedPathsAbsent:list(absolutePath)}),binding:parseBinding,archives:list({name:text,sha256:hash,bytes:positive}),files:list(fileSchema),commands:list(commandSchema),cleanup:list(cleanupSchema),previous:list(resultSchema),discovery:list(discoverySchema),prompts:list(promptSchema),taskId:id,taskAllowance:nullable({value:parseTaskAllowance,file:fileSchema,supervisorConfig:fileSchema,claimPath:absolutePath}),permission:nullable({parentRealFile:text,parentRealDigest:hash,ownerFile:nullable(evidenceFileSchema),offerFile:evidenceFileSchema,offer:parsePermissionOffer,observedAt:integer,decisionId:id,optionId:text})}
 const claimSchema:Schema={version:one(1),allowanceSha256:hash,operationId:id,requestId:id,hostId:hash,handlerGeneration:id,input:v=>{const a={version:1,batchId:"00000000-0000-4000-8000-000000000000",operationId:"00000000-0000-4000-8000-000000000000",sourceHostId:"a".repeat(64),hostId:"a".repeat(64),handlerGeneration:"00000000-0000-4000-8000-000000000000",binding:{sourceRevision:"a".repeat(40),sourceDigest:"a".repeat(64),distDigest:"a".repeat(64),nodeVersion:"v24.13.0",protocol:"agency-bridge/2"},input:v,notBefore:0,deadline:1};parseTaskAllowance(a)},claimedAt:integer}
 const readbackSchema:Schema={hostId:hash,expected:processSchema,firstAt:integer,secondAt:integer,firstBootId:text,secondBootId:text,first:nullable(processSchema),second:nullable(processSchema),firstGroup:list(processSchema),secondGroup:list(processSchema)}
 const phaseEvidenceSchema:Schema={version:one(1),batchId:id,phase:one("install","synthetic","discovery","real","decision","cleanup"),artifactDigest:hash,evidenceKind:one("fixture","live"),outcome,commands:list({operationId:id,invocations:one(0,1),startedAt:nullable(integer),finishedAt:nullable(integer),outcome:one("passed","failed","ambiguous","not-run"),exitCode:nullable(v=>{if(typeof v!=="number"||!Number.isSafeInteger(v))fail("EXIT_CODE")}),stdout:evidenceFileSchema,stderr:evidenceFileSchema,originalRef:nullable(refSchema)}),guardClaim:nullable({file:evidenceFileSchema,value:claimSchema}),productionBefore:list(beforeSchema),productionAfter:list(beforeSchema),candidateBefore:list(beforeSchema),candidateAfter:list(afterSchema),cleanupReadbacks:list(readbackSchema)}
@@ -208,8 +208,9 @@ export function freezePhase(raw:unknown,now:number):FrozenPhase{
     if(input.phase==="install"){
       if(p.request.purpose!=="install"||p.candidate.record||p.candidate.disposition!=="absent"||p.candidateBinding!==null||!roots.every(root=>p.proposedPathsAbsent.includes(root)))fail("INSTALL_NOT_ABSENT")
     }else{
-      if(p.request.purpose!=="observe")fail("OBSERVATION_PURPOSE")
-      equal(p.candidateBinding,input.binding)
+      if(p.request.purpose!==(input.phase==="cleanup"?"cleanup":"observe"))fail("OBSERVATION_PURPOSE")
+      if(input.phase!=="cleanup"||p.candidateBinding!==null)equal(p.candidateBinding,input.binding)
+      if(input.phase==="cleanup"&&p.candidateBinding===null&&p.candidate.disposition==="live"&&input.commands.some(c=>c.kind!=="read"))fail("AMBIGUOUS_OWNER")
       if(!uncertain&&input.phase!=="cleanup"&&p.candidate.disposition!=="live")fail("CANDIDATE_NOT_LIVE")
     }
     for(const path of [...target.providerFiles,...target.toolFiles])if(!claimAbsencePath(target,path)&&p.files.filter(f=>f.path===path).length!==1)fail("REQUESTED_FILE_MISSING")
@@ -231,18 +232,19 @@ export function freezePhase(raw:unknown,now:number):FrozenPhase{
     if(![target.node,...target.toolFiles].includes(c.file)||!input.preflight.find(p=>p.hostId===c.hostId)!.files.some(f=>f.path===c.file)&&c.file!==target.node)fail("COMMAND_FILE")
     if(c.originalRef){if(c.originalRef.task&&(!input.intent.some(t=>t.expectedHostId===c.originalRef!.task!.hostId)||c.originalRef.task.taskId!==input.taskId))fail("COMMAND_TASK");if(c.originalRef.target&&!input.cleanup.find(x=>x.hostId===c.hostId)?.sessions.some(t=>isDeepStrictEqual(t,c.originalRef!.target)))fail("COMMAND_TARGET")}
   }
-  const required:Phase[]=input.phase==="install"?[]:input.phase==="synthetic"?["install"]:input.phase==="discovery"?["install","synthetic"]:["install","synthetic","discovery"]
+  const required:Phase[]=input.phase==="cleanup"?input.previous.map(p=>p.phase):input.phase==="install"?[]:input.phase==="synthetic"?["install"]:input.phase==="discovery"?["install","synthetic"]:["install","synthetic","discovery"]
   equal([...input.previous.map(p=>p.phase)].sort(),[...required].sort(),"PREDECESSORS")
+  if(input.phase==="cleanup"&&(!required.includes("install")||required.includes("cleanup")))fail("CLEANUP_HISTORY")
   for(const previous of input.previous){
-    if(previous.outcome!=="passed"||previous.evidenceKind!==input.evidenceKind)fail("PREDECESSOR_FAILED")
-    equal(previous.productionBefore,previous.productionAfter,"PRODUCTION_CHANGED")
-    equal(previous.productionAfter,input.preflight.map(p=>({hostId:p.hostId,observation:p.production})))
+    if(previous.outcome!=="passed"&&input.phase!=="cleanup"||previous.evidenceKind!==input.evidenceKind)fail("PREDECESSOR_FAILED")
+    if(input.phase!=="cleanup"||input.commands.some(c=>c.kind!=="read")){equal(previous.productionBefore,previous.productionAfter,"PRODUCTION_CHANGED");equal(previous.productionAfter,input.preflight.map(p=>({hostId:p.hostId,observation:p.production})))}
     unique(previous.candidateAfter.map(c=>c.hostId))
     if(previous.candidateAfter.length!==3)fail("PREDECESSOR_CANDIDATES")
-    for(const c of previous.candidateAfter){equal(c.binding,input.binding);if(!input.intent.some(t=>t.expectedHostId===c.hostId))fail("PREDECESSOR_HOST");validateHandler(c.observation);if(c.observation.record&&c.observation.record.hostId!==c.hostId)fail("CANDIDATE_HOST")}
+    for(const c of previous.candidateAfter){if(c.binding!==null||previous.outcome==="passed")equal(c.binding,input.binding);if(!input.intent.some(t=>t.expectedHostId===c.hostId))fail("PREDECESSOR_HOST");validateHandler(c.observation);if(c.observation.record&&c.observation.record.hostId!==c.hostId)fail("CANDIDATE_HOST")}
   }
-  const latest=required.at(-1)
+  const latest=(["install","synthetic","discovery","real","decision"] as Phase[]).filter(p=>required.includes(p)).at(-1)
   if(latest&&input.phase!=="cleanup")equal(input.previous.find(p=>p.phase===latest)!.candidateAfter,input.preflight.map(p=>({hostId:p.hostId,observation:p.candidate,binding:p.candidateBinding})),"PREDECESSOR_GENERATION")
+  if(latest&&input.phase==="cleanup")for(const before of input.previous.find(p=>p.phase===latest)!.candidateAfter){const current=input.preflight.find(p=>p.hostId===before.hostId)!.candidate;if(current.record&&(!before.observation.record||current.record.generation!==before.observation.record.generation||current.record.process&&before.observation.record.process&&!sameProcess(current.record.process,before.observation.record.process))&&input.commands.some(c=>c.kind!=="read"))fail("CLEANUP_OWNER_CHANGED")}
   const needsDiscovery=["discovery","real","decision"].includes(input.phase)
   if(needsDiscovery&&input.discovery.length!==3||!needsDiscovery&&input.discovery.length)fail("DISCOVERY_EVIDENCE")
   for(const d of input.discovery){
@@ -288,20 +290,20 @@ async function evidenceBytes(root:string,file:EvidenceFile,max=1024*1024):Promis
   return bytes
 }
 async function evidenceJson(root:string,file:EvidenceFile):Promise<unknown>{return JSON.parse((await evidenceBytes(root,file)).toString("utf8"))}
-function assertClaim(input:PhaseInput,e:PhaseEvidence):void{
+function assertClaim(input:PhaseInput,e:PhaseEvidence,cutoff:number):void{
   if(input.phase!=="real"){if(e.guardClaim)fail("UNEXPECTED_CLAIM");return}
   const a=input.taskAllowance,c=e.guardClaim?.value
-  if(!a||!c||c.allowanceSha256!==a.file.sha256||c.operationId!==a.value.operationId||c.hostId!==a.value.hostId||c.handlerGeneration!==a.value.handlerGeneration||c.claimedAt<a.value.notBefore||c.claimedAt>a.value.deadline)fail("MISSING_OR_CHANGED_CLAIM")
+  if(!a||!c||c.allowanceSha256!==a.file.sha256||c.operationId!==a.value.operationId||c.hostId!==a.value.hostId||c.handlerGeneration!==a.value.handlerGeneration||c.claimedAt<a.value.notBefore||c.claimedAt>a.value.deadline||c.claimedAt>cutoff)fail("MISSING_OR_CHANGED_CLAIM")
   equal(c.input,a.value.input)
 }
-function validateReadbacks(input:PhaseInput,e:PhaseEvidence):void{
+function validateReadbacks(input:PhaseInput,e:PhaseEvidence,cutoff:number):void{
   const expected=input.cleanup.flatMap(c=>[...c.processes,...c.editors.map(e=>e.process),...(c.handler.record?.process?[c.handler.record.process]:[])].map(process=>({hostId:c.hostId,process})))
   const names=new Set<string>(),all=expected.filter(x=>{const key=canonicalJson(x);if(names.has(key))return false;names.add(key);return true})
   if(e.cleanupReadbacks.length!==all.length)fail("CLEANUP_READBACKS")
   const seen=new Set<string>()
   for(const r of e.cleanupReadbacks){
     const match=all.find(x=>x.hostId===r.hostId&&isDeepStrictEqual(x.process,r.expected)),key=canonicalJson({hostId:r.hostId,process:r.expected})
-    if(!match||seen.has(key)||r.firstAt<Math.max(input.createdAt,...e.commands.map(c=>c.finishedAt??input.createdAt))||r.secondAt<=r.firstAt||r.secondAt>input.cleanup.find(c=>c.hostId===r.hostId)!.deadline||r.firstBootId!==r.secondBootId)fail("CLEANUP_READBACKS")
+    if(!match||seen.has(key)||r.firstAt<Math.max(input.createdAt,...e.commands.map(c=>c.finishedAt??input.createdAt))||r.secondAt<=r.firstAt||r.secondAt>cutoff||r.secondAt>input.cleanup.find(c=>c.hostId===r.hostId)!.deadline||r.firstBootId!==r.secondBootId)fail("CLEANUP_READBACKS")
     seen.add(key)
     for(const [boot,process,group]of [[r.firstBootId,r.first,r.firstGroup],[r.secondBootId,r.second,r.secondGroup]] as const){
       if(process&&process.bootId!==boot||group.some(p=>p.bootId!==boot||p.processGroupId!==r.expected.processGroupId))fail("READBACK_BOOT_OR_GROUP")
@@ -311,8 +313,17 @@ function validateReadbacks(input:PhaseInput,e:PhaseEvidence):void{
     }
   }
 }
-export async function verifyPhaseEvidence(input:PhaseInput,root:string):Promise<void>{
-  check(input,inputSchema)
+function targetScope(input:PhaseInput){return input.intent.map(({providerFiles,toolFiles,...target})=>target)}
+async function frozenArtifact(root:string,path:string):Promise<FrozenPhase>{
+  if(isAbsolute(path)||path.split("/").some(p=>p===".."||p==="."||!p))fail("EVIDENCE_PATH")
+  const raw=JSON.parse((await boundedBytes(join(root,path))).toString("utf8"));check(raw,{input:inputSchema,digest:hash});const frozen=raw as FrozenPhase;equal(freezePhase(frozen.input,frozen.input.createdAt),frozen);return frozen
+}
+export async function verifyPhaseResult(raw:unknown,root:string,now=Date.now()):Promise<PhaseResult>{
+  check(raw,resultSchema);if(!Number.isSafeInteger(now))fail("RESULT_TIME");const result=structuredClone(raw) as PhaseResult,artifact=await frozenArtifact(root,result.artifactFile);await verifyEvidence(artifact.input,root,{result,now});return result
+}
+export async function verifyPhaseEvidence(input:PhaseInput,root:string):Promise<void>{await verifyEvidence(input,root)}
+async function verifyEvidence(input:PhaseInput,root:string,terminal?:{result:PhaseResult;now:number}):Promise<void>{
+  check(input,inputSchema);freezePhase(input,input.createdAt)
   async function verifyFiles(i:PhaseInput,depth=0):Promise<void>{
     if(depth>8)fail("EVIDENCE_DEPTH")
     for(const c of i.commands)if(c.stdinFile)await evidenceBytes(root,c.stdinFile)
@@ -326,15 +337,10 @@ export async function verifyPhaseEvidence(input:PhaseInput,root:string):Promise<
       equal(c.taskCreate,{allowancePath:a.file.path,sha256:a.file.sha256});equal(c.binding,i.binding)
       if(c.batchId!==i.batchId||c.hostId!==source.expectedHostId||c.persistentRoot!==source.persistentRoot||c.runtimeRoot!==source.runtimeRoot||c.packageRoot!==source.packageRoot||c.node!==source.node||c.configPath!==a.supervisorConfig.path)fail("SUPERVISOR_CONFIG")
     }
-    for(const result of i.previous){
-      const path=result.artifactFile
-      if(isAbsolute(path)||path.split("/").some(p=>p===".."||p==="."||!p))fail("EVIDENCE_PATH")
-      const artifact=JSON.parse((await boundedBytes(join(root,path))).toString("utf8"));check(artifact,{input:inputSchema,digest:hash})
-      const frozen=artifact as FrozenPhase
-      const validated=freezePhase(frozen.input,frozen.input.createdAt)
-      equal(validated,frozen)
+    for(const result of depth===0&&terminal?[terminal.result]:i.previous){
+      const frozen=await frozenArtifact(root,result.artifactFile)
       if(frozen.digest!==result.artifactDigest||frozen.input.phase!==result.phase||frozen.input.evidenceKind!==result.evidenceKind||frozen.input.batchId!==i.batchId)fail("ARTIFACT_CHANGED")
-      equal(frozen.input.binding,i.binding)
+      equal(frozen.input.binding,i.binding);equal(targetScope(frozen.input),targetScope(i),"TARGET_SCOPE");if(frozen.input.taskId!==i.taskId)fail("TASK_SCOPE");equal(frozen.input.archives,i.archives,"ARCHIVE_SCOPE")
       if(result.phase==="discovery"&&["real","decision"].includes(i.phase))for(const d of i.discovery)equal(d.commandIds,frozen.input.commands.filter(c=>c.kind==="discovery"&&c.hostId===d.hostId).map(c=>c.operationId),"DISCOVERY_COMMANDS")
       const raw=await evidenceJson(root,{path:result.evidenceFile,sha256:result.evidenceDigest});check(raw,phaseEvidenceSchema)
       const e=raw as PhaseEvidence
@@ -345,13 +351,15 @@ export async function verifyPhaseEvidence(input:PhaseInput,root:string):Promise<
       if(e.outcome==="passed"){
         equal(e.productionBefore,e.productionAfter)
         if(e.candidateAfter.length!==3)fail("CANDIDATE_AFTER")
-        for(const c of e.candidateAfter){if(!i.intent.some(t=>t.expectedHostId===c.hostId))fail("CANDIDATE_AFTER");equal(c.binding,i.binding);validateHandler(c.observation);if(c.observation.record&&c.observation.record.hostId!==c.hostId)fail("CANDIDATE_HOST")}
+        unique(e.candidateAfter.map(c=>c.hostId))
+        if(!["install","cleanup"].includes(frozen.input.phase))equal(e.candidateAfter,e.candidateBefore.map(c=>({...c,binding:i.binding})),"CANDIDATE_CONTINUITY")
+        for(const c of e.candidateAfter){if(!i.intent.some(t=>t.expectedHostId===c.hostId))fail("CANDIDATE_AFTER");if(frozen.input.phase!=="cleanup"||c.binding!==null)equal(c.binding,i.binding);validateHandler(c.observation);if(c.observation.record&&c.observation.record.hostId!==c.hostId)fail("CANDIDATE_HOST");if(frozen.input.phase==="cleanup"){const before=e.candidateBefore.find(b=>b.hostId===c.hostId)!.observation;if(c.observation.disposition==="live"||c.observation.disposition==="ambiguous"||c.observation.record&&(!before.record||c.observation.record.generation!==before.record.generation))fail("CLEANUP_STILL_OWNED")}}
       }
       unique(e.commands.map(c=>c.operationId));equal([...e.commands.map(c=>c.operationId)].sort(),[...frozen.input.commands.map(c=>c.operationId)].sort(),"COMMAND_RECEIPTS")
       for(const c of e.commands){
         const planned=frozen.input.commands.find(p=>p.operationId===c.operationId)!
         equal(c.originalRef,planned.originalRef)
-        if(e.outcome==="passed"&&(c.invocations!==1||c.outcome!=="passed"||c.exitCode!==0||c.startedAt===null||c.finishedAt===null||c.startedAt<frozen.input.createdAt||c.finishedAt<c.startedAt||c.finishedAt>planned.deadline||c.finishedAt>i.createdAt))fail("COMMAND_RESULT")
+        if(e.outcome==="passed"&&(c.invocations!==1||c.outcome!=="passed"||c.exitCode!==0||c.startedAt===null||c.finishedAt===null||c.startedAt<frozen.input.createdAt||c.finishedAt<c.startedAt||c.finishedAt>planned.deadline||c.finishedAt>(depth===0&&terminal?terminal.now:i.createdAt)))fail("COMMAND_RESULT")
         await evidenceBytes(root,c.stdout);await evidenceBytes(root,c.stderr)
       }
       if(e.guardClaim){
@@ -359,17 +367,20 @@ export async function verifyPhaseEvidence(input:PhaseInput,root:string):Promise<
         const path=e.guardClaim.file.path,names=(await readdir(join(root,dirname(path)))).filter(name=>name.endsWith(".claim.json"))
         if(names.length!==1||names[0]!==e.guardClaim.value.operationId+".claim.json"||!path.endsWith("/"+names[0]))fail("CLAIM_EXPORT_SET")
       }
-      if(e.outcome==="passed"){assertClaim(frozen.input,e);if(frozen.input.phase==="cleanup")validateReadbacks(frozen.input,e);else if(e.cleanupReadbacks.length)fail("UNEXPECTED_READBACKS")}
+      if(e.outcome==="passed"){const cutoff=depth===0&&terminal?terminal.now:i.createdAt;assertClaim(frozen.input,e,cutoff);if(frozen.input.phase==="cleanup")validateReadbacks(frozen.input,e,cutoff);else if(e.cleanupReadbacks.length)fail("UNEXPECTED_READBACKS")}
       await verifyFiles(frozen.input,depth+1)
     }
     if(i.permission){
-      const p=i.permission,path=p.parentRealFile
-      if(isAbsolute(path)||path.split("/").some(c=>c===".."||c==="."||!c))fail("PARENT_PATH")
-      const raw=JSON.parse((await boundedBytes(join(root,path))).toString("utf8"));check(raw,{input:inputSchema,digest:hash})
-      const parent=raw as FrozenPhase
-      equal(freezePhase(parent.input,parent.input.createdAt),parent)
+      const p=i.permission,parent=await frozenArtifact(root,p.parentRealFile)
       if(parent.digest!==p.parentRealDigest||parent.input.phase!=="real"||parent.input.batchId!==i.batchId||parent.input.evidenceKind!==i.evidenceKind||p.observedAt<parent.input.createdAt||p.observedAt>parent.input.expiresAt||i.expiresAt>parent.input.expiresAt)fail("PARENT_REAL")
-      equal(parent.input.binding,i.binding)
+      equal(parent.input.binding,i.binding);equal(targetScope(parent.input),targetScope(i),"PARENT_SCOPE");equal(parent.input.archives,i.archives,"PARENT_SCOPE")
+      if(parent.input.taskId!==i.taskId)fail("PARENT_TASK")
+      equal(parent.input.preflight.map(v=>({hostId:v.hostId,candidate:v.candidate,binding:v.candidateBinding})),i.preflight.map(v=>({hostId:v.hostId,candidate:v.candidate,binding:v.candidateBinding})),"PARENT_CANDIDATE")
+      if(p.ownerFile){
+        const record=parseTaskRecord(await evidenceJson(root,p.ownerFile)),worker=parent.input.prompts.find(v=>v.role==="worker")!
+        equal(record.ref,worker.taskRef,"PERMISSION_TASK");equal(record.session,p.offer.ref.target,"PERMISSION_SESSION")
+        if(record.ref.hostId!==p.offer.ref.hostId||record.launch.handlerGeneration!==p.offer.ref.target.handlerGeneration||record.description!==parent.input.taskAllowance!.value.input.description)fail("PERMISSION_TASK")
+      }else if(!parent.input.commands.some(c=>c.kind==="prompt"&&c.hostId===p.offer.ref.hostId&&c.originalRef?.target&&isDeepStrictEqual(c.originalRef.target,p.offer.ref.target)))fail("PERMISSION_SESSION")
       const snapshot=parsePermissionSnapshot(await evidenceJson(root,p.offerFile))
       if(!snapshot.pending.some(o=>isDeepStrictEqual(o,p.offer))||snapshot.receipts.some(r=>isDeepStrictEqual(r.ref,p.offer.ref)))fail("OFFER_NOT_PENDING")
       await verifyFiles(parent.input,depth+1)
