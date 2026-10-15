@@ -1,10 +1,19 @@
+import { fixtureIdentity } from "./fixtures/ownership.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
+import { until } from "./control-support.js"
+import { createCatalogService } from "../src/catalog/service.js"
+import { createAgentStore } from "../src/agent/store.js"
+import { createAgentService } from "../src/agent/service.js"
+import { createRetentionStore } from "../src/retention/store.js"
+import { createRetentionCoordinator } from "../src/retention/coordinator.js"
 import { syntheticProbeFixture } from "./catalog-support.js"
 import { cleanProbeEnvironment } from "../src/catalog/probes.js"
 import { spawn } from "node:child_process"
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
+import fs from "node:fs/promises"
+import { syncBuiltinESMExports } from "node:module"
+import { mkdtemp, mkdir, readFile, stat, realpath, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
@@ -16,8 +25,181 @@ import { createLinuxAdapter } from "../src/platform/linux.js"
 import { observeConfig } from "../src/catalog/config.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
 import type { LaunchRecord } from "../src/platform/types.js"
+import { readProbeDiagnostic, retainProbeDiagnostic } from "../src/catalog/diagnostics.js"
 
 let catalogFixtureFailure: Error | undefined
+
+for (const fault of ["directory-sync", "persistent-directory-sync", "stderr-close"] as const) test(`final diagnostic ${fault} failure remains retained after restart`, async t => {
+  const f = await syntheticProbeFixture(t)
+  await f.runtime.recover()
+  const original = fs.open
+  let injected = false
+  fs.open = (async (...args: Parameters<typeof original>) => {
+    const handle = await original(...args), path = String(args[0])
+    if (path === f.request.meta.workPath) {
+      const sync = handle.sync.bind(handle)
+      handle.sync = async () => {
+        let value
+        try { value = JSON.parse(await readFile(join(path, "diagnostic.json"), "utf8")) } catch { }
+        if (fault !== "stderr-close" && (!injected || fault === "persistent-directory-sync") && value?.finishedAt != null) {
+          injected = true
+          throw Object.assign(new Error("fixture final " + fault + " failure"), { code: "EIO" })
+        }
+        return sync()
+      }
+    }
+    if (fault === "stderr-close" && path === join(f.request.meta.workPath, "worker.stderr")) {
+      const close = handle.close.bind(handle)
+      handle.close = async () => {
+        await close()
+        injected = true
+        throw Object.assign(new Error("fixture stderr-close failure"), { code: "EIO" })
+      }
+    }
+    return handle
+  }) as typeof original
+  syncBuiltinESMExports()
+  let outcome
+  try {
+    const operation = f.runtime.run(f.request, new AbortController().signal)
+    await f.workerObserved.promise; f.releaseWorkerIdentity()
+    await f.nativeRegistered.promise; f.releaseResult()
+    outcome = await operation
+  } finally { fs.open = original; syncBuiltinESMExports() }
+  assert.equal(injected, true)
+  assert.equal(outcome.error?.code, "PROBE_FAILED")
+  assert.equal(outcome.record.phase, "cleanup_verified")
+  const diagnostic = (await readProbeDiagnostic(f.request.meta))!
+  assert.equal(retainProbeDiagnostic(diagnostic, Date.now()), true)
+  assert.equal(diagnostic.stderrComplete, false)
+  if (fault === "stderr-close") { assert.equal(diagnostic.firstFailure?.stage, "diagnostic-write"); assert.equal(diagnostic.firstFailure?.code, "EIO") }
+  else assert.ok(f.runtime.retentionPins().paths.includes("catalog/work/" + f.request.meta.attemptId))
+  const restartedStore = createCatalogStore(f.root)
+  const retained = (await restartedStore.inventory()).metadata.find(meta => meta.attemptId === f.request.meta.attemptId)!
+  assert.equal(retainProbeDiagnostic((await readProbeDiagnostic(retained))!, Date.now() + 604800001), true)
+  assert.deepEqual([...f.processes.values()], [])
+})
+
+
+test("pending capture removal failure conservatively retains a successful probe", async t => {
+  const f = await syntheticProbeFixture(t)
+  await f.runtime.recover()
+  const original = fs.unlink
+  let injected = false
+  fs.unlink = (async path => {
+    if (String(path) === join(f.request.meta.workPath, "capture-pending.json")) { injected = true; throw Object.assign(new Error("fixture pending removal"), { code: "EIO" }) }
+    return original(path)
+  }) as typeof original
+  syncBuiltinESMExports()
+  let outcome
+  try {
+    const operation = f.runtime.run(f.request, new AbortController().signal)
+    await f.workerObserved.promise; f.releaseWorkerIdentity()
+    await f.nativeRegistered.promise; f.releaseResult()
+    outcome = await operation
+  } finally { fs.unlink = original; syncBuiltinESMExports() }
+  assert.equal(injected, true)
+  assert.equal(outcome.error, null)
+  assert.equal((await readProbeDiagnostic(f.request.meta))!.stderrComplete, false)
+  assert.ok(f.runtime.retentionPins().paths.includes("catalog/work/" + f.request.meta.attemptId))
+})
+
+
+for (const fault of ["directory-sync", "stderr-close"]) test(`automatic ${fault} failure retains its receipt graph after runtime restart`, async t => {
+  const f = await syntheticProbeFixture(t, "success", true), original = fs.open
+  const paths = { persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "handler.sock"), hostKey: f.request.meta.hostId }
+  let injected = false
+  fs.open = (async (...args: Parameters<typeof original>) => {
+    const handle = await original(...args), path = String(args[0])
+    if (fault === "directory-sync" && path === f.request.meta.workPath) {
+      const sync = handle.sync.bind(handle)
+      handle.sync = async () => {
+        let value
+        try { value = JSON.parse(await readFile(join(path, "diagnostic.json"), "utf8")) } catch { }
+        if (!injected && value?.finishedAt != null) { injected = true; throw Object.assign(new Error("fixture final sync"), { code: "EIO" }) }
+        return sync()
+      }
+    }
+    if (fault === "stderr-close" && path === join(f.request.meta.workPath, "worker.stderr")) {
+      const close = handle.close.bind(handle)
+      handle.close = async () => { await close(); injected = true; throw Object.assign(new Error("fixture close"), { code: "EIO" }) }
+    }
+    return handle
+  }) as typeof original
+  syncBuiltinESMExports()
+  const catalog = createCatalogService({ paths, generation: f.generation, queue: f.queue, store: f.store, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile], probes: { ...f.runtime, async run(request, signal) { f.bindRequest(request); return f.runtime.run(request, signal) } } })
+  try {
+    await catalog.initialize()
+    catalog.startScheduling()
+    await f.workerObserved.promise; f.releaseWorkerIdentity()
+    await f.nativeRegistered.promise; f.releaseResult()
+    await until(async () => (await catalog.list()).discovery.state === "idle" ? true : undefined)
+  } finally { catalog.close(); fs.open = original; syncBuiltinESMExports() }
+  assert.equal(injected, true)
+  const initial = await f.store.inventory()
+  assert.equal(initial.commands.length, 0); assert.equal(initial.automatic.length, 1)
+  assert.equal(initial.automatic[0]!.state, "completed")
+  assert.equal(initial.metadata[0]!.version, 3)
+  assert.equal(initial.snapshots[0]!.providers.find(p => p.providerId === f.profile.id)!.error?.code, "PROBE_FAILED")
+  const generation = randomUUID(), queue = new MutationQueue(), retention = createRetentionStore(f.root, paths.hostKey, generation), store = createCatalogStore(f.root, undefined, retention.view)
+  const runtime = createProbeRuntime({ paths, adapter: f.adapter, queue, store, generation, canStart: () => false, retirement: retention.view })
+  const restarted = createCatalogService({ paths, generation, queue, store, probes: runtime, retirement: retention.view, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile] })
+  await restarted.initialize()
+  assert.deepEqual(runtime.retentionPins().paths, [])
+  await mkdir(join(f.root, "launches"), { mode: 0o700 })
+  const agentStore = createAgentStore(f.root, undefined, retention.view), mutations = { root: f.root, queue, accepted: [], retirement: retention.view }
+  const state = { hostId: paths.hostKey, handlerGeneration: generation, phase: "ready" as const, reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] as ["status", "doctor", "shutdown"] }
+  const agents = createAgentService({ context: { paths, adapter: f.adapter, mutations, state, shutdownPending: () => false }, catalog: restarted, contracts: [], store: agentStore, retirement: retention.view })
+  const coordinator = createRetentionCoordinator({ root: f.root, hostId: paths.hostKey, generation, queue, adapter: f.adapter, store: retention, catalogStore: store, agentStore, mutations, catalog: restarted, agents, now: () => Date.now() + 604800001 })
+  try {
+    await coordinator.initialize()
+    assert.deepEqual(coordinator.diagnostics(), [])
+    const retained = await store.inventory()
+    for (const kind of ["automatic", "metadata", "launches", "snapshots"] as const) assert.equal(retained[kind].length, 1)
+    assert.equal((await readProbeDiagnostic(retained.metadata[0]!))!.stderrComplete, false)
+    assert.deepEqual([...f.processes.values()], [])
+  } finally { agents.close(); restarted.close() }
+})
+
+
+test("stderr stream errors preserve the first fault and mark capture incomplete", async t => {
+  const f = await syntheticProbeFixture(t)
+  await f.runtime.recover()
+  const operation = f.runtime.run(f.request, new AbortController().signal)
+  await f.workerObserved.promise; f.releaseWorkerIdentity()
+  await f.nativeRegistered.promise
+  f.child.stderr!.emit("error", Object.assign(new Error("fixture capture failure"), { code: "EIO" }))
+  const outcome = await operation, diagnostic = (await readProbeDiagnostic(f.request.meta))!
+  assert.notEqual(outcome.error, null)
+  assert.equal(diagnostic.firstFailure?.stage, "worker-stream")
+  assert.equal(diagnostic.firstFailure?.code, "EIO")
+  assert.equal(diagnostic.stderrComplete, false)
+  assert.equal(outcome.record.phase, "cleanup_verified")
+})
+
+for (const [scenario, stage] of [["spawn-throws", "worker-launch"], ["worker-mismatch", "worker-registration"], ["native-mismatch", "native-registration"], ["closed", "worker-ipc"], ["stderr", null]] as const) test(`private discovery diagnostic retains ${scenario} evidence`, async t => {
+  const f = await syntheticProbeFixture(t, scenario)
+  await f.runtime.recover()
+  f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  const diagnostic = await readProbeDiagnostic(f.request.meta)
+  assert.ok(diagnostic)
+  assert.equal(diagnostic.firstFailure?.stage ?? null, stage)
+  assert.equal(diagnostic.commandId, f.request.meta.commandId)
+  assert.equal(diagnostic.attemptId, f.request.meta.attemptId)
+  assert.equal(diagnostic.handlerGeneration, f.request.meta.handlerGeneration)
+  assert.equal(diagnostic.failed, outcome.error !== null)
+  assert.ok(diagnostic.finishedAt)
+  if (scenario === "stderr") {
+    assert.equal(diagnostic.stderrComplete, true)
+    assert.equal(diagnostic.workerStderrBytes, 139264)
+    assert.equal((await readFile(join(f.request.meta.workPath, "worker.stderr"))).length, 139264)
+    assert.equal(diagnostic.workerTerminal?.signal, "SIGTERM")
+    assert.equal(diagnostic.workerIdentity?.pid, 10001)
+    assert.equal(diagnostic.nativeIdentity?.pid, 10002)
+  }
+  for (const name of ["diagnostic.json", "worker.stderr", "native.stderr"]) assert.equal((await stat(join(f.request.meta.workPath, name))).mode & 0o777, 0o600)
+})
 
 for (const scenario of ["pause-before-attempted", "pause-after-attempted"]) test(`cancellation during ${scenario} discharges a provably unstarted probe`, async t => {
   const f = await syntheticProbeFixture(t, scenario), controller = new AbortController()
@@ -224,10 +406,10 @@ for (const scenario of ["worker-error", "worker-mismatch", "native-death", "nati
   assert.notEqual(outcome.error, null)
 })
 
-for (const scenario of ["normal", "ignore-term", "verbose-stderr"]) test(`gated worker owns a real native fixture through independent group cleanup, ${scenario}`, { timeout: 60000 }, async t => {
+for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejection", "native-early-exit", "native-launch-failure", "graceful-native-exit"]) test(`gated worker owns a real native fixture through independent group cleanup, ${scenario}`, { timeout: 60000 }, async t => {
   const ignoreTerm = scenario === "ignore-term"
   if (catalogFixtureFailure) throw catalogFixtureFailure
-  const root = await mkdtemp(join(await realpath("/tmp"), "agy-catalog-")), adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
+  const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), "agy-catalog-")), adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   let pid: number | undefined, operation: Promise<unknown> | undefined
   const attemptId = randomUUID(), generation = randomUUID(), commandId = randomUUID(), hostId = "a".repeat(64)
   const path = join(root, "catalog/probe-launches", attemptId + ".json")
@@ -237,6 +419,7 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr"]) test(`gated 
     if (pid !== undefined) {
       const record = await readLaunchRecordForReconciliation(path)
       assert.notEqual(record.provider, null, `retained uncertain fixture root: ${root}`)
+      for (const identity of record.provider!.group.observed) fixtureIdentity("catalog-probe/" + scenario, identity)
       const cleanup = join(root, "cleanup.json")
       await writeLaunchRecord(cleanup, record)
       assert.equal((await reconcileRecord(cleanup, adapter, record)).record.phase, "cleanup_verified")
@@ -252,7 +435,8 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr"]) test(`gated 
   const adapterPath = join(root, "adapter.json"), adapterEntry = join(root, "adapter.mjs")
   await writeFile(adapterPath, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "1.7.0", main: "adapter.mjs" }), { mode: 0o600 })
   await writeFile(adapterEntry, "throw new Error('adapter fixture metadata only')", { mode: 0o600 })
-  const profile = { id: "codex-acp" as const, enabled: true, executable: process.execPath, adapterPackageJson: adapterPath, sdkPackageJson: null, configurationFiles: ignoreTerm ? [adapterPath] : scenario === "verbose-stderr" ? [adapterPath, adapterEntry] : [] }
+  const count = ignoreTerm ? 1 : scenario === "verbose-stderr" ? 2 : scenario === "rpc-rejection" ? 3 : scenario === "native-early-exit" ? 4 : scenario === "graceful-native-exit" ? 5 : 0
+  const profile = { id: "codex-acp" as const, enabled: true, executable: scenario === "native-launch-failure" ? adapterEntry : process.execPath, adapterPackageJson: adapterPath, sdkPackageJson: null, configurationFiles: Array.from({ length: count }, (_, i) => join(root, "declared-" + i)) }
   const evidence = await observeConfig(profile), store = createCatalogStore(root)
   const request: ProbeRequest = { profile, evidence, meta: { version: 2, hostId, handlerGeneration: generation, commandId, providerId: profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(root, "catalog/work", attemptId) } }
   await store.writeCommand({ version: 1, commandId, hostId, handlerGeneration: generation, batchId: randomUUID(), fingerprints: [{ providerId: profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: profile.id, attemptId }], state: "pending", snapshotId: null }, null)
@@ -261,9 +445,36 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr"]) test(`gated 
   const run = runtime.run(request, new AbortController().signal)
   operation = run
   const outcome = await run
-  assert.equal(outcome.error, null)
-  assert.equal(outcome.result!.providerVersion, "fixture-1")
-  assert.equal(outcome.record.provider!.group.observed.length, 2)
+  const diagnostic = await readProbeDiagnostic(request.meta)
+  assert.ok(diagnostic)
+  assert.equal(diagnostic.stderrComplete, !ignoreTerm)
+  if (scenario === "rpc-rejection") {
+    assert.equal(outcome.result, null)
+    assert.equal(diagnostic.firstFailure?.stage, "rpc-rejection")
+    assert.equal(diagnostic.firstFailure?.method, "model/list")
+    assert.equal(diagnostic.firstFailure?.message, "fixture rejection")
+    assert.equal(await readFile(join(request.meta.workPath, "native.stderr"), "utf8"), "native fixture rejected RPC\n")
+  } else if (scenario === "native-early-exit") {
+    assert.equal(outcome.result, null)
+    assert.equal(diagnostic.nativeTerminal?.code, 23)
+    assert.equal(diagnostic.firstFailure?.stage, "native-exit")
+    assert.equal(await readFile(join(request.meta.workPath, "native.stderr"), "utf8"), "native fixture exited\n")
+  } else if (scenario === "native-launch-failure") {
+    assert.equal(outcome.result, null)
+    assert.equal(diagnostic.firstFailure?.stage, "native-launch")
+    assert.equal(diagnostic.firstFailure?.code, "EACCES")
+  } else {
+    assert.equal(outcome.error, null)
+    assert.equal(outcome.result!.providerVersion, "fixture-1")
+    assert.equal(outcome.record.provider!.group.observed.length, 2)
+    assert.equal(diagnostic.firstFailure, null)
+    if (scenario === "graceful-native-exit") assert.equal(diagnostic.nativeTerminal?.code, 0)
+    if (scenario === "verbose-stderr") {
+      const stderr = await readFile(join(request.meta.workPath, "native.stderr"))
+      assert.equal(stderr.length, 2097152)
+      assert.ok(stderr.every(byte => byte === 255))
+    }
+  }
   assert.equal(outcome.record.phase, "cleanup_verified")
   await runtime.verifyDischarged()
 })

@@ -1,3 +1,4 @@
+import { fixtureIdentity } from "./fixtures/ownership.js"
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import assert from "node:assert/strict"
@@ -66,6 +67,7 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
     assert.deepEqual(inventory.issues, [])
     const independent = await Promise.all((await readdir(f.root)).filter(name => /^owned-probe-[0-9a-f-]+\.json$/.test(name)).map(async name => ({ path: join(f.root, name), record: await readLaunchRecordForReconciliation(join(f.root, name)) })))
     for (const entry of [...inventory.launches, ...independent]) {
+      for (const identity of entry.record.provider?.group.observed ?? []) fixtureIdentity("handler-catalog-probe/" + entry.record.launchAttemptId, identity)
       const path = join(f.root, entry.record.launchAttemptId + "-catalog-cleanup.json")
       await writeLaunchRecord(path, entry.record)
       assert.equal((await reconcileRecord(path, f.adapter, entry.record)).record.phase, "cleanup_verified")
@@ -121,12 +123,14 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
   }
 }
 
-export async function syntheticProbeFixture(t: TestContext, scenario = "success") {
-  const f = await profileFixture(t), store = createCatalogStore(f.root), generation = randomUUID(), attemptId = randomUUID(), commandId = randomUUID(), batchId = randomUUID()
+export async function syntheticProbeFixture(t: TestContext, scenario = "success", scheduled = false) {
+  const f = await profileFixture(t), store = createCatalogStore(f.root), generation = randomUUID(), batchId = randomUUID()
+  let attemptId: string = randomUUID(), commandId: string = randomUUID()
   const evidence = await observeConfig(f.profile), queue = new MutationQueue()
   const request: ProbeRequest = { profile: f.profile, evidence, meta: { version: 2, hostId: "a".repeat(64), handlerGeneration: generation, commandId, providerId: f.profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(f.root, "catalog/work", attemptId) } }
-  await store.writeCommand({ version: 1, commandId, hostId: request.meta.hostId, handlerGeneration: generation, batchId, fingerprints: [{ providerId: f.profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: f.profile.id, attemptId }], state: "pending", snapshotId: null }, null)
-  const path = join(f.root, "catalog/probe-launches", attemptId + ".json"), workerObserved = gate(), workerGate = gate(), nativeRegistered = gate(), spawnObserved = gate(), nativeGate = gate(), attemptedPublication = gate(), attemptedGate = gate()
+  if (!scheduled) await store.writeCommand({ version: 1, commandId, hostId: request.meta.hostId, handlerGeneration: generation, batchId, fingerprints: [{ providerId: f.profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: f.profile.id, attemptId }], state: "pending", snapshotId: null }, null)
+  let path = join(f.root, "catalog/probe-launches", attemptId + ".json")
+  const workerObserved = gate(), workerGate = gate(), nativeRegistered = gate(), spawnObserved = gate(), nativeGate = gate(), attemptedPublication = gate(), attemptedGate = gate()
   const child = new ChildProcess(), processes = new Map<number, ProcessIdentity>(), signals: string[] = []
   const stdout = new PassThrough(), stderr = new PassThrough()
   Object.assign(child, { pid: 10001, stdout, stderr, connected: true })
@@ -168,6 +172,7 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
       signals.push(signal)
       if (scenario === "cleanup-failure") throw new Error("observation unavailable")
       processes.clear()
+      child.emit("message", { type: "native-closed", attemptId, generation })
       child.emit("exit", null, signal)
       if (scenario !== "missing-close") child.emit("close", null, signal)
     },
@@ -197,5 +202,5 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
   function assertSpawn(file: unknown, args: unknown, options: unknown) {
     if (file !== process.execPath || !Array.isArray(args) || typeof options !== "object" || options === null || !(options as { detached?: boolean }).detached) throw new Error("invalid worker spawn")
   }
-  return { ...f, store, runtime, request, path, signals, child, processes, workerObserved, spawnObserved, nativeRegistered, attemptedPublication, releaseAttempted: () => attemptedGate.resolve(), spawnInvoked: () => spawned, nativeSpawned: () => native, durableAtSpawn: () => durableAtSpawn, releaseWorkerIdentity: () => workerGate.resolve(), releaseResult: () => nativeGate.resolve() }
+  return { ...f, store, runtime, request, path, signals, child, processes, adapter, queue, generation, bindRequest(next: ProbeRequest) { Object.assign(request, next); attemptId = next.meta.attemptId; commandId = next.meta.commandId; path = join(f.root, "catalog/probe-launches", attemptId + ".json"); identity.birth = `100:agy-provider:${attemptId}` }, workerObserved, spawnObserved, nativeRegistered, attemptedPublication, releaseAttempted: () => attemptedGate.resolve(), spawnInvoked: () => spawned, nativeSpawned: () => native, durableAtSpawn: () => durableAtSpawn, releaseWorkerIdentity: () => workerGate.resolve(), releaseResult: () => nativeGate.resolve() }
 }

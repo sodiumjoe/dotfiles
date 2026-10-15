@@ -3,7 +3,7 @@ import { constants, type BigIntStats } from "node:fs"
 import { lstat, mkdir, open, readdir, rename, rmdir, unlink, type FileHandle } from "node:fs/promises"
 import { dirname, join, relative } from "node:path"
 import { isDeepStrictEqual } from "node:util"
-import { decodeJson, digest, readBoundedFile } from "../catalog/config.js"
+import { decodeJson, digestPrivateFile, readBoundedFile } from "../catalog/config.js"
 import { hash, id, keys, object } from "../catalog/types.js"
 import type { InventoryEntry } from "../handler/inventory.js"
 import { assertPrivateDirectory, parseLaunchRecord } from "../platform/private-state.js"
@@ -112,10 +112,10 @@ export function createRetentionStore(root: string, hostId: string, handlerGenera
       return { ...base, kind: "directory", size: null, mtimeNs: null, ctimeNs: null, sha256: null }
     }
     if (!before.isFile() || before.nlink !== 1n) invalid()
-    const bytes = await readBoundedFile(full, 2 * 1048576 + 8192, true)
+    const sha256 = await digestPrivateFile(full, path.startsWith("catalog/work/") ? undefined : 2 * 1048576 + 8192)
     const identity = (s: BigIntStats) => [s.dev, s.ino, s.uid, s.mode, s.nlink, s.size, s.mtimeNs, s.ctimeNs].map(String)
-    if (!bytes || !isDeepStrictEqual(identity(before), identity(await lstat(full, { bigint: true })))) return invalid()
-    return { ...base, kind: "file", size: Number(before.size), mtimeNs: String(before.mtimeNs), ctimeNs: String(before.ctimeNs), sha256: digest(bytes) }
+    if (!isDeepStrictEqual(identity(before), identity(await lstat(full, { bigint: true })))) return invalid()
+    return { ...base, kind: "file", size: Number(before.size), mtimeNs: String(before.mtimeNs), ctimeNs: String(before.ctimeNs), sha256 }
   }
   async function pending(): Promise<CleanupIntent | null> {
     await assertPrivateDirectory(root)

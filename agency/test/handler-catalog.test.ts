@@ -10,6 +10,7 @@ import { CATALOG_PROTOCOL } from "../src/catalog/protocol.js"
 import { createCatalogStore } from "../src/catalog/store.js"
 import { sameProcess } from "../src/platform/types.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
+import { readProbeDiagnostic } from "../src/catalog/diagnostics.js"
 
 test("empty catalog configuration starts no probes", { timeout: 60000 }, async t => {
   const f = await catalogHandlerFixture(t, { enabled: [] })
@@ -48,7 +49,13 @@ test("real discovery retains provenance, stale failure history and removed model
   assert.equal(after.providers[1]!.freshness, "fresh")
   const retry = await f.refresh(first)
   assert.equal(retry.command.snapshotId, initial.snapshotId)
-  await until(async () => (await f.inventory()).launches.length === 0 ? true : undefined)
+  const failed = await until(async () => {
+    const inventory = await f.inventory(), meta = inventory.metadata.find(meta => meta.providerId === "claude-agent-acp")
+    return meta && (await readProbeDiagnostic(meta))?.failed ? meta : undefined
+  })
+  const diagnostic = (await readProbeDiagnostic(failed))!
+  assert.ok(diagnostic.firstFailure)
+  assert.equal(diagnostic.stderrComplete, true)
   assert.equal(JSON.stringify(after).includes("SECRET"), false)
 })
 
@@ -101,19 +108,25 @@ test("changed declared input discards a native candidate after cleanup", { timeo
   const provider = (await f.list()).providers.find(p => p.providerId === "codex-acp")!
   assert.equal(provider.error!.code, "CONFIG_CHANGED")
   assert.notEqual(provider.freshness, "fresh")
-  await until(async () => (await f.inventory()).launches.length === 0 ? true : undefined)
+  const failed = (await f.inventory()).metadata.find(meta => meta.providerId === "codex-acp")!
+  assert.equal((await readProbeDiagnostic(failed))!.failed, true)
+  assert.equal((await f.inventory()).launches.find(entry => entry.record.launchAttemptId === failed.attemptId)!.record.phase, "cleanup_verified")
 })
 
 test("restart cleans the exact old probe and interrupts its command before new work", { timeout: 60000 }, async t => {
   const f = await catalogHandlerFixture(t, { enabled: ["codex-acp"], wait: true }), old = await f.start(), commandId = randomUUID()
   await f.refresh(commandId); const retained = await f.waitNative("codex-acp")
+  const meta = (await f.inventory()).metadata.find(meta => meta.attemptId === retained.record.launchAttemptId)!
   for (const identity of retained.record.provider!.group.observed) assert.ok(sameProcess(identity, (await f.adapter.readProcess(identity.pid))!))
   await f.signal(old.record.process!, "SIGKILL")
   await until(async () => await f.observe(old.record.process!.pid) === null ? true : undefined)
   assert.deepEqual(await f.adapter.readGroup(old.record.process!.pid), [])
   const replacement = await f.start()
   assert.notEqual(replacement.record.generation, old.record.generation)
-  assert.equal(await createCatalogStore(f.paths.persistentRoot).readCommand(commandId), null)
+  const store = createCatalogStore(f.paths.persistentRoot)
+  const owner = await (meta.version === 3 && meta.receiptKind === "automatic" ? store.readAutomatic(meta.commandId) : store.readCommand(meta.commandId))
+  assert.equal(owner?.state, "interrupted")
+  assert.equal((await readProbeDiagnostic(meta))?.finishedAt, null)
   for (const identity of retained.record.provider!.group.observed) assert.equal(await f.adapter.readProcess(identity.pid), null)
   const ownedBeforeRetry = (await readdir(f.root)).filter(name => name.startsWith("owned-probe-"))
   await assert.rejects(f.refresh(commandId, old.record.generation), { code: "STALE_HANDLER" })

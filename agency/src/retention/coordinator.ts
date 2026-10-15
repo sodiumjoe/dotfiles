@@ -5,6 +5,7 @@ import { parseAgentCommand, parseAgentCommandV3, parseAgentRecord, parseAgentRec
 import type { AgentService } from "../agent/service.js"
 import type { AgentStore } from "../agent/store.js"
 import { decodeJson, readBoundedFile } from "../catalog/config.js"
+import { readProbeDiagnostic, retainProbeDiagnostic } from "../catalog/diagnostics.js"
 import { id, parseCommand, parseRetainedProbeMeta } from "../catalog/types.js"
 import type { CatalogService } from "../catalog/service.js"
 import type { CatalogStore } from "../catalog/store.js"
@@ -195,8 +196,14 @@ export function createRetentionCoordinator(input: { root: string; hostId: string
         const references = ["catalog/" + (meta.version === 3 && meta.receiptKind === "automatic" ? "automatic" : "commands") + "/" + meta.commandId + ".json"]
         if (nodes.has(launch)) { references.push(launch); nodes.get(launch)!.references = [path] }
         else if (!catalogUnsafe) cleanupError()
-        try { await lstat(join(input.root, work)); add(work, [path], catalogUnsafe); references.push(work) } catch (error) { if (!absent(error)) throw error }
-        add(path, references, catalogUnsafe || retainedLaunches.has(launch))
+        let diagnosticRetained = false
+        try {
+          await lstat(join(input.root, work))
+          try { const diagnostic = await readProbeDiagnostic(meta); diagnosticRetained = diagnostic !== null && retainProbeDiagnostic(diagnostic, (input.now ?? Date.now)()) }
+          catch (error) { diagnosticRetained = true; note("unreadable probe diagnostics: " + meta.attemptId) }
+          add(work, [path], catalogUnsafe || diagnosticRetained); references.push(work)
+        } catch (error) { if (!absent(error)) throw error }
+        add(path, references, catalogUnsafe || retainedLaunches.has(launch) || diagnosticRetained)
       }
       for (const entry of catalog.launches) if (!metas.has(entry.record.launchAttemptId)) { const node = nodes.get(relative(input.root, entry.path))!; node.retained = true; node.removable = false }
       for (const receipt of shutdown.receipts) {

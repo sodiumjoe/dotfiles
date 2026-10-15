@@ -5,38 +5,43 @@ import { isDeepStrictEqual } from "node:util"
 import { observeConfig, parseProfile } from "./config.js"
 import { cleanProbeEnvironment, parseProbeResult, type ProbeRequest, type ProbeResult } from "./probes.js"
 import { CatalogError, id, invalid, keys, object, parseProbeMeta } from "./types.js"
+import { probeFailureDetail, writeProbeStderr, type ProbeStage } from "./diagnostics.js"
 
 
 export async function runWorker(discover: (context: DriverContext) => Promise<ProbeResult>): Promise<void> {
   const controller = new AbortController()
   let request: ProbeRequest | undefined, started = false, spawned = false, connected = true, stopping = false, exit = false, close = false, input = 0, output = 0
   let child: ChildProcess | undefined, acceptRegistration: (() => void) | undefined, rejectRegistration: (() => void) | undefined
+  let binding: { attemptId: string; generation: string } | undefined
+  let stage: ProbeStage = "worker-config", pendingSends = 0
   const send = (value: object): void => {
-    if (!request || !connected || !process.connected) return
-    const message = { ...value, attemptId: request.meta.attemptId, generation: request.meta.handlerGeneration }
+    if (!binding || !connected || !process.connected) return
+    const message = { ...value, ...binding }
     output += Buffer.byteLength(JSON.stringify(message))
     if (output > 1048576) { controller.abort(); return }
-    try { process.send!(message, undefined, undefined, (error: Error | null) => { if (error) { connected = false; controller.abort(); rejectRegistration?.() } }) }
-    catch { connected = false; controller.abort(); rejectRegistration?.() }
+    pendingSends++
+    try { process.send!(message, undefined, undefined, (error: Error | null) => { pendingSends--; if (error) { connected = false; controller.abort(); rejectRegistration?.() }; finishTerm() }) }
+    catch { pendingSends--; connected = false; controller.abort(); rejectRegistration?.() }
   }
-  const failure = (): void => { controller.abort(); rejectRegistration?.(); send({ type: "failure" }) }
-  const finishTerm = (): void => { if (stopping && (!spawned || exit && close)) process.exit(0) }
+  const failure = (cause: unknown, at: ProbeStage = stage): void => { send({ type: "failure", detail: probeFailureDetail(at, cause) }); controller.abort(); rejectRegistration?.() }
+  const finishTerm = (): void => { if (stopping && pendingSends === 0 && (!spawned || close && (exit || child?.pid === undefined))) process.exit(0) }
   const spawnNative = (file: string, args: readonly string[]): RegisteredChild => {
     if (!request || !connected || controller.signal.aborted || spawned || file !== request.profile.executable || !Array.isArray(args) || args.some(a => typeof a !== "string" || a.includes("\0"))) throw new CatalogError("PROBE_FAILED")
     spawned = true
+    stage = "native-launch"
+    send({ type: "native-command", command: { file, args } })
     const registration = new Promise<void>((resolve, reject) => { acceptRegistration = resolve; rejectRegistration = () => reject(new CatalogError("PROBE_FAILED")) })
     void registration.catch(() => undefined)
     child = spawn(file, [...args], { detached: false, shell: false, cwd: request.meta.workPath, env: cleanProbeEnvironment(process.env), stdio: ["pipe", "pipe", "pipe"] })
-    child.on("error", failure)
-    child.on("exit", () => { exit = true; send({ type: "native-terminal" }); finishTerm() })
-    child.on("close", () => { close = true; rejectRegistration?.(); finishTerm() })
+    child.on("error", cause => failure(cause, "native-launch"))
+    child.on("exit", (code, signal) => { exit = true; send({ type: "native-terminal", terminal: { code, signal } }); finishTerm() })
+    child.on("close", (code, signal) => { close = true; if (!exit) send({ type: "native-terminal", terminal: { code, signal } }); send({ type: "native-closed" }); rejectRegistration?.(); finishTerm() })
     let stdout = 0
-    child.stderr!.on("error", failure)
-    child.stderr!.resume()
-    child.stdout!.on("data", (bytes: Buffer) => { stdout += bytes.length; if (stdout > 1048576) failure() })
+    child.stderr!.on("error", cause => failure(cause, "native-stream"))
+    child.stderr!.on("data", (bytes: Buffer) => { try { writeProbeStderr(4, bytes) } catch (cause) { failure(cause, "diagnostic-write") } })
+    child.stdout!.on("data", (bytes: Buffer) => { stdout += bytes.length; if (stdout > 1048576) failure(new CatalogError("PROBE_FAILED"), "native-stream") })
     const facade = new NativeFacade(child, registration, () => send({ type: "cancel" }))
-    if (child.pid === undefined) failure()
-    else send({ type: "native", pid: child.pid })
+    if (child.pid !== undefined) { stage = "native-registration"; send({ type: "native", pid: child.pid }) }
     return facade
   }
   process.on("message", raw => {
@@ -49,11 +54,13 @@ export async function runWorker(discover: (context: DriverContext) => Promise<Pr
         keys(v, ["type", "attemptId", "generation", "request"])
         if (started || controller.signal.aborted || !connected) invalid()
         started = true
+        binding = { attemptId: id(v.attemptId), generation: id(v.generation) }
         const r = object(v.request)
         keys(r, ["meta", "profile", "evidence"])
         const meta = parseProbeMeta(r.meta), profile = parseProfile(r.profile), evidence = await observeConfig(profile)
         if (meta.attemptId !== v.attemptId || meta.handlerGeneration !== v.generation || meta.workPath !== process.cwd() || meta.providerId !== profile.id || meta.fingerprint !== evidence.fingerprint || !isDeepStrictEqual(r.evidence, evidence)) invalid()
         request = { meta, profile, evidence }
+        stage = "discovery"
         const result = await discover({ request, signal: controller.signal, spawnNative })
         if (!spawned || controller.signal.aborted) throw new CatalogError("PROBE_FAILED")
         send({ type: "result", result: parseProbeResult(result, profile.id) })
@@ -61,8 +68,9 @@ export async function runWorker(discover: (context: DriverContext) => Promise<Pr
         keys(v, ["type", "attemptId", "generation", "pid"])
         if (!request || v.attemptId !== request.meta.attemptId || v.generation !== request.meta.handlerGeneration || !child || child.pid !== v.pid || exit || close || !acceptRegistration) invalid()
         acceptRegistration(); acceptRegistration = undefined
+        stage = "discovery"
       } else invalid()
-    })().catch(failure)
+    })().catch(cause => failure(cause))
   })
   process.on("disconnect", () => { connected = false; controller.abort(); rejectRegistration?.() })
   process.on("SIGTERM", () => { stopping = true; controller.abort(); rejectRegistration?.(); finishTerm() })

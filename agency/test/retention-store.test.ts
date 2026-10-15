@@ -6,6 +6,7 @@ import { join } from "node:path"
 import test from "node:test"
 import { createRetentionStore, type RetentionFileSystem } from "../src/retention/store.js"
 import { privateRoot } from "./control-support.js"
+import { createHash } from "node:crypto"
 
 const host = "a".repeat(64)
 async function fixture(t: Parameters<typeof privateRoot>[0]) {
@@ -129,6 +130,15 @@ test("an oversized work group is retained without publishing a partial intent", 
   await assert.rejects(store.prepare({ paths: f.paths, launches: [], handlers: [] }), /1 MiB/)
   assert.equal(await store.pending(), null)
   assert.equal(await readFile(join(f.root, f.work, "data-3999"), "utf8"), "data")
+})
+
+test("large private stderr retires with a streaming digest and unchanged file evidence", async t => {
+  const f = await fixture(t), store = createRetentionStore(f.root, host, randomUUID()), bytes = Buffer.alloc(3145728, 255), path = f.work + "/native.stderr"
+  await writeFile(join(f.root, path), bytes, { mode: 0o600 })
+  const intent = await store.prepare({ paths: [f.work], launches: [], handlers: [] })
+  assert.equal(intent.entries.find(entry => entry.path === path)?.sha256, createHash("sha256").update(bytes).digest("hex"))
+  await store.resume({ authorize: async () => undefined, removed: () => undefined })
+  await assert.rejects(lstat(join(f.root, f.work)), { code: "ENOENT" })
 })
 
 test("unsafe paths and malformed or oversized intents fail closed", async t => {

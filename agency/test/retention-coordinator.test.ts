@@ -8,6 +8,7 @@ import { createRetentionStore, type RetentionFileSystem } from "../src/retention
 import { FAILED_START_TTL_MS } from "../src/retention/policy.js"
 import { createCatalogStore } from "../src/catalog/store.js"
 import { createCatalogService } from "../src/catalog/service.js"
+import { initialProbeDiagnostic, probeFailureDetail, PROBE_DIAGNOSTIC_TTL_MS, readProbeDiagnostic, writeProbeDiagnostic } from "../src/catalog/diagnostics.js"
 import { CatalogError, failure, type ProviderProfile } from "../src/catalog/types.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { createAgentService } from "../src/agent/service.js"
@@ -39,6 +40,8 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
         await mkdir(join(root, "catalog/probe-launches"), { recursive: true, mode: 0o700 })
         await mkdir(request.meta.workPath, { recursive: true, mode: 0o700 })
         await writeFile(join(request.meta.workPath, "result.json"), "{}", { mode: 0o600 })
+        const diagnostic = initialProbeDiagnostic(request.meta, now)
+        await writeProbeDiagnostic(request.meta.workPath, { ...diagnostic, finishedAt: now, failed: fail, firstFailure: fail ? probeFailureDetail("discovery", new CatalogError("PROBE_FAILED")) : null, stderrComplete: true })
         await writeLaunchRecord(join(root, "catalog/probe-launches", request.meta.attemptId + ".json"), record(request.meta.attemptId, request.meta.handlerGeneration, request.meta.commandId))
       })
       return { request, record: record(request.meta.attemptId, request.meta.handlerGeneration, request.meta.commandId), result: fail ? null : { models: [], providerVersion: null, providerVersionSource: "unknown" }, error: fail ? failure(new CatalogError("PROBE_FAILED")) : null }
@@ -68,7 +71,7 @@ test("imported native history retains its creation receipt without invented laun
   assert.deepEqual(await readdir(join(f.root, "launches")), [])
 })
 
-test("twenty successful and twenty failed automatic batches leave only the current cache", async t => {
+test("successful automatic batches retire while failed batches retain bound evidence for seven days", async t => {
   const f = await fixture(t)
   const sentinels = ["agents/provider-state", "qualification", "provider-home"]
   for (const name of sentinels) { await mkdir(join(f.root, name), { recursive: true, mode: 0o700 }); await writeFile(join(f.root, name, "keep"), "retained", { mode: 0o600 }) }
@@ -82,12 +85,45 @@ test("twenty successful and twenty failed automatic batches leave only the curre
     assert.deepEqual(f.coordinator.diagnostics(), [])
     const inventory = await f.catalogStore.inventory()
     assert.deepEqual(inventory.issues, [])
-    assert.equal(inventory.commands.length, 0); assert.equal(inventory.automatic.length, 0); assert.equal(inventory.snapshots.length, 1)
-    assert.equal(inventory.metadata.length, 0); assert.equal(inventory.launches.length, 0)
-    assert.deepEqual(await readdir(join(f.root, "catalog/work")), [])
+    const retained = index < 20 ? 0 : index - 19
+    assert.equal(inventory.commands.length, 0); assert.equal(inventory.automatic.length, retained); assert.equal(inventory.snapshots.length, Math.max(1, retained))
+    assert.equal(inventory.metadata.length, retained); assert.equal(inventory.launches.length, retained)
+    assert.equal((await readdir(join(f.root, "catalog/work"))).length, retained)
     if (index >= 20) assert.equal((await f.catalog.list()).providers[1]!.error!.code, "PROBE_FAILED")
   }
+  const retained = await f.catalogStore.inventory(), diagnostics = await Promise.all(retained.metadata.map(readProbeDiagnostic))
+  f.setTime(Math.max(...diagnostics.map(value => value!.finishedAt!)) + PROBE_DIAGNOSTIC_TTL_MS)
+  await f.queue.run(() => f.coordinator.sweepLocked())
+  assert.deepEqual(f.coordinator.diagnostics(), [])
+  const expired = await f.catalogStore.inventory()
+  assert.equal(expired.automatic.length, 0); assert.equal(expired.metadata.length, 0); assert.equal(expired.launches.length, 0); assert.equal(expired.snapshots.length, 1)
   for (const name of sentinels) assert.deepEqual(await readdir(join(f.root, name)), ["keep"])
+})
+
+for (const [offset, retained] of [[-1, true], [0, false], [-PROBE_DIAGNOSTIC_TTL_MS - 1, true]] as const) test(`failed discovery retention boundary ${offset}`, async t => {
+  const f = await fixture(t)
+  f.setFailure(true); f.catalog.startScheduling()
+  await until(async () => f.invocations() === 1 && (await f.catalog.list()).discovery.state === "idle" ? true : undefined)
+  f.setTime(1000000 + PROBE_DIAGNOSTIC_TTL_MS + offset)
+  await f.queue.run(() => f.coordinator.sweepLocked())
+  const inventory = await f.catalogStore.inventory()
+  assert.deepEqual(inventory.issues, [])
+  assert.equal(inventory.automatic.length, retained ? 1 : 0)
+  assert.equal(inventory.metadata.length, retained ? 1 : 0)
+  assert.equal(inventory.launches.length, retained ? 1 : 0)
+})
+
+for (const scenario of ["unfinished", "incomplete-stderr", "malformed"]) test(`discovery ${scenario} evidence remains retained after seven days`, async t => {
+  const f = await fixture(t)
+  f.setFailure(true); f.catalog.startScheduling()
+  await until(async () => f.invocations() === 1 && (await f.catalog.list()).discovery.state === "idle" ? true : undefined)
+  const meta = (await f.catalogStore.inventory()).metadata[0]!, diagnostic = (await readProbeDiagnostic(meta))!
+  if (scenario === "malformed") await writeFile(join(meta.workPath, "diagnostic.json"), "{}")
+  else await writeProbeDiagnostic(meta.workPath, { ...diagnostic, ...(scenario === "unfinished" ? { finishedAt: null } : { stderrComplete: false }) })
+  f.setTime(1000000 + PROBE_DIAGNOSTIC_TTL_MS)
+  await f.queue.run(() => f.coordinator.sweepLocked())
+  assert.equal((await f.catalogStore.inventory()).metadata.length, 1)
+  if (scenario === "malformed") assert.ok(f.coordinator.diagnostics().some(value => value.includes("unreadable probe diagnostics")))
 })
 
 test("manual results survive automatic sweeps and lost replies do not redispatch", async t => {

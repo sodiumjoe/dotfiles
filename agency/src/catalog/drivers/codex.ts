@@ -2,6 +2,7 @@ import { normalizeCodex } from "../normalize.js"
 import type { ProbeResult } from "../probes.js"
 import { CatalogError, invalid, object, text } from "../types.js"
 import { jsonRpc, type DriverContext } from "./transport.js"
+import { DiscoveryError } from "../diagnostics.js"
 
 export async function discoverCodex(context: DriverContext): Promise<ProbeResult> {
   if (context.signal.aborted) throw new CatalogError("PROBE_FAILED")
@@ -26,6 +27,6 @@ export async function discoverCodex(context: DriverContext): Promise<ProbeResult
       cursors.add(cursor)
     }
     return invalid()
-  } catch (error) { if (error instanceof CatalogError) throw error; throw new CatalogError("PROBE_FAILED") }
+  } catch (error) { if (error instanceof CatalogError) throw error; throw new DiscoveryError("discovery", error) }
   finally { rpc.close() }
 }

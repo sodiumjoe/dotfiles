@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import { constants } from "node:fs"
-import { mkdir, open } from "node:fs/promises"
+import { mkdir, open, type FileHandle } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { isDeepStrictEqual } from "node:util"
@@ -14,6 +14,7 @@ import { assertPrivateDirectory, readLaunchRecordForReconciliation, writeLaunchR
 import { reconcileRecord } from "../platform/reconcile.js"
 import { sameProcess, sameProcessGeneration, type LaunchRecord, type PlatformAdapter } from "../platform/types.js"
 import { observeConfig } from "./config.js"
+import { beginProbeCapture, completeProbeCapture, initialProbeDiagnostic, openProbeStderr, parseProbeFailureDetail, parseProbeTerminal, probeFailureDetail, writeProbeDiagnostic, writeProbeStderr, type ProbeStage } from "./diagnostics.js"
 import type { CatalogInventory, CatalogStore } from "./store.js"
 import { CatalogError, failure, invalid, keys, object, parseModels, parseProbeMeta, text, type CatalogFailure, type ConfigEvidence, type Model, type ProbeMeta, type ProviderId, type ProviderProfile, type RetainedProbeMeta } from "./types.js"
 
@@ -46,6 +47,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
   let accepted: InventoryEntry[] = [], metadata: RetainedProbeMeta[] = [], initialized = false, blocked = false, running = false
   const blockedProviders = new Map<ProviderId, CatalogFailure>()
   const unscopedIssues = new Set<string>()
+  const diagnosticPins = new Set<string>()
   const terminal = new Map<string, { child: ChildProcess; exit: boolean; close: boolean }>()
   const visibleLaunch = (entry: InventoryEntry) => !options.retirement?.hides("catalog/probe-launches/" + entry.record.launchAttemptId + ".json")
   const visibleMeta = (entry: RetainedProbeMeta) => !options.retirement?.hides("catalog/probe-meta/" + entry.attemptId + ".json")
@@ -151,15 +153,17 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     running = true
     let record: LaunchRecord = { version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: generation, launchAttemptId: m.attemptId, launchBootId: await adapter.bootId(), launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
     let result: ProbeResult | null = null, error: CatalogFailure | null = null, child: ChildProcess | undefined, registered = false, messages = 0, candidates = 0, finished = false, spawnInvoked = false
+    const diagnostic = initialProbeDiagnostic(m)
+    let stage: ProbeStage = "preparation", diagnosticCreated = false, workerStderr: FileHandle | undefined, nativeStderr: FileHandle | undefined, stderrFailed = false, nativeClosed = false
     let finish!: () => void
     const completed = new Promise<void>(resolve => { finish = () => { finished = true; resolve() } })
-    const fail = (cause: unknown): void => { error ??= failure(cause instanceof CatalogError ? cause : new CatalogError("PROBE_FAILED")); finish() }
-    const abort = (): void => fail(new CatalogError("INCOMPLETE"))
-    let timer = setTimeout(() => fail(new CatalogError("PROBE_TIMEOUT")), 5000)
+    const fail = (cause: unknown, at: ProbeStage = stage): void => { diagnostic.firstFailure ??= probeFailureDetail(at, cause); error ??= failure(cause instanceof CatalogError ? cause : new CatalogError("PROBE_FAILED")); finish() }
+    const abort = (): void => fail(new CatalogError("INCOMPLETE"), "cancelled")
+    let timer = setTimeout(() => fail(new CatalogError("PROBE_TIMEOUT"), "timeout"), 5000)
     signal.addEventListener("abort", abort, { once: true })
     const send = (message: object): void => {
-      if (!child?.connected) { fail(new CatalogError("PROBE_FAILED")); return }
-      try { child.send({ ...message, attemptId: m.attemptId, generation }, failure => { if (failure) fail(failure) }) } catch (error) { fail(error) }
+      if (!child?.connected) { fail(new CatalogError("PROBE_FAILED"), "worker-ipc"); return }
+      try { child.send({ ...message, attemptId: m.attemptId, generation }, failure => { if (failure) fail(failure, "worker-ipc") }) } catch (error) { fail(error, "worker-ipc") }
     }
     try {
       await queue.run(async () => {
@@ -172,29 +176,40 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         await privateProbeDirectory(catalog, "probe-launches")
         const work = await privateProbeDirectory(catalog, "work")
         await privateProbeDirectory(work, m.attemptId, true)
+        await beginProbeCapture(m.workPath, diagnostic)
+        await writeProbeDiagnostic(m.workPath, diagnostic)
+        diagnosticCreated = true
+        workerStderr = await openProbeStderr(m.workPath, "worker.stderr")
+        nativeStderr = await openProbeStderr(m.workPath, "native.stderr")
         await update(path, record)
         record = { ...record, launchAttempted: true }
         await update(path, record)
         if (!options.canStart() || signal.aborted || finished) throw new CatalogError("INCOMPLETE")
         spawnInvoked = true
-        child = (deps.spawn ?? spawn)(process.execPath, [options.workerFile ?? fileURLToPath(new URL("./worker.js", import.meta.url))], { argv0: agencyLaunchMarker("provider", m.attemptId), detached: true, shell: false, cwd: m.workPath, env: cleanProbeEnvironment(deps.env ?? process.env), stdio: ["ignore", "pipe", "pipe", "ipc"] })
+        stage = "worker-launch"
+        child = (deps.spawn ?? spawn)(process.execPath, [options.workerFile ?? fileURLToPath(new URL("./worker.js", import.meta.url))], { argv0: agencyLaunchMarker("provider", m.attemptId), detached: true, shell: false, cwd: m.workPath, env: cleanProbeEnvironment(deps.env ?? process.env), stdio: ["ignore", "pipe", "pipe", "ipc", nativeStderr.fd] })
         const facts = { child, exit: false, close: false }
         terminal.set(m.attemptId, facts)
-        child.on("error", fail)
-        child.on("exit", () => { facts.exit = true; if (!finished) fail(new CatalogError("PROBE_FAILED")) })
-        child.on("close", () => { facts.close = true; if (!finished) fail(new CatalogError("PROBE_FAILED")) })
-        child.on("disconnect", () => { if (!finished) fail(new CatalogError("PROBE_FAILED")) })
+        child.on("error", cause => fail(cause, "worker-launch"))
+        child.on("exit", (code, signal) => { facts.exit = true; diagnostic.workerTerminal = { code, signal }; if (!finished) fail(new CatalogError("PROBE_FAILED"), "worker-exit") })
+        child.on("close", (code, signal) => { facts.close = true; diagnostic.workerTerminal ??= { code, signal }; if (!finished) fail(new CatalogError("PROBE_FAILED"), "worker-exit") })
+        child.on("disconnect", () => { if (!finished) fail(new CatalogError("PROBE_FAILED"), "worker-ipc") })
         let stdoutBytes = 0
-        child.stdout?.on("data", (bytes: Buffer) => { stdoutBytes += bytes.length; if (stdoutBytes > 65536) fail(new CatalogError("PROBE_FAILED")) })
-        child.stderr?.resume()
-        for (const stream of [child.stdout, child.stderr]) stream?.on("error", fail)
+        child.stdout?.on("data", (bytes: Buffer) => { stdoutBytes += bytes.length; if (stdoutBytes > 65536) fail(new CatalogError("PROBE_FAILED"), "worker-stream") })
+        child.stderr?.on("data", (bytes: Buffer) => { try { writeProbeStderr(workerStderr!.fd, bytes) } catch (cause) { stderrFailed = true; fail(cause, "diagnostic-write") } })
+        for (const stream of [child.stdout, child.stderr]) stream?.on("error", cause => { if (stream === child?.stderr) stderrFailed = true; fail(cause, "worker-stream") })
         child.on("message", raw => {
           try {
             messages += Buffer.byteLength(JSON.stringify(raw))
             if (messages > 1048576) invalid()
             const v = object(raw)
             if (v.attemptId !== m.attemptId || v.generation !== generation) invalid()
-            if (v.type === "native") {
+            if (v.type === "native-command") {
+              keys(v, ["type", "attemptId", "generation", "command"])
+              const command = object(v.command); keys(command, ["file", "args"])
+              if (diagnostic.nativeCommand !== null || command.file !== request.profile.executable || !Array.isArray(command.args) || command.args.some(a => typeof a !== "string" || a.includes("\0")) || Buffer.byteLength(JSON.stringify(command)) > 65536) invalid()
+              diagnostic.nativeCommand = { file: command.file as string, args: command.args as string[] }
+            } else if (v.type === "native") {
               keys(v, ["type", "attemptId", "generation", "pid"])
               if (registered || finished || typeof v.pid !== "number" || !Number.isSafeInteger(v.pid) || v.pid <= 0) invalid()
               registered = true
@@ -202,6 +217,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
               void queue.run(async () => {
                 await verify()
                 const leader = record.provider?.group.leader, first = await adapter.readProcess(pid), second = await adapter.readProcess(pid)
+                diagnostic.nativeIdentity = first
                 if (!leader || !first || !second || !sameProcess(first, second) || first.parentPid !== leader.pid || first.pid === leader.pid || first.processGroupId !== leader.pid || first.sessionId !== leader.sessionId || first.bootId !== leader.bootId || first.uid !== leader.uid || first.gid !== leader.gid) throw new CatalogError("PROBE_FAILED")
                 const group = await adapter.readGroup(leader.pid)
                 if (!group.some(p => sameProcess(first, p))) throw new CatalogError("PROBE_FAILED")
@@ -209,25 +225,43 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
                 await update(path, record)
                 if (!finished && options.canStart() && !signal.aborted) send({ type: "registered", pid })
                 else abort()
-              }).catch(fail)
+              }).catch(cause => fail(cause, "native-registration"))
             } else if (v.type === "result") {
               keys(v, ["type", "attemptId", "generation", "result"])
               if (++candidates > 1 || !registered) invalid()
               result = parseProbeResult(v.result, m.providerId); finish()
-            } else if (v.type === "failure" || v.type === "cancel" || v.type === "native-terminal") {
+            } else if (v.type === "failure") {
+              keys(v, ["type", "attemptId", "generation", ...(v.detail === undefined ? [] : ["detail"])])
+              if (v.detail !== undefined) {
+                const detail = parseProbeFailureDetail(v.detail)
+                if (detail.stage === "diagnostic-write" || detail.stage === "native-stream") stderrFailed = true
+                diagnostic.firstFailure ??= detail
+              }
+              fail(new CatalogError("PROBE_FAILED"), "discovery")
+            } else if (v.type === "native-terminal") {
+              keys(v, ["type", "attemptId", "generation", "terminal"])
+              diagnostic.nativeTerminal = parseProbeTerminal(v.terminal)
+              if (!registered || !finished && (diagnostic.nativeTerminal.code !== 0 || diagnostic.nativeTerminal.signal !== null)) fail(new CatalogError("PROBE_FAILED"), "native-exit")
+            } else if (v.type === "native-closed") {
               keys(v, ["type", "attemptId", "generation"])
-              if (v.type !== "native-terminal" || !registered) fail(new CatalogError("PROBE_FAILED"))
+              nativeClosed = true
+            } else if (v.type === "cancel") {
+              keys(v, ["type", "attemptId", "generation"])
+              fail(new CatalogError("PROBE_FAILED"), "cancelled")
             } else invalid()
-          } catch (error) { fail(error) }
+          } catch (error) { fail(error, "worker-ipc") }
         })
+        stage = "worker-registration"
         if (child.pid === undefined) throw new CatalogError("PROBE_FAILED")
         const first = await adapter.readProcess(child.pid), second = await adapter.readProcess(child.pid)
+        diagnostic.workerIdentity = first
         if (!first || !second || !sameProcess(first, second) || !exactAgencyBirth(first.birth, agencyLaunchMarker("provider", m.attemptId)) || first.pid !== first.processGroupId || first.pid !== first.sessionId || first.bootId !== record.launchBootId || first.uid !== process.getuid!() || first.gid !== process.getgid!()) throw new CatalogError("PROBE_FAILED")
         record = { ...record, phase: "readiness", provider: { kind: "process-group", group: { leader: first, observed: [first] } } }
         await update(path, record)
         if (!finished && options.canStart() && !signal.aborted) {
           clearTimeout(timer)
-          timer = setTimeout(() => fail(new CatalogError("PROBE_TIMEOUT")), deps.timeoutMs ?? 20000)
+          timer = setTimeout(() => fail(new CatalogError("PROBE_TIMEOUT"), "timeout"), deps.timeoutMs ?? 20000)
+          stage = "discovery"
           send({ type: "start", request })
         }
         else abort()
@@ -238,6 +272,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     } catch (cause) { fail(cause) }
     finally { clearTimeout(timer); signal.removeEventListener("abort", abort) }
     try {
+      stage = "cleanup"
       await queue.run(async () => {
         await verify()
         let entry = accepted.find(e => e.path === path)
@@ -257,22 +292,51 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
       if (facts && (!facts.exit || !facts.close)) scopedUnavailable(m.providerId)
       if (!isDeepStrictEqual(await observeConfig(request.profile), request.evidence)) throw new CatalogError("CONFIG_CHANGED")
     } catch (cause) {
+      diagnostic.firstFailure ??= probeFailureDetail(cause instanceof CatalogError && cause.code === "CONFIG_CHANGED" ? "configuration" : "cleanup", cause)
       if (!(cause instanceof CatalogError) || cause.code !== "CONFIG_CHANGED") { blockedProviders.set(m.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))); error = failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")) }
       else error = failure(cause)
-    } finally { running = false }
+    }
     if (signal.aborted) error ??= failure(new CatalogError("INCOMPLETE"))
+    const captureFailure = (cause: unknown): void => {
+      diagnostic.firstFailure ??= probeFailureDetail("diagnostic-write", cause)
+      stderrFailed = true
+      error ??= failure(new CatalogError("PROBE_FAILED"))
+      diagnosticPins.add(m.attemptId)
+      unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId)
+    }
+    try {
+      if (diagnosticCreated) {
+        for (const handle of [workerStderr, nativeStderr]) {
+          try { await handle?.sync() } catch (cause) { captureFailure(cause) }
+        }
+        try { diagnostic.workerStderrBytes = (await workerStderr?.stat())?.size ?? 0 } catch (cause) { captureFailure(cause) }
+        try { diagnostic.nativeStderrBytes = (await nativeStderr?.stat())?.size ?? 0 } catch (cause) { captureFailure(cause) }
+      }
+      const closed = await Promise.allSettled([workerStderr?.close(), nativeStderr?.close()])
+      for (const value of closed) if (value.status === "rejected") captureFailure(value.reason)
+      if (diagnosticCreated) {
+        diagnostic.stderrComplete = !stderrFailed && diagnostic.firstFailure?.stage !== "diagnostic-write" && record.phase === "cleanup_verified" && (!spawnInvoked || !!terminal.get(m.attemptId)?.close) && (!(registered || diagnostic.nativeCommand) || nativeClosed) && !!workerStderr && !!nativeStderr
+        diagnostic.failed = error !== null
+        diagnostic.finishedAt = Date.now()
+        try { await writeProbeDiagnostic(m.workPath, diagnostic) }
+        catch (cause) { captureFailure(cause); diagnostic.stderrComplete = false; diagnostic.failed = true; throw cause }
+        try { await completeProbeCapture(m.workPath) }
+        catch { diagnosticPins.add(m.attemptId); unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId) }
+      }
+    } catch (cause) { captureFailure(cause) }
+    finally { running = false }
     return { request, record, result: error === null ? result : null, error }
   }
   return { run, recover, verifyDischarged, issues: () => new Map(blockedProviders), diagnostics: () => [...unscopedIssues].sort(),
     retentionPins() {
-      const attempts = new Set<string>()
+      const attempts = new Set<string>(diagnosticPins)
       for (const entry of accepted) if (blocked || running || entry.record.phase !== "cleanup_verified" || blockedProviders.has(ownerOf(entry)!) || unscopedIssues.has(issueFor(entry.record.launchAttemptId, "probe-launches"))) attempts.add(entry.record.launchAttemptId)
       for (const meta of metadata) if (blocked || running || blockedProviders.has(meta.providerId) || unscopedIssues.has(issueFor(meta.attemptId, "probe-meta"))) attempts.add(meta.attemptId)
       for (const [attempt, facts] of terminal) if (!facts.exit || !facts.close) attempts.add(attempt)
       return { paths: [...attempts].flatMap(attempt => ["catalog/probe-meta/" + attempt + ".json", "catalog/probe-launches/" + attempt + ".json", "catalog/work/" + attempt]) }
     },
     forgetRemoved(entry) {
-      if (entry.path.startsWith("catalog/probe-launches/")) { accepted = accepted.filter(value => join(paths.persistentRoot, entry.path) !== value.path); terminal.delete(entry.path.split("/").at(-1)!.slice(0, -5)) }
+      if (entry.path.startsWith("catalog/probe-launches/")) { accepted = accepted.filter(value => join(paths.persistentRoot, entry.path) !== value.path); terminal.delete(entry.path.split("/").at(-1)!.slice(0, -5)); diagnosticPins.delete(entry.path.split("/").at(-1)!.slice(0, -5)) }
       if (entry.path.startsWith("catalog/probe-meta/")) metadata = metadata.filter(value => entry.path !== "catalog/probe-meta/" + value.attemptId + ".json")
     },
   }

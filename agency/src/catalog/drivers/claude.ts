@@ -5,6 +5,7 @@ import { normalizeClaude } from "../normalize.js"
 import type { ProbeResult } from "../probes.js"
 import { CatalogError, invalid, object } from "../types.js"
 import { aborted, type DriverContext, type RegisteredChild } from "./transport.js"
+import { DiscoveryError } from "../diagnostics.js"
 
 export async function discoverClaude(context: DriverContext, loadSdk: (entry: string) => Promise<unknown> = entry => import(pathToFileURL(entry).href)): Promise<ProbeResult> {
   let count = 0, cancelled = false
@@ -31,5 +32,5 @@ export async function discoverClaude(context: DriverContext, loadSdk: (entry: st
     const models = await aborted(Promise.resolve(query.supportedModels()), context.signal)
     if (count !== 1 || cancelled || context.signal.aborted) throw new CatalogError("PROBE_FAILED")
     return { models: normalizeClaude(models), providerVersion: null, providerVersionSource: "unknown" }
-  } catch (error) { if (error instanceof CatalogError) throw error; throw new CatalogError("PROBE_FAILED") }
+  } catch (error) { if (error instanceof CatalogError) throw error; throw new DiscoveryError("discovery", error) }
 }
