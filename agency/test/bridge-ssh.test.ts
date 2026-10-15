@@ -21,6 +21,21 @@ function peerFactory(overrides = {}) {
 }
 const enrollment = () => ({ inventoryId: randomUUID(), hostId: "a".repeat(64), hostname: "worker", agyPath: "/path with 'quote/agy", loginShell: "/bin/sh" })
 
+for (const invalid of [
+  { hostname: "-oProxyCommand=unexpected" },
+  { hostname: "worker\nother" },
+  { agyPath: "relative/agy" },
+  { agyPath: "/tmp/../agy" },
+  { agyPath: "/tmp/agy/" },
+  { loginShell: "/bin/sh\u0000" },
+]) test("SSH rejects invalid enrollment before process creation " + JSON.stringify(invalid), async () => {
+  const f = peerFactory()
+  await assert.rejects(connectBridge({ ...enrollment(), ...invalid }, {
+    action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read"], processFactory: f.factory,
+  }))
+  assert.equal(f.calls.length, 0)
+})
+
 test("SSH bootstrap is noninteractive and retains authentication only on the local child", async () => {
   const e = enrollment(), command = buildSshCommand(e), f = peerFactory(), prior = process.env.SSH_AUTH_SOCK
   process.env.SSH_AUTH_SOCK = "/fixture/private-auth.sock"
