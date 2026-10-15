@@ -165,6 +165,7 @@ _devbox_sync() {
     -ignore 'Name *.jsonl' \
     -ignore 'Name .obsidian' \
     -ignore 'Name node_modules' \
+    -ignore 'Name fsmonitor--daemon*' \
     -logfile /tmp/unison-sync-${host}.log \
     2>&1 | _devbox_filter_sync_output
 }
@@ -186,6 +187,7 @@ _devbox_sync_loop() {
     -ignore 'Name *.jsonl' \
     -ignore 'Name .obsidian' \
     -ignore 'Name node_modules' \
+    -ignore 'Name fsmonitor--daemon*' \
     -logfile /tmp/unison-sync-${host}.log \
     &>/dev/null &
   echo $! >| /tmp/unison-sync-${host}.pid
