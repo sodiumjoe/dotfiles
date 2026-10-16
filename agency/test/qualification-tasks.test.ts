@@ -1,3 +1,4 @@
+import { runningTaskSession } from "./task-readiness-support.js"
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFile,writeFile,readdir } from "node:fs/promises"
@@ -53,7 +54,8 @@ test("end_turn without an explicit report remains unreported",{timeout:90000},as
 
 test("wait timeout and cancellation leave the held worker running",{timeout:90000},async t=>{
   const request=input("held"),f=await qualificationFixture(t,{taskInput:request});request.cwd=f.workspace;const s=await supervisor(f);assert.equal((await s.peer.call("agency_task_create",{hostId:f.config.hostId,input:request})).isError,false)
-  const ref={hostId:f.config.hostId,taskId:request.taskId},w=await wrapper(f);const running=await until(async()=>{const v=await w.tasks.inspect(ref);return v.runtime==="running"?v:undefined},15000)
+  const ref={hostId:f.config.hostId,taskId:request.taskId},w=await wrapper(f);const running=await until(async()=>runningTaskSession(await w.tasks.inspect(ref)),15000)
+  assert.ok(running.record.session)
   const agent=await createAgentStore(f.paths.persistentRoot).readAgent(running.record.session!.agentId);assert.ok(agent?.launch)
   assert.equal((await waitForTask(w.tasks,ref,{timeoutMs:0})).state,"pending");assert.equal((await w.tasks.inspect(ref)).runtime,"running")
   const controller=new AbortController(),waiting=waitForTask(w.tasks,ref,{timeoutMs:60000,signal:controller.signal});controller.abort();assert.equal((await waiting).state,"cancelled");assert.equal((await w.tasks.inspect(ref)).runtime,"running")

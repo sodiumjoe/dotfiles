@@ -253,6 +253,8 @@ Each command also accepts `--local` in place of `--host HASH`. Reports explicitl
 
 Records and reports remain under `<persistentRoot>/tasks/<taskId>/` after runtime history is reclaimed. The report takes precedence if the record status update failed. Cleanup and repair are manual while the task service is inactive; tasks pin neither runtime history nor Git worktrees. There is no automatic replay, completion notification, or supervisor prompt.
 
+Inspection reads the retained record and live runtime separately. The runtime can be running while the returned record still has a null session, because startup may advance between those reads. A caller that needs a running worker and its recorded session must require both a running runtime and a non-null session in the same returned observation. Inspection does not rewrite the record or replay launch or submission.
+
 ### Task MCP configuration
 
 Task workers receive one ordinary stdio MCP entry named `agency_tasks`. Its command is the Handler's absolute Node executable, its args are `["/absolute/agency/dist/src/main.js", "internal-task-tools"]`, and its environment contains `AGENCY_TASK_REF` as the JSON host/task reference. Existing caller MCP entries are preserved. A caller entry named `agency_tasks` is rejected before admission. This default reference is a convenience binding in the trusted local environment. An explicit report reference must match it.
