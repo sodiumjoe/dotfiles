@@ -483,7 +483,7 @@ for (const kind of ["failed start", "recoverable restore"] as const) test(`${kin
 })
 
 test("stop repairs a retained terminal transition before changing its predecessor", async t => {
-  const f = await agentServiceFixture(t, { pause: "spawn" })
+  const f = await agentServiceFixture(t, { pause: "spawn", pauseCleanup: true })
   f.failTerminalBeforeRename(true)
   const accepted = await f.service.start(f.input)
   await f.entered
@@ -491,6 +491,11 @@ test("stop repairs a retained terminal transition before changing its predecesso
   f.release()
   await until(async () => f.terminalWriteFailures() ? true : undefined)
   const target = accepted.command.target!, stop = { ...target, commandId: randomUUID() }
+  await f.cleanupEntered
+  await assert.rejects(f.service.stop({ ...stop, commandId: randomUUID() }), { code: "CLEANUP_UNVERIFIED" })
+  f.releaseCleanup()
+  await until(async () => (await f.service.commandReceipt(f.input.commandId, f.input.handlerGeneration))?.command.state === "completed" ? true : undefined)
+  assert.equal((await f.store.readAgent(target.agentId))?.phase, "starting")
   f.failTerminalBeforeRename(false)
   await f.service.stop(stop)
   const observed = await until(async () => {
