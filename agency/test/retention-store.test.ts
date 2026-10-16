@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
-import { chmod, link, lstat, mkdir, open, readFile, rename, rmdir, symlink, unlink, writeFile, type FileHandle } from "node:fs/promises"
+import { chmod, link, lstat, mkdir, open, readFile, rename, rmdir, symlink, unlink, utimes, writeFile, type FileHandle } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
-import { createRetentionStore, type RetentionFileSystem } from "../src/retention/store.js"
+import { createRetentionStore, sameDirectoryEvidence, type RetentionFileSystem } from "../src/retention/store.js"
 import { privateRoot } from "./control-support.js"
 import { createHash } from "node:crypto"
 
@@ -155,4 +155,38 @@ test("unsafe paths and malformed or oversized intents fail closed", async t => {
   }
   await writeFile(marker, " ".repeat(1048577))
   await assert.rejects(store.pending())
+})
+
+test("directory evidence ignores access time and retains other stat fields", async t => {
+  const f = await fixture(t), before = await lstat(join(f.root, "catalog/snapshots"), { bigint: true })
+  const copy = (values: Partial<typeof before>) => Object.assign(Object.create(Object.getPrototypeOf(before)), before, values) as typeof before
+  assert.equal(sameDirectoryEvidence(before, copy({})), true)
+  const after = copy({ atimeMs: before.atimeMs + 1n, atimeNs: before.atimeNs + 1000000n })
+  assert.equal(after.atime.getTime(), before.atime.getTime() + 1)
+  assert.equal(sameDirectoryEvidence(before, after), true)
+  for (const key of ["dev", "ino", "uid", "gid", "mode", "nlink", "rdev", "blksize", "size", "blocks", "mtimeNs", "ctimeNs", "birthtimeNs"] as const) {
+    assert.equal(sameDirectoryEvidence(before, copy({ [key]: before[key] + 1n })), false, key)
+  }
+})
+
+for (const change of ["mtime", "mode", "replacement"] as const) test("directory mutation still refuses retirement: " + change, async t => {
+  const f = await fixture(t), directory = join(f.root, "catalog/snapshots")
+  let armed = true
+  const filesystem: RetentionFileSystem = { rename, rmdir, unlink, open: (async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args)
+    try {
+      if (armed && String(args[0]) === directory && (Number(args[1]) & constants.O_DIRECTORY)) {
+        armed = false
+        if (change === "mtime") { const before = await lstat(directory); await utimes(directory, before.atime, new Date(before.mtimeMs + 1000)) }
+        if (change === "mode") await chmod(directory, 0o750)
+        if (change === "replacement") { await rename(directory, directory + ".saved"); await mkdir(directory, { mode: 0o700 }) }
+      }
+      return handle
+    } catch (error) { await handle.close(); throw error }
+  }) as typeof open }
+  const store = createRetentionStore(f.root, host, randomUUID(), filesystem)
+  await assert.rejects(store.prepare({ paths: [f.snapshot], launches: [], handlers: [] }), /unsafe or changed retention evidence/)
+  assert.equal(armed, false)
+  const retained = change === "replacement" ? join(directory + ".saved", f.snapshot.split("/").at(-1)!) : join(f.root, f.snapshot)
+  assert.equal(await readFile(retained, "utf8"), "{}")
 })

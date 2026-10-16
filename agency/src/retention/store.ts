@@ -24,6 +24,10 @@ const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === "EN
 const invalid = (): never => { throw new Error("unsafe or changed retention evidence") }
 const integer = (v: unknown): number => { if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) invalid(); return v as number }
 const decimal = (v: unknown): string => { if (typeof v !== "string" || !/^(0|[1-9][0-9]*)$/.test(v)) invalid(); return v as string }
+export function sameDirectoryEvidence(before: BigIntStats, after: BigIntStats): boolean {
+  const evidence = (value: BigIntStats) => Object.fromEntries(Object.entries(value).filter(([key]) => !["atime", "atimeMs", "atimeNs"].includes(key)))
+  return isDeepStrictEqual(evidence(before), evidence(after))
+}
 
 export function retentionPath(input: unknown): string {
   if (typeof input !== "string" || input.length > 4096 || /[\x00-\x1f\x7f\\]/.test(input)) invalid()
@@ -92,7 +96,7 @@ export function createRetentionStore(root: string, hostId: string, handlerGenera
       const p = join(root, ...parts.slice(0, n)), before = await lstat(p, { bigint: true })
       if (!before.isDirectory() || before.isSymbolicLink() || before.dev !== rootStat.dev || before.uid !== rootStat.uid || (before.mode & 0o077n) !== 0n) invalid()
       const handle = await filesystem.open(p, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-      try { const observed = await handle.stat({ bigint: true }); if (observed.dev !== before.dev || observed.ino !== before.ino || !isDeepStrictEqual(before, await lstat(p, { bigint: true }))) invalid() }
+      try { const observed = await handle.stat({ bigint: true }); if (observed.dev !== before.dev || observed.ino !== before.ino || !sameDirectoryEvidence(before, await lstat(p, { bigint: true }))) invalid() }
       finally { await handle.close() }
     }
   }
