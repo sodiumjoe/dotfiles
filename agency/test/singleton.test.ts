@@ -11,7 +11,7 @@ import { createConnection, Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Duplex } from "node:stream"
-import test, { type TestContext } from "node:test"
+import test, { after, type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { agencyLaunchMarker, parseAgencyLaunchMarker } from "../src/platform/launch-marker.js"
 import { bindPrivateSocket, unlinkStalePrivateSocket } from "../src/platform/private-socket.js"
@@ -20,11 +20,15 @@ import { readHandlerRecord, readLaunchRecord, writeHandlerRecord, writeLaunchRec
 import {
   assertStartupLockMetadata,
   inspectHandlerGeneration,
-  startOrConnect,
   startupLockCommand,
   type StartTransition,
 } from "../src/platform/singleton.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../src/platform/types.js"
+
+import { finishSingletonOwnership, installSingletonOwnership, isSingletonLockRelease, killSingletonPid, ownedStartOrConnect as startOrConnect, preserveSingletonFixture, recordSingletonChild, singletonIntent, spawnSingletonContender } from "./fixtures/singleton-ownership.js"
+
+installSingletonOwnership()
+after(finishSingletonOwnership)
 
 const fixturePath = fileURLToPath(new URL("./fixtures/singleton-handler.js", import.meta.url))
 const bootId = "task-3-boot"
@@ -131,10 +135,20 @@ class FakeAdapter implements PlatformAdapter {
 }
 
 async function fixtureRoot(t: TestContext): Promise<string> {
-  void t
-  const parent = await realpath(tmpdir())
+  const parent = await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? tmpdir())
   const root = await mkdtemp(join(parent, "agency-singleton-"))
   await chmod(root, 0o700)
+  const evidence = process.env.AGENCY_TEST_EVIDENCE_ROOT
+  if (evidence !== undefined) {
+    const registry = join(evidence, "fixture-roots.json")
+    const roots = JSON.parse(await readFile(registry, "utf8").catch(() => "[]"))
+    roots.push({ root, runtimeRoot: root, test: t.name, createdAt: Date.now() })
+    await writeFile(registry, JSON.stringify(roots), { mode: 0o600 })
+    t.after(async () => {
+      if (!await pathExists(root)) return
+      await preserveSingletonFixture(root, join(evidence, "singletons", root.split("/").at(-1)!))
+    })
+  }
   return root
 }
 
@@ -222,7 +236,7 @@ async function handlerIdentities(path: string): Promise<ProcessIdentity[]> {
 async function stopIdentity(expected: ProcessIdentity, adapter: FakeAdapter): Promise<void> {
   const observed = await adapter.readProcess(expected.pid)
   if (observed === null || !sameProcess(expected, observed)) return
-  process.kill(expected.pid, "SIGKILL")
+  await killSingletonPid(expected.pid)
   await waitFor(async () => await adapter.readProcess(expected.pid) === null, `Handler ${expected.pid} survived cleanup`)
 }
 
@@ -263,8 +277,8 @@ async function waitChild(child: ChildProcess, timeoutMs = 5000): Promise<number 
   })
 }
 
-function spawnContender(configPath: string): ChildProcess {
-  return spawn(process.execPath, [fixturePath, "contender", configPath], { stdio: ["ignore", "ignore", "pipe"] })
+async function spawnContender(configPath: string): Promise<ChildProcess> {
+  return spawnSingletonContender(fixturePath, configPath)
 }
 
 async function waitEvent(path: string, event: string): Promise<void> {
@@ -657,9 +671,9 @@ test("launcher death before gate release starts no usable Handler", async t => {
         retainedDirectory,
       })
       t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-      const launcher = spawnContender(path)
+      const launcher = await spawnContender(path)
       await waitEvent(eventLog, `launcher:${scenario.transition}`)
-      launcher.kill("SIGKILL")
+      await killSingletonPid(launcher.pid!)
       await waitChild(launcher)
       await waitFor(async () => {
         const identities = await handlerIdentities(config.handlerLog)
@@ -700,6 +714,7 @@ test("a pre-release Handler exits on either gate or status-peer EOF", async t =>
         reconciliation: null,
       }))
       t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
+      const launch = singletonIntent("singleton-direct-handler")
       const child = spawn(process.execPath, [fixturePath, "handler", path], {
         detached: true,
         env: {
@@ -709,6 +724,7 @@ test("a pre-release Handler exits on either gate or status-peer EOF", async t =>
         },
         stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
       })
+      await recordSingletonChild(launch, child)
       await waitFor(async () => (await handlerIdentities(config.handlerLog)).length === 1, "Handler did not claim identity")
       const status = child.stdio[3] as Duplex
       const gate = child.stdio[4] as Duplex
@@ -729,12 +745,12 @@ test("launcher death after gate release does not kill or duplicate the Handler",
   const releasePath = join(root, "release")
   const { config, path } = await writeConfig(root, { eventLog, releasePath, launcherPauseAt: "gate_released" })
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-  const launcher = spawnContender(path)
+  const launcher = await spawnContender(path)
   await waitEvent(eventLog, "launcher:gate_released")
   const events = await lines(eventLog)
   assert.ok(events.indexOf("handler:gate_released") < events.indexOf("launcher:gate_released"))
   const generation = (await readHandlerRecord(join(root, "handler.json"))).generation
-  launcher.kill("SIGKILL")
+  await killSingletonPid(launcher.pid!)
   await waitChild(launcher)
   const result = await startOrConnect({ root, hostId, adapter, handler: handlerCommand(path), timeoutMs: 5000 })
   assert.equal(result.record.generation, generation)
@@ -755,7 +771,7 @@ test("a post-gate readiness timeout detaches the launcher without duplicating th
     timeoutMs: 250,
   })
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-  const launcher = spawnContender(path)
+  const launcher = await spawnContender(path)
   await waitEvent(eventLog, "handler:after_socket_bind_before_publication")
   assert.notEqual(await waitChild(launcher, 1500), 0)
   const stalled = await readHandlerRecord(join(root, "handler.json"))
@@ -842,7 +858,7 @@ test("Handler death at every post-gate boundary remains classifiable and never y
       await writeLaunchRecord(firstRetained, firstRecord)
       await writeLaunchRecord(secondRetained, secondRecord)
       t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-      const launcher = spawnContender(path)
+      const launcher = await spawnContender(path)
       await waitEvent(eventLog, `handler:${stage}`)
       const handlers = await handlerIdentities(config.handlerLog)
       assert.equal(handlers.length, 1)
@@ -882,7 +898,8 @@ test("closes the startup lock handle when helper release rejects", async t => {
   await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(process.pid, process.ppid)))
   const originalEnd = Socket.prototype.end
   let injected = false
-  Socket.prototype.end = function(this: Socket): Socket {
+  Socket.prototype.end = function(this: Socket, ...args: Parameters<Socket["end"]>): Socket {
+    if (!isSingletonLockRelease(this)) return Reflect.apply(originalEnd, this, args)
     this.destroy()
     if (!injected) {
       injected = true

@@ -328,9 +328,9 @@ async function runHandler(config: FixtureConfig): Promise<void> {
   })
 }
 
-async function runContender(config: FixtureConfig, configPath: string): Promise<void> {
+async function runContender(config: FixtureConfig, configPath: string, start: typeof startOrConnect = startOrConnect): Promise<void> {
   try {
-    const inspection = await withPrivateUmask(() => startOrConnect({
+    const inspection = await withPrivateUmask(() => start({
       root: config.root,
       hostId: config.hostId,
       adapter: adapter(config),
@@ -359,4 +359,9 @@ const configPath = process.argv[3]
 if ((mode !== "handler" && mode !== "contender") || configPath === undefined) throw new Error("usage: singleton-handler <handler|contender> <config>")
 const config = JSON.parse(await readFile(configPath, "utf8")) as FixtureConfig
 if (mode === "handler") await runHandler(config)
-else await runContender(config, configPath)
+else if (process.env.AGENCY_SINGLETON_CONTENDER_LAUNCH !== undefined) {
+  const ownership = await import("./singleton-ownership.js")
+  ownership.installSingletonOwnership()
+  await ownership.registerSingletonContender()
+  await runContender(config, configPath, ownership.ownedStartOrConnect)
+} else await runContender(config, configPath)
