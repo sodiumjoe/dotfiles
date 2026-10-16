@@ -1,12 +1,16 @@
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
-import type { ChildProcess } from "node:child_process"
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import childProcess, { spawn, type ChildProcess } from "node:child_process"
+import { pathToFileURL } from "node:url"
+import { createDarwinAdapter } from "../src/platform/darwin.js"
+import { createLinuxAdapter } from "../src/platform/linux.js"
+const nativeSpawn = childProcess.spawn
+import { appendFile, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test, { type TestContext } from "node:test"
-import { admitSingletonChild, createSingletonRecorder, preserveSingletonFixture, registerSingletonChildBeforeRelease } from "./fixtures/singleton-ownership.js"
+import { admitSingletonChild, createSingletonRecorder, finishSingletonOwnership, installSingletonOwnership, retainSingletonIdentity, preserveSingletonFixture, registerSingletonChildBeforeRelease } from "./fixtures/singleton-ownership.js"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
 
 const expected: ProcessIdentity = { bootId: "actual-test-boot", pid: 123, birth: "123:unmarked:node", parentPid: 12, processGroupId: 123, sessionId: 123, uid: 501, gid: 20 }
@@ -123,4 +127,118 @@ test("singleton fixture preservation records symlink targets without following t
   assert.equal(await readFile(join(destination, "regular"), "utf8"), "retained")
   await assert.rejects(lstat(join(destination, "unsafe-entry")), { code: "ENOENT" })
   assert.deepEqual(JSON.parse(await readFile(join(destination, "singleton-symlinks.json"), "utf8")), [{ path: "unsafe-entry", target: "../missing-target" }])
+})
+async function withControlClosure(operation: () => Promise<void>, close: () => Promise<void>): Promise<void> {
+  let failure: unknown
+  try { await operation() } catch (error) { failure = error }
+  try { await close() } catch (closure) {
+    if (failure !== undefined) throw new AggregateError([failure, closure], "control operation and closure failed", { cause: failure })
+    throw closure
+  }
+  if (failure !== undefined) throw failure
+}
+
+async function realControl(t: TestContext) {
+  const parent = process.env.AGENCY_TEST_FIXTURE_ROOT ?? tmpdir()
+  const root = await mkdtemp(join(parent, "singleton-preload-control-"))
+  const evidence = join(process.env.AGENCY_TEST_EVIDENCE_ROOT ?? root, "preload-control-" + crypto.randomUUID())
+  await mkdir(evidence, { recursive: true, mode: 0o700 })
+  const real = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
+  const recorder = createSingletonRecorder(evidence, real)
+  t.after(() => rm(root, { recursive: true, force: true }))
+  return { root, evidence, recorder, real }
+}
+
+async function childExit(child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) return { code: child.exitCode, signal: child.signalCode }
+  return new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", (code, signal) => resolve({ code, signal })) })
+}
+
+async function controlLine(child: ChildProcess): Promise<string> {
+  let line = ""
+  for await (const chunk of child.stdout!) {
+    line += String(chunk)
+    if (line.includes("\n")) return line.slice(0, line.indexOf("\n"))
+  }
+  throw new Error("control fixture closed without publication")
+}
+
+test("exact-path preload retains a fixture and its nested child before release", async t => {
+  const { root, evidence, recorder } = await realControl(t)
+  const fixturePath = join(root, "nested-fixture.mjs")
+  await writeFile(fixturePath, `import { spawn } from "node:child_process"
+import { Socket } from "node:net"
+const gate = new Socket({ fd: 3, readable: true, writable: true })
+const released = new Promise(resolve => { gate.once("data", resolve); gate.once("end", resolve) })
+let child
+if (process.argv[2] !== "child") {
+  child = spawn(process.execPath, [process.argv[1], "child"], { stdio: ["ignore", "pipe", "pipe", "pipe"] })
+  let line = ""
+  for await (const chunk of child.stdout) { line += String(chunk); if (line.includes("\\n")) break }
+  process.stdout.write(JSON.stringify({ pid: process.pid, nestedPid: JSON.parse(line).pid }) + "\\n")
+} else process.stdout.write(JSON.stringify({ pid: process.pid }) + "\\n")
+await released
+if (child) {
+  const exited = new Promise(resolve => child.once("exit", resolve))
+  child.stdio[3].end("release\\n")
+  await exited
+}
+gate.destroy()`)
+  const rootLaunch = recorder.intent("darwin-control-root"), nestedLaunch = recorder.intent("darwin-control-nested")
+  const previousRoot = process.env.AGENCY_SINGLETON_EVIDENCE_ROOT
+  process.env.AGENCY_SINGLETON_EVIDENCE_ROOT = evidence
+  try { installSingletonOwnership([fixturePath]) } finally { if (previousRoot === undefined) delete process.env.AGENCY_SINGLETON_EVIDENCE_ROOT; else process.env.AGENCY_SINGLETON_EVIDENCE_ROOT = previousRoot }
+  const child = spawn(process.execPath, [fixturePath], { env: { ...process.env, AGENCY_SINGLETON_EVIDENCE_ROOT: evidence }, stdio: ["ignore", "pipe", "pipe", "pipe"] })
+  const exited = childExit(child)
+  await withControlClosure(async () => {
+    const leader = await recorder.spawn(rootLaunch, child.pid)
+    assert.notEqual(leader, null)
+    const published = JSON.parse(await controlLine(child)) as { pid: number; nestedPid: number }
+    assert.equal(published.pid, child.pid)
+    await recorder.spawn(nestedLaunch, published.nestedPid)
+    const before = (await readFile(join(evidence, "ownership.jsonl"), "utf8")).trim().split("\n").length
+    retainSingletonIdentity("darwin-group-member", leader!)
+    const rows = (await readFile(join(evidence, "ownership.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line))
+    assert.equal(rows.length, before + 1)
+    assert.deepEqual(rows.at(-1), { at: rows.at(-1).at, type: "observation", role: "darwin-group-member", identity: leader })
+    const automatic = rows.filter(row => row.type === "identity" && row.role === "darwin-fixture")
+    assert.deepEqual(automatic.map(row => row.identity.pid).sort((a: number, b: number) => a - b), [published.pid, published.nestedPid].sort((a, b) => a - b))
+    assert.equal(child.exitCode, null)
+  }, async () => withControlClosure(async () => {
+    ;(child.stdio[3] as PassThrough).end("release\n")
+    const outcome = await exited
+    await appendFile(join(evidence, "ownership.jsonl"), JSON.stringify({ type: "control-exit", ...rootLaunch, pid: child.pid, ...outcome }) + "\n")
+    assert.deepEqual(outcome, { code: 0, signal: null })
+  }, finishSingletonOwnership))
+})
+
+test("preload registration refusal retains actual exit before fixture source entry", async t => {
+  const { root, evidence, recorder } = await realControl(t)
+  const admission = join(root, "admission.mjs"), fixturePath = join(root, "entry.mjs"), marker = join(root, "entered"), invalid = join(root, "invalid-root")
+  await writeFile(admission, `import { Socket } from "node:net"
+const gate = new Socket({ fd: 5, readable: true, writable: true })
+await new Promise(resolve => { gate.once("data", resolve); gate.once("end", resolve) })
+gate.destroy()`)
+  await writeFile(fixturePath, `import { writeFile } from "node:fs/promises";await writeFile(${JSON.stringify(marker)}, "entered")`)
+  await writeFile(invalid, "not a directory")
+  const launch = recorder.intent("darwin-control-refusal")
+  const token = { launch: { launchId: crypto.randomUUID(), role: "darwin-fixture" }, root: invalid, fixturePaths: [fixturePath] }
+  const child = nativeSpawn(process.execPath, [fixturePath], { env: { ...process.env, AGENCY_FIXTURE_LAUNCH: JSON.stringify(token), NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import=" + pathToFileURL(admission).href, "--import=" + new URL("./fixtures/singleton-ownership.js", import.meta.url).href].filter(Boolean).join(" ") }, stdio: ["ignore", "ignore", "pipe", "ignore", "ignore", "pipe"] })
+  const closed = new Promise<void>(resolve => child.once("close", () => resolve()))
+  let stderr = ""
+  child.stderr!.on("data", chunk => { stderr += String(chunk) })
+  const exited = childExit(child)
+  let outcome: Awaited<ReturnType<typeof childExit>> | undefined
+  await withControlClosure(async () => { await recorder.spawn(launch, child.pid) }, async () => {
+    ;(child.stdio as Array<PassThrough | null | undefined>)[5]!.end("release\n")
+    outcome = await exited
+    await closed
+    await appendFile(join(evidence, "ownership.jsonl"), JSON.stringify({ type: "control-refusal-exit", ...launch, pid: child.pid, ...outcome, stderr, descriptorsClosed: child.stdio.every(stream => stream == null || stream.destroyed), attemptedLaunch: token.launch, expectedRegistrationRefusal: true }) + "\n")
+  })
+  assert.notEqual(outcome, undefined)
+  assert.notEqual(outcome!.code, 0)
+  assert.equal(outcome!.signal, null)
+  await assert.rejects(lstat(marker), { code: "ENOENT" })
+  assert.match(stderr, /fixture ownership registration failed/)
+  assert.ok(child.stdio.every(stream => stream == null || stream.destroyed))
 })

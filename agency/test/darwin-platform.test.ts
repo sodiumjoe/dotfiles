@@ -3,7 +3,7 @@ import { execFile, spawn, type ChildProcess, type ExecFileOptionsWithStringEncod
 import { randomUUID } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { constants } from "node:fs"
-import { chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, rmdir, symlink, writeFile, type FileHandle } from "node:fs/promises"
+import { chmod, chown, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, rmdir, symlink, writeFile, type FileHandle } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { homedir, tmpdir } from "node:os"
 import { dirname, isAbsolute, join } from "node:path"
@@ -25,6 +25,9 @@ const providerFixture = fileURLToPath(new URL("./fixtures/provider-tree.js", imp
 const handlerFixture = fileURLToPath(new URL("./fixtures/handler.js", import.meta.url))
 const singletonFixture = fileURLToPath(new URL("./fixtures/singleton-handler.js", import.meta.url))
 const adapter = createDarwinAdapter()
+const retainedEvidence = process.env.AGENCY_TEST_EVIDENCE_ROOT
+const ownership = retainedEvidence === undefined ? undefined : await import("./fixtures/singleton-ownership.js")
+ownership?.installSingletonOwnership([providerFixture, handlerFixture, singletonFixture])
 const darwinTest = process.platform === "darwin" ? test : test.skip
 const allEvidence: GroupEvidence[] = []
 const allPending: PendingGroup[] = []
@@ -305,9 +308,21 @@ class FixtureScope {
   }
 
   static async create(t: TestContext): Promise<FixtureScope> {
-    const root = await realpath(await withPrivateUmask(() => mkdtemp(join(tmpdir(), "agy-darwin-"))))
+    const root = await realpath(await withPrivateUmask(() => mkdtemp(join(process.env.AGENCY_TEST_FIXTURE_ROOT ?? tmpdir(), "agy-darwin-"))))
+    await chown(root, process.getuid!(), process.getgid!())
     await chmod(root, 0o700)
+    const metadata = await lstat(root)
+    assert.equal(metadata.uid, process.getuid!())
+    assert.equal(metadata.gid, process.getgid!())
+    assert.equal(metadata.mode & 0o777, 0o700)
+    assert.equal(await realpath(root), root)
     const scope = new FixtureScope(root)
+    if (retainedEvidence !== undefined) {
+      const registry = join(retainedEvidence, "fixture-roots.json")
+      const roots = JSON.parse(await readFile(registry, "utf8").catch(() => "[]"))
+      roots.push({ root, runtimeRoot: root, test: t.name, createdAt: Date.now() })
+      await writePrivateFile(registry, JSON.stringify(roots))
+    }
     t.after(async () => scope.cleanup())
     return scope
   }
@@ -321,6 +336,7 @@ class FixtureScope {
       return existing
     }
     const evidence = { label, marker, leader, members: sorted(members), receiptPath: join(this.root, `cleanup-${this.evidence.length}-${randomUUID()}.json`) }
+    for (const identity of evidence.members) ownership?.retainSingletonIdentity("darwin-group-member", identity)
     this.evidence.push(evidence)
     allEvidence.push(evidence)
     for (const pending of this.pending) {
@@ -398,6 +414,9 @@ class FixtureScope {
         if (typeof error !== "object" || error === null || !("code" in error) || (error.code !== "ENOENT" && error.code !== "ENOTEMPTY")) failures.push(error)
       }
     }
+    if (retainedEvidence !== undefined && ownership !== undefined) {
+      try { await ownership.preserveSingletonFixture(this.root, join(retainedEvidence, "darwin", this.root.split("/").at(-1)!)) } catch (error) { failures.push(error) }
+    }
     if (failures.length === 0) await rm(this.root, { recursive: true, force: true })
     if (failures.length > 0) throw new AggregateError(failures, "fixture cleanup failed")
   }
@@ -443,8 +462,7 @@ async function registerProvider(child: ChildProcess, scope: FixtureScope, label:
     assertLeader(leader, marker)
     assert.equal(await source.bootId(), leader.bootId)
     const members = await waitFor(async () => {
-      const current = await stableGroup(leader.processGroupId, source)
-      return current.some(member => member.pid === structural.descendantPid) ? current : null
+      return readyProviderGroup(leader.processGroupId, members => members.some(member => member.pid === structural.descendantPid), source)
     }, `${label} descendant was not observable`)
     assert.equal(members.some(member => sameProcess(leader, member)), true)
     for (const member of members) {
@@ -1417,8 +1435,7 @@ qualificationTest("provider publication pipe closure self-cleans the unacknowled
   const leader = await waitFor(() => adapter.readProcess(child.pid!), "publication-closed provider leader was not observable")
   assertLeader(leader, marker)
   const members = await waitFor(async () => {
-    const current = await stableGroup(leader.processGroupId)
-    return current.length >= 2 ? current : null
+    return readyProviderGroup(leader.processGroupId, members => members.length >= 2)
   }, "publication-closed provider descendant was not observable")
   const evidence = scope.register("publication-closed provider", marker, leader, members)
   childPipe(child, 3).destroy()
@@ -1441,8 +1458,7 @@ qualificationTest("provider missing acknowledgement descriptor self-cleans the u
   const structural = await readProviderStructural(child, "acknowledgement-missing provider")
   const leader = await waitFor(() => adapter.readProcess(child.pid!), "acknowledgement-missing provider leader was not observable")
   const members = await waitFor(async () => {
-    const current = await stableGroup(leader.processGroupId)
-    return current.length >= 2 ? current : null
+    return readyProviderGroup(leader.processGroupId, members => members.length >= 2)
   }, "acknowledgement-missing provider descendant was not observable")
   const evidence = scope.register("acknowledgement-missing provider", marker, leader, members)
   assertLeader(evidence.leader, marker)
@@ -1487,8 +1503,7 @@ qualificationTest("provider registration closes acknowledgement on an unauthoriz
   const leader = await waitFor(() => adapter.readProcess(structural.leaderPid), "unauthorized-registration provider leader was not observable")
   assertLeader(leader, marker)
   const members = await waitFor(async () => {
-    const current = await stableGroup(leader.processGroupId)
-    return current.some(member => member.pid === structural.descendantPid) ? current : null
+    return readyProviderGroup(leader.processGroupId, members => members.some(member => member.pid === structural.descendantPid))
   }, "unauthorized-registration provider descendant was not observable")
   scope.register("unauthorized-registration provider cleanup", marker, leader, members)
   const signals: Array<{ processGroupId: number; signal: NodeJS.Signals }> = []
@@ -1940,5 +1955,40 @@ test.after(async () => {
   }
   finalSurvivorCount = new Set(survivors.map(value => `${value.label}:${value.pid}`)).size
   if (finalSurvivorCount > 0) failures.push(new Error(`registered fixture survivors: ${JSON.stringify(survivors)}`))
+  try { await ownership?.finishSingletonOwnership() } catch (error) { failures.push(error) }
   if (failures.length > 0) throw new AggregateError(failures, `fixture survivor verification failed with ${finalSurvivorCount} registered and ${independentSurvivorCount} independent survivors`)
+})
+async function readyProviderGroup(processGroupId: number, required: (members: ProcessIdentity[]) => boolean, source: PlatformAdapter = adapter): Promise<ProcessIdentity[] | null> {
+  const first = sorted(await source.readGroup(processGroupId))
+  const second = sorted(await source.readGroup(processGroupId))
+  return required(first) && required(second) && JSON.stringify(first) === JSON.stringify(second) ? first : null
+}
+
+function groupSequence(groups: ProcessIdentity[][]): PlatformAdapter {
+  let index = 0
+  return { ...adapter, readGroup: async () => {
+    const group = groups[index++]
+    assert.notEqual(group, undefined)
+    return group!
+  } }
+}
+
+const readinessLeader: ProcessIdentity = { bootId: "readiness-control", pid: 100, birth: "123:leader", parentPid: 1, processGroupId: 100, sessionId: 100, uid: 501, gid: 20 }
+const readinessDescendant: ProcessIdentity = { ...readinessLeader, pid: 101, birth: "123:descendant", parentPid: 100 }
+const readinessComplete = [readinessLeader, readinessDescendant]
+
+test("provider readiness waits for an appearing descendant", async () => {
+  assert.equal(await readyProviderGroup(100, members => members.some(member => member.pid === 101), groupSequence([[readinessLeader], readinessComplete])), null)
+})
+
+test("provider readiness accepts two complete equal observations", async () => {
+  assert.deepEqual(await readyProviderGroup(100, members => members.some(member => member.pid === 101), groupSequence([readinessComplete, [...readinessComplete].reverse()])), readinessComplete)
+})
+
+test("provider readiness waits for changing complete observations", async () => {
+  assert.equal(await readyProviderGroup(100, members => members.some(member => member.pid === 101), groupSequence([readinessComplete, [readinessLeader, { ...readinessDescendant, birth: "124:descendant" }]])), null)
+})
+
+test("strict fixture authorization still rejects changing observations", async () => {
+  await assert.rejects(stableGroup(100, groupSequence([[readinessLeader], readinessComplete])), assert.AssertionError)
 })

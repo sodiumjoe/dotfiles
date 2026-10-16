@@ -6,7 +6,7 @@ import { syncBuiltinESMExports } from "node:module"
 import { closeSync, constants, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from "node:fs"
 import { cp, lstat, readFile, readlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, relative } from "node:path"
+import { basename, join, relative } from "node:path"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
 import { startOrConnect, type StartOrConnectOptions } from "../../src/platform/singleton.js"
@@ -100,19 +100,34 @@ async function waitRegistration(launch: SingletonLaunch, child: ChildProcess): P
   }
 }
 
-export function installSingletonOwnership(): void {
+export function installSingletonOwnership(fixturePaths: readonly string[] = []): void {
   if (installed) return
   installed = true
-  evidenceRoot()
+  record(evidenceRoot(), { type: "scope-open" })
   originalSpawn = childProcess.spawn
   childProcess.spawn = ((file: string, args: string[], options: childProcess.SpawnOptions) => {
+    if (file === process.execPath && args[0] !== undefined && fixturePaths.includes(args[0])) {
+      const name = basename(args[0])
+      const role = name === "provider-tree.js" ? "darwin-provider-" + args[1] : name === "handler.js" ? "darwin-crash-handler" : name === "singleton-handler.js" ? "darwin-singleton-" + args[1] : "darwin-fixture"
+      const launch = recorder().intent(role)
+      const env = { ...process.env, ...options.env }
+      env.NODE_OPTIONS = [env.NODE_OPTIONS, "--import=" + import.meta.url].filter(Boolean).join(" ")
+      env.AGENCY_FIXTURE_LAUNCH = JSON.stringify({ launch, root: evidenceRoot(), fixturePaths })
+      env.AGENCY_SINGLETON_EVIDENCE_ROOT = evidenceRoot()
+      let child: ChildProcess
+      try { child = originalSpawn(file, args, { ...options, env }) } catch (error) { void recorder().spawn(launch, undefined); throw error }
+      retainSpawn(launch, child)
+      if (name === "singleton-handler.js" && args[1] === "handler" && child.pid !== undefined) spawnedHandlers.set(child.pid, child)
+      return child
+    }
     if (file !== "/usr/bin/lockf" && file !== "/usr/bin/flock") {
       const child = originalSpawn(file, args, options)
       if (args[0] === fileURLToPath(new URL("./singleton-handler.js", import.meta.url)) && args[1] === "handler" && child.pid !== undefined) spawnedHandlers.set(child.pid, child)
       return child
     }
-    const helper = recorder().intent("singleton-lock-helper")
-    const holder = process.platform === "darwin" ? recorder().intent("singleton-lock-holder") : undefined
+    const lockRole = fixturePaths.length > 0 ? "darwin-lock-" : "singleton-lock-"
+    const helper = recorder().intent(lockRole + "helper")
+    const holder = process.platform === "darwin" ? recorder().intent(lockRole + "holder") : undefined
     const launch: LockLaunch = { helper, holder, launcherPid: process.pid, root: evidenceRoot() }
     const env = { ...process.env, ...options.env }
     env.NODE_OPTIONS = [env.NODE_OPTIONS, "--import=" + import.meta.url].filter(Boolean).join(" ")
@@ -233,12 +248,13 @@ export async function killSingletonPid(pid: number, signal: NodeJS.Signals = "SI
 export async function finishSingletonOwnership(): Promise<void> {
   try { await Promise.all(observations) } finally {
     childProcess.spawn = originalSpawn
+    installed = false
     syncBuiltinESMExports()
   }
   const rows = readFileSync(join(evidenceRoot(), "ownership.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line))
   const failures = rows.filter(row => row.type === "registration-failure")
   if (failures.length) throw new Error("singleton ownership registration failed: " + JSON.stringify(failures))
-  const intents = rows.filter(row => row.type === "intent" && row.role.startsWith("singleton-"))
+  const intents = rows.filter(row => row.type === "intent" && (row.role.startsWith("singleton-") || row.role.startsWith("darwin-")))
   for (const intent of intents) {
     if (!rows.some(row => row.launchId === intent.launchId && (row.type === "identity" || row.type === "no-process"))) throw new Error("singleton ownership intent is unresolved: " + intent.launchId)
   }
@@ -310,4 +326,23 @@ async function reapRegistrationRefusal(child: ChildProcess, descriptors: number[
     throw new AggregateError([registration, closure], "singleton registration and closure failed", { cause: registration })
   }
   throw registration
+}
+
+export function retainSingletonIdentity(role: string, identity: ProcessIdentity): void {
+  record(evidenceRoot(), { type: "observation", role, identity })
+}
+
+const fixtureValue = process.env.AGENCY_FIXTURE_LAUNCH
+if (fixtureValue !== undefined) {
+  delete process.env.AGENCY_FIXTURE_LAUNCH
+  const fixture = JSON.parse(fixtureValue) as { launch: SingletonLaunch; root: string; fixturePaths: string[] }
+  root = fixture.root
+  try {
+    await recorder().observe(fixture.launch, process.pid)
+    installSingletonOwnership(fixture.fixturePaths)
+  } catch (error) {
+    try { record(evidenceRoot(), { type: "registration-failure", ...fixture.launch, pid: process.pid, error: String(error) }) } catch {}
+    process.stderr.write("fixture ownership registration failed: " + String(error) + "\n")
+    process.exit(1)
+  }
 }
