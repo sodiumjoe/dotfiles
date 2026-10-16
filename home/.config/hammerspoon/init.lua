@@ -403,7 +403,10 @@ local function layoutWindows()
     end
 end
 
-_G.windowLayoutWatcher = require("auto_layout").start(layoutWindows)
+_G.windowLayoutWatcher = require("auto_layout").start(function()
+    hs.brightness.set(100)
+    layoutWindows()
+end)
 
 local function layout()
     local speakers = hs.audiodevice.findOutputByName("CalDigit TS4 Audio - Rear")
