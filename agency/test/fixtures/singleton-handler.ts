@@ -207,41 +207,45 @@ function socketForFd(fd: number): Socket {
   return new Socket({ fd, readable: true, writable: true })
 }
 
-async function waitForGate(status: Socket, gate: Socket, timeoutMs: number): Promise<boolean> {
-  return new Promise(resolve => {
-    let settled = false
-    const timer = setTimeout(() => finish(false), timeoutMs)
-    const finish = (released: boolean): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      status.off("end", lost)
-      status.off("close", lost)
-      status.off("error", lost)
-      gate.off("end", lost)
-      gate.off("close", lost)
-      gate.off("error", lost)
-      gate.off("data", opened)
-      resolve(released)
-    }
-    const lost = (): void => finish(false)
-    const opened = (data: Buffer): void => {
-      if (data.toString("utf8").includes("start\n")) finish(true)
-    }
-    status.on("end", lost)
-    status.on("close", lost)
-    status.on("error", lost)
-    gate.on("end", lost)
-    gate.on("close", lost)
-    gate.on("error", lost)
-    gate.on("data", opened)
-  })
+function observeGate(status: Socket, gate: Socket): (timeoutMs: number) => Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let settled = false
+  let resolve: (released: boolean) => void
+  const result = new Promise<boolean>(complete => { resolve = complete })
+  const finish = (released: boolean): void => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    status.off("end", lost)
+    status.off("close", lost)
+    status.off("error", lost)
+    gate.off("end", lost)
+    gate.off("close", lost)
+    gate.off("error", lost)
+    gate.off("data", opened)
+    resolve(released)
+  }
+  const lost = (): void => finish(false)
+  const opened = (data: Buffer): void => {
+    if (data.toString("utf8").includes("start\n")) finish(true)
+  }
+  status.on("end", lost)
+  status.on("close", lost)
+  status.on("error", lost)
+  gate.on("end", lost)
+  gate.on("close", lost)
+  gate.on("error", lost)
+  gate.on("data", opened)
+  return timeoutMs => {
+    if (!settled && timer === undefined) timer = setTimeout(() => finish(false), timeoutMs)
+    return result
+  }
 }
 
 async function runHandler(config: FixtureConfig): Promise<void> {
   const status = socketForFd(3)
   const gate = socketForFd(4)
-  const gateRelease = waitForGate(status, gate, fixtureTimeout(config))
+  const gateRelease = observeGate(status, gate)
   const recordPath = process.env.AGENCY_HANDLER_RECORD
   const generation = process.env.AGENCY_HANDLER_GENERATION
   if (recordPath === undefined || generation === undefined) throw new Error("Handler startup environment is incomplete")
@@ -256,7 +260,7 @@ async function runHandler(config: FixtureConfig): Promise<void> {
   if (!status.destroyed && !status.readableEnded && !gate.destroyed && !gate.readableEnded) {
     status.write(`${JSON.stringify({ type: "identity", identity: self })}\n`)
   }
-  if (!await gateRelease) {
+  if (!await gateRelease(timeoutMs)) {
     status.destroy()
     gate.destroy()
     return

@@ -1605,7 +1605,7 @@ qualificationTest("bounds singleton Handler phase pauses by timeoutMs", async t 
   const generation = randomUUID()
   const hostId = "pause-timeout-host"
   const recordPath = join(scope.root, "handler.json")
-  const config = { root: scope.root, bootId, hostId, handlerLog, retainedDirectory, adapterMode: "darwin-real", timeoutMs, eventLog, releasePath, handlerPauseAt: "before_socket_bind" }
+  const config = { root: scope.root, bootId, hostId, handlerLog, retainedDirectory, adapterMode: "darwin-real", timeoutMs, eventLog, releasePath, handlerPauseAt: "before_socket_bind", identityDelayMs: 600 }
   const configPath = join(scope.root, "pause-timeout.json")
   await writePrivateFile(configPath, JSON.stringify(config))
   await writePrivateHandlerRecord(recordPath, pendingHandlerRecord(scope.root, hostId, bootId, launchAttemptId, generation))
