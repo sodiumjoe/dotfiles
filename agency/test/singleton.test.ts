@@ -675,7 +675,14 @@ test("launcher death before gate release starts no usable Handler", async t => {
       await waitEvent(eventLog, `launcher:${scenario.transition}`)
       await killSingletonPid(launcher.pid!)
       await waitChild(launcher)
+      const spawned = (await lines(eventLog)).find(value => value.startsWith("launcher:handler_pid:"))
+      let handlerPid: number | undefined
+      if (scenario.expectsHandler) {
+        assert.match(spawned ?? "", /^launcher:handler_pid:[1-9]\d*$/)
+        handlerPid = Number(spawned!.slice("launcher:handler_pid:".length))
+      } else assert.equal(spawned, undefined)
       await waitFor(async () => {
+        if (handlerPid !== undefined && processExists(handlerPid)) return false
         const identities = await handlerIdentities(config.handlerLog)
         return identities.every(handler => !processExists(handler.pid))
       }, "pre-gate Handler survived launcher death")
@@ -703,37 +710,40 @@ test("launcher death before gate release starts no usable Handler", async t => {
 test("a pre-release Handler exits on either gate or status-peer EOF", async t => {
   for (const closedFd of [3, 4] as const) {
     await t.test(`fd ${closedFd}`, async t => {
-      const root = await fixtureRoot(t)
-      const adapter = new FakeAdapter(root)
-      const { config, path } = await writeConfig(root)
-      await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(process.pid), {
-        launchAttemptId: crypto.randomUUID(),
-        phase: "launch_pending",
-        process: null,
-        writer: "launcher",
-        reconciliation: null,
-      }))
-      t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-      const launch = singletonIntent("singleton-direct-handler")
-      const child = spawn(process.execPath, [fixturePath, "handler", path], {
-        detached: true,
-        env: {
-          ...process.env,
-          AGENCY_HANDLER_RECORD: join(root, "handler.json"),
-          AGENCY_HANDLER_GENERATION: "never-released",
-        },
-        stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
-      })
-      await recordSingletonChild(launch, child)
-      await waitFor(async () => (await handlerIdentities(config.handlerLog)).length === 1, "Handler did not claim identity")
-      const status = child.stdio[3] as Duplex
-      const gate = child.stdio[4] as Duplex
-      if (closedFd === 3) status.destroy()
-      else gate.destroy()
-      assert.equal(await waitChild(child), 0)
-      status.destroy()
-      gate.destroy()
-      assert.equal(await pathExists(join(root, "handler.sock")), false)
+      for (const beforeIdentity of [true, false]) {
+        const root = await fixtureRoot(t)
+        const adapter = new FakeAdapter(root)
+        const { config, path } = await writeConfig(root, { identityDelayMs: beforeIdentity ? 350 : 0 })
+        await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(process.pid), {
+          launchAttemptId: crypto.randomUUID(),
+          phase: "launch_pending",
+          process: null,
+          writer: "launcher",
+          reconciliation: null,
+        }))
+        t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
+        const launch = singletonIntent("singleton-direct-handler")
+        const child = spawn(process.execPath, [fixturePath, "handler", path], {
+          detached: true,
+          env: {
+            ...process.env,
+            AGENCY_HANDLER_RECORD: join(root, "handler.json"),
+            AGENCY_HANDLER_GENERATION: "never-released",
+          },
+          stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
+        })
+        await recordSingletonChild(launch, child)
+        if (beforeIdentity) assert.deepEqual(await handlerIdentities(config.handlerLog), [])
+        else await waitFor(async () => (await handlerIdentities(config.handlerLog)).length === 1, "Handler did not claim identity")
+        const status = child.stdio[3] as Duplex
+        const gate = child.stdio[4] as Duplex
+        if (closedFd === 3) status.destroy()
+        else gate.destroy()
+        assert.equal(await waitChild(child), 0)
+        status.destroy()
+        gate.destroy()
+        assert.equal(await pathExists(join(root, "handler.sock")), false)
+      }
     })
   }
 })

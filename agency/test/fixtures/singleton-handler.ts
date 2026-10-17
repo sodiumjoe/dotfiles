@@ -241,6 +241,7 @@ async function waitForGate(status: Socket, gate: Socket, timeoutMs: number): Pro
 async function runHandler(config: FixtureConfig): Promise<void> {
   const status = socketForFd(3)
   const gate = socketForFd(4)
+  const gateRelease = waitForGate(status, gate, fixtureTimeout(config))
   const recordPath = process.env.AGENCY_HANDLER_RECORD
   const generation = process.env.AGENCY_HANDLER_GENERATION
   if (recordPath === undefined || generation === undefined) throw new Error("Handler startup environment is incomplete")
@@ -252,8 +253,10 @@ async function runHandler(config: FixtureConfig): Promise<void> {
   await delay(config.identityDelayMs)
   await appendPrivateFile(config.handlerLog, `${JSON.stringify(self)}\n`)
   await event(config, "handler:identity_claimed")
-  status.write(`${JSON.stringify({ type: "identity", identity: self })}\n`)
-  if (!await waitForGate(status, gate, timeoutMs)) {
+  if (!status.destroyed && !status.readableEnded && !gate.destroyed && !gate.readableEnded) {
+    status.write(`${JSON.stringify({ type: "identity", identity: self })}\n`)
+  }
+  if (!await gateRelease) {
     status.destroy()
     gate.destroy()
     return
@@ -340,7 +343,11 @@ async function runContender(config: FixtureConfig, configPath: string, start: ty
       },
       timeoutMs: config.timeoutMs ?? 5000,
       lockTimeoutSeconds: config.lockTimeoutSeconds ?? 10,
-      onTransition: async transition => {
+      onTransition: async (transition, pid) => {
+        if (transition === "handler_spawned" && config.launcherPauseAt !== undefined) {
+          if (pid === undefined) throw new Error("Handler spawn has no pid")
+          await event(config, `launcher:handler_pid:${pid}`)
+        }
         await event(config, `launcher:${transition}`)
         if (config.launcherPauseAt !== transition || config.releasePath === undefined) return
         await waitForRelease(config, `launcher ${transition}`)
