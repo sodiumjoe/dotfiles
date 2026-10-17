@@ -350,6 +350,7 @@ async function runContender(config: FixtureConfig, configPath: string, start: ty
         }
         await event(config, `launcher:${transition}`)
         if (config.launcherPauseAt !== transition || config.releasePath === undefined) return
+        await event(config, `launcher:pause_started:${Date.now()}`)
         await waitForRelease(config, `launcher ${transition}`)
       },
     }))
