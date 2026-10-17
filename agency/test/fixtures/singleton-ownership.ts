@@ -15,21 +15,26 @@ import { sameProcess, type PlatformAdapter, type ProcessIdentity } from "../../s
 export type SingletonLaunch = { launchId: string; role: string }
 type LockLaunch = { helper: SingletonLaunch; holder?: SingletonLaunch | undefined; launcherPid: number; root: string }
 
-function record(root: string, value: unknown): void {
+function recordMany(root: string, values: readonly unknown[]): void {
   const fd = openSync(join(root, "ownership.jsonl"), constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600)
-  try { writeSync(fd, JSON.stringify({ at: Date.now(), ...value as object }) + "\n"); fsyncSync(fd) } finally { closeSync(fd) }
+  try {
+    for (const value of values) writeSync(fd, JSON.stringify({ at: Date.now(), ...value as object }) + "\n")
+    fsyncSync(fd)
+  } finally { closeSync(fd) }
 }
 
+function record(root: string, value: unknown): void { recordMany(root, [value]) }
+
 export function createSingletonRecorder(root: string, adapter: PlatformAdapter, signal: (pid: number, signal: NodeJS.Signals) => void = process.kill) {
-  const observe = async (launch: SingletonLaunch, pid: number): Promise<ProcessIdentity> => {
+  const observe = async (launch: SingletonLaunch, pid: number, retain: (value: unknown) => void = value => record(root, value)): Promise<ProcessIdentity> => {
     const startedAt = Date.now()
     try {
       const identity = await adapter.readProcess(pid)
       if (identity === null) throw new Error("singleton fixture exited before ownership registration")
-      record(root, { type: "identity", ...launch, identity, elapsedMs: Date.now() - startedAt })
+      retain({ type: "identity", ...launch, identity, elapsedMs: Date.now() - startedAt })
       return identity
     } catch (error) {
-      record(root, { type: "registration-failure", ...launch, pid, error: String(error) })
+      retain({ type: "registration-failure", ...launch, pid, error: String(error) })
       throw error
     }
   }
@@ -39,11 +44,26 @@ export function createSingletonRecorder(root: string, adapter: PlatformAdapter, 
       record(root, { type: "intent", ...launch })
       return launch
     },
-    observe,
+    observe: (launch: SingletonLaunch, pid: number) => observe(launch, pid),
     async spawn(launch: SingletonLaunch, pid: number | undefined): Promise<ProcessIdentity | null> {
       record(root, { type: "spawn", ...launch, pid: pid ?? null })
       if (pid === undefined) { record(root, { type: "no-process", ...launch }); return null }
       return observe(launch, pid)
+    },
+    async lock(helper: SingletonLaunch, holder: SingletonLaunch, parentPid: number, holderPid: number): Promise<void> {
+      const values: unknown[] = []
+      const retain = (value: unknown) => { values.push({ at: Date.now(), ...value as object }) }
+      let registration: { error: unknown } | undefined
+      try {
+        await observe(helper, parentPid, retain)
+        retain({ type: "spawn", ...holder, pid: holderPid })
+        await observe(holder, holderPid, retain)
+      } catch (error) { registration = { error } }
+      try { recordMany(root, values) } catch (durability) {
+        if (registration !== undefined) throw new AggregateError([registration.error, durability], "singleton lock registration and durability failed", { cause: registration.error })
+        throw durability
+      }
+      if (registration !== undefined) throw registration.error
     },
     async kill(expected: ProcessIdentity, requested: NodeJS.Signals): Promise<void> {
       const observed = await adapter.readProcess(expected.pid)
@@ -269,8 +289,7 @@ if (lockValue !== undefined) {
   try {
     if (launch.holder !== undefined) {
       if (process.ppid === launch.launcherPid) throw new Error("Darwin lock holder has no lockf parent")
-      await recorder().observe(launch.helper, process.ppid)
-      await recorder().spawn(launch.holder, process.pid)
+      await recorder().lock(launch.helper, launch.holder, process.ppid, process.pid)
     } else {
       await recorder().observe(launch.helper, process.pid)
     }

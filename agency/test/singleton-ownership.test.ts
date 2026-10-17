@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
+import { syncBuiltinESMExports } from "node:module"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 import childProcess, { spawn, type ChildProcess } from "node:child_process"
@@ -15,7 +17,7 @@ import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
 
 const expected: ProcessIdentity = { bootId: "actual-test-boot", pid: 123, birth: "123:unmarked:node", parentPid: 12, processGroupId: 123, sessionId: 123, uid: 501, gid: 20 }
 
-async function fixture(t: TestContext, observe: () => Promise<ProcessIdentity | null> = async () => expected) {
+async function fixture(t: TestContext, observe: (pid: number) => Promise<ProcessIdentity | null> = async () => expected) {
   const parent = process.env.AGENCY_TEST_FIXTURE_ROOT ?? tmpdir()
   await mkdir(parent, { recursive: true, mode: 0o700 })
   const root = await mkdtemp(join(parent, "singleton-recorder-"))
@@ -241,4 +243,87 @@ gate.destroy()`)
   await assert.rejects(lstat(marker), { code: "ENOENT" })
   assert.match(stderr, /fixture ownership registration failed/)
   assert.ok(child.stdio.every(stream => stream == null || stream.destroyed))
+})
+
+async function durabilityControl<T>(root: string, operation: () => Promise<T>, barrier: (rows: Array<{ type: string }>) => void = () => undefined): Promise<{ result: T; snapshots: Array<Array<{ type: string }>> }> {
+  const nativeSync = fs.fsyncSync
+  const snapshots: Array<Array<{ type: string }>> = []
+  fs.fsyncSync = fd => {
+    const rows = fs.readFileSync(join(root, "ownership.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))
+    snapshots.push(rows)
+    nativeSync(fd)
+    barrier(rows)
+  }
+  syncBuiltinESMExports()
+  try { return { result: await operation(), snapshots } } finally { fs.fsyncSync = nativeSync; syncBuiltinESMExports() }
+}
+
+test("singleton lock registration durably flushes ordered actual identities once before source entry", async t => {
+  const helper = { launchId: "helper", role: "singleton-lock-helper" }, holder = { launchId: "holder", role: "singleton-lock-holder" }
+  const parent = { ...expected, pid: 122 }, child = { ...expected, parentPid: 122 }
+  const reads: number[] = []
+  const { root, recorder, rows } = await fixture(t, async pid => { reads.push(pid); return reads.length === 1 ? parent : child })
+  let sourceEntered = false, snapshotsBeforeSource = 0
+  const { snapshots } = await durabilityControl(root, async () => {
+    await recorder.lock(helper, holder, parent.pid, child.pid)
+    assert.equal(snapshotsBeforeSource, 1)
+    sourceEntered = true
+  }, observed => { assert.equal(sourceEntered, false); snapshotsBeforeSource += 1; assert.deepEqual(observed.map(row => row.type), ["identity", "spawn", "identity"]) })
+  assert.equal(sourceEntered, true)
+  assert.deepEqual(reads, [parent.pid, child.pid])
+  assert.equal(snapshots.length, 1)
+  const recorded = await rows()
+  assert.deepEqual(recorded.map(row => [row.type, row.launchId]), [["identity", "helper"], ["spawn", "holder"], ["identity", "holder"]])
+  assert.deepEqual(recorded[0].identity, parent)
+  assert.deepEqual(recorded[2].identity, child)
+  assert.ok(recorded.filter(row => row.type === "identity").every(row => typeof row.elapsedMs === "number"))
+})
+
+test("singleton lock registration flushes its actual helper and failed holder before rejecting", async t => {
+  const failure = new Error("holder observation unavailable")
+  let reads = 0
+  const { root, recorder, rows } = await fixture(t, async () => { if (++reads === 2) throw failure; return expected })
+  const helper = { launchId: "helper", role: "singleton-lock-helper" }, holder = { launchId: "holder", role: "singleton-lock-holder" }
+  const { snapshots } = await durabilityControl(root, async () => assert.rejects(recorder.lock(helper, holder, expected.pid, expected.pid + 1), error => error === failure))
+  assert.equal(reads, 2)
+  assert.equal(snapshots.length, 1)
+  const recorded = await rows()
+  assert.deepEqual(recorded.map(row => row.type), ["identity", "spawn", "registration-failure"])
+  assert.equal(recorded[2].launchId, holder.launchId)
+  assert.equal(recorded[2].pid, expected.pid + 1)
+  assert.deepEqual(recorded[0].identity, expected)
+})
+
+test("singleton lock registration flushes a refused helper without claiming a holder", async t => {
+  const failure = new Error("helper observation unavailable")
+  const { root, recorder, rows } = await fixture(t, async () => { throw failure })
+  const helper = { launchId: "helper", role: "singleton-lock-helper" }, holder = { launchId: "holder", role: "singleton-lock-holder" }
+  const { snapshots } = await durabilityControl(root, async () => assert.rejects(recorder.lock(helper, holder, expected.pid, expected.pid + 1), error => error === failure))
+  assert.equal(snapshots.length, 1)
+  assert.deepEqual((await rows()).map(row => [row.type, row.launchId]), [["registration-failure", "helper"]])
+})
+
+test("singleton lock registration refuses source entry when its durability barrier fails", async t => {
+  const failure = new Error("durability unavailable")
+  const { root, recorder } = await fixture(t)
+  const helper = { launchId: "helper", role: "singleton-lock-helper" }, holder = { launchId: "holder", role: "singleton-lock-holder" }
+  let sourceEntered = false
+  await durabilityControl(root, async () => {
+    await assert.rejects(async () => { await recorder.lock(helper, holder, expected.pid, expected.pid + 1); sourceEntered = true }, error => error === failure)
+  }, () => { throw failure })
+  assert.equal(sourceEntered, false)
+})
+
+test("singleton lock registration preserves observation and durability failures together", async t => {
+  const observation = new Error("actual observation unavailable"), durability = new Error("durability unavailable")
+  const { root, recorder } = await fixture(t, async () => { throw observation })
+  const helper = { launchId: "helper", role: "singleton-lock-helper" }, holder = { launchId: "holder", role: "singleton-lock-holder" }
+  await durabilityControl(root, async () => {
+    await assert.rejects(recorder.lock(helper, holder, expected.pid, expected.pid + 1), error => {
+      assert.ok(error instanceof AggregateError)
+      assert.equal(error.cause, observation)
+      assert.deepEqual(error.errors, [observation, durability])
+      return true
+    })
+  }, () => { throw durability })
 })
