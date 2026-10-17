@@ -836,7 +836,7 @@ test("immediate Handler death after gate release is reported without waiting for
   const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root)
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-  const started = Date.now()
+  let started: number | undefined
   await assert.rejects(startOrConnect({
     root,
     hostId,
@@ -844,12 +844,15 @@ test("immediate Handler death after gate release is reported without waiting for
     handler: handlerCommand(path),
     timeoutMs: 5000,
     onTransition: async transition => {
+      if (transition === "lock_acquired") await new Promise(resolve => setTimeout(resolve, 1200))
       if (transition !== "gate_released") return
+      started = Date.now()
       const handlers = await handlerIdentities(config.handlerLog)
       assert.equal(handlers.length, 1)
       await stopIdentity(handlers[0]!, adapter)
     },
   }), /exited|closed|acknowledgement/i)
+  assert.ok(started !== undefined)
   assert.ok(Date.now() - started < 1000)
 })
 
