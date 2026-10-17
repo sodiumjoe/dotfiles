@@ -25,7 +25,7 @@ import {
 } from "../src/platform/singleton.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../src/platform/types.js"
 
-import { finishSingletonOwnership, installSingletonOwnership, isSingletonLockRelease, killSingletonPid, ownedStartOrConnect as startOrConnect, preserveSingletonFixture, recordSingletonChild, singletonIntent, spawnSingletonContender } from "./fixtures/singleton-ownership.js"
+import { finishSingletonOwnership, settleSingletonStarts, installSingletonOwnership, isSingletonLockRelease, killSingletonPid, ownedStartOrConnect as startOrConnect, preserveSingletonFixture, recordSingletonChild, singletonIntent, spawnSingletonContender } from "./fixtures/singleton-ownership.js"
 
 installSingletonOwnership()
 after(finishSingletonOwnership)
@@ -430,7 +430,7 @@ test("selects one generation across 32 contenders and reconciles all records bef
   await writeLaunchRecord(releasedPath, providerRecord("released", cleanLeader))
   await writeLaunchRecord(quarantinedPath, providerRecord("quarantined", ambiguousLeader))
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-  const results = await Promise.all(Array.from({ length: 32 }, () => startOrConnect({
+  const results = await settleSingletonStarts(Array.from({ length: 32 }, () => startOrConnect({
     root,
     hostId,
     adapter,

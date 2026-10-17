@@ -12,7 +12,7 @@ import { appendFile, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } f
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test, { type TestContext } from "node:test"
-import { admitSingletonChild, createSingletonRecorder, finishSingletonOwnership, installSingletonOwnership, retainSingletonIdentity, preserveSingletonFixture, registerSingletonChildBeforeRelease } from "./fixtures/singleton-ownership.js"
+import { admitSingletonChild, settleSingletonStarts, createSingletonRecorder, finishSingletonOwnership, installSingletonOwnership, retainSingletonIdentity, preserveSingletonFixture, registerSingletonChildBeforeRelease } from "./fixtures/singleton-ownership.js"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
 
 const expected: ProcessIdentity = { bootId: "actual-test-boot", pid: 123, birth: "123:unmarked:node", parentPid: 12, processGroupId: 123, sessionId: 123, uid: 501, gid: 20 }
@@ -326,4 +326,21 @@ test("singleton lock registration preserves observation and durability failures 
       return true
     })
   }, () => { throw durability })
+})
+
+test("singleton startup failure waits for every contender before teardown", async () => {
+  const failure = new Error("first startup refused")
+  const release = Promise.withResolvers<number>()
+  let finished = false
+  const starting = settleSingletonStarts([Promise.reject(failure), release.promise])
+  const result = starting.then(value => ({ value }), error => ({ error })).finally(() => { finished = true })
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(finished, false)
+  } finally { release.resolve(2) }
+  const outcome = await result
+  assert.ok("error" in outcome)
+  assert.ok(outcome.error instanceof AggregateError)
+  assert.deepEqual(outcome.error.errors, [failure])
+  assert.deepEqual(await settleSingletonStarts([Promise.resolve(1), Promise.resolve(2)]), [1, 2])
 })

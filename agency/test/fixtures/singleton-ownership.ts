@@ -179,6 +179,17 @@ export function installSingletonOwnership(fixturePaths: readonly string[] = []):
   syncBuiltinESMExports()
 }
 
+export async function settleSingletonStarts<T>(starts: readonly Promise<T>[]): Promise<T[]> {
+  const settled = await Promise.allSettled(starts)
+  const results: T[] = [], failures: unknown[] = []
+  for (const value of settled) {
+    if (value.status === "fulfilled") results.push(value.value)
+    else failures.push(value.reason)
+  }
+  if (failures.length) throw new AggregateError(failures, "singleton startup contenders failed", { cause: failures[0] })
+  return results
+}
+
 export async function ownedStartOrConnect(options: StartOrConnectOptions) {
   let launch: SingletonLaunch | undefined
   let spawned = false
