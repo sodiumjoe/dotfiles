@@ -808,8 +808,14 @@ test("identity and readiness share one launch deadline", async t => {
   const adapter = new FakeAdapter(root)
   const { config, path } = await writeConfig(root, { identityDelayMs: 350, readyDelayMs: 350 })
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-  const started = Date.now()
-  await assert.rejects(startOrConnect({ root, hostId, adapter, handler: handlerCommand(path), timeoutMs: 500 }), /timeout|timed out|unavailable/i)
+  let started: number | undefined
+  await assert.rejects(startOrConnect({ root, hostId, adapter, handler: handlerCommand(path), timeoutMs: 500, onTransition: async transition => {
+    if (transition === "lock_acquired") {
+      await new Promise(resolve => setTimeout(resolve, 350))
+      started = Date.now()
+    }
+  } }), /timeout|timed out|unavailable/i)
+  assert.ok(started !== undefined)
   const elapsed = Date.now() - started
   assert.ok(elapsed >= 450)
   assert.ok(elapsed < 800)
