@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import type { TestContext } from "node:test"
 import { spawn as nodeSpawn,type ChildProcessWithoutNullStreams } from "node:child_process"
-import { mkdtemp,mkdir,readFile,writeFile,appendFile,cp,rm,readdir,lstat,realpath } from "node:fs/promises"
+import { mkdtemp,mkdir,readFile,writeFile,appendFile,cp,readdir,lstat,realpath } from "node:fs/promises"
 import { join,dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomUUID,createHash } from "node:crypto"
@@ -49,6 +49,7 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
   const fixtureEntry=fileURLToPath(new URL("./fixtures/qualification-launcher.js",import.meta.url))
   await writeFile(config.configPath,JSON.stringify(config),{mode:0o600,flag:"wx"});await writeFile(config.launcherPath,launcherText(config,fixtureEntry),{mode:0o700,flag:"wx"})
   const completed=new WeakMap<ChildProcessWithoutNullStreams,Promise<number>>()
+  const commandResults:Array<{pid:number|undefined;argv:string[];code:number|null;signal:NodeJS.Signals|null;stderr:string}>=[]
   const children=new Set<ChildProcessWithoutNullStreams>(),identities:ProcessIdentity[]=[],peers=new Set<Awaited<ReturnType<typeof connectHandlerBridge>>>(),errors:string[]=[]
   const childSpawn=async(argv:string[])=>{
     const intent=fixtureLaunch("qualification-command")
@@ -56,7 +57,7 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
     const child=nodeSpawn(config.launcherPath,argv,{cwd:workspace,env,stdio:["pipe","pipe","pipe"]});children.add(child)
     completed.set(child,new Promise<number>((resolve,reject)=>{child.once("error",reject);child.once("close",code=>resolve(code??70))}))
     let stderr="";child.stderr.on("data",b=>{stderr=(stderr+String(b)).slice(-32768)})
-    child.on("close",(code,signal)=>{children.delete(child);void appendFile(join(root,"commands.jsonl"),JSON.stringify({pid:child.pid,argv,code,signal,stderr})+"\n",{mode:0o600})})
+    child.on("close",(code,signal)=>{children.delete(child);commandResults.push({pid:child.pid,argv,code,signal,stderr})})
     child.on("error",error=>errors.push(String(error)))
     const identity=await until(async()=>{try{return await adapter.readProcess(child.pid!)??(child.exitCode!==null?{exited:true}:undefined)}catch{return undefined}},3000)
     if("pid" in identity)identities.push(identity)
@@ -97,9 +98,10 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
     await writeFile(join(root,"cleanup.json"),JSON.stringify({identities,survivors:[],verifiedAt:Date.now()}),{mode:0o600})
     if(evidence)await cp(root,join(evidence,"fixtures",root.split("/").at(-1)!),{recursive:true,filter:async path=>!(await lstat(path)).isSocket()})
     cleaned=true
-    await rm(runtimeRoot,{recursive:true});await rm(root,{recursive:true})
+    await writeFile(join(root,"result.json"),JSON.stringify({revision:config.binding.sourceRevision,commands:commandResults,identities,cleanup:"verified",root,runtimeRoot}),{mode:0o600})
+    t.diagnostic("retained qualification fixture: "+root)
   }
-  t.after(async()=>{try{await verifyCleanup()}catch(error){throw new AggregateError([error],"qualification fixture retained "+root)}})
+  t.after(async()=>{try{await verifyCleanup()}catch(error){await writeFile(join(root,"result.json"),JSON.stringify({revision:config.binding.sourceRevision,commands:commandResults,identities,cleanup:"incomplete",error:String(error),root,runtimeRoot}),{mode:0o600});throw new AggregateError([error],"qualification fixture retained "+root)}})
   const result:QualificationFixture={config,paths,root,workspace,adapter,command,spawn:childSpawn,owner,sentinel,verifyCleanup,async bridge(){const current=await owner(),peer=await connectHandlerBridge({root:runtimeRoot,hostId,handlerGeneration:current.generation});peers.add(peer);return peer}}
   if(options.taskInput){
     const started=await command(["status","--json"]);assert.equal(started.code,0,started.stderr+started.stdout)

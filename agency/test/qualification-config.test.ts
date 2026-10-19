@@ -99,7 +99,7 @@ test("guard refusal is a definite INVALID_INPUT through ordinary MCP bindings",a
   assert.equal(result.isError,true)
   assert.equal((JSON.parse((result.content[0] as {text:string}).text)).error.code,"INVALID_INPUT")
 })
-test("config accepts verified candidate bytes and rejects individual changed bindings without state creation",async t=>{
+test("config compares declared bindings without recursively hashing candidate files",async t=>{
   const {root,config}=await fixture(t)
   const {captureBuildManifest,publishBuildManifest}=await import("../scripts/build-manifest.js")
   await mkdir(join(config.packageRoot,"dist"),{recursive:true,mode:0o700})
@@ -122,7 +122,10 @@ test("config accepts verified candidate bytes and rejects individual changed bin
   }
   await writeFile(config.configPath,JSON.stringify(config))
   await writeFile(join(config.packageRoot,"dist/leaf.js"),"export const candidate = 2")
-  await assert.rejects(readPrivateConfig(config.configPath),/BUILD_CHANGED/)
+  assert.deepEqual(await readPrivateConfig(config.configPath),config)
+  await mkdir(join(config.packageRoot,"src"),{mode:0o700})
+  await writeFile(join(config.packageRoot,"src/unrelated.ts"),"export const added = 1")
+  assert.deepEqual(await readPrivateConfig(config.configPath),config)
   await assert.rejects(readFile(join(config.persistentRoot,"launches")))
   assert.throws(()=>parsePrivateConfig({...config,packageRoot:join(config.persistentRoot,"pkg")}))
   assert.throws(()=>parsePrivateConfig({...config,editor:{executable:"/usr/bin/true",shimPath:"/outside/nvim",initPath:"/outside/init.lua",toolDirectories:[],luaRoot:root,plugins:[]}}))

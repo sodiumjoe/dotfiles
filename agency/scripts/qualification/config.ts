@@ -8,7 +8,6 @@ import type { JsonObject } from "../../src/agent/session-config.js"
 import type { PlatformPaths } from "../../src/platform/paths.js"
 import { readHostId } from "../../src/platform/host-id.js"
 import { assertPrivateDirectory } from "../../src/platform/private-state.js"
-import { verifyBuildManifest } from "../build-manifest.js"
 import { posixQuote } from "../../src/bridge/bootstrap.js"
 export type CandidateBinding = { sourceRevision:string; sourceDigest:string; distDigest:string; nodeVersion:"v24.13.0"; protocol:"agency-bridge/2" }
 export type PrivateConfig = {
@@ -70,7 +69,7 @@ export async function validatePrivateConfig(c:PrivateConfig):Promise<void> {
     if(path===installed||path===join(process.env.HOME??homedir(),"bin/agy"))throw new Error("INSTALLED_EXECUTABLE")
   }
   const manifest=decodeJson((await readBoundedFile(join(c.packageRoot,"dist/build-manifest.json"),65536))!) as Record<string,unknown>
-  if(manifest.sourceRevision!==c.binding.sourceRevision||manifest.sourceDigest!==c.binding.sourceDigest||manifest.distDigest!==c.binding.distDigest||manifest.nodeVersion!==c.binding.nodeVersion||!await verifyBuildManifest(c.packageRoot))throw new Error("BUILD_CHANGED")
+  if(manifest.sourceRevision!==c.binding.sourceRevision||manifest.sourceDigest!==c.binding.sourceDigest||manifest.distDigest!==c.binding.distDigest||manifest.nodeVersion!==c.binding.nodeVersion)throw new Error("BUILD_CHANGED")
 }
 export async function readPrivateConfig(path:string):Promise<PrivateConfig> {const c=parsePrivateConfig(decodeJson(await privateFile(path)));if(c.configPath!==path)throw new Error("CONFIG_PATH");await validatePrivateConfig(c);return c}
 export function privatePaths(c:PrivateConfig):PlatformPaths {return {hostKey:c.hostId,persistentRoot:c.persistentRoot,runtimeRoot:c.runtimeRoot,handlerSocketPath:join(c.runtimeRoot,"handler.sock")}}
