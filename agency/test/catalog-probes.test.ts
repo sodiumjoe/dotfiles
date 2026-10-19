@@ -321,6 +321,36 @@ test("changed configuration discards a candidate after independently verified cl
   await f.runtime.verifyDischarged()
 })
 
+for (const existing of [false, true]) for (const failure of ["configuration", "observation", "metadata"] as const) test(`preflight ${failure} failure leaves no launch with ${existing ? "existing" : "fresh"} launch directory`, async t => {
+  const f = await syntheticProbeFixture(t)
+  if (existing) await mkdir(join(f.root, "catalog/probe-launches"), { mode: 0o700 })
+  await f.runtime.recover()
+  const writeMeta = f.store.writeProbeMeta
+  if (failure === "configuration") await writeFile(f.config, "replaced before admission")
+  else if (failure === "observation") await fs.unlink(f.executable)
+  else f.store.writeProbeMeta = async () => { throw new Error("metadata unavailable") }
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(outcome.error?.code, failure === "configuration" ? "CONFIG_CHANGED" : failure === "observation" ? "INVALID_CATALOG" : "PROBE_FAILED")
+  assert.equal(f.spawnInvoked(), false)
+  assert.deepEqual(f.signals, [])
+  const inventory = await f.store.inventory()
+  assert.deepEqual(inventory.launches, [])
+  assert.deepEqual(inventory.metadata, [])
+  assert.deepEqual(inventory.issues, [])
+  await f.runtime.verifyDischarged()
+  assert.deepEqual([...f.runtime.issues!()], [])
+  f.store.writeProbeMeta = writeMeta
+  if (failure === "observation") await writeFile(f.executable, "fixture executable", { mode: 0o700 })
+  const evidence = await observeConfig(f.profile), commandId = randomUUID(), attemptId = randomUUID()
+  const next = { ...f.request, evidence, meta: { ...f.request.meta, commandId, attemptId, fingerprint: evidence.fingerprint, workPath: join(f.root, "catalog/work", attemptId) } }
+  await f.store.writeCommand({ version: 1, commandId, hostId: next.meta.hostId, handlerGeneration: f.generation, batchId: randomUUID(), fingerprints: [{ providerId: f.profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: f.profile.id, attemptId }], state: "pending", snapshotId: null }, null)
+  f.bindRequest(next); f.releaseWorkerIdentity(); f.releaseResult()
+  const later = await f.runtime.run(next, new AbortController().signal)
+  assert.equal(later.error, null)
+  assert.equal(later.record.phase, "cleanup_verified")
+  await f.runtime.verifyDischarged()
+})
+
 test("a pre-existing scratch checkout cannot become discovery cwd", async t => {
   const f = await syntheticProbeFixture(t)
   await mkdir(join(f.root, "catalog/work"), { mode: 0o700 })
