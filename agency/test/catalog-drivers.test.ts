@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { spawnOwnedChild } from "../src/runtime/owned-child.js"
+import { randomUUID } from "node:crypto"
 import { ChildProcess } from "node:child_process"
 import { PassThrough, Writable } from "node:stream"
 import test from "node:test"
@@ -106,7 +108,7 @@ test("SDK process facade buffers input and routes kill to its owner", async () =
   let rawKills = 0, ownedCleanup = 0, received = ""
   Object.assign(raw, { stdin, stdout, stderr, pid: 123, kill: () => { rawKills++; return true } })
   stdin.on("data", bytes => { received += bytes.toString() })
-  const facade = new NativeFacade(raw, registered.promise, () => { ownedCleanup++ })
+  const facade = new NativeFacade(spawnOwnedChild({ launchAttemptId: randomUUID(), spawn: () => raw }), registered.promise, () => { ownedCleanup++ })
   facade.stdin.write("before-registration")
   await Promise.resolve()
   assert.equal(received, "")

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events"
-import type { ChildProcess } from "node:child_process"
+import type { OwnedChild } from "../../runtime/owned-child.js"
 import { Writable, type Readable } from "node:stream"
 import type { ProbeRequest } from "../probes.js"
 import { CatalogError, invalid, object } from "../types.js"
@@ -12,8 +12,9 @@ export class NativeFacade extends EventEmitter implements RegisteredChild {
   readonly stdout: Readable
   readonly stderr: Readable
   readonly terminal: Promise<void>
-  constructor(private readonly child: ChildProcess, registered: Promise<void>, readonly requestCleanup: () => void) {
+  constructor(private readonly owner: OwnedChild, registered: Promise<void>, readonly requestCleanup: () => void) {
     super()
+    const child = owner.child
     this.stdout = child.stdout!; this.stderr = child.stderr!
     this.on("error", () => undefined)
     let total = 0
@@ -26,11 +27,12 @@ export class NativeFacade extends EventEmitter implements RegisteredChild {
     child.stdin?.on("error", error => this.stdin.destroy(error))
     child.on("error", error => this.emit("error", error))
     child.on("exit", (code, signal) => this.emit("exit", code, signal))
-    this.terminal = new Promise(resolve => child.once("close", (code, signal) => { this.emit("close", code, signal); resolve() }))
+    child.on("close", (code, signal) => this.emit("close", code, signal))
+    this.terminal = Promise.all([owner.terminal, owner.closed]).then(() => undefined)
   }
-  get pid() { return this.child.pid }
-  get exitCode() { return this.child.exitCode }
-  get signalCode() { return this.child.signalCode }
+  get pid() { return this.owner.child.pid }
+  get exitCode() { const terminal = this.owner.snapshot().terminal; return terminal?.kind === "exit" ? terminal.code : this.owner.child.exitCode }
+  get signalCode() { const terminal = this.owner.snapshot().terminal; return terminal?.kind === "exit" ? terminal.signal : this.owner.child.signalCode }
   get killed() { return false }
   kill(): boolean { this.requestCleanup(); return false }
 }
