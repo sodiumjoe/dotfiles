@@ -235,6 +235,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const op = intents.get(next.commandId)
     if (op) retire(op)
     if (next.state !== "pending") input.onTerminal?.()
+    if (next.op === "stop" && next.state === "completed") stopFailures.delete(next.commandId)
   }
   async function publishAgent(next: AgentRecord, expected: AgentRecord | null): Promise<void> {
     dirtyAgents.add(next.definition.agentId)

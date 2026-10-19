@@ -433,6 +433,37 @@ test("terminal stop receipt durability blocks retirement until exact retry", asy
   assert.equal(f.retired().length, 1)
 })
 
+for (const retry of ["command", "stop", "shutdown"] as const) test(`durable stop receipt repair through ${retry} permits forced shutdown`, async t => {
+  const f = await agentServiceFixture(t)
+  t.after(() => f.failReceipt(false))
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  f.failReceipt(true)
+  await f.service.stop(stop)
+  await until(async () => {
+    const receipt = await f.service.commandReceipt(stop.commandId, stop.handlerGeneration)
+    return receipt?.command.state === "completed" && receipt.durability === "unverified" ? receipt : undefined
+  })
+  assert.ok(f.receiptFailures() > 0)
+  await assert.rejects(f.service.freezeAndDrain(true), { code: "INCOMPLETE" })
+  assert.equal(f.context.mutations.accepted[0]!.record.phase, "cleanup_verified")
+  assert.deepEqual(f.retired(), [])
+  const signal = f.context.adapter.signalGroup
+  let furtherSignals = 0
+  f.context.adapter.signalGroup = async (group, kind) => { furtherSignals++; await signal(group, kind) }
+  f.failReceipt(false)
+  if (retry === "command") assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  else if (retry === "stop") {
+    const receipt = await f.service.stop(stop)
+    assert.equal(receipt.command.result?.outcome, "stopped")
+    assert.equal(receipt.durability, "verified")
+  }
+  await f.service.freezeAndDrain(true)
+  await f.service.verifyDischarged()
+  assert.equal(f.retired().length, 1)
+  assert.equal(furtherSignals, 0)
+})
+
 test("failed start receipt durability blocks retirement until exact retry", async t => {
   const f = await agentServiceFixture(t, { pause: "spawn" })
   f.failReceipt(true)
