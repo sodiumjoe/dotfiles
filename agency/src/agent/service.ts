@@ -3,6 +3,7 @@ import { createPermissionArbiter, type PermissionArbiter } from "./permission-ar
 import { startEditorRouting, type EditorRouting } from "./editor-routing.js"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
+import { lstat } from "node:fs/promises"
 import { isDeepStrictEqual } from "node:util"
 import { observeConfig, readProfiles } from "../catalog/config.js"
 import type { CatalogService } from "../catalog/service.js"
@@ -107,6 +108,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const importIntents = new Map<string, AgentCommandV3>()
   const dirty = new Set<string>(), dirtyAgents = new Set<string>(), stops = new Map<string, Promise<void>>()
+  const stopFailures = new Map<string, unknown>(), launchAdmissions = new Set<Promise<unknown>>()
+  const trackAdmission = <T>(operation: Promise<T>): Promise<T> => {
+    launchAdmissions.add(operation)
+    void operation.then(() => { launchAdmissions.delete(operation) }, () => { launchAdmissions.delete(operation) })
+    return operation
+  }
   const permissions = createPermissionArbiter({ hostId: context.paths.hostKey, handlerGeneration: generation })
   const permissionBroker = createPermissionBroker({ routing: permissions, cwd: target => operations.get(target.agentId)!.initial.definition.cwd, respond(target, requestId, result) {
     const op = operations.get(target.agentId)
@@ -292,7 +299,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   async function finishStart(op: Live): Promise<void> {
     if (op.expired) return
     if (!op.result) return
-    if (op.owner && op.result.outcome === "failed" && !op.cleanupVerified) return
+    if (op.result.outcome === "failed" && (!op.cleanupVerified || !op.terminalAgent)) return
     const command = commands.get(op.initial.launch.commandId)
     if (!command) return
     if (command.state === "pending" && command.version === 3) await publishCommand({ ...command, state: "completed", result: op.result }, command)
@@ -305,9 +312,32 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const checkCleanup = (): void => { if (op.expired || !op.ready && performance.now() >= op.deadline + cleanupBudget(op.contract)) throw new AgentError("CLEANUP_UNVERIFIED") }
     op.cleanup = (async () => {
       checkCleanup()
-      if (op.owner) await op.owner.cleanup()
+      const ownedResult = op.owner ? await op.owner.cleanup() : undefined
       await queue.run(async () => {
         checkCleanup()
+        if (ownedResult) {
+          const spec = specOf(op.initial), path = join(root, "launches", spec.launchAttemptId + ".json")
+          if (ownedResult.version !== 2 || ownedResult.owner.kind !== "agent" || ownedResult.owner.agentId !== spec.agentId
+            || ownedResult.owner.providerGeneration !== spec.providerGeneration || ownedResult.handlerGeneration !== spec.handlerGeneration
+            || ownedResult.handlerGeneration !== generation || context.state.handlerGeneration !== generation
+            || ownedResult.launchAttemptId !== spec.launchAttemptId || ownedResult.reason !== null
+            || !isDeepStrictEqual(ownedResult, op.owner!.record())) throw new AgentError("CLEANUP_UNVERIFIED")
+          const entries = context.mutations.accepted.filter(entry => entry.path === path || entry.record.launchAttemptId === spec.launchAttemptId)
+          if (context.mutations.issues?.some(issue => issue.path === path) || context.mutations.reconciliationIssues?.some(issue => issue.path === path)) throw new AgentError("CLEANUP_UNVERIFIED")
+          if (!entries.length) {
+            if (ownedResult.phase !== "launch_pending" || ownedResult.launchAttempted || ownedResult.provider !== null) throw new AgentError("CLEANUP_UNVERIFIED")
+            try { await lstat(path) }
+            catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error }
+            throw new AgentError("CLEANUP_UNVERIFIED")
+          }
+          if (entries.length !== 1 || entries[0]!.path !== path || ownedResult.phase !== "cleanup_verified"
+            || ownedResult.launchAttempted && !ownedResult.provider
+            || !isDeepStrictEqual(entries[0]!.record, ownedResult)
+            || !isDeepStrictEqual(await readLaunchRecordForReconciliation(path), ownedResult)) throw new AgentError("CLEANUP_UNVERIFIED")
+          checkCleanup()
+          return
+        }
+        if (op.owner) throw new AgentError("CLEANUP_UNVERIFIED")
         await retainUnspawnedRestore(context, op.initial)
         const spec = specOf(op.initial), entry = context.mutations.accepted.find(e => e.record.launchAttemptId === spec.launchAttemptId)
         if (!entry) {
@@ -441,7 +471,10 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       return view(commands.get(commandId)!)
     })
   }
-  async function acceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore"): Promise<CommandView> {
+  function acceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore"): Promise<CommandView> {
+    return trackAdmission(performAcceptLaunch(raw, kind))
+  }
+  async function performAcceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore"): Promise<CommandView> {
     const native = kind === "start" && !("handlerGeneration" in raw)
     const request = native ? { ...raw, commandId: id(raw.commandId), handlerGeneration: generation, environment: parseLaunchEnvironment(raw.environment) } : kind === "start" ? parseStartInput(raw) : parseRestoreRequest(raw)
     accepting++
@@ -495,7 +528,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const checkCommandDeadline = (): void => {
         if (timedOut || performance.now() >= commandDeadline) { timedOut = true; acceptingOperation?.controller.abort(); throw new AgentError("STARTUP_TIMEOUT") }
       }
-      const acceptance = queue.run(async () => {
+      const acceptance = trackAdmission(queue.run(async () => {
         checkCommandDeadline()
         await verify(); available()
         const previous = commands.get(request.commandId) ?? intents.get(request.commandId)?.accepted
@@ -529,7 +562,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         try { await publishCommand(accepted, null); checkCommandDeadline(); await publishAgent(durableRecord, previousAgent ?? null) }
         catch (error) { if (error instanceof AgentError && error.code === "STARTUP_TIMEOUT") throw error; throw new AgentError("INCOMPLETE") }
         checkCommandDeadline(); launch(op); return view(accepted)
-      })
+      }))
       try {
         return await Promise.race([acceptance, new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; acceptingOperation?.controller.abort(); reject(new AgentError("STARTUP_TIMEOUT")) }, Math.max(1, commandDeadline - performance.now())) })])
       } finally { clearTimeout(timer) }
@@ -819,7 +852,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           const previous = commands.get(command.commandId)!
           if (previous.state === "pending" && previous.version === 3) await publishCommand({ ...previous, state: "completed", result: { outcome: "stopped", target: command.target, failure: null, session: matching ? record.session : op?.result?.session ?? null } }, previous)
         })
-      } catch { }
+        stopFailures.delete(command.commandId)
+      } catch (error) { stopFailures.set(command.commandId, error) }
       finally { stops.delete(command.commandId) }
     })()
     stops.set(command.commandId, operation)
@@ -835,7 +869,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   const pageIssues = (): AgentStateIssue[] => [...assessment.issues, ...assessment.unavailable.values(), ...runtimeIssues.values(), ...cleanupDiagnostics()].filter((issue, index, all) => all.findIndex(other => isDeepStrictEqual(issue, other)) === index)
   const pageAgents = (activeOnly: boolean): AgentView[] => [...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json") && (!activeOnly || active(record))).map(agentView)
   const ordinary = (): void => {
-    if (!initialized || accepting || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "restoring", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 2 && e.record.owner.kind === "agent" && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
+    if (!initialized || accepting || launchAdmissions.size || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "restoring", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 2 && e.record.owner.kind === "agent" && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
   }
   return {
     start, restore, stop, prompt, command, setSession, importSession,
@@ -1029,23 +1063,57 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       if (!stopAgents) ordinary()
       frozen = true
       if (!stopAgents) return
-      await verify()
-      const prompts = [...operations.values()].flatMap(op => op.prompt ? [op.prompt] : [])
-      for (const active of prompts) active.controller.abort()
-      await Promise.all(prompts.map(active => active.promise.catch(() => undefined)))
-      const failures: unknown[] = []
+      const failures: unknown[] = [], admitted = new Set<Live>([...operations.values(), ...intents.values()])
+      const prompts = new Set<LivePrompt>()
+      const capture = (): void => {
+        for (const op of [...operations.values(), ...intents.values()]) {
+          admitted.add(op)
+          if (!op.ready) op.controller.abort()
+          if (op.prompt) { prompts.add(op.prompt); op.prompt.controller.abort() }
+        }
+      }
+      const settled = new Set<Promise<unknown>>()
+      const settle = async (pending: Promise<unknown>[]): Promise<void> => {
+        for (const operation of pending) settled.add(operation)
+        for (const outcome of await Promise.allSettled(pending)) if (outcome.status === "rejected") failures.push(outcome.reason)
+      }
+      capture()
+      while (launchAdmissions.size) await settle([...launchAdmissions])
+      capture()
+      try { await queue.run(verify) } catch (error) { failures.push(error) }
+      const scheduled = new Set<Live>()
       for (const record of records.values()) {
         const view = agentView(record)
         if (!["starting", "ready", "restoring", "stopping"].includes(record.phase) && ["not_launched", "verified"].includes(view.cleanup)) continue
-        const existing = [...commands.values()].find(c => c.op === "stop" && c.target?.agentId === record.definition.agentId && c.state === "pending")
-        try { await stop({ ...agentTuple(record)!, commandId: existing?.commandId ?? randomUUID() }) } catch (error) { failures.push(error) }
+        const existing = [...commands.values()].find(c => c.op === "stop" && isDeepStrictEqual(c.target, agentTuple(record)) && c.state === "pending")
+        try {
+          await stop({ ...agentTuple(record)!, commandId: existing?.commandId ?? randomUUID() })
+          const op = operations.get(record.definition.agentId)
+          if (op && isDeepStrictEqual(agentTuple(op.initial), agentTuple(record))) scheduled.add(op)
+        } catch (error) { failures.push(error) }
       }
-      await Promise.all([...stops.values()])
-      await queue.run(async () => {
-        for (const op of new Set(intents.values())) await finishStart(op)
-        for (const command of commands.values()) if (dirty.has(command.commandId)) await publishCommand(command, command)
+      capture()
+      const fallback = [...admitted].filter(op => !op.cleanupVerified && !scheduled.has(op)).map(async op => {
+        op.controller.abort()
+        await op.work
+        await cleanup(op)
       })
-      if (failures.length) throw new AgentError("INCOMPLETE")
+      await settle([...fallback, ...[...prompts].map(active => active.promise), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()])
+      for (;;) {
+        capture()
+        const pending = [...launchAdmissions, ...[...prompts].map(active => active.promise), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()].filter(operation => !settled.has(operation))
+        if (!pending.length) break
+        await settle(pending)
+      }
+      try {
+        await queue.run(async () => {
+          for (const op of admitted) try { await finishStart(op) } catch (error) { failures.push(error) }
+          for (const command of commands.values()) if (dirty.has(command.commandId)) try { await publishCommand(command, command) } catch (error) { failures.push(error) }
+        })
+      } catch (error) { failures.push(error) }
+      if (failures.length || stopFailures.size || stops.size || launchAdmissions.size || dirty.size || dirtyAgents.size
+        || [...commands.values()].some(command => command.state === "pending")
+        || [...admitted].some(op => !op.cleanupVerified || op.terminalAgent && !op.terminalAgentDurable)) throw new AgentError("INCOMPLETE")
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { await verify(); ordinary(); if (dirty.size || dirtyAgents.size || assessment.unavailable.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },

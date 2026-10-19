@@ -454,7 +454,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUp
   return { connection, sent, permissionReplies, readable, writable, send, replaceOptions(values: import("../src/agent/session-config.js").JsonObject[]) { options.splice(0, options.length, ...structuredClone(values)) }, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { hostId?: string; retirement?: import("../src/retention/store.js").RetirementView; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: RuntimeLaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { cleanupOverride?: (agentId: string, cleanup: () => Promise<LaunchRecord>) => Promise<LaunchRecord>; hostId?: string; retirement?: import("../src/retention/store.js").RetirementView; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: RuntimeLaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
   if (options.productionCatalog) options = { ...options, productionContract: true }
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
@@ -598,7 +598,7 @@ export async function agentServiceFixture(t: TestContext, options: { hostId?: st
     } } }
     const owner = createAgentProcess(input, processDependencies)
     owners.push(owner)
-    return { ...owner, async cleanup() { cleanupCalls++; if (options.pauseCleanup) { cleanupEntered.resolve(); await cleanupReleased.promise }; return owner.cleanup() }, async initialize(signal) {
+    return { ...owner, async cleanup() { cleanupCalls++; if (options.pauseCleanup) { cleanupEntered.resolve(); await cleanupReleased.promise }; return options.cleanupOverride ? options.cleanupOverride(input.spec.agentId, () => owner.cleanup()) : owner.cleanup() }, async initialize(signal) {
       if (input.session?.kind === "load" && restorePause === "spawn") { restoreEntered.resolve(); await restoreReleased.promise }
       await pause("spawn", signal)
       const session = await owner.initialize(signal)

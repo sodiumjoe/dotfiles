@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { agentTuple, recoverAgents } from "../src/agent/recovery.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { AGENT_PROTOCOL, parseAgentReply } from "../src/agent/protocol.js"
-import { projectRestoreInput } from "../src/agent/types.js"
+import { AgentError, projectRestoreInput } from "../src/agent/types.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
 import { agentServiceFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -923,4 +923,111 @@ test("closing with live permissions withdraws editors and closes the service", a
   assert.doesNotThrow(() => f.service.close())
   assert.ok(frames.some(frame => frame.method === "agency/permission_withdrawn"))
   await assert.rejects(f.service.permissions.snapshot(), { code: "UNAVAILABLE" })
+})
+
+function settlementGate() {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+test("live cleanup is consumed without duplicate platform observations", async t => {
+  let context: Awaited<ReturnType<typeof agentServiceFixture>>["context"]
+  let saved: typeof context.adapter | undefined
+  const f = await agentServiceFixture(t, { cleanupOverride: async (_agentId, cleanup) => {
+    const record = await cleanup()
+    saved ??= { ...context.adapter }
+    const forbidden = async (): Promise<never> => { throw new Error("duplicate service observation") }
+    context.adapter.readProcess = forbidden; context.adapter.readGroup = forbidden; context.adapter.signalGroup = forbidden
+    return record
+  } })
+  context = f.context
+  t.after(() => { if (saved) Object.assign(context.adapter, saved) })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  if (saved) Object.assign(context.adapter, saved)
+})
+
+test("shutdown settles another held owner before reporting a cleanup failure", async t => {
+  const secondEntered = settlementGate(), secondReleased = settlementGate(), firstAttempted = settlementGate()
+  let firstId = "", secondId = "", fail = true
+  const f = await agentServiceFixture(t, { cleanupOverride: async (agentId, cleanup) => {
+    if (agentId === firstId && fail) { firstAttempted.resolve(); throw new Error("CLEANUP_UNVERIFIED") }
+    if (agentId === secondId && fail) { secondEntered.resolve(); await secondReleased.promise }
+    return cleanup()
+  } })
+  t.after(() => { fail = false; secondReleased.resolve() })
+  firstId = (await completed(f.service, (await f.service.start(f.input)).command)).command.target!.agentId
+  secondId = (await completed(f.service, (await f.service.start({ ...f.input, commandId: randomUUID() })).command)).command.target!.agentId
+  let settled = false
+  const pending = f.service.freezeAndDrain(true)
+  void pending.then(() => { settled = true }, () => { settled = true })
+  await firstAttempted.promise; await secondEntered.promise
+  assert.equal(settled, false)
+  secondReleased.resolve()
+  await assert.rejects(pending, { code: "INCOMPLETE" })
+  assert.equal((await f.store.readAgent(secondId))!.phase, "stopped")
+  assert.equal(f.context.mutations.accepted.find(entry => entry.record.version === 2 && entry.record.owner.kind === "agent" && entry.record.owner.agentId === firstId)!.record.phase, "active")
+  fail = false
+})
+
+test("forged owner result cannot authorize stopped publication", async t => {
+  let forge = true
+  const f = await agentServiceFixture(t, { cleanupOverride: async (_agentId, cleanup) => {
+    const record = await cleanup()
+    return forge ? { ...record, handlerGeneration: randomUUID() } : record
+  } })
+  t.after(() => { forge = false })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  await assert.rejects(f.service.freezeAndDrain(true), { code: "INCOMPLETE" })
+  assert.notEqual((await f.store.readAgent(ready.command.target!.agentId))!.phase, "stopped")
+  forge = false
+})
+
+test("shutdown waits for timed-out physical admission and prevents its spawn", async t => {
+  const f = await agentServiceFixture(t, { pauseCommand: true })
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const accepted = f.service.start(f.input)
+  const rejected = assert.rejects(accepted, { code: "STARTUP_TIMEOUT" })
+  await f.commandEntered
+  t.mock.timers.tick(5001)
+  await rejected
+  assert.throws(() => f.service.assertOrdinaryShutdownSafe(), { code: "ACTIVE_AGENTS" })
+  let settled = false
+  const pending = f.service.freezeAndDrain(true)
+  void pending.then(() => { settled = true }, () => { settled = true })
+  for (let n = 0; n < 16; n++) await Promise.resolve()
+  assert.equal(settled, false)
+  f.release()
+  await assert.rejects(pending, { code: "INCOMPLETE" })
+  assert.equal(f.spawns(), 0)
+})
+
+test("pre-drain verification failure still stops admitted live owners", async t => {
+  const f = await agentServiceFixture(t)
+  await completed(f.service, (await f.service.start(f.input)).command)
+  const inventory = f.store.inventory
+  f.store.inventory = async () => { throw new Error("pre-drain verification") }
+  await assert.rejects(f.service.freezeAndDrain(true), { code: "INCOMPLETE" })
+  assert.ok(f.cleanupCalls() > 0)
+  f.store.inventory = inventory
+})
+
+test("unspawned restore without an owner retains its stopped native session", async t => {
+  let refuse = false
+  const f = await agentServiceFixture(t, { observe: async () => { if (refuse) throw new AgentError("CONFIG_CHANGED") } })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const stop = { ...ready.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  refuse = true
+  const request = { commandId: randomUUID(), handlerGeneration: stop.handlerGeneration, agentId: stop.agentId, environment: {} }
+  await f.service.restore(request)
+  const result = await completed(f.service, request)
+  assert.equal(result.command.result?.outcome, "failed")
+  const record = await f.store.readAgent(stop.agentId)
+  assert.equal(record!.phase, "recoverable")
+  assert.deepEqual(record!.session, ready.command.result!.session)
+  assert.equal(f.spawns(), 1)
 })
