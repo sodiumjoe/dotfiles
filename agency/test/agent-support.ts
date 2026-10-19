@@ -537,7 +537,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     try { await base.writeCommand(value, expected) } finally { writingReceipt = false }
   } }
   const unsupported = async (): Promise<never> => { throw new Error("unexpected catalog operation") }
-  const catalog: CatalogService = { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, initialize: async () => undefined, startScheduling() {}, list: unsupported, refresh: async () => { refreshes++; return unsupported() }, freezeAndDrain: async () => undefined, resume() {}, verifyDischarged: async () => undefined, close() {}, async launchEvidence(id) {
+  const catalog: CatalogService = { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, initialize: async () => undefined, list: unsupported, refresh: async () => { refreshes++; return unsupported() }, freezeAndDrain: async () => undefined, resume() {}, verifyDischarged: async () => undefined, close() {}, async launchEvidence(id) {
     catalogReads++
     return f.context.mutations.queue.run(async () => {
       const provider = snapshot.providers.find(p => p.providerId === id)

@@ -17,7 +17,6 @@ import { createProbeTransition, type ProbeTransition } from "./probe-transitions
 import { ProbeRecoveryError, recoverProbeEntry } from "./probe-recovery.js"
 import { parseNativeSettlement, parseWorkerEnvelope, type NativeSettlement } from "./worker-protocol.js"
 import { type ManagedLaunchRecord, type LaunchRecord, type PlatformAdapter } from "../platform/types.js"
-import { observeConfig } from "./config.js"
 import { beginProbeCapture, completeProbeCapture, initialProbeDiagnostic, openProbeStderr, parseProbeFailureDetail, parseProbeTerminal, probeFailureDetail, writeProbeDiagnostic, writeProbeStderr, type ProbeStage } from "./diagnostics.js"
 import type { CatalogInventory, CatalogStore } from "./store.js"
 import { CatalogError, failure, invalid, keys, object, parseModels, parseProbeMeta, text, type CatalogFailure, type ConfigEvidence, type Model, type ProbeMeta, type ProviderId, type ProviderProfile, type RetainedProbeMeta } from "./types.js"
@@ -267,7 +266,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
       const admission = queue.run(async () => {
         if (!options.canStart() || signal.aborted || finished || accepted.some(e => e.record.launchAttemptId === m.attemptId)) throw new CatalogError("INCOMPLETE")
         record.launchBootId = await bounded(adapter.bootId(), preparationDeadline)
-        if (!isDeepStrictEqual(await observeConfig(request.profile), request.evidence) || m.fingerprint !== request.evidence.fingerprint || m.providerId !== request.profile.id) throw new CatalogError("CONFIG_CHANGED")
+        if (m.fingerprint !== request.evidence.fingerprint || m.providerId !== request.profile.id) throw new CatalogError("CONFIG_CHANGED")
         await store.writeProbeMeta(m)
         metadata = [...metadata, m].sort((a, b) => a.attemptId < b.attemptId ? -1 : 1)
         const catalog = join(paths.persistentRoot, "catalog")
@@ -356,8 +355,6 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
       error = failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))
     } finally { clearTimeout(expiration); recomputeIssues() }
     record = attempt.transition?.current() ?? record
-    try { if (!isDeepStrictEqual(await observeConfig(request.profile), request.evidence)) throw new CatalogError("CONFIG_CHANGED") }
-    catch (cause) { diagnostic.firstFailure ??= probeFailureDetail("configuration", cause); error ??= failure(cause) }
     if (signal.aborted) error ??= failure(new CatalogError("INCOMPLETE"))
     const captureFailure = (cause: unknown): void => {
       diagnostic.firstFailure ??= probeFailureDetail("diagnostic-write", cause)

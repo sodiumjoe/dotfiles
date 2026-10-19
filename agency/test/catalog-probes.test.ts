@@ -131,15 +131,15 @@ for (const fault of ["directory-sync", "stderr-close"]) test(`automatic ${fault}
   const catalog = createCatalogService({ paths, generation: f.generation, queue: f.queue, store: f.store, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile], probes: { ...f.runtime, async run(request, signal) { f.bindRequest(request); return f.runtime.run(request, signal) } } })
   try {
     await catalog.initialize()
-    catalog.startScheduling()
+    await catalog.refresh(randomUUID(), f.generation)
     await f.workerObserved.promise; f.releaseWorkerIdentity()
     await f.nativeRegistered.promise; f.releaseResult()
     await until(async () => (await catalog.list()).discovery.state === "idle" ? true : undefined)
   } finally { catalog.close(); fs.open = original; syncBuiltinESMExports() }
   assert.equal(injected, true)
   const initial = await f.store.inventory()
-  assert.equal(initial.commands.length, 0); assert.equal(initial.automatic.length, 1)
-  assert.equal(initial.automatic[0]!.state, "completed")
+  assert.equal(initial.commands.length, 1); assert.equal(initial.automatic.length, 0)
+  assert.equal(initial.commands[0]!.state, "completed")
   assert.equal(initial.metadata[0]!.version, 3)
   assert.equal(initial.snapshots[0]!.providers.find(p => p.providerId === f.profile.id)!.error?.code, "PROBE_FAILED")
   const generation = randomUUID(), queue = new MutationQueue(), retention = createRetentionStore(f.root, paths.hostKey, generation), store = createCatalogStore(f.root, undefined, retention.view)
@@ -156,7 +156,7 @@ for (const fault of ["directory-sync", "stderr-close"]) test(`automatic ${fault}
     await coordinator.initialize()
     assert.deepEqual(coordinator.diagnostics(), [])
     const retained = await store.inventory()
-    for (const kind of ["automatic", "metadata", "launches", "snapshots"] as const) assert.equal(retained[kind].length, 1)
+    for (const kind of ["commands", "metadata", "launches", "snapshots"] as const) assert.equal(retained[kind].length, 1)
     assert.equal((await readProbeDiagnostic(retained.metadata[0]!))!.stderrComplete, false)
     assert.deepEqual([...f.processes.values()], [])
   } finally { agents.close(); restarted.close() }
@@ -305,7 +305,7 @@ test("cancellation discards output after verified cleanup", async t => {
   assert.equal(outcome.record.phase, "cleanup_verified")
 })
 
-test("changed configuration discards a candidate after independently verified cleanup", async t => {
+test("changed configuration preserves captured evidence and independently verified cleanup", async t => {
   const f = await syntheticProbeFixture(t)
   await f.runtime.recover()
   const operation = f.runtime.run(f.request, new AbortController().signal)
@@ -315,22 +315,21 @@ test("changed configuration discards a candidate after independently verified cl
   await writeFile(f.config, "replaced")
   f.releaseResult()
   const outcome = await operation
-  assert.equal(outcome.result, null)
-  assert.equal(outcome.error!.code, "CONFIG_CHANGED")
+  assert.notEqual(outcome.result, null)
+  assert.equal(outcome.error, null)
   assert.equal(outcome.record.phase, "cleanup_verified")
   await f.runtime.verifyDischarged()
 })
 
-for (const existing of [false, true]) for (const failure of ["configuration", "observation", "metadata"] as const) test(`preflight ${failure} failure leaves no launch with ${existing ? "existing" : "fresh"} launch directory`, async t => {
+for (const existing of [false, true]) for (const failure of ["configuration", "metadata"] as const) test(`preflight ${failure} failure leaves no launch with ${existing ? "existing" : "fresh"} launch directory`, async t => {
   const f = await syntheticProbeFixture(t)
   if (existing) await mkdir(join(f.root, "catalog/probe-launches"), { mode: 0o700 })
   await f.runtime.recover()
   const writeMeta = f.store.writeProbeMeta
-  if (failure === "configuration") await writeFile(f.config, "replaced before admission")
-  else if (failure === "observation") await fs.unlink(f.executable)
+  if (failure === "configuration") f.request.meta.fingerprint = "f".repeat(64)
   else f.store.writeProbeMeta = async () => { throw new Error("metadata unavailable") }
   const outcome = await f.runtime.run(f.request, new AbortController().signal)
-  assert.equal(outcome.error?.code, failure === "configuration" ? "CONFIG_CHANGED" : failure === "observation" ? "INVALID_CATALOG" : "PROBE_FAILED")
+  assert.equal(outcome.error?.code, failure === "configuration" ? "CONFIG_CHANGED" : "PROBE_FAILED")
   assert.equal(f.spawnInvoked(), false)
   assert.deepEqual(f.signals, [])
   const inventory = await f.store.inventory()
@@ -340,7 +339,6 @@ for (const existing of [false, true]) for (const failure of ["configuration", "o
   await f.runtime.verifyDischarged()
   assert.deepEqual([...f.runtime.issues!()], [])
   f.store.writeProbeMeta = writeMeta
-  if (failure === "observation") await writeFile(f.executable, "fixture executable", { mode: 0o700 })
   const evidence = await observeConfig(f.profile), commandId = randomUUID(), attemptId = randomUUID()
   const next = { ...f.request, evidence, meta: { ...f.request.meta, commandId, attemptId, fingerprint: evidence.fingerprint, workPath: join(f.root, "catalog/work", attemptId) } }
   await f.store.writeCommand({ version: 1, commandId, hostId: next.meta.hostId, handlerGeneration: f.generation, batchId: randomUUID(), fingerprints: [{ providerId: f.profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: f.profile.id, attemptId }], state: "pending", snapshotId: null }, null)

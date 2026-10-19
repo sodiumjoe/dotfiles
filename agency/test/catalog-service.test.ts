@@ -14,7 +14,7 @@ import { privateRoot, until } from "./control-support.js"
 const result = (providerId: ProviderId, modelId = "a"): ProbeResult => ({ models: [{ providerId, modelId, resolvedModelId: null, displayName: "Model", reasoning: { state: "unknown" }, modes: { state: "unknown" }, availability: "advertised" }], providerVersion: null, providerVersionSource: "unknown" })
 async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: string) {
   const root = retainedRoot ?? await privateRoot(t)
-  let now = 1000000, tick: (() => void) | undefined, ready = true, shutdown = false
+  let now = 1000000, ready = true, shutdown = false
   const blocked = new Set<ProviderId>()
   const profiles: ProviderProfile[] = ["claude-agent-acp", "codex-acp"].map(id => ({ id: id as ProviderId, enabled: true, executable: "/fixture/native", adapterPackageJson: "/fixture/package.json", sdkPackageJson: id === "codex-acp" ? null : "/fixture/sdk.json", configurationFiles: [] }))
   const evidence = new Map(profiles.map(p => [p.id, { providerId: p.id, scope: "declared-config-v1" as const, fingerprint: (p.id === "codex-acp" ? "b" : "a").repeat(64), adapterVersion: "1", sdkVersion: p.id === "codex-acp" ? null : "0.3.232" }]))
@@ -44,14 +44,14 @@ async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: stri
     const m = entry.request.meta
     entry.gate.resolve({ request: entry.request, record: { version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "fixture", launchAttempted: false, provider: null, phase: blocked.has(m.providerId) ? "quarantined" : "cleanup_verified", reason: blocked.has(m.providerId) ? "fixture" : null }, result: value, error: code ? failure(new CatalogError(code)) : null })
   }
-  const clock: CatalogClock = { now: () => now, every: (ms, callback) => { assert.equal(ms, 30000); tick = callback; return () => { tick = undefined } } }
+  const clock: CatalogClock = { now: () => now }
   const options = { paths, generation, queue, store, probes, isReady: () => ready, shutdownPending: () => shutdown, readProfiles: async () => structuredClone(profiles), observeConfig: async (p: ProviderProfile) => structuredClone(evidence.get(p.id)!), clock }
   const service = createCatalogService(options)
   t.after(async () => { await service.freezeAndDrain(); service.close() })
   const waitProbe = async (providerId: ProviderId) => until(async () => pending.find(e => e.request.meta.providerId === providerId))
   const completeProbe = async (providerId: ProviderId, value: ProbeResult | null = result(providerId), code?: "PROBE_FAILED" | "PROBE_CLEANUP_UNVERIFIED") => complete(await waitProbe(providerId), value, code)
   const finish = async (commandId: string) => until(async () => { const response = await service.refresh(commandId, generation); return response.command.state === "pending" ? undefined : response })
-  return { root, service, store, generation, profiles, evidence, options, probes, queue, pending, started, completeProbe, waitProbe, finish, advance(ms: number) { now += ms; tick?.() }, setTime(value: number) { now = value }, setReady(value: boolean) { ready = value }, setShutdown(value: boolean) { shutdown = value } }
+  return { root, service, store, generation, profiles, evidence, options, probes, queue, pending, started, completeProbe, waitProbe, finish, advance(ms: number) { now += ms }, setTime(value: number) { now = value }, setReady(value: boolean) { ready = value }, setShutdown(value: boolean) { shutdown = value } }
 }
 
 test("explicit refresh remains available above 4096 retained receipts", async t => {
@@ -124,7 +124,7 @@ test("freshness respects expiry, backwards time, and generation provenance", asy
   assert.equal((await next.list()).providers[0]!.freshness, "stale")
 })
 
-test("launch evidence never refreshes and requires fresh accepted configuration provenance", async t => {
+test("cached launch evidence remains advisory across expiry, configuration edits and generations", async t => {
   const f = await fixture(t), command = randomUUID()
   await f.service.initialize()
   await assert.rejects(f.service.launchEvidence("codex-acp"))
@@ -138,12 +138,17 @@ test("launch evidence never refreshes and requires fresh accepted configuration 
   evidence.provider.models.length = 0
   assert.equal((await f.service.launchEvidence("codex-acp")).provider.models.length, 1)
   f.advance(600000)
-  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  assert.equal((await f.service.launchEvidence("codex-acp")).snapshotId, completed.snapshot!.snapshotId)
   f.setTime(999999)
-  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  assert.equal((await f.service.launchEvidence("codex-acp")).snapshotId, completed.snapshot!.snapshotId)
   f.setTime(1000000)
   f.evidence.get("codex-acp")!.fingerprint = "e".repeat(64)
-  await assert.rejects(f.service.launchEvidence("codex-acp"))
+  assert.equal((await f.service.launchEvidence("codex-acp")).configuration.fingerprint, "b".repeat(64))
+  await f.service.freezeAndDrain(); f.service.close()
+  const next = createCatalogService({ ...f.options, generation: randomUUID() })
+  t.after(() => next.close())
+  await next.initialize()
+  assert.equal((await next.launchEvidence("codex-acp")).provider.verifiedHandlerGeneration, f.generation)
   assert.equal(f.started.length, 2)
 })
 
@@ -231,7 +236,7 @@ test("freeze permits queued terminal writes and interrupts accepted commands", a
   assert.equal(f.started.length, 2)
 })
 
-test("pending bindings are bounded and configuration/generation conflicts do not start work", async t => {
+test("pending bindings are bounded and retries retain captured configuration", async t => {
   const f = await fixture(t)
   await f.service.initialize()
   const ids = Array.from({ length: 32 }, () => randomUUID())
@@ -239,7 +244,7 @@ test("pending bindings are bounded and configuration/generation conflicts do not
   await assert.rejects(f.service.refresh(randomUUID(), f.generation), { code: "INCOMPLETE" })
   await assert.rejects(f.service.refresh(ids[0]!, randomUUID()), { code: "STALE_HANDLER" })
   f.evidence.get("claude-agent-acp")!.fingerprint = "d".repeat(64)
-  await assert.rejects(f.service.refresh(ids[0]!, f.generation), { code: "COMMAND_CONFLICT" })
+  assert.equal((await f.service.refresh(ids[0]!, f.generation)).command.state, "pending")
   assert.equal(f.started.length, 1)
 })
 
@@ -252,14 +257,15 @@ test("restart interrupts pending commands without replay and rejects old IDs", a
   await assert.rejects(f.service.refresh(command, f.generation), { code: "COMMAND_CONFLICT" })
 })
 
-test("changed declared config during a probe cannot become a fresh result", async t => {
+test("a batch retains its captured configuration when declared config changes", async t => {
   const f = await fixture(t), command = randomUUID()
   await f.service.initialize(); await f.service.refresh(command, f.generation)
   await f.waitProbe("claude-agent-acp")
   f.evidence.get("claude-agent-acp")!.fingerprint = "d".repeat(64)
   await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
   await until(async () => (await f.store.readCommand(command))?.state === "completed" ? true : undefined)
-  assert.notEqual((await f.service.list()).providers[0]!.freshness, "fresh")
+  assert.equal((await f.service.list()).providers[0]!.fingerprint, "a".repeat(64))
+  assert.equal((await f.service.list()).providers[0]!.freshness, "fresh")
 })
 
 test("catalog display and explicit refresh use initialized inventory", async t => {
@@ -273,72 +279,14 @@ test("catalog display and explicit refresh use initialized inventory", async t =
   assert.equal((await f.finish(commandId)).command.state, "completed")
 })
 
-test("automatic discovery does not create an externally retryable receipt", async t => {
-  const f = await fixture(t)
-  await f.service.initialize(); f.service.startScheduling()
-  await f.waitProbe("claude-agent-acp")
-  assert.equal((await f.service.list()).refresh, null)
-  assert.equal((await f.store.inventory()).commands.length, 0)
-  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
-  await until(async () => (await f.service.list()).discovery.state === "idle" ? true : undefined)
-  assert.equal((await f.service.list()).refresh, null)
-  assert.equal((await f.store.inventory()).commands.length, 0)
-})
-
-test("guessed private identities conflict and pending private restart does not replay", async t => {
-  const f = await fixture(t)
-  await f.service.initialize(); f.service.startScheduling(); await f.waitProbe("claude-agent-acp")
-  const privateId = (await f.store.inventory()).automatic[0]!.commandId
+test("historical private identities conflict and pending restart does not replay", async t => {
+  const f = await fixture(t), privateId = randomUUID()
+  await f.store.writeAutomatic({ version: 1, commandId: privateId, hostId: f.options.paths.hostKey, handlerGeneration: f.generation, batchId: randomUUID(), fingerprints: [], attempts: [], state: "pending", snapshotId: null }, null)
+  await f.service.initialize()
   await assert.rejects(f.service.refresh(privateId, f.generation), { code: "COMMAND_CONFLICT" })
-  await f.service.freezeAndDrain(); f.service.close()
-  const started = f.started.length, next = createCatalogService({ ...f.options, generation: randomUUID() })
-  t.after(() => next.close())
-  await next.initialize()
-  assert.equal(f.started.length, started)
-  assert.equal((await f.store.readAutomatic(privateId))!.state, "interrupted")
-  assert.equal((await next.list()).refresh, null)
-})
-
-test("automatic publication retries retain pins and do not repeat provider work", async t => {
-  const f = await fixture(t), failed = gate(), write = f.store.writeAutomatic
-  let fail = true
-  f.store.writeAutomatic = async (record, expected) => { await write(record, expected); if (record.state === "completed" && fail) { failed.resolve(); throw new Error("automatic completion sync") } }
-  await f.service.initialize(); f.service.startScheduling(); await f.waitProbe("claude-agent-acp")
-  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await failed.promise
-  assert.ok(f.service.retentionPins().paths.some(path => path.startsWith("catalog/automatic/")))
-  fail = false; f.advance(30000)
-  await until(async () => (await f.service.list()).discovery.state === "idle" ? true : undefined)
-  assert.equal(f.started.length, 2)
-  assert.equal((await f.store.inventory()).automatic[0]!.state, "completed")
-})
-
-test("an explicit refresh joining an automatic batch retains its own snapshot", async t => {
-  const f = await fixture(t)
-  await f.service.initialize(); f.service.startScheduling()
-  await f.waitProbe("claude-agent-acp")
-  const command = randomUUID()
-  await f.service.refresh(command, f.generation)
-  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
-  const first = await f.finish(command), starts = f.started.length
-  assert.deepEqual(await f.service.refresh(command, f.generation), first)
-  assert.equal(f.started.length, starts)
-  assert.equal((await f.store.inventory()).commands.length, 1)
-})
-
-test("automatic refresh starts only after ready, polls configuration and backs off failures", async t => {
-  const f = await fixture(t)
-  f.setReady(false)
-  await f.service.initialize(); f.service.startScheduling(); f.advance(30000)
   assert.equal(f.started.length, 0)
-  f.setReady(true); f.advance(30000)
-  await f.completeProbe("claude-agent-acp", null, "PROBE_FAILED"); await f.completeProbe("codex-acp", null, "PROBE_FAILED")
-  await until(async () => (await f.service.list()).discovery.state === "idle" ? true : undefined)
-  f.advance(30000)
-  await f.service.list()
-  assert.equal(f.started.length, 2)
-  f.advance(30000)
-  await f.waitProbe("claude-agent-acp")
-  assert.equal(f.started.length, 3)
+  assert.equal((await f.store.readAutomatic(privateId))!.state, "interrupted")
+  assert.equal((await f.service.list()).refresh, null)
 })
 
 test("publication retries finish durability without repeating provider work", async t => {
@@ -356,7 +304,7 @@ test("publication retries finish durability without repeating provider work", as
   assert.equal(f.started.length, 2)
 })
 
-test("a configuration change during uncertain publication interrupts without replay", async t => {
+test("uncertain publication retains captured configuration without replay", async t => {
   const f = await fixture(t), command = randomUUID(), failed = gate()
   const write = f.store.writeSnapshot
   let fail = true
@@ -366,8 +314,8 @@ test("a configuration change during uncertain publication interrupts without rep
   f.evidence.get("claude-agent-acp")!.fingerprint = "d".repeat(64)
   fail = false
   const response = await f.service.refresh(command, f.generation)
-  assert.equal(response.command.state, "interrupted")
-  assert.equal(response.snapshot, null)
+  assert.equal(response.command.state, "completed")
+  assert.equal(response.snapshot!.providers[0]!.fingerprint, "a".repeat(64))
   assert.equal(f.started.length, 2)
 })
 
@@ -405,7 +353,7 @@ test("removed and disabled profiles remain unconfigured without new probe work",
   const f = await fixture(t)
   f.profiles[0]!.enabled = false
   f.profiles.splice(1)
-  await f.service.initialize(); f.service.startScheduling()
+  await f.service.initialize()
   assert.deepEqual((await f.service.list()).providers.map(p => p.state), ["unconfigured", "unconfigured"])
   assert.equal(f.started.length, 0)
 })
@@ -488,4 +436,23 @@ test("visible terminal cleanup with failed durability cannot publish fresh catal
   assert.equal(provider.state, "blocked")
   await service.freezeAndDrain()
   await assert.rejects(service.verifyDischarged(), { code: "PROBE_CLEANUP_UNVERIFIED" })
+})
+
+test("discovery is explicit and display does not observe configuration", async t => {
+  const f = await fixture(t)
+  let observations = 0
+  const observe = f.options.observeConfig
+  f.options.observeConfig = async profile => { observations++; return observe(profile) }
+  await f.service.initialize()
+  await f.service.list(); f.service.resume(); f.advance(3600000); await f.service.list()
+  assert.equal(observations, 0)
+  assert.equal(f.started.length, 0)
+  assert.equal("startScheduling" in f.service, false)
+  const commandId = randomUUID()
+  await f.service.refresh(commandId, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  assert.equal((await f.finish(commandId)).command.state, "completed")
+  assert.equal(observations, 2)
+  await f.service.list()
+  assert.equal(observations, 2)
 })

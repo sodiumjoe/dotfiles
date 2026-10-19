@@ -293,7 +293,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       void Promise.resolve().then(() => initializeTasks(taskInput)).then(async service => { if (closing) await service.close(); else ownerTasks = service }).catch(() => {
         if (!closing) taskIssues.push({ path: join(root, "tasks"), launchAttemptId: null, message: "Task service is unavailable" })
       })
-      catalog.startScheduling()
     }
     await closed
   } catch (error) {

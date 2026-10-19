@@ -7,6 +7,7 @@ import { createRetentionCoordinator, authorizeRetirement, authorizedRetirementVi
 import { createRetentionStore, type RetentionFileSystem } from "../src/retention/store.js"
 import { FAILED_START_TTL_MS } from "../src/retention/policy.js"
 import { createCatalogStore } from "../src/catalog/store.js"
+import type { ProbeRuntime } from "../src/catalog/probes.js"
 import { createCatalogService } from "../src/catalog/service.js"
 import { initialProbeDiagnostic, probeFailureDetail, PROBE_DIAGNOSTIC_TTL_MS, readProbeDiagnostic, writeProbeDiagnostic } from "../src/catalog/diagnostics.js"
 import { CatalogError, failure, type ProviderProfile } from "../src/catalog/types.js"
@@ -24,14 +25,14 @@ import { sampleAgent, sampleCommand, sampleSession } from "./agent-support.js"
 async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: RetentionFileSystem) {
   const root = await privateRoot(t), hostId = "a".repeat(64), generation = randomUUID(), queue = new MutationQueue()
   await mkdir(join(root, "launches"), { mode: 0o700 })
-  let now = 1000000, tick: (() => void) | undefined, fail = false, invocations = 0
+  let now = 1000000, fail = false, invocations = 0
   const adapter: PlatformAdapter = { platform: "linux", bootId: async () => "boot", readProcess: async () => null, readGroup: async () => [], signalGroup: async () => { throw new Error("retention must not signal") } }
   const retention = createRetentionStore(root, hostId, generation, filesystem), catalogStore = createCatalogStore(root, undefined, retention.view), agentStore = createAgentStore(root, undefined, retention.view)
   const mutations: HandlerMutations = { queue, accepted: [], root, retirement: retention.view }
   const paths = { persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock"), hostKey: hostId }
   const profile: ProviderProfile = { id: "codex-acp", enabled: true, executable: "/fixture/native", adapterPackageJson: "/fixture/adapter.json", sdkPackageJson: null, configurationFiles: [] }
   let coordinator: ReturnType<typeof createRetentionCoordinator>
-  const catalog = createCatalogService({ paths, generation, queue, store: catalogStore, retirement: retention.view, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [profile], observeConfig: async () => ({ providerId: "codex-acp", scope: "declared-config-v1", fingerprint: "b".repeat(64), adapterVersion: "1", sdkVersion: null }), clock: { now: () => now, every: (_ms, callback) => { tick = callback; return () => { tick = undefined } } }, onTerminal: () => coordinator?.request(), probes: {
+  const probes: ProbeRuntime = {
     retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined,
     async run(request) {
       invocations++
@@ -46,7 +47,8 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
       })
       return { request, record: record(request.meta.attemptId, request.meta.handlerGeneration, request.meta.commandId), result: fail ? null : { models: [], providerVersion: null, providerVersionSource: "unknown" }, error: fail ? failure(new CatalogError("PROBE_FAILED")) : null }
     },
-  } })
+  }
+  const catalog = createCatalogService({ paths, generation, queue, store: catalogStore, retirement: retention.view, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [profile], observeConfig: async () => ({ providerId: "codex-acp", scope: "declared-config-v1", fingerprint: "b".repeat(64), adapterVersion: "1", sdkVersion: null }), clock: { now: () => now }, onTerminal: () => coordinator?.request(), probes })
   const state: HandlerStatus = { hostId, handlerGeneration: generation, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
   const agents = createAgentService({ context: { paths, adapter, mutations, state, shutdownPending: () => false }, catalog, contracts: [], store: agentStore, retirement: retention.view })
   const coordination = { root, hostId, generation, queue, adapter, store: retention, catalogStore, agentStore, mutations, catalog, agents, now: () => now }
@@ -54,7 +56,18 @@ async function fixture(t: Parameters<typeof privateRoot>[0], filesystem?: Retent
   await catalog.initialize()
   t.after(() => { agents.close(); catalog.close() })
   const record = (attempt: string, handler: string, owner: string): ManagedLaunchRecord => ({ version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: owner }, handlerGeneration: handler, launchAttemptId: attempt, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null })
-  return { root, hostId, generation, queue, adapter, retention, catalogStore, agentStore, catalog, agents, mutations, coordinator, setTime(value: number) { now = value }, setFailure(value: boolean) { fail = value }, advance() { now += 600001; tick?.() }, invocations: () => invocations }
+  async function seedAutomatic() {
+    const commandId = randomUUID(), attemptId = randomUUID(), snapshotId = randomUUID(), fingerprint = "b".repeat(64)
+    const request = { profile, evidence: { providerId: profile.id, scope: "declared-config-v1" as const, fingerprint, adapterVersion: "1", sdkVersion: null }, meta: { version: 3 as const, receiptKind: "automatic" as const, hostId, handlerGeneration: generation, commandId, providerId: profile.id, attemptId, fingerprint, workPath: join(root, "catalog/work", attemptId) } }
+    const outcome = await probes.run(request, new AbortController().signal)
+    const snapshot = { version: 1 as const, hostId, handlerGeneration: generation, snapshotId, createdAt: now, providers: [{ providerId: profile.id, fingerprint: fail ? null : fingerprint, verifiedAt: fail ? null : now, verifiedHandlerGeneration: fail ? null : generation, adapterVersion: fail ? null : "1", sdkVersion: null, models: [], providerVersion: null, providerVersionSource: "unknown" as const, error: outcome.error }] }
+    await catalogStore.writeSnapshot(snapshot)
+    await catalogStore.publishCurrent(snapshot)
+    const pending = { version: 1 as const, commandId, hostId, handlerGeneration: generation, batchId: randomUUID(), fingerprints: [{ providerId: profile.id, fingerprint }], attempts: [{ providerId: profile.id, attemptId }], state: "pending" as const, snapshotId: null }
+    await catalogStore.writeAutomatic(pending, null)
+    await catalogStore.writeAutomatic({ ...pending, state: "completed", snapshotId }, pending)
+  }
+  return { root, hostId, generation, queue, adapter, retention, catalogStore, agentStore, catalog, agents, mutations, coordinator, seedAutomatic, setTime(value: number) { now = value }, setFailure(value: boolean) { fail = value }, advance() { now += 600001 }, invocations: () => invocations }
 }
 
 test("imported native history retains its creation receipt without invented launch evidence", async t => {
@@ -76,11 +89,11 @@ test("successful automatic batches retire while failed batches retain bound evid
   const sentinels = ["agents/provider-state", "qualification", "provider-home"]
   for (const name of sentinels) { await mkdir(join(f.root, name), { recursive: true, mode: 0o700 }); await writeFile(join(f.root, name, "keep"), "retained", { mode: 0o600 }) }
   await f.catalogStore.inventory()
-  f.catalog.startScheduling()
   for (let index = 0; index < 40; index++) {
     f.setFailure(index >= 20)
     if (index) f.advance()
-    await until(async () => f.invocations() === index + 1 && (await f.catalog.list()).discovery.state === "idle" ? true : undefined)
+    await f.seedAutomatic()
+    assert.equal(f.invocations(), index + 1)
     await f.queue.run(() => f.coordinator.sweepLocked())
     assert.deepEqual(f.coordinator.diagnostics(), [])
     const inventory = await f.catalogStore.inventory()
@@ -89,7 +102,7 @@ test("successful automatic batches retire while failed batches retain bound evid
     assert.equal(inventory.commands.length, 0); assert.equal(inventory.automatic.length, retained); assert.equal(inventory.snapshots.length, Math.max(1, retained))
     assert.equal(inventory.metadata.length, retained); assert.equal(inventory.launches.length, retained)
     assert.equal((await readdir(join(f.root, "catalog/work"))).length, retained)
-    if (index >= 20) assert.equal((await f.catalog.list()).providers[1]!.error!.code, "PROBE_FAILED")
+    if (index >= 20) assert.equal((await f.catalogStore.readCurrent())!.providers[0]!.error!.code, "PROBE_FAILED")
   }
   const retained = await f.catalogStore.inventory(), diagnostics = await Promise.all(retained.metadata.map(readProbeDiagnostic))
   f.setTime(Math.max(...diagnostics.map(value => value!.finishedAt!)) + PROBE_DIAGNOSTIC_TTL_MS)
@@ -102,8 +115,7 @@ test("successful automatic batches retire while failed batches retain bound evid
 
 for (const [offset, retained] of [[-1, true], [0, false], [-PROBE_DIAGNOSTIC_TTL_MS - 1, true]] as const) test(`failed discovery retention boundary ${offset}`, async t => {
   const f = await fixture(t)
-  f.setFailure(true); f.catalog.startScheduling()
-  await until(async () => f.invocations() === 1 && (await f.catalog.list()).discovery.state === "idle" ? true : undefined)
+  f.setFailure(true); await f.seedAutomatic()
   f.setTime(1000000 + PROBE_DIAGNOSTIC_TTL_MS + offset)
   await f.queue.run(() => f.coordinator.sweepLocked())
   const inventory = await f.catalogStore.inventory()
@@ -115,8 +127,7 @@ for (const [offset, retained] of [[-1, true], [0, false], [-PROBE_DIAGNOSTIC_TTL
 
 for (const scenario of ["unfinished", "incomplete-stderr", "malformed"]) test(`discovery ${scenario} evidence remains retained after seven days`, async t => {
   const f = await fixture(t)
-  f.setFailure(true); f.catalog.startScheduling()
-  await until(async () => f.invocations() === 1 && (await f.catalog.list()).discovery.state === "idle" ? true : undefined)
+  f.setFailure(true); await f.seedAutomatic()
   const meta = (await f.catalogStore.inventory()).metadata[0]!, diagnostic = (await readProbeDiagnostic(meta))!
   if (scenario === "malformed") await writeFile(join(meta.workPath, "diagnostic.json"), "{}")
   else await writeProbeDiagnostic(meta.workPath, { ...diagnostic, ...(scenario === "unfinished" ? { finishedAt: null } : { stderrComplete: false }) })
@@ -132,13 +143,15 @@ test("manual results survive automatic sweeps and lost replies do not redispatch
   const first = await until(async () => { const reply = await f.catalog.refresh(commandId, f.generation); return reply.command.state !== "pending" ? reply : undefined })
   const count = f.invocations()
   assert.deepEqual(await f.catalog.refresh(commandId, f.generation), first); assert.equal(f.invocations(), count)
-  f.catalog.startScheduling(); f.advance()
-  await until(async () => f.invocations() > count && (await f.catalog.list()).discovery.state === "idle" ? true : undefined)
+  f.advance()
+  const second = randomUUID()
+  await f.catalog.refresh(second, f.generation)
+  await until(async () => (await f.catalog.refresh(second, f.generation)).command.state === "completed" ? true : undefined)
   await f.queue.run(() => f.coordinator.sweepLocked())
   assert.deepEqual(f.coordinator.diagnostics(), [])
   assert.deepEqual(await f.catalog.refresh(commandId, f.generation), first)
   const inventory = await f.catalogStore.inventory()
-  assert.equal(inventory.commands.length, 1); assert.equal(inventory.snapshots.length, 2); assert.equal(inventory.launches.length, 0)
+  assert.equal(inventory.commands.length, 2); assert.equal(inventory.snapshots.length, 2); assert.equal(inventory.launches.length, 0)
 })
 
 async function failedAgent(f: Awaited<ReturnType<typeof fixture>>, session = false, current = false) {
@@ -213,8 +226,7 @@ test("unknown same-boot process evidence is retained without signaling", async t
 test("partial work unlink stays diagnostic, retries, and does not corrupt unrelated inventories", async t => {
   let fail = true
   const f = await fixture(t, { open, rename, rmdir, async unlink(path) { if (fail && String(path).endsWith("result.json")) throw new Error("injected unlink failure"); await unlink(path) } })
-  f.catalog.startScheduling()
-  await until(async () => (await f.catalog.list()).discovery.state === "idle" ? true : undefined)
+  await f.seedAutomatic()
   await f.coordinator.initialize()
   assert.ok(await f.retention.pending()); assert.ok(f.coordinator.diagnostics().length)
   assert.deepEqual((await f.catalogStore.inventory()).issues, []); assert.deepEqual((await f.agentStore.inventory()).issues, [])

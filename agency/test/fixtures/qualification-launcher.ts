@@ -25,7 +25,7 @@ try{
       entryDriver:{async ensure(ref){editor={editorId:randomUUID(),session:"qualification-editor",pane:"%1",tmuxSocketPath:join(options.paths.runtimeRoot,"entry-tmux.sock")};await appendFile(join(root,"entry-driver.jsonl"),JSON.stringify({ref,editor,executable:config.editor?.shimPath??null})+"\n",{mode:0o600});return editor},async activate(){},async inspect(){return editor}},
       catalogFactory(context){
         const service=createCatalogService({...context,queue:context.mutations.queue,probes:{retentionPins:()=>({paths:[]}),forgetRemoved(){},recover:async()=>undefined,verifyDischarged:async()=>undefined,run:async()=>{throw new Error("FIXTURE_DISCOVERY_FORBIDDEN")}}})
-        return {...service,startScheduling(){},async initialize(){
+        return {...service,async initialize(){
           const profiles=JSON.parse(await readFile(join(context.paths.persistentRoot,"catalog/providers.json"),"utf8")).providers as ProviderProfile[]
           const evidence=await observeConfig(profiles[0]!)
           const snapshot:CatalogSnapshot={version:1,hostId:context.paths.hostKey,handlerGeneration:context.generation,snapshotId:randomUUID(),createdAt:Date.now(),providers:[{providerId:"codex-acp",fingerprint:evidence.fingerprint,verifiedAt:Date.now(),verifiedHandlerGeneration:context.generation,providerVersion:null,providerVersionSource:"unknown",adapterVersion:"1.0.0",sdkVersion:null,error:null,models:[{providerId:"codex-acp",modelId:"model-a",resolvedModelId:null,displayName:"Synthetic model",reasoning:{state:"values",values:["high","low"]},modes:{state:"values",values:["plan","review"]},availability:"advertised"}]}]}

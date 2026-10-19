@@ -94,29 +94,31 @@ test("ordinary shutdown cancels a registered discovery group without agent flags
   for (const identity of active.record.provider!.group.observed) assert.equal(await f.adapter.readProcess(identity.pid), null)
 })
 
-test("refused shutdown resumes discovery without an admission dependency", { timeout: 60000 }, async t => {
+test("refused shutdown requires an explicit new discovery request", { timeout: 60000 }, async t => {
   const f = await catalogHandlerFixture(t, { enabled: ["codex-acp"], wait: true }), handler = await f.start()
+  assert.equal((await f.inventory()).launches.length, 0)
+  await f.refresh(randomUUID())
   const first = await f.waitNative("codex-acp")
   const stale = await f.spawnProvider()
   await writeLaunchRecord(join(f.paths.persistentRoot, "launches", `${stale.launchAttemptId}.json`), stale)
   const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
   assert.ok(!reply.ok && reply.error.code === "ACTIVE_AGENTS")
+  assert.equal((await f.list()).discovery.state, "idle")
+  await f.refresh(randomUUID())
   const resumed = await f.waitNative("codex-acp")
   assert.notEqual(resumed.record.launchAttemptId, first.record.launchAttemptId)
   assert.equal(await f.adapter.readProcess(first.record.provider!.group.leader.pid), null)
 })
 
-test("changed declared input discards a native candidate after cleanup", { timeout: 60000 }, async t => {
+test("changed declared input does not invalidate an admitted discovery batch", { timeout: 60000 }, async t => {
   const f = await catalogHandlerFixture(t, { enabled: ["codex-acp"], wait: true }), commandId = randomUUID()
   await f.start(); await f.refresh(commandId); await f.waitNative("codex-acp")
   await writeFile(f.profiles.find(p => p.id === "codex-acp")!.configurationFiles[0]!, "changed")
   await f.release("codex-acp"); await f.waitCommand(commandId)
   const provider = (await f.list()).providers.find(p => p.providerId === "codex-acp")!
-  assert.equal(provider.error!.code, "CONFIG_CHANGED")
-  assert.notEqual(provider.freshness, "fresh")
-  const failed = (await f.inventory()).metadata.find(meta => meta.providerId === "codex-acp")!
-  assert.equal((await readProbeDiagnostic(failed))!.failed, true)
-  assert.equal((await f.inventory()).launches.find(entry => entry.record.launchAttemptId === failed.attemptId)!.record.phase, "cleanup_verified")
+  assert.equal(provider.error, null)
+  assert.equal(provider.freshness, "fresh")
+  await until(async () => (await f.inventory()).launches.length === 0 ? true : undefined)
 })
 
 test("restart cleans the exact old probe and interrupts its command before new work", { timeout: 60000 }, async t => {
