@@ -326,7 +326,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   const child = new EventEmitter() as ChildProcess
   let unrefs = 0
   Object.assign(child, { pid: 12345, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() { unrefs++ } })
-  let live = false, count = 0, bootCalls = 0, absentGroups = 0, lateAbsenceReads = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, attemptPublished = false, readbackFailed = false, earlyWrites = 0, invalidation = "", checks = 0, spawnInputReleases = 0, releasesAtSpawn = -1
+  let live = false, count = 0, cleanupStarted = false, absenceStarted = false, failCleanupPublication = scenario === "cleanup-publication-after-write", lateAbsenceReads = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, attemptPublished = false, readbackFailed = false, earlyWrites = 0, invalidation = "", checks = 0, spawnInputReleases = 0, releasesAtSpawn = -1
   const signals: NodeJS.Signals[] = []
   let identity: ProcessIdentity = { pid: 12345, bootId: "boot-a", birth: `100:agy-provider:${spec.launchAttemptId}`, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
   if (scenario === "identity-mismatch") identity.birth = "100:other"
@@ -339,15 +339,15 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
     state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
     mutations: { queue: new MutationQueue(), accepted: [] }, shutdownPending: () => false,
     adapter: { platform: "linux", bootId: async () => {
-      if (scenario === "cleanup-boot-hang" && ++bootCalls === 3) { cleanupObservation.resolve(); return new Promise<string>(() => undefined) }
+      if (scenario === "cleanup-boot-hang" && cleanupStarted) { cleanupObservation.resolve(); return new Promise<string>(() => undefined) }
       return "boot-a"
     }, readProcess: async () => {
-      if (scenario === "absence-paused" && absentGroups >= 3) lateAbsenceReads++
+      if (scenario === "absence-paused" && absenceStarted) lateAbsenceReads++
       return scenario === "identity-hang" && live ? new Promise<ProcessIdentity>(() => undefined) : live ? structuredClone(identity) : null
     }, readGroup: async () => {
-      if (!live && scenario === "absence-hang" && ++absentGroups === 3) { absentEntered.resolve(); return new Promise<ProcessIdentity[]>(() => undefined) }
-      if (!live && scenario === "absence-paused" && ++absentGroups === 3) { absentEntered.resolve(); await absentReleased.promise }
-      return live ? [structuredClone(identity)] : []
+      if (!live && scenario === "absence-hang" && !absenceStarted) { absenceStarted = true; absentEntered.resolve(); return new Promise<ProcessIdentity[]>(() => undefined) }
+      if (!live && scenario === "absence-paused" && !absenceStarted) { absenceStarted = true; absentEntered.resolve(); await absentReleased.promise }
+      return live ? [structuredClone(identity)] : scenario === "leader-exit-descendant-live" ? [{ ...identity, pid: 12346, birth: "101:helper" }] : []
     }, async signalGroup(group, signal) {
       if (group !== 12345) throw new Error("wrong signal target")
       signals.push(signal)
@@ -357,7 +357,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
       }
       live = false
       terminated.resolve()
-      if (scenario !== "termination-hang") queueMicrotask(() => { child.emit("exit", 0, signal); if (scenario !== "close-held") child.emit("close", 0, signal) })
+      if (!["termination-hang", "error-without-exit"].includes(scenario)) queueMicrotask(() => { Object.assign(child, { signalCode: signal }); child.emit("exit", null, signal); if (scenario !== "close-held") child.emit("close", null, signal) })
     } },
   }
   if (scenario === "queued-preparation") void context.mutations.queue.run(async () => { beforeSpawn.resolve(); await publication.promise })
@@ -370,13 +370,15 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
     if (executable !== process.execPath || JSON.stringify(args) !== '["/fixture.mjs"]') throw new Error("wrong executable")
     if (scenario === "spawn-throws") throw new Error("spawn invocation failed")
     live = scenario !== "child-exit"
-    if (!live) queueMicrotask(() => child.emit("exit", 1, null))
+    if (!live) queueMicrotask(() => { Object.assign(child, { exitCode: 1 }); child.emit("exit", 1, null); child.emit("close", 1, null) })
     return child
   }) as typeof spawn, onSpawnInputReleased() { spawnInputReleases++ }, transitionIO: {
     async publish(file, record) {
       if (scenario === "attempt-write" && record.launchAttempted && !record.provider) throw new Error("attempt write failed")
       if (scenario === "restore-failure" && !record.launchAttempted) throw new Error("restore failed")
+      if (record.phase === "cleanup_pending") cleanupStarted = true
       await writeLaunchRecord(file, record)
+      if (record.phase === "cleanup_verified" && failCleanupPublication) throw new Error("cleanup publication after write")
       if (record.launchAttempted && !record.provider) attemptPublished = true
       if (record.provider) identityPublished = true
       if (scenario === "publication-paused" && record.launchAttempted && !record.provider) { beforeSpawn.resolve(); await publication.promise }
@@ -385,7 +387,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
     },
     async read(file) { if (scenario === "attempt-readback" && attemptPublished && !readbackFailed) { readbackFailed = true; throw new Error("readback failed") }; return readLaunchRecordForReconciliation(file) },
   }, now: () => Date.now() })
-  return { emitStderr(bytes: Buffer) { child.stderr!.emit("data", bytes) }, emitProcess(event: "exit" | "close", code: number | null, signal: NodeJS.Signals | null) { live = false; child.emit(event, code, signal) }, emitError(event: "error" | "stdin_error" | "stdout_error" | "stderr_error", error: Error) { if (event === "error") child.emit("error", error); else child[event.split("_")[0] as "stdin" | "stdout" | "stderr"]!.emit("error", error) }, owner, root, spec, context, signals, requests: peer.sent, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, spawnInputReleases: () => spawnInputReleases, releasesAtSpawn: () => releasesAtSpawn, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
+  return { failCleanupPublication(value: boolean) { failCleanupPublication = value }, emitStderr(bytes: Buffer) { child.stderr!.emit("data", bytes) }, emitProcess(event: "exit" | "close", code: number | null, signal: NodeJS.Signals | null) { live = false; if (event === "exit") Object.assign(child, { exitCode: code, signalCode: signal }); child.emit(event, code, signal) }, emitError(event: "error" | "stdin_error" | "stdout_error" | "stderr_error", error: Error) { if (event === "error") child.emit("error", error); else child[event.split("_")[0] as "stdin" | "stdout" | "stderr"]!.emit("error", error) }, owner, root, spec, context, signals, requests: peer.sent, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, spawnInputReleases: () => spawnInputReleases, releasesAtSpawn: () => releasesAtSpawn, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }
 
 const NO_ACP_RESPONSE = Symbol("no-acp-response")
@@ -538,7 +540,7 @@ export async function agentServiceFixture(t: TestContext, options: { hostId?: st
   let restorePause = ""
   const restoreEntered = agentGate(), restoreReleased = agentGate()
   f.context.adapter = { platform: "linux", bootId: async () => "boot-a", readProcess: async pid => processes.get(pid)?.identity ?? null, readGroup: async group => [...processes.values()].map(v => v.identity).filter(v => v.processGroupId === group), async signalGroup(group, signal) {
-    for (const [pid, value] of processes) if (value.identity.processGroupId === group) { processes.delete(pid); value.child.emit("exit", 0, signal); value.child.emit("close", 0, signal) }
+    for (const [pid, value] of processes) if (value.identity.processGroupId === group) { processes.delete(pid); Object.assign(value.child, { signalCode: signal }); value.child.emit("exit", null, signal); value.child.emit("close", null, signal) }
   } }
   const pause = async (at: typeof options.pause, signal?: AbortSignal) => {
     if (options.pause !== at) return
@@ -590,7 +592,7 @@ export async function agentServiceFixture(t: TestContext, options: { hostId?: st
       await writeLaunchRecord(path, record)
       if (options.exitDuringInitialize && record.provider) {
         const provider = [...processes.entries()].find(([, value]) => value.agentId === input.spec.agentId)
-        if (provider) { const [pid, value] = provider; processes.delete(pid); value.child.emit("exit", 7, "SIGABRT"); value.child.emit("close", 7, "SIGABRT") }
+        if (provider) { const [pid, value] = provider; processes.delete(pid); Object.assign(value.child, { exitCode: 7, signalCode: "SIGABRT" }); value.child.emit("exit", 7, "SIGABRT"); value.child.emit("close", 7, "SIGABRT") }
       }
       if (record.launchAttempted && record.provider === null) await pause("attempted")
     } } }
