@@ -7,7 +7,7 @@ import { lstat } from "node:fs/promises"
 import { isDeepStrictEqual } from "node:util"
 import { observeConfig, readProfiles } from "../catalog/config.js"
 import type { CatalogService } from "../catalog/service.js"
-import { id, PROVIDERS, absolutePath, object, type ProviderId, type ProviderProfile, type ConfigEvidence } from "../catalog/types.js"
+import { id, PROVIDERS, absolutePath, object, type ProviderId } from "../catalog/types.js"
 import { digest } from "../catalog/config.js"
 import { inventoryPage, launchChoices, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
 import { ControlError } from "../control/protocol.js"
@@ -21,7 +21,7 @@ import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import type { LaunchEnvironment } from "./environment.js"
 import { agentTuple, recoverAgents, retainUnspawnedRestore, type AgentAssessment, type AgentRecoveryRepair } from "./recovery.js"
 import type { AgentStateIssue, AgentStore } from "./store.js"
-import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type RuntimeLaunchSpec as LaunchSpec, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity, type LegacyAgentRecord } from "./types.js"
+import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity, type LegacyAgentRecord } from "./types.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
 import { createConversation, type Conversation, type ConversationListener, type ConversationObservation } from "./conversation.js"
 import { createTurnCoordinator, type AcpSubmissionRequest, type SubmissionReceipt, type SubmissionRequest, type TurnCoordinator } from "./turns.js"
@@ -39,7 +39,6 @@ import { backendSelection } from "./backend-selection.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
-type BackendEvidence = { profile: ProviderProfile; configuration: ConfigEvidence; backend: Backend }
 
 export function sessionInputs(cwd: string, raw: JsonObject | undefined, required: string[] = []): { params: JsonObject; names: string[] } {
   const params = withoutAgencyMetadata({ cwd, mcpServers: [], ...raw })
@@ -76,7 +75,7 @@ export type AgentService = {
   createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
 type LivePrompt = { controller: AbortController; promise: Promise<TurnResult | JsonObject> }
-type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; declaration: LaunchContract; contract: ConfiguredLaunchContract; evidence: BackendEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; contract: ConfiguredLaunchContract; backend: Backend; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
@@ -367,7 +366,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         if (closed || op.controller.signal.aborted || op.expired) { editor.close(); throw new AgentError("STARTUP_FAILED") }
         op.editor = editor
         const environment = { ...callerEnvironment, NVIM: editor.path, NVIM_SOCKET_PATH: editor.path }
-        try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.evidence.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
+        try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
           await requireTarget(agentTuple(op.initial))
           if (!op.turns?.busy()) throw new AgentError("INVALID_PROTOCOL")
           await permissionBroker.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
@@ -454,7 +453,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       if (candidates.length !== 1) throw new AgentError("ADAPTER_UNQUALIFIED")
       const declaration = parseLaunchContract(candidates[0])
       if (kind === "restore" && !declaration.sessionLoad) throw new AgentError("RESTORE_UNSUPPORTED")
-      const configuration = await (dependencies.observeConfig ?? observeConfig)(profile), evidence: BackendEvidence = { profile, configuration, backend }
+      const configuration = await (dependencies.observeConfig ?? observeConfig)(profile)
       const contract = await configureLaunchContract(declaration, profile, configuration)
       const cwd = absolutePath(previousAgent?.definition.cwd ?? (raw as CreateSessionInput | StartInput).cwd)
       const selected = native ? parseRequestedSettings((raw as CreateSessionInput).selection ?? {}) : kind === "start" ? {
@@ -506,7 +505,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const accepted = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: kind, input: durableInput, agentId, target: agentTuple(record), state: "pending", result: null })
         const conversation = createConversation(agentTuple(record))
         conversation.append({ kind: "lifecycle", phase: record.phase, cwd, session: record.session })
-        const op: Live = { initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, declaration, contract, evidence, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
+        const op: Live = { initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, contract, backend, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
         op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invoke: (text, limits) => invoke(op, text, limits), invokeAcp: params => invokeAcp(op, params), onAccepted: request => {
           if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
           op.editor!.begin(request.submissionId, request.originConnectionId ? { connectionId: request.originConnectionId, attachment: request.originAttachment!, ...(request.editorAddress === undefined ? {} : { address: request.editorAddress }) } : undefined)

@@ -32,7 +32,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   const probeIssues = new Map<ProviderId, CatalogFailure>()
   const unscopedIssues = new Set<string>()
   const commands = new Map<string, RefreshCommand>(), privateCommands = new Map<string, RefreshCommand>()
-  const hidden = (kind: string, commandId: string) => options.retirement?.hides("catalog/" + kind + "/" + commandId + ".json")
   const owner = (commandId: string) => commands.get(commandId) ?? privateCommands.get(commandId)
   const owners = () => [...commands.values(), ...privateCommands.values()]
   function latch(error: unknown, inventory = false): void { blocked ??= failure(error); inventoryBlocked ||= inventory }
