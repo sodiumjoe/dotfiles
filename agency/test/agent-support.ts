@@ -38,6 +38,20 @@ import type { AgentCommand, AgentCommandV3, AgentRecord, AgentRecordV3, RuntimeL
 
 export type AgentHandlerOptions = RetentionFixtureOptions & { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
 
+export async function verifyFixtureProviderGroup(identity: ProcessIdentity, io: { readGroup(pid: number): Promise<ProcessIdentity[]>; observe(pid: number): Promise<ProcessIdentity | null> }): Promise<ProcessIdentity[] | null> {
+  const members = await io.readGroup(identity.pid), again = await io.readGroup(identity.pid)
+  for (const group of [members, again]) for (const member of group) assert.deepEqual(member, identity)
+  assert.ok(members.length <= 1 && again.length <= 1)
+  const latest = await io.observe(identity.pid)
+  if (latest === null) {
+    for (let n = 0; n < 2; n++) { assert.equal(await io.observe(identity.pid), null); assert.deepEqual(await io.readGroup(identity.pid), []) }
+    return null
+  }
+  assert.deepEqual(latest, identity)
+  assert.deepEqual(members, [identity]); assert.deepEqual(again, members)
+  return members
+}
+
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
   const workspace = join(f.root, "workspace"), otherWorkspace = join(f.root, "other-workspace")
@@ -59,9 +73,9 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
         assert.equal(identity.bootId, await f.adapter.bootId())
         assert.equal(identity.pid, identity.processGroupId); assert.equal(identity.pid, identity.sessionId)
         assert.equal(identity.uid, process.getuid!()); assert.equal(identity.gid, process.getgid!())
-        const members = await f.adapter.readGroup(hint.pid)
+        const members = await verifyFixtureProviderGroup(identity, { readGroup: pid => f.adapter.readGroup(pid), observe: f.observe })
+        if (members === null) { seen.add(hint.attempt); continue }
         for (const member of members) fixtureIdentity("provider-group", member)
-        assert.deepEqual(await f.adapter.readGroup(hint.pid), members); assert.deepEqual(members, [identity])
         const record: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: hint.agentId, providerGeneration: agent.launch.providerGeneration }, handlerGeneration: agent.launch.handlerGeneration, launchAttemptId: hint.attempt, launchBootId: identity.bootId, launchAttempted: true, provider: { kind: "process-group", group: { leader: identity, observed: members } }, phase: "active", reason: null }
         await writeLaunchRecord(join(f.root, `owned-${hint.attempt}.json`), record)
         owned.set(hint.attempt, record)

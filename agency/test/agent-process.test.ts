@@ -18,7 +18,7 @@ import { lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { agentFailure } from "../src/agent/types.js"
-import { syntheticAgentProcess } from "./agent-support.js"
+import { verifyFixtureProviderGroup, syntheticAgentProcess } from "./agent-support.js"
 
 test("agent process publishes a managed launch and spawns in the exact caller directory with profile-derived adapter routing", async t => {
   const f = await syntheticAgentProcess(t, "normal")
@@ -339,4 +339,22 @@ test("cancellation after capture prevents readiness and still cleans the registe
   controller.abort(); f.releasePublication()
   await assert.rejects(pending)
   assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
+for (const initialGroup of ["empty", "leader"] as const) test(`fixture provider exit after leader observation with ${initialGroup} group requires two absence passes`, async () => {
+  const identity = { bootId: "boot", pid: 123, birth: "100:agy-provider:attempt", parentPid: 1, processGroupId: 123, sessionId: 123, uid: 501, gid: 20 }
+  let groups = 0, processes = 0
+  const result = await verifyFixtureProviderGroup(identity, {
+    async readGroup() { groups++; return initialGroup === "leader" && groups === 1 ? [identity] : [] },
+    async observe() { processes++; return null },
+  })
+  assert.equal(result, null)
+  assert.equal(groups, 4)
+  assert.equal(processes, 3)
+})
+
+test("fixture provider tracking refuses a replacement and surviving group members", async () => {
+  const identity = { bootId: "boot", pid: 123, birth: "100:agy-provider:attempt", parentPid: 1, processGroupId: 123, sessionId: 123, uid: 501, gid: 20 }
+  await assert.rejects(verifyFixtureProviderGroup(identity, { async readGroup() { return [identity] }, async observe() { return { ...identity, birth: "200:replacement" } } }))
+  await assert.rejects(verifyFixtureProviderGroup(identity, { async readGroup() { return [{ ...identity, pid: 124 }] }, async observe() { return null } }))
 })
