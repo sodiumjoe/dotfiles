@@ -9,6 +9,7 @@ import { createTaskService } from "../src/tasks/service.js"
 import { registerTaskEndpoint } from "../src/tasks/endpoint.js"
 import { waitForTask } from "../src/tasks/wait.js"
 import { agentServiceFixture } from "./agent-support.js"
+import { until } from "./control-support.js"
 import { runtimeNetwork } from "./host-runtime-support.js"
 import { sampleTaskRecord, taskHost } from "./task-test-support.js"
 import { TASK_PROTOCOL, parseTaskRequest, type TaskRequest } from "../src/tasks/protocol.js"
@@ -27,8 +28,10 @@ for (const relay of [false, true]) test(`task mutations survive lost replies ove
   const client = createHostTaskClient({ localHostId: a.enrollment.hostId, route: async (route, signal) => { const result = await a.router.request(route, signal); if (route.channel === "task-write") { writes++; if (drop) throw new Error("lost reply") }; return result } })
   const input = { taskId: randomUUID(), description: "remote worker", cwd: f.workspace, backendId: "codex-acp" as const, text: "held" }, ref = { hostId: taskHost, taskId: input.taskId }
   await assert.rejects(client.create(taskHost, input), e => e instanceof TaskOutcomeUnknown && e.ref.taskId === ref.taskId)
-  await f.promptEntered; assert.equal((await client.inspect(ref)).runtime, "running")
+  await f.promptEntered
+  await until(async () => { const value = await client.inspect(ref); return value.runtime === "running" && value.record.status === "running" ? true : undefined })
   const before = await readdir(join(f.context.paths.persistentRoot, "tasks", ref.taskId)), controller = new AbortController()
+  assert.deepEqual(before, ["record.json"])
   const waiting = waitForTask(client, ref, { timeoutMs: 60000, signal: controller.signal }); controller.abort()
   assert.equal((await waiting).state, "cancelled"); const target = (await tasks.inspect(ref.taskId)).record.session!
   assert.equal((await f.service.sessionRecord(target.agentId))!.live, true)
