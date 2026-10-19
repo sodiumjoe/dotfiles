@@ -223,7 +223,7 @@ test("unknown agent storage entry reports an issue without blocking an independe
   assert.deepEqual((await store.inventory()).issues, [])
 })
 
-for (const failure of ["file-sync", "rename", "directory-sync", "readback"] as const) {
+for (const failure of ["file-sync", "rename", "directory-sync"] as const) {
   test(`publication ${failure} failure retains evidence and exact retry repeats durability`, async t => {
     const root = await privateRoot(t), value = sampleCommand(), path = join(root, "agents/commands", value.commandId + ".json")
     let enabled = true, renamed = false
@@ -241,12 +241,10 @@ for (const failure of ["file-sync", "rename", "directory-sync", "readback"] as c
       async rename(from, to) {
         if (enabled && failure === "rename") throw new Error("injected rename")
         await rename(from, to); renamed = true
-        if (enabled && failure === "readback") await writeFile(to, "{}", { mode: 0o600 })
       },
     }
     const store = createAgentStore(root, io)
     await assert.rejects(store.writeCommand(value, null))
-    if (failure === "readback") { assert.equal(await readFile(path, "utf8"), "{}"); assert.ok((await store.inventory()).issues.length); return }
     if (failure === "directory-sync") assert.deepEqual(await store.readCommand(value.commandId), value)
     enabled = false; syncs.length = 0
     await store.writeCommand(value, null)

@@ -121,7 +121,6 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     }
   }
   async function publish(path: string, value: unknown, expected: unknown): Promise<void> {
-    try { await names(directory) } catch { unavailable() }
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > 1048576) throw new AgentError("INCOMPLETE")
     const before = await evidence(path)
@@ -132,12 +131,8 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     try {
       handle = await filesystem.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = undefined
-      if (!isDeepStrictEqual(await evidence(path), before)) unavailable()
       await filesystem.rename(temporary, path); renamed = true
-      const visible = await evidence(path)
-      if (!visible?.bytes.equals(bytes)) unavailable()
       await sync(dirname(path))
-      if (!isDeepStrictEqual(await evidence(path), visible)) unavailable()
       known.set(path, path.includes("/records/") ? "agent" : "command")
     } finally { await handle?.close(); if (!renamed) await filesystem.rm(temporary, { force: true }) }
   }

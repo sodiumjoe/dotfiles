@@ -57,17 +57,6 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
     await retirement?.validate()
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > byteLimit(path)) invalid()
-    for (const [knownPath, knownBytes] of accepted) {
-      if (retirement?.hides(relative(root, knownPath))) continue
-      const probeMeta = dirname(knownPath) === join(catalog, "probe-meta")
-      let current: Buffer | null
-      try { current = await read(knownPath) }
-      catch (error) { if (probeMeta) continue; throw error }
-      if (current === null || !current.equals(knownBytes)) {
-        if (probeMeta) continue
-        throw new CatalogError("CATALOG_UNAVAILABLE")
-      }
-    }
     const previous = await read(path)
     if (previous !== null && previous.equals(bytes)) { }
     else if (immutable ? previous !== null : !isDeepStrictEqual(previous === null ? null : decodeJson(previous), expected)) conflict()
@@ -80,17 +69,10 @@ export function createCatalogStore(root: string, filesystem: CatalogFileSystem =
       await handle.sync()
       await handle.close()
       handle = undefined
-      const before = await read(path)
-      if (!isDeepStrictEqual(before, previous)) throw new CatalogError("CATALOG_UNAVAILABLE")
       await filesystem.rename(temporary, path)
       renamed = true
       accepted.set(path, bytes)
       await sync(dirname(path))
-      if (!bytes.equals((await read(path)) ?? Buffer.alloc(0))) invalid()
-    } catch (error) {
-      const remaining = await read(path)
-      if (remaining?.equals(bytes)) accepted.set(path, bytes)
-      throw error
     } finally { await handle?.close(); if (!renamed) await filesystem.rm(temporary, { force: true }) }
   }
   async function readSnapshot(snapshotId: string): Promise<CatalogSnapshot | null> {

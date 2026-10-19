@@ -274,3 +274,11 @@ test("authorized snapshot retirement preserves detection of unrelated external d
   await unlink(join(root, "catalog/snapshots", b.snapshotId + ".json"))
   assert.ok((await store.inventory()).issues.length > 0)
 })
+
+test("publication does not audit unrelated accepted commands", async t => {
+  const root = await privateRoot(t), store = createCatalogStore(root), first = command(), second = command()
+  await store.writeCommand(first, null)
+  await unlink(join(root, "catalog/commands", first.commandId + ".json"))
+  await store.writeCommand(second, null)
+  assert.deepEqual(await store.readCommand(second.commandId), second)
+})
