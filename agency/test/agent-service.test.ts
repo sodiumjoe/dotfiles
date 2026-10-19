@@ -950,6 +950,18 @@ test("live cleanup is consumed without duplicate platform observations", async t
   if (saved) Object.assign(context.adapter, saved)
 })
 
+test("forced shutdown treats an aborted prompt as settled after verified cleanup", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command)
+  const pending = f.service.prompt({ ...ready.command.target!, text: "challenge" })
+  const rejected = assert.rejects(pending, { code: "STARTUP_FAILED" })
+  await f.promptEntered
+  await f.service.freezeAndDrain(true)
+  await rejected
+  await f.service.verifyDischarged()
+  assert.equal(f.context.mutations.accepted[0]!.record.phase, "cleanup_verified")
+})
+
 test("shutdown settles another held owner before reporting a cleanup failure", async t => {
   const secondEntered = settlementGate(), secondReleased = settlementGate(), firstAttempted = settlementGate()
   let firstId = "", secondId = "", fail = true

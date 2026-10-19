@@ -1064,12 +1064,16 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       frozen = true
       if (!stopAgents) return
       const failures: unknown[] = [], admitted = new Set<Live>([...operations.values(), ...intents.values()])
-      const prompts = new Set<LivePrompt>()
+      const prompts = new Map<LivePrompt, Promise<void>>()
       const capture = (): void => {
         for (const op of [...operations.values(), ...intents.values()]) {
           admitted.add(op)
           if (!op.ready) op.controller.abort()
-          if (op.prompt) { prompts.add(op.prompt); op.prompt.controller.abort() }
+          if (op.prompt) {
+            const active = op.prompt
+            active.controller.abort()
+            if (!prompts.has(active)) prompts.set(active, active.promise.then(() => undefined, () => undefined))
+          }
         }
       }
       const settled = new Set<Promise<unknown>>()
@@ -1098,10 +1102,10 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         await op.work
         await cleanup(op)
       })
-      await settle([...fallback, ...[...prompts].map(active => active.promise), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()])
+      await settle([...fallback, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()])
       for (;;) {
         capture()
-        const pending = [...launchAdmissions, ...[...prompts].map(active => active.promise), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()].filter(operation => !settled.has(operation))
+        const pending = [...launchAdmissions, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()].filter(operation => !settled.has(operation))
         if (!pending.length) break
         await settle(pending)
       }
