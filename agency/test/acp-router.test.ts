@@ -332,14 +332,14 @@ test("pre-creation choices carry configured defaults and advertised model-specif
   assert.equal((await f.requests("codex-acp")).length, 0)
 })
 
-test("changed catalog configuration exposes only labeled configured defaults without replacing the backend", async t => {
+test("catalog choices retain cached offers after configuration changes", async t => {
   const f = await acpFixture(t, { selectionCatalog: true }), c = await f.connect()
   await c.request("initialize", initialize)
+  const before = await c.request("agency/backends", {})
   await writeFile(join(f.root, "profile/declared.json"), "changed", { mode: 0o600 })
   const backend = ((await c.request("agency/backends", {})).backends as JsonObject[]).find(value => value.id === "codex-acp")!
-  assert.equal(backend.discovery, "unavailable")
-  assert.deepEqual(backend.models, [])
-  assert.deepEqual(backend.defaults, {})
+  assert.deepEqual(backend, (before.backends as JsonObject[]).find(value => value.id === "codex-acp"))
+  assert.ok((backend.models as JsonObject[]).length > 0)
   assert.equal((await f.inventory()).agents.length, 0)
 })
 
@@ -420,15 +420,16 @@ test("explicit modern selections override conflicting configured legacy model an
   assert.equal(options.find(value => value.id === "mode")!.currentValue, "agent-full-access")
 })
 
-test("incompatible enabled backends do not block compatible choices or change the configured default", async t => {
+test("backend choices remain advisory while admission checks current adapter compatibility", async t => {
   const f = await acpFixture(t), c = await f.connect()
   await c.request("initialize", initialize)
+  const before = await c.request("agency/backends", {})
   await writeFile(join(f.root, "secondary/adapter.json"), JSON.stringify({ name: "@agentclientprotocol/claude-agent-acp", version: "99.0.0", main: "agent-provider.js" }), { mode: 0o600 })
-  const compatible = await c.request("agency/backends", {})
-  assert.equal(compatible.defaultBackendId, "codex-acp")
-  assert.deepEqual((compatible.backends as JsonObject[]).map(value => value.id), ["codex-acp"])
+  assert.deepEqual(await c.request("agency/backends", {}), before)
+  await assert.rejects(c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: meta("claude-agent-acp") }), { code: "ADAPTER_UNQUALIFIED" })
   await writeFile(join(f.root, "profile/adapter.json"), JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "99.0.0", main: "agent-provider.js" }), { mode: 0o600 })
-  assert.deepEqual(await c.request("agency/backends", {}), { defaultBackendId: "codex-acp", backends: [] })
+  assert.deepEqual(await c.request("agency/backends", {}), before)
+  await assert.rejects(c.request("session/new", { cwd: f.workspace, mcpServers: [] }), { code: "ADAPTER_UNQUALIFIED" })
   assert.equal((await f.requests("codex-acp")).length, 0)
   assert.equal((await f.requests("claude-agent-acp")).length, 0)
 })

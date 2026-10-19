@@ -13,7 +13,7 @@ import { inventoryPage, launchChoices, parsePageInput, QUERY_BYTES, type AgentCh
 import { ControlError } from "../control/protocol.js"
 import { commitLaunchTransition, type LaunchContext } from "../handler/launch-transitions.js"
 import { confirmReconciledLaunch } from "../handler/mutations.js"
-import { summarizeLaunches } from "../handler/inventory.js"
+import { summarizeLaunches } from "../handler/launch-summary.js"
 import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
 import { cleanupBudget, configureLaunchContract, observeLaunchContract, parseLaunchContract, type ConfiguredLaunchContract, type LaunchContract } from "./contracts.js"
@@ -193,6 +193,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const visible = await store.readCommand(next.commandId)
         if (isDeepStrictEqual(visible, next)) {
           commands.set(next.commandId, structuredClone(next))
+          if (next.version === 3 && next.op === "configure") {
+            const pending = new Set(assessment.configurationPending.get(next.agentId))
+            if (next.state === "pending" || dirty.has(next.commandId)) pending.add(next.commandId)
+            else pending.delete(next.commandId)
+            if (pending.size) assessment.configurationPending.set(next.agentId, [...pending])
+            else assessment.configurationPending.delete(next.agentId)
+          }
           if (next.target && runtimeIssues.get(next.target.agentId)?.path === join(root, "agents", "commands", next.commandId + ".json")) runtimeIssues.delete(next.target.agentId)
         }
         else if (!isDeepStrictEqual(visible, expected) && next.target) note(next.target.agentId, "command", next.commandId, join(root, "agents", "commands", next.commandId + ".json"), new AgentError("INVALID_AGENT_STATE"))
@@ -1001,6 +1008,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     assertOrdinaryShutdownSafe: ordinary,
     async freezeAndDrain(stopAgents) {
       const deadline = Math.max(5000, ...(launchAdmissions.size ? [AGENT_LIMITS.startupMs + Math.max(0, ...input.contracts.map(cleanupBudget))] : []), ...[...operations.values()].map(op => (op.ready ? 0 : Math.max(0, op.deadline - performance.now())) + cleanupBudget(op.contract)))
+      let draining = true
+      const checkDraining = (): void => { if (!draining) throw new AgentError("INCOMPLETE") }
       const drain = async (): Promise<void> => {
         if (!stopAgents) ordinary()
         frozen = true
@@ -1008,6 +1017,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const failures: unknown[] = [], admitted = new Set<Live>([...operations.values(), ...intents.values()])
         const prompts = new Map<LivePrompt, Promise<void>>()
         const capture = (): void => {
+          checkDraining()
           for (const op of [...operations.values(), ...intents.values()]) {
             admitted.add(op)
             if (!op.ready) op.controller.abort()
@@ -1024,10 +1034,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           for (const outcome of await Promise.allSettled(pending)) if (outcome.status === "rejected") failures.push(outcome.reason)
         }
         capture()
-        while (launchAdmissions.size) await settle([...launchAdmissions])
+        while (launchAdmissions.size) { checkDraining(); await settle([...launchAdmissions]) }
         capture()
         const scheduled = new Set<Live>()
         for (const record of records.values()) {
+          checkDraining()
           const view = agentView(record)
           if (!["starting", "ready", "restoring", "stopping"].includes(record.phase) && ["not_launched", "verified"].includes(view.cleanup)) continue
           const existing = [...commands.values()].find(c => c.op === "stop" && isDeepStrictEqual(c.target, agentTuple(record)) && c.state === "pending")
@@ -1052,15 +1063,17 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         }
         try {
           await queue.run(async () => {
-            for (const op of admitted) try { await finishStart(op) } catch (error) { failures.push(error) }
-            for (const command of commands.values()) if (dirty.has(command.commandId)) try { await publishCommand(command, command) } catch (error) { failures.push(error) }
+            checkDraining()
+            for (const op of admitted) { checkDraining(); try { await finishStart(op) } catch (error) { failures.push(error) } }
+            for (const command of commands.values()) { checkDraining(); if (dirty.has(command.commandId)) try { await publishCommand(command, command) } catch (error) { failures.push(error) } }
           })
         } catch (error) { failures.push(error) }
         if (failures.length || stopFailures.size || stops.size || launchAdmissions.size || dirty.size || dirtyAgents.size
           || [...commands.values()].some(command => command.state === "pending")
           || [...admitted].some(op => !op.cleanupVerified || op.terminalAgent && !op.terminalAgentDurable)) throw new AgentError("INCOMPLETE")
       }
-      await bounded(drain(), deadline, "INCOMPLETE")
+      try { await bounded(drain(), deadline, "INCOMPLETE") }
+      finally { draining = false }
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { ordinary(); if (dirty.size || dirtyAgents.size || assessment.unavailable.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },

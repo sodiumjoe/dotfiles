@@ -96,9 +96,9 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
     assert.deepEqual(errors,[])
     assert.deepEqual(await sentinel(),[])
     await writeFile(join(root,"cleanup.json"),JSON.stringify({identities,survivors:[],verifiedAt:Date.now()}),{mode:0o600})
+    await writeFile(join(root,"result.json"),JSON.stringify({revision:config.binding.sourceRevision,commands:commandResults,identities,cleanup:"verified",root,runtimeRoot}),{mode:0o600})
     if(evidence)await cp(root,join(evidence,"fixtures",root.split("/").at(-1)!),{recursive:true,filter:async path=>!(await lstat(path)).isSocket()})
     cleaned=true
-    await writeFile(join(root,"result.json"),JSON.stringify({revision:config.binding.sourceRevision,commands:commandResults,identities,cleanup:"verified",root,runtimeRoot}),{mode:0o600})
     t.diagnostic("retained qualification fixture: "+root)
   }
   t.after(async()=>{try{await verifyCleanup()}catch(error){await writeFile(join(root,"result.json"),JSON.stringify({revision:config.binding.sourceRevision,commands:commandResults,identities,cleanup:"incomplete",error:String(error),root,runtimeRoot}),{mode:0o600});throw new AggregateError([error],"qualification fixture retained "+root)}})

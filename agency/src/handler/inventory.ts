@@ -2,9 +2,9 @@ import { lstat, readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
 import type { RetirementView } from "../retention/store.js"
 import { isDeepStrictEqual } from "node:util"
-import { UUID, type LaunchSummary } from "../control/protocol.js"
+import { UUID } from "../control/protocol.js"
 import { assertPrivateDirectory, readLaunchRecordForReconciliation } from "../platform/private-state.js"
-import { launchOwner, type LaunchRecord } from "../platform/types.js"
+import type { LaunchRecord } from "../platform/types.js"
 
 export type InventoryEntry = { path: string; record: LaunchRecord }
 export type LaunchIssue = { path: string; launchAttemptId: string | null; message: string }
@@ -44,6 +44,4 @@ export async function verifyInventory(directory: string, expected: InventoryEntr
   if (!isDeepStrictEqual(current, expected)) throw new Error("RETAINED_INVENTORY_CHANGED")
 }
 
-export function summarizeLaunches(records: LaunchRecord[]): LaunchSummary[] {
-  return records.map(record => ({ launchAttemptId: record.launchAttemptId, owner: launchOwner(record), phase: record.phase, reason: record.reason }))
-}
+export { summarizeLaunches } from "./launch-summary.js"

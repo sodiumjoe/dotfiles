@@ -1123,3 +1123,28 @@ test("startup expiry settles its receipt and preserves unrelated sessions and la
   await until(async () => (await f.service.sessionRecord(targetId))?.cleanup === "verified" ? true : undefined)
   assert.notEqual((await f.service.sessionRecord(targetId))?.record.phase, "ready")
 })
+
+test("timed-out shutdown cannot capture a prompt admitted after resume", async t => {
+  const released = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+  t.after(() => released.resolve())
+  let targetId = ""
+  const f = await agentServiceFixture(t, { prompt: "hang", cleanupOverride: async (agentId, cleanup) => { if (agentId === targetId) { entered.resolve(); await released.promise }; return cleanup() } })
+  const first = await completed(f.service, (await f.service.start(f.input)).command)
+  targetId = first.command.target!.agentId
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const incomplete = assert.rejects(f.service.freezeAndDrain(true), { code: "INCOMPLETE" })
+  await entered.promise
+  t.mock.timers.tick(40000); t.mock.timers.reset()
+  await incomplete
+  f.service.resume()
+  const next = await completed(f.service, (await f.service.start({ ...f.input, commandId: randomUUID() })).command)
+  const target = next.command.target!, submissionId = randomUUID()
+  await f.service.submit(target, { submissionId, text: "continue", limits: { inputBytes: 262144, outputBytes: 786432, encodedTextBytes: 917504, allowEmptyAnswer: true } }); await f.promptEntered
+  released.resolve()
+  await until(async () => (await f.store.inventory()).commands.some(command => command.op === "stop" && command.target?.agentId === targetId && command.state === "completed") ? true : undefined)
+  for (let n = 0; n < 16; n++) await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal((await f.service.submission(target, submissionId))?.state, "running")
+  f.completePrompt(target.agentId)
+  await until(async () => (await f.service.submission(target, submissionId))?.state === "completed" ? true : undefined)
+  assert.equal((await f.service.sessionRecord(target.agentId))?.record.phase, "ready")
+})
