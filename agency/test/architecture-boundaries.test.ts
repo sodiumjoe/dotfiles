@@ -33,3 +33,23 @@ test("the import guard detects forbidden dependencies and permits current task i
   await writeFile(join(root, "probe.ts"), 'import {x} from "../tasks/service.js"')
   await assertNoLegacyImports(url, ".ts")
 })
+
+function assertNoHistoricalImports(source: string): void {
+  assert.doesNotMatch(source, /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["'][^"']*\/(?:reconcile|inventory)(?:\.js)?["']/)
+}
+
+test("live child owners do not import historical reconciliation or inventory", async () => {
+  for (const root of [new URL("../../src/", import.meta.url), new URL("../src/", import.meta.url)]) {
+    const extension = root.pathname.includes("/dist/") ? ".js" : ".ts"
+    for (const path of ["agent/process", "runtime/owned-child", "platform/live-process"]) {
+      assertNoHistoricalImports(await readFile(new URL(path + extension, root), "utf8"))
+    }
+  }
+})
+
+test("live ownership guard rejects sibling, dynamic and side-effect historical imports", () => {
+  for (const source of ['import { x } from "./reconcile.js"', 'import("../handler/inventory.js")', 'import "./inventory.js"']) {
+    assert.throws(() => assertNoHistoricalImports(source))
+  }
+  assertNoHistoricalImports('import { x } from "../platform/live-process.js"')
+})
