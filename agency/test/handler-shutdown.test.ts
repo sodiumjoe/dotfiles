@@ -187,3 +187,12 @@ test("incomplete forced lifecycle cleanup leaves Handler status and live ownersh
   const unrelated = { ...f.input, commandId: randomUUID() }
   assert.equal((await f.service.start(unrelated)).command.state, "pending")
 })
+
+test("shutdown verifies catalog discharge outside the shared mutation queue", { timeout: 1500 }, async t => {
+  const ctx = await context(t)
+  let verified = false
+  ctx.catalog = { freezeAndDrain: async () => undefined, resume() {}, verifyDischarged: async () => ctx.mutations.queue.run(async () => { verified = true }) }
+  const reply = await shutdownHandler(request(), ctx)
+  assert.equal(reply.ok, true)
+  assert.equal(verified, true)
+})

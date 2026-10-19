@@ -9,11 +9,27 @@ await runWorker(async context => {
     try { await rpc.request("model/list", {}) } finally { rpc.close() }
   }
   const response = new Promise<void>((resolve, reject) => {
-    child.stdout.once("data", () => resolve())
-    child.stdout.once("error", reject)
+    let settled = false
+    const data = () => finish()
+    const error = (cause: Error) => finish(cause)
+    const abort = () => finish(new Error("fixture discovery cancelled"))
+    function finish(cause?: Error) {
+      if (settled) return
+      settled = true
+      child.stdout.off("data", data)
+      child.stdout.off("error", error)
+      context.signal.removeEventListener("abort", abort)
+      if (cause) reject(cause)
+      else resolve()
+    }
+    child.stdout.once("data", data)
+    child.stdout.once("error", error)
+    context.signal.addEventListener("abort", abort, { once: true })
+    void child.terminal.then(() => finish(new Error("fixture native closed before output")))
+    if (context.signal.aborted) abort()
   })
   child.stdin.write("catalog\n")
   await response
-  if (context.request.profile.configurationFiles.length === 5) await new Promise(resolve => setTimeout(resolve, 100))
+  if (context.request.profile.configurationFiles.length === 5) await child.terminal
   return { models: [], providerVersion: "fixture-1", providerVersionSource: "reported" }
 })

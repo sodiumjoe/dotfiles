@@ -9,7 +9,7 @@ import { until } from "./control-support.js"
 import { CATALOG_PROTOCOL } from "../src/catalog/protocol.js"
 import { createCatalogStore } from "../src/catalog/store.js"
 import { sameProcess } from "../src/platform/types.js"
-import { writeLaunchRecord } from "../src/platform/private-state.js"
+import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import { readProbeDiagnostic } from "../src/catalog/diagnostics.js"
 
 test("empty catalog configuration starts no probes", { timeout: 60000 }, async t => {
@@ -85,6 +85,12 @@ test("ordinary shutdown cancels a registered discovery group without agent flags
   assert.ok(reply.ok)
   await until(async () => await f.observe(handler.record.process!.pid) === null ? true : undefined)
   assert.equal((await createCatalogStore(f.paths.persistentRoot).readCommand(commandId))!.state, "interrupted")
+  const final = await readLaunchRecordForReconciliation(active.path)
+  assert.equal(final.phase, "cleanup_verified")
+  const diagnostic = await readProbeDiagnostic((await createCatalogStore(f.paths.persistentRoot).inventory()).metadata.find(meta => meta.attemptId === final.launchAttemptId)!)
+  assert.ok(diagnostic?.nativeTerminal)
+  assert.ok(diagnostic.workerTerminal)
+  assert.equal(diagnostic.stderrComplete, true)
   for (const identity of active.record.provider!.group.observed) assert.equal(await f.adapter.readProcess(identity.pid), null)
 })
 

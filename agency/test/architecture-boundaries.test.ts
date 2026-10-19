@@ -41,7 +41,7 @@ function assertNoHistoricalImports(source: string): void {
 test("live child owners do not import historical reconciliation or inventory", async () => {
   for (const root of [new URL("../../src/", import.meta.url), new URL("../src/", import.meta.url)]) {
     const extension = root.pathname.includes("/dist/") ? ".js" : ".ts"
-    for (const path of ["agent/process", "runtime/owned-child", "platform/live-process"]) {
+    for (const path of ["agent/process", "runtime/owned-child", "platform/live-process", "catalog/worker", "catalog/worker-protocol", "catalog/probe-transitions", "catalog/drivers/transport"]) {
       assertNoHistoricalImports(await readFile(new URL(path + extension, root), "utf8"))
     }
   }
@@ -52,4 +52,14 @@ test("live ownership guard rejects sibling, dynamic and side-effect historical i
     assert.throws(() => assertNoHistoricalImports(source))
   }
   assertNoHistoricalImports('import { x } from "../platform/live-process.js"')
+})
+
+test("only explicit catalog recovery modules import historical reconciliation", async () => {
+  for (const root of [new URL("../../src/catalog/", import.meta.url), new URL("../src/catalog/", import.meta.url)]) {
+    const extension = root.pathname.includes("/dist/") ? ".js" : ".ts"
+    for (const path of await readdir(root, { recursive: true })) {
+      if (!path.endsWith(extension) || ["recovery", "probe-recovery"].some(name => path === name + extension)) continue
+      assert.doesNotMatch(await readFile(new URL(path, root), "utf8"), /(?:\bfrom\s*|\bimport\s*(?:\(\s*)?)["'][^"']*\/reconcile(?:\.js)?["']/)
+    }
+  }
 })

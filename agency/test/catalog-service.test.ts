@@ -8,7 +8,7 @@ import { CatalogError, failure, type ConfigEvidence, type ProviderId, type Provi
 import { createCatalogStore } from "../src/catalog/store.js"
 import type { ProbeOutcome, ProbeRequest, ProbeResult, ProbeRuntime } from "../src/catalog/probes.js"
 import { MutationQueue } from "../src/handler/mutations.js"
-import { gate } from "./catalog-support.js"
+import { gate, syntheticProbeFixture } from "./catalog-support.js"
 import { privateRoot, until } from "./control-support.js"
 
 const result = (providerId: ProviderId, modelId = "a"): ProbeResult => ({ models: [{ providerId, modelId, resolvedModelId: null, displayName: "Model", reasoning: { state: "unknown" }, modes: { state: "unknown" }, availability: "advertised" }], providerVersion: null, providerVersionSource: "unknown" })
@@ -442,4 +442,49 @@ test("visible completed commands repeat failed durability before reporting compl
   assert.equal((await f.service.refresh(command, f.generation)).command.state, "completed")
   assert.equal(completionWrites, 2)
   assert.equal(f.started.length, 2)
+})
+
+for (const scenario of ["held-native-publication", "held-cleanup-publication"]) test("catalog drain waits for admitted " + scenario, { timeout: 15000 }, async t => {
+  const f = await syntheticProbeFixture(t, scenario, true), outcomes: ProbeOutcome[] = []
+  const service = createCatalogService({ paths: { persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "socket"), hostKey: f.request.meta.hostId }, generation: f.generation, queue: f.queue, store: f.store, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile], probes: { ...f.runtime, async run(request, signal) { f.bindRequest(request); const outcome = await f.runtime.run(request, signal); outcomes.push(outcome); return outcome } } })
+  t.after(() => service.close())
+  await service.initialize(); await service.refresh(randomUUID(), f.generation)
+  await f.workerObserved.promise; f.releaseWorkerIdentity()
+  if (scenario === "held-native-publication") await f.nativePublication.promise
+  else {
+    await f.nativeRegistered.promise
+    f.child.emit("message", { type: "failure", attemptId: f.request.meta.attemptId, generation: f.generation })
+    await f.cleanupPublication.promise
+  }
+  const drainStarted = gate(), drained = gate()
+  let finished = false
+  const operation = (async () => { drainStarted.resolve(); await service.freezeAndDrain(); finished = true; drained.resolve() })()
+  await drainStarted.promise; await f.physicalCleanup.promise
+  assert.equal(finished, false)
+  assert.equal(outcomes.length, 0)
+  f.advanceClock(10000)
+  if (scenario === "held-native-publication") f.releaseNativePublication()
+  else f.releaseCleanupPublication()
+  await drained.promise; await operation
+  assert.equal(outcomes[0]!.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcomes[0]!.result, null)
+  assert.equal(await f.store.readCurrent(), null)
+  assert.equal((await service.list()).providers.find(p => p.providerId === f.profile.id)!.verifiedAt, null)
+  assert.equal(f.recoverCalls(), 0)
+})
+
+test("visible terminal cleanup with failed durability cannot publish fresh catalog evidence", { timeout: 15000 }, async t => {
+  const f = await syntheticProbeFixture(t, "terminal-fsync-failure", true), terminal = gate()
+  const service = createCatalogService({ paths: { persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "socket"), hostKey: f.request.meta.hostId }, generation: f.generation, queue: f.queue, store: f.store, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile], onTerminal: () => terminal.resolve(), probes: { ...f.runtime, async run(request, signal) { f.bindRequest(request); return f.runtime.run(request, signal) } } })
+  t.after(() => service.close())
+  await service.initialize(); await service.refresh(randomUUID(), f.generation)
+  await f.workerObserved.promise; f.releaseWorkerIdentity()
+  await f.nativeRegistered.promise; f.releaseResult(); await terminal.promise
+  const inventory = await f.store.inventory()
+  assert.equal(inventory.launches[0]!.record.phase, "cleanup_verified")
+  const view = await service.list(), provider = view.providers.find(p => p.providerId === f.profile.id)!
+  assert.equal(provider.verifiedAt, null)
+  assert.equal(provider.state, "blocked")
+  await service.freezeAndDrain()
+  await assert.rejects(service.verifyDischarged(), { code: "PROBE_CLEANUP_UNVERIFIED" })
 })

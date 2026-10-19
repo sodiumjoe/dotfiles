@@ -47,7 +47,7 @@ export function gate<T = void>() {
 }
 
 export async function catalogHandlerFixture(t: TestContext, options: { enabled?: ProviderId[]; wait?: boolean; scenario?: "uncertain" } = {}) {
-  const f = await controlFixture(t)
+  const f = await controlFixture(t, {}, undefined, undefined, { retainRoot: true })
   f.beforeCleanup(async () => {
     if (options.scenario === "uncertain") return
     let handler

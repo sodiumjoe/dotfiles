@@ -29,6 +29,8 @@ export async function runWorker(discover: (context: DriverContext) => Promise<Pr
   let request: ProbeRequest | undefined, started = false, invoked = false, connected = true, stopping = false, input = 0, output = 0
   let nativeOwner: OwnedChild | undefined, acceptRegistration: (() => void) | undefined, rejectRegistration: (() => void) | undefined
   let binding: WorkerBinding | undefined, stage: ProbeStage = "worker-config"
+  let resolveTermination!: () => void
+  const termination = new Promise<void>(resolve => { resolveTermination = resolve })
   let resolveStop!: () => void
   const stopped = new Promise<void>(resolve => { resolveStop = resolve })
   const work: Promise<unknown>[] = [], sends: Promise<void>[] = []
@@ -103,8 +105,9 @@ export async function runWorker(discover: (context: DriverContext) => Promise<Pr
     })().catch(cause => failure(cause))
     work.push(admitted)
   }
-  const disconnect = () => { connected = false; stop() }
-  host.on("message", message); host.on("disconnect", disconnect); host.on("SIGTERM", stop)
+  const terminate = () => { resolveTermination(); stop() }
+  const disconnect = () => { connected = false; resolveTermination(); stop() }
+  host.on("message", message); host.on("disconnect", disconnect); host.on("SIGTERM", terminate)
   await stopped
   for (let drained = 0; drained < work.length;) { const batch = work.slice(drained); drained = work.length; await Promise.allSettled(batch) }
   let settlement: NativeSettlement | undefined
@@ -117,7 +120,8 @@ export async function runWorker(discover: (context: DriverContext) => Promise<Pr
   await Promise.allSettled(sends)
   if (settlement && connected && host.connected()) send({ type: "native-settled", native: settlement })
   await Promise.allSettled(sends)
-  host.off("message", message); host.off("disconnect", disconnect); host.off("SIGTERM", stop)
+  if (connected && host.connected()) await termination
+  host.off("message", message); host.off("disconnect", disconnect); host.off("SIGTERM", terminate)
   host.finish()
 }
 

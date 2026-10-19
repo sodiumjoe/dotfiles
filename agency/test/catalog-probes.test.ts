@@ -13,7 +13,7 @@ import { cleanProbeEnvironment } from "../src/catalog/probes.js"
 import { spawn } from "node:child_process"
 import fs from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
-import { mkdtemp, mkdir, readFile, stat, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, stat, realpath, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
@@ -413,12 +413,13 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
   const ignoreTerm = scenario === "ignore-term"
   if (catalogFixtureFailure) throw catalogFixtureFailure
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), "agy-catalog-")), adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
-  let pid: number | undefined, operation: Promise<unknown> | undefined
+  let pid: number | undefined, operation: Promise<unknown> | undefined, workerClosed: Promise<void> | undefined
   const attemptId = randomUUID(), generation = randomUUID(), commandId = randomUUID(), hostId = "a".repeat(64)
   const path = join(root, "catalog/probe-launches", attemptId + ".json")
   t.after(async () => {
     try {
     await operation?.catch(() => undefined)
+    await workerClosed
     if (pid !== undefined) {
       const record = await readLaunchRecordForReconciliation(path)
       assert.notEqual(record.provider, null, `retained uncertain fixture root: ${root}`)
@@ -431,7 +432,7 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
         assert.deepEqual(await adapter.readGroup(pid), [])
       }
     }
-    await rm(root, { recursive: true })
+    t.diagnostic("retained fixture root: " + root)
     } catch (cause) { catalogFixtureFailure = new Error(`unverified fixture cleanup; retained ${root}`, { cause }); throw catalogFixtureFailure }
   })
   await mkdir(join(root, "home"), { mode: 0o700 })
@@ -443,7 +444,7 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
   const evidence = await observeConfig(profile), store = createCatalogStore(root)
   const request: ProbeRequest = { profile, evidence, meta: { version: 2, hostId, handlerGeneration: generation, commandId, providerId: profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(root, "catalog/work", attemptId) } }
   await store.writeCommand({ version: 1, commandId, hostId, handlerGeneration: generation, batchId: randomUUID(), fingerprints: [{ providerId: profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: profile.id, attemptId }], state: "pending", snapshotId: null }, null)
-  const runtime = createProbeRuntime({ paths: { hostKey: hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, queue: new MutationQueue(), store, generation, canStart: () => true, workerFile: fileURLToPath(new URL("./fixtures/catalog-worker.js", import.meta.url)), dependencies: { env: { HOME: join(root, "home"), PATH: "/usr/bin:/bin" }, spawn: ((...args: Parameters<typeof spawn>) => { const child = spawn(...args); pid = child.pid; return child }) as typeof spawn } })
+  const runtime = createProbeRuntime({ paths: { hostKey: hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, queue: new MutationQueue(), store, generation, canStart: () => true, workerFile: fileURLToPath(new URL("./fixtures/catalog-worker.js", import.meta.url)), dependencies: { env: { HOME: join(root, "home"), PATH: "/usr/bin:/bin" }, spawn: ((...args: Parameters<typeof spawn>) => { const child = spawn(...args); pid = child.pid; workerClosed = new Promise(resolve => child.once("close", () => resolve())); return child }) as typeof spawn } })
   await runtime.recover()
   const run = runtime.run(request, new AbortController().signal)
   operation = run
@@ -460,12 +461,18 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
   } else if (scenario === "native-early-exit") {
     assert.equal(outcome.result, null)
     assert.equal(diagnostic.nativeTerminal?.code, 23)
+    assert.ok(diagnostic.nativeIdentity)
+    assert.equal(outcome.record.provider!.group.observed.length, 2)
     assert.equal(diagnostic.firstFailure?.stage, "native-exit")
     assert.equal(await readFile(join(request.meta.workPath, "native.stderr"), "utf8"), "native fixture exited\n")
   } else if (scenario === "native-launch-failure") {
     assert.equal(outcome.result, null)
     assert.equal(diagnostic.firstFailure?.stage, "native-launch")
     assert.equal(diagnostic.firstFailure?.code, "EACCES")
+  } else if (ignoreTerm) {
+    assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+    assert.equal(outcome.result, null)
+    assert.equal(diagnostic.workerTerminal?.signal, "SIGKILL")
   } else {
     assert.equal(outcome.error, null)
     assert.equal(outcome.result!.providerVersion, "fixture-1")
@@ -478,8 +485,8 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
       assert.ok(stderr.every(byte => byte === 255))
     }
   }
-  assert.equal(outcome.record.phase, "cleanup_verified")
-  await runtime.verifyDischarged()
+  if (ignoreTerm) await assert.rejects(runtime.verifyDischarged(), { code: "PROBE_CLEANUP_UNVERIFIED" })
+  else { assert.equal(outcome.record.phase, "cleanup_verified"); await runtime.verifyDischarged() }
 })
 
 test("current discovery never invokes historical reconciliation or reinitializes its owners", async t => {

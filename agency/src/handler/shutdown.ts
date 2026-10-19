@@ -57,7 +57,6 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
   context.state.reconciliation = { classified: entries.length, total: entries.length, uncertain: entries.filter(entry => entry.record.phase === "quarantined").length }
   if (context.state.issues.length || entries.some(entry => entry.record.phase !== "cleanup_verified")) throw new ControlError("INCOMPLETE", "launch cleanup remains unverified")
   if (context.record.process === null) throw new ControlError("INCOMPLETE", "Handler identity unavailable")
-  await context.catalog?.verifyDischarged()
   const receipt: ShutdownReceipt = { version: 1, commandId: request.commandId, handlerGeneration: context.record.generation, hostId: context.record.hostId, handlerIdentity: context.record.process, stopAgents: request.stopAgents, state: "accepted" }
   await (context.publishReceipt ?? writeShutdownReceipt)(context.paths.persistentRoot, receipt)
   context.accepted = receipt
@@ -83,6 +82,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
       const operation = Promise.resolve().then(async () => {
         await context.agents?.freezeAndDrain(request.stopAgents)
         await context.catalog?.freezeAndDrain()
+        await context.catalog?.verifyDischarged()
         return context.mutations.queue.run(async () => {
           try {
             if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")

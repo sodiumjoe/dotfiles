@@ -55,7 +55,7 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv, rootPolicy: { retainRoot?: boolean } = {}) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
@@ -142,7 +142,8 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       assert.deepEqual(await adapter.readGroup(provider.record.provider!.group.leader.pid), [])
     }
     await writeFile(join(root, "cleanup.json"), JSON.stringify({ identities: owned, survivors: [], failedStarts: failedStarts.map(String) }), { mode: 0o600 })
-    await rm(root, { recursive: true })
+    if (rootPolicy.retainRoot) t.diagnostic("retained fixture root: " + root)
+    else await rm(root, { recursive: true })
   })().catch(error => { throw failFixtureBatch(error) })
   t.after(cleanup)
   await chown(root, process.getuid!(), process.getgid!())

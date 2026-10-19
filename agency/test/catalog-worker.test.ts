@@ -36,12 +36,13 @@ async function fixture(t: TestContext) {
   }) as typeof spawn })
   const emit = (message: object) => events.emit("message", { ...message, ...binding })
   const stop = () => emit({ type: "stop" })
+  const signal = () => events.emit("SIGTERM")
   const exit = () => { raw.emit("exit", 23, null) }
   const close = () => { raw.emit("close", 23, null) }
   const start = async () => { emit({ type: "start", request }); return context.promise }
   const waitMessage = (type: string) => { if (sent.some(message => message.type === type)) return Promise.resolve(); const g = gate(); reached.set(type, g); return g.promise }
-  t.after(async () => { stop(); driver.resolve(result); exit(); close(); for (const g of held.values()) g.resolve(); await operation; for (const stream of [stdin, stdout, stderr]) stream.destroy() })
-  return { ...f, request, raw, host, events, sent, operation, start, stop, exit, close, emit, driver, waitMessage, calls: () => calls, finishes: () => finishes, held,
+  t.after(async () => { stop(); signal(); driver.resolve(result); exit(); close(); for (const g of held.values()) g.resolve(); await operation; for (const stream of [stdin, stdout, stderr]) stream.destroy() })
+  return { ...f, request, raw, host, events, sent, operation, start, stop, signal, exit, close, emit, driver, waitMessage, calls: () => calls, finishes: () => finishes, held,
     disconnect() { connected = false; events.emit("disconnect") }, throwSpawn() { throwSpawn = true }, failSend(type: string) { failSend = type }, reports: () => sent.filter(message => message.type === "native-settled") }
 }
 
@@ -61,7 +62,7 @@ test("bound stop before spawn freezes admission and discards a late driver resul
   const f = await fixture(t), context = await f.start()
   f.stop(); f.stop()
   assert.throws(() => context.spawnNative(f.profile.executable, []))
-  f.driver.resolve(result)
+  f.driver.resolve(result); f.signal()
   await f.operation
   assert.equal(f.calls(), 0)
   assert.deepEqual(f.reports().map(message => message.native), [{ kind: "not-spawned" }])
@@ -73,7 +74,7 @@ test("bound stop before spawn freezes admission and discards a late driver resul
 test("stop waits for admitted driver work even without a native child", async t => {
   const f = await fixture(t); await f.start(); f.stop(); await turn()
   assert.equal(f.finishes(), 0)
-  f.driver.resolve(result); await f.operation
+  f.driver.resolve(result); f.signal(); await f.operation
   assert.equal(f.finishes(), 1)
 })
 
@@ -85,7 +86,7 @@ test("native exit alone cannot finish until actual close and report send callbac
   assert.equal(f.reports().length, 0); assert.equal(f.finishes(), 0)
   f.close(); await f.waitMessage("native-settled")
   assert.equal(f.finishes(), 0)
-  report.resolve(); await f.operation
+  report.resolve(); f.signal(); await f.operation
   assert.deepEqual(f.reports()[0].native, { kind: "exit", pid: 20002, code: 23, signal: null })
   assert.equal(f.finishes(), 1)
 })
@@ -96,7 +97,7 @@ test("PID-bearing error and close cannot manufacture a native terminal", async t
   f.raw.emit("error", new Error("transport")); f.close(); f.driver.resolve(result); await turn()
   assert.equal(f.reports().length, 0); assert.equal(f.finishes(), 0)
   assert.equal(f.sent.some(message => message.type === "native-terminal"), false)
-  f.exit(); await f.operation
+  f.exit(); f.signal(); await f.operation
   assert.equal(f.reports().length, 1)
 })
 
@@ -105,14 +106,14 @@ test("actual undefined-PID spawn error requires close before reporting", async t
   Object.assign(f.raw, { pid: undefined }); context.spawnNative(f.profile.executable, [])
   f.raw.emit("error", Object.assign(new Error("spawn"), { code: "ENOENT" })); f.driver.resolve(result); await turn()
   assert.equal(f.reports().length, 0)
-  f.close(); await f.operation
+  f.close(); f.signal(); await f.operation
   assert.deepEqual(f.reports()[0].native, { kind: "spawn-error" })
 })
 
 test("synchronously thrown native invocation remains unknown", async t => {
   const f = await fixture(t), context = await f.start(); f.throwSpawn()
   assert.throws(() => context.spawnNative(f.profile.executable, []))
-  f.stop(); f.driver.resolve(result); await f.operation
+  f.stop(); f.driver.resolve(result); f.signal(); await f.operation
   assert.equal(f.calls(), 1); assert.equal(f.reports().length, 0)
 })
 
@@ -123,7 +124,7 @@ test("cancellation rejects registration-gated writes and ends native stdin", asy
   assert.ok(await written)
   assert.equal(f.raw.stdin!.writableEnded, true)
   assert.throws(() => context.spawnNative(f.profile.executable, []))
-  f.exit(); f.close(); await f.operation
+  f.exit(); f.close(); f.signal(); await f.operation
 })
 
 for (const mode of ["held", "failed", "disconnect"] as const) test("worker drains native ownership with " + mode + " terminal IPC", async t => {
@@ -132,7 +133,7 @@ for (const mode of ["held", "failed", "disconnect"] as const) test("worker drain
   if (mode !== "disconnect") f.held.set("native-terminal", terminalSend)
   if (mode === "failed") f.failSend("native-terminal")
   if (mode === "disconnect") f.disconnect()
-  else f.stop()
+  else { f.stop(); f.signal() }
   f.driver.resolve(result); await turn()
   assert.equal(f.finishes(), 0)
   f.exit(); f.close(); await turn()
@@ -143,7 +144,7 @@ for (const mode of ["held", "failed", "disconnect"] as const) test("worker drain
 
 test("duplicate start fails protocol admission and cannot duplicate native settlement", async t => {
   const f = await fixture(t); await f.start()
-  f.emit({ type: "start", request: f.request }); f.driver.resolve(result); await f.operation
+  f.emit({ type: "start", request: f.request }); f.driver.resolve(result); f.signal(); await f.operation
   assert.equal(f.sent.filter(message => message.type === "failure").length, 1)
   assert.equal(f.reports().length, 1)
 })
@@ -151,11 +152,22 @@ test("duplicate start fails protocol admission and cannot duplicate native settl
 test("foreign stop cannot masquerade as the active binding", async t => {
   const f = await fixture(t); await f.start()
   f.events.emit("message", { type: "stop", attemptId: randomUUID(), generation: f.request.meta.handlerGeneration })
-  f.driver.resolve(result); await f.operation
+  f.driver.resolve(result); f.signal(); await f.operation
   assert.equal(f.sent.some(message => message.type === "failure"), true)
 })
 
 test("native settlement parser refuses extra, malformed and contradictory facts", () => {
   for (const value of [{ kind: "exit", pid: 0, code: 0, signal: null }, { kind: "exit", pid: 2, code: null, signal: "bad" }, { kind: "spawn-error", pid: 2 }, { kind: "not-spawned", code: 0 }, { kind: "close" }]) assert.throws(() => parseNativeSettlement(value))
   assert.deepEqual(parseNativeSettlement({ kind: "exit", pid: 2, code: 23, signal: null }), { kind: "exit", pid: 2, code: 23, signal: null })
+})
+
+test("settled worker retains its live leader until platform termination or IPC loss", async t => {
+  const f = await fixture(t), context = await f.start()
+  context.spawnNative(f.profile.executable, [])
+  f.exit(); f.close(); f.stop(); f.driver.resolve(result)
+  await f.waitMessage("native-settled"); await turn()
+  assert.equal(f.finishes(), 0)
+  f.signal(); await f.operation
+  assert.equal(f.finishes(), 1)
+  assert.deepEqual(f.reports()[0].native, { kind: "exit", pid: 20002, code: 23, signal: null })
 })
