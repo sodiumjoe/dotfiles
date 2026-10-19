@@ -54,17 +54,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     for (const p of profiles) { try { evidence.set(p.id, await (options.observeConfig ?? observeConfig)(p)) } catch (error) { errors.set(p.id, failure(error)) } }
     return { profiles, evidence, errors, fingerprints: [...evidence].map(([providerId, e]) => ({ providerId, fingerprint: e.fingerprint })) }
   }
-  async function verify(): Promise<void> {
-    try {
-      const inventory = await store.inventory()
-      scopeProbeIssues(inventory)
-      await options.retirement?.validate()
-      const sorted = (values: RefreshCommand[], kind: string) => values.filter(c => !hidden(kind, c.commandId)).sort((a, b) => a.commandId < b.commandId ? -1 : 1)
-      const expected = sorted([...commands.values()], "commands")
-      if (!isDeepStrictEqual(inventory.automatic, sorted([...privateCommands.values()], "automatic"))) throw new CatalogError("CATALOG_UNAVAILABLE")
-      if (inventory.issues.some(issue => !issue.startsWith("probe-meta/") && !issue.startsWith("probe-launches/")) || !isDeepStrictEqual(inventory.commands, expected) || !isDeepStrictEqual(await store.readCurrent(), diskCurrent) || [...inventory.commands, ...inventory.automatic].some(c => c.hostId !== paths.hostKey)) throw new CatalogError("CATALOG_UNAVAILABLE")
-    } catch (error) { latch(error, true); throw new CatalogError("CATALOG_UNAVAILABLE") }
-  }
   async function persist(value: RefreshCommand, expected: RefreshCommand | null, privateOwner = false): Promise<void> {
     try { await (privateOwner ? store.writeAutomatic : store.writeCommand)(value, expected) }
     finally {
@@ -80,7 +69,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   }
   async function finalize(batch: Batch): Promise<void> {
     if (active !== batch || !batch.finished) return
-    await verify()
     const interrupted = () => frozen || closed || options.shutdownPending() || !options.isReady()
     let interrupt = interrupted()
     if (!interrupt && batch.snapshot !== null) {
@@ -148,7 +136,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     })().catch(error => { batch.finished = true; latch(error) })
   }
   async function accept(commandId: string, privateOwner = false): Promise<RefreshResult> {
-    await verify()
     if ((privateOwner ? commands : privateCommands).has(commandId)) throw new CatalogError("COMMAND_CONFLICT")
     const retained = (privateOwner ? privateCommands : commands).get(commandId)
     if (retained && retained.handlerGeneration !== generation) throw new CatalogError("COMMAND_CONFLICT")
@@ -211,7 +198,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
       if (current && current.hostId !== paths.hostKey) throw new CatalogError("CATALOG_UNAVAILABLE")
       try { await probes.recover(); for (const [providerId, issue] of probes.issues?.() ?? []) probeIssues.set(providerId, issue) } catch (error) { latch(error) }
       await queue.run(async () => {
-        await verify()
         for (const c of owners()) if (c.state === "pending") await persist({ ...c, state: "interrupted" }, c, privateCommands.has(c.commandId))
       })
     } catch (error) { latch(error, true) }
@@ -219,7 +205,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   }
   async function list(): Promise<CatalogView> {
     const result = await queue.run(async () => {
-      try { await verify() } catch { }
       let observed: Config = { profiles: [], evidence: new Map(), errors: new Map(), fingerprints: [] }
       try { observed = await config() } catch (error) { latch(error) }
       const now = clock.now()
@@ -253,7 +238,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     },
     launchEvidence(providerId) {
       return queue.run(async () => {
-        await verify()
         if (!canStart() || !current) throw new CatalogError("CATALOG_UNAVAILABLE")
         const observed = await config(), profile = observed.profiles.find(p => p.id === providerId), configuration = observed.evidence.get(providerId), provider = current.providers.find(p => p.providerId === providerId)
         if (!profile || !configuration || !provider || observed.errors.has(providerId) || provider.error || provider.verifiedHandlerGeneration !== generation || provider.fingerprint !== configuration.fingerprint || !isFresh(provider.verifiedAt, clock.now())) throw new CatalogError("CATALOG_UNAVAILABLE")
@@ -273,7 +257,7 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
       }
     },
     resume() { if (closed) return; frozen = false; void automatic() },
-    async verifyDischarged() { await verify(); await probes.verifyDischarged(); if (blocked || active || owners().some(c => c.state === "pending")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
+    async verifyDischarged() { await probes.verifyDischarged(); if (blocked || active || owners().some(c => c.state === "pending")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
     close() { closed = true; frozen = true; scheduling = false; cancelTimer?.(); active?.controller.abort() },
   }
 }

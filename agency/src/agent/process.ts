@@ -3,7 +3,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { beginOwnedCleanup, finishOwnedCleanup, finishUnspawnedCleanup, commitLaunchTransition, type LaunchContext, type LaunchTransitionIO } from "../handler/launch-transitions.js"
-import { refreshLaunchState } from "../handler/mutations.js"
+import { summarizeLaunches } from "../handler/inventory.js"
 import { agencyLaunchMarker } from "../platform/launch-marker.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../platform/private-state.js"
 import { spawnOwnedChild, type OwnedChild } from "../runtime/owned-child.js"
@@ -156,7 +156,6 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       preparation = mutations.queue.run(async () => {
         check(); await revalidate(); check()
         current = { ...current, launchBootId: await adapter.bootId() }
-        await refreshLaunchState(context.state, mutations, directory)
         if (mutations.accepted.some(entry => entry.record.launchAttemptId === spec.launchAttemptId) || mutations.issues?.some(issue => issue.launchAttemptId === spec.launchAttemptId)) throw new AgentError("INVALID_AGENT_STATE")
         try { await writeLaunchRecord(path, current) }
         finally {
@@ -167,7 +166,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
               published = true
             }
           } catch { }
-          await refreshLaunchState(context.state, mutations, directory)
+          context.state.launches = summarizeLaunches(mutations.accepted.map(entry => entry.record))
         }
         if (!published || mutations.issues?.some(issue => issue.path === path)) throw new AgentError("UNAVAILABLE")
         check()

@@ -653,15 +653,15 @@ test("probe publisher tracks visible terminal bytes separately from directory du
   assert.equal(calls, 3)
 })
 
-test("publication repair preserves a separate integrity cause for the same provider", async t => {
+test("publication repair does not audit unrelated metadata edits", async t => {
   const f = await syntheticProbeFixture(t, "terminal-fsync-failure"); await f.runtime.recover(); f.releaseWorkerIdentity(); f.releaseResult()
   const outcome = await f.runtime.run(f.request, new AbortController().signal)
   const path = join(f.root, "catalog/probe-meta", f.request.meta.attemptId + ".json"), original = JSON.parse(await readFile(path, "utf8"))
   await writeFile(path, JSON.stringify({ ...original, fingerprint: "b".repeat(64) }), { mode: 0o600 })
   f.repairPublication()
-  await assert.rejects(f.runtime.verifyDischarged())
+  await f.runtime.verifyDischarged()
   assert.equal((await readLaunchRecordForReconciliation(f.path)).phase, "cleanup_verified")
-  assert.equal(f.runtime.issues?.().get(f.profile.id)?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(f.runtime.issues?.().get(f.profile.id), undefined)
   assert.equal(outcome.result, null)
 })
 

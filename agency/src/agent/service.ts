@@ -12,15 +12,16 @@ import { digest } from "../catalog/config.js"
 import { inventoryPage, launchChoices, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
 import { ControlError } from "../control/protocol.js"
 import { commitLaunchTransition, type LaunchContext } from "../handler/launch-transitions.js"
-import { confirmReconciledLaunch, refreshLaunchState } from "../handler/mutations.js"
+import { confirmReconciledLaunch } from "../handler/mutations.js"
+import { summarizeLaunches } from "../handler/inventory.js"
 import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
 import { cleanupBudget, configureLaunchContract, observeLaunchContract, parseLaunchContract, type ConfiguredLaunchContract, type LaunchContract } from "./contracts.js"
 import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import type { LaunchEnvironment } from "./environment.js"
-import { agentTuple, crossCheckAgents, recoverAgents, retainUnspawnedRestore, type AgentAssessment, type AgentRecoveryRepair } from "./recovery.js"
-import type { AgentInventory, AgentStateIssue, AgentStore } from "./store.js"
-import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type RuntimeLaunchSpec as LaunchSpec, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity } from "./types.js"
+import { agentTuple, recoverAgents, retainUnspawnedRestore, type AgentAssessment, type AgentRecoveryRepair } from "./recovery.js"
+import type { AgentStateIssue, AgentStore } from "./store.js"
+import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type RuntimeLaunchSpec as LaunchSpec, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity, type LegacyAgentRecord } from "./types.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
 import { createConversation, type Conversation, type ConversationListener, type ConversationObservation } from "./conversation.js"
 import { createTurnCoordinator, type AcpSubmissionRequest, type SubmissionReceipt, type SubmissionRequest, type TurnCoordinator } from "./turns.js"
@@ -152,7 +153,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   let initialized = false, closed = false, frozen = false, accepting = 0, stopping = 0
   let assessment: AgentAssessment = { unavailable: new Map(), issues: [], configurationPending: new Map() }
   const runtimeIssues = new Map<string, AgentStateIssue>()
-  let inventoryRevision = randomUUID(), inventoryFingerprint = ""
+  let inventoryRevision = randomUUID()
+  let legacyAgents: LegacyAgentRecord[] = []
   let rosterRevision = randomUUID(), rosterFingerprint = ""
   const changed = (): void => { inventoryRevision = randomUUID() }
   const cleanupDiagnostics = (): AgentStateIssue[] => (input.cleanupIssues?.() ?? []).map(message => ({ kind: "unknown", id: null, path: join(root, "retention/pending.json"), message }))
@@ -199,25 +201,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   const available = (): void => {
     if (!initialized || closed || frozen || context.shutdownPending() || context.state.phase !== "ready") throw new AgentError("NOT_READY")
-  }
-  async function verify(): Promise<AgentInventory> {
-    await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
-    const inventory = await store.inventory()
-    assessment = crossCheckAgents(context, inventory)
-    for (const repair of recoveryRepairs.values()) {
-      const agentId = repair.kind === "command" ? repair.next.target?.agentId : repair.next.definition.agentId
-      if (agentId && inventory.agents.some(record => record.definition.agentId === agentId)) assessment.unavailable.set(agentId, repair.issue)
-      else assessment.issues.push(repair.issue)
-    }
-    if (inventory.issues.some(issue => issue.path === join(root, "agents"))) throw new AgentError("UNAVAILABLE")
-    const agentIds = new Set(inventory.agents.map(record => record.definition.agentId)), commandIds = new Set(inventory.commands.map(command => command.commandId))
-    for (const agentId of records.keys()) if (!agentIds.has(agentId) && !dirtyAgents.has(agentId) && !input.retirement?.hides("agents/records/" + agentId + ".json")) records.delete(agentId)
-    for (const commandId of commands.keys()) if (!commandIds.has(commandId) && !dirty.has(commandId) && !input.retirement?.hides("agents/commands/" + commandId + ".json")) commands.delete(commandId)
-    for (const record of inventory.agents) if (!dirtyAgents.has(record.definition.agentId)) records.set(record.definition.agentId, record)
-    for (const command of inventory.commands) if (!dirty.has(command.commandId)) commands.set(command.commandId, command)
-    const fingerprint = digest(JSON.stringify([inventory, context.state.launches, assessment.issues, [...assessment.unavailable], [...runtimeIssues]]))
-    if (fingerprint !== inventoryFingerprint) { changed(); inventoryFingerprint = fingerprint }
-    return inventory
   }
   async function publishCommand(next: AgentCommand, expected: AgentCommand | null): Promise<void> {
     dirty.add(next.commandId)
@@ -272,9 +255,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       } else if (repair.kind === "agent") await publishAgent(repair.next, repair.expected)
       else await publishCommand(repair.next, repair.expected)
       recoveryRepairs.delete(key)
+      const agentId = repair.kind === "command" ? repair.next.target?.agentId : repair.next.definition.agentId
+      if (agentId && isDeepStrictEqual(assessment.unavailable.get(agentId), repair.issue)) assessment.unavailable.delete(agentId)
+      assessment.issues = assessment.issues.filter(issue => !isDeepStrictEqual(issue, repair.issue))
       repaired = true
     }
-    await verify()
     for (const op of new Set(intents.values())) retire(op)
     if (repaired) input.onTerminal?.()
   }
@@ -282,7 +267,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (closed || op.controller.signal.aborted || op.fault) throw new AgentError("STARTUP_FAILED")
     if (context.state.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
     if (context.state.phase !== "ready") throw new AgentError("NOT_READY")
-    await verify()
     if (assessment.unavailable.has(op.initial.definition.agentId) || runtimeIssues.has(op.initial.definition.agentId)) throw new AgentError("INVALID_AGENT_STATE")
     const observed = records.get(op.initial.definition.agentId)
     if (!observed || !isDeepStrictEqual(observed.definition, op.initial.definition) || !isDeepStrictEqual(observed.launch, op.initial.launch)) throw new AgentError("INVALID_AGENT_STATE")
@@ -342,7 +326,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         await retainUnspawnedRestore(context, op.initial)
         const spec = specOf(op.initial), entry = context.mutations.accepted.find(e => e.record.launchAttemptId === spec.launchAttemptId)
         if (!entry) {
-          await verify()
           return
         }
         if (entry.record.version !== 2 || entry.record.owner.kind !== "agent" || entry.record.owner.agentId !== spec.agentId || entry.record.owner.providerGeneration !== spec.providerGeneration) throw new AgentError("CLEANUP_UNVERIFIED")
@@ -350,10 +333,10 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const result = await reconcileRecord(entry.path, context.adapter, entry.record)
         if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new AgentError("CLEANUP_UNVERIFIED")
         entry.record = result.record
-        await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
+        context.state.launches = summarizeLaunches(context.mutations.accepted.map(value => value.record))
         if (result.record.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
         confirmReconciledLaunch(context.mutations, entry.path)
-        await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
+        context.state.launches = summarizeLaunches(context.mutations.accepted.map(value => value.record))
       })
     })().then(() => {
       checkCleanup()
@@ -388,6 +371,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     op.uncertain = null
     if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
+    assessment.configurationPending.delete(op.initial.definition.agentId)
     op.ready = true
     clearTimeout(op.watchdog)
     op.deadline = Infinity
@@ -451,7 +435,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   async function command(commandId: string, expectedGeneration: string): Promise<CommandView> {
     id(commandId); id(expectedGeneration)
     return queue.run(async () => {
-      await verify()
       const command = commands.get(commandId) ?? intents.get(commandId)?.accepted
       if (!command) throw new AgentError("UNAVAILABLE")
       if (command.handlerGeneration !== expectedGeneration) throw new AgentError("COMMAND_CONFLICT")
@@ -480,7 +463,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const request = native ? { ...raw, commandId: id(raw.commandId), handlerGeneration: generation, environment: parseLaunchEnvironment(raw.environment) } : kind === "start" ? parseStartInput(raw) : parseRestoreRequest(raw)
     accepting++
     try {
-      await queue.run(async () => { await verify(); available() })
+      await queue.run(async () => { available() })
       if (request.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
       const previousAgent = kind === "restore" ? records.get((request as RestoreRequest).agentId) : undefined
       const checkRestorable = (): void => {
@@ -531,7 +514,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       }
       const acceptance = trackAdmission(queue.run(async () => {
         checkCommandDeadline()
-        await verify(); available()
+        available()
         const previous = commands.get(request.commandId) ?? intents.get(request.commandId)?.accepted
         if (previous) {
           if (previous.op !== kind || !isDeepStrictEqual(previous.input, durableInput)) throw new AgentError("COMMAND_CONFLICT")
@@ -582,7 +565,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   async function importSession(raw: ImportInput): Promise<CommandView> {
     const request = parseImportInput(raw), selection = { backendId: request.backendId, nativeSessionId: request.nativeSessionId, cwd: request.cwd }
     return queue.run(async () => {
-      await verify(); available()
+      available()
       if (request.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
       if (request.backendId !== "codex-acp") throw new AgentError("UNSUPPORTED_SESSION_FEATURE")
       const finish = async (command: AgentCommandV3): Promise<CommandView> => {
@@ -625,7 +608,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     stopping++
     try {
       return await queue.run(async () => {
-        await verify()
         const prior = commands.get(request.commandId)
         if (prior) {
           if (prior.op !== "stop" || !isDeepStrictEqual(prior.input, prior.version === 3 ? { target: { agentId: request.agentId, handlerGeneration: request.handlerGeneration, providerGeneration: request.providerGeneration } } : request)) throw new AgentError("COMMAND_CONFLICT")
@@ -863,7 +845,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (!record.launch) return { record: structuredClone(record), launch: null, live: false, cleanup: "not_launched", unavailable: issueFor(record.definition.agentId) }
     const launch = context.mutations.accepted.find(e => e.record.launchAttemptId === record.launch!.launchAttemptId)?.record ?? null, op = operations.get(record.definition.agentId)
     const unavailable = issueFor(record.definition.agentId)
-    if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.handlerGeneration !== record.launch.handlerGeneration)) return { record: structuredClone(record), launch: null, live: false, cleanup: "unknown", unavailable }
+    if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.handlerGeneration !== record.launch.handlerGeneration)) return { record: structuredClone(record), launch: null, live: false, cleanup: "unknown", unavailable: { kind: "agent", id: record.definition.agentId, path: join(root, "launches", record.launch.launchAttemptId + ".json"), message: "launch ownership mismatch" } }
     return { ...(op ? { display: op.conversation.display() } : {}), record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !closed && record.launch.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase), cleanup: launch === null ? "not_launched" : launch.phase === "cleanup_verified" ? op && !op.cleanupVerified ? "unverified" : "verified" : launch.phase === "quarantined" ? "unknown" : "unverified", unavailable }
   }
   const active = (record: AgentRecord): boolean => record.launch?.handlerGeneration === generation && (record.phase === "ready" || ["starting", "restoring", "stopping"].includes(record.phase) && (!!operations.get(record.definition.agentId) || [...commands.values()].some(c => c.state === "pending" && c.target && isDeepStrictEqual(c.target, agentTuple(record)))))
@@ -877,7 +859,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     async commandReceipt(commandId, expectedGeneration) {
       id(commandId); id(expectedGeneration)
       return queue.run(async () => {
-        await verify()
         const saved = commands.get(commandId) ?? intents.get(commandId)?.accepted
         if (!saved) return null
         if (saved.handlerGeneration !== expectedGeneration) throw new AgentError("COMMAND_CONFLICT")
@@ -1015,8 +996,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     async page(raw) {
       const options = parsePageInput(raw)
       return queue.run(async () => {
-        const inventory = await verify()
-        const legacy = inventory.legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
+        const legacy = legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
         const agents = pageAgents(options.activeOnly ?? false)
         return inventoryPage({ revision: inventoryRevision, agents: options.activeOnly ? agents : [...agents, ...legacy], issues: pageIssues() }, options)
       })
@@ -1033,12 +1013,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         if (repair.kind !== "command") { recoveryRepairs.set(`${repair.kind}:${repair.next.definition.agentId}`, repair); dirtyAgents.add(repair.next.definition.agentId) }
         else { recoveryRepairs.set(`command:${repair.next.commandId}`, repair); dirty.add(repair.next.commandId) }
       }
+      legacyAgents = recovered.inventory.legacyAgents
       assessment = recovered.assessment; initialized = true
     },
     async list() {
       return queue.run(async () => {
-        const inventory = await verify()
-        const legacy = inventory.legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
+        const legacy = legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
         const result: AgentList = { state: "agents", agents: [...[...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json")).sort((a, b) => a.definition.agentId.localeCompare(b.definition.agentId)).map(agentView), ...legacy], issues: [...assessment.issues, ...cleanupDiagnostics()] }
         if (Buffer.byteLength(JSON.stringify(result)) > 7 * 1024 * 1024) throw new AgentError("INCOMPLETE")
         return result
@@ -1047,14 +1027,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     sessionRecord(agentId) {
       id(agentId)
       return queue.run(async () => {
-        await verify()
         const record = records.get(agentId)
         return record && !input.retirement?.hides("agents/records/" + agentId + ".json") ? agentView(record) : null
       })
     },
     async current(cwd) {
       return queue.run(async () => {
-        await verify()
         const agents = [...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json")).map(agentView).filter(agent => agent.live && agent.record.definition.cwd === cwd)
         return { state: "current", cwd, agents }
       })
@@ -1085,7 +1063,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       capture()
       while (launchAdmissions.size) await settle([...launchAdmissions])
       capture()
-      try { await queue.run(verify) } catch (error) { failures.push(error) }
       const scheduled = new Set<Live>()
       for (const record of records.values()) {
         const view = agentView(record)
@@ -1121,7 +1098,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         || [...admitted].some(op => !op.cleanupVerified || op.terminalAgent && !op.terminalAgentDurable)) throw new AgentError("INCOMPLETE")
     },
     resume() { if (!closed) frozen = false },
-    async verifyDischarged() { await verify(); ordinary(); if (dirty.size || dirtyAgents.size || assessment.unavailable.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },
+    async verifyDischarged() { ordinary(); if (dirty.size || dirtyAgents.size || assessment.unavailable.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },
     close() { closed = true; frozen = true; permissions.close(); for (const op of new Set([...operations.values(), ...intents.values()])) { op.editor?.close(); clearTimeout(op.watchdog); op.prompt?.controller.abort(); op.owner?.dispose(); op.controller.abort(); op.turns?.close(op.fault); op.conversation.close() } },
   }
 }

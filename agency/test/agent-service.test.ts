@@ -241,7 +241,7 @@ test("catalog refresh before a prompt does not invalidate its live session", asy
   assert.equal(record.version === 3 && record.phase, "ready")
 })
 
-test("healthy agents continue beside corrupt agent and unknown files, then issues clear after repair", async t => {
+test("external history edits do not change running state until initialization", async t => {
   const f = await agentServiceFixture(t)
   const healthy = await completed(f.service, (await f.service.start(f.input)).command)
   const damagedRequest = { ...f.input, commandId: randomUUID() }
@@ -259,12 +259,12 @@ test("healthy agents continue beside corrupt agent and unknown files, then issue
   assert.equal((await completed(f.service, (await f.service.restore(restore)).command)).command.result?.outcome, "restored")
   const listed = await f.service.list()
   assert.equal(listed.agents.some(view => view.record.version === 3 && view.record.definition.agentId === healthy.command.target!.agentId), true)
-  assert.deepEqual(listed.issues.map(issue => issue.path), [damagedPath, unknownPath])
+  assert.deepEqual(listed.issues, [])
   await writeFile(damagedPath, saved); await rm(unknownPath)
   assert.deepEqual((await f.service.list()).issues, [])
 })
 
-test("missing related command is unavailable only on its agent view until repaired", async t => {
+test("a cached receipt remains available after an external command edit", async t => {
   const f = await agentServiceFixture(t)
   const ready = await completed(f.service, (await f.service.start(f.input)).command)
   const commandPath = join(f.root, "agents/commands", f.input.commandId + ".json"), saved = await readFile(commandPath)
@@ -273,8 +273,8 @@ test("missing related command is unavailable only on its agent view until repair
   assert.deepEqual(listed.issues, [])
   assert.equal(view?.record.version, 3)
   if (view?.record.version !== 3) throw new Error("missing agent view")
-  assert.equal(view && "unavailable" in view ? view.unavailable?.path : null, commandPath)
-  await assert.rejects(f.service.prompt({ ...ready.command.target!, text: "blocked" }), { code: "INVALID_AGENT_STATE" })
+  assert.equal(view && "unavailable" in view ? view.unavailable : undefined, null)
+  assert.equal((await f.service.prompt({ ...ready.command.target!, text: "continue" })).stopReason, "end_turn")
   const unrelated = { ...f.input, commandId: randomUUID() }
   const started = await completed(f.service, (await f.service.start(unrelated)).command)
   assert.equal(started.command.result?.outcome, "started")
@@ -1048,12 +1048,12 @@ test("shutdown waits for timed-out physical admission and prevents its spawn", a
   assert.equal(f.spawns(), 0)
 })
 
-test("pre-drain verification failure still stops admitted live owners", async t => {
+test("shutdown does not inventory retained state before stopping live owners", async t => {
   const f = await agentServiceFixture(t)
   await completed(f.service, (await f.service.start(f.input)).command)
   const inventory = f.store.inventory
   f.store.inventory = async () => { throw new Error("pre-drain verification") }
-  await assert.rejects(f.service.freezeAndDrain(true), { code: "INCOMPLETE" })
+  await f.service.freezeAndDrain(true)
   assert.ok(f.cleanupCalls() > 0)
   f.store.inventory = inventory
 })
@@ -1073,4 +1073,19 @@ test("unspawned restore without an owner retains its stopped native session", as
   assert.equal(record!.phase, "recoverable")
   assert.deepEqual(record!.session, ready.command.result!.session)
   assert.equal(f.spawns(), 1)
+})
+
+test("ordinary agent operations use initialized state without inventory scans", async t => {
+  const f = await agentServiceFixture(t)
+  f.store.inventory = async () => { throw new Error("unexpected inventory") }
+  const command = await completed(f.service, (await f.service.start(f.input)).command)
+  const target = command.command.target!
+  assert.equal(command.command.result?.outcome, "started")
+  assert.equal((await f.service.commandReceipt(f.input.commandId, f.input.handlerGeneration))?.command.state, "completed")
+  assert.equal((await f.service.sessionRecord(target.agentId))?.live, true)
+  assert.equal((await f.service.current(f.workspace)).agents.length, 1)
+  assert.equal((await f.service.page({ limit: 20 })).agents.length, 1)
+  assert.equal((await f.service.list()).agents.length, 1)
+  assert.equal((await f.service.prompt({ ...target, text: "continue" })).stopReason, "end_turn")
+  await f.service.freezeAndDrain(true)
 })

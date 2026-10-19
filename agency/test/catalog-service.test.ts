@@ -199,7 +199,7 @@ test("uncertain probe cleanup leaves verified evidence and unrelated provider la
   await assert.rejects(f.service.verifyDischarged())
 })
 
-test("orphan malformed probe evidence is reported without blocking verified starts", async t => {
+test("external probe history edits are not audited during ordinary operations", async t => {
   const f = await fixture(t), first = randomUUID(), orphan = randomUUID()
   await f.service.initialize(); await f.service.refresh(first, f.generation)
   await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp"); await f.finish(first)
@@ -210,7 +210,7 @@ test("orphan malformed probe evidence is reported without blocking verified star
   await writeFile(join(f.root, "catalog/probe-meta/line\nbreak.json"), "{", { mode: 0o600 })
   const status = await f.service.list()
   assert.equal(status.discovery.state, "idle")
-  assert.deepEqual((status.discovery as typeof status.discovery & { issues?: string[] }).issues, ["probe evidence entry has an unprintable or oversized name", `probe-meta/${orphan}.json`, "probe-meta/unknown.json"])
+  assert.equal(status.discovery.issues, undefined)
   assert.deepEqual(await f.service.launchEvidence("claude-agent-acp"), prior)
   const second = randomUUID()
   await f.service.refresh(second, f.generation)
@@ -262,14 +262,15 @@ test("changed declared config during a probe cannot become a fresh result", asyn
   assert.notEqual((await f.service.list()).providers[0]!.freshness, "fresh")
 })
 
-test("external command disappearance latches unavailable and does not repair evidence", async t => {
-  const f = await fixture(t), command = randomUUID()
-  await f.service.initialize(); await f.service.refresh(command, f.generation)
-  await f.waitProbe("claude-agent-acp")
-  await unlink(join(f.root, "catalog/commands", command + ".json"))
-  assert.equal((await f.service.list()).discovery.state, "blocked")
-  await assert.rejects(f.service.refresh(randomUUID(), f.generation))
-  assert.equal(await f.store.readCommand(command), null)
+test("catalog display and explicit refresh use initialized inventory", async t => {
+  const f = await fixture(t)
+  await f.service.initialize()
+  f.store.inventory = async () => { throw new Error("unexpected inventory") }
+  assert.equal((await f.service.list()).discovery.state, "idle")
+  const commandId = randomUUID()
+  await f.service.refresh(commandId, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  assert.equal((await f.finish(commandId)).command.state, "completed")
 })
 
 test("automatic discovery does not create an externally retryable receipt", async t => {
@@ -422,11 +423,11 @@ test("uncertain command acceptance retries durable binding before first spawn", 
   assert.equal(f.started.length, 1)
 })
 
-test("an externally added immutable snapshot is not accepted as Handler-owned history", async t => {
+test("an externally added snapshot does not invalidate initialized catalog state", async t => {
   const f = await fixture(t)
   await f.service.initialize()
   await createCatalogStore(f.root).writeSnapshot({ version: 1, hostId: f.options.paths.hostKey, handlerGeneration: f.generation, snapshotId: randomUUID(), createdAt: 1000000, providers: [] })
-  assert.equal((await f.service.list()).discovery.state, "blocked")
+  assert.equal((await f.service.list()).discovery.state, "idle")
 })
 
 test("visible completed commands repeat failed durability before reporting completion", async t => {

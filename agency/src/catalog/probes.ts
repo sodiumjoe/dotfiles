@@ -86,35 +86,6 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     unscopedIssues.add(issueFor(entry.record.launchAttemptId, "probe-launches"))
     throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
   }
-  async function verify(): Promise<void> {
-    const inventory = await store.inventory()
-    await options.retirement?.validate()
-    unscopedIssues.clear()
-    for (const issue of inventory.issues) {
-      const match = /^probe-(?:meta|launches)\/([0-9a-f-]+)\.json$/.exec(issue)
-      if (!match) {
-        if (issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/")) { unscopedIssues.add(issue); continue }
-        return unavailable()
-      }
-      markIssue(issue, providerFor(match[1]!, inventory))
-    }
-    const markLaunch = (entry: InventoryEntry, known?: InventoryEntry): void => markIssue(issueFor(entry.record.launchAttemptId, "probe-launches"), providerFor(entry.record.launchAttemptId, inventory, known))
-    const launchesByPath = new Map(inventory.launches.map(entry => [entry.path, entry]))
-    const acceptedByPath = new Map(accepted.map(entry => [entry.path, entry]))
-    for (const entry of inventory.launches) if (!isDeepStrictEqual(entry, acceptedByPath.get(entry.path))) markLaunch(entry, acceptedByPath.get(entry.path))
-    for (const entry of accepted.filter(visibleLaunch)) if (!isDeepStrictEqual(entry, launchesByPath.get(entry.path))) markLaunch(entry, entry)
-    const metadataByAttempt = new Map(inventory.metadata.map(entry => [entry.attemptId, entry]))
-    const acceptedMetaByAttempt = new Map(metadata.map(entry => [entry.attemptId, entry]))
-    for (const entry of inventory.metadata) if (entry.hostId !== paths.hostKey || !isDeepStrictEqual(entry, acceptedMetaByAttempt.get(entry.attemptId))) markIssue(issueFor(entry.attemptId, "probe-meta"), acceptedMetaByAttempt.get(entry.attemptId)?.providerId ?? providerFor(entry.attemptId, inventory))
-    for (const entry of metadata.filter(visibleMeta)) if (!isDeepStrictEqual(entry, metadataByAttempt.get(entry.attemptId))) markIssue(issueFor(entry.attemptId, "probe-meta"), entry.providerId)
-    const affected = (attemptId: string): boolean => {
-      const providerId = providerFor(attemptId, inventory)
-      return providerId !== null && blockedProviders.has(providerId) || unscopedIssues.has(issueFor(attemptId, "probe-meta")) || unscopedIssues.has(issueFor(attemptId, "probe-launches"))
-    }
-    const permitted = (entry: InventoryEntry) => !affected(entry.record.launchAttemptId)
-    const permittedMeta = (entry: RetainedProbeMeta) => !affected(entry.attemptId)
-    if (!isDeepStrictEqual(inventory.launches.filter(permitted), accepted.filter(visibleLaunch).filter(permitted)) || !isDeepStrictEqual(inventory.metadata.filter(permittedMeta), metadata.filter(visibleMeta).filter(permittedMeta))) unavailable()
-  }
   function accept(path: string, record: LaunchRecord): void {
     accepted = [...accepted.filter(e => e.path !== path), { path, record: structuredClone(record) }].sort((a, b) => a.path < b.path ? -1 : 1)
   }
@@ -129,18 +100,22 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     if (current.size) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
     await queue.run(async () => {
       if (running || current.size) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-      if (initialized) { await verify(); return }
+      if (initialized) { if (blocked) unavailable(); return }
       const inventory = await store.inventory()
       accepted = inventory.launches; metadata = inventory.metadata; initialized = true
       for (const entry of accepted) historical.add(entry.record.launchAttemptId)
       if (inventory.issues.some(issue => !issue.startsWith("probe-meta/") && !issue.startsWith("probe-launches/"))) blocked = true
       for (const meta of metadata) if (meta.hostId !== paths.hostKey) retainedIssues.set(meta.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
+      for (const issue of inventory.issues) {
+        const match = /^probe-(?:meta|launches)\/([0-9a-f-]+)\.json$/.exec(issue)
+        if (match) markIssue(issue, providerFor(match[1]!, inventory))
+        else if (issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/")) unscopedIssues.add(issue)
+      }
       recomputeIssues()
       for (const entry of [...accepted]) {
         try { await discharge(entry) }
         catch { markIssue(issueFor(entry.record.launchAttemptId, "probe-launches"), ownerOf(entry) ?? metadata.find(meta => meta.attemptId === entry.record.launchAttemptId)?.providerId ?? null) }
       }
-      await verify()
       if (blocked) unavailable()
     })
   }
@@ -171,7 +146,6 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         }
       }
       recomputeIssues()
-      await verify()
       if (blocked || running || blockedProviders.size || unscopedIssues.size
         || [...current.values()].some(attempt => !attempt.done || attempt.cleanupFailed || (attempt.transition ? !attempt.transition.durable() : attempt.spawnInvoked))
         || accepted.filter(visibleLaunch).some(entry => entry.record.phase !== "cleanup_verified")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
@@ -248,7 +222,6 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
           const registration = queue.run(async () => {
             try {
               if (cleaning) { attempt.unresolved = true; throw new CatalogError("PROBE_FAILED") }
-              await verify()
               const member = await bounded(adapter.readProcess(v.pid as number), discoveryDeadline)
               diagnostic.nativeIdentity = member
               if (!member || member.pid !== v.pid || !attempt.group) { attempt.unresolved = true; throw new CatalogError("PROBE_FAILED") }
@@ -292,7 +265,6 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     }
     try {
       const admission = queue.run(async () => {
-        await verify()
         if (!options.canStart() || signal.aborted || finished || accepted.some(e => e.record.launchAttemptId === m.attemptId)) throw new CatalogError("INCOMPLETE")
         record.launchBootId = await bounded(adapter.bootId(), preparationDeadline)
         if (!isDeepStrictEqual(await observeConfig(request.profile), request.evidence) || m.fingerprint !== request.evidence.fingerprint || m.providerId !== request.profile.id) throw new CatalogError("CONFIG_CHANGED")

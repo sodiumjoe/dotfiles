@@ -9,7 +9,7 @@ import { sameProcessGeneration, type ProcessGroupIdentity, type LaunchRecord, ty
 import { isLiveProcessGroup, isLiveCleanupEvidence, type LiveProcessGroup, type LiveCleanupEvidence } from "../platform/live-process.js"
 import { summarizeLaunches } from "./inventory.js"
 import { UUID } from "../control/protocol.js"
-import { refreshLaunchState, type HandlerMutations } from "./mutations.js"
+import { type HandlerMutations } from "./mutations.js"
 
 export type LaunchContext = { paths: PlatformPaths; adapter: PlatformAdapter; state: HandlerStatus; mutations: HandlerMutations; shutdownPending(): boolean }
 
@@ -34,13 +34,6 @@ async function publishExact(context: LaunchContext, expected: LaunchRecord, next
     context.state.launches = summarizeLaunches(context.mutations.accepted.map(value => value.record))
   }
   if (!matched) throw new AgentError("INVALID_AGENT_STATE")
-}
-
-async function publish(context: LaunchContext, expected: LaunchRecord, next: LaunchRecord, io: LaunchTransitionIO): Promise<void> {
-  const directory = join(context.paths.persistentRoot, "launches")
-  await refreshLaunchState(context.state, context.mutations, directory)
-  try { await publishExact(context, expected, next, io) }
-  finally { await refreshLaunchState(context.state, context.mutations, directory) }
 }
 
 function assertManaged(context: LaunchContext, record: ManagedLaunchRecord): void {
@@ -97,12 +90,12 @@ export async function commitLaunchTransition(context: LaunchContext, expected: L
   if (!legal.includes(next.phase) || expected.launchAttempted && !next.launchAttempted) throw new AgentError("INVALID_AGENT_STATE")
   if (expected.provider && (!next.provider || !isDeepStrictEqual(expected.provider.group.leader, next.provider.group.leader) || expected.provider.group.observed.some(member => !next.provider!.group.observed.some(value => isDeepStrictEqual(member, value))))) throw new AgentError("INVALID_AGENT_STATE")
   if (!["launch_pending", "readiness", "active"].includes(expected.phase) && !isDeepStrictEqual(next, expected)) throw new AgentError("INVALID_AGENT_STATE")
-  await publish(context, expected, next, io)
+  await publishExact(context, expected, next, io)
 }
 
 export async function restoreUninvokedLaunch(context: LaunchContext, expected: LaunchRecord, proof: { spawnInvoked: false }, io: LaunchTransitionIO = defaults): Promise<LaunchRecord> {
   if (proof.spawnInvoked !== false || !expected.launchAttempted || expected.provider !== null || expected.phase !== "launch_pending" || expected.reason !== null) throw new AgentError("INVALID_AGENT_STATE")
   const restored = { ...expected, launchAttempted: false }
-  await publish(context, expected, restored, io)
+  await publishExact(context, expected, restored, io)
   return restored
 }

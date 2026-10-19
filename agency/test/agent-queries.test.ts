@@ -156,12 +156,11 @@ test("logically retired cached agents are absent from list and page queries", as
   } finally { hidden.clear() }
 })
 
-test("memory roster bypasses failing and queued retained verification while actions revalidate", async t => {
+test("memory queries and live actions do not inventory retained files", async t => {
   const f = await agentServiceFixture(t)
   const started = await f.service.start(f.input)
   await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
   const service = f.service as typeof f.service & { roster: typeof f.service.page }
-  const original = f.store.inventory.bind(f.store)
   const failure = t.mock.method(f.store, "inventory", async () => { throw new Error("retained verification unavailable") })
   try {
     const page = await service.roster({ limit: 100 })
@@ -170,18 +169,9 @@ test("memory roster bypasses failing and queued retained verification while acti
     assert.equal((await service.roster({ limit: 100 })).revision, page.revision)
     page.agents[0]!.record.phase = "failed"
     assert.equal((await service.roster({ limit: 100 })).agents[0]!.record.phase, "ready")
-    await assert.rejects(f.service.page({ limit: 100 }), /retained verification unavailable/)
-    await assert.rejects(f.service.sessionSnapshot(started.command.target!), /retained verification unavailable/)
+    assert.equal((await f.service.page({ limit: 100 })).agents.length, 1)
+    assert.ok(await f.service.sessionSnapshot(started.command.target!))
   } finally { failure.mock.restore() }
-  let release!: () => void, entered!: () => void
-  const gate = new Promise<void>(resolve => { release = resolve }), seen = new Promise<void>(resolve => { entered = resolve })
-  const blocked = t.mock.method(f.store, "inventory", async () => { entered(); await gate; return original() })
-  const verifying = f.service.page({ limit: 100 })
-  await seen
-  try {
-    const page = await Promise.race([service.roster({ limit: 100 }), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("roster waited for verification queue")), 500).unref())])
-    assert.equal(page.agents.length, 1)
-  } finally { release(); await verifying; blocked.mock.restore() }
   f.service.close()
   await assert.rejects(service.roster({ limit: 100 }), { code: "NOT_READY" })
 })
