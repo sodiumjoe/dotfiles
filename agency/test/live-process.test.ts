@@ -222,3 +222,45 @@ test("late authorization cannot act during an explicit fresh attempt", async t =
   await second
   assert.deepEqual(f.signals, ["SIGTERM"])
 })
+
+test("an explicitly observed native that escapes after leader exit prevents cleanup", async t => {
+  const f = fixture(t), group = await f.capture()
+  const native = { ...f.identity, pid: 12346, parentPid: f.identity.pid, birth: "102:unmarked:fixture" }
+  group.observeMember(native)
+  assert.deepEqual(group.identity().observed, [f.identity, native])
+  f.exit()
+  f.adapter.readProcess = async pid => pid === native.pid ? { ...native, processGroupId: native.pid } : null
+  await assert.rejects(group.cleanup(f.limits()), { reason: "absence" })
+  assert.deepEqual(f.signals, [])
+})
+
+for (const field of ["bootId", "sessionId", "uid", "gid", "processGroupId", "parentPid", "pid", "birth"] as const) test("native observation rejects invalid " + field, async t => {
+  const f = fixture(t), group = await f.capture()
+  const native = { ...f.identity, pid: 12346, parentPid: f.identity.pid, birth: "102:native" }
+  Object.assign(native, { [field]: typeof native[field] === "number" ? field === "pid" ? -1 : 44 : "invalid" })
+  assert.throws(() => group.observeMember(native), { reason: "identity" })
+  assert.deepEqual(group.identity().observed, [f.identity])
+  assert.deepEqual(f.signals, [])
+})
+
+test("native observations are cloned and repeated generation admission is idempotent", async t => {
+  const f = fixture(t), group = await f.capture()
+  const native = { ...f.identity, pid: 12346, parentPid: f.identity.pid, birth: "102:native" }, initial = structuredClone(native)
+  group.observeMember(native)
+  group.observeMember({ ...native, birth: "102:updated command" })
+  assert.throws(() => group.observeMember({ ...native, birth: "103:replacement" }), { reason: "identity" })
+  native.birth = "104:mutated"; native.pid = 42
+  group.identity().observed[1]!.birth = "105:mutated return"
+  assert.deepEqual(group.identity().observed, [f.identity, initial])
+})
+
+for (const phase of ["cleanup", "terminal", "abandoned"] as const) test("native observation rejects after " + phase, async t => {
+  const f = fixture(t), group = await f.capture()
+  const native = { ...f.identity, pid: 12346, parentPid: f.identity.pid, birth: "102:native" }
+  let cleanup: Promise<unknown> | undefined
+  if (phase === "cleanup") cleanup = group.cleanup(f.limits())
+  else if (phase === "terminal") f.exit()
+  else f.owner.abandon("lost")
+  assert.throws(() => group.observeMember(native), { reason: "terminal" })
+  await cleanup
+})

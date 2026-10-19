@@ -10,7 +10,7 @@ export class LiveProcessError extends Error {
 }
 export type LiveCleanupEvidence = Readonly<{ launchAttemptId: string; group: ProcessGroupIdentity; terminal: ChildTerminal; transport: "closed" | "destroyed" }>
 type CleanupLimits = { deadline: number; terminateMs: number; absenceMs: number; transportCloseMs: number; retry?: true }
-export type LiveProcessGroup = { readonly owner: OwnedChild; identity(): ProcessGroupIdentity; cleanup(input: CleanupLimits): Promise<LiveCleanupEvidence> }
+export type LiveProcessGroup = { readonly owner: OwnedChild; identity(): ProcessGroupIdentity; observeMember(identity: ProcessIdentity): void; cleanup(input: CleanupLimits): Promise<LiveCleanupEvidence> }
 const registrations = new WeakSet<LiveProcessGroup>()
 const evidence = new WeakMap<LiveCleanupEvidence, { group: LiveProcessGroup; attribution: LiveCleanupEvidence }>()
 export function isLiveProcessGroup(value: LiveProcessGroup): boolean { return registrations.has(value) }
@@ -76,7 +76,8 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
       break
     }
   } finally { capture.invalidate() }
-  const initial = freezeGroup({ leader, observed: [structuredClone(leader)] }), observed = [structuredClone(leader)]
+  const observed = [structuredClone(leader)]
+  let cleanupStarted = false
   let pending: Promise<LiveCleanupEvidence> | undefined, rejected = false, result: LiveCleanupEvidence | undefined
   const cleanupAttempt = async (limits: CleanupLimits): Promise<void> => {
     const work = scope(owner, limits.deadline, now)
@@ -158,8 +159,18 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
     } finally { work.invalidate() }
   }
   const group: LiveProcessGroup = Object.freeze({
-    owner, identity: () => structuredClone(initial),
+    owner, identity: () => structuredClone({ leader, observed }),
+    observeMember(member: ProcessIdentity): void {
+      if (cleanupStarted || !live() || owner.snapshot().abandoned) throw new LiveProcessError("terminal")
+      if (!Number.isSafeInteger(member.pid) || member.pid <= 0 || member.pid === leader.pid || member.parentPid !== leader.pid
+        || member.bootId !== leader.bootId || member.processGroupId !== leader.processGroupId || member.sessionId !== leader.sessionId
+        || member.uid !== leader.uid || member.gid !== leader.gid || processBirthStart(member.birth) === null) throw new LiveProcessError("identity")
+      const prior = observed.find(value => value.pid === member.pid)
+      if (prior && !sameAuthority(prior, member)) throw new LiveProcessError("identity")
+      if (!prior) observed.push(structuredClone(member))
+    },
     cleanup(limits: CleanupLimits): Promise<LiveCleanupEvidence> {
+      cleanupStarted = true
       if (pending && (!limits.retry || !rejected)) return pending
       rejected = false
       const stopped = limits.retry ? owner.retryStop(() => cleanupAttempt(limits)) : owner.stop(() => cleanupAttempt(limits))
