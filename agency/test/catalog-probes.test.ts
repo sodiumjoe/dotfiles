@@ -8,7 +8,7 @@ import { createAgentStore } from "../src/agent/store.js"
 import { createAgentService } from "../src/agent/service.js"
 import { createRetentionStore } from "../src/retention/store.js"
 import { createRetentionCoordinator } from "../src/retention/coordinator.js"
-import { syntheticProbeFixture } from "./catalog-support.js"
+import { gate, syntheticProbeFixture } from "./catalog-support.js"
 import { cleanProbeEnvironment } from "../src/catalog/probes.js"
 import { spawn } from "node:child_process"
 import fs from "node:fs/promises"
@@ -24,7 +24,8 @@ import { createDarwinAdapter } from "../src/platform/darwin.js"
 import { createLinuxAdapter } from "../src/platform/linux.js"
 import { observeConfig } from "../src/catalog/config.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
-import type { LaunchRecord } from "../src/platform/types.js"
+import { createProbeTransition } from "../src/catalog/probe-transitions.js"
+import type { ManagedLaunchRecord, LaunchRecord } from "../src/platform/types.js"
 import { readProbeDiagnostic, retainProbeDiagnostic } from "../src/catalog/diagnostics.js"
 
 let catalogFixtureFailure: Error | undefined
@@ -236,7 +237,7 @@ test("entering spawn preserves attempted uncertainty even when invocation throws
   const outcome = await f.runtime.run(f.request, new AbortController().signal)
   assert.equal(f.spawnInvoked(), true)
   assert.equal(outcome.record.launchAttempted, true)
-  assert.equal((await readLaunchRecordForReconciliation(f.path)).phase, "quarantined")
+  assert.equal((await readLaunchRecordForReconciliation(f.path)).phase, "launch_pending")
   await assert.rejects(f.runtime.verifyDischarged())
 })
 
@@ -272,7 +273,7 @@ for (const scenario of ["timeout", "closed", "malformed", "stdout", "ipc", "doub
   const outcome = await operation
   assert.equal(outcome.result, null)
   assert.notEqual(outcome.error, null)
-  if (["early-exit", "cleanup-failure", "missing-close"].includes(scenario)) await assert.rejects(f.runtime.verifyDischarged())
+  if (["early-exit", "cleanup-failure", "missing-close", "ipc", "closed"].includes(scenario)) await assert.rejects(f.runtime.verifyDischarged())
   else await f.runtime.verifyDischarged()
 })
 
@@ -362,7 +363,9 @@ test("historical version-one probe records are reconciled during recovery", asyn
   const recovered = await readLaunchRecordForReconciliation(f.path)
   assert.equal(recovered.version, 1)
   assert.equal(recovered.phase, "cleanup_verified")
+  assert.equal(f.recoverCalls(), 1)
   await f.runtime.verifyDischarged()
+  assert.equal(f.recoverCalls(), 2)
 })
 
 test("orphan malformed probe evidence remains diagnostic without stopping new probes", async t => {
@@ -477,4 +480,211 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
   }
   assert.equal(outcome.record.phase, "cleanup_verified")
   await runtime.verifyDischarged()
+})
+
+test("current discovery never invokes historical reconciliation or reinitializes its owners", async t => {
+  const f = await syntheticProbeFixture(t); await f.runtime.recover()
+  f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(outcome.error, null)
+  await f.runtime.verifyDischarged()
+  assert.equal(f.recoverCalls(), 0)
+  await assert.rejects(f.runtime.recover())
+  assert.equal(f.recoverCalls(), 0)
+})
+
+test("worker loss after start without native notification remains unknown with an empty group", async t => {
+  const f = await syntheticProbeFixture(t, "worker-loss-before-native"); await f.runtime.recover(); f.releaseWorkerIdentity()
+  const operation = f.runtime.run(f.request, new AbortController().signal)
+  await f.startObserved.promise
+  f.processes.clear(); f.exitWorker(); f.closeWorker()
+  const outcome = await operation
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcome.result, null)
+  assert.deepEqual(f.signals, [])
+  await assert.rejects(f.runtime.verifyDischarged())
+})
+
+for (const scenario of ["native-missing-close", "native-missing-report", "native-wrong-report", "native-double-report"]) test("current cleanup rejects " + scenario, async t => {
+  const f = await syntheticProbeFixture(t, scenario); await f.runtime.recover(); f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcome.result, null)
+  await assert.rejects(f.runtime.verifyDischarged())
+})
+
+for (const scenario of ["terminal-fsync-failure", "cleanup-pending-failure"]) test("exact durable retry repairs only publication after " + scenario, async t => {
+  const f = await syntheticProbeFixture(t, scenario); await f.runtime.recover(); f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal), signals = [...f.signals]
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcome.result, null)
+  assert.deepEqual([...f.processes.values()], [])
+  await assert.rejects(f.runtime.verifyDischarged())
+  f.repairPublication()
+  await f.runtime.verifyDischarged()
+  assert.deepEqual(f.signals, signals)
+  assert.equal(f.runtime.issues?.().has(f.profile.id), false)
+  assert.equal(f.recoverCalls(), 0)
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcome.result, null)
+})
+
+test("physical cleanup precedes held native publication and late publication cannot acknowledge", { timeout: 15000 }, async t => {
+  const f = await syntheticProbeFixture(t, "held-native-publication"), controller = new AbortController()
+  await f.runtime.recover(); f.releaseWorkerIdentity()
+  let settled = false
+  const operation = f.runtime.run(f.request, controller.signal).then(value => { settled = true; return value })
+  await f.nativePublication.promise
+  controller.abort()
+  await f.physicalCleanup.promise
+  assert.deepEqual([...f.processes.values()], [])
+  assert.equal(settled, false)
+  assert.deepEqual(f.acknowledgements, [])
+  f.advanceClock(10000); f.releaseNativePublication()
+  const outcome = await operation
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.deepEqual(f.acknowledgements, [])
+  await f.runtime.verifyDischarged()
+  assert.equal(outcome.result, null)
+})
+
+test("held terminal publication retains run and explicit discharge until its mutation settles", { timeout: 15000 }, async t => {
+  const f = await syntheticProbeFixture(t, "held-cleanup-publication"); await f.runtime.recover(); f.releaseWorkerIdentity(); f.releaseResult()
+  let settled = false
+  const operation = f.runtime.run(f.request, new AbortController().signal).then(value => { settled = true; return value })
+  await f.cleanupPublication.promise
+  const inspected = gate(), verified = f.runtime.verifyDischarged().finally(() => inspected.resolve())
+  let discharged = false; void inspected.promise.then(() => { discharged = true })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(settled, false); assert.equal(discharged, false)
+  f.advanceClock(10000); f.releaseCleanupPublication()
+  const outcome = await operation
+  await verified
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcome.result, null)
+})
+
+test("observed native escape after leader loss prevents current cleanup without stale signals", async t => {
+  const f = await syntheticProbeFixture(t); await f.runtime.recover(); f.releaseWorkerIdentity()
+  const operation = f.runtime.run(f.request, new AbortController().signal)
+  await f.nativeRegistered.promise
+  const native = f.processes.get(10002)!
+  f.processes.set(10002, { ...native, processGroupId: 10002, sessionId: 10002 })
+  f.adapter.readGroup = async () => []
+  f.emitNativeTerminal(); f.emitNativeClosed(); f.emitNativeSettled({ kind: "exit", pid: 10002, code: 0, signal: null })
+  f.exitWorker(); f.closeWorker()
+  const outcome = await operation
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.deepEqual(f.signals, [])
+})
+
+test("native exit before attribution cannot be repaired by an empty group", async t => {
+  const f = await syntheticProbeFixture(t, "native-death"); await f.runtime.recover(); f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  await assert.rejects(f.runtime.verifyDischarged())
+})
+
+for (const field of ["owner", "handlerGeneration", "launchAttemptId", "launchBootId", "missing", "malformed"] as const) test("probe publisher refuses changed exact " + field, async () => {
+  const initial: ManagedLaunchRecord = { version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: randomUUID() }, handlerGeneration: randomUUID(), launchAttemptId: randomUUID(), launchBootId: "boot", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
+  let visible: LaunchRecord | null = null, calls = 0, malformed = false
+  const transition = createProbeTransition({ path: "/fixture", initial, accept() {}, io: {
+    read: async () => { if (malformed) throw new Error("malformed record"); if (!visible) throw Object.assign(new Error("missing"), { code: "ENOENT" }); return structuredClone(visible) },
+    publish: async (_path, record) => { calls++; visible = structuredClone(record) },
+  } })
+  await transition.publish(initial)
+  if (field === "missing") visible = null
+  else if (field === "malformed") malformed = true
+  else visible = { ...initial, [field]: field === "owner" ? { kind: "catalog-probe", providerId: "claude-agent-acp", commandId: randomUUID() } : "foreign" } as ManagedLaunchRecord
+  await assert.rejects(transition.publish({ ...initial, phase: "cleanup_verified" }))
+  assert.equal(calls, 1)
+})
+
+test("probe publisher tracks visible terminal bytes separately from directory durability", async () => {
+  const initial: ManagedLaunchRecord = { version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: randomUUID() }, handlerGeneration: randomUUID(), launchAttemptId: randomUUID(), launchBootId: "boot", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
+  let visible: LaunchRecord | null = null, fault = false, calls = 0
+  const transition = createProbeTransition({ path: "/fixture", initial, accept() {}, io: {
+    read: async () => { if (!visible) throw Object.assign(new Error("missing"), { code: "ENOENT" }); return structuredClone(visible) },
+    publish: async (_path, record) => { calls++; visible = structuredClone(record); if (fault) throw new Error("fsync") },
+  } })
+  await transition.publish(initial); fault = true
+  await assert.rejects(transition.publish({ ...initial, phase: "cleanup_verified" }))
+  assert.equal(transition.current().phase, "cleanup_verified"); assert.equal(transition.durable(), false)
+  fault = false; await transition.publish(transition.current())
+  assert.equal(transition.durable(), true); assert.equal(calls, 3)
+  await assert.rejects(createProbeTransition({ path: "/fixture", initial, accept() {}, io: { read: async () => visible!, publish: async () => { calls++ } } }).publish(initial))
+  assert.equal(calls, 3)
+})
+
+test("publication repair preserves a separate integrity cause for the same provider", async t => {
+  const f = await syntheticProbeFixture(t, "terminal-fsync-failure"); await f.runtime.recover(); f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  const path = join(f.root, "catalog/probe-meta", f.request.meta.attemptId + ".json"), original = JSON.parse(await readFile(path, "utf8"))
+  await writeFile(path, JSON.stringify({ ...original, fingerprint: "b".repeat(64) }), { mode: 0o600 })
+  f.repairPublication()
+  await assert.rejects(f.runtime.verifyDischarged())
+  assert.equal((await readLaunchRecordForReconciliation(f.path)).phase, "cleanup_verified")
+  assert.equal(f.runtime.issues?.().get(f.profile.id)?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcome.result, null)
+})
+
+test("matching not-spawned settlement permits cleanup after cancellation before native invocation", async t => {
+  const f = await syntheticProbeFixture(t, "no-native"), controller = new AbortController()
+  await f.runtime.recover(); f.releaseWorkerIdentity()
+  const operation = f.runtime.run(f.request, controller.signal)
+  await f.startObserved.promise; controller.abort()
+  const outcome = await operation
+  assert.equal(outcome.record.phase, "cleanup_verified")
+  assert.equal(outcome.error?.code, "INCOMPLETE")
+  await f.runtime.verifyDischarged()
+})
+
+test("leader exit during current authorization refuses every stale group signal", async t => {
+  const f = await syntheticProbeFixture(t); await f.runtime.recover(); f.releaseWorkerIdentity()
+  const operation = f.runtime.run(f.request, new AbortController().signal)
+  await f.nativeRegistered.promise
+  f.adapter.readGroup = async () => {
+    f.adapter.readGroup = async () => []
+    f.processes.clear(); f.emitNativeTerminal(); f.emitNativeClosed(); f.emitNativeSettled({ kind: "exit", pid: 10002, code: 0, signal: null }); f.exitWorker(); f.closeWorker(); return []
+  }
+  f.releaseResult()
+  const outcome = await operation
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.deepEqual(f.signals, [])
+})
+
+test("failed boot observation releases run admission without manufacturing a worker", async t => {
+  const f = await syntheticProbeFixture(t); await f.runtime.recover()
+  const boot = f.adapter.bootId; f.adapter.bootId = async () => { throw new Error("boot unavailable") }
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(f.spawnInvoked(), false); assert.equal(outcome.error?.code, "PROBE_FAILED")
+  f.adapter.bootId = boot
+  await f.runtime.verifyDischarged()
+})
+
+test("native observation must match the notified PID before acknowledgement", async t => {
+  const f = await syntheticProbeFixture(t); await f.runtime.recover()
+  const read = f.adapter.readProcess
+  f.adapter.readProcess = async pid => { const member = await read(pid); return pid === 10002 && member ? { ...member, pid: 10003 } : member }
+  f.releaseWorkerIdentity(); f.releaseResult()
+  const outcome = await f.runtime.run(f.request, new AbortController().signal)
+  assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.deepEqual(f.acknowledgements, [])
+})
+
+test("failed historical recovery never adopts an unrelated replacement", async t => {
+  const f = await syntheticProbeFixture(t), m = f.request.meta
+  await f.store.writeProbeMeta(m)
+  await mkdir(join(f.root, "catalog/probe-launches"), { mode: 0o700 })
+  const original: ManagedLaunchRecord = { version: 2, owner: { kind: "catalog-probe", providerId: m.providerId, commandId: m.commandId }, handlerGeneration: m.handlerGeneration, launchAttemptId: m.attemptId, launchBootId: "boot", launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null }
+  await writeLaunchRecord(f.path, original)
+  const runtime = createProbeRuntime({ paths: { persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "handler.sock"), hostKey: m.hostId }, adapter: f.adapter, queue: f.queue, store: f.store, generation: f.generation, canStart: () => true, dependencies: { recoverEntry: async () => {
+    await writeLaunchRecord(f.path, { ...original, owner: { kind: "catalog-probe", commandId: m.commandId, providerId: "codex-acp" } })
+    throw new Error("recovery failed after replacement")
+  } } })
+  await runtime.recover()
+  await writeLaunchRecord(f.path, original)
+  await runtime.recover()
+  assert.equal(runtime.issues?.().has("codex-acp"), false)
+  assert.equal(runtime.issues?.().get(m.providerId)?.code, "PROBE_CLEANUP_UNVERIFIED")
 })

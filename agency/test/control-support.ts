@@ -225,9 +225,9 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   return { root, paths, adapter, owned, start, call, signal, observe, configPath, spawnProvider, cleanup, beforeCleanup: (barrier: () => Promise<void>) => { cleanupBarriers.push(barrier) } }
 }
 
-export async function privateRoot(t: TestContext): Promise<string> {
+export async function privateRoot(t: TestContext, options: { retainRoot?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
-  t.after(async () => { await rm(root, { recursive: true, force: true }) })
+  t.after(async () => { if (options.retainRoot) t.diagnostic("retained fixture root: " + root); else await rm(root, { recursive: true, force: true }) })
   return root
 }
 
