@@ -6,10 +6,15 @@ import { chmod, link, mkdir, open, readFile, readdir, rename, rm, symlink, unlin
 import { createRetentionStore } from "../src/retention/store.js"
 import { join } from "node:path"
 import { createAgentStore } from "../src/agent/store.js"
-import { commitLaunchTransition, restoreUninvokedLaunch, type LaunchContext } from "../src/handler/launch-transitions.js"
+import { beginOwnedCleanup, finishOwnedCleanup, finishUnspawnedCleanup, commitLaunchTransition, restoreUninvokedLaunch, type LaunchContext } from "../src/handler/launch-transitions.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
-import type { LaunchRecord } from "../src/platform/types.js"
+import { EventEmitter } from "node:events"
+import { PassThrough } from "node:stream"
+import type { ChildProcess } from "node:child_process"
+import { spawnOwnedChild } from "../src/runtime/owned-child.js"
+import { captureLiveProcess, type LiveCleanupEvidence } from "../src/platform/live-process.js"
+import type { ManagedLaunchRecord, LaunchRecord } from "../src/platform/types.js"
 import type { CatalogFileSystem } from "../src/catalog/store.js"
 import { agentFailure, AgentError, normalizeAgentRecord, splitLaunchSpec, type AgentCommand, type AgentRecord } from "../src/agent/types.js"
 import { agentId, sampleAgent, sampleCommand, sampleSession, sampleSpec } from "./agent-support.js"
@@ -298,4 +303,85 @@ test("visible launch publication failure updates attribution without authorizing
   assert.deepEqual(f.context.mutations.accepted[0]!.record, attempted)
   await assert.rejects(restoreUninvokedLaunch(f.context, attempted, { spawnInvoked: false }, io))
   assert.equal(f.context.mutations.accepted[0]!.record.launchAttempted, false)
+})
+
+async function ownedTransition(t: test.TestContext) {
+  const f = await transitionContext(t), record = { ...f.record, launchAttempted: true } as ManagedLaunchRecord
+  await writeLaunchRecord(f.path, record); f.context.mutations.accepted[0]!.record = record
+  const child = Object.assign(new EventEmitter(), { pid: 12345, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null, unref() {} }) as unknown as ChildProcess
+  t.after(() => { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() })
+  const owner = spawnOwnedChild({ launchAttemptId: record.launchAttemptId, spawn: () => child })
+  const marker = "agy-provider:" + record.launchAttemptId
+  const identity = { bootId: "boot-a", pid: 12345, birth: "100:" + marker, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
+  f.context.adapter.readProcess = async () => identity
+  const group = await captureLiveProcess({ owner, adapter: f.context.adapter, launchBootId: "boot-a", marker, deadline: performance.now() + 1000 })
+  const evidence = async () => {
+    Object.assign(child, { exitCode: 0 }); child.emit("exit", 0, null); child.emit("close", 0, null)
+    f.context.adapter.readProcess = async () => null
+    return group.cleanup({ deadline: performance.now() + 1000, terminateMs: 200, absenceMs: 200, transportCloseMs: 100 })
+  }
+  return { ...f, record, group, evidence }
+}
+
+for (const operation of ["begin", "finish", "unspawned"] as const) {
+  for (const fault of ["generation", "owner", "disk", "before", "after"] as const) test(operation + " cleanup rejects " + fault + " without trusting visibility", async t => {
+    const f = await ownedTransition(t)
+    let record = operation === "finish" ? await beginOwnedCleanup(f.context, f.record, f.group) : f.record
+    const proof = operation === "finish" ? await f.evidence() : undefined
+    if (operation === "unspawned") {
+      record = { ...record, launchAttempted: false }
+      f.context.mutations.accepted[0]!.record = record; await writeLaunchRecord(f.path, record)
+    }
+    if (fault === "generation") f.context.state.handlerGeneration = agentId(99)
+    if (fault === "owner") record = { ...record, owner: { kind: "agent", agentId: agentId(98), providerGeneration: agentId(97) } }
+    if (fault === "disk") await writeLaunchRecord(f.path, { ...record, handlerGeneration: agentId(96) })
+    let writes = 0
+    const io = { read: readLaunchRecordForReconciliation, async publish(path: string, next: LaunchRecord) {
+      writes++
+      if (fault === "before") throw new Error("before publication")
+      await writeLaunchRecord(path, next)
+      if (fault === "after") throw new Error("after publication")
+    } }
+    const run = () => operation === "begin" ? beginOwnedCleanup(f.context, record, f.group, io) : operation === "finish" ? finishOwnedCleanup(f.context, record, f.group, proof!, io) : finishUnspawnedCleanup(f.context, record, { spawnInvoked: false }, io)
+    await assert.rejects(f.context.mutations.queue.run(run))
+    assert.equal(writes, fault === "before" || fault === "after" ? 1 : 0)
+    if (fault === "after") {
+      record = f.context.mutations.accepted[0]!.record as ManagedLaunchRecord
+      assert.equal(record.phase, operation === "begin" ? "cleanup_pending" : "cleanup_verified")
+      let rewrites = 0
+      const repair = { read: readLaunchRecordForReconciliation, async publish(path: string, next: LaunchRecord) { rewrites++; await writeLaunchRecord(path, next) } }
+      if (operation === "begin") await beginOwnedCleanup(f.context, record, f.group, repair)
+      else if (operation === "finish") await finishOwnedCleanup(f.context, record, f.group, proof!, repair)
+      else await finishUnspawnedCleanup(f.context, record, { spawnInvoked: false }, repair)
+      assert.equal(rewrites, 1)
+    }
+  })
+}
+
+test("owned publishers ignore unrelated malformed history and preserve its issues", async t => {
+  const f = await ownedTransition(t), unrelated = join(f.context.paths.persistentRoot, "launches", agentId(90) + ".json")
+  await writeFile(unrelated, "{}", { mode: 0o600 })
+  f.context.mutations.issues = [{ path: unrelated, launchAttemptId: agentId(90), message: "preserved" }]
+  const before = structuredClone(f.context.state.reconciliation), issues = structuredClone(f.context.mutations.issues)
+  const io = { read: async (path: string) => { assert.equal(path, f.path); return readLaunchRecordForReconciliation(path) }, publish: writeLaunchRecord }
+  const pending = await beginOwnedCleanup(f.context, f.record, f.group, io)
+  const proof = await f.evidence()
+  await assert.rejects(finishOwnedCleanup(f.context, pending, f.group, { ...proof }, io))
+  const other = await ownedTransition(t), foreign = await other.evidence()
+  await assert.rejects(finishOwnedCleanup(f.context, pending, f.group, foreign, io))
+  const verified = await finishOwnedCleanup(f.context, pending, f.group, proof, io)
+  assert.equal(verified.phase, "cleanup_verified")
+  assert.deepEqual(f.context.state.reconciliation, before)
+  assert.deepEqual(f.context.mutations.issues, issues)
+  assert.equal(f.context.state.launches[0]!.phase, "cleanup_verified")
+  await assert.rejects(beginOwnedCleanup(f.context, verified, f.group))
+})
+
+test("structural groups and mismatched initial attribution cannot publish", async t => {
+  const f = await ownedTransition(t)
+  await assert.rejects(beginOwnedCleanup(f.context, f.record, { ...f.group }))
+  const changed: ManagedLaunchRecord = { ...f.record, provider: { kind: "process-group", group: f.group.identity() } }
+  changed.provider!.group.leader.birth = "999:replacement"
+  f.context.mutations.accepted[0]!.record = changed; await writeLaunchRecord(f.path, changed)
+  await assert.rejects(beginOwnedCleanup(f.context, changed, f.group))
 })
