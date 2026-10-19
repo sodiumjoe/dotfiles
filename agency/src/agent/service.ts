@@ -80,31 +80,11 @@ type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: 
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
-  observeLaunchEvidence(spec: LaunchSpec, expected: BackendEvidence): Promise<void>
-  fatalStartupTimeout(spec: LaunchSpec): never
+  observeConfig?: typeof observeConfig
   onOperationRetired?(agentId: string, commandId: string): void
 }
 
-function productionDependencies(root: string): AgentServiceDependencies {
-  const handlerPid = process.pid
-  return {
-    processFactory: createAgentProcess,
-    async observeLaunchEvidence(spec, expected) {
-      const backend = (await readBackendConfig(root)).backends.find(value => value.id === spec.backendId)
-      const profile = (await readProfiles(root)).find(value => value.id === spec.backendId)
-      if (!backend || !isDeepStrictEqual(backend, expected.backend)
-        || !profile || !isDeepStrictEqual(profile, expected.profile)
-        || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
-    },
-    fatalStartupTimeout() {
-      if (handlerPid !== process.pid) throw new AgentError("STARTUP_TIMEOUT")
-      process.kill(handlerPid, "SIGKILL")
-      throw new AgentError("STARTUP_TIMEOUT")
-    },
-  }
-}
-
-export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore; retirement?: RetirementView; onTerminal?: () => void; cleanupIssues?: () => readonly string[] }, dependencies: AgentServiceDependencies = productionDependencies(input.context.paths.persistentRoot)): AgentService {
+export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore; retirement?: RetirementView; onTerminal?: () => void; cleanupIssues?: () => readonly string[] }, dependencies: AgentServiceDependencies = { processFactory: createAgentProcess }): AgentService {
   const { context, store, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const importIntents = new Map<string, AgentCommandV3>()
@@ -190,14 +170,18 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     dependencies.onOperationRetired?.(agentId, op.initial.launch.commandId)
     input.onTerminal?.()
   }
-  function expire(op: Live): never {
-    if (op.expired) throw new AgentError("STARTUP_TIMEOUT")
-    op.editor?.close()
+  function expire(op: Live): void {
+    if (op.expired) return
     op.expired = true; clearTimeout(op.watchdog)
     op.fault ??= agentFailure(new AgentError("STARTUP_TIMEOUT"))
-    noteOperation(op, new AgentError("STARTUP_TIMEOUT"))
+    noteOperation(op, new AgentError("CLEANUP_UNVERIFIED"))
     op.controller.abort()
-    dependencies.fatalStartupTimeout(specOf(op.initial))
+    void failOperation(op, new AgentError("STARTUP_TIMEOUT")).catch(error => noteOperation(op, error))
+  }
+  async function bounded<T>(operation: Promise<T>, ms: number, code: "STARTUP_TIMEOUT" | "INCOMPLETE"): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    try { return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new AgentError(code)), Math.max(1, ms)) })]) }
+    finally { clearTimeout(timer) }
   }
   const available = (): void => {
     if (!initialized || closed || frozen || context.shutdownPending() || context.state.phase !== "ready") throw new AgentError("NOT_READY")
@@ -273,18 +257,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   async function revalidate(op: Live): Promise<void> {
     await validateLiveOperation(op)
-    const spec = specOf(op.initial)
-    if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
-    await dependencies.observeLaunchEvidence(spec, op.evidence)
-    const configured = await configureLaunchContract(op.declaration, op.evidence.profile, op.evidence.configuration)
-    if (!isDeepStrictEqual(configured, op.contract) || backendFingerprint(op.evidence.backend, configured) !== spec.backendFingerprint) throw new AgentError("CONFIG_CHANGED")
-    if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   async function finishStart(op: Live): Promise<void> {
-    if (op.expired) return
     if (!op.result) return
-    if (op.result.outcome === "failed" && (!op.cleanupVerified || !op.terminalAgent)) return
+    if (op.result.outcome === "failed" && !op.expired && (!op.cleanupVerified || !op.terminalAgent)) return
     const command = commands.get(op.initial.launch.commandId)
     if (!command) return
     if (command.state === "pending" && command.version === 3) await publishCommand({ ...command, state: "completed", result: op.result }, command)
@@ -294,12 +271,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     op.editor?.close()
     permissionBroker.invalidate(agentTuple(op.initial))
     if (op.cleanup) return op.cleanup
-    const checkCleanup = (): void => { if (op.expired || !op.ready && performance.now() >= op.deadline + cleanupBudget(op.contract)) throw new AgentError("CLEANUP_UNVERIFIED") }
     op.cleanup = (async () => {
-      checkCleanup()
       const ownedResult = op.owner ? await op.owner.cleanup() : undefined
       await queue.run(async () => {
-        checkCleanup()
         if (ownedResult) {
           const spec = specOf(op.initial), path = join(root, "launches", spec.launchAttemptId + ".json")
           if (ownedResult.version !== 2 || ownedResult.owner.kind !== "agent" || ownedResult.owner.agentId !== spec.agentId
@@ -319,7 +293,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
             || ownedResult.launchAttempted && !ownedResult.provider
             || !isDeepStrictEqual(entries[0]!.record, ownedResult)
             || !isDeepStrictEqual(await readLaunchRecordForReconciliation(path), ownedResult)) throw new AgentError("CLEANUP_UNVERIFIED")
-          checkCleanup()
           return
         }
         if (op.owner) throw new AgentError("CLEANUP_UNVERIFIED")
@@ -329,7 +302,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           return
         }
         if (entry.record.version !== 2 || entry.record.owner.kind !== "agent" || entry.record.owner.agentId !== spec.agentId || entry.record.owner.providerGeneration !== spec.providerGeneration) throw new AgentError("CLEANUP_UNVERIFIED")
-        checkCleanup()
         const result = await reconcileRecord(entry.path, context.adapter, entry.record)
         if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new AgentError("CLEANUP_UNVERIFIED")
         entry.record = result.record
@@ -339,7 +311,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         context.state.launches = summarizeLaunches(context.mutations.accepted.map(value => value.record))
       })
     })().then(() => {
-      checkCleanup()
       op.cleanupVerified = true; runtimeIssues.delete(op.initial.definition.agentId); clearTimeout(op.watchdog)
       retire(op)
     }).catch(error => { delete op.cleanup; noteOperation(op, new AgentError("CLEANUP_UNVERIFIED")); throw error })
@@ -347,7 +318,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   async function failOperation(op: Live, error: unknown): Promise<void> {
     op.editor?.close()
-    if (op.expired) return
     op.fault ??= agentFailure(errorFor(error)); op.controller.abort(); op.uncertain = null
     permissionBroker.invalidate(agentTuple(op.initial))
     if (!op.ready) op.result = { outcome: "failed", target: agentTuple(op.initial), failure: op.fault, session: null }
@@ -355,6 +325,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const record = records.get(op.initial.definition.agentId)
       if (record && ["starting", "ready"].includes(record.phase)) await publishTerminalAgent(op, { ...record, phase: "failed", failure: op.fault }, record)
     }).catch(error => noteOperation(op, error))
+    if (op.expired) await queue.run(() => finishStart(op)).catch(error => noteOperation(op, error))
     await cleanup(op).catch(() => undefined)
     if (op.accepted.op === "restore" && op.cleanupVerified) await queue.run(async () => {
       const record = records.get(op.initial.definition.agentId)
@@ -417,7 +388,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           await finishStart(op)
         })
       } catch (error) {
-        if (!op.expired && !closed && !op.ready && !op.uncertain) await failOperation(op, error)
+        if (!closed && !op.ready && !op.uncertain) await failOperation(op, error)
       }
     })().catch(error => noteOperation(op, error))
   }
@@ -483,7 +454,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       if (candidates.length !== 1) throw new AgentError("ADAPTER_UNQUALIFIED")
       const declaration = parseLaunchContract(candidates[0])
       if (kind === "restore" && !declaration.sessionLoad) throw new AgentError("RESTORE_UNSUPPORTED")
-      const configuration = await observeConfig(profile), evidence: BackendEvidence = { profile, configuration, backend }
+      const configuration = await (dependencies.observeConfig ?? observeConfig)(profile), evidence: BackendEvidence = { profile, configuration, backend }
       const contract = await configureLaunchContract(declaration, profile, configuration)
       const cwd = absolutePath(previousAgent?.definition.cwd ?? (raw as CreateSessionInput | StartInput).cwd)
       const selected = native ? parseRequestedSettings((raw as CreateSessionInput).selection ?? {}) : kind === "start" ? {
@@ -886,14 +857,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const choices: JsonObject[] = []
       for (const backend of backends) {
         const declaration = input.contracts.find(contract => contract.id === backend.compatibilityId && contract.providerId === backend.id)!
-        const profile = profiles.find(profile => profile.id === backend.id)!
-        let evidence
-        try { evidence = await observeConfig(profile); await configureLaunchContract(declaration, profile, evidence) } catch { continue }
         let provider
-        try {
-          provider = (await catalog.list()).providers.find(value => value.providerId === backend.id
-            && value.verifiedAt !== null && value.fingerprint === evidence.fingerprint && value.models.length > 0)
-        } catch {}
+        try { provider = (await catalog.list()).providers.find(value => value.providerId === backend.id && value.verifiedAt !== null && value.models.length > 0) } catch {}
         choices.push(backendSelection(backend, declaration, provider))
       }
       return { defaultBackendId: config.defaultBackendId, backends: choices }
@@ -905,10 +870,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         for (const backend of backends.backends) {
           const profile = profiles.find(value => value.id === backend.id && value.enabled), declaration = input.contracts.find(value => value.id === backend.compatibilityId && value.providerId === backend.id)
           if (!profile || !declaration) continue
-          try {
-            const contract = await configureLaunchContract(declaration, profile, await observeConfig(profile))
-            for (const key of ["image", "audio", "embeddedContext"] as const) capabilities[key] ||= contract.promptCapabilities?.[key] === true
-          } catch {}
+          for (const key of ["image", "audio", "embeddedContext"] as const) capabilities[key] ||= declaration.promptCapabilities?.[key] === true
         }
       } catch (error) { if (!(error instanceof AgentError && error.code === "UNAVAILABLE") && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
       return { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: capabilities }
@@ -927,7 +889,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const accepted = await acceptLaunch(request, "start"), target = accepted.command.target
       if (!target) throw new AgentError("INCOMPLETE")
       const op = operations.get(target.agentId)
-      if (op) await op.work
+      if (op?.work) await bounded(op.work, op.deadline - performance.now() + cleanupBudget(op.contract), "STARTUP_TIMEOUT")
       const record = records.get(target.agentId)
       if (!record || record.phase !== "ready" || dirtyAgents.has(target.agentId)) throw new AgentError(record?.failure?.code ?? "INCOMPLETE")
       return structuredClone(record)
@@ -1039,63 +1001,67 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     },
     assertOrdinaryShutdownSafe: ordinary,
     async freezeAndDrain(stopAgents) {
-      if (!stopAgents) ordinary()
-      frozen = true
-      if (!stopAgents) return
-      const failures: unknown[] = [], admitted = new Set<Live>([...operations.values(), ...intents.values()])
-      const prompts = new Map<LivePrompt, Promise<void>>()
-      const capture = (): void => {
-        for (const op of [...operations.values(), ...intents.values()]) {
-          admitted.add(op)
-          if (!op.ready) op.controller.abort()
-          if (op.prompt) {
-            const active = op.prompt
-            active.controller.abort()
-            if (!prompts.has(active)) prompts.set(active, active.promise.then(() => undefined, () => undefined))
+      const deadline = Math.max(5000, ...(launchAdmissions.size ? [AGENT_LIMITS.startupMs + Math.max(0, ...input.contracts.map(cleanupBudget))] : []), ...[...operations.values()].map(op => (op.ready ? 0 : Math.max(0, op.deadline - performance.now())) + cleanupBudget(op.contract)))
+      const drain = async (): Promise<void> => {
+        if (!stopAgents) ordinary()
+        frozen = true
+        if (!stopAgents) return
+        const failures: unknown[] = [], admitted = new Set<Live>([...operations.values(), ...intents.values()])
+        const prompts = new Map<LivePrompt, Promise<void>>()
+        const capture = (): void => {
+          for (const op of [...operations.values(), ...intents.values()]) {
+            admitted.add(op)
+            if (!op.ready) op.controller.abort()
+            if (op.prompt) {
+              const active = op.prompt
+              active.controller.abort()
+              if (!prompts.has(active)) prompts.set(active, active.promise.then(() => undefined, () => undefined))
+            }
           }
         }
-      }
-      const settled = new Set<Promise<unknown>>()
-      const settle = async (pending: Promise<unknown>[]): Promise<void> => {
-        for (const operation of pending) settled.add(operation)
-        for (const outcome of await Promise.allSettled(pending)) if (outcome.status === "rejected") failures.push(outcome.reason)
-      }
-      capture()
-      while (launchAdmissions.size) await settle([...launchAdmissions])
-      capture()
-      const scheduled = new Set<Live>()
-      for (const record of records.values()) {
-        const view = agentView(record)
-        if (!["starting", "ready", "restoring", "stopping"].includes(record.phase) && ["not_launched", "verified"].includes(view.cleanup)) continue
-        const existing = [...commands.values()].find(c => c.op === "stop" && isDeepStrictEqual(c.target, agentTuple(record)) && c.state === "pending")
-        try {
-          await stop({ ...agentTuple(record)!, commandId: existing?.commandId ?? randomUUID() })
-          const op = operations.get(record.definition.agentId)
-          if (op && isDeepStrictEqual(agentTuple(op.initial), agentTuple(record))) scheduled.add(op)
-        } catch (error) { failures.push(error) }
-      }
-      capture()
-      const fallback = [...admitted].filter(op => !op.cleanupVerified && !scheduled.has(op)).map(async op => {
-        op.controller.abort()
-        await op.work
-        await cleanup(op)
-      })
-      await settle([...fallback, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()])
-      for (;;) {
+        const settled = new Set<Promise<unknown>>()
+        const settle = async (pending: Promise<unknown>[]): Promise<void> => {
+          for (const operation of pending) settled.add(operation)
+          for (const outcome of await Promise.allSettled(pending)) if (outcome.status === "rejected") failures.push(outcome.reason)
+        }
         capture()
-        const pending = [...launchAdmissions, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()].filter(operation => !settled.has(operation))
-        if (!pending.length) break
-        await settle(pending)
-      }
-      try {
-        await queue.run(async () => {
-          for (const op of admitted) try { await finishStart(op) } catch (error) { failures.push(error) }
-          for (const command of commands.values()) if (dirty.has(command.commandId)) try { await publishCommand(command, command) } catch (error) { failures.push(error) }
+        while (launchAdmissions.size) await settle([...launchAdmissions])
+        capture()
+        const scheduled = new Set<Live>()
+        for (const record of records.values()) {
+          const view = agentView(record)
+          if (!["starting", "ready", "restoring", "stopping"].includes(record.phase) && ["not_launched", "verified"].includes(view.cleanup)) continue
+          const existing = [...commands.values()].find(c => c.op === "stop" && isDeepStrictEqual(c.target, agentTuple(record)) && c.state === "pending")
+          try {
+            await stop({ ...agentTuple(record)!, commandId: existing?.commandId ?? randomUUID() })
+            const op = operations.get(record.definition.agentId)
+            if (op && isDeepStrictEqual(agentTuple(op.initial), agentTuple(record))) scheduled.add(op)
+          } catch (error) { failures.push(error) }
+        }
+        capture()
+        const fallback = [...admitted].filter(op => !op.cleanupVerified && !scheduled.has(op)).map(async op => {
+          op.controller.abort()
+          await op.work
+          await cleanup(op)
         })
-      } catch (error) { failures.push(error) }
-      if (failures.length || stopFailures.size || stops.size || launchAdmissions.size || dirty.size || dirtyAgents.size
-        || [...commands.values()].some(command => command.state === "pending")
-        || [...admitted].some(op => !op.cleanupVerified || op.terminalAgent && !op.terminalAgentDurable)) throw new AgentError("INCOMPLETE")
+        await settle([...fallback, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()])
+        for (;;) {
+          capture()
+          const pending = [...launchAdmissions, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()].filter(operation => !settled.has(operation))
+          if (!pending.length) break
+          await settle(pending)
+        }
+        try {
+          await queue.run(async () => {
+            for (const op of admitted) try { await finishStart(op) } catch (error) { failures.push(error) }
+            for (const command of commands.values()) if (dirty.has(command.commandId)) try { await publishCommand(command, command) } catch (error) { failures.push(error) }
+          })
+        } catch (error) { failures.push(error) }
+        if (failures.length || stopFailures.size || stops.size || launchAdmissions.size || dirty.size || dirtyAgents.size
+          || [...commands.values()].some(command => command.state === "pending")
+          || [...admitted].some(op => !op.cleanupVerified || op.terminalAgent && !op.terminalAgentDurable)) throw new AgentError("INCOMPLETE")
+      }
+      await bounded(drain(), deadline, "INCOMPLETE")
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { ordinary(); if (dirty.size || dirtyAgents.size || assessment.unavailable.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },

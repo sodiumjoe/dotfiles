@@ -87,10 +87,7 @@ try {
       } }
     },
     agentFactory(input) {
-      let writingReceipt = false, evidenceCalls = 0
-      const startupHang = async (boundary: AgentHandlerOptions["startupHang"]): Promise<void> => {
-        if (config.startupHang === boundary) await new Promise<void>(() => undefined)
-      }
+      let writingReceipt = false
       const base = createAgentStore(config.paths.persistentRoot, { mkdir, rename, rm, async open(path, flags, mode) {
         const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
         handle.sync = async () => {
@@ -101,7 +98,6 @@ try {
       } }, input.retirement)
       return createAgentService({ ...input, store: { ...base, async writeAgent(next, expected) {
         await base.writeAgent(next, expected)
-        if (next.phase === "ready") await startupHang("publication")
         if (next.phase === "ready") await pause("ready")
       }, async writeCommand(next, expected) {
         if (next.op === "stop" && next.state === "completed") await pause("stop-receipt-before")
@@ -127,17 +123,6 @@ try {
           if (record.provider !== null) await pause("identity")
         } } })
         return { ...owner, async cleanup() { const record = await owner.cleanup(); await pause("stop-verified"); return record } }
-      }, async observeLaunchEvidence(spec, expected) {
-        if (++evidenceCalls === 5) await startupHang("evidence")
-        const profile = (config.profiles ?? [config.profile]).find(value => value.id === spec.backendId)
-        if (!profile || !isDeepStrictEqual(profile, expected.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
-      }, fatalStartupTimeout(spec): never {
-        if (!config.startupHang || spec.handlerGeneration !== generation) throw new Error("unexpected fixture startup timeout")
-        const handlerPid = process.pid
-        writeFileSync(join(root, "startup-timeout.json"), JSON.stringify({ pid: handlerPid, signal: "SIGKILL", attempt: spec.launchAttemptId }), { mode: 0o600 })
-        if (handlerPid !== process.pid) throw new Error("fixture Handler identity changed")
-        process.kill(handlerPid, "SIGKILL")
-        throw new Error("fixture Handler survived SIGKILL")
       } })
     },
   })

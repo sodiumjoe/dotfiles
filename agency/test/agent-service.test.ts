@@ -400,7 +400,7 @@ test("failed pre-ready lifecycle releases its transient operation after cleanup 
   const f = await agentServiceFixture(t, { pause: "spawn" })
   const accepted = await f.service.start(f.input)
   await f.entered
-  await writeFile(f.config, "{\"changed\":true}", { mode: 0o600 })
+  f.failInitialize(true)
   f.release()
   const failed = await completed(f.service, accepted.command)
   assert.equal(failed.command.result?.outcome, "failed")
@@ -469,7 +469,7 @@ test("failed start receipt durability blocks retirement until exact retry", asyn
   f.failReceipt(true)
   await f.service.start(f.input)
   await f.entered
-  await writeFile(f.config, "{\"changed\":true}", { mode: 0o600 })
+  f.failInitialize(true)
   f.release()
   await until(async () => (await f.store.readCommand(f.input.commandId))?.state === "completed" ? true : undefined)
   assert.deepEqual(f.retired(), [])
@@ -487,7 +487,7 @@ for (const kind of ["failed start", "recoverable restore"] as const) test(`${kin
     request = (await f.service.start(f.input)).command
     predecessor = "starting"
     await f.entered
-    await writeFile(f.config, "{\"changed\":true}", { mode: 0o600 })
+    f.failInitialize(true)
     f.release()
   } else {
     const ready = await completed(f.service, (await f.service.start(f.input)).command)
@@ -518,7 +518,7 @@ test("stop repairs a retained terminal transition before changing its predecesso
   f.failTerminalBeforeRename(true)
   const accepted = await f.service.start(f.input)
   await f.entered
-  await writeFile(f.config, "{\"changed\":true}", { mode: 0o600 })
+  f.failInitialize(true)
   f.release()
   await until(async () => f.terminalWriteFailures() ? true : undefined)
   const target = accepted.command.target!, stop = { ...target, commandId: randomUUID() }
@@ -767,14 +767,20 @@ test("stop racing an unspawned start cannot publish a ready session", async t =>
   assert.equal(f.spawns(), 0)
 })
 
-test("startup revalidation rejects changed configuration evidence before spawn", async t => {
+test("admitted launches retain captured configuration and the next launch observes edits", async t => {
   const f = await agentServiceFixture(t, { pause: "spawn" })
-  await f.service.start(f.input)
+  const first = await f.service.start(f.input)
   await f.entered
+  assert.equal(f.evidenceCalls(), 1)
   await writeFile(f.config, "{\"changed\":true}", { mode: 0o600 })
   f.release()
-  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "failed")
-  assert.equal(f.spawns(), 0)
+  assert.equal((await completed(f.service, f.input)).command.result?.outcome, "started")
+  const second = await completed(f.service, (await f.service.start({ ...f.input, commandId: randomUUID() })).command)
+  const a = await f.store.readAgent(first.command.target!.agentId), b = await f.store.readAgent(second.command.target!.agentId)
+  assert.notEqual(a!.launch!.configuration.fingerprint, b!.launch!.configuration.fingerprint)
+  assert.equal(f.evidenceCalls(), 2)
+  await f.service.backendChoices(); await f.service.acpCapabilities()
+  assert.equal(f.evidenceCalls(), 2)
 })
 
 test("uncertain completed receipt is repaired without repeating a provider launch", async t => {
@@ -1059,12 +1065,11 @@ test("shutdown does not inventory retained state before stopping live owners", a
 })
 
 test("unspawned restore without an owner retains its stopped native session", async t => {
-  let refuse = false
-  const f = await agentServiceFixture(t, { observe: async () => { if (refuse) throw new AgentError("CONFIG_CHANGED") } })
+  const f = await agentServiceFixture(t)
   const ready = await completed(f.service, (await f.service.start(f.input)).command)
   const stop = { ...ready.command.target!, commandId: randomUUID() }
   await f.service.stop(stop); await completed(f.service, stop)
-  refuse = true
+  f.failOwner(true)
   const request = { commandId: randomUUID(), handlerGeneration: stop.handlerGeneration, agentId: stop.agentId, environment: {} }
   await f.service.restore(request)
   const result = await completed(f.service, request)
@@ -1088,4 +1093,33 @@ test("ordinary agent operations use initialized state without inventory scans", 
   assert.equal((await f.service.list()).agents.length, 1)
   assert.equal((await f.service.prompt({ ...target, text: "continue" })).stopReason, "end_turn")
   await f.service.freezeAndDrain(true)
+})
+
+test("startup expiry settles its receipt and preserves unrelated sessions and late cleanup", async t => {
+  const released = Promise.withResolvers<void>()
+  t.after(() => released.resolve())
+  let targetId = "", held = false
+  const f = await agentServiceFixture(t, { cleanupOverride: async (agentId, cleanup) => { if (held && agentId === targetId) await released.promise; return cleanup() } })
+  const first = await completed(f.service, (await f.service.start(f.input)).command)
+  targetId = first.command.target!.agentId
+  const stop = { ...first.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop); await completed(f.service, stop)
+  const healthy = await completed(f.service, (await f.service.start({ ...f.input, commandId: randomUUID() })).command)
+  f.pauseRestore("ready"); held = true
+  const request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: targetId, environment: {} }
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  await f.service.restore(request); await f.restoreEntered
+  t.mock.timers.tick(40000); t.mock.timers.reset()
+  const failed = await until(async () => { const receipt = await f.service.commandReceipt(request.commandId, request.handlerGeneration); return receipt?.command.state === "completed" ? receipt : undefined }, 1500)
+  assert.equal(failed.command.result?.failure?.code, "STARTUP_TIMEOUT")
+  assert.equal((await f.service.sessionRecord(targetId))?.cleanup, "unverified")
+  assert.equal((await f.service.prompt({ ...healthy.command.target!, text: "continue" })).stopReason, "end_turn")
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const draining = f.service.freezeAndDrain(true)
+  const incomplete = assert.rejects(draining, { code: "INCOMPLETE" })
+  t.mock.timers.tick(40000); t.mock.timers.reset()
+  await incomplete
+  held = false; released.resolve(); f.release()
+  await until(async () => (await f.service.sessionRecord(targetId))?.cleanup === "verified" ? true : undefined)
+  assert.notEqual((await f.service.sessionRecord(targetId))?.record.phase, "ready")
 })

@@ -140,22 +140,21 @@ test("closed owner permissions is explicit on the agent protocol", async t => {
 })
 
 test("local roster preserves active filtering, pagination and not-yet-live starts", async t => {
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const f = await agentServiceFixture(t, { observe: async () => { entered.resolve(); await release.promise } })
+  const f = await agentServiceFixture(t, { pause: "spawn" })
   const command = await f.service.start(f.input)
-  await entered.promise
+  await f.entered
   try {
   const page = await dispatchRuntimeHuman(f.service, { op: "agent_roster", input: { limit: 1, cwd: f.workspace } })
   assert.equal(page.state, "page")
   assert.ok(page.state === "page")
   assert.equal(page.agents.length, 1)
   assert.equal(page.agents[0]!.record.phase, "starting")
-  assert.equal(page.agents[0]!.live, false)
+  assert.equal(page.agents[0]!.live, true)
   const empty = await dispatchRuntimeHuman(f.service, { op: "agent_roster", input: { limit: 1, cwd: "/other" } })
   assert.ok(empty.state === "page")
   assert.equal(empty.agents.length, 0)
   await assert.rejects(dispatchRuntimeHuman(f.service, { op: "agent_roster", input: { limit: 1, activeOnly: false } }), { code: "INVALID_PROTOCOL" })
-  } finally { release.resolve() }
+  } finally { f.release() }
   await until(async () => (await f.service.command(command.command.commandId, command.command.handlerGeneration)).command.state === "completed" ? true : undefined)
 })
 

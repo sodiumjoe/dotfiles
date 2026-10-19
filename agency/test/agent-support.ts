@@ -36,7 +36,7 @@ import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentCommandV3, AgentRecord, AgentRecordV3, RuntimeLaunchSpec, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = RetentionFixtureOptions & { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; startupHang?: "evidence" | "publication"; failReceiptSync?: boolean; providerScenario?: string }
+export type AgentHandlerOptions = RetentionFixtureOptions & { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean; providerScenario?: string }
 
 export async function verifyFixtureProviderGroup(identity: ProcessIdentity, io: { readGroup(pid: number): Promise<ProcessIdentity[]>; observe(pid: number): Promise<ProcessIdentity | null> }): Promise<ProcessIdentity[] | null> {
   const members = await io.readGroup(identity.pid), again = await io.readGroup(identity.pid)
@@ -468,7 +468,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUp
   return { connection, sent, permissionReplies, readable, writable, send, replaceOptions(values: import("../src/agent/session-config.js").JsonObject[]) { options.splice(0, options.length, ...structuredClone(values)) }, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { cleanupOverride?: (agentId: string, cleanup: () => Promise<LaunchRecord>) => Promise<LaunchRecord>; hostId?: string; retirement?: import("../src/retention/store.js").RetirementView; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; observe?: (count: number, spec: RuntimeLaunchSpec) => Promise<void>; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { cleanupOverride?: (agentId: string, cleanup: () => Promise<LaunchRecord>) => Promise<LaunchRecord>; hostId?: string; retirement?: import("../src/retention/store.js").RetirementView; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
   if (options.productionCatalog) options = { ...options, productionContract: true }
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
@@ -483,7 +483,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     shutdownPending: () => false,
   }
   const f = { root, workspace, context }, entered = agentGate(), commandEntered = agentGate(), released = agentGate(), readyCommitEntered = agentGate(), readyCommitReleased = agentGate(), stateRemovalReleased = agentGate(), promptEntered = agentGate(), publications: string[] = []
-  let stateRemovalCalls = 0, evidenceCalls = 0, fatalCalls = 0, cleanupCalls = 0
+  let stateRemovalCalls = 0, evidenceCalls = 0, cleanupCalls = 0
   let beforeOwnerPage: Promise<import("../src/agent/queries.js").AgentPage> | undefined
   const cleanupEntered = agentGate(), cleanupReleased = agentGate()
   const requests: Promise<unknown>[] = [], owners: OwnedAgentProcess[] = []
@@ -565,7 +565,9 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     const cancelled = new Promise<void>(resolve => { aborted = resolve; signal.addEventListener("abort", aborted, { once: true }) })
     try { await Promise.race([released.promise, cancelled]) } finally { signal.removeEventListener("abort", aborted) }
   }
+  let failInitialize = false, failOwner = false
   const processFactory: typeof createAgentProcess = input => {
+    if (failOwner) throw new AgentError("STARTUP_FAILED")
     const peer = scriptedAcp(t, "exact", { productionContract: options.productionContract === true, hold: input.session?.kind === "load" && restorePause === "spawned" ? 1 : Infinity, response(request, reply) {
       methodHistory.push(request.method)
       if (input.session?.kind === "load" && request.method === "initialize" && loadBehavior === "unsupported") reply.result.agentCapabilities.loadSession = false
@@ -615,6 +617,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     return { ...owner, async cleanup() { cleanupCalls++; if (options.pauseCleanup) { cleanupEntered.resolve(); await cleanupReleased.promise }; return options.cleanupOverride ? options.cleanupOverride(input.spec.agentId, () => owner.cleanup()) : owner.cleanup() }, async initialize(signal) {
       if (input.session?.kind === "load" && restorePause === "spawn") { restoreEntered.resolve(); await restoreReleased.promise }
       await pause("spawn", signal)
+      if (failInitialize) throw new AgentError("STARTUP_FAILED")
       const session = await owner.initialize(signal)
       if (input.session?.kind === "load" && restorePause === "ready") { restoreEntered.resolve(); await restoreReleased.promise }
       await pause("ready", signal); return session
@@ -623,15 +626,16 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
   const supplied = options.launchContracts?.map(value => Object.fromEntries(Object.entries(value).filter(([key]) => !["entrypoint", "executable", "fingerprint"].includes(key))) as LaunchContract)
   const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : supplied ?? [contract], store, ...(options.retirement ? { retirement: options.retirement } : {}) }
   const retired: Array<{ agentId: string; commandId: string }> = []
-  const dependencies = { processFactory, onOperationRetired(agentId: string, commandId: string) { retired.push({ agentId, commandId }) }, async observeLaunchEvidence(spec: RuntimeLaunchSpec, expected: { profile: ProviderProfile }) {
-    publications.push("evidence"); evidenceCalls++; await options.observe?.(evidenceCalls, spec)
-    if (!isDeepStrictEqual(profile, expected.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
-  }, fatalStartupTimeout(): never { fatalCalls++; throw new Error("fixture Handler fail-stop") } }
+  const dependencies = { processFactory, onOperationRetired(agentId: string, commandId: string) { retired.push({ agentId, commandId }) }, async observeConfig(profile: ProviderProfile) {
+    publications.push("evidence"); evidenceCalls++
+    return observeConfig(profile)
+  } }
+
   let service = track(createAgentService(composition, dependencies))
   t.after(async () => {
     released.resolve(); readyCommitReleased.resolve(); stateRemovalReleased.resolve(); restoreReleased.resolve(); cleanupReleased.resolve()
     await Promise.allSettled(requests)
-    if (!fatalCalls) await service.freezeAndDrain(true).catch(() => undefined)
+    await service.freezeAndDrain(true).catch(() => undefined)
     service.close()
     await Promise.allSettled(owners.map(owner => owner.cleanup()))
     await f.context.mutations.queue.run(async () => undefined)
@@ -643,7 +647,8 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     beforeOwnerPage: () => beforeOwnerPage, cleanupEntered: cleanupEntered.promise, releaseCleanup: cleanupReleased.resolve,
     failStopReceipt(value: boolean) { failStopReceipt = value },
     pauseRestore(value: string) { restorePause = value }, restoreEntered: restoreEntered.promise,
-    evidenceCalls: () => evidenceCalls, fatalCalls: () => fatalCalls, cleanupCalls: () => cleanupCalls, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
+    failInitialize(value: boolean) { failInitialize = value }, failOwner(value: boolean) { failOwner = value },
+    evidenceCalls: () => evidenceCalls, cleanupCalls: () => cleanupCalls, commandEntered: commandEntered.promise, promptEntered: promptEntered.promise,
     failReceipt(value: boolean) { failReceipt = value }, receiptFailures() { return receiptFailures }, failReady(value: boolean) { failReady = value }, failInitialAgent(value: boolean) { failInitialAgent = value }, failInitialCommand(value: boolean) { failInitialCommand = value },
     failTerminal(value: boolean) { failTerminal = value }, terminalFailures: () => terminalFailures, failTerminalBeforeRename(value: boolean) { failTerminalBeforeRename = value }, terminalWriteFailures: () => terminalWriteFailures, retired: () => structuredClone(retired),
     holdReady(value: boolean) { holdReady = value }, readyCommitEntered: readyCommitEntered.promise, releaseReadyCommit: readyCommitReleased.resolve,

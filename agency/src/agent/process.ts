@@ -78,9 +78,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
   }
   function cleanup(): Promise<LaunchRecord> {
     if (cleaning) return cleaning
-    const budget = cleanupBudget(contract), readyForCleanup = isReady?.() ?? initialized
-    const computed = readyForCleanup ? now() + budget : Math.min(overallDeadline + budget, now() + budget)
-    const cleanupDeadline = Number.isFinite(computed) ? computed : now() + budget
+    const cleanupDeadline = now() + cleanupBudget(contract)
     stopping = true; controller.abort(); connection?.close()
     child?.stdout?.resume(); child?.stderr?.resume()
     let expired = false
