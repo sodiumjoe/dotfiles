@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
-import type { RetentionPins } from "../retention/policy.js"
-import type { RemovalEvidence, RetirementView } from "../retention/store.js"
 import { isDeepStrictEqual } from "node:util"
 import type { MutationQueue } from "../handler/mutations.js"
 import type { PlatformPaths } from "../platform/paths.js"
@@ -15,7 +13,7 @@ export type ProviderView = ProviderSnapshot & { state: "unconfigured" | "ready" 
 export type CatalogView = { state: "catalog"; hostId: string; handlerGeneration: string; observedAt: number; launchAuthorized: false; providers: ProviderView[]; refresh: RefreshView | null; discovery: { state: "idle" | "refreshing" | "blocked"; error: CatalogFailure | null; issues?: string[] } }
 export type RefreshResult = { state: "refresh"; command: RefreshView; snapshot: CatalogSnapshot | null }
 export type LaunchEvidence = { snapshotId: string; provider: ProviderSnapshot; profile: ProviderProfile; configuration: ConfigEvidence }
-export type CatalogService = { retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; initialize(): Promise<void>; list(): Promise<CatalogView>; launchEvidence(providerId: ProviderId): Promise<LaunchEvidence>; refresh(commandId: string, generation: string): Promise<RefreshResult>; freezeAndDrain(): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
+export type CatalogService = { initialize(): Promise<void>; list(): Promise<CatalogView>; launchEvidence(providerId: ProviderId): Promise<LaunchEvidence>; refresh(commandId: string, generation: string): Promise<RefreshResult>; freezeAndDrain(): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void }
 export type CatalogClock = { now(): number }
 type Config = { profiles: ProviderProfile[]; evidence: Map<ProviderId, ConfigEvidence>; errors: Map<ProviderId, CatalogFailure>; fingerprints: RefreshCommand["fingerprints"] }
 type Batch = { id: string; config: Config; requests: ProbeRequest[]; commands: string[]; controller: AbortController; operation: Promise<void> | null; snapshot: CatalogSnapshot | null; finished: boolean; started: boolean; outcomes: Map<ProviderId, ProbeOutcome> }
@@ -24,7 +22,7 @@ const view = ({ commandId, handlerGeneration, state, snapshotId }: RefreshComman
 const diagnostic = (issue: string): string => /^[\x20-\x7e]{1,480}$/.test(issue) ? issue : "probe evidence entry has an unprintable or oversized name"
 const systemClock: CatalogClock = { now: Date.now }
 
-export function createCatalogService(options: { paths: PlatformPaths; generation: string; queue: MutationQueue; store: CatalogStore; probes: ProbeRuntime; isReady(): boolean; shutdownPending(): boolean; readProfiles?: typeof readProfiles; observeConfig?: typeof observeConfig; clock?: CatalogClock; retirement?: RetirementView; onTerminal?: () => void; cleanupIssues?: () => readonly string[] }): CatalogService {
+export function createCatalogService(options: { paths: PlatformPaths; generation: string; queue: MutationQueue; store: CatalogStore; probes: ProbeRuntime; isReady(): boolean; shutdownPending(): boolean; readProfiles?: typeof readProfiles; observeConfig?: typeof observeConfig; clock?: CatalogClock }): CatalogService {
   const { paths, generation, queue, store, probes } = options, clock = options.clock ?? systemClock
   let current: CatalogSnapshot | null = null, diskCurrent: CatalogSnapshot | null = null, initialized = false, closed = false, frozen = false
   let blocked: CatalogFailure | null = null, inventoryBlocked = false, active: Batch | null = null, latest: RefreshCommand | null = null
@@ -101,7 +99,6 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
       await persist(updated, previous, privateCommands.has(commandId))
     }
     if (active === batch) active = null
-    options.onTerminal?.()
   }
   function launch(batch: Batch): void {
     if (batch.started || active !== batch) return
@@ -189,26 +186,12 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
         const fresh = configured && !error && snapshot.verifiedHandlerGeneration === generation && isFresh(snapshot.verifiedAt, now)
         return { ...snapshot, error, state: !configured ? "unconfigured" : error?.code === "PROBE_CLEANUP_UNVERIFIED" ? "blocked" : error || snapshot.verifiedAt === null ? "unavailable" : "ready", freshness: snapshot.verifiedAt === null ? "unverified" : fresh ? "fresh" : "stale", ...(probeIssues.has(providerId) ? { refreshIssue: probeIssues.get(providerId)! } : {}) }
       })
-      const issues = [...new Set([...unscopedIssues, ...(probes.diagnostics?.() ?? []), ...(options.cleanupIssues?.() ?? [])].map(diagnostic))].sort().slice(0, 32)
+      const issues = [...new Set([...unscopedIssues, ...(probes.diagnostics?.() ?? [])].map(diagnostic))].sort().slice(0, 32)
       return { state: "catalog" as const, hostId: paths.hostKey, handlerGeneration: generation, observedAt: now, launchAuthorized: false as const, providers, refresh: latest === null ? null : view(latest), discovery: { state: blocked ? "blocked" as const : active ? "refreshing" as const : "idle" as const, error: blocked, ...(issues.length ? { issues } : {}) } }
     })
   }
   return {
     initialize, list,
-    retentionPins() {
-      const pins = [...probes.retentionPins().paths]
-      for (const c of owners()) if (c.state === "pending" || active?.commands.includes(c.commandId) || inventoryBlocked) {
-        pins.push("catalog/" + (privateCommands.has(c.commandId) ? "automatic" : "commands") + "/" + c.commandId + ".json")
-        if (c.snapshotId) pins.push("catalog/snapshots/" + c.snapshotId + ".json")
-      }
-      if (active?.snapshot) pins.push("catalog/snapshots/" + active.snapshot.snapshotId + ".json")
-      return { paths: pins }
-    },
-    forgetRemoved(entry) {
-      const match = /^catalog\/(automatic|commands)\/([0-9a-f-]+)\.json$/.exec(entry.path)
-      if (match) { (match[1] === "automatic" ? privateCommands : commands).delete(match[2]!); if (latest?.commandId === match[2]) latest = null }
-      probes.forgetRemoved(entry)
-    },
     launchEvidence(providerId) {
       return queue.run(async () => {
         if (!canStart() || !current) throw new CatalogError("CATALOG_UNAVAILABLE")

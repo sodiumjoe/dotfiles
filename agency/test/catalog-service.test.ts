@@ -21,8 +21,6 @@ async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: stri
   const queue = new MutationQueue(), store = createCatalogStore(root), generation = randomUUID(), paths = { hostKey: "c".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "socket") }
   const started: ProbeRequest[] = [], pending: Array<{ request: ProbeRequest; gate: ReturnType<typeof gate<ProbeOutcome>> }> = []
   const probes: ProbeRuntime = {
-    retentionPins: () => ({ paths: [] }),
-    forgetRemoved() {},
     recover: async () => undefined,
     verifyDischarged: async () => { if (blocked.size || pending.length) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
     async run(request, signal) {
@@ -424,11 +422,11 @@ for (const scenario of ["held-native-publication", "held-cleanup-publication"]) 
 
 test("visible terminal cleanup with failed durability cannot publish fresh catalog evidence", { timeout: 15000 }, async t => {
   const f = await syntheticProbeFixture(t, "terminal-fsync-failure", true), terminal = gate()
-  const service = createCatalogService({ paths: { persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "socket"), hostKey: f.request.meta.hostId }, generation: f.generation, queue: f.queue, store: f.store, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile], onTerminal: () => terminal.resolve(), probes: { ...f.runtime, async run(request, signal) { f.bindRequest(request); return f.runtime.run(request, signal) } } })
+  const service = createCatalogService({ paths: { persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "socket"), hostKey: f.request.meta.hostId }, generation: f.generation, queue: f.queue, store: f.store, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile], probes: { ...f.runtime, async run(request, signal) { f.bindRequest(request); return f.runtime.run(request, signal) } } })
   t.after(() => service.close())
   await service.initialize(); await service.refresh(randomUUID(), f.generation)
   await f.workerObserved.promise; f.releaseWorkerIdentity()
-  await f.nativeRegistered.promise; f.releaseResult(); await terminal.promise
+  await f.nativeRegistered.promise; f.releaseResult(); await until(async () => (await service.list()).discovery.state === "idle" ? true : undefined)
   const inventory = await f.store.inventory()
   assert.equal(inventory.launches[0]!.record.phase, "cleanup_verified")
   const view = await service.list(), provider = view.providers.find(p => p.providerId === f.profile.id)!

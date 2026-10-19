@@ -111,7 +111,7 @@ test("expired failed worker retirement preserves task record and report bytes", 
   const runtimeStore = createAgentStore(f.paths.persistentRoot), failed = await runtimeStore.readAgent(agent.definition.agentId)
   assert.ok(failed && failed.version === 3); assert.equal(failed.session, null); assert.equal(failed.configurationState.verification.kind, "unknown")
   await runtimeStore.writeAgent({ ...failed, configurationState: { ...failed.configurationState, verification: { kind: "verified" } } }, failed)
-  await f.restart({ nativeAcp: true, retentionNow: Date.now() + 8 * 86400000 })
+  await f.restart({ nativeAcp: true })
   assert.equal((await f.inventory()).agents.some(value => value.definition.agentId === agent.definition.agentId), false)
   assert.deepEqual(await Promise.all([readFile(join(directory, "record.json")), readFile(join(directory, "report.json"))]), before)
   const store = createTaskStore({ root: f.paths.persistentRoot, hostId }); await store.initialize()

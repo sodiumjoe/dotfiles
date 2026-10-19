@@ -11,7 +11,6 @@ import { createProbeRuntime } from "../../src/catalog/probes.js"
 import { createCatalogService } from "../../src/catalog/service.js"
 import { observeConfig } from "../../src/catalog/config.js"
 import { writeLaunchRecord } from "../../src/platform/private-state.js"
-import { fixtureRetention } from "../retention-support.js"
 
 process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as ControlFixtureConfig
@@ -26,13 +25,7 @@ if (config.failSignalGroup !== undefined) {
   adapter.signalGroup = async (group, signal) => { if (group === config.failSignalGroup) throw new Error(config.failSignalMessage ?? "injected retained cleanup failure"); await signalGroup(group, signal) }
 }
 try {
-  const retention = fixtureRetention(root, config.paths.persistentRoot, config), filesystem = retention.filesystem!
-  retention.filesystem = { ...filesystem, async unlink(path) {
-    const name = String(path).split("/").at(-1)!
-    if (["sdk-observed.json", "native-methods.json"].includes(name) && String(path).startsWith(join(config.paths.persistentRoot, "catalog/work") + "/")) await writeFile(join(root, String(path).split("/").at(-2)! + "-" + name), await readFile(path), { mode: 0o600 })
-    await filesystem.unlink(path)
-  } }
-  await runHandler({ retention, paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), ...(config.catalog ? { catalogFactory: (context: Parameters<NonNullable<import("../../src/handler/daemon.js").HandlerOptions["catalogFactory"]>>[0]) => {
+  await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), ...(config.catalog ? { catalogFactory: (context: Parameters<NonNullable<import("../../src/handler/daemon.js").HandlerOptions["catalogFactory"]>>[0]) => {
     const store = context.store
     const probes = createProbeRuntime({ ...context, queue: context.mutations.queue, store, canStart: () => context.isReady() && !context.shutdownPending(), dependencies: { async publish(path, record) {
       await writeLaunchRecord(path, record)

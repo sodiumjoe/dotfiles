@@ -22,7 +22,6 @@ import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../../src/
 import type { PlatformPaths } from "../../src/platform/paths.js"
 import type { CatalogSnapshot, ProviderProfile } from "../../src/catalog/types.js"
 import type { AgentHandlerOptions } from "../agent-support.js"
-import { fixtureRetention } from "../retention-support.js"
 
 process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as AgentHandlerOptions & { paths: PlatformPaths; profile: ProviderProfile; profiles?: ProviderProfile[] }
@@ -69,11 +68,11 @@ try {
       },
       async inspect() { return binding }
     }
-  })() } : {}), paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
+  })() } : {}), paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: config.nativeAcp ? [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }] : [contract],
     catalogFactory(context) {
       const store = context.store
-      const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
+      const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
       return { ...service, async initialize() {
         const evidence = await observeConfig(config.profile)
         const snapshot: CatalogSnapshot = { version: 1 as const, hostId: config.paths.hostKey, handlerGeneration: generation, snapshotId: randomUUID(), createdAt: Date.now(), providers: [{ providerId: "codex-acp" as const, fingerprint: evidence.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp" as const, modelId: "model-a", resolvedModelId: null, displayName: "Fixture model", reasoning: { state: "values" as const, values: ["high", "low"] }, modes: { state: "unknown" as const }, availability: "advertised" as const }] }] }
@@ -95,7 +94,7 @@ try {
           await sync()
         }
         return handle
-      } }, input.retirement)
+      } })
       return createAgentService({ ...input, store: { ...base, async writeAgent(next, expected) {
         await base.writeAgent(next, expected)
         if (next.phase === "ready") await pause("ready")

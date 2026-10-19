@@ -27,8 +27,6 @@ import { createConversation, type Conversation, type ConversationListener, type 
 import { createTurnCoordinator, type AcpSubmissionRequest, type SubmissionReceipt, type SubmissionRequest, type TurnCoordinator } from "./turns.js"
 import { LEGACY_TURN_LIMITS, type AcpObservation, type TurnOptions, type TurnResult } from "./session-events.js"
 import type { AgentTuple } from "./types.js"
-import type { RetentionPins } from "../retention/policy.js"
-import type { RemovalEvidence, RetirementView } from "../retention/store.js"
 import { backendFingerprint, readBackendConfig, mergeBackendEnvironment, type Backend } from "./backend-config.js"
 import { canonicalJson, parseRequestedSettings, projectRestorableSettings, nonRestorableOptionIds, type RequestedSettings, type JsonObject, type SessionConfiguration } from "./session-config.js"
 import { withNativeSession, withoutAgencyMetadata, type ProviderSession } from "./acp.js"
@@ -72,7 +70,7 @@ export type AgentService = {
   detachPermissions(connectionId: string, target?: AgentTuple): void
   observeSession(target: AgentTuple, listener: ConversationListener, configuration: (snapshot: SessionConfiguration) => void): Promise<AcpSessionObservation>
   beginSession(input: CreateSessionInput): Promise<CommandView>
-  createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
+  createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
 type LivePrompt = { controller: AbortController; promise: Promise<TurnResult | JsonObject> }
 type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; contract: ConfiguredLaunchContract; backend: Backend; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
@@ -83,7 +81,7 @@ export type AgentServiceDependencies = {
   onOperationRetired?(agentId: string, commandId: string): void
 }
 
-export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore; retirement?: RetirementView; onTerminal?: () => void; cleanupIssues?: () => readonly string[] }, dependencies: AgentServiceDependencies = { processFactory: createAgentProcess }): AgentService {
+export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore }, dependencies: AgentServiceDependencies = { processFactory: createAgentProcess }): AgentService {
   const { context, store, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const importIntents = new Map<string, AgentCommandV3>()
@@ -136,7 +134,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   let legacyAgents: LegacyAgentRecord[] = []
   let rosterRevision = randomUUID(), rosterFingerprint = ""
   const changed = (): void => { inventoryRevision = randomUUID() }
-  const cleanupDiagnostics = (): AgentStateIssue[] => (input.cleanupIssues?.() ?? []).map(message => ({ kind: "unknown", id: null, path: join(root, "retention/pending.json"), message }))
   const errorFor = (error: unknown): AgentError => error instanceof AgentError ? error : new AgentError("STARTUP_FAILED")
   const note = (agentId: string, kind: AgentStateIssue["kind"], id: string, path: string, error: unknown): void => {
     const next = { kind, id, path, message: String(error).slice(0, 512) }
@@ -167,7 +164,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     delete op.work
     delete op.cleanup
     dependencies.onOperationRetired?.(agentId, op.initial.launch.commandId)
-    input.onTerminal?.()
+    
   }
   function expire(op: Live): void {
     if (op.expired) return
@@ -207,7 +204,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     }
     const op = intents.get(next.commandId)
     if (op) retire(op)
-    if (next.state !== "pending") input.onTerminal?.()
+    if (next.state !== "pending") 
     if (next.op === "stop" && next.state === "completed") stopFailures.delete(next.commandId)
   }
   async function publishAgent(next: AgentRecord, expected: AgentRecord | null): Promise<void> {
@@ -251,7 +248,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       repaired = true
     }
     for (const op of new Set(intents.values())) retire(op)
-    if (repaired) input.onTerminal?.()
   }
   async function validateLiveOperation(op: Live): Promise<void> {
     if (closed || op.controller.signal.aborted || op.fault) throw new AgentError("STARTUP_FAILED")
@@ -826,8 +822,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     return { ...(op ? { display: op.conversation.display() } : {}), record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !closed && record.launch.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase), cleanup: launch === null ? "not_launched" : launch.phase === "cleanup_verified" ? op && !op.cleanupVerified ? "unverified" : "verified" : launch.phase === "quarantined" ? "unknown" : "unverified", unavailable }
   }
   const active = (record: AgentRecord): boolean => record.launch?.handlerGeneration === generation && (record.phase === "ready" || ["starting", "restoring", "stopping"].includes(record.phase) && (!!operations.get(record.definition.agentId) || [...commands.values()].some(c => c.state === "pending" && c.target && isDeepStrictEqual(c.target, agentTuple(record)))))
-  const pageIssues = (): AgentStateIssue[] => [...assessment.issues, ...assessment.unavailable.values(), ...runtimeIssues.values(), ...cleanupDiagnostics()].filter((issue, index, all) => all.findIndex(other => isDeepStrictEqual(issue, other)) === index)
-  const pageAgents = (activeOnly: boolean): AgentView[] => [...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json") && (!activeOnly || active(record))).map(agentView)
+  const pageIssues = (): AgentStateIssue[] => [...assessment.issues, ...assessment.unavailable.values(), ...runtimeIssues.values()].filter((issue, index, all) => all.findIndex(other => isDeepStrictEqual(issue, other)) === index)
+  const pageAgents = (activeOnly: boolean): AgentView[] => [...records.values()].filter(record => (!activeOnly || active(record))).map(agentView)
   const ordinary = (): void => {
     if (!initialized || accepting || launchAdmissions.size || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "restoring", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 2 && e.record.owner.kind === "agent" && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
   }
@@ -904,34 +900,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     nativeSession(target) { return queue.run(async () => { const op = await requireTarget(target); return { ...structuredClone(op.providerSession!), configuration: op.owner!.snapshot() } }) },
     async submitAcp(target, request, beforeAccepted) { const op = await queue.run(() => requireTarget(target)); return op.turns!.submitAcp(request, beforeAccepted) },
     async settledAcp(target, submissionId) { const op = await queue.run(() => requireTarget(target)); return op.turns!.settledAcp(submissionId) },
-    retentionPins() {
-      const paths = new Set<string>()
-      const pinAgent = (agentId: string) => paths.add("agents/records/" + agentId + ".json")
-      for (const op of new Set([...operations.values(), ...intents.values()])) if (!op.retired) {
-        pinAgent(op.initial.definition.agentId)
-        paths.add("agents/commands/" + op.accepted.commandId + ".json")
-        paths.add("launches/" + op.initial.launch.launchAttemptId + ".json")
-      }
-      for (const id of dirty) paths.add("agents/commands/" + id + ".json")
-      for (const id of dirtyAgents) pinAgent(id)
-      for (const id of stops.keys()) { paths.add("agents/commands/" + id + ".json"); const target = commands.get(id)?.target; if (target) pinAgent(target.agentId) }
-      for (const [id, issue] of [...assessment.unavailable, ...runtimeIssues]) { pinAgent(id); if (issue.path.startsWith(root + "/")) paths.add(issue.path.slice(root.length + 1)) }
-      for (const issue of assessment.issues) {
-        const path = issue.path.startsWith(root + "/") ? issue.path.slice(root.length + 1) : null
-        if (path && /^(?:agents\/(?:records|commands)|launches)\/[0-9a-f-]{36}\.json$/.test(path)) paths.add(path)
-        else {
-          for (const id of records.keys()) pinAgent(id)
-          for (const id of commands.keys()) paths.add("agents/commands/" + id + ".json")
-          for (const entry of context.mutations.accepted) if (entry.path.startsWith(root + "/")) paths.add(entry.path.slice(root.length + 1))
-        }
-      }
-      return { paths: [...paths] }
-    },
-    forgetRemoved(entry) {
-      store.forgetRemoved(entry)
-      const match = /^agents\/(records|commands)\/([0-9a-f-]+)\.json$/.exec(entry.path)
-      if (match) { if (match[1] === "records") records.delete(match[2]!); else commands.delete(match[2]!); changed() }
-    },
     async choices() {
       available()
       const result: AgentChoices = { state: "choices", choices: [], unavailable: [] }
@@ -987,7 +955,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     async list() {
       return queue.run(async () => {
         const legacy = legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
-        const result: AgentList = { state: "agents", agents: [...[...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json")).sort((a, b) => a.definition.agentId.localeCompare(b.definition.agentId)).map(agentView), ...legacy], issues: [...assessment.issues, ...cleanupDiagnostics()] }
+        const result: AgentList = { state: "agents", agents: [...[...records.values()].sort((a, b) => a.definition.agentId.localeCompare(b.definition.agentId)).map(agentView), ...legacy], issues: [...assessment.issues] }
         if (Buffer.byteLength(JSON.stringify(result)) > 7 * 1024 * 1024) throw new AgentError("INCOMPLETE")
         return result
       })
@@ -996,12 +964,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       id(agentId)
       return queue.run(async () => {
         const record = records.get(agentId)
-        return record && !input.retirement?.hides("agents/records/" + agentId + ".json") ? agentView(record) : null
+        return record ? agentView(record) : null
       })
     },
     async current(cwd) {
       return queue.run(async () => {
-        const agents = [...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json")).map(agentView).filter(agent => agent.live && agent.record.definition.cwd === cwd)
+        const agents = [...records.values()].map(agentView).filter(agent => agent.live && agent.record.definition.cwd === cwd)
         return { state: "current", cwd, agents }
       })
     },

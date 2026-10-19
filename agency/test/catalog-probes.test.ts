@@ -6,8 +6,6 @@ import { until } from "./control-support.js"
 import { createCatalogService } from "../src/catalog/service.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { createAgentService } from "../src/agent/service.js"
-import { createRetentionStore } from "../src/retention/store.js"
-import { createRetentionCoordinator } from "../src/retention/coordinator.js"
 import { gate, syntheticProbeFixture } from "./catalog-support.js"
 import { cleanProbeEnvironment } from "../src/catalog/probes.js"
 import { spawn } from "node:child_process"
@@ -74,7 +72,6 @@ for (const fault of ["directory-sync", "persistent-directory-sync", "stderr-clos
   assert.equal(retainProbeDiagnostic(diagnostic, Date.now()), true)
   assert.equal(diagnostic.stderrComplete, false)
   if (fault === "stderr-close") { assert.equal(diagnostic.firstFailure?.stage, "diagnostic-write"); assert.equal(diagnostic.firstFailure?.code, "EIO") }
-  else assert.ok(f.runtime.retentionPins().paths.includes("catalog/work/" + f.request.meta.attemptId))
   const restartedStore = createCatalogStore(f.root)
   const retained = (await restartedStore.inventory()).metadata.find(meta => meta.attemptId === f.request.meta.attemptId)!
   assert.equal(retainProbeDiagnostic((await readProbeDiagnostic(retained))!, Date.now() + 604800001), true)
@@ -102,64 +99,6 @@ test("pending capture removal failure conservatively retains a successful probe"
   assert.equal(injected, true)
   assert.equal(outcome.error, null)
   assert.equal((await readProbeDiagnostic(f.request.meta))!.stderrComplete, false)
-  assert.ok(f.runtime.retentionPins().paths.includes("catalog/work/" + f.request.meta.attemptId))
-})
-
-
-for (const fault of ["directory-sync", "stderr-close"]) test(`automatic ${fault} failure retains its receipt graph after runtime restart`, async t => {
-  const f = await syntheticProbeFixture(t, "success", true), original = fs.open
-  const paths = { persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "handler.sock"), hostKey: f.request.meta.hostId }
-  let injected = false
-  fs.open = (async (...args: Parameters<typeof original>) => {
-    const handle = await original(...args), path = String(args[0])
-    if (fault === "directory-sync" && path === f.request.meta.workPath) {
-      const sync = handle.sync.bind(handle)
-      handle.sync = async () => {
-        let value
-        try { value = JSON.parse(await readFile(join(path, "diagnostic.json"), "utf8")) } catch { }
-        if (!injected && value?.finishedAt != null) { injected = true; throw Object.assign(new Error("fixture final sync"), { code: "EIO" }) }
-        return sync()
-      }
-    }
-    if (fault === "stderr-close" && path === join(f.request.meta.workPath, "worker.stderr")) {
-      const close = handle.close.bind(handle)
-      handle.close = async () => { await close(); injected = true; throw Object.assign(new Error("fixture close"), { code: "EIO" }) }
-    }
-    return handle
-  }) as typeof original
-  syncBuiltinESMExports()
-  const catalog = createCatalogService({ paths, generation: f.generation, queue: f.queue, store: f.store, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile], probes: { ...f.runtime, async run(request, signal) { f.bindRequest(request); return f.runtime.run(request, signal) } } })
-  try {
-    await catalog.initialize()
-    await catalog.refresh(randomUUID(), f.generation)
-    await f.workerObserved.promise; f.releaseWorkerIdentity()
-    await f.nativeRegistered.promise; f.releaseResult()
-    await until(async () => (await catalog.list()).discovery.state === "idle" ? true : undefined)
-  } finally { catalog.close(); fs.open = original; syncBuiltinESMExports() }
-  assert.equal(injected, true)
-  const initial = await f.store.inventory()
-  assert.equal(initial.commands.length, 1); assert.equal(initial.automatic.length, 0)
-  assert.equal(initial.commands[0]!.state, "completed")
-  assert.equal(initial.metadata[0]!.version, 3)
-  assert.equal(initial.snapshots[0]!.providers.find(p => p.providerId === f.profile.id)!.error?.code, "PROBE_FAILED")
-  const generation = randomUUID(), queue = new MutationQueue(), retention = createRetentionStore(f.root, paths.hostKey, generation), store = createCatalogStore(f.root, undefined, retention.view)
-  const runtime = createProbeRuntime({ paths, adapter: f.adapter, queue, store, generation, canStart: () => false, retirement: retention.view })
-  const restarted = createCatalogService({ paths, generation, queue, store, probes: runtime, retirement: retention.view, isReady: () => true, shutdownPending: () => false, readProfiles: async () => [f.profile] })
-  await restarted.initialize()
-  assert.deepEqual(runtime.retentionPins().paths, [])
-  await mkdir(join(f.root, "launches"), { mode: 0o700 })
-  const agentStore = createAgentStore(f.root, undefined, retention.view), mutations = { root: f.root, queue, accepted: [], retirement: retention.view }
-  const state = { hostId: paths.hostKey, handlerGeneration: generation, phase: "ready" as const, reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] as ["status", "doctor", "shutdown"] }
-  const agents = createAgentService({ context: { paths, adapter: f.adapter, mutations, state, shutdownPending: () => false }, catalog: restarted, contracts: [], store: agentStore, retirement: retention.view })
-  const coordinator = createRetentionCoordinator({ root: f.root, hostId: paths.hostKey, generation, queue, adapter: f.adapter, store: retention, catalogStore: store, agentStore, mutations, catalog: restarted, agents, now: () => Date.now() + 604800001 })
-  try {
-    await coordinator.initialize()
-    assert.deepEqual(coordinator.diagnostics(), [])
-    const retained = await store.inventory()
-    for (const kind of ["commands", "metadata", "launches", "snapshots"] as const) assert.equal(retained[kind].length, 1)
-    assert.equal((await readProbeDiagnostic(retained.metadata[0]!))!.stderrComplete, false)
-    assert.deepEqual([...f.processes.values()], [])
-  } finally { agents.close(); restarted.close() }
 })
 
 

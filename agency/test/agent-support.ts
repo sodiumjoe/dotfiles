@@ -30,13 +30,12 @@ import { AGENT_PROTOCOL, exchangeAgent, type AgentRequest } from "../src/agent/p
 import { PROTOCOL } from "../src/control/protocol.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
 import type { TestContext } from "node:test"
-import type { RetentionFixtureOptions } from "./retention-support.js"
 import { createAcpConnection } from "../src/agent/acp.js"
 import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentCommandV3, AgentRecord, AgentRecordV3, RuntimeLaunchSpec, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = RetentionFixtureOptions & { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean; providerScenario?: string }
+export type AgentHandlerOptions = { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean; providerScenario?: string }
 
 export async function verifyFixtureProviderGroup(identity: ProcessIdentity, io: { readGroup(pid: number): Promise<ProcessIdentity[]>; observe(pid: number): Promise<ProcessIdentity | null> }): Promise<ProcessIdentity[] | null> {
   const members = await io.readGroup(identity.pid), again = await io.readGroup(identity.pid)
@@ -468,7 +467,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUp
   return { connection, sent, permissionReplies, readable, writable, send, replaceOptions(values: import("../src/agent/session-config.js").JsonObject[]) { options.splice(0, options.length, ...structuredClone(values)) }, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { cleanupOverride?: (agentId: string, cleanup: () => Promise<LaunchRecord>) => Promise<LaunchRecord>; hostId?: string; retirement?: import("../src/retention/store.js").RetirementView; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { cleanupOverride?: (agentId: string, cleanup: () => Promise<LaunchRecord>) => Promise<LaunchRecord>; hostId?: string; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
   if (options.productionCatalog) options = { ...options, productionContract: true }
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
@@ -518,7 +517,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
       await sync()
     }
     return handle
-  } }, options.retirement)
+  } })
   const store = { ...base, async writeAgent(value: AgentRecord | AgentRecordV3, expected: AgentRecord | AgentRecordV3 | null) {
     publications.push("agent:" + value.phase)
     if (failInitialAgent && expected === null) throw new Error("initial agent publication")
@@ -537,7 +536,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     try { await base.writeCommand(value, expected) } finally { writingReceipt = false }
   } }
   const unsupported = async (): Promise<never> => { throw new Error("unexpected catalog operation") }
-  const catalog: CatalogService = { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, initialize: async () => undefined, list: unsupported, refresh: async () => { refreshes++; return unsupported() }, freezeAndDrain: async () => undefined, resume() {}, verifyDischarged: async () => undefined, close() {}, async launchEvidence(id) {
+  const catalog: CatalogService = { initialize: async () => undefined, list: unsupported, refresh: async () => { refreshes++; return unsupported() }, freezeAndDrain: async () => undefined, resume() {}, verifyDischarged: async () => undefined, close() {}, async launchEvidence(id) {
     catalogReads++
     return f.context.mutations.queue.run(async () => {
       const provider = snapshot.providers.find(p => p.providerId === id)
@@ -624,7 +623,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     } }
   }
   const supplied = options.launchContracts?.map(value => Object.fromEntries(Object.entries(value).filter(([key]) => !["entrypoint", "executable", "fingerprint"].includes(key))) as LaunchContract)
-  const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : supplied ?? [contract], store, ...(options.retirement ? { retirement: options.retirement } : {}) }
+  const composition = { context: f.context, catalog, contracts: options.contract === false ? [] : supplied ?? [contract], store }
   const retired: Array<{ agentId: string; commandId: string }> = []
   const dependencies = { processFactory, onOperationRetired(agentId: string, commandId: string) { retired.push({ agentId, commandId }) }, async observeConfig(profile: ProviderProfile) {
     publications.push("evidence"); evidenceCalls++
