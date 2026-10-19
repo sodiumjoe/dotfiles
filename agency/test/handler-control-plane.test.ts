@@ -16,6 +16,14 @@ function client(f: Awaited<ReturnType<typeof controlFixture>>) {
   return { out, deps, run: (args: string[]) => runControl([...args, "--json"], deps), result: () => JSON.parse(out.at(-1)!) }
 }
 
+test("two concurrent clients select one ready Handler", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t)
+  const [first, second] = await Promise.all([f.start(), f.start()])
+  assert.equal(first.record.generation, second.record.generation)
+  assert.equal(first.record.phase, "ready")
+  assert.equal(f.owned.length, 1)
+})
+
 test("32 concurrent clients select one real generation and observe the same readiness boundary", { timeout: 20000 }, async t => {
   const f = await controlFixture(t)
   const settled = await Promise.allSettled(Array.from({ length: 32 }, () => f.start()))
