@@ -462,9 +462,9 @@ for (const stage of ["Agency backend", "Agency model"]) test(`fresh editor super
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
 })
 
-test("fresh saved history remains visible when every configured adapter is incompatible", { timeout: 60000 }, async t => {
+test("saved history and live attachment remain visible after adapter metadata changes", { timeout: 60000 }, async t => {
   const f = await acpFixture(t, { legacyCount: 1 }), e = await editorFixture(f)
-  await start(e, "codex-acp")
+  const sid = await start(e, "codex-acp")
   for (const [directory, name] of [["profile", "@agentclientprotocol/codex-acp"], ["secondary", "@agentclientprotocol/claude-agent-acp"]])
     await writeFile(join(f.root, directory!, "adapter.json"), JSON.stringify({ name, version: "99.0.0", main: "agent-provider.js" }), { mode: 0o600 })
   await run(e, `AgencyFixture.commands(); picker_spec=nil; Snacks={picker=function(opts) picker_spec=opts end}; confirms=0; vim.ui.select=function() confirms=confirms+1 end
@@ -472,7 +472,8 @@ test("fresh saved history remains visible when every configured adapter is incom
   await wait(e, "picker_spec ~= nil")
   assert.equal(await e.lua("#picker_spec.items"), 2)
   await run(e, `for _,item in ipairs(picker_spec.items) do
-    assert(item.unavailable); assert(item.text:find('Unavailable',1,true)); picker_spec.confirm({close=function() end},item)
+    if item.session_id == ${JSON.stringify(sid)} then assert(not item.unavailable)
+    else assert(item.unavailable); assert(item.text:find('Unavailable',1,true)); picker_spec.confirm({close=function() end},item) end
   end`)
   assert.equal(await e.lua("confirms"), 0)
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
