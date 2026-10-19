@@ -371,7 +371,7 @@ test("repairing a historical stop receipt cannot stop a restored process generat
   f.failStopReceipt(true)
   const stop = { ...target, commandId: randomUUID() }
   await f.service.stop(stop)
-  await until(async () => (await f.store.readAgent(target.agentId))?.phase === "stopped" ? true : undefined)
+  await until(async () => (await f.service.sessionRecord(target.agentId))?.record.phase === "stopped" ? true : undefined)
   assert.deepEqual(f.retired(), [])
   const restore = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: target.agentId, environment: {} }
   await f.service.restore(restore)
