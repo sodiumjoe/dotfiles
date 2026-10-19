@@ -1,8 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { chmod, mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises"
-import { MutationQueue, refreshLaunchState, type HandlerMutations } from "../src/handler/mutations.js"
-import type { HandlerStatus } from "../src/control/protocol.js"
 import { join } from "node:path"
 import test from "node:test"
 import { inventoryLaunches, inventoryLaunchState, summarizeLaunches, verifyInventory } from "../src/handler/inventory.js"

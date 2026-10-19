@@ -32,12 +32,10 @@ import { createCatalogStore, type CatalogStore } from "../catalog/store.js"
 import { createProbeRuntime } from "../catalog/probes.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
-import { PrivateStatePublicationError, readHandlerRecord, readLaunchRecordForReconciliation, writeHandlerRecord } from "../platform/private-state.js"
-import { reconcileRecord, RetainedInventoryChangedError } from "../platform/reconcile.js"
-import { sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
+import { readHandlerRecord, writeHandlerRecord } from "../platform/private-state.js"
+import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
-import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type LaunchIssue } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
 
@@ -100,15 +98,9 @@ async function selfIdentity(adapter: PlatformAdapter): Promise<ProcessIdentity> 
   }
 }
 
-function retainedIdentity(record: LaunchRecord): unknown {
-  const { phase, reason, launchAttempted, provider, ...identity } = record
-  return { ...identity, leader: provider?.group.leader }
-}
-
 export async function runHandler(options: HandlerOptions): Promise<void> {
   let server: Server | undefined, attachmentServer: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
   const sockets = new Set<Socket>()
-  let entries: InventoryEntry[] = []
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
@@ -194,50 +186,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     attachmentServer.on("close", () => { if (!closing) rejectClosed(new Error("attachment listener closed unexpectedly")) })
     current = { ...published, writer: "handler", phase: "socket_bound" }
     await writeHandlerRecord(options.recordPath, current)
-    const directory = join(options.paths.persistentRoot, "launches")
-    const initialInventory = await inventoryLaunchState(directory)
-    entries = initialInventory.records
-    state.issues = initialInventory.issues
-    state.phase = "reconciling"
-    state.reconciliation.total = entries.length
-    state.launches = summarizeLaunches(entries.map(entry => entry.record))
-    current = { ...published, writer: "handler", phase: "reconciling", reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
-    await writeHandlerRecord(options.recordPath, current)
-    await options.onPhase?.("reconciling")
-    const reconciliationIssues: LaunchIssue[] = [], successful = new Map<string, InventoryEntry["record"]>()
-    for (const entry of entries) {
-      try {
-        const result = await reconcileRecord(entry.path, options.adapter, entry.record)
-        if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new RetainedInventoryChangedError()
-        entry.record = result.record
-        successful.set(entry.path, result.record)
-      } catch (error) {
-        if (error instanceof RetainedInventoryChangedError || error instanceof PrivateStatePublicationError) throw error
-        reconciliationIssues.push({ path: entry.path, launchAttemptId: entry.record.launchAttemptId, message: String(error).slice(0, 512) })
-      }
-      state.reconciliation.classified++
-      if (entry.record.phase === "quarantined") state.reconciliation.uncertain++
-      state.launches = summarizeLaunches(entries.map(item => item.record))
-      current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
-      await writeHandlerRecord(options.recordPath, current)
-    }
     await options.onPhase?.("ready")
-    const checkedInventory = await inventoryLaunchState(directory)
-    const initialPaths = new Set(entries.map(entry => entry.path))
-    if (checkedInventory.records.some(entry => !initialPaths.has(entry.path))) throw new Error("RETAINED_INVENTORY_CHANGED")
-    for (const [path, expected] of successful) if (!isDeepStrictEqual(checkedInventory.records.find(entry => entry.path === path)?.record, expected)) throw new Error("RETAINED_INVENTORY_CHANGED")
-    const trusted = checkedInventory.records.filter(entry => {
-      const original = entries.find(value => value.path === entry.path)?.record
-      if (!original) return false
-      if (successful.has(entry.path)) return true
-      return isDeepStrictEqual(retainedIdentity(original), retainedIdentity(entry.record))
-    })
-    state.launches = summarizeLaunches(checkedInventory.records.map(entry => entry.record))
-    state.reconciliation = { classified: checkedInventory.records.length, total: checkedInventory.records.length, uncertain: checkedInventory.records.filter(entry => entry.record.phase === "quarantined").length }
-    state.issues = [...checkedInventory.issues, ...reconciliationIssues]
-    current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
-    await writeHandlerRecord(options.recordPath, current)
-    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(trusted), reconciliationIssues, root }
+    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [], root }
     const catalogStore = createCatalogStore(root), agentStore = createAgentStore(root)
     const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, store: catalogStore, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
@@ -266,7 +216,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     router = createHostRouter({ hostId: options.paths.hostKey, inventory: createHostInventory(root), local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
     registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
-    current = { ...current, phase: "ready" }
+    current = { ...current, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 } }
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, agents }

@@ -140,6 +140,7 @@ test("memory queries and live actions do not inventory retained files", async t 
   const started = await f.service.start(f.input)
   await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
   const service = f.service as typeof f.service & { roster: typeof f.service.page }
+  await f.service.page({ limit: 100 })
   const failure = t.mock.method(f.store, "inventory", async () => { throw new Error("retained verification unavailable") })
   try {
     const page = await service.roster({ limit: 100 })

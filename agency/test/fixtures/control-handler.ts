@@ -48,7 +48,7 @@ try {
       await service.initialize()
     } }
   } } : {}), onPhase: async phase => {
-    if (config.delayMs !== undefined && phase === "reconciling") await new Promise(resolve => setTimeout(resolve, config.delayMs))
+    if (config.delayMs !== undefined && phase === "ready") await new Promise(resolve => setTimeout(resolve, config.delayMs))
     if (config.pauseAt === phase) {
       await writeFile(join(root, "paused"), phase, { mode: 0o600 })
       const deadline = Date.now() + 10000

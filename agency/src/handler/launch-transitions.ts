@@ -20,7 +20,7 @@ async function publishExact(context: LaunchContext, expected: LaunchRecord, next
   const path = join(context.paths.persistentRoot, "launches", expected.launchAttemptId + ".json")
   const entry = context.mutations.accepted.find(value => value.path === path)
   if (!UUID.test(expected.launchAttemptId) || !entry || !isDeepStrictEqual(entry.record, expected) || expected.handlerGeneration !== context.state.handlerGeneration) throw new AgentError("INVALID_AGENT_STATE")
-  if (context.mutations.issues?.some(issue => issue.path === path) || context.mutations.reconciliationIssues?.some(issue => issue.path === path)) throw new AgentError("UNAVAILABLE")
+  if (context.mutations.issues?.some(issue => issue.path === path)) throw new AgentError("UNAVAILABLE")
   try {
     if (!isDeepStrictEqual(await io.read(path), expected)) throw new AgentError("UNAVAILABLE")
   } catch { throw new AgentError("UNAVAILABLE") }

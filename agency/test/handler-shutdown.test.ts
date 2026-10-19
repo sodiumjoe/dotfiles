@@ -112,16 +112,14 @@ test("refused shutdown resumes scheduling but unverified catalog prevents a rece
   assert.equal(ctx.state.phase, "ready")
 })
 
-test("unverified launches block shutdown; --stop-agents cannot release provider-null ambiguity", async t => {
-  const ctx = await context(t), record = launch(), path = join(ctx.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`)
+test("historical launch ambiguity does not enter current shutdown discharge", async t => {
+  const ctx = await context(t), record = launch(), path = join(ctx.paths.persistentRoot, "launches", record.launchAttemptId + ".json")
   await writeLaunchRecord(path, record)
-  const command = request(), refused = await shutdownHandler(command, ctx)
-  assert.ok(!refused.ok && refused.error.code === "ACTIVE_AGENTS")
-  const incomplete = await shutdownHandler({ ...command, stopAgents: true }, ctx)
-  assert.ok(!incomplete.ok && incomplete.error.code === "INCOMPLETE")
-  assert.equal(JSON.parse(await readFile(path, "utf8")).phase, "quarantined")
-  assert.equal(ctx.state.phase, "ready")
-  assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
+  const command = request(), reply = await shutdownHandler(command, ctx)
+  assert.equal(reply.ok, true)
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), record)
+  assert.equal(ctx.state.phase, "draining")
+  assert.ok(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId))
 })
 
 test("uncertain receipt publication remains serviceable and retries the same pinned intent", async t => {

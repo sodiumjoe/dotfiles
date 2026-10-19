@@ -21,7 +21,6 @@ import { ControlError, PROTOCOL } from "../src/control/protocol.js"
 import { exchange } from "../src/control/wire.js"
 import { readShutdownReceipt } from "../src/handler/receipt.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
-import { recoverProbeEntry } from "../src/catalog/probe-recovery.js"
 import type { NativeSettlement } from "../src/catalog/worker-protocol.js"
 
 export async function profileFixture(t: TestContext) {
@@ -137,7 +136,7 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
   const child = new ChildProcess(), processes = new Map<number, ProcessIdentity>(), signals: string[] = []
   const stdout = new PassThrough(), stderr = new PassThrough()
   Object.assign(child, { pid: 10001, stdin: null, stdout, stderr, connected: true })
-  let spawned = false, native = false, first = true, durableAtSpawn = false, attemptedPublished = false, publicationFault = true, recoverCalls = 0, clockOffset = 0
+  let spawned = false, native = false, first = true, durableAtSpawn = false, attemptedPublished = false, publicationFault = true, clockOffset = 0
   const acknowledgements: string[] = []
   const emitNativeTerminal = (code: number | null = 0, signal: NodeJS.Signals | null = null) => child.emit("message", { type: "native-terminal", attemptId, generation, terminal: { code, signal } })
   const emitNativeClosed = () => child.emit("message", { type: "native-closed", attemptId, generation })
@@ -197,7 +196,6 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
   }
   const runtime = createProbeRuntime({ paths: { hostKey: request.meta.hostId, persistentRoot: f.root, runtimeRoot: f.root, handlerSocketPath: join(f.root, "handler.sock") }, adapter, queue, store, generation, canStart: () => true, dependencies: {
     timeoutMs: scenario === "timeout" ? 50 : 1000, closeMs: 10, now: () => performance.now() + clockOffset,
-    recoverEntry: async (entry, adapter) => { recoverCalls++; return recoverProbeEntry(entry, adapter) },
     publish: async (path, record) => {
       const stage = record.provider === null ? record.launchAttempted ? "attempted" : "unattempted" : record.provider.group.observed.length === 1 ? "worker" : "native"
       if (record.phase === "cleanup_pending" && scenario === "cleanup-pending-failure" && publicationFault) throw new Error("cleanup pending publication")
@@ -225,5 +223,5 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
   function assertSpawn(file: unknown, args: unknown, options: unknown) {
     if (file !== process.execPath || !Array.isArray(args) || typeof options !== "object" || options === null || !(options as { detached?: boolean }).detached) throw new Error("invalid worker spawn")
   }
-  return { ...f, store, runtime, request, path, signals, child, processes, adapter, queue, generation, startObserved, physicalCleanup, nativePublication, cleanupPublication, acknowledgements, emitNativeTerminal, emitNativeClosed, emitNativeSettled, exitWorker, closeWorker, recoverCalls: () => recoverCalls, repairPublication: () => { publicationFault = false }, releaseNativePublication: () => nativePublicationGate.resolve(), releaseCleanupPublication: () => cleanupPublicationGate.resolve(), advanceClock: (ms: number) => { clockOffset += ms }, bindRequest(next: ProbeRequest) { Object.assign(request, next); attemptId = next.meta.attemptId; commandId = next.meta.commandId; path = join(f.root, "catalog/probe-launches", attemptId + ".json"); identity.birth = `100:agy-provider:${attemptId}` }, workerObserved, spawnObserved, nativeRegistered, attemptedPublication, releaseAttempted: () => attemptedGate.resolve(), spawnInvoked: () => spawned, nativeSpawned: () => native, durableAtSpawn: () => durableAtSpawn, releaseWorkerIdentity: () => workerGate.resolve(), releaseResult: () => nativeGate.resolve() }
+  return { ...f, store, runtime, request, path, signals, child, processes, adapter, queue, generation, startObserved, physicalCleanup, nativePublication, cleanupPublication, acknowledgements, emitNativeTerminal, emitNativeClosed, emitNativeSettled, exitWorker, closeWorker, repairPublication: () => { publicationFault = false }, releaseNativePublication: () => nativePublicationGate.resolve(), releaseCleanupPublication: () => cleanupPublicationGate.resolve(), advanceClock: (ms: number) => { clockOffset += ms }, bindRequest(next: ProbeRequest) { Object.assign(request, next); attemptId = next.meta.attemptId; commandId = next.meta.commandId; path = join(f.root, "catalog/probe-launches", attemptId + ".json"); identity.birth = `100:agy-provider:${attemptId}` }, workerObserved, spawnObserved, nativeRegistered, attemptedPublication, releaseAttempted: () => attemptedGate.resolve(), spawnInvoked: () => spawned, nativeSpawned: () => native, durableAtSpawn: () => durableAtSpawn, releaseWorkerIdentity: () => workerGate.resolve(), releaseResult: () => nativeGate.resolve() }
 }

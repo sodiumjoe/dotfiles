@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { lstat, mkdir, open, opendir, rename, rm, type FileHandle } from "node:fs/promises"
-import { basename, dirname, join, relative } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { decodeJson, readBoundedFile } from "../catalog/config.js"
 import type { CatalogFileSystem } from "../catalog/store.js"
@@ -149,13 +149,14 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
         if (!isDeepStrictEqual(current, normalizedExpected)) conflict()
         if (current === null) { if (value.phase !== "starting" && !(value.definition.origin === "import" && value.phase === "stopped" && value.launch === null)) conflict() }
         else {
-          if (!isDeepStrictEqual(value.definition, current.definition) || value.phase !== current.phase && !edges[current.phase].includes(value.phase)) conflict()
-          const restoring = value.phase === "restoring" && ["stopped", "recoverable"].includes(current.phase)
+          const historicalRestore = value.phase === "restoring" && value.launch && current.launch && value.launch.handlerGeneration !== current.launch.handlerGeneration && current.session !== null
+          if (!isDeepStrictEqual(value.definition, current.definition) || !historicalRestore && value.phase !== current.phase && !edges[current.phase].includes(value.phase)) conflict()
+          const restoring = value.phase === "restoring" && (["stopped", "recoverable"].includes(current.phase) || historicalRestore)
           if (restoring || value.phase === "recoverable") {
-            if (current.launch) {
+            if (current.launch && !historicalRestore) {
               const launch = await readLaunchRecordForReconciliation(join(root, "launches", current.launch.launchAttemptId + ".json"))
               if (!current.session || launch?.phase !== "cleanup_verified" || launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== current.definition.agentId || launch.owner.providerGeneration !== current.launch.providerGeneration || launch.handlerGeneration !== current.launch.handlerGeneration) conflict()
-            } else if (!current.session || current.definition.origin !== "import") conflict()
+            } else if (!current.session || !historicalRestore && current.definition.origin !== "import") conflict()
           }
           if (restoring) {
             if (!value.launch || current.launch && ["providerGeneration", "launchAttemptId", "commandId"].some(field => value.launch![field as keyof NonNullable<typeof value.launch>] === current.launch![field as keyof NonNullable<typeof current.launch>]) || !isDeepStrictEqual(value.session, current.session)) conflict()

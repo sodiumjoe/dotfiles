@@ -9,7 +9,7 @@ import { acpFixture } from "./acp-support.js"
 import type { AgentStore } from "../src/agent/store.js"
 import { until } from "./control-support.js"
 
-test("recovery completes an interrupted identity-reuse import without replacing the existing record", async t => {
+test("historical identity-reuse receipt remains interrupted without replacing the existing record", async t => {
   const f = await agentServiceFixture(t), input = { commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, backendId: "codex-acp" as const, nativeSessionId: "saved-native", cwd: f.workspace }
   await f.service.importSession(input)
   const original = (await f.store.inventory()).agents[0]!, commandId = randomUUID()
@@ -19,7 +19,7 @@ test("recovery completes an interrupted identity-reuse import without replacing 
   await assert.rejects(service.importSession({ ...input, commandId, handlerGeneration: f.context.state.handlerGeneration }))
   const restarted = await f.restart()
   const receipt = await restarted.command(commandId, (await f.store.readCommand(commandId))!.handlerGeneration)
-  assert.equal(receipt.command.state, "completed")
+  assert.equal(receipt.command.state, "interrupted")
   assert.equal(receipt.durability, "verified")
   assert.deepEqual((await f.store.inventory()).agents[0], original)
 })
@@ -85,11 +85,14 @@ for (const stage of ["receipt", "record"] as const) test("import resumes the sam
   await assert.rejects(service.importSession(input))
   const pending = (await base.inventory()).commands.find(command => command.commandId === input.commandId)!
   const next = await f.restart()
-  const recovered = await next.importSession({ ...input, handlerGeneration: f.context.state.handlerGeneration })
+  await assert.rejects(next.importSession({ ...input, handlerGeneration: f.context.state.handlerGeneration }), { code: "COMMAND_CONFLICT" })
+  assert.equal((await next.command(input.commandId, input.handlerGeneration)).command.state, "interrupted")
+  const recovered = await next.importSession({ ...input, commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration })
   const repeated = await next.importSession({ ...input, commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration })
   assert.equal((recovered.command as any).agentId, (pending as any).agentId)
   assert.equal((repeated.command as any).agentId, (pending as any).agentId)
   assert.equal((await base.inventory()).agents.length, 1)
+  assert.equal((await base.readCommand(input.commandId))!.state, "pending")
   assert.equal((await next.list()).issues.length, 0)
 })
 
@@ -153,4 +156,14 @@ test("import of a native session already owned by Agency reuses its live record"
   assert.equal((await f.inventory()).agents[0]!.definition.origin, "new")
   assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/new").length, 1)
   await f.stopSession(String(created.sessionId))
+})
+
+test("addressed historical import rejects mismatched creation evidence", async t => {
+  const f = await agentServiceFixture(t), commandId = randomUUID()
+  const receipt = await f.service.importSession({ commandId, handlerGeneration: f.context.state.handlerGeneration, backendId: "codex-acp", nativeSessionId: "saved-native", cwd: f.workspace })
+  const command = (await f.store.readCommand(commandId))!
+  await writeFile(join(f.root, "agents/commands", commandId + ".json"), JSON.stringify({ ...command, input: { ...command.input, nativeSessionId: "another-native" } }), { mode: 0o600 })
+  const service = await f.restart()
+  await assert.rejects(service.sessionRecord((receipt.command as any).agentId), { code: "INVALID_AGENT_STATE" })
+  await service.freezeAndDrain(false); await service.verifyDischarged()
 })

@@ -2,8 +2,6 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import test from "node:test"
 import { normalizeAgentRecord, parseAgentRecordV3, parseAgentCommandV3, tupleOfRecord } from "../src/agent/types.js"
-import { crossCheckAgents } from "../src/agent/recovery.js"
-import type { LaunchContext } from "../src/handler/launch-transitions.js"
 import { AGENT_PROTOCOL, parseAgentReply, validateAgentReply } from "../src/agent/protocol.js"
 import { launchEnvironmentDigest } from "../src/agent/environment.js"
 import { sampleAgent, agentServiceFixture, sampleProductionSpec } from "./agent-support.js"
@@ -66,40 +64,22 @@ test("V3 import publication does not require a fictional launch", async t => {
   assert.deepEqual((await store.inventory()).issues, [])
 })
 
-test("import recovery checks native creation evidence without demanding launch ownership", () => {
-  const base = normalizeAgentRecord(sampleAgent())
-  const record = parseAgentRecordV3({ ...base, definition: { ...base.definition, origin: "import" }, launch: null, phase: "stopped", session: { sessionId: "saved-native", protocolVersion: 1 } })
-  const command = parseAgentCommandV3({ version: 3, hostId: record.definition.hostId, commandId: record.definition.createdCommandId, handlerGeneration: randomUUID(), op: "import", input: { backendId: "codex-acp", nativeSessionId: "saved-native", cwd: record.definition.cwd }, agentId: record.definition.agentId, target: null, state: "completed", result: { outcome: "imported", target: null, failure: null, session: record.session } })
-  const context = { paths: { persistentRoot: "/fixture", hostKey: record.definition.hostId }, mutations: { accepted: [], issues: [] } } as unknown as LaunchContext
-  const result = crossCheckAgents(context, { agents: [record], commands: [command], legacyAgents: [], issues: [] })
-  assert.deepEqual([...result.unavailable], [])
-  assert.deepEqual(result.issues, [])
-  const mismatch = { ...command, input: { ...command.input, nativeSessionId: "another" } }
-  assert.equal(crossCheckAgents(context, { agents: [record], commands: [mismatch], legacyAgents: [], issues: [] }).unavailable.size, 1)
-})
-
-for (const stage of ["receipt", "record"] as const) test("import recovery closes the " + stage + " write gap without inventing process ownership", async t => {
+for (const stage of ["receipt", "record"] as const) test("explicit import closes the " + stage + " write gap without inventing process ownership", async t => {
   const f = await agentServiceFixture(t), agentId = randomUUID(), commandId = randomUUID(), session = { sessionId: "saved-native", protocolVersion: 1 }
   const command = parseAgentCommandV3({ version: 3, hostId: f.context.paths.hostKey, commandId, handlerGeneration: f.context.state.handlerGeneration, op: "import", input: { backendId: "codex-acp", nativeSessionId: "saved-native", cwd: f.workspace }, agentId, target: null, state: "pending", result: null })
   await f.store.writeCommand(command, null)
   if (stage === "record") await f.store.writeAgent(parseAgentRecordV3({ version: 3, definition: { hostId: f.context.paths.hostKey, agentId, createdCommandId: commandId, backendId: "codex-acp", cwd: f.workspace, origin: "import" }, launch: null, phase: "stopped", session, inputRequirements: { mcpServerNames: [] }, settings: {}, configurationState: { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }, failure: null }), null)
-  await f.restart()
+  const service = await f.restart()
+  assert.equal((await f.store.readCommand(commandId))!.state, "pending")
+  assert.equal((await f.store.inventory()).agents.length, stage === "receipt" ? 0 : 1)
+  await service.importSession({ commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, backendId: "codex-acp", nativeSessionId: "saved-native", cwd: f.workspace })
   const inventory = await f.store.inventory()
   assert.equal(inventory.agents.length, 1)
   assert.equal(inventory.agents[0]!.definition.agentId, agentId)
   assert.equal(inventory.agents[0]!.launch, null)
-  assert.deepEqual((await f.store.readCommand(commandId))!.result, { outcome: "imported", target: null, failure: null, session })
+  assert.equal((await f.store.readCommand(commandId))!.state, "pending")
   assert.equal(f.spawns(), 0)
   assert.equal(f.context.mutations.accepted.length, 0)
-})
-
-test("dangling configure intent requires native verification even before marker publication", () => {
-  const base = normalizeAgentRecord(sampleAgent()), target = tupleOfRecord(base)!
-  const command = parseAgentCommandV3({ version: 3, hostId: base.definition.hostId, commandId: randomUUID(), handlerGeneration: target.handlerGeneration, op: "configure", input: { target, method: "session/set_model", optionIds: ["model"], prior: base.settings, desired: { ...base.settings, modelId: "model-b" }, priorNonRestorableOptionIds: ["secret-option"] }, agentId: target.agentId, target, state: "pending", result: null })
-  const context = { paths: { persistentRoot: "/fixture", hostKey: base.definition.hostId }, mutations: { accepted: [], issues: [] } } as unknown as LaunchContext
-  const result = crossCheckAgents(context, { agents: [base], commands: [command], legacyAgents: [], issues: [] })
-  assert.deepEqual(result.configurationPending.get(target.agentId), [command.commandId])
-  assert.equal(base.configurationState.verification.kind, "verified")
 })
 
 test("control roster accepts an imported stopped record without a live tuple", () => {

@@ -24,7 +24,7 @@ try{
     return {...options,onPhase:async phase=>{const identity=await options.adapter.readProcess(process.pid);if(identity)fixtureIdentity("handler-"+phase,identity)},launchContracts:[contract],
       entryDriver:{async ensure(ref){editor={editorId:randomUUID(),session:"qualification-editor",pane:"%1",tmuxSocketPath:join(options.paths.runtimeRoot,"entry-tmux.sock")};await appendFile(join(root,"entry-driver.jsonl"),JSON.stringify({ref,editor,executable:config.editor?.shimPath??null})+"\n",{mode:0o600});return editor},async activate(){},async inspect(){return editor}},
       catalogFactory(context){
-        const service=createCatalogService({...context,queue:context.mutations.queue,probes:{recover:async()=>undefined,verifyDischarged:async()=>undefined,run:async()=>{throw new Error("FIXTURE_DISCOVERY_FORBIDDEN")}}})
+        const service=createCatalogService({...context,queue:context.mutations.queue,probes:{verifyDischarged:async()=>undefined,run:async()=>{throw new Error("FIXTURE_DISCOVERY_FORBIDDEN")}}})
         return {...service,async initialize(){
           const profiles=JSON.parse(await readFile(join(context.paths.persistentRoot,"catalog/providers.json"),"utf8")).providers as ProviderProfile[]
           const evidence=await observeConfig(profiles[0]!)

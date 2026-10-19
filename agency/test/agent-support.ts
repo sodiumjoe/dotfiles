@@ -691,6 +691,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
           await writeLaunchRecord(entry.path, entry.record)
         }
       })
+      f.context.mutations.accepted = []; f.context.mutations.issues = []
       f.context.state.handlerGeneration = randomUUID()
       snapshot = { ...snapshot, snapshotId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, providers: snapshot.providers.map(provider => ({ ...provider, verifiedHandlerGeneration: f.context.state.handlerGeneration, verifiedAt: Date.now() })) }
       await saveCatalog()

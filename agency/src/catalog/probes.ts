@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process"
 import { constants } from "node:fs"
 import { mkdir, open, type FileHandle } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { isDeepStrictEqual } from "node:util"
 import type { MutationQueue } from "../handler/mutations.js"
@@ -12,18 +12,17 @@ import { assertPrivateDirectory, readLaunchRecordForReconciliation, writeLaunchR
 import { spawnOwnedChild, type OwnedChild } from "../runtime/owned-child.js"
 import { captureLiveProcess, isLiveCleanupEvidence, type LiveProcessGroup, type LiveCleanupEvidence } from "../platform/live-process.js"
 import { createProbeTransition, type ProbeTransition } from "./probe-transitions.js"
-import { ProbeRecoveryError, recoverProbeEntry } from "./probe-recovery.js"
 import { parseNativeSettlement, parseWorkerEnvelope, type NativeSettlement } from "./worker-protocol.js"
 import { type ManagedLaunchRecord, type LaunchRecord, type PlatformAdapter } from "../platform/types.js"
 import { beginProbeCapture, completeProbeCapture, initialProbeDiagnostic, openProbeStderr, parseProbeFailureDetail, parseProbeTerminal, probeFailureDetail, writeProbeDiagnostic, writeProbeStderr, type ProbeStage } from "./diagnostics.js"
-import type { CatalogInventory, CatalogStore } from "./store.js"
-import { CatalogError, failure, invalid, keys, object, parseModels, parseProbeMeta, text, type CatalogFailure, type ConfigEvidence, type Model, type ProbeMeta, type ProviderId, type ProviderProfile, type RetainedProbeMeta } from "./types.js"
+import type { CatalogStore } from "./store.js"
+import { CatalogError, failure, invalid, keys, object, parseModels, parseProbeMeta, text, type CatalogFailure, type ConfigEvidence, type Model, type ProbeMeta, type ProviderId, type ProviderProfile } from "./types.js"
 
 export type ProbeResult = { models: Model[]; providerVersion: string | null; providerVersionSource: "reported" | "unknown" }
 export type ProbeRequest = { meta: ProbeMeta; profile: ProviderProfile; evidence: ConfigEvidence }
 export type ProbeOutcome = { request: ProbeRequest; record: LaunchRecord; result: ProbeResult | null; error: CatalogFailure | null }
-export type ProbeRuntime = { run(request: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome>; recover(): Promise<void>; verifyDischarged(): Promise<void>; issues?(): Map<ProviderId, CatalogFailure>; diagnostics?(): string[] }
-export type ProbeDependencies = { spawn?: typeof spawn; publish?: typeof writeLaunchRecord; timeoutMs?: number; closeMs?: number; env?: NodeJS.ProcessEnv; now?: () => number; recoverEntry?: typeof recoverProbeEntry }
+export type ProbeRuntime = { run(request: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome>; verifyDischarged(): Promise<void>; issues?(): Map<ProviderId, CatalogFailure>; diagnostics?(): string[] }
+export type ProbeDependencies = { spawn?: typeof spawn; publish?: typeof writeLaunchRecord; timeoutMs?: number; closeMs?: number; env?: NodeJS.ProcessEnv; now?: () => number }
 export function cleanProbeEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([key]) => key !== "NODE_OPTIONS" && key !== "NODE_PATH" && !key.startsWith("AGENCY_") && !key.startsWith("GIT_")))
 }
@@ -53,68 +52,13 @@ type CurrentProbe = {
 }
 export function createProbeRuntime(options: { paths: PlatformPaths; adapter: PlatformAdapter; queue: MutationQueue; store: CatalogStore; generation: string; canStart(): boolean; workerFile?: string; dependencies?: ProbeDependencies }): ProbeRuntime {
   const { paths, adapter, queue, store, generation } = options, deps = options.dependencies ?? {}, publish = deps.publish ?? writeLaunchRecord, now = deps.now ?? (() => performance.now())
-  let accepted: InventoryEntry[] = [], metadata: RetainedProbeMeta[] = [], initialized = false, blocked = false, running = false
-  const blockedProviders = new Map<ProviderId, CatalogFailure>(), retainedIssues = new Map<ProviderId, CatalogFailure>()
-  const historical = new Set<string>(), current = new Map<string, CurrentProbe>()
+  let accepted: InventoryEntry[] = [], running = false
+  const blockedProviders = new Map<ProviderId, CatalogFailure>()
+  const current = new Map<string, CurrentProbe>()
   const unscopedIssues = new Set<string>()
-  const diagnosticPins = new Set<string>()
-  const recomputeIssues = () => { blockedProviders.clear(); for (const [provider, error] of retainedIssues) blockedProviders.set(provider, error); for (const attempt of current.values()) if (attempt.cleanupFailed) blockedProviders.set(attempt.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))) }
-  const visibleLaunch = (entry: InventoryEntry) => true
-  const visibleMeta = (entry: RetainedProbeMeta) => true
-  const unavailable = (): never => { blocked = true; throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
-  const scopedUnavailable = (providerId: ProviderId): never => { retainedIssues.set(providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))); recomputeIssues(); throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
-  const issueFor = (attemptId: string, kind: "probe-meta" | "probe-launches") => `${kind}/${attemptId}.json`
-  const ownerOf = (entry: InventoryEntry): ProviderId | null => entry.record.version === 2 && entry.record.owner.kind === "catalog-probe" ? entry.record.owner.providerId : null
-  function providerFor(attemptId: string, inventory: CatalogInventory, known?: InventoryEntry): ProviderId | null {
-    const acceptedEntry = known ?? accepted.find(entry => entry.record.launchAttemptId === attemptId)
-    return (acceptedEntry ? ownerOf(acceptedEntry) : null)
-      ?? metadata.find(meta => meta.attemptId === attemptId)?.providerId
-      ?? [...inventory.commands, ...inventory.automatic].flatMap(command => command.attempts).find(attempt => attempt.attemptId === attemptId)?.providerId
-      ?? inventory.metadata.find(meta => meta.attemptId === attemptId)?.providerId
-      ?? null
-  }
-  function markIssue(issue: string, providerId: ProviderId | null): void {
-    if (providerId) { retainedIssues.set(providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))); recomputeIssues() }
-    else unscopedIssues.add(issue)
-  }
-  const unavailableFor = (entry: InventoryEntry): never => {
-    const providerId = ownerOf(entry) ?? metadata.find(meta => meta.attemptId === entry.record.launchAttemptId)?.providerId
-    if (providerId) return scopedUnavailable(providerId)
-    unscopedIssues.add(issueFor(entry.record.launchAttemptId, "probe-launches"))
-    throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-  }
+  const recomputeIssues = () => { blockedProviders.clear(); for (const attempt of current.values()) if (attempt.cleanupFailed) blockedProviders.set(attempt.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))) }
   function accept(path: string, record: LaunchRecord): void {
     accepted = [...accepted.filter(e => e.path !== path), { path, record: structuredClone(record) }].sort((a, b) => a.path < b.path ? -1 : 1)
-  }
-  async function discharge(entry: InventoryEntry): Promise<LaunchRecord> {
-    try { const record = await (deps.recoverEntry ?? recoverProbeEntry)(entry, adapter); accept(entry.path, record); return record }
-    catch (cause) {
-      if (cause instanceof ProbeRecoveryError) accept(entry.path, cause.record)
-      return unavailableFor(entry)
-    }
-  }
-  async function recover(): Promise<void> {
-    if (current.size) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-    await queue.run(async () => {
-      if (running || current.size) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-      if (initialized) { if (blocked) unavailable(); return }
-      const inventory = await store.inventory()
-      accepted = inventory.launches; metadata = inventory.metadata; initialized = true
-      for (const entry of accepted) historical.add(entry.record.launchAttemptId)
-      if (inventory.issues.some(issue => !issue.startsWith("probe-meta/") && !issue.startsWith("probe-launches/"))) blocked = true
-      for (const meta of metadata) if (meta.hostId !== paths.hostKey) retainedIssues.set(meta.providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
-      for (const issue of inventory.issues) {
-        const match = /^probe-(?:meta|launches)\/([0-9a-f-]+)\.json$/.exec(issue)
-        if (match) markIssue(issue, providerFor(match[1]!, inventory))
-        else if (issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/")) unscopedIssues.add(issue)
-      }
-      recomputeIssues()
-      for (const entry of [...accepted]) {
-        try { await discharge(entry) }
-        catch { markIssue(issueFor(entry.record.launchAttemptId, "probe-launches"), ownerOf(entry) ?? metadata.find(meta => meta.attemptId === entry.record.launchAttemptId)?.providerId ?? null) }
-      }
-      if (blocked) unavailable()
-    })
   }
   async function publishClean(attempt: CurrentProbe): Promise<void> {
     const transition = attempt.transition
@@ -143,15 +87,14 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         }
       }
       recomputeIssues()
-      if (blocked || running || blockedProviders.size || unscopedIssues.size
+      if (running || blockedProviders.size || unscopedIssues.size
         || [...current.values()].some(attempt => !attempt.done || attempt.cleanupFailed || (attempt.transition ? !attempt.transition.durable() : attempt.spawnInvoked))
-        || accepted.filter(visibleLaunch).some(entry => entry.record.phase !== "cleanup_verified")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-      for (const entry of accepted.filter(visibleLaunch)) if (historical.has(entry.record.launchAttemptId)) await discharge(entry)
+        || accepted.some(entry => entry.record.phase !== "cleanup_verified")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
     })
   }
   async function run(input: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome> {
     const request = structuredClone(input), m = parseProbeMeta(request.meta), path = join(paths.persistentRoot, "catalog/probe-launches", m.attemptId + ".json")
-    if (!initialized || blocked || blockedProviders.has(m.providerId) || running || current.has(m.attemptId) || m.handlerGeneration !== generation || m.hostId !== paths.hostKey) throw new CatalogError(blockedProviders.has(m.providerId) ? "PROBE_CLEANUP_UNVERIFIED" : "CATALOG_UNAVAILABLE")
+    if (blockedProviders.has(m.providerId) || running || current.has(m.attemptId) || m.handlerGeneration !== generation || m.hostId !== paths.hostKey) throw new CatalogError(blockedProviders.has(m.providerId) ? "PROBE_CLEANUP_UNVERIFIED" : "CATALOG_UNAVAILABLE")
     running = true
     let complete!: () => void
     const attempt: CurrentProbe = { providerId: m.providerId, mutations: [], completion: new Promise(resolve => { complete = resolve }), done: false, cleanupFailed: false, publicationFailed: false, unresolved: false, repairable: false, epoch: 0, spawnInvoked: false, startAttempted: false, nativePid: null, attributedPid: null, native: null, nativeClosed: false, nativeTerminal: null, nativeCommand: false, protocolInvalid: false, ipcComplete: false, physicalComplete: false }
@@ -266,7 +209,6 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         record.launchBootId = await bounded(adapter.bootId(), preparationDeadline)
         if (m.fingerprint !== request.evidence.fingerprint || m.providerId !== request.profile.id) throw new CatalogError("CONFIG_CHANGED")
         await store.writeProbeMeta(m)
-        metadata = [...metadata, m].sort((a, b) => a.attemptId < b.attemptId ? -1 : 1)
         const catalog = join(paths.persistentRoot, "catalog")
         await privateProbeDirectory(catalog, "probe-launches")
         attempt.transition = createProbeTransition({ path, initial: record, io: { publish, read: readLaunchRecordForReconciliation }, accept: value => accept(path, value) })
@@ -358,7 +300,6 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
       diagnostic.firstFailure ??= probeFailureDetail("diagnostic-write", cause)
       stderrFailed = true
       error ??= failure(new CatalogError("PROBE_FAILED"))
-      diagnosticPins.add(m.attemptId)
       unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId)
     }
     try {
@@ -378,12 +319,12 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         try { await writeProbeDiagnostic(m.workPath, diagnostic) }
         catch (cause) { captureFailure(cause); diagnostic.stderrComplete = false; diagnostic.failed = true; throw cause }
         try { await completeProbeCapture(m.workPath) }
-        catch { diagnosticPins.add(m.attemptId); unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId) }
+        catch { unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId) }
       }
     } catch (cause) { captureFailure(cause) }
     finally { finalized = true; attempt.owner?.child.off("message", receive); attempt.done = true; running = false; complete() }
     return { request, record: structuredClone(record), result: error === null ? result : null, error }
   }
-  return { run, recover, verifyDischarged, issues: () => new Map(blockedProviders), diagnostics: () => [...unscopedIssues].sort(),
+  return { run, verifyDischarged, issues: () => new Map(blockedProviders), diagnostics: () => [...unscopedIssues].sort(),
   }
 }

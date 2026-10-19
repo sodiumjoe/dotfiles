@@ -1,3 +1,4 @@
+import { incompleteHistory } from "../handler/history.js"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
@@ -5,7 +6,7 @@ import type { MutationQueue } from "../handler/mutations.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import { observeConfig, readProfiles } from "./config.js"
 import type { ProbeOutcome, ProbeRequest, ProbeRuntime } from "./probes.js"
-import type { CatalogInventory, CatalogStore } from "./store.js"
+import type { CatalogStore } from "./store.js"
 import { CatalogError, failure, id, isFresh, PROVIDERS, type CatalogFailure, type CatalogSnapshot, type ConfigEvidence, type ProviderId, type ProviderProfile, type ProviderSnapshot, type RefreshCommand } from "./types.js"
 
 export type RefreshView = Pick<RefreshCommand, "commandId" | "handlerGeneration" | "state" | "snapshotId">
@@ -29,22 +30,10 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   let profiles: ProviderProfile[] = []
   const probeIssues = new Map<ProviderId, CatalogFailure>()
   const unscopedIssues = new Set<string>()
-  const commands = new Map<string, RefreshCommand>(), privateCommands = new Map<string, RefreshCommand>()
-  const owner = (commandId: string) => commands.get(commandId) ?? privateCommands.get(commandId)
-  const owners = () => [...commands.values(), ...privateCommands.values()]
+  const commands = new Map<string, RefreshCommand>()
+  const owner = (commandId: string) => commands.get(commandId)
+  const owners = () => [...commands.values()]
   function latch(error: unknown, inventory = false): void { blocked ??= failure(error); inventoryBlocked ||= inventory }
-  function scopeProbeIssues(inventory: CatalogInventory): void {
-    unscopedIssues.clear()
-    for (const issue of inventory.issues) {
-      const match = /^probe-(?:meta|launches)\/([0-9a-f-]+)\.json$/.exec(issue)
-      const attempt = match?.[1]
-      const providerId = [...inventory.commands, ...inventory.automatic].flatMap(command => command.attempts).find(value => value.attemptId === attempt)?.providerId
-        ?? inventory.metadata.find(meta => meta.attemptId === attempt)?.providerId
-        ?? inventory.launches.flatMap(entry => entry.record.version === 2 && entry.record.owner.kind === "catalog-probe" ? [{ attemptId: entry.record.launchAttemptId, providerId: entry.record.owner.providerId }] : []).find(value => value.attemptId === attempt)?.providerId
-      if (!providerId) { if (issue.startsWith("probe-meta/") || issue.startsWith("probe-launches/")) unscopedIssues.add(issue); continue }
-      probeIssues.set(providerId, failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED")))
-    }
-  }
   const canStart = () => initialized && !closed && !frozen && !blocked && options.isReady() && !options.shutdownPending()
   async function config(): Promise<Config> {
     profiles = (await (options.readProfiles ?? readProfiles)(paths.persistentRoot)).filter(p => p.enabled).sort((a, b) => a.id < b.id ? -1 : 1)
@@ -52,11 +41,11 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     for (const p of profiles) { try { evidence.set(p.id, await (options.observeConfig ?? observeConfig)(p)) } catch (error) { errors.set(p.id, failure(error)) } }
     return { profiles, evidence, errors, fingerprints: [...evidence].map(([providerId, e]) => ({ providerId, fingerprint: e.fingerprint })) }
   }
-  async function persist(value: RefreshCommand, expected: RefreshCommand | null, privateOwner = false): Promise<void> {
-    try { await (privateOwner ? store.writeAutomatic : store.writeCommand)(value, expected) }
+  async function persist(value: RefreshCommand, expected: RefreshCommand | null): Promise<void> {
+    try { await store.writeCommand(value, expected) }
     finally {
-      const visible = await (privateOwner ? store.readAutomatic : store.readCommand)(value.commandId)
-      if (isDeepStrictEqual(visible, value)) { (privateOwner ? privateCommands : commands).set(value.commandId, value); if (!privateOwner) latest = value }
+      const visible = await store.readCommand(value.commandId)
+      if (isDeepStrictEqual(visible, value)) { commands.set(value.commandId, value); latest = value }
       else if (!isDeepStrictEqual(visible, expected)) latch(new CatalogError("CATALOG_UNAVAILABLE"), true)
     }
   }
@@ -96,7 +85,7 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     for (const commandId of batch.commands) {
       const previous = owner(commandId)!
       const updated: RefreshCommand = previous.state !== "pending" ? previous : { ...previous, state: interrupt ? "interrupted" : "completed", snapshotId: interrupt ? null : batch.snapshot!.snapshotId }
-      await persist(updated, previous, privateCommands.has(commandId))
+      await persist(updated, previous)
     }
     if (active === batch) active = null
   }
@@ -125,7 +114,13 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     })().catch(error => { batch.finished = true; latch(error) })
   }
   async function accept(commandId: string): Promise<RefreshResult> {
-    if (privateCommands.has(commandId)) throw new CatalogError("COMMAND_CONFLICT")
+    const historical = await store.readCommand(commandId), automatic = await store.readAutomatic(commandId)
+    if (automatic) throw new CatalogError("COMMAND_CONFLICT")
+    if (historical && !commands.has(commandId)) {
+      if (historical.handlerGeneration !== generation) throw new CatalogError("COMMAND_CONFLICT")
+      if (await incompleteHistory(paths.persistentRoot, "catalog/commands/" + commandId + ".json")) throw new CatalogError("INCOMPLETE")
+      return receipt(historical.state === "pending" ? { ...historical, state: "interrupted" } : historical)
+    }
     const retained = commands.get(commandId)
     if (retained && retained.handlerGeneration !== generation) throw new CatalogError("COMMAND_CONFLICT")
     if (retained && active?.finished) { await finalize(active); return receipt(owner(commandId)!) }
@@ -161,20 +156,12 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     return receipt(command)
   }
   async function initialize(): Promise<void> {
+    try { profiles = (await (options.readProfiles ?? readProfiles)(paths.persistentRoot)).filter(p => p.enabled) }
+    catch (error) { latch(error) }
     try {
-      profiles = (await (options.readProfiles ?? readProfiles)(paths.persistentRoot)).filter(p => p.enabled)
-      const inventory = await store.inventory()
-      scopeProbeIssues(inventory)
-      for (const c of inventory.commands) commands.set(c.commandId, c)
-      for (const c of inventory.automatic) privateCommands.set(c.commandId, c)
-      if (inventory.issues.some(issue => !issue.startsWith("probe-meta/") && !issue.startsWith("probe-launches/")) || [...inventory.commands, ...inventory.automatic].some(c => c.hostId !== paths.hostKey)) throw new CatalogError("CATALOG_UNAVAILABLE")
       current = diskCurrent = await store.readCurrent()
-      if (current && current.hostId !== paths.hostKey) throw new CatalogError("CATALOG_UNAVAILABLE")
-      try { await probes.recover(); for (const [providerId, issue] of probes.issues?.() ?? []) probeIssues.set(providerId, issue) } catch (error) { latch(error) }
-      await queue.run(async () => {
-        for (const c of owners()) if (c.state === "pending") await persist({ ...c, state: "interrupted" }, c, privateCommands.has(c.commandId))
-      })
-    } catch (error) { latch(error, true) }
+      if (current && (current.hostId !== paths.hostKey || await incompleteHistory(paths.persistentRoot, "catalog/snapshots/" + current.snapshotId + ".json"))) throw new CatalogError("CATALOG_UNAVAILABLE")
+    } catch { current = diskCurrent = null; unscopedIssues.add("Retained catalog snapshot is unavailable") }
     initialized = true
   }
   async function list(): Promise<CatalogView> {

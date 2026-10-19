@@ -21,7 +21,6 @@ async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: stri
   const queue = new MutationQueue(), store = createCatalogStore(root), generation = randomUUID(), paths = { hostKey: "c".repeat(64), persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "socket") }
   const started: ProbeRequest[] = [], pending: Array<{ request: ProbeRequest; gate: ReturnType<typeof gate<ProbeOutcome>> }> = []
   const probes: ProbeRuntime = {
-    recover: async () => undefined,
     verifyDischarged: async () => { if (blocked.size || pending.length) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },
     async run(request, signal) {
       if (blocked.has(request.meta.providerId)) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
@@ -69,7 +68,7 @@ test("explicit refresh remains available above 4096 retained receipts", async t 
   assert.equal((await f.finish(commandId)).command.state, "completed")
 })
 
-test("malformed evidence after 4096 retained receipts still blocks acceptance", async t => {
+test("malformed unrelated history does not block fresh catalog refresh", async t => {
   const f = await fixture(t), directory = join(f.root, "catalog", "commands")
   await mkdir(directory, { recursive: true, mode: 0o700 })
   for (let index = 0; index < 4097; index++) {
@@ -78,8 +77,10 @@ test("malformed evidence after 4096 retained receipts still blocks acceptance", 
   }
   await writeFile(join(directory, "ffffffff-ffff-ffff-ffff-ffffffffffff.json"), "{", { mode: 0o600 })
   await f.service.initialize()
-  await assert.rejects(f.service.refresh(randomUUID(), f.generation), { code: "CATALOG_UNAVAILABLE" })
-  assert.equal(f.started.length, 0)
+  const commandId = randomUUID()
+  await f.service.refresh(commandId, f.generation)
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  assert.equal((await f.finish(commandId)).command.state, "completed")
 })
 
 test("32 callers coalesce durable identity and preserve immutable command snapshots", async t => {
@@ -250,7 +251,7 @@ test("restart interrupts pending commands without replay and rejects old IDs", a
   const f = await fixture(t), command = randomUUID()
   await f.store.writeCommand({ version: 1, commandId: command, hostId: f.options.paths.hostKey, handlerGeneration: randomUUID(), batchId: randomUUID(), fingerprints: [], attempts: [], state: "pending", snapshotId: null }, null)
   await f.service.initialize()
-  assert.equal((await f.store.readCommand(command))!.state, "interrupted")
+  assert.equal((await f.store.readCommand(command))!.state, "pending")
   assert.equal(f.started.length, 0)
   await assert.rejects(f.service.refresh(command, f.generation), { code: "COMMAND_CONFLICT" })
 })
@@ -283,7 +284,7 @@ test("historical private identities conflict and pending restart does not replay
   await f.service.initialize()
   await assert.rejects(f.service.refresh(privateId, f.generation), { code: "COMMAND_CONFLICT" })
   assert.equal(f.started.length, 0)
-  assert.equal((await f.store.readAutomatic(privateId))!.state, "interrupted")
+  assert.equal((await f.store.readAutomatic(privateId))!.state, "pending")
   assert.equal((await f.service.list()).refresh, null)
 })
 
@@ -417,7 +418,6 @@ for (const scenario of ["held-native-publication", "held-cleanup-publication"]) 
   assert.equal(outcomes[0]!.result, null)
   assert.equal(await f.store.readCurrent(), null)
   assert.equal((await service.list()).providers.find(p => p.providerId === f.profile.id)!.verifiedAt, null)
-  assert.equal(f.recoverCalls(), 0)
 })
 
 test("visible terminal cleanup with failed durability cannot publish fresh catalog evidence", { timeout: 15000 }, async t => {
