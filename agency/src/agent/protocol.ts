@@ -1,6 +1,6 @@
 import type { Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
-import { absolutePath, hash, id, keys, object, providerId } from "../catalog/types.js"
+import { absolutePath, hash, id, keys, object, providerId, text } from "../catalog/types.js"
 import { CURSOR_BYTES, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
 import { parseImportInput, parseSelection, startSelectionDigest, type ImportInput } from "./types.js"
 import { ControlError, UUID } from "../control/protocol.js"
@@ -11,13 +11,22 @@ import type { AgentStateIssue } from "./store.js"
 import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
 import { launchEnvironmentDigest } from "./environment.js"
 
+import { isRuntimeSessionRequest, parseRuntimeSessionOperation, type RuntimeSessionRequest, type RuntimeSessionResult } from "./session-controls.js"
+import { parseSubmissionReceipt } from "./attachment-protocol.js"
+import { parseTuple } from "./types.js"
+
+import type { RuntimeHumanRequest, RuntimeHumanResult } from "./human-controls.js"
+import { parsePermissionRef, parsePermissionReceipt, parsePermissionSnapshot } from "../agent/permission-types.js"
+
 export const AGENT_PROTOCOL = "agency-agent/3" as const
 export type AgentRequest = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string } & (
+  | RuntimeHumanRequest
+  | RuntimeSessionRequest
   | { op: "agent_import"; input: ImportInput } | { op: "agent_choices" } | { op: "agent_page"; input: PageInput } | { op: "agent_start"; input: StartInput } | { op: "agent_restore"; input: RestoreRequest } | { op: "agent_stop"; input: StopInput } | { op: "agent_prompt"; input: PromptInput } | { op: "agent_current"; cwd: string } | { op: "agent_list" } | { op: "agent_command"; commandId: string; commandGeneration: string }
 )
-export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgents | PromptView | AgentChoices | AgentPage } | { ok: false; error: AgentFailure })
+export type AgentReply = { protocol: typeof AGENT_PROTOCOL; requestId: string; handlerGeneration: string | null; commandId?: string } & ({ ok: true; result: CommandView | AgentList | CurrentAgents | PromptView | AgentChoices | AgentPage | RuntimeHumanResult | RuntimeSessionResult } | { ok: false; error: AgentFailure })
 function invalid(): never { throw new AgentError("INVALID_PROTOCOL") }
-const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" || request.op === "agent_import" ? request.input.commandId : undefined
+export const commandIdFor = (request: AgentRequest): string | undefined => request.op === "agent_command" || request.op === "agent_session_command" ? request.commandId : request.op === "agent_start" || request.op === "agent_session_start" || request.op === "agent_restore" || request.op === "agent_stop" || request.op === "agent_import" ? request.input.commandId : undefined
 function identity(input: unknown): ProcessIdentity {
   const v = object(input)
   keys(v, ["bootId", "pid", "birth", "parentPid", "processGroupId", "sessionId", "uid", "gid"])
@@ -45,7 +54,7 @@ function launchRecord(input: unknown): LaunchRecord {
   if (owner.kind !== "catalog-probe") invalid()
   return { version: 2, owner: { kind: "catalog-probe", providerId: agentText(owner.providerId) as import("../catalog/types.js").ProviderId, commandId: id(owner.commandId) }, ...fields }
 }
-function agentView(input: unknown, generation: string | null): AgentView | LegacyAgentView {
+export function parseAgentView(input: unknown, generation: string | null): AgentView | LegacyAgentView {
   const v = object(input), current = object(v.record)
   keys(v, current.version === 1 ? ["record", "launch", "live", "cleanup"] : ["record", "launch", "live", "cleanup", "unavailable", ...(Object.hasOwn(v, "display") ? ["display"] : [])])
   const recordValue = object(v.record), launch = v.launch === null ? null : launchRecord(v.launch)
@@ -87,8 +96,23 @@ export function parseAgentRequest(input: unknown): AgentRequest {
     const v = object(input)
     if (v.protocol !== AGENT_PROTOCOL) invalid()
     const common = { protocol: AGENT_PROTOCOL, requestId: id(v.requestId), handlerGeneration: id(v.handlerGeneration) }
+    if (typeof v.op === "string" && isRuntimeSessionRequest({ op: v.op })) {
+      const { protocol, requestId, handlerGeneration, ...operation } = v
+      const parsed = parseRuntimeSessionOperation(operation)
+      const expected = "target" in parsed ? parsed.target.handlerGeneration : "input" in parsed ? parsed.input.handlerGeneration : common.handlerGeneration
+      if (expected !== common.handlerGeneration) invalid()
+      return { ...common, ...parsed }
+    }
     if (v.op === "agent_choices") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: "agent_choices" } }
-    if (v.op === "agent_page") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"]); return { ...common, op: "agent_page", input: parsePageInput(v.input) } }
+    if (v.op === "agent_page" || v.op === "agent_roster") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"]); return { ...common, op: v.op, input: parsePageInput(v.input) } }
+    if (v.op === "agent_permissions") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: v.op } }
+    if (v.op === "agent_permission_inspect") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId"]); return { ...common, op: v.op, commandId: id(v.commandId) } }
+    if (v.op === "agent_permission_decide") {
+      keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "ref", "optionId"])
+      const ref = parsePermissionRef(v.ref)
+      if (ref.target.handlerGeneration !== common.handlerGeneration) invalid()
+      return { ...common, op: v.op, commandId: id(v.commandId), ref, optionId: text(v.optionId) }
+    }
     if (v.op === "agent_list") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: "agent_list" } }
     if (v.op === "agent_current") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "cwd"]); return { ...common, op: "agent_current", cwd: absolutePath(v.cwd) } }
     if (v.op === "agent_command") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "commandGeneration"]); return { ...common, op: "agent_command", commandId: id(v.commandId), commandGeneration: id(v.commandGeneration) } }
@@ -99,7 +123,14 @@ export function parseAgentRequest(input: unknown): AgentRequest {
     if (v.op === "agent_stop") { const input = parseStopInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_stop", input } }
     if (v.op === "agent_prompt") { const input = parsePromptInput(v.input); if (input.handlerGeneration !== common.handlerGeneration) invalid(); return { ...common, op: "agent_prompt", input } }
     return invalid()
-  } catch { return invalid() }
+  } catch (error) { if (error instanceof AgentError && error.code === "INPUT_TOO_LARGE") throw error; return invalid() }
+}
+export function parseCommandView(input: unknown): CommandView {
+  const r = object(input)
+  keys(r, ["state", "command", "durability"])
+  if (r.state !== "command" || r.durability !== "verified" && r.durability !== "unverified") invalid()
+  const command = object(r.command).version === 3 ? parseAgentCommandV3(r.command) : parseAgentCommand(r.command)
+  return { state: "command", command, durability: r.durability }
 }
 export function parseAgentReply(input: unknown): AgentReply {
   try {
@@ -110,12 +141,39 @@ export function parseAgentReply(input: unknown): AgentReply {
     if (!v.ok) return { ...common, ok: false, error: parseAgentFailure(v.error) }
     const r = object(v.result)
     if (r.state === "command") {
-      keys(r, ["state", "command", "durability"])
-      const command = object(r.command).version === 3 ? parseAgentCommandV3(r.command) : parseAgentCommand(r.command)
-      if (common.commandId !== command.commandId || r.durability !== "verified" && r.durability !== "unverified") invalid()
-      return { ...common, ok: true, result: { state: "command", command, durability: r.durability as CommandView["durability"] } }
+      const result = parseCommandView(r)
+      if (common.commandId !== result.command.commandId) invalid()
+      return { ...common, ok: true, result }
+    }
+    if (r.state === "session_command") {
+      keys(r, ["state", "commandId", "commandGeneration", "receipt"])
+      const commandId = id(r.commandId), commandGeneration = id(r.commandGeneration), receipt = r.receipt === null ? null : parseCommandView(r.receipt)
+      if (common.commandId !== commandId || receipt && (receipt.command.commandId !== commandId || receipt.command.handlerGeneration !== commandGeneration)) invalid()
+      return { ...common, ok: true, result: { state: "session_command", commandId, commandGeneration, receipt } }
     }
     if (common.commandId) invalid()
+    if (r.state === "session") {
+      keys(r, ["state", "agentId", "agent"])
+      const agentId = id(r.agentId), agent = r.agent === null ? null : parseAgentView(r.agent, common.handlerGeneration)
+      if (agent && (agent.record.version !== 3 || agent.record.definition.agentId !== agentId)) invalid()
+      return { ...common, ok: true, result: { state: "session", agentId, agent: agent as AgentView | null } }
+    }
+    if (r.state === "submission") {
+      keys(r, ["state", "target", "submissionId", "receipt"])
+      const target = parseTuple(r.target), submissionId = id(r.submissionId), receipt = r.receipt === null ? null : parseSubmissionReceipt(r.receipt)
+      if (target.handlerGeneration !== common.handlerGeneration || receipt && receipt.submissionId !== submissionId) invalid()
+      return { ...common, ok: true, result: { state: "submission", target, submissionId, receipt } }
+    }
+    if (r.state === "permissions") {
+      keys(r, ["state", "snapshot"])
+      const snapshot = parsePermissionSnapshot(r.snapshot)
+      if (snapshot.handlerGeneration !== common.handlerGeneration) invalid()
+      return { ...common, ok: true, result: { state: "permissions", snapshot } }
+    }
+    if (r.state === "permission") {
+      keys(r, ["state", "receipt"])
+      return { ...common, ok: true, result: { state: "permission", receipt: r.receipt === null ? null : parsePermissionReceipt(r.receipt) } }
+    }
     if (r.state === "choices") {
       keys(r, ["state", "choices", "unavailable"])
       if (!Array.isArray(r.choices) || r.choices.length > 4096 || !Array.isArray(r.unavailable) || r.unavailable.length > 2 || Buffer.byteLength(JSON.stringify(r)) > QUERY_BYTES) invalid()
@@ -128,7 +186,7 @@ export function parseAgentReply(input: unknown): AgentReply {
       keys(r, ["state", "revision", "agents", "issues", "nextCursor"])
       if (!Array.isArray(r.agents) || !Array.isArray(r.issues) || r.agents.length + r.issues.length > 100 || Buffer.byteLength(JSON.stringify(r)) > QUERY_BYTES) invalid()
       if (r.nextCursor !== null && (typeof r.nextCursor !== "string" || !/^[A-Za-z0-9_-]+$/.test(r.nextCursor) || r.nextCursor.length > CURSOR_BYTES)) invalid()
-      const agents = r.agents.map(a => agentView(a, common.handlerGeneration)), ids = agents.map(a => a.record.version === 3 ? a.record.definition.agentId : a.record.spec.agentId)
+      const agents = r.agents.map(a => parseAgentView(a, common.handlerGeneration)), ids = agents.map(a => a.record.version === 3 ? a.record.definition.agentId : a.record.spec.agentId)
       if (new Set(ids).size !== ids.length || ids.some((value, index) => index > 0 && ids[index - 1]! >= value)) invalid()
       return { ...common, ok: true, result: { state: "page", revision: id(r.revision), agents, issues: r.issues.map(stateIssue), nextCursor: r.nextCursor as string | null } }
     }
@@ -136,14 +194,14 @@ export function parseAgentReply(input: unknown): AgentReply {
     if (r.state === "agents") {
       keys(r, ["state", "agents", "issues"])
       if (!Array.isArray(r.agents) || r.agents.length > 4096 || !Array.isArray(r.issues) || r.issues.length > 4096) invalid()
-      const agents = (r.agents as unknown[]).map(a => agentView(a, common.handlerGeneration))
+      const agents = (r.agents as unknown[]).map(a => parseAgentView(a, common.handlerGeneration))
       if (new Set(agents.map(a => a.record.version === 3 ? a.record.definition.agentId : a.record.spec.agentId)).size !== agents.length) invalid()
       return { ...common, ok: true, result: { state: "agents", agents, issues: (r.issues as unknown[]).map(stateIssue) } }
     }
     if (r.state !== "current") invalid()
     keys(r, ["state", "cwd", "agents"])
     if (!Array.isArray(r.agents) || r.agents.length > 4096) invalid()
-    const cwd = absolutePath(r.cwd), agents = (r.agents as unknown[]).map(value => agentView(value, common.handlerGeneration))
+    const cwd = absolutePath(r.cwd), agents = (r.agents as unknown[]).map(value => parseAgentView(value, common.handlerGeneration))
     if (agents.some(agent => agent.record.version !== 3 || !agent.live || agent.record.definition.cwd !== cwd) || new Set(agents.map(agent => agent.record.version === 3 ? agent.record.definition.agentId : agent.record.spec.agentId)).size !== agents.length) invalid()
     return { ...common, ok: true, result: { state: "current", cwd, agents: agents as AgentView[] } }
   } catch { return invalid() }
@@ -153,11 +211,30 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
   if (reply.handlerGeneration !== request.handlerGeneration) throw new AgentError("STALE_HANDLER")
   if (!reply.ok) return
   const result = reply.result
+  if (request.op === "agent_session_inspect") { if (result.state !== "session" || result.agentId !== request.agentId) invalid(); return }
+  if (request.op === "agent_session_command") { if (result.state !== "session_command" || result.commandId !== request.commandId || result.commandGeneration !== request.commandGeneration) invalid(); return }
+  if (request.op === "agent_session_submit" || request.op === "agent_session_submission" || request.op === "agent_session_cancel") {
+    if (result.state !== "submission" || !isDeepStrictEqual(result.target, request.target) || result.submissionId !== request.submissionId || request.op !== "agent_session_submission" && !result.receipt) invalid()
+    return
+  }
+  if (request.op === "agent_session_start") {
+    if (result.state !== "command" || result.command.version !== 3 || result.command.op !== "start" || result.command.handlerGeneration !== request.handlerGeneration || result.command.input.cwd !== request.input.cwd || result.command.input.backendId !== request.input.backendId) invalid()
+    return
+  }
   if (request.op === "agent_choices") { if (result.state !== "choices") invalid(); return }
-  if (request.op === "agent_page") {
+  if (request.op === "agent_page" || request.op === "agent_roster") {
     if (result.state !== "page" || result.agents.length + result.issues.length > request.input.limit) invalid()
     if (request.input.cwd && result.agents.some(a => (a.record.version === 3 ? a.record.definition.cwd : a.record.spec.checkout.root.path) !== request.input.cwd)) invalid()
-    if (request.input.activeOnly && result.agents.some(a => a.record.version !== 3 || a.record.launch?.handlerGeneration !== request.handlerGeneration || !["starting", "ready", "restoring", "stopping"].includes(a.record.phase))) invalid()
+    if ((request.input.activeOnly || request.op === "agent_roster") && result.agents.some(a => a.record.version !== 3 || a.record.launch?.handlerGeneration !== request.handlerGeneration || !["starting", "ready", "restoring", "stopping"].includes(a.record.phase))) invalid()
+    return
+  }
+  if (request.op === "agent_permissions") { if (result.state !== "permissions") invalid(); return }
+  if (request.op === "agent_permission_decide") {
+    if (result.state !== "permission" || !result.receipt || result.receipt.commandId !== request.commandId || result.receipt.optionId !== request.optionId || !isDeepStrictEqual(result.receipt.ref, request.ref)) invalid()
+    return
+  }
+  if (request.op === "agent_permission_inspect") {
+    if (result.state !== "permission" || result.receipt && result.receipt.commandId !== request.commandId) invalid()
     return
   }
   if (request.op === "agent_list") { if (result.state !== "agents") invalid(); return }
@@ -169,6 +246,7 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
     if (result.command.version !== 3 || result.command.op !== "import" || !isDeepStrictEqual(result.command.input, { backendId: request.input.backendId, nativeSessionId: request.input.nativeSessionId, cwd: request.input.cwd })) invalid()
     return
   }
+  if (request.op !== "agent_start" && request.op !== "agent_restore" && request.op !== "agent_stop") invalid()
   if (result.command.op !== (request.op === "agent_start" ? "start" : request.op === "agent_restore" ? "restore" : "stop")) invalid()
   if (result.command.version === 2) {
     if (!isDeepStrictEqual(result.command.input, request.op === "agent_start" ? projectStartInput(request.input) : request.op === "agent_restore" ? projectRestoreInput(request.input) : request.input)) invalid()

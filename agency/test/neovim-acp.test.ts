@@ -462,9 +462,9 @@ for (const stage of ["Agency backend", "Agency model"]) test(`fresh editor super
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
 })
 
-test("fresh saved history remains visible when every configured adapter is incompatible", { timeout: 60000 }, async t => {
+test("saved history and live attachment remain visible after adapter metadata changes", { timeout: 60000 }, async t => {
   const f = await acpFixture(t, { legacyCount: 1 }), e = await editorFixture(f)
-  await start(e, "codex-acp")
+  const sid = await start(e, "codex-acp")
   for (const [directory, name] of [["profile", "@agentclientprotocol/codex-acp"], ["secondary", "@agentclientprotocol/claude-agent-acp"]])
     await writeFile(join(f.root, directory!, "adapter.json"), JSON.stringify({ name, version: "99.0.0", main: "agent-provider.js" }), { mode: 0o600 })
   await run(e, `AgencyFixture.commands(); picker_spec=nil; Snacks={picker=function(opts) picker_spec=opts end}; confirms=0; vim.ui.select=function() confirms=confirms+1 end
@@ -472,7 +472,8 @@ test("fresh saved history remains visible when every configured adapter is incom
   await wait(e, "picker_spec ~= nil")
   assert.equal(await e.lua("#picker_spec.items"), 2)
   await run(e, `for _,item in ipairs(picker_spec.items) do
-    assert(item.unavailable); assert(item.text:find('Unavailable',1,true)); picker_spec.confirm({close=function() end},item)
+    if item.session_id == ${JSON.stringify(sid)} then assert(not item.unavailable)
+    else assert(item.unavailable); assert(item.text:find('Unavailable',1,true)); picker_spec.confirm({close=function() end},item) end
   end`)
   assert.equal(await e.lua("confirms"), 0)
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
@@ -598,15 +599,11 @@ test("provider editor RPC follows the submitting attachment across editor replac
 })
 
 test("routed approval UI races an attached child UI without replying through the parent provider", { timeout: 60000 }, async t => {
-  const { createConnection } = await import("node:net"), { exchangeBureau, BUREAU_PROTOCOL } = await import("../src/bureau/protocol.js")
-  const f = await acpFixture(t), parent = await editorFixture(f), child = await editorFixture(f)
-  const parentSession = await start(parent), childSession = await start(child), target = await f.tuple(childSession)
-  const enabled = await exchangeBureau(createConnection(join(f.paths.runtimeRoot, "bureau.sock")), { protocol: BUREAU_PROTOCOL, requestId: randomUUID(), handlerGeneration: target.handlerGeneration, op: "bureau_enable" })
-  assert.equal(enabled.ok, true)
+  const f = await acpFixture(t, {  }), parent = await editorFixture(f), child = await editorFixture(f)
+  const parentSession = await start(parent), childSession = await start(child)
   await run(parent, `AgencyFixture.commands(); _G.Snacks=nil; fixture_before_layout=vim.fn.winlayout(); fixture_selection=nil;
     vim.ui.select=function(items,opts,callback) fixture_selection={items=items,opts=opts,callback=callback} end;
-    fixture_routed=require('sodium.agency.permissions').new({command=fixture_control.command,
-      watch=function() return {start=function() end,close=function() end} end});
+    fixture_routed=require('sodium.agency.permissions').new({command=fixture_control.command});
     fixture_manager._agency_routed_permissions=fixture_routed`)
   await submit(child, "permission"); await pending(child)
   await run(parent, "vim.cmd('AgencyPermissions')")
@@ -627,4 +624,23 @@ test("routed approval UI races an attached child UI without replying through the
   assert.ok(["allow-once", "reject-once"].includes(String((replies[0]!.result!.outcome as JsonObject).optionId)))
   const requests = await f.requests("codex-acp")
   assert.equal(requests.filter(frame => frame.method === "session/prompt").length, 1)
+})
+test("the shared runtime entry driver binds and inspects a real headless editor with Bureau unavailable", { timeout: 60000 }, async t => {
+  const { createRuntimeEntryDriver, entryEditorIdentity } = await import("../src/entry/editor.js")
+  const f = await acpFixture(t, {  }), acp = await f.connect(), e = await editorFixture(f)
+  await acp.request("initialize", { protocolVersion: 1 })
+  const session = await acp.request("session/new", { cwd: f.workspace, mcpServers: [] }), target = await f.tuple(String(session.sessionId)), ref = { hostId: f.paths.hostKey, target }, identity = entryEditorIdentity(ref)
+  await run(e, "AgencyFixture.commands()")
+  const driver = createRuntimeEntryDriver({ runtimeRoot: f.paths.runtimeRoot, socket: async () => "/fixture/nvim.sock", run: async (file, argv) => {
+    if (file === "tmux") { if (argv.includes("show-options")) return identity.digest; if (argv.includes("list-panes")) return "%1"; return "" }
+    const expression = argv.at(-1)!, method = expression.includes('.bind(') ? "bind" : "status"
+    return String(await e.lua(`require("sodium.agency.remote").${method}(vim.json.decode(${JSON.stringify(JSON.stringify({ editorId: identity.editorId, target }))}))`))
+  } })
+  const editor = await driver.ensure(ref); await driver.activate(ref, editor)
+  assert.deepEqual(await driver.inspect(ref), editor)
+  const registry = "require('agentic.session_registry').sessions[vim.api.nvim_get_current_tabpage()]"
+  assert.equal(await e.lua(registry + ".session_id"), session.sessionId)
+  assert.equal(await e.lua(registry + "._agency_entry.editorId"), editor.editorId)
+  assert.deepEqual(await e.lua("fixture_notifications"), [])
+  acp.close()
 })

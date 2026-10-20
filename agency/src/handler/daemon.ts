@@ -1,19 +1,24 @@
-import { createHostCoordination } from "./host-coordination.js"
-import { createHandlerBridge } from "../bridge/server.js"
-import { createToolBindings } from "../orchestration/tool-bindings.js"
-import { serveToolSocket } from "../orchestration/tool-client.js"
-import { type BureauService } from "../bureau/service.js"
-import { dispatchBureau } from "../bureau/client.js"
-import { parseBureauRequest } from "../bureau/protocol.js"
-import { encodeFrame, receiveFrame } from "../control/wire.js"
-import { loadOrchestrationPins } from "../orchestration/receipts.js"
+import { taskToolDescriptor } from "../tasks/mcp.js"
+import { createTaskStore } from "../tasks/store.js"
+import { createTaskService, type TaskService, type TaskServiceOptions } from "../tasks/service.js"
+import { registerTaskEndpoint } from "../tasks/endpoint.js"
+import { destinationEnvironment } from "../agent/environment.js"
+import { AgentError } from "../agent/types.js"
+import { createRuntimeEntry, type RuntimeEntryDriver } from "../entry/runtime.js"
+import { createRuntimeEntryDriver } from "../entry/editor.js"
+import { id, keys, object } from "../catalog/types.js"
+import { createHostInventory } from "../hosts/inventory.js"
+import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
+import { connectBridge } from "../bridge/ssh.js"
+import { dispatchAgentRequest } from "../agent/dispatch.js"
+import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
+import { registerRuntimeEndpoint } from "../hosts/runtime.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
 import { createAgentService, type AgentService } from "../agent/service.js"
 import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
-import { AGENT_PROTOCOL, agentErrorReply, type AgentRequest, type AgentReply } from "../agent/protocol.js"
-import { AgentError } from "../agent/types.js"
+import { type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { serveAttachment } from "../agent/attachment-server.js"
 import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
@@ -27,16 +32,12 @@ import { createCatalogStore, type CatalogStore } from "../catalog/store.js"
 import { createProbeRuntime } from "../catalog/probes.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
-import { PrivateStatePublicationError, readHandlerRecord, readLaunchRecordForReconciliation, writeHandlerRecord } from "../platform/private-state.js"
-import { reconcileRecord, RetainedInventoryChangedError } from "../platform/reconcile.js"
-import { sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
+import { readHandlerRecord, writeHandlerRecord } from "../platform/private-state.js"
+import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
-import { inventoryLaunchState, summarizeLaunches, type InventoryEntry, type LaunchIssue } from "./inventory.js"
 import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
-import { createRetentionStore, type RetirementView, type RetentionFileSystem } from "../retention/store.js"
-import { RetirementBlocked, authorizeRetirement, authorizedRetirementView, createRetentionCoordinator, type RetentionCoordinator } from "../retention/coordinator.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -46,10 +47,11 @@ export type HandlerOptions = {
   status: Duplex
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
-  catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; store: CatalogStore; retirement: RetirementView; onTerminal(): void; cleanupIssues(): readonly string[]; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
+  catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; store: CatalogStore; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
   agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
   launchContracts?: readonly LaunchContract[]
-  retention?: { now?: () => number; filesystem?: RetentionFileSystem }
+  entryDriver?: RuntimeEntryDriver
+  taskFactory?: (input: TaskServiceOptions) => Promise<TaskService>
 }
 
 export function receiveStart(gate: Duplex, status: Duplex, timeoutMs = 5000): Promise<void> {
@@ -96,36 +98,32 @@ async function selfIdentity(adapter: PlatformAdapter): Promise<ProcessIdentity> 
   }
 }
 
-function retainedIdentity(record: LaunchRecord): unknown {
-  const { phase, reason, launchAttempted, provider, ...identity } = record
-  return { ...identity, leader: provider?.group.leader }
-}
-
 export async function runHandler(options: HandlerOptions): Promise<void> {
   let server: Server | undefined, attachmentServer: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
   const sockets = new Set<Socket>()
-  let entries: InventoryEntry[] = []
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
-  let bureau: BureauService | undefined, toolBindings: ReturnType<typeof createToolBindings> | undefined
-  let bureauServer: Server | undefined, toolsServer: Server | undefined
-  let coordination: Awaited<ReturnType<typeof createHostCoordination>> | undefined
-  let bridgeServer: Awaited<ReturnType<typeof createHandlerBridge>> | undefined
+  let router: HostRouter | undefined
+  let bridge: HandlerBridge | undefined
+  let ownerTasks: TaskService | undefined
+  let unregisterTasks: (() => void) | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
+  const taskIssues: NonNullable<HandlerStatus["issues"]> = []
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject })
   void closed.catch(() => undefined)
   const close = async (): Promise<void> => {
     if (closing) return closed
     closing = true
-    if (coordination) await coordination.close()
-    else { await bureau?.close(); toolBindings?.close() }
-    await bridgeServer?.close()
+    unregisterTasks?.()
+    await ownerTasks?.close()
+    router?.close()
+    await bridge?.close()
     await acpServer?.close()
     for (const socket of sockets) socket.destroy()
-    for (const listener of [server, attachmentServer, bureauServer, toolsServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
+    for (const listener of [server, attachmentServer]) if (listener !== undefined) await new Promise<void>(resolve => listener.close(() => resolve()))
     resolveClosed()
   }
   const terminate = async (): Promise<void> => {
@@ -156,28 +154,12 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const live = await selfIdentity(options.adapter)
     if (!isDeepStrictEqual(published, expected) || !sameProcess(self, live)) throw new Error("Handler publication mismatch")
     current = published
-    const root = options.paths.persistentRoot, retentionStore = createRetentionStore(root, options.paths.hostKey, options.generation, options.retention?.filesystem)
-    let pinIssue: string | undefined, initialPins: readonly string[] = []
-    try { initialPins = (await loadOrchestrationPins(root)).paths } catch (error) { pinIssue = String(error).slice(0, 480) }
-    const orchestrationPins = async () => {
-      try { const pins = await loadOrchestrationPins(root); pinIssue = undefined; return pins }
-      catch (error) { pinIssue = String(error).slice(0, 480); throw error }
-    }
-    retentionStore.view = authorizedRetirementView(retentionStore, async intent => {
-      let pins
-      try { pins = await orchestrationPins() } catch (error) { throw new RetirementBlocked("orchestration references unavailable", { cause: error }) }
-      await authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter, pins: [...(catalog?.retentionPins().paths ?? []), ...(agents?.retentionPins().paths ?? []), ...pins.paths] }, intent)
-    })
-    let coordinator: RetentionCoordinator | undefined, bootstrapIssue: string | undefined
-    try { if (pinIssue) throw new Error(pinIssue); await retentionStore.resume({ authorize: intent => authorizeRetirement({ root, hostId: options.paths.hostKey, generation: options.generation, adapter: options.adapter, pins: initialPins }, intent), removed() {} }) }
-    catch (error) { bootstrapIssue = String(error).slice(0, 480) }
-    const cleanupIssues = () => [...(coordinator?.diagnostics() ?? (bootstrapIssue ? [bootstrapIssue] : [])), ...(pinIssue ? [pinIssue] : [])]
-    const onTerminal = () => coordinator?.request()
+    const root = options.paths.persistentRoot
     await sendStatus(options.status, { type: "gate_released", generation: options.generation }).catch(() => undefined)
     const dispatch = async (request: ControlRequest): Promise<ControlReply> => {
       if (request.handlerGeneration !== options.generation) return errorReply({ ...request, handlerGeneration: options.generation }, new ControlError("STALE_HANDLER"))
       if (request.op === "shutdown") return shutdown === undefined ? errorReply(request, new ControlError("INCOMPLETE", "Handler has not completed startup")) : shutdownHandler(request, shutdown)
-      return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone(state) }
+      return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone({ ...state, issues: [...(state.issues ?? []), ...taskIssues] }) }
     }
     const dispatchCatalog = async (request: CatalogRequest): Promise<CatalogReply> => {
       const bound = { ...request, handlerGeneration: options.generation }
@@ -186,15 +168,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       try { return { protocol: CATALOG_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: request.op === "model_list" ? await catalog.list() : await catalog.refresh(request.commandId, request.handlerGeneration) } }
       catch (error) { return catalogErrorReply(bound, error) }
     }
-    const dispatchAgent = async (request: AgentRequest): Promise<AgentReply> => {
-      const bound = { ...request, handlerGeneration: options.generation }
-      if (request.handlerGeneration !== options.generation) return agentErrorReply(bound, new AgentError("STALE_HANDLER"))
-      if (!agents || state.phase !== "ready") return agentErrorReply(bound, new AgentError("NOT_READY"))
-      try {
-        const result = request.op === "agent_import" ? await agents.importSession(request.input) : request.op === "agent_choices" ? await agents.choices() : request.op === "agent_page" ? await agents.page(request.input) : request.op === "agent_start" ? await agents.start(request.input) : request.op === "agent_restore" ? await agents.restore(request.input) : request.op === "agent_stop" ? await agents.stop(request.input) : request.op === "agent_prompt" ? await agents.prompt(request.input) : request.op === "agent_command" ? await agents.command(request.commandId, request.commandGeneration) : request.op === "agent_current" ? await agents.current(request.cwd) : await agents.list()
-        return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ...(request.op === "agent_command" ? { commandId: request.commandId } : request.op === "agent_start" || request.op === "agent_restore" || request.op === "agent_stop" || request.op === "agent_import" ? { commandId: request.input.commandId } : {}), ok: true, result }
-      } catch (error) { return agentErrorReply(bound, error) }
-    }
+    const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => dispatchAgentRequest({ agents, generation: options.generation, ready: () => state.phase === "ready" && !closing }, request)
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
@@ -212,52 +186,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     attachmentServer.on("close", () => { if (!closing) rejectClosed(new Error("attachment listener closed unexpectedly")) })
     current = { ...published, writer: "handler", phase: "socket_bound" }
     await writeHandlerRecord(options.recordPath, current)
-    const directory = join(options.paths.persistentRoot, "launches")
-    const initialInventory = await inventoryLaunchState(directory, retentionStore.view, root)
-    entries = initialInventory.records
-    state.issues = initialInventory.issues
-    state.phase = "reconciling"
-    state.reconciliation.total = entries.length
-    state.launches = summarizeLaunches(entries.map(entry => entry.record))
-    current = { ...published, writer: "handler", phase: "reconciling", reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
-    await writeHandlerRecord(options.recordPath, current)
-    await options.onPhase?.("reconciling")
-    const reconciliationIssues: LaunchIssue[] = [], successful = new Map<string, InventoryEntry["record"]>()
-    for (const entry of entries) {
-      try {
-        const result = await reconcileRecord(entry.path, options.adapter, entry.record)
-        if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new RetainedInventoryChangedError()
-        entry.record = result.record
-        successful.set(entry.path, result.record)
-      } catch (error) {
-        if (error instanceof RetainedInventoryChangedError || error instanceof PrivateStatePublicationError) throw error
-        reconciliationIssues.push({ path: entry.path, launchAttemptId: entry.record.launchAttemptId, message: String(error).slice(0, 512) })
-      }
-      state.reconciliation.classified++
-      if (entry.record.phase === "quarantined") state.reconciliation.uncertain++
-      state.launches = summarizeLaunches(entries.map(item => item.record))
-      current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
-      await writeHandlerRecord(options.recordPath, current)
-    }
     await options.onPhase?.("ready")
-    const checkedInventory = await inventoryLaunchState(directory, retentionStore.view, root)
-    const initialPaths = new Set(entries.map(entry => entry.path))
-    if (checkedInventory.records.some(entry => !initialPaths.has(entry.path))) throw new Error("RETAINED_INVENTORY_CHANGED")
-    for (const [path, expected] of successful) if (!isDeepStrictEqual(checkedInventory.records.find(entry => entry.path === path)?.record, expected)) throw new Error("RETAINED_INVENTORY_CHANGED")
-    const trusted = checkedInventory.records.filter(entry => {
-      const original = entries.find(value => value.path === entry.path)?.record
-      if (!original) return false
-      if (successful.has(entry.path)) return true
-      return isDeepStrictEqual(retainedIdentity(original), retainedIdentity(entry.record))
-    })
-    state.launches = summarizeLaunches(checkedInventory.records.map(entry => entry.record))
-    state.reconciliation = { classified: checkedInventory.records.length, total: checkedInventory.records.length, uncertain: checkedInventory.records.filter(entry => entry.record.phase === "quarantined").length }
-    state.issues = [...checkedInventory.issues, ...reconciliationIssues]
-    current = { ...current, reconciliation: { classified: state.reconciliation.classified, total: state.reconciliation.total, quarantined: state.reconciliation.uncertain } }
-    await writeHandlerRecord(options.recordPath, current)
-    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: structuredClone(trusted), reconciliationIssues, retirement: retentionStore.view, root }
-    const catalogStore = createCatalogStore(root, undefined, retentionStore.view), agentStore = createAgentStore(root, undefined, retentionStore.view)
-    const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, store: catalogStore, retirement: retentionStore.view, onTerminal, cleanupIssues, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
+    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [], root }
+    const catalogStore = createCatalogStore(root), agentStore = createAgentStore(root)
+    const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, store: catalogStore, isReady: () => state.phase === "ready" && !closing, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
     else {
       const store = catalogStore
@@ -266,33 +198,25 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     await catalog.initialize()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
-    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, retirement: retentionStore.view, onTerminal, cleanupIssues })
+    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore })
     await agents.initialize()
-    coordination = await createHostCoordination({ root, runtimeRoot: options.paths.runtimeRoot, hostId: options.paths.hostKey, agents, coordinator: (payload, signal) => { if (!bridgeServer) throw new Error("BUREAU_UNAVAILABLE"); return bridgeServer.coordinatorRequest(payload, signal) } })
-    const { origin, origins } = coordination
-    toolBindings = coordination.tools; bureau = coordination.bureau
-    const scopedTools = toolBindings, core = bureau
-    toolsServer = await bindPrivateSocket(options.paths.runtimeRoot, "orchestration.sock", socket => {
-      sockets.add(socket); socket.once("close", () => sockets.delete(socket))
-      void serveToolSocket(socket, scopedTools).catch(() => socket.destroy())
+    bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
+    unregisterTasks = registerTaskEndpoint({ bridge, hostId: options.paths.hostKey, generation: options.generation, ready: () => state.phase === "ready" && !closing, service: () => ownerTasks })
+    registerRuntimeEndpoint(bridge, dispatchAgent)
+    const ownerAgents = agents
+    const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
+      try { await ownerAgents.sessionSnapshot(target); return true }
+      catch (error) { if (error instanceof AgentError && ["STALE_HANDLER", "STALE_PROVIDER", "SESSION_UNAVAILABLE", "NOT_READY", "UNAVAILABLE"].includes(error.code)) return false; throw error }
+    } })
+    bridge.register(["entry-open", "runtime-entry-inspect"], async ({ channel, payload }) => {
+      const value = object(payload); keys(value, channel === "entry-open" ? ["commandId", "ref"] : ["commandId"])
+      return channel === "entry-open" ? entry.open(id(value.commandId), value.ref as never) : entry.inspect(id(value.commandId))
     })
-    bureauServer = await bindPrivateSocket(options.paths.runtimeRoot, "bureau.sock", socket => {
-      sockets.add(socket); socket.once("close", () => sockets.delete(socket)); socket.allowHalfOpen = true
-      socket.on("error", () => undefined)
-      void (async () => {
-        try {
-          const request = parseBureauRequest(await receiveFrame(socket)), reply = await dispatchBureau(core, options.generation, request, coordination!.human)
-          await new Promise<void>(resolve => socket.end(encodeFrame(reply), resolve))
-        } catch { socket.destroy() } finally { socket.destroy() }
-      })()
-    })
-    toolsServer.on("error", () => toolBindings?.close())
-    bureauServer.on("error", () => bureau?.close())
-    bridgeServer = await createHandlerBridge({ root: options.paths.runtimeRoot, host: origin, journals: origins, replay: () => coordination!.replay(), identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
+    const coreBridge = bridge
+    router = createHostRouter({ hostId: options.paths.hostKey, inventory: createHostInventory(root), local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
+    registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
-    coordinator = createRetentionCoordinator({ root, hostId: options.paths.hostKey, generation: options.generation, queue: mutations.queue, adapter: options.adapter, store: retentionStore, catalogStore, agentStore, mutations, catalog, agents, orchestrationPins, ...(options.retention?.now ? { now: options.retention.now } : {}) })
-    await coordinator.initialize()
-    current = { ...current, phase: "ready" }
+    current = { ...current, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 } }
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, agents }
@@ -300,7 +224,13 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (termination) await terminate()
     else await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
-    if (!termination && !closing) catalog.startScheduling()
+    if (!termination && !closing) {
+      const taskInput: TaskServiceOptions = { store: createTaskStore({ root, hostId: options.paths.hostKey }), hostId: options.paths.hostKey, generation: options.generation, runtime: agents, descriptor: taskToolDescriptor, environment: () => destinationEnvironment(process.env) }
+      const initializeTasks = options.taskFactory ?? (async (input: TaskServiceOptions) => { await input.store.initialize(); return createTaskService(input) })
+      void Promise.resolve().then(() => initializeTasks(taskInput)).then(async service => { if (closing) await service.close(); else ownerTasks = service }).catch(() => {
+        if (!closing) taskIssues.push({ path: join(root, "tasks"), launchAttemptId: null, message: "Task service is unavailable" })
+      })
+    }
     await closed
   } catch (error) {
     if (current !== undefined) {
@@ -308,9 +238,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     throw error
   } finally {
+    await close()
     agents?.close()
     catalog?.close()
-    await close()
     process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal)
     options.status.destroy(); options.gate.destroy()
   }

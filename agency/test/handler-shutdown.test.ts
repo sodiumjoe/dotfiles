@@ -112,16 +112,14 @@ test("refused shutdown resumes scheduling but unverified catalog prevents a rece
   assert.equal(ctx.state.phase, "ready")
 })
 
-test("unverified launches block shutdown; --stop-agents cannot release provider-null ambiguity", async t => {
-  const ctx = await context(t), record = launch(), path = join(ctx.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`)
+test("historical launch ambiguity does not enter current shutdown discharge", async t => {
+  const ctx = await context(t), record = launch(), path = join(ctx.paths.persistentRoot, "launches", record.launchAttemptId + ".json")
   await writeLaunchRecord(path, record)
-  const command = request(), refused = await shutdownHandler(command, ctx)
-  assert.ok(!refused.ok && refused.error.code === "ACTIVE_AGENTS")
-  const incomplete = await shutdownHandler({ ...command, stopAgents: true }, ctx)
-  assert.ok(!incomplete.ok && incomplete.error.code === "INCOMPLETE")
-  assert.equal(JSON.parse(await readFile(path, "utf8")).phase, "quarantined")
-  assert.equal(ctx.state.phase, "ready")
-  assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
+  const command = request(), reply = await shutdownHandler(command, ctx)
+  assert.equal(reply.ok, true)
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), record)
+  assert.equal(ctx.state.phase, "draining")
+  assert.ok(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId))
 })
 
 test("uncertain receipt publication remains serviceable and retries the same pinned intent", async t => {
@@ -164,21 +162,35 @@ test("forced lifecycle and catalog drain independently release the mutation queu
   assert.equal((await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.result!.outcome, "failed")
 })
 
-test("incomplete forced lifecycle cleanup leaves Handler status and quarantine readable", async t => {
+test("incomplete forced lifecycle cleanup leaves Handler status and live ownership readable", async t => {
   const f = await agentServiceFixture(t), base = await context(t)
   const ctx: ShutdownContext = { ...base, paths: f.context.paths, state: f.context.state, adapter: f.context.adapter, mutations: f.context.mutations, record: { ...base.record, generation: f.input.handlerGeneration }, agents: f.service }
   f.context.shutdownPending = () => ctx.pending !== undefined
   await f.service.start(f.input)
   await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
-  const read = f.context.adapter.readProcess
+  const read = f.context.adapter.readProcess, signal = f.context.adapter.signalGroup
+  let signals = 0
+  f.context.adapter.signalGroup = async (...args) => { signals++; return signal(...args) }
   f.context.adapter.readProcess = async pid => { const identity = await read(pid); return identity ? { ...identity, birth: identity.birth.replace(/^100:/, "200:") } : null }
   const command = { ...request(), handlerGeneration: f.input.handlerGeneration, stopAgents: true }
   const reply = await shutdownHandler(command, ctx)
   assert.ok(!reply.ok && reply.error.code === "INCOMPLETE", JSON.stringify(reply))
   assert.equal(ctx.pending, undefined); assert.equal(ctx.state.phase, "ready")
   assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
-  assert.equal((await f.service.list()).agents[0]!.cleanup, "unknown")
+  assert.equal((await f.service.list()).agents[0]!.cleanup, "unverified")
+  assert.equal(f.context.mutations.accepted[0]!.record.phase, "cleanup_pending")
+  assert.equal(signals, 0)
+  f.context.adapter.signalGroup = signal
   f.context.adapter.readProcess = read
   const unrelated = { ...f.input, commandId: randomUUID() }
   assert.equal((await f.service.start(unrelated)).command.state, "pending")
+})
+
+test("shutdown verifies catalog discharge outside the shared mutation queue", { timeout: 1500 }, async t => {
+  const ctx = await context(t)
+  let verified = false
+  ctx.catalog = { freezeAndDrain: async () => undefined, resume() {}, verifyDischarged: async () => ctx.mutations.queue.run(async () => { verified = true }) }
+  const reply = await shutdownHandler(request(), ctx)
+  assert.equal(reply.ok, true)
+  assert.equal(verified, true)
 })

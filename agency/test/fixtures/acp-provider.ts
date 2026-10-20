@@ -1,4 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { appendFile, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
@@ -30,37 +29,10 @@ const snapshot = () => backend === "codex-acp" ? { configOptions: options, ...(p
   modes: { currentModeId: modeId, availableModes: [{ id: "normal", name: "Normal" }, { id: "review", name: "Review" }] },
 }
 await appendFile(log, JSON.stringify({ method: "fixture/environment", params: { AGENCY_TEST_EDITOR_MARKER: process.env.AGENCY_TEST_EDITOR_MARKER ?? null, NVIM: process.env.NVIM ?? null, NVIM_SOCKET_PATH: process.env.NVIM_SOCKET_PATH ?? null } }) + "\n", { mode: 0o600 })
-const ownership = process.env.AGENCY_TEST_OWNERSHIP_MODULE ? await import(process.env.AGENCY_TEST_OWNERSHIP_MODULE) as typeof import("./ownership.js") : null
-let helperDefinition: { command: string; args: string[]; env: { name: string; value: string }[] } | undefined
-let helper: ChildProcessWithoutNullStreams | undefined, helperId = 0
-let executionAgentId = "", executionRunId = ""
-const helperPending = new Map<number, { resolve(value: any): void; reject(error: unknown): void }>()
-async function helperCall(method: string, params?: unknown) {
-  const id = ++helperId, response = Promise.withResolvers<any>()
-  helperPending.set(id, response)
-  helper!.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }) + "\n")
-  return response.promise
-}
-async function launchHelper() {
-  if (!helperDefinition) throw new Error("missing injected Agency definition")
-  const env = { ...process.env, ...Object.fromEntries(helperDefinition.env.map(value => [value.name, value.value])) }
-  const launch = ownership?.fixtureLaunch("mcp-helper")
-  helper = spawn(helperDefinition.command, helperDefinition.args, { env, stdio: ["pipe", "pipe", "pipe"] })
-  await appendFile(join(root!, "tools-helpers.jsonl"), JSON.stringify({ pid: helper.pid }) + "\n", { mode: 0o600 })
-  let bytes = ""
-  helper.stdout.on("data", chunk => { bytes += chunk.toString(); let newline; while ((newline = bytes.indexOf("\n")) !== -1) { const reply = JSON.parse(bytes.slice(0, newline)); bytes = bytes.slice(newline + 1); helperPending.get(reply.id)?.resolve(reply); helperPending.delete(reply.id) } })
-  helper.stderr.resume()
-  helper.once("exit", () => { for (const pending of helperPending.values()) pending.reject(new Error("helper exited")); helperPending.clear() })
-  if (launch) await ownership!.fixtureSpawn(launch, helper.pid)
-  const initialize = await helperCall("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "fixture-provider", version: "1" } })
-  if (!initialize.result) throw new Error("helper initialization failed")
-  helper.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n")
-}
-async function closeHelper() { if (helper) { const child = helper; const ended = new Promise(resolve => child.once("exit", resolve)); child.stdin.end(); await ended; helper = undefined } }
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
 for await (const line of lines) {
   const request = JSON.parse(line)
-  await appendFile(log, JSON.stringify({ ...request, ...(ownership && request.method === "session/prompt" ? { fixtureAgentId: executionAgentId } : {}) }) + "\n", { mode: 0o600 })
+  await appendFile(log, JSON.stringify(request) + "\n", { mode: 0o600 })
   void dispatch(request).catch(error => {
     send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: String(error) } })
   })
@@ -80,15 +52,6 @@ async function dispatch(request: { id: string | number; method?: string; params?
         if (state.models) modelId = state.models.currentModelId
         if (state.modes) modeId = state.modes.currentModeId
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
-    }
-    if (process.env.FIXTURE_AGENCY_TOOLS) {
-      helperDefinition = params.mcpServers.find((server: { name: string }) => server.name === "agency")
-      await launchHelper()
-      const list = await helperCall("tools/list"), context = await helperCall("tools/call", { name: "agency_context", arguments: {} }), identity = JSON.parse(context.result.content[0].text)
-      executionAgentId = identity.execution.agentId; executionRunId = identity.runId
-      await writeFile(join(root!, "tools-descriptor-" + executionAgentId + ".json"), JSON.stringify(helperDefinition), { mode: 0o600 })
-      const denied = await helperCall("tools/call", { name: "agency_delegate", arguments: { runId: identity.runId, bindingEpoch: identity.bindingEpoch, commandId: "11111111-1111-4111-8111-111111111111", description: "bootstrap", hostId: identity.execution.hostId, cwd: process.cwd(), backendId: backend, modelId: "model-a", overrides: {}, git: null } })
-      await writeFile(join(root!, "tools-bootstrap-" + executionAgentId + ".json"), JSON.stringify({ list, context, denied }), { mode: 0o600 })
     }
     await barrier("session")
     reply(request.id, { sessionId, ...snapshot(), _meta: { fixture: backend } })
@@ -117,15 +80,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
   } else if (request.method === "session/prompt") {
     if (params.sessionId !== sessionId || !Array.isArray(params.prompt)) throw new Error("wrong prompt")
     const text = params.prompt.filter((value: { type: string }) => value.type === "text").map((value: { text: string }) => value.text).join("\n")
-    if (text === "fixture-tools") {
-      const action = JSON.parse(await readFile(join(root!, "tool-action.json"), "utf8"))
-      const first = await helperCall("tools/call", action)
-      await closeHelper(); await launchHelper()
-      const repeated = await helperCall("tools/call", action)
-      await writeFile(join(root!, "tools-action-" + executionAgentId + ".json"), JSON.stringify({ first, repeated }), { mode: 0o600 })
-    }
     if (text === "auth-required") { send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "AUTH_REQUIRED" } }); return }
-    if (text.startsWith("Delegated assignments reported:") && ownership) await ownership.fixtureNotification(root!, executionRunId, executionAgentId, params.prompt)
     if (text === "fail") { process.exit(2) }
     promptId = request.id
     if (text === "permission") {

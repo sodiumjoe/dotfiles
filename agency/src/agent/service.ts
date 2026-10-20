@@ -1,32 +1,32 @@
+import { incompleteHistory, historyDiagnostic } from "../handler/history.js"
 import { underlyingFailureCode } from "./failure-diagnostics.js"
-import { createPermissionRouting, type PermissionRouting } from "../orchestration/permission-routing.js"
+import { createPermissionArbiter, type PermissionArbiter } from "./permission-arbiter.js"
 import { startEditorRouting, type EditorRouting } from "./editor-routing.js"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
+import { lstat } from "node:fs/promises"
 import { isDeepStrictEqual } from "node:util"
 import { observeConfig, readProfiles } from "../catalog/config.js"
 import type { CatalogService } from "../catalog/service.js"
-import { id, PROVIDERS, absolutePath, object, type ProviderId, type ProviderProfile, type ConfigEvidence } from "../catalog/types.js"
+import { id, PROVIDERS, absolutePath, object, type ProviderId } from "../catalog/types.js"
 import { digest } from "../catalog/config.js"
 import { inventoryPage, launchChoices, parsePageInput, QUERY_BYTES, type AgentChoices, type AgentPage, type PageInput } from "./queries.js"
 import { ControlError } from "../control/protocol.js"
 import { commitLaunchTransition, type LaunchContext } from "../handler/launch-transitions.js"
-import { confirmReconciledLaunch, refreshLaunchState } from "../handler/mutations.js"
+import { summarizeLaunches } from "../handler/launch-summary.js"
 import { readLaunchRecordForReconciliation } from "../platform/private-state.js"
 import { reconcileRecord } from "../platform/reconcile.js"
-import { cleanupBudget, configureLaunchContract, observeLaunchContract, parseLaunchContract, type ConfiguredLaunchContract, type LaunchContract } from "./contracts.js"
+import { cleanupBudget, configureLaunchContract, parseLaunchContract, type ConfiguredLaunchContract, type LaunchContract } from "./contracts.js"
 import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import type { LaunchEnvironment } from "./environment.js"
-import { agentTuple, crossCheckAgents, recoverAgents, retainUnspawnedRestore, type AgentAssessment, type AgentRecoveryRepair } from "./recovery.js"
-import type { AgentInventory, AgentStateIssue, AgentStore } from "./store.js"
-import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type RuntimeLaunchSpec as LaunchSpec, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity } from "./types.js"
-import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from "./types.js"
+import { agentTuple, retainUnspawnedRestore } from "./recovery.js"
+import type { AgentStateIssue, AgentStore } from "./store.js"
+import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity, type LegacyAgentRecord } from "./types.js"
+import { parseRestoreRequest, type RestoreRequest } from "./types.js"
 import { createConversation, type Conversation, type ConversationListener, type ConversationObservation } from "./conversation.js"
 import { createTurnCoordinator, type AcpSubmissionRequest, type SubmissionReceipt, type SubmissionRequest, type TurnCoordinator } from "./turns.js"
 import { LEGACY_TURN_LIMITS, type AcpObservation, type TurnOptions, type TurnResult } from "./session-events.js"
 import type { AgentTuple } from "./types.js"
-import type { RetentionPins } from "../retention/policy.js"
-import type { RemovalEvidence, RetirementView } from "../retention/store.js"
 import { backendFingerprint, readBackendConfig, mergeBackendEnvironment, type Backend } from "./backend-config.js"
 import { canonicalJson, parseRequestedSettings, projectRestorableSettings, nonRestorableOptionIds, type RequestedSettings, type JsonObject, type SessionConfiguration } from "./session-config.js"
 import { withNativeSession, withoutAgencyMetadata, type ProviderSession } from "./acp.js"
@@ -37,8 +37,6 @@ import { backendSelection } from "./backend-selection.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
-export type AgentLaunchHooks = { agentId: string; mcpServerNames?: string[]; prepare(record: OwnedAgentRecord, params: JsonObject): Promise<JsonObject>; ready?(record: AgentRecord): void; settled?(record: AgentRecord): void; revoke?(): void }
-type BackendEvidence = { profile: ProviderProfile; configuration: ConfigEvidence; backend: Backend }
 
 export function sessionInputs(cwd: string, raw: JsonObject | undefined, required: string[] = []): { params: JsonObject; names: string[] } {
   const params = withoutAgencyMetadata({ cwd, mcpServers: [], ...raw })
@@ -58,11 +56,8 @@ export function sessionInputs(cwd: string, raw: JsonObject | undefined, required
 
 export type AcpSessionObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
 export type AgentService = {
-  readonly permissionRouting: PermissionRouting
-  withExecution<T>(target: AgentTuple, publish: () => Promise<T>): Promise<T>
-  orchestrationSnapshot<T>(observe: (snapshot: { agents: AgentView[]; commands: CommandView[] }) => Promise<T>): Promise<T>
+  readonly permissions: PermissionArbiter
   commandReceipt(commandId: string, expectedGeneration: string): Promise<CommandView | null>
-  launchSession(input: CreateSessionInput | RestoreRequest, kind: "start" | "restore", hooks: AgentLaunchHooks): Promise<CommandView>
   importSession(input: ImportInput): Promise<CommandView>
   readonly handlerGeneration: string
   backendChoices(): Promise<JsonObject>
@@ -74,49 +69,35 @@ export type AgentService = {
   permissionDecision(connectionId: string, requestId: string | number, result: JsonObject): Promise<boolean>
   detachPermissions(connectionId: string, target?: AgentTuple): void
   observeSession(target: AgentTuple, listener: ConversationListener, configuration: (snapshot: SessionConfiguration) => void): Promise<AcpSessionObservation>
-  createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; retentionPins(): RetentionPins; forgetRemoved(entry: RemovalEvidence): void; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
+  beginSession(input: CreateSessionInput): Promise<CommandView>
+  createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
 type LivePrompt = { controller: AbortController; promise: Promise<TurnResult | JsonObject> }
-type Live = { hooks: AgentLaunchHooks | undefined; initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; declaration: LaunchContract; contract: ConfiguredLaunchContract; evidence: BackendEvidence; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; contract: ConfiguredLaunchContract; backend: Backend; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
-  observeLaunchEvidence(spec: LaunchSpec, expected: BackendEvidence): Promise<void>
-  fatalStartupTimeout(spec: LaunchSpec): never
+  observeConfig?: typeof observeConfig
   onOperationRetired?(agentId: string, commandId: string): void
 }
 
-function productionDependencies(root: string): AgentServiceDependencies {
-  const handlerPid = process.pid
-  return {
-    processFactory: createAgentProcess,
-    async observeLaunchEvidence(spec, expected) {
-      const backend = (await readBackendConfig(root)).backends.find(value => value.id === spec.backendId)
-      const profile = (await readProfiles(root)).find(value => value.id === spec.backendId)
-      if (!backend || !isDeepStrictEqual(backend, expected.backend)
-        || !profile || !isDeepStrictEqual(profile, expected.profile)
-        || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
-    },
-    fatalStartupTimeout() {
-      if (handlerPid !== process.pid) throw new AgentError("STARTUP_TIMEOUT")
-      process.kill(handlerPid, "SIGKILL")
-      throw new AgentError("STARTUP_TIMEOUT")
-    },
-  }
-}
-
-export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore; retirement?: RetirementView; onTerminal?: () => void; cleanupIssues?: () => readonly string[] }, dependencies: AgentServiceDependencies = productionDependencies(input.context.paths.persistentRoot)): AgentService {
+export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore }, dependencies: AgentServiceDependencies = { processFactory: createAgentProcess }): AgentService {
   const { context, store, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const importIntents = new Map<string, AgentCommandV3>()
   const dirty = new Set<string>(), dirtyAgents = new Set<string>(), stops = new Map<string, Promise<void>>()
-  const permissionRouting = createPermissionRouting({ root, hostId: context.paths.hostKey, handlerGeneration: generation, queue })
-  const permissions = createPermissionBroker({ routing: permissionRouting, cwd: target => operations.get(target.agentId)!.initial.definition.cwd, respond(target, requestId, result) {
+  const stopFailures = new Map<string, unknown>(), launchAdmissions = new Set<Promise<unknown>>()
+  const trackAdmission = <T>(operation: Promise<T>): Promise<T> => {
+    launchAdmissions.add(operation)
+    void operation.then(() => { launchAdmissions.delete(operation) }, () => { launchAdmissions.delete(operation) })
+    return operation
+  }
+  const permissions = createPermissionArbiter({ hostId: context.paths.hostKey, handlerGeneration: generation })
+  const permissionBroker = createPermissionBroker({ routing: permissions, cwd: target => operations.get(target.agentId)!.initial.definition.cwd, respond(target, requestId, result) {
     const op = operations.get(target.agentId)
     if (!op?.owner || op.controller.signal.aborted || !isDeepStrictEqual(agentTuple(op.initial), target)) throw new AgentError("STALE_ATTACHMENT")
     return op.owner.respond(requestId, result)
   } })
-  const recoveryRepairs = new Map<string, AgentRecoveryRepair>()
   const configuring = new Set<string>()
   const echoes = new Map<Live, { blocks: JsonObject[]; index: number; offset: number; held: AcpObservation[]; bytes: number }>()
   const displayUpdates = (op: Live, event: AcpObservation): AcpObservation[] => {
@@ -146,12 +127,14 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     }
   }
   let initialized = false, closed = false, frozen = false, accepting = 0, stopping = 0
-  let assessment: AgentAssessment = { unavailable: new Map(), issues: [], configurationPending: new Map() }
+  const historicalConfigurations = new Map<string, AgentCommandV3>()
+  const configurationPending = new Map<string, string[]>()
+  let historical: Awaited<ReturnType<AgentStore["inventory"]>> | undefined
   const runtimeIssues = new Map<string, AgentStateIssue>()
-  let inventoryRevision = randomUUID(), inventoryFingerprint = ""
+  let inventoryRevision = randomUUID()
+  let legacyAgents: LegacyAgentRecord[] = []
   let rosterRevision = randomUUID(), rosterFingerprint = ""
   const changed = (): void => { inventoryRevision = randomUUID() }
-  const cleanupDiagnostics = (): AgentStateIssue[] => (input.cleanupIssues?.() ?? []).map(message => ({ kind: "unknown", id: null, path: join(root, "retention/pending.json"), message }))
   const errorFor = (error: unknown): AgentError => error instanceof AgentError ? error : new AgentError("STARTUP_FAILED")
   const note = (agentId: string, kind: AgentStateIssue["kind"], id: string, path: string, error: unknown): void => {
     const next = { kind, id, path, message: String(error).slice(0, 512) }
@@ -159,15 +142,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     runtimeIssues.set(agentId, next)
   }
   const noteOperation = (op: Live, error: unknown): void => note(op.initial.definition.agentId, "agent", op.initial.definition.agentId, join(root, "launches", op.initial.launch.launchAttemptId + ".json"), error)
-  const issueFor = (agentId: string): AgentStateIssue | null => assessment.unavailable.get(agentId) ?? runtimeIssues.get(agentId) ?? null
+  const issueFor = (agentId: string): AgentStateIssue | null => runtimeIssues.get(agentId) ?? null
   const targetFailure = (issue: AgentStateIssue): AgentError => new AgentError(issue.path.startsWith(join(root, "launches") + "/") ? "CLEANUP_UNVERIFIED" : "INVALID_AGENT_STATE")
-  const repairTargetsTuple = (repair: AgentRecoveryRepair, tuple: ReturnType<typeof agentTuple>): boolean => repair.kind === "command" ? !!repair.next.target && isDeepStrictEqual(repair.next.target, tuple) : isDeepStrictEqual(agentTuple(repair.next), tuple)
   function retire(op: Live): void {
     const agentId = op.initial.definition.agentId, tuple = agentTuple(op.initial)
     const related = [...commands.values()].filter(command => command.target && isDeepStrictEqual(command.target, tuple))
     const original = commands.get(op.accepted.commandId)
-    const repairing = [...recoveryRepairs.values()].some(repair => repairTargetsTuple(repair, tuple))
-    if (op.retired || !op.cleanupVerified || !op.terminalAgent || !op.terminalAgentDurable || op.prompt || dirtyAgents.has(agentId) || repairing) return
+    if (op.retired || !op.cleanupVerified || !op.terminalAgent || !op.terminalAgentDurable || op.prompt || dirtyAgents.has(agentId)) return
     if (!original || original.state !== "completed" || dirty.has(original.commandId)) return
     if (!related.length || related.some(command => command.state === "pending" || dirty.has(command.commandId))) return
     op.retired = true
@@ -182,38 +163,23 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     delete op.work
     delete op.cleanup
     dependencies.onOperationRetired?.(agentId, op.initial.launch.commandId)
-    input.onTerminal?.()
+
   }
-  function expire(op: Live): never {
-    if (op.expired) throw new AgentError("STARTUP_TIMEOUT")
-    op.editor?.close()
+  function expire(op: Live): void {
+    if (op.expired) return
     op.expired = true; clearTimeout(op.watchdog)
     op.fault ??= agentFailure(new AgentError("STARTUP_TIMEOUT"))
-    noteOperation(op, new AgentError("STARTUP_TIMEOUT"))
+    noteOperation(op, new AgentError("CLEANUP_UNVERIFIED"))
     op.controller.abort()
-    dependencies.fatalStartupTimeout(specOf(op.initial))
+    void failOperation(op, new AgentError("STARTUP_TIMEOUT")).catch(error => noteOperation(op, error))
+  }
+  async function bounded<T>(operation: Promise<T>, ms: number, code: "STARTUP_TIMEOUT" | "INCOMPLETE"): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    try { return await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new AgentError(code)), Math.max(1, ms)) })]) }
+    finally { clearTimeout(timer) }
   }
   const available = (): void => {
     if (!initialized || closed || frozen || context.shutdownPending() || context.state.phase !== "ready") throw new AgentError("NOT_READY")
-  }
-  async function verify(): Promise<AgentInventory> {
-    await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
-    const inventory = await store.inventory()
-    assessment = crossCheckAgents(context, inventory)
-    for (const repair of recoveryRepairs.values()) {
-      const agentId = repair.kind === "command" ? repair.next.target?.agentId : repair.next.definition.agentId
-      if (agentId && inventory.agents.some(record => record.definition.agentId === agentId)) assessment.unavailable.set(agentId, repair.issue)
-      else assessment.issues.push(repair.issue)
-    }
-    if (inventory.issues.some(issue => issue.path === join(root, "agents"))) throw new AgentError("UNAVAILABLE")
-    const agentIds = new Set(inventory.agents.map(record => record.definition.agentId)), commandIds = new Set(inventory.commands.map(command => command.commandId))
-    for (const agentId of records.keys()) if (!agentIds.has(agentId) && !dirtyAgents.has(agentId) && !input.retirement?.hides("agents/records/" + agentId + ".json")) records.delete(agentId)
-    for (const commandId of commands.keys()) if (!commandIds.has(commandId) && !dirty.has(commandId) && !input.retirement?.hides("agents/commands/" + commandId + ".json")) commands.delete(commandId)
-    for (const record of inventory.agents) if (!dirtyAgents.has(record.definition.agentId)) records.set(record.definition.agentId, record)
-    for (const command of inventory.commands) if (!dirty.has(command.commandId)) commands.set(command.commandId, command)
-    const fingerprint = digest(JSON.stringify([inventory, context.state.launches, assessment.issues, [...assessment.unavailable], [...runtimeIssues]]))
-    if (fingerprint !== inventoryFingerprint) { changed(); inventoryFingerprint = fingerprint }
-    return inventory
   }
   async function publishCommand(next: AgentCommand, expected: AgentCommand | null): Promise<void> {
     dirty.add(next.commandId)
@@ -223,6 +189,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const visible = await store.readCommand(next.commandId)
         if (isDeepStrictEqual(visible, next)) {
           commands.set(next.commandId, structuredClone(next))
+          if (next.version === 3 && next.op === "configure") {
+            const pending = new Set(configurationPending.get(next.agentId))
+            if (next.state === "pending" || dirty.has(next.commandId)) pending.add(next.commandId)
+            else pending.delete(next.commandId)
+            if (pending.size) configurationPending.set(next.agentId, [...pending])
+            else configurationPending.delete(next.agentId)
+          }
           if (next.target && runtimeIssues.get(next.target.agentId)?.path === join(root, "agents", "commands", next.commandId + ".json")) runtimeIssues.delete(next.target.agentId)
         }
         else if (!isDeepStrictEqual(visible, expected) && next.target) note(next.target.agentId, "command", next.commandId, join(root, "agents", "commands", next.commandId + ".json"), new AgentError("INVALID_AGENT_STATE"))
@@ -230,7 +203,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     }
     const op = intents.get(next.commandId)
     if (op) retire(op)
-    if (next.state !== "pending") input.onTerminal?.()
+    if (next.op === "stop" && next.state === "completed") stopFailures.delete(next.commandId)
   }
   async function publishAgent(next: AgentRecord, expected: AgentRecord | null): Promise<void> {
     dirtyAgents.add(next.definition.agentId)
@@ -251,85 +224,119 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     else if (!isDeepStrictEqual(op.terminalAgent, { next, expected })) throw new AgentError("INVALID_AGENT_STATE")
     await publishAgent(op.terminalAgent.next, op.terminalAgent.expected)
     if (!isDeepStrictEqual(records.get(next.definition.agentId), next) || dirtyAgents.has(next.definition.agentId)) throw new AgentError("INCOMPLETE")
-    if (!op.terminalAgentDurable) { op.conversation.append({ kind: "lifecycle", phase: next.phase, failure: next.failure }); op.hooks?.settled?.(next) }
+    if (!op.terminalAgentDurable) { op.conversation.append({ kind: "lifecycle", phase: next.phase, failure: next.failure }) }
     op.terminalAgentDurable = true
     retire(op)
   }
-  const view = (command: AgentCommand): CommandView => ({ state: "command", command: structuredClone(command), durability: dirty.has(command.commandId) || command.version === 3 && dirtyAgents.has(command.agentId) || !!command.target && (dirtyAgents.has(command.target.agentId) || [...recoveryRepairs.values()].some(repair => repairTargetsTuple(repair, command.target!))) ? "unverified" : "verified" })
-  async function retryRecovery(tuple: ReturnType<typeof agentTuple> | null, commandId: string): Promise<void> {
-    let repaired = false
-    for (const [key, repair] of recoveryRepairs) {
-      if (repair.kind === "command" ? repair.next.commandId !== commandId && (!tuple || !repairTargetsTuple(repair, tuple)) : !tuple || !repairTargetsTuple(repair, tuple)) continue
-      if (repair.kind === "launch") {
-        await retainUnspawnedRestore(context, repair.expected)
-        if (!context.mutations.accepted.some(entry => entry.record.launchAttemptId === repair.expected.launch!.launchAttemptId && entry.record.phase === "cleanup_verified")) throw new AgentError("CLEANUP_UNVERIFIED")
-        await publishAgent(repair.next, repair.expected)
-      } else if (repair.kind === "agent") await publishAgent(repair.next, repair.expected)
-      else await publishCommand(repair.next, repair.expected)
-      recoveryRepairs.delete(key)
-      repaired = true
-    }
-    await verify()
-    for (const op of new Set(intents.values())) retire(op)
-    if (repaired) input.onTerminal?.()
+  const view = (command: AgentCommand): CommandView => ({ state: "command", command: structuredClone(command), durability: dirty.has(command.commandId) || command.version === 3 && dirtyAgents.has(command.agentId) || !!command.target && dirtyAgents.has(command.target.agentId) ? "unverified" : "verified" })
+  const historicalCommand = (command: AgentCommand): AgentCommand => command.state !== "pending" ? command : { ...command, state: "interrupted", result: { outcome: "interrupted", target: command.target, failure: agentFailure(new AgentError("INCOMPLETE")), session: null } }
+  async function savedCommand(commandId: string): Promise<AgentCommand | null> {
+    const command = commands.get(commandId) ?? intents.get(commandId)?.accepted
+    if (command) return command
+    const retained = await store.readCommand(commandId)
+    if (retained && retained.hostId !== context.paths.hostKey || await incompleteHistory(root, "agents/commands/" + commandId + ".json", retained !== null)) throw new AgentError("INVALID_AGENT_STATE")
+    return retained
   }
+  async function retainedAgent(agentId: string): Promise<AgentRecord | null> {
+    const current = records.get(agentId)
+    if (current) return current
+    const record = await store.readAgent(agentId)
+    if (await incompleteHistory(root, "agents/records/" + agentId + ".json", record !== null)) throw new AgentError("INVALID_AGENT_STATE")
+    if (!record) return null
+    if (record.definition.hostId !== context.paths.hostKey) throw new AgentError("INVALID_AGENT_STATE")
+    const created = await savedCommand(record.definition.createdCommandId)
+    if (!created || created.op !== (record.definition.origin === "import" ? "import" : "start") || (created.version === 3 ? created.agentId : created.target?.agentId) !== agentId) throw new AgentError("INVALID_AGENT_STATE")
+    const selected = created.input as JsonObject
+    const backend = created.version === 2 ? (created.input as { selection?: { providerId: string } }).selection?.providerId : selected.backendId
+    if (selected.cwd !== record.definition.cwd || backend !== record.definition.backendId || created.op === "import" && selected.nativeSessionId !== record.session?.sessionId) throw new AgentError("INVALID_AGENT_STATE")
+    if (record.launch) {
+      const command = await savedCommand(record.launch.commandId)
+      if (!command || !["start", "restore"].includes(command.op) || !isDeepStrictEqual(command.target, agentTuple(record))) throw new AgentError("INVALID_AGENT_STATE")
+      if (["started", "restored"].includes(command.result?.outcome ?? "") && command.result?.session?.sessionId !== record.session?.sessionId) throw new AgentError("INVALID_AGENT_STATE")
+    }
+    if (record.configurationState.verification.kind === "pending") {
+      const command = await savedCommand(record.configurationState.verification.commandId)
+      if (!command || command.version !== 3 || command.op !== "configure" || command.agentId !== agentId) throw new AgentError("INVALID_AGENT_STATE")
+    }
+    return record
+  }
+  async function inspectHistory(): Promise<void> {
+    if (historical) return
+    historical = await store.inventory()
+    legacyAgents = historical.legacyAgents
+    const diagnose = await historyDiagnostic(root)
+    const issue = diagnose("")
+    if (issue) historical.issues.push({ kind: "unknown", id: null, path: join(root, "retention/pending.json"), message: issue })
+    for (const record of historical.agents) {
+      const issue = diagnose("agents/records/" + record.definition.agentId + ".json")
+      if (issue) historical.issues.push({ kind: "agent", id: record.definition.agentId, path: join(root, "agents/records", record.definition.agentId + ".json"), message: issue })
+    }
+    changed()
+  }
+  const historicalView = (record: AgentRecord): AgentView => ({ record: structuredClone(["starting", "ready", "restoring", "stopping", "recoverable"].includes(record.phase) ? { ...record, phase: "interrupted" as const, failure: agentFailure(new AgentError("INCOMPLETE")) } : record), launch: null, live: false, cleanup: record.launch ? "unknown" : "not_launched", unavailable: historical?.issues.find(issue => issue.id === record.definition.agentId) ?? null })
   async function validateLiveOperation(op: Live): Promise<void> {
     if (closed || op.controller.signal.aborted || op.fault) throw new AgentError("STARTUP_FAILED")
     if (context.state.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
     if (context.state.phase !== "ready") throw new AgentError("NOT_READY")
-    await verify()
-    if (assessment.unavailable.has(op.initial.definition.agentId) || runtimeIssues.has(op.initial.definition.agentId)) throw new AgentError("INVALID_AGENT_STATE")
+    if (runtimeIssues.has(op.initial.definition.agentId)) throw new AgentError("INVALID_AGENT_STATE")
     const observed = records.get(op.initial.definition.agentId)
     if (!observed || !isDeepStrictEqual(observed.definition, op.initial.definition) || !isDeepStrictEqual(observed.launch, op.initial.launch)) throw new AgentError("INVALID_AGENT_STATE")
   }
   async function revalidate(op: Live): Promise<void> {
     await validateLiveOperation(op)
-    const spec = specOf(op.initial)
-    if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
-    await dependencies.observeLaunchEvidence(spec, op.evidence)
-    const configured = await configureLaunchContract(op.declaration, op.evidence.profile, op.evidence.configuration)
-    if (!isDeepStrictEqual(configured, op.contract) || backendFingerprint(op.evidence.backend, configured) !== spec.backendFingerprint) throw new AgentError("CONFIG_CHANGED")
-    if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
   }
   async function finishStart(op: Live): Promise<void> {
-    if (op.expired) return
     if (!op.result) return
-    if (op.owner && op.result.outcome === "failed" && !op.cleanupVerified) return
+    if (op.result.outcome === "failed" && !op.expired && (!op.cleanupVerified || !op.terminalAgent)) return
     const command = commands.get(op.initial.launch.commandId)
     if (!command) return
     if (command.state === "pending" && command.version === 3) await publishCommand({ ...command, state: "completed", result: op.result }, command)
     retire(op)
   }
   function cleanup(op: Live): Promise<void> {
-    op.hooks?.revoke?.()
     op.editor?.close()
-    permissions.invalidate(agentTuple(op.initial))
+    permissionBroker.invalidate(agentTuple(op.initial))
     if (op.cleanup) return op.cleanup
-    const checkCleanup = (): void => { if (op.expired || !op.ready && performance.now() >= op.deadline + cleanupBudget(op.contract)) throw new AgentError("CLEANUP_UNVERIFIED") }
     op.cleanup = (async () => {
-      checkCleanup()
-      if (op.owner) await op.owner.cleanup()
+      const ownedResult = op.owner ? await op.owner.cleanup() : undefined
       await queue.run(async () => {
-        checkCleanup()
+        if (ownedResult) {
+          const spec = specOf(op.initial), path = join(root, "launches", spec.launchAttemptId + ".json")
+          if (ownedResult.version !== 2 || ownedResult.owner.kind !== "agent" || ownedResult.owner.agentId !== spec.agentId
+            || ownedResult.owner.providerGeneration !== spec.providerGeneration || ownedResult.handlerGeneration !== spec.handlerGeneration
+            || ownedResult.handlerGeneration !== generation || context.state.handlerGeneration !== generation
+            || ownedResult.launchAttemptId !== spec.launchAttemptId || ownedResult.reason !== null
+            || !isDeepStrictEqual(ownedResult, op.owner!.record())) throw new AgentError("CLEANUP_UNVERIFIED")
+          const entries = context.mutations.accepted.filter(entry => entry.path === path || entry.record.launchAttemptId === spec.launchAttemptId)
+          if (context.mutations.issues?.some(issue => issue.path === path)) throw new AgentError("CLEANUP_UNVERIFIED")
+          if (!entries.length) {
+            if (ownedResult.phase !== "launch_pending" || ownedResult.launchAttempted || ownedResult.provider !== null) throw new AgentError("CLEANUP_UNVERIFIED")
+            try { await lstat(path) }
+            catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error }
+            throw new AgentError("CLEANUP_UNVERIFIED")
+          }
+          if (entries.length !== 1 || entries[0]!.path !== path || ownedResult.phase !== "cleanup_verified"
+            || ownedResult.launchAttempted && !ownedResult.provider
+            || !isDeepStrictEqual(entries[0]!.record, ownedResult)
+            || !isDeepStrictEqual(await readLaunchRecordForReconciliation(path), ownedResult)) throw new AgentError("CLEANUP_UNVERIFIED")
+          return
+        }
+        if (op.owner) throw new AgentError("CLEANUP_UNVERIFIED")
         await retainUnspawnedRestore(context, op.initial)
         const spec = specOf(op.initial), entry = context.mutations.accepted.find(e => e.record.launchAttemptId === spec.launchAttemptId)
         if (!entry) {
-          await verify()
           return
         }
         if (entry.record.version !== 2 || entry.record.owner.kind !== "agent" || entry.record.owner.agentId !== spec.agentId || entry.record.owner.providerGeneration !== spec.providerGeneration) throw new AgentError("CLEANUP_UNVERIFIED")
-        checkCleanup()
         const result = await reconcileRecord(entry.path, context.adapter, entry.record)
         if (!isDeepStrictEqual(await readLaunchRecordForReconciliation(entry.path), result.record)) throw new AgentError("CLEANUP_UNVERIFIED")
         entry.record = result.record
-        await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
+        context.state.launches = summarizeLaunches(context.mutations.accepted.map(value => value.record))
         if (result.record.phase !== "cleanup_verified") throw new AgentError("CLEANUP_UNVERIFIED")
-        confirmReconciledLaunch(context.mutations, entry.path)
-        await refreshLaunchState(context.state, context.mutations, join(root, "launches"))
+        context.state.launches = summarizeLaunches(context.mutations.accepted.map(value => value.record))
       })
     })().then(() => {
-      checkCleanup()
       op.cleanupVerified = true; runtimeIssues.delete(op.initial.definition.agentId); clearTimeout(op.watchdog)
       retire(op)
     }).catch(error => { delete op.cleanup; noteOperation(op, new AgentError("CLEANUP_UNVERIFIED")); throw error })
@@ -337,14 +344,14 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   async function failOperation(op: Live, error: unknown): Promise<void> {
     op.editor?.close()
-    if (op.expired) return
     op.fault ??= agentFailure(errorFor(error)); op.controller.abort(); op.uncertain = null
-    permissions.invalidate(agentTuple(op.initial))
+    permissionBroker.invalidate(agentTuple(op.initial))
     if (!op.ready) op.result = { outcome: "failed", target: agentTuple(op.initial), failure: op.fault, session: null }
     await queue.run(async () => {
       const record = records.get(op.initial.definition.agentId)
       if (record && ["starting", "ready"].includes(record.phase)) await publishTerminalAgent(op, { ...record, phase: "failed", failure: op.fault }, record)
     }).catch(error => noteOperation(op, error))
+    if (op.expired) await queue.run(() => finishStart(op)).catch(error => noteOperation(op, error))
     await cleanup(op).catch(() => undefined)
     if (op.accepted.op === "restore" && op.cleanupVerified) await queue.run(async () => {
       const record = records.get(op.initial.definition.agentId)
@@ -361,8 +368,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     op.uncertain = null
     if (op.controller.signal.aborted || op.fault || closed) throw new AgentError("STARTUP_FAILED")
     if (performance.now() >= op.deadline) throw new AgentError("STARTUP_TIMEOUT")
+    configurationPending.delete(op.initial.definition.agentId)
     op.ready = true
-    op.hooks?.ready?.(record)
     clearTimeout(op.watchdog)
     op.deadline = Infinity
     op.result = { outcome: op.accepted.op === "restore" ? "restored" : "started", target: agentTuple(record), failure: null, session: record.session }
@@ -386,10 +393,10 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         if (closed || op.controller.signal.aborted || op.expired) { editor.close(); throw new AgentError("STARTUP_FAILED") }
         op.editor = editor
         const environment = { ...callerEnvironment, NVIM: editor.path, NVIM_SOCKET_PATH: editor.path }
-        try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.evidence.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
+        try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
           await requireTarget(agentTuple(op.initial))
           if (!op.turns?.busy()) throw new AgentError("INVALID_PROTOCOL")
-          await permissions.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
+          await permissionBroker.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
         }).catch(error => { void failOperation(op, new AgentError(errorFor(error).code, error instanceof AgentError && error.diagnostic ? error.diagnostic : { boundary: "permission_request", causeCode: underlyingFailureCode(error) })).catch(error => noteOperation(op, error)) }) }, revalidate: () => revalidate(op) }) }
         finally { op.environment = null }
         void op.owner.fault.then(failure => { if (!closed && !op.controller.signal.aborted) void failOperation(op, new AgentError(failure.code, failure.diagnostic)).catch(error => noteOperation(op, error)) })
@@ -407,7 +414,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           await finishStart(op)
         })
       } catch (error) {
-        if (!op.expired && !closed && !op.ready && !op.uncertain) await failOperation(op, error)
+        if (!closed && !op.ready && !op.uncertain) await failOperation(op, error)
       }
     })().catch(error => noteOperation(op, error))
   }
@@ -425,13 +432,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   async function command(commandId: string, expectedGeneration: string): Promise<CommandView> {
     id(commandId); id(expectedGeneration)
     return queue.run(async () => {
-      await verify()
-      const command = commands.get(commandId) ?? intents.get(commandId)?.accepted
+      const command = await savedCommand(commandId)
       if (!command) throw new AgentError("UNAVAILABLE")
       if (command.handlerGeneration !== expectedGeneration) throw new AgentError("COMMAND_CONFLICT")
+      if (!commands.has(commandId) && !intents.has(commandId)) return view(historicalCommand(command))
       const op = intents.get(commandId)
       try {
-        await retryRecovery(command.target, commandId)
         if (op && !closed) await repair(op)
         const current = commands.get(commandId)!
         if (dirty.has(commandId)) await publishCommand(current, current)
@@ -446,23 +452,33 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       return view(commands.get(commandId)!)
     })
   }
-  async function acceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore", hooks?: AgentLaunchHooks): Promise<CommandView> {
-    if (hooks) id(hooks.agentId)
+  function acceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore"): Promise<CommandView> {
+    return trackAdmission(performAcceptLaunch(raw, kind))
+  }
+  async function performAcceptLaunch(raw: StartInput | RestoreRequest | CreateSessionInput, kind: "start" | "restore"): Promise<CommandView> {
     const native = kind === "start" && !("handlerGeneration" in raw)
     const request = native ? { ...raw, commandId: id(raw.commandId), handlerGeneration: generation, environment: parseLaunchEnvironment(raw.environment) } : kind === "start" ? parseStartInput(raw) : parseRestoreRequest(raw)
     accepting++
     try {
-      await queue.run(async () => { await verify(); available() })
+      await queue.run(async () => { available() })
       if (request.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
-      const previousAgent = kind === "restore" ? records.get((request as RestoreRequest).agentId) : undefined
+      const previousAgent = kind === "restore" ? await retainedAgent((request as RestoreRequest).agentId) : undefined
+      if (kind === "restore" && previousAgent && !records.has(previousAgent.definition.agentId)) {
+        const inventory = await store.inventory()
+        for (const pending of inventory.commands) if (pending.version === 3 && pending.op === "configure" && pending.agentId === previousAgent.definition.agentId && pending.state === "pending") {
+          configurationPending.set(previousAgent.definition.agentId, [...new Set([...configurationPending.get(previousAgent.definition.agentId) ?? [], pending.commandId])])
+          historicalConfigurations.set(pending.commandId, pending)
+        }
+      }
       const checkRestorable = (): void => {
         if (kind !== "restore") return
         const issue = issueFor((request as RestoreRequest).agentId)
         if (issue) throw targetFailure(issue)
-        if (!previousAgent || !previousAgent.session || !["stopped", "recoverable"].includes(previousAgent.phase) || !isDeepStrictEqual(records.get(previousAgent.definition.agentId), previousAgent)) throw new AgentError("NOT_READY")
-        if (previousAgent.launch && !context.mutations.accepted.some(entry => entry.record.launchAttemptId === previousAgent.launch!.launchAttemptId && entry.record.phase === "cleanup_verified")) throw new AgentError("CLEANUP_UNVERIFIED")
+        if (!previousAgent || !previousAgent.session || records.has(previousAgent.definition.agentId) && (!["stopped", "recoverable"].includes(previousAgent.phase) || !isDeepStrictEqual(records.get(previousAgent.definition.agentId), previousAgent))) throw new AgentError("NOT_READY")
+        if (records.has(previousAgent!.definition.agentId) && previousAgent.launch && !context.mutations.accepted.some(entry => entry.record.launchAttemptId === previousAgent.launch!.launchAttemptId && entry.record.phase === "cleanup_verified")) throw new AgentError("CLEANUP_UNVERIFIED")
       }
-      const existing = commands.get(request.commandId) ?? intents.get(request.commandId)?.accepted
+      const existing = await savedCommand(request.commandId)
+      if (existing && existing.handlerGeneration !== generation) throw new AgentError("COMMAND_CONFLICT")
       if (!existing) checkRestorable()
       const config = await readBackendConfig(root)
       const backendId = previousAgent?.definition.backendId ?? (native ? (raw as CreateSessionInput).backendId ?? config.defaultBackendId : (raw as StartInput).selection.providerId)
@@ -472,7 +488,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       if (candidates.length !== 1) throw new AgentError("ADAPTER_UNQUALIFIED")
       const declaration = parseLaunchContract(candidates[0])
       if (kind === "restore" && !declaration.sessionLoad) throw new AgentError("RESTORE_UNSUPPORTED")
-      const configuration = await observeConfig(profile), evidence: BackendEvidence = { profile, configuration, backend }
+      const configuration = await (dependencies.observeConfig ?? observeConfig)(profile)
       const contract = await configureLaunchContract(declaration, profile, configuration)
       const cwd = absolutePath(previousAgent?.definition.cwd ?? (raw as CreateSessionInput | StartInput).cwd)
       const selected = native ? parseRequestedSettings((raw as CreateSessionInput).selection ?? {}) : kind === "start" ? {
@@ -487,9 +503,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         if (selected[field] !== undefined && selected.configValues?.[option] === undefined && merged.configValues) delete merged.configValues[option]
       }
       const settings = previousAgent?.settings ?? merged
-      const external = sessionInputs(cwd, "nativeParams" in raw ? raw.nativeParams : undefined, previousAgent?.inputRequirements.mcpServerNames.filter(name => !hooks?.mcpServerNames?.includes(name)))
-      const names = [...new Set([...external.names, ...(hooks?.mcpServerNames ?? [])])].sort()
-      let params = external.params
+      const external = sessionInputs(cwd, "nativeParams" in raw ? raw.nativeParams : undefined, previousAgent?.inputRequirements.mcpServerNames)
+      const names = external.names
+      const params = external.params
       const selectionDigest = kind === "start" ? native ? requestedSettingsDigest(settings) : startSelectionDigest((raw as StartInput).selection) : null
       const durableInput: JsonObject = kind === "start" ? { cwd, backendId, selectionDigest, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names } : { agentId: (request as RestoreRequest).agentId, environmentDigest: launchEnvironmentDigest(request.environment), mcpServerNames: names }
       if (existing) {
@@ -501,10 +517,10 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const checkCommandDeadline = (): void => {
         if (timedOut || performance.now() >= commandDeadline) { timedOut = true; acceptingOperation?.controller.abort(); throw new AgentError("STARTUP_TIMEOUT") }
       }
-      const acceptance = queue.run(async () => {
+      const acceptance = trackAdmission(queue.run(async () => {
         checkCommandDeadline()
-        await verify(); available()
-        const previous = commands.get(request.commandId) ?? intents.get(request.commandId)?.accepted
+        available()
+        const previous = await savedCommand(request.commandId)
         if (previous) {
           if (previous.op !== kind || !isDeepStrictEqual(previous.input, durableInput)) throw new AgentError("COMMAND_CONFLICT")
           const retained = intents.get(request.commandId)
@@ -512,52 +528,55 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           return view(commands.get(request.commandId) ?? previous)
         }
         checkRestorable()
-        const agentId = previousAgent?.definition.agentId ?? hooks?.agentId ?? randomUUID()
-        if (hooks && agentId !== hooks.agentId || !previousAgent && records.has(agentId)) throw new AgentError("COMMAND_CONFLICT")
+        const agentId = previousAgent?.definition.agentId ?? randomUUID()
+        if (!previousAgent && records.has(agentId)) throw new AgentError("COMMAND_CONFLICT")
         const record = ownedRecord(parseAgentRecordV3({
           version: 3, definition: previousAgent?.definition ?? { hostId: context.paths.hostKey, agentId, createdCommandId: request.commandId, cwd, backendId, origin: "new" },
           launch: { handlerGeneration: generation, providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId, configuration, backendFingerprint: backendFingerprint(backend, contract), compatibilityId: declaration.id, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS },
           phase: kind === "restore" ? "restoring" : "starting", session: previousAgent?.session ?? null, failure: null,
           settings, inputRequirements: { mcpServerNames: names }, configurationState: previousAgent?.configurationState ?? { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }
         }))
-        if (previousAgent && (assessment.configurationPending.get(agentId)?.length ?? 0) > 0 && record.configurationState.verification.kind === "verified") record.configurationState.verification = { kind: "unknown" }
-        if (hooks) {
-          try { params = sessionInputs(cwd, await hooks.prepare(record, structuredClone(params)), names).params }
-          catch (error) { hooks.revoke?.(); throw error }
-        }
+        if (previousAgent && (configurationPending.get(agentId)?.length ?? 0) > 0 && record.configurationState.verification.kind === "verified") record.configurationState.verification = { kind: "unknown" }
         const accepted = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: kind, input: durableInput, agentId, target: agentTuple(record), state: "pending", result: null })
         const conversation = createConversation(agentTuple(record))
         conversation.append({ kind: "lifecycle", phase: record.phase, cwd, session: record.session })
-        const op: Live = { hooks, initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, declaration, contract, evidence, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
+        const op: Live = { initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, contract, backend, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
         op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invoke: (text, limits) => invoke(op, text, limits), invokeAcp: params => invokeAcp(op, params), onAccepted: request => {
           if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
           op.editor!.begin(request.submissionId, request.originConnectionId ? { connectionId: request.originConnectionId, attachment: request.originAttachment!, ...(request.editorAddress === undefined ? {} : { address: request.editorAddress }) } : undefined)
-        }, cancel: submissionId => { op.editor?.end(submissionId); permissions.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: submissionId => { op.editor?.end(submissionId); permissions.invalidate(agentTuple(op.initial)); retire(op); op.hooks?.settled?.(op.initial) } })
+        }, cancel: submissionId => { op.editor?.end(submissionId); permissionBroker.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: submissionId => { op.editor?.end(submissionId); permissionBroker.invalidate(agentTuple(op.initial)); retire(op) } })
         checkCommandDeadline(); acceptingOperation = op
         operations.set(agentId, op); intents.set(request.commandId, op)
         const durableRecord = previousAgent ? record : parseAgentRecordV3({ ...record, settings: {} })
         try { await publishCommand(accepted, null); checkCommandDeadline(); await publishAgent(durableRecord, previousAgent ?? null) }
-        catch (error) { if (hooks) { hooks.revoke?.(); op.fault = agentFailure(new AgentError("STARTUP_FAILED")); op.controller.abort() }; if (error instanceof AgentError && error.code === "STARTUP_TIMEOUT") throw error; throw new AgentError("INCOMPLETE") }
+        catch (error) { if (error instanceof AgentError && error.code === "STARTUP_TIMEOUT") throw error; throw new AgentError("INCOMPLETE") }
         checkCommandDeadline(); launch(op); return view(accepted)
-      }).catch(error => { hooks?.revoke?.(); throw error })
+      }))
       try {
         return await Promise.race([acceptance, new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; acceptingOperation?.controller.abort(); reject(new AgentError("STARTUP_TIMEOUT")) }, Math.max(1, commandDeadline - performance.now())) })])
-      } catch (error) { hooks?.revoke?.(); throw error }
-      finally { clearTimeout(timer) }
+      } finally { clearTimeout(timer) }
     } finally { accepting-- }
+  }
+  const beginningSessions = new Set<string>()
+  async function beginSession(request: CreateSessionInput): Promise<CommandView> {
+    const commandId = id(request.commandId)
+    if (beginningSessions.has(commandId) || commands.has(commandId) || intents.has(commandId)) throw new AgentError("COMMAND_CONFLICT")
+    beginningSessions.add(commandId)
+    try { return await acceptLaunch(request, "start") }
+    finally { beginningSessions.delete(commandId) }
   }
   const start = (request: StartInput): Promise<CommandView> => acceptLaunch(request, "start")
   const restore = (request: RestoreRequest): Promise<CommandView> => acceptLaunch(request, "restore")
   async function importSession(raw: ImportInput): Promise<CommandView> {
     const request = parseImportInput(raw), selection = { backendId: request.backendId, nativeSessionId: request.nativeSessionId, cwd: request.cwd }
     return queue.run(async () => {
-      await verify(); available()
+      available()
       if (request.handlerGeneration !== generation) throw new AgentError("STALE_HANDLER")
       if (request.backendId !== "codex-acp") throw new AgentError("UNSUPPORTED_SESSION_FEATURE")
       const finish = async (command: AgentCommandV3): Promise<CommandView> => {
         const visible = await store.readCommand(command.commandId)
         if (!visible || dirty.has(command.commandId)) await publishCommand(command, visible)
-        let record = records.get(command.agentId)
+        let record = records.get(command.agentId) ?? await retainedAgent(command.agentId)
         if (!record) {
           record = parseAgentRecordV3({ version: 3, definition: { hostId: context.paths.hostKey, agentId: command.agentId, createdCommandId: command.commandId, cwd: command.input.cwd, backendId: command.input.backendId, origin: "import" }, launch: null, phase: "stopped", session: { sessionId: command.input.nativeSessionId, protocolVersion: 1 }, inputRequirements: { mcpServerNames: [] }, settings: {}, configurationState: { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }, failure: null })
           await publishAgent(record, null)
@@ -568,23 +587,25 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         importIntents.delete(command.commandId)
         return view(commands.get(command.commandId)!)
       }
-      const previous = commands.get(request.commandId) ?? importIntents.get(request.commandId)
+      const previous = await savedCommand(request.commandId) ?? importIntents.get(request.commandId)
       if (previous) {
         if (previous.version !== 3 || previous.op !== "import" || previous.hostId !== context.paths.hostKey || !isDeepStrictEqual(previous.input, selection)) throw new AgentError("COMMAND_CONFLICT")
+        if (previous.handlerGeneration !== generation) throw new AgentError("COMMAND_CONFLICT")
         return finish(previous)
       }
+      const retained = await store.inventory()
+      const retainedImports = retained.commands.filter(command => command.version === 3 && command.op === "import" && command.state === "pending")
       const config = await readBackendConfig(root), profiles = await readProfiles(root)
       const backend = config.backends.find(value => value.id === request.backendId)
       if (!backend || !profiles.some(value => value.enabled && value.id === request.backendId) || !input.contracts.some(value => value.providerId === request.backendId && value.id === backend.compatibilityId && value.sessionLoad)) throw new AgentError("UNAVAILABLE")
-      for (const command of [...commands.values(), ...importIntents.values()]) if (command.version === 3 && command.op === "import" && command.hostId === context.paths.hostKey && command.input.backendId === request.backendId && command.input.nativeSessionId === request.nativeSessionId && command.state === "pending") {
-        if (command.input.cwd !== request.cwd) throw new AgentError("COMMAND_CONFLICT")
-        await finish(command)
-      }
-      const matching = [...records.values()].filter(record => record.definition.hostId === context.paths.hostKey && record.definition.backendId === request.backendId && record.session?.sessionId === request.nativeSessionId)
+      const pending = [...commands.values(), ...importIntents.values(), ...retainedImports].filter(command => command.version === 3 && command.op === "import" && command.hostId === context.paths.hostKey && command.input.backendId === request.backendId && command.input.nativeSessionId === request.nativeSessionId && command.state === "pending") as AgentCommandV3[]
+      if (pending.some(command => command.input.cwd !== request.cwd) || new Set(pending.map(command => command.agentId)).size > 1) throw new AgentError("COMMAND_CONFLICT")
+      const matching = [...new Map([...retained.agents, ...records.values()].map(record => [record.definition.agentId, record])).values()].filter(record => record.definition.hostId === context.paths.hostKey && record.definition.backendId === request.backendId && record.session?.sessionId === request.nativeSessionId)
       if (matching.length > 1 || matching.some(record => record.definition.cwd !== request.cwd)) throw new AgentError("COMMAND_CONFLICT")
       const record = matching[0]
+      if (record) await retainedAgent(record.definition.agentId)
       if (record && issueFor(record.definition.agentId)) throw targetFailure(issueFor(record.definition.agentId)!)
-      const command = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: "import", input: selection, agentId: record?.definition.agentId ?? randomUUID(), target: null, state: "pending", result: null })
+      const command = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: "import", input: selection, agentId: record?.definition.agentId ?? pending[0]?.agentId ?? randomUUID(), target: null, state: "pending", result: null })
       importIntents.set(command.commandId, command)
       return finish(command)
     })
@@ -594,8 +615,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     stopping++
     try {
       return await queue.run(async () => {
-        await verify()
-        const prior = commands.get(request.commandId)
+        const prior = await savedCommand(request.commandId)
+        if (prior && !commands.has(request.commandId)) {
+          if (prior.op !== "stop" || !isDeepStrictEqual(prior.target, { agentId: request.agentId, handlerGeneration: request.handlerGeneration, providerGeneration: request.providerGeneration })) throw new AgentError("COMMAND_CONFLICT")
+          return view(historicalCommand(prior))
+        }
         if (prior) {
           if (prior.op !== "stop" || !isDeepStrictEqual(prior.input, prior.version === 3 ? { target: { agentId: request.agentId, handlerGeneration: request.handlerGeneration, providerGeneration: request.providerGeneration } } : request)) throw new AgentError("COMMAND_CONFLICT")
           const live = operations.get(request.agentId)
@@ -647,13 +671,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   function assertConfigurationReady(op: Live): void {
     const agentId = op.initial.definition.agentId
     if (configuring.has(agentId)) throw new AgentError("BUSY")
-    if (records.get(agentId)?.configurationState.verification.kind !== "verified" || (assessment.configurationPending.get(agentId)?.length ?? 0) > 0 || dirtyAgents.has(agentId)) throw new AgentError("NOT_READY")
+    if (records.get(agentId)?.configurationState.verification.kind !== "verified" || (configurationPending.get(agentId)?.length ?? 0) > 0 || dirtyAgents.has(agentId)) throw new AgentError("NOT_READY")
   }
   function verifyLoadedConfiguration(op: Live, session: ProviderSession): void {
     const settings = projectRestorableSettings(session.configuration), saved = op.initial.settings
     const required = new Set(op.initial.configurationState.nonRestorableOptionIds)
-    for (const commandId of assessment.configurationPending.get(op.initial.definition.agentId) ?? []) {
-      const command = commands.get(commandId)
+    for (const commandId of configurationPending.get(op.initial.definition.agentId) ?? []) {
+      const command = commands.get(commandId) ?? historicalConfigurations.get(commandId)
       if (command?.version !== 3 || command.op !== "configure") continue
       for (const optionId of command.input.priorNonRestorableOptionIds as string[]) required.add(optionId)
       const desired = command.input.desired as RequestedSettings
@@ -786,10 +810,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const op = candidate && isDeepStrictEqual(agentTuple(candidate.initial), command.target) ? candidate : undefined
     if (op) intents.set(command.commandId, op)
     const activePrompt = op?.prompt?.promise
-    op?.hooks?.revoke?.()
     op?.editor?.close()
     op?.controller.abort()
-    if (op) permissions.invalidate(agentTuple(op.initial))
+    if (op) permissionBroker.invalidate(agentTuple(op.initial))
     const operation = (async () => {
       try {
         await activePrompt?.catch(() => undefined)
@@ -823,7 +846,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           const previous = commands.get(command.commandId)!
           if (previous.state === "pending" && previous.version === 3) await publishCommand({ ...previous, state: "completed", result: { outcome: "stopped", target: command.target, failure: null, session: matching ? record.session : op?.result?.session ?? null } }, previous)
         })
-      } catch { }
+        stopFailures.delete(command.commandId)
+      } catch (error) { stopFailures.set(command.commandId, error) }
       finally { stops.delete(command.commandId) }
     })()
     stops.set(command.commandId, operation)
@@ -832,39 +856,30 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (!record.launch) return { record: structuredClone(record), launch: null, live: false, cleanup: "not_launched", unavailable: issueFor(record.definition.agentId) }
     const launch = context.mutations.accepted.find(e => e.record.launchAttemptId === record.launch!.launchAttemptId)?.record ?? null, op = operations.get(record.definition.agentId)
     const unavailable = issueFor(record.definition.agentId)
-    if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.handlerGeneration !== record.launch.handlerGeneration)) return { record: structuredClone(record), launch: null, live: false, cleanup: "unknown", unavailable }
+    if (launch && (launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== record.definition.agentId || launch.owner.providerGeneration !== record.launch.providerGeneration || launch.handlerGeneration !== record.launch.handlerGeneration)) return { record: structuredClone(record), launch: null, live: false, cleanup: "unknown", unavailable: { kind: "agent", id: record.definition.agentId, path: join(root, "launches", record.launch.launchAttemptId + ".json"), message: "launch ownership mismatch" } }
     return { ...(op ? { display: op.conversation.display() } : {}), record: structuredClone(op?.uncertain && !op.ready ? op.initial : record), launch: structuredClone(launch), live: !closed && record.launch.handlerGeneration === generation && !!op?.owner && !op.fault && !op.controller.signal.aborted && ["starting", "ready", "recoverable", "restoring", "stopping"].includes(record.phase), cleanup: launch === null ? "not_launched" : launch.phase === "cleanup_verified" ? op && !op.cleanupVerified ? "unverified" : "verified" : launch.phase === "quarantined" ? "unknown" : "unverified", unavailable }
   }
   const active = (record: AgentRecord): boolean => record.launch?.handlerGeneration === generation && (record.phase === "ready" || ["starting", "restoring", "stopping"].includes(record.phase) && (!!operations.get(record.definition.agentId) || [...commands.values()].some(c => c.state === "pending" && c.target && isDeepStrictEqual(c.target, agentTuple(record)))))
-  const permissionIssues = (): AgentStateIssue[] => permissionRouting.status().available ? [] : [{ kind: "unknown", id: null, path: join(root, "orchestration", "permissions", context.paths.hostKey), message: "PERMISSIONS_UNAVAILABLE: " + String(permissionRouting.status().issue).slice(0, 480) }]
-  const pageIssues = (): AgentStateIssue[] => [...assessment.issues, ...assessment.unavailable.values(), ...runtimeIssues.values(), ...cleanupDiagnostics(), ...permissionIssues()].filter((issue, index, all) => all.findIndex(other => isDeepStrictEqual(issue, other)) === index)
-  const pageAgents = (activeOnly: boolean): AgentView[] => [...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json") && (!activeOnly || active(record))).map(agentView)
+  const pageIssues = (): AgentStateIssue[] => [...historical?.issues ?? [], ...runtimeIssues.values()].filter((issue, index, all) => all.findIndex(other => isDeepStrictEqual(issue, other)) === index)
+  const pageAgents = (activeOnly: boolean): AgentView[] => [...records.values()].filter(record => (!activeOnly || active(record))).map(agentView)
   const ordinary = (): void => {
-    if (!initialized || accepting || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "restoring", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 2 && e.record.owner.kind === "agent" && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
+    if (!initialized || accepting || launchAdmissions.size || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "restoring", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 2 && e.record.owner.kind === "agent" && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
   }
   return {
     start, restore, stop, prompt, command, setSession, importSession,
-    withExecution: (target, publish) => queue.run(async () => { await requireTarget(target); return publish() }),
-    orchestrationSnapshot: observe => queue.run(async () => {
-      await verify()
-      const retained = new Map<string, AgentCommand>([...intents].map(([commandId, op]) => [commandId, op.accepted]))
-      for (const [commandId, command] of commands) retained.set(commandId, command)
-      return observe({ agents: pageAgents(false), commands: [...retained.values()].map(view) })
-    }),
     async commandReceipt(commandId, expectedGeneration) {
       id(commandId); id(expectedGeneration)
       return queue.run(async () => {
-        await verify()
-        const saved = commands.get(commandId) ?? intents.get(commandId)?.accepted
+        const saved = await savedCommand(commandId)
         if (!saved) return null
         if (saved.handlerGeneration !== expectedGeneration) throw new AgentError("COMMAND_CONFLICT")
-        return view(saved)
+        return view(commands.has(commandId) ? saved : historicalCommand(saved))
       })
     },
-    launchSession: (request, kind, hooks) => acceptLaunch(request, kind, hooks),
+    beginSession,
     handlerGeneration: generation,
-    permissionRouting,
-    attachPermissions(target, client, current) { return queue.run(async () => { await requireTarget(target); if (current && !current()) throw new AgentError("STALE_ATTACHMENT"); permissions.attach(target, client) }) },
+    permissions,
+    attachPermissions(target, client, current) { return queue.run(async () => { await requireTarget(target); if (current && !current()) throw new AgentError("STALE_ATTACHMENT"); permissionBroker.attach(target, client) }) },
     attachEditor(target, connectionId, address, token) {
       const op = operations.get(target.agentId)
       if (closed || !op?.ready || op.controller.signal.aborted || !isDeepStrictEqual(agentTuple(op.initial), target) || !op.editor) throw new AgentError("STALE_ATTACHMENT")
@@ -873,8 +888,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     detachEditor(connectionId, target, expectedToken) {
       for (const op of operations.values()) if (!target || isDeepStrictEqual(agentTuple(op.initial), target)) op.editor?.detach(connectionId, expectedToken)
     },
-    permissionDecision(connectionId, requestId, result) { return permissions.decision(connectionId, requestId, result) },
-    detachPermissions: (connectionId, target) => permissions.detach(connectionId, target),
+    permissionDecision(connectionId, requestId, result) { return permissionBroker.decision(connectionId, requestId, result) },
+    detachPermissions: (connectionId, target) => permissionBroker.detach(connectionId, target),
     async backendChoices() {
       const config = await readBackendConfig(root), profiles = await readProfiles(root)
       const backends = config.backends.filter(backend => profiles.some(profile => profile.id === backend.id && profile.enabled)
@@ -882,14 +897,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const choices: JsonObject[] = []
       for (const backend of backends) {
         const declaration = input.contracts.find(contract => contract.id === backend.compatibilityId && contract.providerId === backend.id)!
-        const profile = profiles.find(profile => profile.id === backend.id)!
-        let evidence
-        try { evidence = await observeConfig(profile); await configureLaunchContract(declaration, profile, evidence) } catch { continue }
         let provider
-        try {
-          provider = (await catalog.list()).providers.find(value => value.providerId === backend.id
-            && value.verifiedAt !== null && value.fingerprint === evidence.fingerprint && value.models.length > 0)
-        } catch {}
+        try { provider = (await catalog.list()).providers.find(value => value.providerId === backend.id && value.verifiedAt !== null && value.models.length > 0) } catch {}
         choices.push(backendSelection(backend, declaration, provider))
       }
       return { defaultBackendId: config.defaultBackendId, backends: choices }
@@ -901,10 +910,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         for (const backend of backends.backends) {
           const profile = profiles.find(value => value.id === backend.id && value.enabled), declaration = input.contracts.find(value => value.id === backend.compatibilityId && value.providerId === backend.id)
           if (!profile || !declaration) continue
-          try {
-            const contract = await configureLaunchContract(declaration, profile, await observeConfig(profile))
-            for (const key of ["image", "audio", "embeddedContext"] as const) capabilities[key] ||= contract.promptCapabilities?.[key] === true
-          } catch {}
+          for (const key of ["image", "audio", "embeddedContext"] as const) capabilities[key] ||= declaration.promptCapabilities?.[key] === true
         }
       } catch (error) { if (!(error instanceof AgentError && error.code === "UNAVAILABLE") && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
       return { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: capabilities }
@@ -923,7 +929,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const accepted = await acceptLaunch(request, "start"), target = accepted.command.target
       if (!target) throw new AgentError("INCOMPLETE")
       const op = operations.get(target.agentId)
-      if (op) await op.work
+      if (op?.work) await bounded(op.work, op.deadline - performance.now() + cleanupBudget(op.contract), "STARTUP_TIMEOUT")
       const record = records.get(target.agentId)
       if (!record || record.phase !== "ready" || dirtyAgents.has(target.agentId)) throw new AgentError(record?.failure?.code ?? "INCOMPLETE")
       return structuredClone(record)
@@ -932,34 +938,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     nativeSession(target) { return queue.run(async () => { const op = await requireTarget(target); return { ...structuredClone(op.providerSession!), configuration: op.owner!.snapshot() } }) },
     async submitAcp(target, request, beforeAccepted) { const op = await queue.run(() => requireTarget(target)); return op.turns!.submitAcp(request, beforeAccepted) },
     async settledAcp(target, submissionId) { const op = await queue.run(() => requireTarget(target)); return op.turns!.settledAcp(submissionId) },
-    retentionPins() {
-      const paths = new Set<string>()
-      const pinAgent = (agentId: string) => paths.add("agents/records/" + agentId + ".json")
-      for (const op of new Set([...operations.values(), ...intents.values()])) if (!op.retired) {
-        pinAgent(op.initial.definition.agentId)
-        paths.add("agents/commands/" + op.accepted.commandId + ".json")
-        paths.add("launches/" + op.initial.launch.launchAttemptId + ".json")
-      }
-      for (const id of dirty) paths.add("agents/commands/" + id + ".json")
-      for (const id of dirtyAgents) pinAgent(id)
-      for (const id of stops.keys()) { paths.add("agents/commands/" + id + ".json"); const target = commands.get(id)?.target; if (target) pinAgent(target.agentId) }
-      for (const [id, issue] of [...assessment.unavailable, ...runtimeIssues]) { pinAgent(id); if (issue.path.startsWith(root + "/")) paths.add(issue.path.slice(root.length + 1)) }
-      for (const issue of assessment.issues) {
-        const path = issue.path.startsWith(root + "/") ? issue.path.slice(root.length + 1) : null
-        if (path && /^(?:agents\/(?:records|commands)|launches)\/[0-9a-f-]{36}\.json$/.test(path)) paths.add(path)
-        else {
-          for (const id of records.keys()) pinAgent(id)
-          for (const id of commands.keys()) paths.add("agents/commands/" + id + ".json")
-          for (const entry of context.mutations.accepted) if (entry.path.startsWith(root + "/")) paths.add(entry.path.slice(root.length + 1))
-        }
-      }
-      return { paths: [...paths] }
-    },
-    forgetRemoved(entry) {
-      store.forgetRemoved(entry)
-      const match = /^agents\/(records|commands)\/([0-9a-f-]+)\.json$/.exec(entry.path)
-      if (match) { if (match[1] === "records") records.delete(match[2]!); else commands.delete(match[2]!); changed() }
-    },
     async choices() {
       available()
       const result: AgentChoices = { state: "choices", choices: [], unavailable: [] }
@@ -992,9 +970,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     async page(raw) {
       const options = parsePageInput(raw)
       return queue.run(async () => {
-        const inventory = await verify()
-        const legacy = inventory.legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
-        const agents = pageAgents(options.activeOnly ?? false)
+        if (!options.activeOnly) await inspectHistory()
+        const legacy = legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
+        const agents = [...pageAgents(options.activeOnly ?? false), ...options.activeOnly ? [] : (historical?.agents ?? []).filter(record => !records.has(record.definition.agentId)).map(historicalView)]
         return inventoryPage({ revision: inventoryRevision, agents: options.activeOnly ? agents : [...agents, ...legacy], issues: pageIssues() }, options)
       })
     },
@@ -1002,22 +980,12 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     async submit(target, request) { const op = await queue.run(() => requireTarget(target)); return op.turns!.submit(request) },
     submission(target, submissionId) { id(submissionId); return queue.run(async () => (await requireTarget(target)).turns!.inspect(submissionId)) },
     async cancel(target, submissionId) { const op = await queue.run(() => requireTarget(target)); return op.turns!.cancel(submissionId) },
-    async initialize() {
-      await permissionRouting.initialize()
-      const recovered = await recoverAgents({ context, store })
-      for (const record of recovered.inventory.agents) records.set(record.definition.agentId, record)
-      for (const command of recovered.inventory.commands) commands.set(command.commandId, command)
-      for (const repair of recovered.repairs) {
-        if (repair.kind !== "command") { recoveryRepairs.set(`${repair.kind}:${repair.next.definition.agentId}`, repair); dirtyAgents.add(repair.next.definition.agentId) }
-        else { recoveryRepairs.set(`command:${repair.next.commandId}`, repair); dirty.add(repair.next.commandId) }
-      }
-      assessment = recovered.assessment; initialized = true
-    },
+    async initialize() { initialized = true },
     async list() {
       return queue.run(async () => {
-        const inventory = await verify()
-        const legacy = inventory.legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
-        const result: AgentList = { state: "agents", agents: [...[...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json")).sort((a, b) => a.definition.agentId.localeCompare(b.definition.agentId)).map(agentView), ...legacy], issues: [...assessment.issues, ...cleanupDiagnostics(), ...permissionIssues()] }
+        await inspectHistory()
+        const legacy = legacyAgents.map(record => ({ record, launch: context.mutations.accepted.find(entry => entry.record.launchAttemptId === record.spec.launchAttemptId)?.record ?? null, live: false as const, cleanup: "unknown" as const }))
+        const result: AgentList = { state: "agents", agents: [...[...records.values()].sort((a, b) => a.definition.agentId.localeCompare(b.definition.agentId)).map(agentView), ...(historical?.agents ?? []).filter(record => !records.has(record.definition.agentId)).map(historicalView), ...legacy], issues: [...historical?.issues ?? []] }
         if (Buffer.byteLength(JSON.stringify(result)) > 7 * 1024 * 1024) throw new AgentError("INCOMPLETE")
         return result
       })
@@ -1025,43 +993,88 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     sessionRecord(agentId) {
       id(agentId)
       return queue.run(async () => {
-        await verify()
-        const record = records.get(agentId)
-        return record && !input.retirement?.hides("agents/records/" + agentId + ".json") ? agentView(record) : null
+        const record = await retainedAgent(agentId)
+        return record ? records.has(agentId) ? agentView(record) : historicalView(record) : null
       })
     },
     async current(cwd) {
       return queue.run(async () => {
-        await verify()
-        const agents = [...records.values()].filter(record => !input.retirement?.hides("agents/records/" + record.definition.agentId + ".json")).map(agentView).filter(agent => agent.live && agent.record.definition.cwd === cwd)
+        const agents = [...records.values()].map(agentView).filter(agent => agent.live && agent.record.definition.cwd === cwd)
         return { state: "current", cwd, agents }
       })
     },
     assertOrdinaryShutdownSafe: ordinary,
     async freezeAndDrain(stopAgents) {
-      if (!stopAgents) ordinary()
-      frozen = true
-      if (!stopAgents) return
-      await verify()
-      const prompts = [...operations.values()].flatMap(op => op.prompt ? [op.prompt] : [])
-      for (const active of prompts) active.controller.abort()
-      await Promise.all(prompts.map(active => active.promise.catch(() => undefined)))
-      const failures: unknown[] = []
-      for (const record of records.values()) {
-        const view = agentView(record)
-        if (!["starting", "ready", "restoring", "stopping"].includes(record.phase) && ["not_launched", "verified"].includes(view.cleanup)) continue
-        const existing = [...commands.values()].find(c => c.op === "stop" && c.target?.agentId === record.definition.agentId && c.state === "pending")
-        try { await stop({ ...agentTuple(record)!, commandId: existing?.commandId ?? randomUUID() }) } catch (error) { failures.push(error) }
+      const deadline = Math.max(5000, ...(launchAdmissions.size ? [AGENT_LIMITS.startupMs + Math.max(0, ...input.contracts.map(cleanupBudget))] : []), ...[...operations.values()].map(op => (op.ready ? 0 : Math.max(0, op.deadline - performance.now())) + cleanupBudget(op.contract)))
+      let draining = true
+      const checkDraining = (): void => { if (!draining) throw new AgentError("INCOMPLETE") }
+      const drain = async (): Promise<void> => {
+        if (!stopAgents) ordinary()
+        frozen = true
+        if (!stopAgents) return
+        const failures: unknown[] = [], admitted = new Set<Live>([...operations.values(), ...intents.values()])
+        const prompts = new Map<LivePrompt, Promise<void>>()
+        const capture = (): void => {
+          checkDraining()
+          for (const op of [...operations.values(), ...intents.values()]) {
+            admitted.add(op)
+            if (!op.ready) op.controller.abort()
+            if (op.prompt) {
+              const active = op.prompt
+              active.controller.abort()
+              if (!prompts.has(active)) prompts.set(active, active.promise.then(() => undefined, () => undefined))
+            }
+          }
+        }
+        const settled = new Set<Promise<unknown>>()
+        const settle = async (pending: Promise<unknown>[]): Promise<void> => {
+          for (const operation of pending) settled.add(operation)
+          for (const outcome of await Promise.allSettled(pending)) if (outcome.status === "rejected") failures.push(outcome.reason)
+        }
+        capture()
+        while (launchAdmissions.size) { checkDraining(); await settle([...launchAdmissions]) }
+        capture()
+        const scheduled = new Set<Live>()
+        for (const record of records.values()) {
+          checkDraining()
+          const view = agentView(record)
+          if (!["starting", "ready", "restoring", "stopping"].includes(record.phase) && ["not_launched", "verified"].includes(view.cleanup)) continue
+          const existing = [...commands.values()].find(c => c.op === "stop" && isDeepStrictEqual(c.target, agentTuple(record)) && c.state === "pending")
+          try {
+            await stop({ ...agentTuple(record)!, commandId: existing?.commandId ?? randomUUID() })
+            const op = operations.get(record.definition.agentId)
+            if (op && isDeepStrictEqual(agentTuple(op.initial), agentTuple(record))) scheduled.add(op)
+          } catch (error) { failures.push(error) }
+        }
+        capture()
+        const fallback = [...admitted].filter(op => !op.cleanupVerified && !scheduled.has(op)).map(async op => {
+          op.controller.abort()
+          await op.work
+          await cleanup(op)
+        })
+        await settle([...fallback, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()])
+        for (;;) {
+          capture()
+          const pending = [...launchAdmissions, ...prompts.values(), ...[...admitted].flatMap(op => op.work ? [op.work] : []), ...stops.values()].filter(operation => !settled.has(operation))
+          if (!pending.length) break
+          await settle(pending)
+        }
+        try {
+          await queue.run(async () => {
+            checkDraining()
+            for (const op of admitted) { checkDraining(); try { await finishStart(op) } catch (error) { failures.push(error) } }
+            for (const command of commands.values()) { checkDraining(); if (dirty.has(command.commandId)) try { await publishCommand(command, command) } catch (error) { failures.push(error) } }
+          })
+        } catch (error) { failures.push(error) }
+        if (failures.length || stopFailures.size || stops.size || launchAdmissions.size || dirty.size || dirtyAgents.size
+          || [...commands.values()].some(command => command.state === "pending")
+          || [...admitted].some(op => !op.cleanupVerified || op.terminalAgent && !op.terminalAgentDurable)) throw new AgentError("INCOMPLETE")
       }
-      await Promise.all([...stops.values()])
-      await queue.run(async () => {
-        for (const op of new Set(intents.values())) await finishStart(op)
-        for (const command of commands.values()) if (dirty.has(command.commandId)) await publishCommand(command, command)
-      })
-      if (failures.length) throw new AgentError("INCOMPLETE")
+      try { await bounded(drain(), deadline, "INCOMPLETE") }
+      finally { draining = false }
     },
     resume() { if (!closed) frozen = false },
-    async verifyDischarged() { await verify(); ordinary(); if (dirty.size || dirtyAgents.size || assessment.unavailable.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },
-    close() { closed = true; frozen = true; for (const op of new Set([...operations.values(), ...intents.values()])) { op.hooks?.revoke?.(); op.editor?.close(); clearTimeout(op.watchdog); op.prompt?.controller.abort(); op.owner?.dispose(); op.controller.abort(); op.turns?.close(op.fault); op.conversation.close() } },
+    async verifyDischarged() { ordinary(); if (dirty.size || dirtyAgents.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },
+    close() { closed = true; frozen = true; permissions.close(); for (const op of new Set([...operations.values(), ...intents.values()])) { op.editor?.close(); clearTimeout(op.watchdog); op.prompt?.controller.abort(); op.owner?.dispose(); op.controller.abort(); op.turns?.close(op.fault); op.conversation.close() } },
   }
 }

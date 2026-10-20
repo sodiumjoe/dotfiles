@@ -207,40 +207,45 @@ function socketForFd(fd: number): Socket {
   return new Socket({ fd, readable: true, writable: true })
 }
 
-async function waitForGate(status: Socket, gate: Socket, timeoutMs: number): Promise<boolean> {
-  return new Promise(resolve => {
-    let settled = false
-    const timer = setTimeout(() => finish(false), timeoutMs)
-    const finish = (released: boolean): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      status.off("end", lost)
-      status.off("close", lost)
-      status.off("error", lost)
-      gate.off("end", lost)
-      gate.off("close", lost)
-      gate.off("error", lost)
-      gate.off("data", opened)
-      resolve(released)
-    }
-    const lost = (): void => finish(false)
-    const opened = (data: Buffer): void => {
-      if (data.toString("utf8").includes("start\n")) finish(true)
-    }
-    status.on("end", lost)
-    status.on("close", lost)
-    status.on("error", lost)
-    gate.on("end", lost)
-    gate.on("close", lost)
-    gate.on("error", lost)
-    gate.on("data", opened)
-  })
+function observeGate(status: Socket, gate: Socket): (timeoutMs: number) => Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let settled = false
+  let resolve: (released: boolean) => void
+  const result = new Promise<boolean>(complete => { resolve = complete })
+  const finish = (released: boolean): void => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    status.off("end", lost)
+    status.off("close", lost)
+    status.off("error", lost)
+    gate.off("end", lost)
+    gate.off("close", lost)
+    gate.off("error", lost)
+    gate.off("data", opened)
+    resolve(released)
+  }
+  const lost = (): void => finish(false)
+  const opened = (data: Buffer): void => {
+    if (data.toString("utf8").includes("start\n")) finish(true)
+  }
+  status.on("end", lost)
+  status.on("close", lost)
+  status.on("error", lost)
+  gate.on("end", lost)
+  gate.on("close", lost)
+  gate.on("error", lost)
+  gate.on("data", opened)
+  return timeoutMs => {
+    if (!settled && timer === undefined) timer = setTimeout(() => finish(false), timeoutMs)
+    return result
+  }
 }
 
 async function runHandler(config: FixtureConfig): Promise<void> {
   const status = socketForFd(3)
   const gate = socketForFd(4)
+  const gateRelease = observeGate(status, gate)
   const recordPath = process.env.AGENCY_HANDLER_RECORD
   const generation = process.env.AGENCY_HANDLER_GENERATION
   if (recordPath === undefined || generation === undefined) throw new Error("Handler startup environment is incomplete")
@@ -252,8 +257,10 @@ async function runHandler(config: FixtureConfig): Promise<void> {
   await delay(config.identityDelayMs)
   await appendPrivateFile(config.handlerLog, `${JSON.stringify(self)}\n`)
   await event(config, "handler:identity_claimed")
-  status.write(`${JSON.stringify({ type: "identity", identity: self })}\n`)
-  if (!await waitForGate(status, gate, timeoutMs)) {
+  if (!status.destroyed && !status.readableEnded && !gate.destroyed && !gate.readableEnded) {
+    status.write(`${JSON.stringify({ type: "identity", identity: self })}\n`)
+  }
+  if (!await gateRelease(timeoutMs)) {
     status.destroy()
     gate.destroy()
     return
@@ -328,9 +335,9 @@ async function runHandler(config: FixtureConfig): Promise<void> {
   })
 }
 
-async function runContender(config: FixtureConfig, configPath: string): Promise<void> {
+async function runContender(config: FixtureConfig, configPath: string, start: typeof startOrConnect = startOrConnect): Promise<void> {
   try {
-    const inspection = await withPrivateUmask(() => startOrConnect({
+    const inspection = await withPrivateUmask(() => start({
       root: config.root,
       hostId: config.hostId,
       adapter: adapter(config),
@@ -340,9 +347,14 @@ async function runContender(config: FixtureConfig, configPath: string): Promise<
       },
       timeoutMs: config.timeoutMs ?? 5000,
       lockTimeoutSeconds: config.lockTimeoutSeconds ?? 10,
-      onTransition: async transition => {
+      onTransition: async (transition, pid) => {
+        if (transition === "handler_spawned" && config.launcherPauseAt !== undefined) {
+          if (pid === undefined) throw new Error("Handler spawn has no pid")
+          await event(config, `launcher:handler_pid:${pid}`)
+        }
         await event(config, `launcher:${transition}`)
         if (config.launcherPauseAt !== transition || config.releasePath === undefined) return
+        await event(config, `launcher:pause_started:${Date.now()}`)
         await waitForRelease(config, `launcher ${transition}`)
       },
     }))
@@ -359,4 +371,9 @@ const configPath = process.argv[3]
 if ((mode !== "handler" && mode !== "contender") || configPath === undefined) throw new Error("usage: singleton-handler <handler|contender> <config>")
 const config = JSON.parse(await readFile(configPath, "utf8")) as FixtureConfig
 if (mode === "handler") await runHandler(config)
-else await runContender(config, configPath)
+else if (process.env.AGENCY_SINGLETON_CONTENDER_LAUNCH !== undefined) {
+  const ownership = await import("./singleton-ownership.js")
+  ownership.installSingletonOwnership()
+  await ownership.registerSingletonContender()
+  await runContender(config, configPath, ownership.ownedStartOrConnect)
+} else await runContender(config, configPath)

@@ -36,7 +36,14 @@ test("wire views accept nested values and preserve JSON number semantics", () =>
   const source = '{"nested":' + '['.repeat(1000) + '{"escaped":"a\\\\b\\\"c","number":-1.2e+3,"values":[null,true,false]}' + ']'.repeat(1000) + '}'
   const value = parseWireJson(source)
   assert.equal(encodeWireJson(value), source)
-  assert.deepEqual(value, JSON.parse(source))
+  assert.deepEqual(Object.keys(value), ["nested"])
+  let nested: unknown = value.nested
+  for (let depth = 0; depth < 1000; depth += 1) {
+    assert.ok(Array.isArray(nested))
+    assert.equal(nested.length, 1)
+    nested = nested[0]
+  }
+  assert.deepEqual(nested, { escaped: 'a\\b"c', number: -1200, values: [null, true, false] })
 })
 
 test("scanner releases regexp subjects after accepted and malformed large frames", () => {

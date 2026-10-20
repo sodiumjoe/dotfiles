@@ -16,6 +16,14 @@ function client(f: Awaited<ReturnType<typeof controlFixture>>) {
   return { out, deps, run: (args: string[]) => runControl([...args, "--json"], deps), result: () => JSON.parse(out.at(-1)!) }
 }
 
+test("two concurrent clients select one ready Handler", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t)
+  const [first, second] = await Promise.all([f.start(), f.start()])
+  assert.equal(first.record.generation, second.record.generation)
+  assert.equal(first.record.phase, "ready")
+  assert.equal(f.owned.length, 1)
+})
+
 test("32 concurrent clients select one real generation and observe the same readiness boundary", { timeout: 20000 }, async t => {
   const f = await controlFixture(t)
   const settled = await Promise.allSettled(Array.from({ length: 32 }, () => f.start()))
@@ -60,7 +68,7 @@ test("restart after exact Handler death rejects the old command target without s
   assert.equal((await f.start()).record.generation, second.record.generation)
 })
 
-test("startup releases an unattempted lease and preserves attempted provider-null quarantine", { timeout: 20000 }, async t => {
+test("retained attempted and unattempted launches remain outside current shutdown", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), boot = await f.adapter.bootId()
   const ambiguous = launch({ launchBootId: boot, checkoutId: "ambiguous" }), unattempted = launch({ launchBootId: boot, checkoutId: "unattempted", launchAttempted: false })
   for (const record of [ambiguous, unattempted]) await writeLaunchRecord(join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`), record)
@@ -68,23 +76,22 @@ test("startup releases an unattempted lease and preserves attempted provider-nul
   const cli = client(f)
   assert.equal(await cli.run(["status"]), 0)
   const state = cli.result().result
-  assert.equal(state.launches.find((record: { launchAttemptId: string }) => record.launchAttemptId === ambiguous.launchAttemptId).phase, "quarantined")
-  assert.equal(state.launches.find((record: { launchAttemptId: string }) => record.launchAttemptId === unattempted.launchAttemptId).phase, "cleanup_verified")
-  assert.equal(await cli.run(["shutdown", "--stop-agents"]), 75)
-  assert.ok((await f.call()).ok)
+  assert.deepEqual(state.launches, [])
+  for (const record of [ambiguous, unattempted]) assert.deepEqual(JSON.parse(await readFile(join(f.paths.persistentRoot, "launches", record.launchAttemptId + ".json"), "utf8")), record)
+  assert.equal(await cli.run(["shutdown", "--stop-agents"]), 0)
 })
 
-test("startup cleans an exact retained provider tree and independently proves every member absent", { timeout: 20000 }, async t => {
+test("startup and shutdown leave retained provider trees to explicit maintenance", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), record = await f.spawnProvider()
   const path = join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`)
   await writeLaunchRecord(path, record)
   await f.start()
-  assert.equal(JSON.parse(await readFile(path, "utf8")).phase, "cleanup_verified")
-  for (const member of record.provider!.group.observed) assert.equal(await f.observe(member.pid), null)
-  assert.deepEqual(await f.adapter.readGroup(record.provider!.group.leader.pid), [])
+  assert.equal(await client(f).run(["shutdown", "--stop-agents"]), 0)
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), record)
+  assert.notEqual(await f.observe(record.provider!.group.leader.pid), null)
 })
 
-test("a lost shutdown reply is resolved before receipt retirement and cannot stop a later Handler", { timeout: 20000 }, async t => {
+test("a lost shutdown reply is resolved from its retained receipt without stopping a later Handler", { timeout: 20000 }, async t => {
   const f = await controlFixture(t), first = await f.start(), cli = client(f)
   const call = cli.deps.call
   let shutdownCalls = 0
@@ -96,10 +103,10 @@ test("a lost shutdown reply is resolved before receipt retirement and cannot sto
   assert.equal(await f.observe(first.record.process!.pid), null)
   const second = await f.start()
   assert.notEqual(second.record.generation, first.record.generation)
-  assert.equal(await readShutdownReceipt(f.paths.persistentRoot, completed.commandId), null)
+  assert.deepEqual(await readShutdownReceipt(f.paths.persistentRoot, completed.commandId), receipt)
   assert.equal(shutdownCalls, 1)
-  assert.equal(await cli.run(["shutdown", "--command-id", completed.commandId, "--handler-generation", first.record.generation]), 69)
-  assert.equal(cli.result().error.code, "STALE_HANDLER")
+  assert.equal(await cli.run(["shutdown", "--command-id", completed.commandId, "--handler-generation", first.record.generation]), 0)
+  assert.equal(cli.result().result.state, "shutdown_complete")
   assert.equal(shutdownCalls, 1)
   assert.equal((await f.start()).record.generation, second.record.generation)
 })
@@ -121,13 +128,13 @@ test("shutdown closes partial-request, idle control, and attachment clients befo
   assert.ok(attachment.destroyed)
 })
 
-test("launcher readiness timeout after gate release leaves one live reconciling Handler", { timeout: 20000 }, async t => {
+test("launcher readiness timeout after gate release leaves one live starting Handler", { timeout: 20000 }, async t => {
   const f = await controlFixture(t, { delayMs: 2400 })
   let released = false
   await assert.rejects(f.start(1800, async transition => { if (transition === "gate_released") released = true }))
   assert.ok(released)
   const pending = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
-  assert.equal(pending.phase, "reconciling")
+  assert.equal(pending.phase, "socket_bound")
   const ready = await f.start()
   assert.equal(ready.record.generation, pending.generation)
   assert.equal(f.owned.length, 1)

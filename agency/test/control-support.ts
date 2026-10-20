@@ -44,7 +44,7 @@ export async function fileExists(path: string): Promise<boolean> {
   try { await readFile(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error }
 }
 
-export type ControlFixtureConfig = import("./retention-support.js").RetentionFixtureOptions & { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
+export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
 
 let fixtureBatchFailure: Error | undefined
 export function assertFixtureBatchHealthy(): void {
@@ -55,7 +55,7 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv, rootPolicy: { retainRoot?: boolean } = {}) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
@@ -142,7 +142,8 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       assert.deepEqual(await adapter.readGroup(provider.record.provider!.group.leader.pid), [])
     }
     await writeFile(join(root, "cleanup.json"), JSON.stringify({ identities: owned, survivors: [], failedStarts: failedStarts.map(String) }), { mode: 0o600 })
-    await rm(root, { recursive: true })
+    if (rootPolicy.retainRoot) t.diagnostic("retained fixture root: " + root)
+    else await rm(root, { recursive: true })
   })().catch(error => { throw failFixtureBatch(error) })
   t.after(cleanup)
   await chown(root, process.getuid!(), process.getgid!())
@@ -225,9 +226,9 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   return { root, paths, adapter, owned, start, call, signal, observe, configPath, spawnProvider, cleanup, beforeCleanup: (barrier: () => Promise<void>) => { cleanupBarriers.push(barrier) } }
 }
 
-export async function privateRoot(t: TestContext): Promise<string> {
+export async function privateRoot(t: TestContext, options: { retainRoot?: boolean } = {}): Promise<string> {
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
-  t.after(async () => { await rm(root, { recursive: true, force: true }) })
+  t.after(async () => { if (options.retainRoot) t.diagnostic("retained fixture root: " + root); else await rm(root, { recursive: true, force: true }) })
   return root
 }
 

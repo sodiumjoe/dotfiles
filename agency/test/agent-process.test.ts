@@ -18,7 +18,7 @@ import { lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { agentFailure } from "../src/agent/types.js"
-import { syntheticAgentProcess } from "./agent-support.js"
+import { verifyFixtureProviderGroup, syntheticAgentProcess } from "./agent-support.js"
 
 test("agent process publishes a managed launch and spawns in the exact caller directory with profile-derived adapter routing", async t => {
   const f = await syntheticAgentProcess(t, "normal")
@@ -56,7 +56,7 @@ test("process identity mismatch never becomes a ready launch", async t => {
   assert.deepEqual(f.signals, [])
 })
 
-test("spawn failure retains exact launch attribution and verifies cleanup", async t => {
+test("thrown spawn retains exact launch attribution with unresolved cleanup", async t => {
   const f = await syntheticAgentProcess(t, "spawn-throws")
   await assert.rejects(f.owner.initialize(new AbortController().signal))
   assert.equal(f.spawnInputReleases(), 1)
@@ -84,29 +84,22 @@ test("provider exit fails the owned process and cleanup targets its retained gro
 
 test("provider identity publication retries a transient platform observation", async t => {
   const f = await syntheticAgentProcess(t, "normal")
-  const readGroup = f.context.adapter.readGroup
+  const readProcess = f.context.adapter.readProcess
   let reads = 0
-  f.context.adapter.readGroup = async group => {
+  f.context.adapter.readProcess = async pid => {
     if (++reads === 1) throw new DarwinObservationUnavailable("transient fixture observation")
-    return readGroup(group)
+    return readProcess(pid)
   }
   assert.equal((await f.owner.initialize(new AbortController().signal)).sessionId, "fixture-session")
   assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
 })
 
-test("provider identity publication waits for consecutive matching group snapshots", async t => {
-  const f = await syntheticAgentProcess(t, "normal")
-  const readGroup = f.context.adapter.readGroup
-  const leader = { bootId: "boot-a", pid: 12345, birth: `100:agy-provider:${f.spec.launchAttemptId}`, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
-  const child = { ...leader, pid: 12346, birth: "101:unmarked:/fixture-child", parentPid: leader.pid }
-  let reads = 0
-  f.context.adapter.readGroup = async group => {
-    const current = await readGroup(group)
-    if (!current.length) return current
-    return ++reads === 1 ? current : [...current, child]
-  }
+test("startup captures the leader without group observation", async t => {
+  const f = await syntheticAgentProcess(t, "normal"), readGroup = f.context.adapter.readGroup
+  f.context.adapter.readGroup = async () => { throw new Error("group observation before stop") }
   assert.equal((await f.owner.initialize(new AbortController().signal)).sessionId, "fixture-session")
-  assert.equal(f.owner.record().provider?.group.observed.length, 2)
+  assert.equal(f.owner.record().provider!.group.observed.length, 1)
+  f.context.adapter.readGroup = readGroup
   assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
 })
 
@@ -281,4 +274,87 @@ test("ACP transport diagnostic retains its protocol failure boundary", async t =
   f.eof()
   assert.deepEqual((await f.owner.fault as any).diagnostic, { boundary: "acp_transport", causeCode: "STARTUP_FAILED" })
   await f.owner.cleanup()
+})
+
+test("an error without exit cannot become verified cleanup", async t => {
+  const f = await syntheticAgentProcess(t, "error-without-exit")
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  f.emitError("error", new Error("IPC failure"))
+  const pending = f.owner.cleanup(), rejected = assert.rejects(pending, { code: "CLEANUP_UNVERIFIED" })
+  await f.terminated
+  t.mock.timers.tick(5001)
+  await rejected
+})
+
+test("a terminal leader with a surviving descendant remains unresolved without signals", async t => {
+  const f = await syntheticAgentProcess(t, "leader-exit-descendant-live")
+  await f.owner.initialize(new AbortController().signal)
+  f.emitProcess("exit", 0, null); f.emitProcess("close", 0, null)
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  assert.deepEqual(f.signals, [])
+})
+
+test("visible cleanup publication failure needs a durability-only retry", async t => {
+  const f = await syntheticAgentProcess(t, "cleanup-publication-after-write")
+  await f.owner.initialize(new AbortController().signal)
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  assert.equal(f.owner.record().phase, "cleanup_verified")
+  assert.equal(f.owner.record().launchAttemptId, f.spec.launchAttemptId)
+  const signals = [...f.signals]
+  f.failCleanupPublication(false)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, signals)
+})
+
+for (const scenario of ["cleanup-boot-hang", "absence-hang", "absence-paused"]) test(scenario + " has a bounded cleanup and no late stages", async t => {
+  const f = await syntheticAgentProcess(t, scenario)
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const pending = f.owner.cleanup(), rejected = assert.rejects(pending, { code: "CLEANUP_UNVERIFIED" })
+  await (scenario === "cleanup-boot-hang" ? f.cleanupObservation : f.absentEntered)
+  t.mock.timers.tick(8001)
+  await rejected
+  f.releaseAbsence()
+  for (let n = 0; n < 8; n++) await Promise.resolve()
+  assert.equal(f.lateAbsenceReads(), 0)
+})
+
+test("held transport close is discharged by destroying pipes", async t => {
+  const f = await syntheticAgentProcess(t, "close-held")
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const pending = f.owner.cleanup()
+  await f.terminated
+  for (let n = 0; n < 16; n++) await Promise.resolve()
+  t.mock.timers.tick(1000)
+  assert.equal((await pending).phase, "cleanup_verified")
+  assert.equal(f.pipesDestroyed(), true)
+})
+
+test("cancellation after capture prevents readiness and still cleans the registered child", async t => {
+  const f = await syntheticAgentProcess(t, "identity-publication-paused"), controller = new AbortController()
+  const pending = f.owner.initialize(controller.signal)
+  await f.beforeSpawn.promise
+  controller.abort(); f.releasePublication()
+  await assert.rejects(pending)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
+
+for (const initialGroup of ["empty", "leader"] as const) test(`fixture provider exit after leader observation with ${initialGroup} group requires two absence passes`, async () => {
+  const identity = { bootId: "boot", pid: 123, birth: "100:agy-provider:attempt", parentPid: 1, processGroupId: 123, sessionId: 123, uid: 501, gid: 20 }
+  let groups = 0, processes = 0
+  const result = await verifyFixtureProviderGroup(identity, {
+    async readGroup() { groups++; return initialGroup === "leader" && groups === 1 ? [identity] : [] },
+    async observe() { processes++; return null },
+  })
+  assert.equal(result, null)
+  assert.equal(groups, 4)
+  assert.equal(processes, 3)
+})
+
+test("fixture provider tracking refuses a replacement and surviving group members", async () => {
+  const identity = { bootId: "boot", pid: 123, birth: "100:agy-provider:attempt", parentPid: 1, processGroupId: 123, sessionId: 123, uid: 501, gid: 20 }
+  await assert.rejects(verifyFixtureProviderGroup(identity, { async readGroup() { return [identity] }, async observe() { return { ...identity, birth: "200:replacement" } } }))
+  await assert.rejects(verifyFixtureProviderGroup(identity, { async readGroup() { return [{ ...identity, pid: 124 }] }, async observe() { return null } }))
 })

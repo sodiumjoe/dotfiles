@@ -4,7 +4,7 @@ import { bridgeError } from "./protocol.js"
 import type { createBridgePeer, RequestOptions } from "./codec.js"
 
 const PAGE_BYTES = 256 * 1024
-const channels = new Set(["snapshot", "origin-read", "origin-retained"])
+const channels = new Set(["task-read", "runtime-read", "host-route-read", "runtime-entry-inspect"])
 type Page = { transferId: string; index: number; data: string; done: boolean; digest: string | null }
 function* jsonParts(value: unknown): Generator<Buffer> {
   if (Array.isArray(value)) {
@@ -93,5 +93,5 @@ export async function requestBridgeRead(peer: ReturnType<typeof createBridgePeer
       }
       raw = await peer.request("read-page", { transferId, index: ++index }, options)
     }
-  } finally { if (transferId) await peer.request("read-close", { transferId }).catch(() => undefined) }
+  } finally { if (transferId) await peer.request("read-close", { transferId }, { timeoutMs: 1000, ...(options.signal ? { signal: options.signal } : {}) }).catch(() => undefined) }
 }

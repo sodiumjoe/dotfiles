@@ -383,7 +383,7 @@ test("a public model change preserves non-restorable requirements across explici
   assert.deepEqual(restored.configurationState.nonRestorableOptionIds, [])
 })
 
-for (const boundary of ["intent", "marker", "settings", "receipt"] as const) test("setter publication failure at " + boundary + " does not report success or replay stale settings", async t => {
+for (const boundary of ["intent", "marker", "settings", "receipt", "receipt-visible"] as const) test("setter publication failure at " + boundary + " does not report success or replay stale settings", async t => {
   const f = await agentServiceFixture(t), record = await f.service.createSession({ commandId: randomUUID(), cwd: f.workspace, environment: {}, nativeParams: { cwd: f.workspace, mcpServers: [] } }), target = tupleOfRecord(record)!
   const writeAgent = f.store.writeAgent.bind(f.store), writeCommand = f.store.writeCommand.bind(f.store)
   f.store.writeAgent = async (value, expected) => {
@@ -393,12 +393,20 @@ for (const boundary of ["intent", "marker", "settings", "receipt"] as const) tes
   f.store.writeCommand = async (value, expected) => {
     if (value.op === "configure" && (boundary === "intent" && value.state === "pending" || boundary === "receipt" && value.state === "completed")) throw new Error("injected " + boundary)
     await writeCommand(value, expected)
+    if (value.op === "configure" && boundary === "receipt-visible" && value.state === "completed") throw new Error("injected receipt durability")
   }
   const count = f.methodHistory.filter(method => method === "session/set_config_option").length
   await assert.rejects(f.service.setSession(target, "session/set_config_option", { configId: "reasoning", value: "high" }), { code: "INCOMPLETE" })
-  assert.equal(f.methodHistory.filter(method => method === "session/set_config_option").length, count + (boundary === "settings" || boundary === "receipt" ? 1 : 0))
+  assert.equal(f.methodHistory.filter(method => method === "session/set_config_option").length, count + (boundary === "settings" || boundary === "receipt" || boundary === "receipt-visible" ? 1 : 0))
   if (boundary !== "intent") await assert.rejects(f.service.submitAcp(target, { submissionId: randomUUID(), prompt: [{ type: "text", text: "blocked" }] }), { code: "NOT_READY" })
   f.store.writeAgent = writeAgent; f.store.writeCommand = writeCommand
+  if (boundary === "receipt-visible") {
+    const command = (await f.store.inventory()).commands.find(command => command.op === "configure")!
+    assert.equal((await f.service.command(command.commandId, target.handlerGeneration)).durability, "verified")
+    await f.service.submitAcp(target, { submissionId: randomUUID(), prompt: [{ type: "text", text: "repaired" }] })
+    const { until } = await import("./control-support.js")
+    await until(async () => f.methodHistory.includes("session/prompt") ? true : undefined)
+  }
   const service = await f.restart()
   const restore = { agentId: target.agentId, commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, environment: {} }
   await service.restore(restore)
@@ -407,6 +415,6 @@ for (const boundary of ["intent", "marker", "settings", "receipt"] as const) tes
   const restored = (await f.store.readAgent(target.agentId))!
   assert.equal(restored.phase, "ready")
   assert.equal(restored.configurationState.verification.kind, "verified")
-  assert.equal(restored.settings.configValues?.reasoning, boundary === "settings" || boundary === "receipt" ? "high" : "low")
-  assert.equal(f.methodHistory.filter(method => method === "session/set_config_option").length, count + (boundary === "settings" || boundary === "receipt" ? 1 : 0))
+  assert.equal(restored.settings.configValues?.reasoning, boundary === "settings" || boundary === "receipt" || boundary === "receipt-visible" ? "high" : "low")
+  assert.equal(f.methodHistory.filter(method => method === "session/set_config_option").length, count + (boundary === "settings" || boundary === "receipt" || boundary === "receipt-visible" ? 1 : 0))
 })

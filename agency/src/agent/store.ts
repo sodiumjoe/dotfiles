@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { constants } from "node:fs"
 import { lstat, mkdir, open, opendir, rename, rm, type FileHandle } from "node:fs/promises"
-import { basename, dirname, join, relative } from "node:path"
-import type { RemovalEvidence, RetirementView } from "../retention/store.js"
+import { basename, dirname, join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { decodeJson, readBoundedFile } from "../catalog/config.js"
 import type { CatalogFileSystem } from "../catalog/store.js"
@@ -21,8 +20,6 @@ export type AgentStore = {
   writeCommand(next: AgentCommand, expected: AgentCommand | null): Promise<void>
   verifyDurability(kind: "agent" | "command"): Promise<void>
   inventory(): Promise<AgentInventory>
-  forgetRemoved(entry: RemovalEvidence): void
-  terminalTimes(agentId: string, commandIds: readonly string[]): Promise<number[] | null>
 }
 type FileEvidence = { bytes: Buffer; identity: string }
 const absent = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
@@ -30,7 +27,7 @@ function unavailable(): never { throw new AgentError("INVALID_AGENT_STATE") }
 const conflict = (): never => { throw new AgentError("COMMAND_CONFLICT") }
 const edges: Record<AgentPhase, AgentPhase[]> = { starting: ["ready", "stopping", "failed", "interrupted"], ready: ["recoverable", "stopping", "failed", "interrupted"], recoverable: ["restoring", "stopping", "failed", "interrupted"], restoring: ["ready", "recoverable", "stopping", "failed", "interrupted"], stopping: ["stopped", "recoverable", "failed", "interrupted"], stopped: ["restoring"], failed: [], interrupted: [] }
 
-export function createAgentStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }, retirement?: RetirementView): AgentStore {
+export function createAgentStore(root: string, filesystem: CatalogFileSystem = { open, rename, rm, mkdir }): AgentStore {
   const directory = join(root, "agents")
   const known = new Map<string, "agent" | "command">()
   async function checkDirectory(path: string): Promise<boolean> {
@@ -74,15 +71,13 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
   async function inventory(): Promise<AgentInventory> {
     const result: AgentInventory = { agents: [], legacyAgents: [], commands: [], issues: [] }, seen = new Set<string>()
     try {
-      await retirement?.validate()
-      for (const name of await names(directory)) {
+        for (const name of await names(directory)) {
         if (name === "records" || name === "commands") continue
         if (name !== "provider-state") result.issues.push({ kind: "unknown", id: null, path: join(directory, name), message: "unknown agent state entry" })
       }
       for (const kind of ["records", "commands"] as const) {
         for (const name of await names(join(directory, kind))) {
           const path = join(directory, kind, name)
-          if (retirement?.hides(relative(root, path))) continue
           seen.add(path)
           try {
             const stat = await lstat(path)
@@ -105,7 +100,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
           }
         }
       }
-      for (const [path, kind] of known) if (!seen.has(path) && !retirement?.hides(relative(root, path))) result.issues.push({ kind, id: basename(path, ".json"), path, message: "missing agent state entry" })
+      for (const [path, kind] of known) if (!seen.has(path)) result.issues.push({ kind, id: basename(path, ".json"), path, message: "missing agent state entry" })
     } catch (error) { result.issues.push({ kind: "unknown", id: null, path: directory, message: String(error).slice(0, 512) }) }
     return result
   }
@@ -121,7 +116,6 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     }
   }
   async function publish(path: string, value: unknown, expected: unknown): Promise<void> {
-    try { await names(directory) } catch { unavailable() }
     const bytes = Buffer.from(JSON.stringify(value))
     if (bytes.length > 1048576) throw new AgentError("INCOMPLETE")
     const before = await evidence(path)
@@ -132,33 +126,13 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     try {
       handle = await filesystem.open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
       await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = undefined
-      if (!isDeepStrictEqual(await evidence(path), before)) unavailable()
       await filesystem.rename(temporary, path); renamed = true
-      const visible = await evidence(path)
-      if (!visible?.bytes.equals(bytes)) unavailable()
       await sync(dirname(path))
-      if (!isDeepStrictEqual(await evidence(path), visible)) unavailable()
       known.set(path, path.includes("/records/") ? "agent" : "command")
     } finally { await handle?.close(); if (!renamed) await filesystem.rm(temporary, { force: true }) }
   }
   return {
     readAgent, readCommand, inventory,
-    forgetRemoved(entry) { known.delete(join(root, entry.path)) },
-    async terminalTimes(agentId, commandIds) {
-      try {
-        const paths = [join(directory, "records", id(agentId) + ".json"), ...commandIds.map(value => join(directory, "commands", id(value) + ".json"))], times: number[] = []
-        for (const path of paths) {
-          const before = await evidence(path)
-          if (!before) return null
-          const stat = await lstat(path, { bigint: true })
-          if (!isDeepStrictEqual(before, await evidence(path))) return null
-          const time = Number(stat.mtimeNs) / 1000000
-          if (!Number.isFinite(time) || time < 0) return null
-          times.push(time)
-        }
-        return times
-      } catch { return null }
-    },
     async verifyDurability(kind) {
       const path = join(directory, kind === "agent" ? "records" : "commands")
       if (!await checkDirectory(path)) return
@@ -175,13 +149,14 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
         if (!isDeepStrictEqual(current, normalizedExpected)) conflict()
         if (current === null) { if (value.phase !== "starting" && !(value.definition.origin === "import" && value.phase === "stopped" && value.launch === null)) conflict() }
         else {
-          if (!isDeepStrictEqual(value.definition, current.definition) || value.phase !== current.phase && !edges[current.phase].includes(value.phase)) conflict()
-          const restoring = value.phase === "restoring" && ["stopped", "recoverable"].includes(current.phase)
+          const historicalRestore = value.phase === "restoring" && value.launch && current.launch && value.launch.handlerGeneration !== current.launch.handlerGeneration && current.session !== null
+          if (!isDeepStrictEqual(value.definition, current.definition) || !historicalRestore && value.phase !== current.phase && !edges[current.phase].includes(value.phase)) conflict()
+          const restoring = value.phase === "restoring" && (["stopped", "recoverable"].includes(current.phase) || historicalRestore)
           if (restoring || value.phase === "recoverable") {
-            if (current.launch) {
+            if (current.launch && !historicalRestore) {
               const launch = await readLaunchRecordForReconciliation(join(root, "launches", current.launch.launchAttemptId + ".json"))
               if (!current.session || launch?.phase !== "cleanup_verified" || launch.version !== 2 || launch.owner.kind !== "agent" || launch.owner.agentId !== current.definition.agentId || launch.owner.providerGeneration !== current.launch.providerGeneration || launch.handlerGeneration !== current.launch.handlerGeneration) conflict()
-            } else if (!current.session || current.definition.origin !== "import") conflict()
+            } else if (!current.session || !historicalRestore && current.definition.origin !== "import") conflict()
           }
           if (restoring) {
             if (!value.launch || current.launch && ["providerGeneration", "launchAttemptId", "commandId"].some(field => value.launch![field as keyof NonNullable<typeof value.launch>] === current.launch![field as keyof NonNullable<typeof current.launch>]) || !isDeepStrictEqual(value.session, current.session)) conflict()

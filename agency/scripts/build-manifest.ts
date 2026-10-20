@@ -29,12 +29,6 @@ export async function captureBuildManifest(root: string): Promise<BuildManifest>
 export async function publishBuildManifest(root: string, manifest: BuildManifest): Promise<void> {
   await writeFile(join(root, "dist/build-manifest.json"), JSON.stringify(manifest), { mode: 0o600 })
 }
-export async function verifyBuildManifest(root: string): Promise<boolean> {
-  try {
-    const recorded = JSON.parse(await readFile(join(root, "dist/build-manifest.json"), "utf8")), current = await captureBuildManifest(root)
-    return recorded.version === 1 && recorded.nodeVersion === current.nodeVersion && recorded.sourceDigest === current.sourceDigest && recorded.distDigest === current.distDigest
-  } catch { return false }
-}
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL("../../", import.meta.url))
   if (process.version !== "v24.13.0") throw new Error("NODE_VERSION")

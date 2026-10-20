@@ -1,17 +1,14 @@
 process.umask(0o077)
-if (process.argv[2] === "internal-host-bridge" || process.argv[2] === "internal-host-call") {
-  try {
-    const { runHostBridgeCli, runHostCallCli, productionHostBridgeDependencies } = await import("./bridge/remote.js")
-    const run = process.argv[2] === "internal-host-bridge" ? runHostBridgeCli : runHostCallCli
-    await run(process.argv.slice(3), productionHostBridgeDependencies())
-  } catch { process.stderr.write("Agency host helper failed\n"); process.exitCode = 70 }
-} else if (process.argv[2] === "internal-entry") {
-  const { runEntryHelper } = await import("./bureau/entry-cli.js")
+if (process.argv[2] === "internal-task-tools") {
+  try { const { runProductionTaskTools } = await import("./tasks/tools-cli.js"); await runProductionTaskTools(process.argv.slice(3)) }
+  catch { process.stderr.write("Agency task helper failed\n"); process.exitCode = 70 }
+} else if (process.argv[2] === "internal-runtime-bridge") {
+  try { const { runRuntimeBridgeCli, productionRuntimeBridgeDependencies } = await import("./bridge/runtime-remote.js"); await runRuntimeBridgeCli(process.argv.slice(3), productionRuntimeBridgeDependencies()) }
+  catch (error) { process.stderr.write(String(error) + "\n"); process.exitCode = 1 }
+} else if (process.argv[2] === "internal-runtime-entry") {
+  const { runRuntimeEntryHelper } = await import("./entry/cli.js")
   const { productionControlDependencies } = await import("./cli/control.js")
-  process.exitCode = await runEntryHelper(process.argv.slice(3), productionControlDependencies())
-} else if (process.argv[2] === "internal-agency-tools") {
-  try { const { runAgencyTools } = await import("./orchestration/tool-client.js"); await runAgencyTools() }
-  catch { process.stderr.write("Agency tool helper failed\n"); process.exitCode = 70 }
+  process.exitCode = await runRuntimeEntryHelper(process.argv.slice(3), productionControlDependencies())
 } else if (process.argv[2] === "internal-handler") {
   try {
     const { fstatSync } = await import("node:fs")

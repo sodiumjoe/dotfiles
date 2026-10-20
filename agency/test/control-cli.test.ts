@@ -69,11 +69,11 @@ test("status aliases start one Handler and validate the wire response", async ()
   }
 })
 
-test("doctor inspects without starting or calling the daemon", async () => {
+test("doctor reads runtime status without starting a Handler", async () => {
   const m = model()
   assert.equal(await runControl(["doctor", "--json"], m.deps), 0)
   assert.equal(m.state.starts, 0)
-  assert.deepEqual(m.state.calls, [])
+  assert.deepEqual(m.state.calls.map(call => call.op), ["status"])
   assert.equal(m.output().result.handler.record.generation, m.generation)
   for (const removed of ["checkout", "admission", "lease"]) assert.equal(JSON.stringify(m.output().result).includes(removed), false)
 })
@@ -279,4 +279,34 @@ test("wrapper reports a missing build without creating it", async t => {
   await copyFile(fileURLToPath(new URL("../../../home/bin/agy", import.meta.url)), wrapper)
   await chmod(wrapper, 0o755)
   await assert.rejects(promisify(execFile)(wrapper, ["status"], { env: { ...process.env } }), (error: unknown) => (error as { code: number; stderr: string }).code === 69 && /build/.test((error as { stderr: string }).stderr))
+})
+
+test("doctor keeps inventory inspection available when runtime status is unreachable", async () => {
+  const m = model()
+  m.deps.call = async () => { throw new ControlError("UNAVAILABLE") }
+  assert.equal(await runControl(["doctor", "--json"], m.deps), 0)
+  assert.equal(m.state.starts, 0)
+  assert.equal(m.output().result.handler.record.generation, m.generation)
+  assert.equal(m.output().result.runtimeIssues, undefined)
+})
+
+test("doctor skips runtime status for an absent Handler", async () => {
+  const m = model()
+  m.state.inspection = null
+  assert.equal(await runControl(["doctor", "--json"], m.deps), 0)
+  assert.deepEqual(m.state.calls, [])
+  assert.equal(m.state.starts, 0)
+})
+
+test("retired commands return usage before resolving the environment", async () => {
+  for (const argv of [["bureau", "hosts"], ["run", "create"], ["assignment", "create"],
+    ["git", "configure"], ["git", "verify", randomUUID()], ["git", "inspect", randomUUID()],
+    ["git", "integrate"], ["entry", "prepare"], ["entry", "consume"]]) {
+    const m = model()
+    let accessed = false
+    m.deps.environment = async () => { accessed = true; throw new Error("unexpected owner access") }
+    assert.equal(await runControl([...argv, "--json"], m.deps), 64)
+    assert.equal(accessed, false)
+    assert.equal(m.output().error.code, "USAGE")
+  }
 })

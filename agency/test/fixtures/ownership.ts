@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto"
 import { closeSync, fsyncSync, openSync, writeSync, constants } from "node:fs"
-import { writeFile } from "node:fs/promises"
-import { createJournalPool } from "../../src/orchestration/journal.js"
-import { journalEntries } from "../../src/orchestration/reports.js"
-import { canonicalDigest } from "../../src/orchestration/types.js"
 import { join } from "node:path"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
@@ -33,11 +29,4 @@ export async function fixtureSpawn(launch: FixtureLaunch, pid: number | undefine
 }
 export function fixtureIdentity(role: string, identity: ProcessIdentity): void {
   record({ type: "observed", role, identity })
-}
-export async function fixtureNotification(root: string, runId: string, agentId: string, prompt: unknown): Promise<void> {
-  const entries = await journalEntries(createJournalPool(join(root, "state"), undefined, Date.now, "origin").forRun(runId))
-  const receipt = entries.findLast(entry => entry.kind === "notification-receipt" && (entry.payload as { state?: string; digest?: string }).state === "accepted" && (entry.payload as { digest?: string }).digest === canonicalDigest({ prompt }))
-  if (!receipt) throw new Error("notification dispatched without a durable accepted receipt")
-  const value = { receiptBeforeDispatch: true, submissionId: (receipt.payload as { submissionId: string }).submissionId }
-  await writeFile(join(root, "notification-admission-" + agentId + ".json"), JSON.stringify(value), { mode: 0o600 })
 }

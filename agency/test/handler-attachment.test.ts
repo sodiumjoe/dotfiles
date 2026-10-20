@@ -26,7 +26,7 @@ test("a lost acceptance response is inspected without dispatching twice", { time
 })
 
 test("stop, restore, and Handler restart reject stale attachment generations", { timeout: 90000 }, async t => {
-  const f = await attachmentHandlerFixture(t)
+  const f = await attachmentHandlerFixture(t, { tasks: "reject",  })
   const target = (await f.waitCompleted(await f.start())).command.target!
   const old = await f.attach(target)
   await assert.rejects(f.attach({ ...target, providerGeneration: randomUUID() }), { code: "STALE_PROVIDER" })
@@ -39,7 +39,10 @@ test("stop, restore, and Handler restart reject stale attachment generations", {
   await f.crashHandler()
   await until(async () => live.socket.destroyed ? true : undefined)
   await f.restart()
-  await f.assertProviderAbsent(restored)
+  const historical = (await f.list()).agents.find(agent => agent.record.version === 3 && agent.record.definition.agentId === restored.agentId)!
+  assert.equal(historical.live, false)
+  assert.equal(historical.cleanup, "unknown")
+  assert.equal(historical.record.phase, "interrupted")
   await assert.rejects(f.attach(restored), { code: "STALE_HANDLER" })
   const afterRestart = (await f.waitCompleted(await f.restore(target.agentId))).command.target!
   assert.notEqual(afterRestart.handlerGeneration, restored.handlerGeneration)

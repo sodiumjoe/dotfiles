@@ -40,13 +40,10 @@ function M.setup(deps)
         roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
-    api.watch_roster = deps.watch_roster
-    if not api.watch_roster and not deps.client then
-        api.watch_roster = function(update, unavailable)
-            local watch = require("sodium.agency.watch").new()
-            watch.start({ "roster", "watch" }, update, unavailable)
-            return watch
-        end
+    api.read_roster = deps.roster or function(callback)
+        (deps.client or require("sodium.agency.control")).command({ "roster", "list" }, { timeout_ms = 10000 }, function(err, envelope)
+            callback(err, envelope and envelope.result)
+        end)
     end
     function api.snapshot()
         local manager = local_manager()
@@ -221,17 +218,10 @@ function M.setup(deps)
         local manager = local_manager()
         if not manager then api.notify("A local Agency attachment is required"); return end
         manager._agency_routed_permissions = manager._agency_routed_permissions or require("sodium.agency.permissions").new({ notify = api.notify })
-        manager._agency_routed_permissions.subscribe()
         manager._agency_routed_permissions.open()
     end
-    function api.verify_result(report_id)
-        vim.ui.input({ prompt = "Bureau destination checkout: ", default = vim.g.agency_git_destination or vim.fn.getcwd() }, function(destination)
-            if not destination or destination == "" then return end
-            operations.verify_result(report_id, destination, function(err, receipt) report(err); if receipt then api.notify(vim.inspect(receipt)) end end)
-        end)
-    end
     controller = api
-    local commands = { AgencyGitVerify = { "verify_result", 1 }, AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
+    local commands = { AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
         AgencyOpen = { "open", 0 }, AgencyAttach = { "attach", 1 }, AgencyRestore = { "restore", 1 },
         AgencySettings = { "settings", 0 }, AgencyDetach = { "detach", 0 }, AgencyCancel = { "cancel", 0 }, AgencyStop = { "stop", 0 }, AgencyInspect = { "inspect_delivery", 0 } }
     for name, spec in pairs(commands) do

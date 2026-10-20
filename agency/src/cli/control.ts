@@ -1,7 +1,12 @@
-import type { Writable } from "node:stream"
-import type { BureauReply, BureauRequest } from "../bureau/protocol.js"
-import { runBureauClient } from "../bureau/cli.js"
+import { runTaskClient } from "../tasks/cli.js"
+import { runSessionClient } from "../hosts/session-cli.js"
+import { runEntryClient } from "../entry/cli.js"
+import { runGitPrepare } from "../git/cli.js"
+import { runHostClient } from "../hosts/cli.js"
+import type { HostRoute } from "../hosts/router.js"
+import type { createHostInventory } from "../hosts/inventory.js"
 import { randomUUID } from "node:crypto"
+import { runLocalHumanClient } from "../agent/human-client.js"
 import { runAgentClient } from "../agent/client.js"
 import { runAttachmentClient, productionAttachmentStreams, type AttachmentDependencies } from "../agent/attachment-client.js"
 import { exchangeAgent, type AgentRequest, type AgentReply } from "../agent/protocol.js"
@@ -25,8 +30,8 @@ import { DarwinObservationUnavailable } from "../platform/darwin.js"
 import { LinuxObservationUnavailable } from "../platform/linux.js"
 
 export type ControlDependencies = {
-  watch?: { stdout: Writable; onSignal(signal: "SIGINT" | "SIGTERM", callback: () => void): () => void }
-  callBureau?(env: HandlerEnvironment, request: BureauRequest, timeoutMs?: number): Promise<BureauReply>
+  hostInventory?(env: HandlerEnvironment): Pick<ReturnType<typeof createHostInventory>, "list" | "enroll">
+  hostRoute?(env: HandlerEnvironment, route: HostRoute, signal?: AbortSignal): Promise<unknown>
   attachment?: Omit<AttachmentDependencies, "environment" | "inspect" | "stderr">
   environment(): Promise<HandlerEnvironment>
   start(env: HandlerEnvironment): Promise<HandlerInspection>
@@ -47,7 +52,6 @@ export type ControlDependencies = {
 export function productionControlDependencies(): ControlDependencies {
   return {
     attachment: productionAttachmentStreams(),
-    watch: { stdout: process.stdout, onSignal(signal, callback) { process.on(signal, callback); return () => { process.off(signal, callback) } } },
     environment: productionEnvironment,
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
@@ -121,7 +125,12 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 }
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
-  if (["bureau", "run", "assignment", "permission", "roster", "entry", "git"].includes(argv[0] ?? "")) return runBureauClient(argv, dependencies)
+  if (argv[0] === "task") return runTaskClient(argv, dependencies)
+  if (argv[0] === "session") return runSessionClient(argv, dependencies)
+  if (argv[0] === "entry") return runEntryClient(argv, dependencies)
+  if (argv[0] === "git" && argv[1] === "prepare") return runGitPrepare(argv, dependencies)
+  if (argv.includes("--local")) return runLocalHumanClient(argv, dependencies)
+  if (["host", "roster", "permission"].includes(argv[0] ?? "")) return runHostClient(argv, dependencies)
   if (argv[0] === "model" && argv[1] === "recover-probe") return runProbeRecovery(argv, dependencies)
   if (argv[0] === "agent" && argv[1] === "attach") return runAttachmentClient(argv, { ...productionAttachmentStreams(), ...dependencies.attachment, environment: dependencies.environment, inspect: dependencies.inspect, stderr: dependencies.stderr })
   if (argv[0] === "agent") return runAgentClient(argv, { ...dependencies, callAgent: dependencies.callAgent ?? (async () => { throw new ControlError("UNAVAILABLE") }), agentStore: dependencies.agentStore ?? (env => createAgentStore(env.paths.persistentRoot)) })
@@ -137,7 +146,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
@@ -145,7 +154,15 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       const launches = await dependencies.inventory(join(env.paths.persistentRoot, "launches"))
       const agents = await createAgentStore(env.paths.persistentRoot).inventory()
       const catalog = await createCatalogStore(env.paths.persistentRoot).inventory()
+      let runtimeIssues: DoctorDiagnostic["runtimeIssues"]
+      if (handler?.disposition === "live" && handler.record.phase === "ready") {
+        try {
+          const reply = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "status" })
+          if (reply.ok && "phase" in reply.result && reply.result.issues?.length) runtimeIssues = reply.result.issues
+        } catch {}
+      }
       const result: DoctorDiagnostic = {
+        ...(runtimeIssues ? { runtimeIssues } : {}),
         node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler,
         launches: summarizeLaunches(launches.records.map(entry => entry.record)),
         agents: { records: [...agents.agents.map(record => ({ id: record.definition.agentId, phase: record.phase })), ...agents.legacyAgents.map(record => ({ id: record.spec.agentId, phase: record.phase }))], commands: agents.commands.map(command => ({ id: command.commandId, op: command.op, state: command.state })), issues: agents.issues.map(issue => ({ path: issue.path, message: issue.message })) },

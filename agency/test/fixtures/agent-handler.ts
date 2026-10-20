@@ -1,3 +1,4 @@
+import { createTaskService } from "../../src/tasks/service.js"
 import { fixtureLaunch, fixtureSpawn } from "./ownership.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
@@ -21,7 +22,6 @@ import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../../src/
 import type { PlatformPaths } from "../../src/platform/paths.js"
 import type { CatalogSnapshot, ProviderProfile } from "../../src/catalog/types.js"
 import type { AgentHandlerOptions } from "../agent-support.js"
-import { fixtureRetention } from "../retention-support.js"
 
 process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as AgentHandlerOptions & { paths: PlatformPaths; profile: ProviderProfile; profiles?: ProviderProfile[] }
@@ -44,12 +44,36 @@ const contract: LaunchContract = {
   permissionEvidence: "fixture-contract-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
 }
 try {
-  await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation, retention: fixtureRetention(root, config.paths.persistentRoot, config),
+  await runHandler({ taskFactory: async input => {
+    if (config.tasks) await writeFile(join(root, "tasks-entered"), "entered", { mode: 0o600 })
+    if (config.tasks === "reject") throw new Error("fixture task initialization failure")
+    if (config.tasks === "hold") while (true) {
+      try { await readFile(join(root, "release-tasks")); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    await input.store.initialize()
+    return createTaskService(input)
+  }, ...(config.entry === "synthetic" ? { entryDriver: (() => {
+    let creations = 0, activations = 0, binding: import("../../src/entry/runtime.js").RuntimeEditor | null = null
+    const editor = { editorId: randomUUID(), session: "synthetic-entry", pane: "%1", tmuxSocketPath: join(config.paths.runtimeRoot, "entry-tmux.sock") }
+    return {
+      async ensure() { await writeFile(join(root, "entry-creations"), String(++creations)); return editor },
+      async activate() {
+        await writeFile(join(root, "entry-activations"), String(++activations))
+        while (true) {
+          try { await readFile(join(root, "entry-release")); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+        binding = editor
+      },
+      async inspect() { return binding }
+    }
+  })() } : {}), paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), launchContracts: config.nativeAcp ? [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }] : [contract],
     catalogFactory(context) {
       const store = context.store
-      const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { retentionPins: () => ({ paths: [] }), forgetRemoved() {}, recover: async () => undefined, verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
-      return { ...service, ...(config.selectionCatalog ? { startScheduling() {} } : {}), async initialize() {
+      const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes: { verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
+      return { ...service, async initialize() {
         const evidence = await observeConfig(config.profile)
         const snapshot: CatalogSnapshot = { version: 1 as const, hostId: config.paths.hostKey, handlerGeneration: generation, snapshotId: randomUUID(), createdAt: Date.now(), providers: [{ providerId: "codex-acp" as const, fingerprint: evidence.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp" as const, modelId: "model-a", resolvedModelId: null, displayName: "Fixture model", reasoning: { state: "values" as const, values: ["high", "low"] }, modes: { state: "unknown" as const }, availability: "advertised" as const }] }] }
         if (config.selectionCatalog) snapshot.providers[0]!.models[0]!.modes = { state: "values", values: ["agent-full-access", "read-only"] }
@@ -62,10 +86,7 @@ try {
       } }
     },
     agentFactory(input) {
-      let writingReceipt = false, evidenceCalls = 0
-      const startupHang = async (boundary: AgentHandlerOptions["startupHang"]): Promise<void> => {
-        if (config.startupHang === boundary) await new Promise<void>(() => undefined)
-      }
+      let writingReceipt = false
       const base = createAgentStore(config.paths.persistentRoot, { mkdir, rename, rm, async open(path, flags, mode) {
         const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
         handle.sync = async () => {
@@ -73,10 +94,9 @@ try {
           await sync()
         }
         return handle
-      } }, input.retirement)
+      } })
       return createAgentService({ ...input, store: { ...base, async writeAgent(next, expected) {
         await base.writeAgent(next, expected)
-        if (next.phase === "ready") await startupHang("publication")
         if (next.phase === "ready") await pause("ready")
       }, async writeCommand(next, expected) {
         if (next.op === "stop" && next.state === "completed") await pause("stop-receipt-before")
@@ -102,17 +122,6 @@ try {
           if (record.provider !== null) await pause("identity")
         } } })
         return { ...owner, async cleanup() { const record = await owner.cleanup(); await pause("stop-verified"); return record } }
-      }, async observeLaunchEvidence(spec, expected) {
-        if (++evidenceCalls === 5) await startupHang("evidence")
-        const profile = (config.profiles ?? [config.profile]).find(value => value.id === spec.backendId)
-        if (!profile || !isDeepStrictEqual(profile, expected.profile) || !isDeepStrictEqual(await observeConfig(profile), spec.configuration)) throw new AgentError("CONFIG_CHANGED")
-      }, fatalStartupTimeout(spec): never {
-        if (!config.startupHang || spec.handlerGeneration !== generation) throw new Error("unexpected fixture startup timeout")
-        const handlerPid = process.pid
-        writeFileSync(join(root, "startup-timeout.json"), JSON.stringify({ pid: handlerPid, signal: "SIGKILL", attempt: spec.launchAttemptId }), { mode: 0o600 })
-        if (handlerPid !== process.pid) throw new Error("fixture Handler identity changed")
-        process.kill(handlerPid, "SIGKILL")
-        throw new Error("fixture Handler survived SIGKILL")
       } })
     },
   })

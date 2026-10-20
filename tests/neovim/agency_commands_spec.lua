@@ -35,6 +35,12 @@ describe("Agency native commands", function()
                 settings = { { id = "reasoning_effort", name = "Reasoning effort", kind = "config", values = { { value = "medium", name = "medium" } } } } } },
             settings = { { id = "mode", name = "Mode", kind = "config", values = { { value = "read-only", name = "Read only" } } } } } } }
     end
+    it("does not register retired Git verification", function()
+        assert.are.equal(0, vim.fn.exists(":AgencyGitVerify"))
+        assert.are.equal(2, vim.fn.exists(":Agency"))
+        assert.are.equal(2, vim.fn.exists(":AgencyPermissions"))
+        assert.are.equal(2, vim.fn.exists(":AgencyCurrent"))
+    end)
     it("uses the cached ACP connection for active roster display outside fast events", function()
         local systems, complete, fast = 0, nil, nil
         local system = vim.system

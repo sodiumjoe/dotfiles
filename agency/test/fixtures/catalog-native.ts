@@ -45,6 +45,9 @@ if (process.argv.includes("app-server") || process.argv.includes("--agency-fixtu
     }
   })
 } else process.stdin.once("data", () => {
+  if (process.argv.includes("--early-exit")) { process.stderr.write("native fixture exited\n", () => process.exit(23)); return }
+  if (process.argv.includes("--rpc-failure")) { process.stderr.write("native fixture rejected RPC\n"); process.stdout.write(JSON.stringify({ id: 1, error: { code: -32603, message: "fixture rejection" } }) + "\n"); return }
+  if (process.argv.includes("--graceful-exit")) { process.stdout.write("registered\n", () => process.exit(0)); return }
   if (process.argv.includes("--verbose-stderr")) process.stderr.write(Buffer.alloc(2097152, 255), () => process.stdout.write("registered\n"))
   else process.stdout.write("registered\n")
 })

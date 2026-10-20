@@ -1,11 +1,6 @@
 import assert from "node:assert/strict"
-import { mkdir } from "node:fs/promises"
-import { join } from "node:path"
 import test from "node:test"
-import { MutationQueue, refreshLaunchState, type HandlerMutations } from "../src/handler/mutations.js"
-import type { HandlerStatus } from "../src/control/protocol.js"
-import { writeLaunchRecord } from "../src/platform/private-state.js"
-import { privateRoot, launch } from "./control-support.js"
+import { MutationQueue } from "../src/handler/mutations.js"
 
 test("failed mutations do not poison the queue or overlap later operations", async () => {
   const queue = new MutationQueue(), order: number[] = []
@@ -20,21 +15,4 @@ test("failed mutations do not poison the queue or overlap later operations", asy
   await failed
   assert.equal(await second, 7)
   assert.deepEqual(order, [1, 2])
-})
-
-test("unrecognized launch mutations remain localized without erasing cached status", async t => {
-  const root = await privateRoot(t), directory = join(root, "launches")
-  await mkdir(directory, { mode: 0o700 })
-  const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [] }
-  const state: HandlerStatus = { hostId: "a".repeat(64), handlerGeneration: "generation", phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
-  await refreshLaunchState(state, mutations, directory)
-  const record = launch(), path = join(directory, `${record.launchAttemptId}.json`)
-  await writeLaunchRecord(path, record)
-  await refreshLaunchState(state, mutations, directory)
-  assert.equal(mutations.issues?.length, 1)
-  assert.equal(state.launches.length, 1)
-  mutations.accepted = [{ path, record }]
-  await refreshLaunchState(state, mutations, directory)
-  assert.deepEqual(mutations.issues, [])
-  assert.equal(state.launches[0]!.launchAttemptId, record.launchAttemptId)
 })

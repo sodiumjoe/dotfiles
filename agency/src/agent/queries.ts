@@ -29,7 +29,7 @@ export function launchChoices(evidence: LaunchEvidence, contract: ConfiguredLaun
   for (const model of evidence.provider.models) for (const reasoning of reasonings) for (const mode of modes) for (const permissionProfile of contract.permissionProfiles) {
     const selection: StartSelection = { providerId: contract.providerId, modelId: model.modelId, reasoning, mode, permissionProfile }
     try {
-      const spec = resolveLaunchSpec({ ids: { hostId, handlerGeneration: generation, agentId: randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: randomUUID() }, cwd: "/", selection, snapshotId: evidence.snapshotId, provider: evidence.provider, configuration: evidence.configuration, contract })
+      const spec = resolveLaunchSpec({ ids: { hostId, handlerGeneration: evidence.provider.verifiedHandlerGeneration!, agentId: randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: randomUUID() }, cwd: "/", selection, snapshotId: evidence.snapshotId, provider: evidence.provider, configuration: evidence.configuration, contract })
       choices.push({ displayName: model.displayName, selection: structuredClone(spec.selection), snapshotId: evidence.snapshotId, contractFingerprint: contract.fingerprint })
     } catch (error) { if (!(error instanceof AgentError) || !["MODEL_UNAVAILABLE", "INVALID_AGENT_STATE", "SELECTION_UNSUPPORTED"].includes(error.code)) throw error }
     if (choices.length > 4096 || Buffer.byteLength(JSON.stringify(choices)) > QUERY_BYTES) throw new AgentError("INCOMPLETE")

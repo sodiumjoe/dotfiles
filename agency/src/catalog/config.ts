@@ -31,6 +31,24 @@ export async function readBoundedFile(path: string, max: number, privateFile = f
 export function decodeJson(bytes: Buffer): unknown {
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) } catch { return invalid() }
 }
+export async function digestPrivateFile(path: string, max?: number): Promise<string> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile() || before.nlink !== 1n || before.uid !== BigInt(process.getuid!()) || (before.mode & 0o077n) !== 0n || !Number.isSafeInteger(Number(before.size)) || max !== undefined && before.size > BigInt(max)) invalid()
+    const hash = createHash("sha256"), buffer = Buffer.alloc(65536)
+    let length = 0
+    while (length <= Number(before.size)) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null)
+      if (bytesRead === 0) break
+      length += bytesRead
+      if (length > Number(before.size)) invalid()
+      hash.update(buffer.subarray(0, bytesRead))
+    }
+    if (length !== Number(before.size) || !isDeepStrictEqual(identity(before), identity(await handle.stat({ bigint: true }))) || !isDeepStrictEqual(identity(before), identity(await lstat(path, { bigint: true })))) invalid()
+    return hash.digest("hex")
+  } finally { await handle.close() }
+}
 export function parseProfile(input: unknown): ProviderProfile {
   const v = object(input)
   keys(v, ["id", "enabled", "executable", "adapterPackageJson", "sdkPackageJson", "configurationFiles"])

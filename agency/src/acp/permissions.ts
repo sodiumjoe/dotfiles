@@ -1,4 +1,5 @@
-import { permissionKey, type PermissionRef, type PermissionRouting } from "../orchestration/permission-routing.js"
+import { permissionKey, type PermissionRef } from "../agent/permission-types.js"
+import type { PermissionArbiter } from "../agent/permission-arbiter.js"
 import { randomUUID } from "node:crypto"
 import type { JsonObject } from "../agent/session-config.js"
 import { AgentError, type AgentTuple } from "../agent/types.js"
@@ -14,7 +15,7 @@ export type PermissionBroker = {
 type Request = { ref: PermissionRef | null; key: string; target: AgentTuple; providerId: string | number; params: JsonObject; options: Set<string>; offers: Map<string, string> }
 const tupleKey = (target: AgentTuple): string => JSON.stringify([target.agentId, target.handlerGeneration, target.providerGeneration])
 
-export function createPermissionBroker(input: { routing?: PermissionRouting; cwd?(target: AgentTuple): string; respond(target: AgentTuple, id: string | number, result: JsonObject): unknown }): PermissionBroker {
+export function createPermissionBroker(input: { routing?: PermissionArbiter; cwd?(target: AgentTuple): string; respond(target: AgentTuple, id: string | number, result: JsonObject): unknown }): PermissionBroker {
   const requests = new Map<string, Request>(), clients = new Map<string, { client: PermissionClient; targets: Set<string>; offers: Map<string, Request> }>()
   const send = (client: PermissionClient, frame: JsonObject): void => { try { client.send(frame) } catch { detach(client.connectionId) } }
   function offer(request: Request, connectionId: string): void {
@@ -58,7 +59,7 @@ export function createPermissionBroker(input: { routing?: PermissionRouting; cwd
       if (!input.routing) return publish()
       return input.routing.open(target, params, input.cwd!(target), optionId => Promise.resolve(input.respond(target, providerId, { outcome: { outcome: "selected", optionId } })).then(() => undefined)).then(ref => {
         request.ref = ref
-        if (requests.get(key) !== request) { void input.routing!.invalidate(target); return key }
+        if (requests.get(key) !== request) { void input.routing!.invalidate(target).catch(() => {}); return key }
         return publish()
       }, error => { remove(request); throw error })
     },
@@ -85,6 +86,6 @@ export function createPermissionBroker(input: { routing?: PermissionRouting; cwd
       return false
     },
     detach,
-    invalidate(target) { void input.routing?.invalidate(target); for (const request of [...requests.values()]) if (tupleKey(request.target) === tupleKey(target)) remove(request) },
+    invalidate(target) { void input.routing?.invalidate(target).catch(() => {}); for (const request of [...requests.values()]) if (tupleKey(request.target) === tupleKey(target)) remove(request) },
   }
 }
