@@ -471,7 +471,12 @@ test("failed start receipt durability blocks retirement until exact retry", asyn
   await f.entered
   f.failInitialize(true)
   f.release()
-  await until(async () => (await f.store.readCommand(f.input.commandId))?.state === "completed" ? true : undefined)
+  const receipt = await until(async () => {
+    const value = await f.service.commandReceipt(f.input.commandId, f.input.handlerGeneration)
+    return value?.command.state === "completed" ? value : undefined
+  })
+  assert.equal(receipt.durability, "unverified")
+  assert.equal((await f.store.readCommand(f.input.commandId))?.state, "completed")
   assert.deepEqual(f.retired(), [])
   f.failReceipt(false)
   assert.equal((await completed(f.service, f.input)).command.result?.outcome, "failed")
