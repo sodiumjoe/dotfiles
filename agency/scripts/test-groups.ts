@@ -58,6 +58,7 @@ export const deterministicFiles = [
   "permission-write.test.js",
   "private-state.test.js",
   "reconcile.test.js",
+  "run-scope.test.js",
   "runtime-bridge.test.js",
   "runtime-entry.test.js",
   "task-cli.test.js",
