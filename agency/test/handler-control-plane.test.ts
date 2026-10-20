@@ -16,6 +16,19 @@ function client(f: Awaited<ReturnType<typeof controlFixture>>) {
   return { out, deps, run: (args: string[]) => runControl([...args, "--json"], deps), result: () => JSON.parse(out.at(-1)!) }
 }
 
+async function completedShutdown(f: Awaited<ReturnType<typeof controlFixture>>, cli: ReturnType<typeof client>, flags: string[] = []) {
+  const code = await cli.run(["shutdown", ...flags])
+  if (code !== 75) return code
+  const initial = cli.result()
+  assert.equal(initial.error.code, "INCOMPLETE")
+  assert.match(initial.error.message, /did not have a stable complete observation|same process generation changed identity/)
+  const receipt = await readShutdownReceipt(f.paths.persistentRoot, initial.commandId)
+  assert.ok(receipt)
+  assert.equal(receipt.handlerGeneration, initial.handlerGeneration)
+  await until(async () => await f.observe(receipt.handlerIdentity.pid) === null ? true : undefined)
+  return cli.run(["shutdown", ...flags, "--command-id", initial.commandId, "--handler-generation", initial.handlerGeneration])
+}
+
 test("two concurrent clients select one ready Handler", { timeout: 20000 }, async t => {
   const f = await controlFixture(t)
   const [first, second] = await Promise.all([f.start(), f.start()])
@@ -53,7 +66,7 @@ test("historical admission state does not participate in Handler lifecycle", { t
   assert.equal(await readFile(join(directory, "historical.json"), "utf8"), "{")
   await assert.rejects(lstat(marker), { code: "ENOENT" })
   await assert.rejects(lstat(gitMarker), { code: "ENOENT" })
-  assert.equal(await cli.run(["shutdown"]), 0)
+  assert.equal(await completedShutdown(f, cli), 0)
   assert.equal(handler.record.phase, "ready")
 })
 
@@ -78,7 +91,7 @@ test("retained attempted and unattempted launches remain outside current shutdow
   const state = cli.result().result
   assert.deepEqual(state.launches, [])
   for (const record of [ambiguous, unattempted]) assert.deepEqual(JSON.parse(await readFile(join(f.paths.persistentRoot, "launches", record.launchAttemptId + ".json"), "utf8")), record)
-  assert.equal(await cli.run(["shutdown", "--stop-agents"]), 0)
+  assert.equal(await completedShutdown(f, cli, ["--stop-agents"]), 0)
 })
 
 test("startup and shutdown leave retained provider trees to explicit maintenance", { timeout: 20000 }, async t => {
@@ -86,7 +99,8 @@ test("startup and shutdown leave retained provider trees to explicit maintenance
   const path = join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`)
   await writeLaunchRecord(path, record)
   await f.start()
-  assert.equal(await client(f).run(["shutdown", "--stop-agents"]), 0)
+  const cli = client(f)
+  assert.equal(await completedShutdown(f, cli, ["--stop-agents"]), 0, JSON.stringify(cli.out))
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), record)
   assert.notEqual(await f.observe(record.provider!.group.leader.pid), null)
 })
@@ -96,7 +110,7 @@ test("a lost shutdown reply is resolved from its retained receipt without stoppi
   const call = cli.deps.call
   let shutdownCalls = 0
   cli.deps.call = async (env, request) => { if (request.op === "shutdown") shutdownCalls++; const reply = await call(env, request); if (request.op === "shutdown") throw new ControlError("UNAVAILABLE", "reply lost"); return reply }
-  assert.equal(await cli.run(["shutdown"]), 0)
+  assert.equal(await completedShutdown(f, cli), 0, JSON.stringify(cli.out))
   const completed = cli.result().result
   const receipt = await readShutdownReceipt(f.paths.persistentRoot, completed.commandId)
   assert.equal(receipt?.handlerGeneration, first.record.generation)
@@ -120,7 +134,7 @@ test("shutdown closes partial-request, idle control, and attachment clients befo
   idle.on("error", () => undefined); partial.on("error", () => undefined); attachment.on("error", error => { attachmentError = error })
   partial.write('{"protocol":')
   const cli = client(f)
-  assert.equal(await cli.run(["shutdown"]), 0)
+  assert.equal(await completedShutdown(f, cli), 0)
   await delay(20)
   assert.ok(idle.destroyed)
   assert.ok(partial.destroyed)

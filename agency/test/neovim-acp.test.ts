@@ -11,7 +11,10 @@ import type { JsonObject } from "../src/agent/session-config.js"
 import { until } from "./control-support.js"
 
 const run = (e: EditorFixture, source: string) => e.lua(`(function() ${source}; return true end)()`)
-const wait = async (e: EditorFixture, condition: string) => assert.equal(await e.lua(`vim.wait(10000, function() return ${condition} end)`), true, condition)
+const wait = async (e: EditorFixture, condition: string) => {
+  const result = await e.lua(`vim.wait(10000, function() return ${condition} end)`)
+  assert.equal(result, true, result === true ? condition : condition + JSON.stringify(await e.lua("{notifications=fixture_notifications,errmsg=vim.v.errmsg}")))
+}
 async function ready(e: EditorFixture) {
   await wait(e, "fixture_manager.session_id ~= nil and not fixture_manager._is_restoring_session")
   await run(e, "fixture_ready = false; fixture_manager:on_session_ready(function() fixture_ready = true end)")
@@ -87,6 +90,10 @@ test("native command entry points toggle, inspect, attach, cancel, stop and rest
   assert.deepEqual(await f.tuple(sid), target)
   await run(e, "vim.ui.select=function(items,opts,callback) callback('Stop') end; vim.cmd('AgencyStop')")
   await wait(e, "fixture_manager._agency_epoch > 1 and not fixture_manager.is_generating")
+  await wait(e, "next(fixture_controller.operations.pending()) == nil")
+  const stoppedPage = await f.page({ limit: 100 })
+  assert.equal(stoppedPage.agents[0]!.record.phase, "stopped")
+  assert.equal(stoppedPage.agents[0]!.cleanup, "verified")
   const stopped = await f.current()
   assert.equal(stopped.agents.length, 0)
   await run(e, "vim.cmd('AgencyDetach')")
