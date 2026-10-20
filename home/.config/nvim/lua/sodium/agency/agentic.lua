@@ -155,6 +155,31 @@ function M.install()
     local native = {}
     for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = entry[1][name] end end
     local sm, acp = native[Manager], native[Client]
+    local get_instance = Instances.get_instance
+    Instances.get_instance = function(name, on_ready)
+        local client = Instances._instances[name]
+        if name == "agency" and not client then return get_instance(name, on_ready or function() end) end
+        if name == "agency" and client and (client.state == "error" or client.state == "disconnected")
+            and not client.transport.process then
+            client.ready_listeners = {}
+            pcall(client.stop, client)
+            client:_set_state("disconnected")
+            client:_setup_transport()
+            client._on_ready = function(ready)
+                local listeners = ready.ready_listeners
+                ready.ready_listeners = {}
+                for _, listener in ipairs(listeners) do vim.schedule(function() listener(ready) end) end
+            end
+            if on_ready then client:when_ready(on_ready) end
+            client:_connect()
+            return client
+        end
+        if name == "agency" and client and client.state ~= "ready" and client.state ~= "error" and client.state ~= "disconnected" then
+            if on_ready then client:when_ready(on_ready) end
+            return client
+        end
+        return get_instance(name, on_ready)
+    end
     local Agentic = require("agentic")
     for _, name in ipairs({ "switch_provider", "new_session_with_provider" }) do
         local original = Agentic[name]

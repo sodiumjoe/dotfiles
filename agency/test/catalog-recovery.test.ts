@@ -79,8 +79,43 @@ test("the next Handler reconciler must accept the recovered evidence", async t =
   assert.equal((await reconcileRecord(f.path, f.env.adapter, await readLaunchRecord(f.path))).record.phase, "cleanup_verified")
 })
 
-test("recovery rejects retained groups that omit the leader or contain duplicate PIDs", async t => {
-  for (const fault of ["missing-leader", "duplicate-pid"]) await t.test(fault, async t => {
+test("recovery preserves helper executable history when all retained processes are absent", async t => {
+  const f = await fixture(t), recover = await operation()
+  f.launch.provider!.group.observed.push({ ...f.helper, birth: "102:unmarked:replacement" }, { ...f.helper, birth: "102:unmarked:<defunct>" })
+  await writeLaunchRecord(f.path, f.launch)
+  const original = await readFile(f.path)
+  f.request.sha256 = digest(original)
+  const result = await recover(f.env, f.request)
+  assert.equal(result.state, "cleanup_verified")
+  assert.deepEqual(await readFile(join(f.archive, "launch.json")), original)
+  assert.deepEqual(await readLaunchRecord(f.path), { ...f.launch, phase: "cleanup_verified", reason: null })
+  assert.equal(f.calls.filter(pid => pid === f.helper.pid).length >= 2, true)
+  assert.equal((await reconcileRecord(f.path, f.env.adapter, await readLaunchRecord(f.path))).record.phase, "cleanup_verified")
+  assert.deepEqual(f.signals, [])
+})
+
+test("helper history never permits conflicting ownership or a present PID during recovery", async t => {
+  for (const fault of ["helper-start", "leader-executable", "parent", "uid", "group", "live-helper", "reused-helper"]) await t.test(fault, async t => {
+    const f = await fixture(t), recover = await operation()
+    const history = { ...f.helper, birth: "102:unmarked:replacement" }
+    if (fault === "helper-start") history.birth = "333:unmarked:replacement"
+    if (fault === "leader-executable") Object.assign(history, f.leader, { birth: "101:unmarked:replacement" })
+    if (fault === "parent") history.parentPid++
+    if (fault === "uid") history.uid++
+    if (fault === "group") history.processGroupId++
+    f.launch.provider!.group.observed.push(history)
+    if (fault === "live-helper" || fault === "reused-helper") f.processes.set(f.helper.pid, { ...history, birth: fault === "reused-helper" ? "333:unmarked:other" : history.birth })
+    await writeLaunchRecord(f.path, f.launch)
+    const original = await readFile(f.path)
+    f.request.sha256 = digest(original)
+    await assert.rejects(recover(f.env, f.request))
+    assert.deepEqual(await readFile(f.path), original)
+    assert.deepEqual(f.signals, [])
+  })
+})
+
+test("recovery rejects retained groups that omit the leader or repeat an identical observation", async t => {
+  for (const fault of ["missing-leader", "duplicate-identity"]) await t.test(fault, async t => {
     const f = await fixture(t), recover = await operation()
     f.launch.provider!.group.observed = fault === "missing-leader" ? [f.helper] : [f.leader, f.helper, f.leader]
     await writeLaunchRecord(f.path, f.launch)

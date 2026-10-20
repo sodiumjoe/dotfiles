@@ -26,7 +26,7 @@ function M.new(deps)
         end
         timer:start(deps.timeout_ms or 5000, 0, vim.schedule_wrap(function() finish(failure("UNAVAILABLE")) end))
         local ok = pcall(function()
-            client = require("agentic.acp.agent_instance").get_instance("agency", function() end)
+            client = require("agentic.acp.agent_instance").get_instance("agency")
             if client.state == "disconnected" or client.state == "error" then finish(failure("UNAVAILABLE")); return end
             ready = function()
                 if settled then return end

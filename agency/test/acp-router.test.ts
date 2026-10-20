@@ -341,6 +341,12 @@ test("catalog choices retain cached offers after configuration changes", async t
   assert.deepEqual(backend, (before.backends as JsonObject[]).find(value => value.id === "codex-acp"))
   assert.ok((backend.models as JsonObject[]).length > 0)
   assert.equal((await f.inventory()).agents.length, 0)
+  assert.equal((await f.requests("codex-acp")).length, 0)
+  const selected = (backend.models as JsonObject[]).find(model => model.id === "model-c")!
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, backendId: "codex-acp", selection: selected.selection! } } })
+  const options = session.configOptions as JsonObject[]
+  assert.equal(options.find(option => option.id === "model")!.currentValue, "model-c")
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length, 0)
 })
 
 test("raw selected models work beside composite legacy IDs and validate reasoning after changing model", async t => {

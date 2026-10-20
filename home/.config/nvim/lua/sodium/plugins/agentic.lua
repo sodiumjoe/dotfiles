@@ -879,7 +879,12 @@ return {
         patch_agentic_acp_client()
         patch_agentic_session_restore()
 
-        local providers = { agency = { command = "agy", args = { "acp" } } }
+        local providers = { agency = { command = "sh", args = { "-c", [[
+status=$(agy status --json) || {
+    printf '%s\n' "$status" >&2
+    exit 70
+}
+exec agy acp]] } } }
         for name in pairs(require("agentic.config_default").acp_providers) do providers[name] = false end
         require("agentic").setup({
             image_paste = {

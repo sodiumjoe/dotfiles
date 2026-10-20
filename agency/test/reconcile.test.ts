@@ -209,82 +209,107 @@ test("transient Darwin group observation churn stabilizes before SIGTERM", async
 })
 
 for (const platform of ["darwin", "linux"] as const) {
-  const Unavailable = platform === "darwin" ? DarwinObservationUnavailable : LinuxObservationUnavailable
-  for (const stage of ["initial", "SIGTERM", "SIGKILL"] as const) {
-    test(`${platform} retained observation churn stabilizes before ${stage} authorization`, async t => {
-      const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
-      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
-      const adapter = new FakeAdapter({ platform, group: [leader, child], onSignal: (signal, state) => {
-        if (stage !== "SIGKILL" || signal === "SIGKILL") { state.leader = null; state.group = [] }
-      } })
-      const readProcess = adapter.readProcess.bind(adapter)
-      let childReads = 0
+  for (const observation of ["absent", "reparented", "unreadable", "changed"] as const) {
+    test(`${platform} helper observation ${observation} does not veto an exact live-led group`, async t => {
+      const leader = identity(), helper = identity({ pid: 102, birth: "102:unmarked:/bin/sh" })
+      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, helper] } } })
+      const adapter = new FakeAdapter({ platform, group: [leader, helper], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
       adapter.readProcess = async pid => {
-        if (pid === child.pid && ++childReads === (stage === "initial" ? 1 : stage === "SIGTERM" ? 2 : 3)) throw new Unavailable("transient retained child observation")
-        return readProcess(pid)
+        if (pid === leader.pid) return adapter.leader
+        if (adapter.signals.length || observation === "absent") return null
+        if (observation === "unreadable") throw new Error("helper observation unavailable")
+        return { ...helper, ...(observation === "reparented" ? { parentPid: 1 } : { birth: "102:unmarked:/bin/sleep" }) }
       }
-      await assertOutcome(t, starting, adapter, { disposition: "cleaned", signals: stage === "SIGKILL" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"] })
+      await assertOutcome(t, starting, adapter, { disposition: "cleaned", signals: ["SIGTERM"] })
     })
   }
 
-  test(`${platform} retained observation churn settles to an exited child`, async t => {
-    const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
-    const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
-    const adapter = new FakeAdapter({ platform, group: [leader, child], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
-    const readProcess = adapter.readProcess.bind(adapter)
-    let childReads = 0
-    adapter.readProcess = async pid => {
-      if (pid === child.pid && ++childReads === 2) {
-        adapter.group = [leader]
-        throw new Unavailable("child exited during observation")
-      }
-      return readProcess(pid)
-    }
-    await assertOutcome(t, starting, adapter, { disposition: "cleaned", signals: ["SIGTERM"] })
-  })
-
-  test(`${platform} retained observation retry does not authorize changed ownership`, async t => {
-    for (const changed of [{ birth: "102:changed" }, { uid: uid + 1 }, { gid: gid + 1 }, { sessionId: 202 }]) {
-      const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
-      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
-      const adapter = new FakeAdapter({ platform, group: [leader, child] })
-      const readProcess = adapter.readProcess.bind(adapter)
-      let childReads = 0
-      adapter.readProcess = async pid => {
-        if (pid === child.pid) {
-          if (++childReads === 2) throw new Unavailable("transient retained child observation")
-          if (childReads > 2) return { ...child, ...changed }
-        }
-        return readProcess(pid)
-      }
-      await assertOutcome(t, starting, adapter, { disposition: "quarantined", signals: [] })
+  test(`${platform} current group helper ownership changes prevent signaling`, async t => {
+    for (const changed of [{ uid: uid + 1 }, { gid: gid + 1 }, { sessionId: 202 }, { processGroupId: 202 }, { bootId: "boot-2" }]) {
+      const leader = identity(), helper = identity({ pid: 102, birth: "102:unmarked:/bin/sh" })
+      const adapter = new FakeAdapter({ platform })
+      let reads = 0
+      adapter.readGroup = async () => ++reads === 1 ? [leader, helper] : [leader, { ...helper, ...changed }]
+      await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: [] })
     }
   })
+}
 
-  for (const failure of ["transient", "unknown"] as const) {
-    test(`${platform} persistent ${failure} retained observation failure prevents signaling`, { timeout: 5000 }, async t => {
-      const leader = identity(), child = identity({ pid: 102, birth: "102:descendant", parentPid: leader.pid })
-      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, child] } } })
-      const adapter = new FakeAdapter({ platform, group: [leader, child] })
-      const readProcess = adapter.readProcess.bind(adapter)
-      let childReads = 0
-      const started = Date.now()
-      adapter.readProcess = async pid => {
-        if (pid === child.pid && ++childReads >= 2) throw failure === "transient" ? new Unavailable("persistent observation failure") : new Error("unknown observation failure")
-        return readProcess(pid)
-      }
+for (const platform of ["darwin", "linux"] as const) {
+  for (const stage of ["initial", "publication", "escalation"] as const) {
+    test(`${platform} helper executable changes during ${stage} preserve live-led cleanup`, async t => {
+      const leader = identity(), helper = identity({ pid: 102, birth: "102:unmarked:/bin/sh", parentPid: leader.pid })
+      const executed = { ...helper, birth: "102:unmarked:/bin/sleep" }
+      const starting = record({ provider: { kind: "process-group", group: { leader, observed: [leader, helper] } } })
       const path = await recordFixture(t, starting)
+      const adapter = new FakeAdapter({ platform, group: [leader, stage === "initial" ? executed : helper], onSignal: (signal, state) => {
+        if (stage !== "escalation" || signal !== "SIGTERM") { state.leader = null; state.group = [] }
+      } })
+      const readGroup = adapter.readGroup.bind(adapter)
+      let polling = false
+      adapter.readGroup = async () => {
+        if (stage === "escalation" && adapter.signals.length === 1) {
+          if (!polling) { polling = true; await new Promise(resolve => setTimeout(resolve, 1100)) }
+          else adapter.group = [leader, executed]
+        }
+        if (stage === "publication" && !adapter.signals.length && (await readLaunchRecord(path)).phase === "cleanup_pending") adapter.group = [leader, executed]
+        return readGroup()
+      }
+      const result = await reconcileRecord(path, adapter)
+      assert.equal(result.record.phase, "cleanup_verified")
+      assert.deepEqual(adapter.signals, stage === "escalation" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"])
+      assert.ok(result.record.provider!.group.observed.some(member => member.birth === executed.birth))
+      assert.deepEqual(await readLaunchRecord(path), result.record)
+    })
+  }
+
+  for (const change of ["absent", "replacement"] as const) {
+    test(`${platform} leader loss during helper publication prevents signaling (${change})`, async t => {
+      const leader = identity(), helper = identity({ pid: 102, birth: "102:unmarked:/bin/sh" })
+      const executed = { ...helper, birth: "102:unmarked:/bin/sleep" }
+      const path = await recordFixture(t, record())
+      const adapter = new FakeAdapter({ platform })
+      let groupReads = 0
+      adapter.readGroup = async () => {
+        const durable = await readLaunchRecord(path)
+        if (durable.provider!.group.observed.some(member => member.pid === helper.pid)) {
+          adapter.leader = change === "absent" ? null : identity({ birth: "999:replacement" })
+          adapter.group = change === "absent" ? [executed] : [adapter.leader!, executed]
+        } else if (++groupReads > 1) adapter.group = [leader, helper]
+        return adapter.group
+      }
       const result = await reconcileRecord(path, adapter)
       assert.equal(result.disposition, "quarantined")
-      assert.deepEqual(result.record, await readLaunchRecord(path))
       assert.deepEqual(adapter.signals, [])
-      if (failure === "transient") assert.ok(Date.now() - started >= 1000)
-      else assert.equal(childReads, 2)
-      const stable = new FakeAdapter({ platform, group: [leader, child] })
-      assert.deepEqual(await reconcileRecord(path, stable), result)
-      assert.deepEqual(stable.signals, [])
+      assert.deepEqual(await readLaunchRecord(path), result.record)
     })
   }
+
+  test(`${platform} leaderless cleanup cannot adopt an unretained helper`, async t => {
+    const leader = identity(), retained = identity({ pid: 102, birth: "102:unmarked:/bin/sleep" })
+    const newcomer = identity({ pid: 103, birth: "103:unmarked:/bin/sleep" })
+    const starting = record({ phase: "cleanup_pending", provider: { kind: "process-group", group: { leader, observed: [leader, retained] } } })
+    const adapter = new FakeAdapter({ platform, leader: null, group: [retained, newcomer], onSignal: (_signal, state) => { state.group = [] } })
+    await assertOutcome(t, starting, adapter, { disposition: "quarantined", signals: [] })
+  })
+
+  test(`${platform} leaderless unreadable helper prevents signaling`, async t => {
+    const leader = identity(), helper = identity({ pid: 102, birth: "102:unmarked:/bin/sleep" })
+    const starting = record({ phase: "cleanup_pending", provider: { kind: "process-group", group: { leader, observed: [leader, helper] } } })
+    const adapter = new FakeAdapter({ platform, leader: null, group: [helper] })
+    adapter.readProcess = async pid => { if (pid === helper.pid) throw new Error("helper unreadable"); return null }
+    await assertOutcome(t, starting, adapter, { disposition: "quarantined", signals: [] })
+  })
+
+  test(`${platform} leaderless helper executable changes prevent escalation`, async t => {
+    const leader = identity(), helper = identity({ pid: 102, birth: "102:unmarked:/bin/sh" })
+    const stable = identity({ pid: 103, birth: "103:unmarked:/bin/sleep" })
+    const adapter = new FakeAdapter({ platform, group: [leader, helper, stable], onSignal: (_signal, state) => {
+      state.leader = null
+      state.group = [{ ...helper, birth: "102:unmarked:/bin/sleep" }, stable]
+    } })
+    await assertOutcome(t, record(), adapter, { disposition: "quarantined", signals: ["SIGTERM"] })
+  })
 }
 
 test("expected inventory rejects a replaced record before any write or signal", async t => {
@@ -495,16 +520,16 @@ test("retains malformed core records instead of releasing the checkout", async t
 
 
 test("reconciles retained-member escape without unauthorized signaling", async t => {
-  for (const platform of ["darwin", "linux"] as const) for (const scenario of ["empty", "leader", "omitted", "marker", "uid", "gid", "malformed"]) await t.test(`${platform}: ${scenario}`, async t => {
+  for (const platform of ["darwin", "linux"] as const) for (const scenario of ["empty", "leader", "omitted", "marker", "uid", "gid", "session"]) await t.test(`${platform}: ${scenario}`, async t => {
     const leader = identity()
     const member = identity({ pid: 102, birth: "102:descendant" })
-    const changed = { ...member, ...(scenario === "marker" ? { birth: "102:changed" } : scenario === "uid" ? { uid: member.uid + 1 } : scenario === "gid" ? { gid: member.gid + 1 } : scenario === "malformed" ? { birth: "invalid" } : { processGroupId: 202, sessionId: 202 }) }
-    const adapter = new FakeAdapter({ platform, leader: scenario === "empty" ? null : leader, group: scenario === "empty" ? [] : [leader], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
-    adapter.readProcess = async pid => pid === 102 ? changed : adapter.leader
+    const changed = { ...member, ...(scenario === "marker" ? { birth: "102:changed" } : scenario === "uid" ? { uid: member.uid + 1 } : scenario === "gid" ? { gid: member.gid + 1 } : scenario === "session" ? { sessionId: 202 } : { processGroupId: 202, sessionId: 202 }) }
+    const adapter = new FakeAdapter({ platform, leader: scenario === "empty" ? null : leader, group: scenario === "empty" ? [] : ["uid", "gid", "session"].includes(scenario) ? [leader, changed] : [leader], onSignal: (_signal, state) => { state.leader = null; state.group = [] } })
+    adapter.readProcess = async pid => pid === 102 ? scenario === "marker" && adapter.signals.length ? null : changed : adapter.leader
     const path = await recordFixture(t, record({ phase: scenario === "omitted" ? "cleanup_pending" : "active", provider: { kind: "process-group", group: { leader, observed: [leader, member] } } }))
     const result = await reconcileRecord(path, adapter)
-    assert.equal(result.disposition, ["empty", "leader", "omitted"].includes(scenario) ? scenario === "empty" ? "released" : "cleaned" : "quarantined")
-    assert.deepEqual(adapter.signals, ["leader", "omitted"].includes(scenario) ? ["SIGTERM"] : [])
+    assert.equal(result.disposition, ["empty", "leader", "omitted", "marker"].includes(scenario) ? scenario === "empty" ? "released" : "cleaned" : "quarantined")
+    assert.deepEqual(adapter.signals, ["leader", "omitted", "marker"].includes(scenario) ? ["SIGTERM"] : [])
     if (["empty", "leader", "omitted"].includes(scenario)) assert.deepEqual(result.diagnostics, [{ kind: "detached-helper", identity: changed }])
     assert.ok(result.record.provider?.kind === "process-group" && result.record.provider.group.observed.some(value => value.pid === 102))
   })

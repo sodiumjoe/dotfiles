@@ -1424,6 +1424,47 @@ for (const terminal of ["end", "error", "close", "timeout"] as const) {
   })
 }
 
+qualificationTest("real helper executable transition preserves owned group cleanup", async t => {
+  const scope = await FixtureScope.create(t), launchAttemptId = randomUUID()
+  const marker = agencyLaunchMarker("provider", launchAttemptId)
+  const source = "const { spawn } = require('node:child_process'); const child = spawn('/bin/sh', ['-c', 'read value; exec /bin/sleep 30'], { stdio: ['pipe', 'ignore', 'ignore'] }); process.on('message', () => child.stdin.end('exec\\n')); setInterval(() => {}, 1000)"
+  const child = spawn(node, ["-e", source], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"] })
+  assert.notEqual(child.pid, undefined)
+  scope.track("exec helper fixture", marker, child.pid!)
+  const leader = await waitFor(async () => {
+    const observed = await adapter.readProcess(child.pid!)
+    return observed && exactMarker(observed, marker) ? observed : null
+  }, "fixture leader unavailable")
+  const members = await waitFor(async () => {
+    const group = await adapter.readGroup(leader.pid)
+    return group.length === 2 && group.some(member => member.birth.endsWith(":unmarked:/bin/sh")) ? group : null
+  }, "shell helper unavailable")
+  const evidence = scope.register("exec helper fixture", marker, leader, members)
+  const helper = members.find(member => member.pid !== leader.pid)!
+  const path = join(scope.root, "launch.json")
+  const record: LaunchRecord = { version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: randomUUID() }, handlerGeneration: randomUUID(), launchAttemptId, launchBootId: leader.bootId, launchAttempted: true, phase: "active", provider: { kind: "process-group", group: { leader, observed: members } }, reason: null }
+  await writePrivateLaunchRecord(path, record)
+  child.send("exec")
+  const executed = await waitFor(async () => {
+    const observed = await adapter.readProcess(helper.pid)
+    return observed?.birth.endsWith(":unmarked:/bin/sleep") ? observed : null
+  }, "helper did not execute sleep")
+  evidence.members = [leader, executed]
+  assert.equal(helper.pid, executed.pid)
+  assert.equal(helper.birth.split(":")[0], executed.birth.split(":")[0])
+  assert.equal(sameProcess(helper, executed), false)
+  assert.equal(sameProcess(leader, (await adapter.readProcess(leader.pid))!), true)
+  const result = await reconcilePrivateRecord(path, adapter)
+  assert.equal(result.record.phase, "cleanup_verified")
+  assert.ok(result.record.provider!.group.observed.some(member => member.birth === executed.birth))
+  for (let observation = 0; observation < 2; observation++) {
+    assert.equal(await adapter.readProcess(leader.pid), null)
+    assert.equal(await adapter.readProcess(helper.pid), null)
+    assert.deepEqual(await adapter.readGroup(leader.pid), [])
+  }
+  if (child.connected) child.disconnect()
+})
+
 qualificationTest("provider publication pipe closure self-cleans the unacknowledged tree", async t => {
   const scope = await FixtureScope.create(t)
   const launchAttemptId = randomUUID()

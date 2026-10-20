@@ -150,7 +150,10 @@ async function pollContinuity(adapter: PlatformAdapter, provider: ProcessGroupPr
   const deadline = Date.now() + timeout
   while (true) {
     const continuity = continuedContinuity(provider, await observeGroup(adapter, provider))
-    if (continuity.state === "authorized") await retain(continuity.observation)
+    if (continuity.state === "authorized") {
+      if (continuity.observation.leader === null && (!membersRetained(provider.group.observed, continuity.observation.members) || (await retainedState(adapter, provider)).state === "ambiguous")) return { state: "mismatch" }
+      await retain(continuity.observation)
+    }
     if (continuity.state !== "authorized" || Date.now() >= deadline) return continuity
     await sleep()
   }
@@ -236,7 +239,7 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   const initial = (record.phase === "cleanup_pending" ? continuedContinuity : initialContinuity)(record.provider, await observeGroup(adapter, record.provider))
   if (initial.state === "empty") return discharge(path, adapter, record, "released")
   if (initial.state === "mismatch") return quarantine(path, record, "process-group identity is ambiguous")
-  if ((await retainedState(adapter, record.provider)).state === "ambiguous") return quarantine(path, record, "retained member observation is ambiguous")
+  if (initial.observation.leader === null && (!membersRetained(record.provider.group.observed, initial.observation.members) || (await retainedState(adapter, record.provider)).state === "ambiguous")) return quarantine(path, record, "retained member observation is ambiguous")
   const verifiedLeader = record.provider.group.leader
   const pendingProvider: ProcessGroupProviderIdentity = {
     kind: "process-group",
@@ -248,36 +251,44 @@ async function reconcileProcessGroupRecord(path: string, adapter: PlatformAdapte
   const pending = clone(record, { phase: "cleanup_pending", provider: pendingProvider, reason: null })
   await writeLaunchRecord(path, pending)
   pendingRecord(pending)
-  const retain = async (observation: GroupObservation): Promise<void> => {
+  const retain = async (observation: GroupObservation): Promise<boolean> => {
     const members = unionMembers(pendingProvider.group.observed, observation.members)
-    if (sameMembers(members, pendingProvider.group.observed)) return
+    if (sameMembers(members, pendingProvider.group.observed)) return false
     pendingProvider.group.observed = members
     await writeLaunchRecord(path, pending)
     pendingRecord(pending)
+    return true
   }
-  if ((await retainedState(adapter, pendingProvider)).state === "ambiguous") return quarantine(path, pending, "retained member changed before SIGTERM")
-  const authorization = (record.phase === "cleanup_pending" ? continuedContinuity : initialContinuity)(pendingProvider, await observeGroup(adapter, pendingProvider))
+  const authorizeSignal = async (previous: ProcessIdentity[]): Promise<Continuity> => {
+    const deadline = Date.now() + OBSERVATION_DEADLINE_MS
+    let reference = previous
+    while (true) {
+      let authorization = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
+      if (authorization.state !== "authorized") return authorization
+      if (authorization.observation.leader === null) {
+        if (!membersRetained(reference, authorization.observation.members) || (await retainedState(adapter, pendingProvider)).state === "ambiguous") return { state: "mismatch" }
+        const previousMembers = authorization.observation.members
+        authorization = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
+        if (authorization.state !== "authorized") return authorization
+        if (authorization.observation.leader === null && !membersRetained(previousMembers, authorization.observation.members)) return { state: "mismatch" }
+      }
+      reference = authorization.observation.members
+      if (!await retain(authorization.observation)) return authorization
+      if (Date.now() >= deadline) return { state: "mismatch" }
+    }
+  }
+  const authorization = await authorizeSignal(pendingProvider.group.observed)
   if (authorization.state === "empty") return discharge(path, adapter, pending, "released")
   if (authorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGTERM")
-  await retain(authorization.observation)
   await signal(adapter, pendingProvider.group.leader.processGroupId, "SIGTERM")
-  const afterTerm = await pollContinuity(adapter, pendingProvider, TERM_DEADLINE_MS, retain)
+  const afterTerm = await pollContinuity(adapter, pendingProvider, TERM_DEADLINE_MS, async observation => { await retain(observation) })
   if (afterTerm.state === "empty") return discharge(path, adapter, pending, "cleaned")
   if (afterTerm.state === "mismatch") return quarantine(path, pending, "process-group identity changed after SIGTERM")
-  const killAuthorization = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
+  const killAuthorization = await authorizeSignal(afterTerm.observation.members)
   if (killAuthorization.state === "empty") return discharge(path, adapter, pending, "cleaned")
   if (killAuthorization.state === "mismatch") return quarantine(path, pending, "process-group authorization changed before SIGKILL")
-  await retain(killAuthorization.observation)
-  if (killAuthorization.state !== "authorized" || !membersRetained(afterTerm.observation.members, killAuthorization.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
-  pendingProvider.group.observed = unionMembers(pendingProvider.group.observed, killAuthorization.observation.members)
-  await writeLaunchRecord(path, pending)
-  if ((await retainedState(adapter, pendingProvider)).state === "ambiguous") return quarantine(path, pending, "retained member changed before SIGKILL")
-  const finalKill = continuedContinuity(pendingProvider, await observeGroup(adapter, pendingProvider))
-  if (finalKill.state === "empty") return discharge(path, adapter, pending, "cleaned")
-  if (finalKill.state === "authorized") await retain(finalKill.observation)
-  if (finalKill.state !== "authorized" || !membersRetained(killAuthorization.observation.members, finalKill.observation.members)) return quarantine(path, pending, "process-group snapshot changed before SIGKILL")
   await signal(adapter, pendingProvider.group.leader.processGroupId, "SIGKILL")
-  const afterKill = await pollContinuity(adapter, pendingProvider, KILL_DEADLINE_MS, retain)
+  const afterKill = await pollContinuity(adapter, pendingProvider, KILL_DEADLINE_MS, async observation => { await retain(observation) })
   if (afterKill.state === "empty") return discharge(path, adapter, pending, "cleaned")
   return quarantine(path, pending, afterKill.state === "mismatch" ? "process-group identity changed after SIGKILL" : "process-group survived SIGKILL deadline")
 }

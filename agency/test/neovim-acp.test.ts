@@ -502,8 +502,10 @@ test("restarting an editor keeps its agent in the roster beside another live age
   assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/cancel").length, 0)
 })
 
-test("new-session model selection exposes cached models after discovery failure in a fresh editor", { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { selectionCatalog: true, catalogState: "failed" }), e = await editorFixture(f)
+for (const changedExecutable of [false, true]) test(`new-session model selection exposes cached models after discovery failure${changedExecutable ? " and executable replacement" : ""} in a fresh editor`, { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { selectionCatalog: true, catalogState: "failed" })
+  if (changedExecutable) await writeFile(join(f.root, "profile/native"), "replaced fixture executable", { mode: 0o700 })
+  const e = await editorFixture(f)
   await run(e, `AgencyFixture.commands(); fixture_model_labels={}; vim.ui.select=function(items,opts,callback)
     if opts.prompt == 'Agency backend' then callback(items[1])
     elseif opts.prompt:find('Agency model',1,true) then

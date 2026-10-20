@@ -59,8 +59,6 @@ describe("Agentic Agency provider", function()
             vim.env.DOTFILES_ENV = env
             local opts = load_agentic_setup()
             assert.are.equal("agency", opts.provider)
-            assert.are.equal("agy", opts.acp_providers.agency.command)
-            assert.are.same({ "acp" }, opts.acp_providers.agency.args)
             for name in pairs(require("agentic.config_default").acp_providers) do
                 assert.is_false(opts.acp_providers[name])
             end
@@ -70,6 +68,58 @@ describe("Agentic Agency provider", function()
         end
         vim.env.DOTFILES_ENV = saved
     end)
+
+    for _, state in ipairs({ "absent", "ready", "unavailable" }) do
+        it("launches ACP after ensuring a Handler that is " .. state, function()
+            local root = vim.fn.tempname()
+            vim.fn.mkdir(root, "p")
+            local script = [[#!/bin/sh
+case "$1 $2" in
+  'status --json')
+    printf 'status\n' >> "$AGENCY_FIXTURE_ROOT/trace"
+    if [ -f "$AGENCY_FIXTURE_ROOT/unavailable" ]; then
+      printf '{"ok":false,"error":{"message":"startup failed"}}\n'
+      exit 69
+    fi
+    [ -f "$AGENCY_FIXTURE_ROOT/handler" ] || printf 'new-generation' > "$AGENCY_FIXTURE_ROOT/handler"
+    printf '{"ok":true,"result":{"phase":"ready"}}\n'
+    ;;
+  'acp ')
+    printf 'acp\n' >> "$AGENCY_FIXTURE_ROOT/trace"
+    [ -f "$AGENCY_FIXTURE_ROOT/handler" ] || exit 70
+    cat
+    ;;
+  *) exit 64 ;;
+esac]]
+            vim.fn.writefile(vim.split(script, "\n", { plain = true }), root .. "/agy")
+            assert(vim.uv.fs_chmod(root .. "/agy", 448))
+            if state == "ready" then vim.fn.writefile({ "existing-generation" }, root .. "/handler", "b") end
+            if state == "unavailable" then vim.fn.writefile({}, root .. "/unavailable") end
+            local ok, err = pcall(function()
+                local provider = load_agentic_setup().acp_providers.agency
+                local argv = { provider.command }
+                vim.list_extend(argv, provider.args)
+                local payload = '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n'
+                local result = vim.system(argv, { text = true, stdin = payload,
+                    env = { PATH = root .. ":/usr/bin:/bin", AGENCY_FIXTURE_ROOT = root } }):wait(5000)
+                if state == "unavailable" then
+                    assert.are.equal(70, result.code)
+                    assert.are.equal("", result.stdout)
+                    assert.is_truthy(result.stderr:find("startup failed", 1, true))
+                    assert.are.same({ "status" }, vim.fn.readfile(root .. "/trace"))
+                    assert.are.equal(0, vim.fn.filereadable(root .. "/handler"))
+                else
+                    assert.are.equal(0, result.code)
+                    assert.are.equal(payload, result.stdout)
+                    assert.are.equal("", result.stderr)
+                    assert.are.same({ "status", "acp" }, vim.fn.readfile(root .. "/trace"))
+                    assert.are.same({ state == "ready" and "existing-generation" or "new-generation" }, vim.fn.readfile(root .. "/handler"))
+                end
+            end)
+            vim.fn.delete(root, "rf")
+            assert.is_true(ok, err)
+        end)
+    end
 
     it("runs the agent notification hook when a response completes", function()
         local original_jobstart = vim.fn.jobstart
