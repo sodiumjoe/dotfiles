@@ -1,11 +1,15 @@
 import assert from "node:assert/strict"
-import { spawn, type ChildProcess } from "node:child_process"
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { type Duplex } from "node:stream"
 import { join } from "node:path"
 import { agencyLaunchMarker, exactAgencyBirth } from "./launch-marker.js"
 import { readHandlerRecord, writeHandlerRecord } from "./private-state.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type HandlerInspection, type PlatformAdapter, type ProcessIdentity } from "./types.js"
+
+export type StartupSpawn = (file: string, args: readonly string[], options: SpawnOptions) => ChildProcess
+export type StartupDependencies = { spawn?: StartupSpawn }
+export const nativeStartupSpawn: StartupSpawn = (file, args, options) => spawn(file, [...args], options)
 
 export type StartTransition =
   | "lock_acquired"
@@ -232,7 +236,7 @@ function assertReadyRecord(published: HandlerGenerationRecord, ready: HandlerGen
   if (published.process === null || ready.process === null || !sameProcess(published.process, ready.process)) throw new Error("Handler ready identity does not match the published identity")
 }
 
-export async function launchHandlerGeneration(options: LaunchHandlerOptions): Promise<HandlerInspection> {
+export async function launchHandlerGeneration(options: LaunchHandlerOptions, dependencies: StartupDependencies = {}): Promise<HandlerInspection> {
   const deadline = Date.now() + options.timeoutMs
   const recordPath = join(options.root, "handler.json")
   const socketPath = join(options.root, "handler.sock")
@@ -258,7 +262,7 @@ export async function launchHandlerGeneration(options: LaunchHandlerOptions): Pr
   await writeHandlerRecord(recordPath, { ...pending, launchAttempted: true })
   await transition(options, "launch_attempt_recorded")
   const launchMarker = agencyLaunchMarker("handler", launchAttemptId)
-  const child = spawn(options.handler.file, [...options.handler.args], {
+  const child = (dependencies.spawn ?? nativeStartupSpawn)(options.handler.file, options.handler.args, {
     argv0: launchMarker,
     detached: true,
     env: {

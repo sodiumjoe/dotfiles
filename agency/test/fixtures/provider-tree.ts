@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { constants, closeSync, fsyncSync, openSync, writeFileSync, renameSync, lstatSync } from "node:fs"
 import { lstat, open, realpath, rename, rm, type FileHandle } from "node:fs/promises"
 import { Socket } from "node:net"
@@ -194,11 +194,14 @@ export async function stopDescendant(descendant: ReturnType<typeof spawn>, timeo
   })
 }
 
-export async function leader(readyPath: string, providerMode: ProviderMode, timeoutMs: number, dependencies?: { spawnDescendant: () => ReturnType<typeof spawn>; socketForFd: (fd: number) => Duplex; readyFileSystem?: ReadyFileSystem; receiptPath?: string }): Promise<never> {
+export async function leader(readyPath: string, providerMode: ProviderMode, timeoutMs: number, dependencies?: { spawnDescendant: () => ReturnType<typeof spawn>; socketForFd: (fd: number) => Duplex; readyFileSystem?: ReadyFileSystem; finalFailureSink?: (value: unknown) => Promise<void> }): Promise<never> {
   const fixturePath = process.argv[1]
   if (fixturePath === undefined) throw new Error("provider-tree fixture path is unavailable")
-  const token = createHash("sha256").update(readyPath).digest("hex").slice(0,32)
-  const receiptPath = dependencies?.receiptPath ?? (dependencies === undefined ? process.env.AGENCY_PROVIDER_RECEIPT ?? join(dirname(readyPath), `${token.slice(0,8)}-${token.slice(8,12)}-${token.slice(12,16)}-${token.slice(16,20)}-${token.slice(20)}.json`) : undefined)
+  const legacy = dependencies === undefined && process.env.AGENCY_FIXTURE_LEGACY_LINUX_RECEIPTS === "1"
+  if (legacy && (!process.env.AGENCY_PROVIDER_RECEIPT || !process.env.AGENCY_PROVIDER_ATTEMPT || !process.env.AGENCY_PROVIDER_CASE || !process.env.AGENCY_PROVIDER_LAUNCH || process.env.AGENCY_PROVIDER_BATCH !== process.env.AGENCY_DIRECT_GROUP_BATCH)) throw new Error("Legacy Linux receipt bindings are incomplete")
+  const receiptPath = legacy ? process.env.AGENCY_PROVIDER_RECEIPT : undefined
+  const runtime = dependencies === undefined && !legacy ? await import("./fixture-spawn.js") : undefined
+  const launch = runtime ? await runtime.fixtureSpawner() : undefined
   const receipt = { key: receiptPath === undefined ? randomUUID() : basename(receiptPath, ".json"), providerAttemptId: process.env.AGENCY_PROVIDER_ATTEMPT ?? null, batchId: process.env.AGENCY_PROVIDER_BATCH ?? null, caseId: process.env.AGENCY_PROVIDER_CASE ?? null, launchAttemptId: process.env.AGENCY_PROVIDER_LAUNCH ?? null, phase: "planned", pid: null as number | null, ownership: "direct-unreaped-child-handle", registered: false, fatalConditions: [] as string[], signalAttempt: null as string | null, delivered: null as boolean | null, outcome: "pending", error: null as string | null }
   const persist = (): void => {
     if (receiptPath === undefined) return
@@ -213,7 +216,7 @@ export async function leader(readyPath: string, providerMode: ProviderMode, time
     try { fsyncSync(parent) } finally { closeSync(parent) }
   }
   persist()
-  const descendant = dependencies?.spawnDescendant() ?? spawn(process.execPath, [fixturePath, "descendant", providerMode], { stdio: ["ignore", "ignore", "ignore", "pipe"] })
+  const descendant = dependencies?.spawnDescendant() ?? (launch ? launch("provider-descendant", process.execPath, [fixturePath, "descendant", providerMode], { stdio: ["ignore", "ignore", "ignore", "pipe"] }) : spawn(process.execPath, [fixturePath, "descendant", providerMode], { stdio: ["ignore", "ignore", "ignore", "pipe"] }))
   receipt.pid = descendant.pid ?? null
   receipt.phase = "spawned"
   persist()
@@ -256,6 +259,7 @@ export async function leader(readyPath: string, providerMode: ProviderMode, time
     receipt.registered = true
     receipt.phase = "registered"
     persist()
+    if (runtime) await runtime.sealFixtureSource()
     if (providerMode === "leader-exits-on-term") process.once("SIGTERM", () => process.exit(0))
     await withPrivateUmask(() => publishReady(readyPath, JSON.stringify({ leaderPid: process.pid, descendantPid: descendant.pid }), dependencies?.readyFileSystem))
   } catch (error) {
@@ -272,7 +276,14 @@ export async function leader(readyPath: string, providerMode: ProviderMode, time
       receipt.outcome = "error"
       receipt.fatalConditions.push(String(cleanupError))
       persist()
+      await dependencies?.finalFailureSink?.(receipt)
       throw cleanupError
+    }
+    await dependencies?.finalFailureSink?.(receipt)
+    if (runtime) {
+      const { scope } = await runtime.fixtureRuntime()
+      await withPrivateUmask(() => import("node:fs/promises").then(fs => fs.writeFile(readyPath + ".failure.json", JSON.stringify({ receipt, scope: scope.snapshot() }), { mode: 0o600, flag: "wx" })))
+      if (!(await runtime.fixtureRuntime()).sealed) await runtime.finishFixtureSource()
     }
     throw error
   } finally {

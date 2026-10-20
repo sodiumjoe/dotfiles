@@ -17,7 +17,9 @@ import { agencyLaunchMarker, parseAgencyLaunchMarker } from "../src/platform/lau
 import { resolvePlatformPaths } from "../src/platform/paths.js"
 import { readHandlerRecord, readLaunchRecord, writeHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import { reconcileRecord } from "../src/platform/reconcile.js"
-import { startOrConnect } from "../src/platform/singleton.js"
+import { ownedStartOrConnect as startOrConnect, preserveSingletonFixture } from "./fixtures/singleton-ownership.js"
+import { fixtureSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
+import { workerScope } from "./fixtures/run-boundary.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type LaunchPhase, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../src/platform/types.js"
 import { leader as providerLeader, stopDescendant } from "./fixtures/provider-tree.js"
 
@@ -27,8 +29,7 @@ const handlerFixture = fileURLToPath(new URL("./fixtures/handler.js", import.met
 const singletonFixture = fileURLToPath(new URL("./fixtures/singleton-handler.js", import.meta.url))
 const adapter = createDarwinAdapter()
 const retainedEvidence = process.env.AGENCY_TEST_EVIDENCE_ROOT
-const ownership = retainedEvidence === undefined ? undefined : await import("./fixtures/singleton-ownership.js")
-ownership?.installSingletonOwnership([providerFixture, handlerFixture, singletonFixture])
+
 const darwinTest = process.platform === "darwin" ? test : test.skip
 const allEvidence: GroupEvidence[] = []
 const allPending: PendingGroup[] = []
@@ -261,7 +262,7 @@ async function cleanupEvidence(evidence: GroupEvidence): Promise<void> {
   if (observation.members.length > 0 && observation.leader !== null) {
     observation = await authorized(evidence)
     assert.notEqual(observation.leader, null)
-    await adapter.signalGroup(evidence.leader.processGroupId, "SIGTERM")
+    await signalFixturePid(evidence.leader.pid, "SIGTERM", false, true)
     receipt.actions.push("SIGTERM")
     const deadline = Date.now() + 1000
     while (Date.now() < deadline) {
@@ -274,7 +275,8 @@ async function cleanupEvidence(evidence: GroupEvidence): Promise<void> {
   if (observation.members.length > 0) {
     observation = await authorized(evidence)
     assert.ok(observation.members.length > 0)
-    await adapter.signalGroup(evidence.leader.processGroupId, "SIGKILL")
+    if (observation.leader) await signalFixturePid(evidence.leader.pid, "SIGKILL", false, true)
+    else for (const member of observation.members) await signalFixturePid(member.pid, "SIGKILL")
     receipt.actions.push("SIGKILL")
     await waitUntil(async () => (await adapter.readGroup(evidence.leader.processGroupId)).length === 0, `${evidence.label} survived fixture SIGKILL`, 3000)
   }
@@ -292,13 +294,12 @@ async function cleanupEvidence(evidence: GroupEvidence): Promise<void> {
 
 class FixtureScope {
   readonly evidence: GroupEvidence[] = []
-  readonly identityLogs = new Set<string>()
   readonly emptyRoots = new Set<string>()
   readonly pending: PendingGroup[] = []
   private readonly starts: Promise<unknown>[] = []
   private stopping = false
 
-  private constructor(readonly root: string) {}
+  private constructor(readonly root: string, private readonly registrationStart: number) {}
 
   start<T>(operation: () => Promise<T>): Promise<T> {
     if (this.stopping) throw new Error("fixture startup cannot begin during teardown")
@@ -317,7 +318,8 @@ class FixtureScope {
     assert.equal(metadata.gid, process.getgid!())
     assert.equal(metadata.mode & 0o777, 0o700)
     assert.equal(await realpath(root), root)
-    const scope = new FixtureScope(root)
+    const scope = new FixtureScope(root, (await workerScope()).snapshot().launches.length)
+    ;(await workerScope()).artifact(root)
     if (retainedEvidence !== undefined) {
       const registry = join(retainedEvidence, "fixture-roots.json")
       const roots = JSON.parse(await readFile(registry, "utf8").catch(() => "[]"))
@@ -337,7 +339,6 @@ class FixtureScope {
       return existing
     }
     const evidence = { label, marker, leader, members: sorted(members), receiptPath: join(this.root, `cleanup-${this.evidence.length}-${randomUUID()}.json`) }
-    for (const identity of evidence.members) ownership?.retainSingletonIdentity("darwin-group-member", identity)
     this.evidence.push(evidence)
     allEvidence.push(evidence)
     for (const pending of this.pending) {
@@ -353,14 +354,12 @@ class FixtureScope {
   }
 
   private async discoverHandlers(): Promise<void> {
-    for (const path of this.identityLogs) {
-      if (!await exists(path)) continue
-      const lines = (await readFile(path, "utf8")).split("\n").filter(Boolean)
-      for (const line of lines) {
-        const identity = JSON.parse(line) as ProcessIdentity
-        const marker = identity.birth.slice(identity.birth.indexOf(":") + 1)
-        this.register(`Handler ${identity.pid}`, marker, identity, [identity])
-      }
+    for (const launch of (await workerScope()).snapshot().launches.slice(this.registrationStart)) {
+      if (launch.role !== "singleton-handler" || !launch.identity || launch.exit) continue
+      const identity = launch.identity
+      if (!await adapter.readProcess(identity.pid)) continue
+      const marker = identity.birth.slice(identity.birth.indexOf(":") + 1)
+      this.register(`Handler ${identity.pid}`, marker, identity, [identity])
     }
   }
 
@@ -415,10 +414,9 @@ class FixtureScope {
         if (typeof error !== "object" || error === null || !("code" in error) || (error.code !== "ENOENT" && error.code !== "ENOTEMPTY")) failures.push(error)
       }
     }
-    if (retainedEvidence !== undefined && ownership !== undefined) {
-      try { await ownership.preserveSingletonFixture(this.root, join(retainedEvidence, "darwin", this.root.split("/").at(-1)!)) } catch (error) { failures.push(error) }
+    if (retainedEvidence !== undefined) {
+      try { await preserveSingletonFixture(this.root, join(retainedEvidence, "darwin", this.root.split("/").at(-1)!)) } catch (error) { failures.push(error) }
     }
-    if (failures.length === 0) await rm(this.root, { recursive: true, force: true })
     if (failures.length > 0) throw new AggregateError(failures, "fixture cleanup failed")
   }
 }
@@ -521,7 +519,7 @@ async function spawnProvider(scope: FixtureScope, label: string, mode: ProviderM
   const launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("provider", launchAttemptId)
   const readyPath = join(scope.root, `provider-${randomUUID()}.json`)
-  const child = spawn(node, [providerFixture, "leader", readyPath, mode, "5000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] })
+  const child = (await fixtureSpawner())("provider-tree", node, [providerFixture, "leader", readyPath, mode, "5000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track(label, marker, child.pid!)
   const structural = await readProviderStructural(child, label)
@@ -537,7 +535,8 @@ async function spawnProvider(scope: FixtureScope, label: string, mode: ProviderM
 }
 
 async function killExactHandler(identity: ProcessIdentity): Promise<void> {
-  await signalExactHandlerGroup(adapter, identity, "SIGKILL")
+  const launch = (await workerScope()).snapshot().launches.find(value => value.pid === identity.pid)
+  await signalFixturePid(identity.pid, "SIGKILL", launch?.role === "darwin-handler" || launch?.role === "singleton-contender")
   await waitUntil(async () => await adapter.readProcess(identity.pid) === null, `Handler ${identity.pid} survived SIGKILL`, 5000)
 }
 
@@ -635,7 +634,7 @@ async function crashHandler(scope: FixtureScope, phase: CrashPhase, providerMode
   const configPath = join(scope.root, `handler-${phase}-${randomUUID()}.json`)
   const providerReadyPath = join(scope.root, `provider-ready-${phase}-${randomUUID()}.json`)
   await writePrivateFile(configPath, JSON.stringify({ phase, recordPath, providerReadyPath, providerMode, timeoutMs: 5000 }))
-  const child = spawn(node, [handlerFixture, configPath], { argv0: marker, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] })
+  const child = (await fixtureSpawner())("darwin-handler", node, [handlerFixture, configPath], { argv0: marker, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track(`crash Handler ${phase}`, marker, child.pid!)
   let providerEvidence: GroupEvidence | null = null
@@ -1326,7 +1325,7 @@ darwinTest("drains all 32 contender starts and aggregates failures before return
 })
 
 for (const count of [32, 1]) {
-  darwinTest(`drains ${count === 32 ? "contender starts" : "replacementStart"} in the registered after hook before fixture discovery and root removal`, async t => {
+  darwinTest(`drains ${count === 32 ? "contender starts" : "replacementStart"} in the registered after hook before fixture discovery and retained roots`, async t => {
     const hooks: Array<() => Promise<void>> = []
     const scope = await FixtureScope.create({ after: (hook: () => Promise<void>) => hooks.push(hook) } as unknown as TestContext)
     const gate = Promise.withResolvers<void>()
@@ -1358,7 +1357,7 @@ for (const count of [32, 1]) {
     assert.deepEqual(beforeRelease, [], "fixture discovery ran while startup was pending")
     assert.deepEqual(events, [...Array.from({ length: count }, (_, index) => `started:${index}`), "discover"])
     assert.ok(results.every(result => result.status === "fulfilled"))
-    assert.equal(await exists(scope.root), false)
+    assert.equal(await exists(scope.root), true)
   })
 }
 
@@ -1428,8 +1427,7 @@ for (const terminal of ["end", "error", "close", "timeout"] as const) {
 qualificationTest("real helper executable transition preserves owned group cleanup", async t => {
   const scope = await FixtureScope.create(t), launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("provider", launchAttemptId)
-  const source = "const { spawn } = require('node:child_process'); const child = spawn('/bin/sh', ['-c', 'read value; exec /bin/sleep 30'], { stdio: ['pipe', 'ignore', 'ignore'] }); process.on('message', () => child.stdin.end('exec\\n')); setInterval(() => {}, 1000)"
-  const child = spawn(node, ["-e", source], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"] })
+  const child = (await fixtureSpawner())("darwin-exec-tree", node, [fileURLToPath(new URL("./fixtures/darwin-descendant.js", import.meta.url)), "exec"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track("exec helper fixture", marker, child.pid!)
   const leader = await waitFor(async () => {
@@ -1445,7 +1443,9 @@ qualificationTest("real helper executable transition preserves owned group clean
   const path = join(scope.root, "launch.json")
   const record: LaunchRecord = { version: 2, owner: { kind: "catalog-probe", providerId: "codex-acp", commandId: randomUUID() }, handlerGeneration: randomUUID(), launchAttemptId, launchBootId: leader.bootId, launchAttempted: true, phase: "active", provider: { kind: "process-group", group: { leader, observed: members } }, reason: null }
   await writePrivateLaunchRecord(path, record)
+  const executedReport = new Promise<void>(resolve => child.on("message", value => { if (value === "executed") resolve() }))
   child.send("exec")
+  await executedReport
   const executed = await waitFor(async () => {
     const observed = await adapter.readProcess(helper.pid)
     return observed?.birth.endsWith(":unmarked:/bin/sleep") ? observed : null
@@ -1471,7 +1471,7 @@ qualificationTest("provider publication pipe closure self-cleans the unacknowled
   const launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("provider", launchAttemptId)
   const readyPath = join(scope.root, "publication-closed-ready.json")
-  const child = spawn(node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] })
+  const child = (await fixtureSpawner())("provider-tree", node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track("publication-closed provider", marker, child.pid!)
   const leader = await waitFor(() => adapter.readProcess(child.pid!), "publication-closed provider leader was not observable")
@@ -1494,7 +1494,7 @@ qualificationTest("provider missing acknowledgement descriptor self-cleans the u
   const launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("provider", launchAttemptId)
   const readyPath = join(scope.root, "acknowledgement-missing-ready.json")
-  const child = spawn(node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe"] })
+  const child = (await fixtureSpawner())("provider-tree", node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe"] }, { source: true })
   if (child.pid === undefined) throw new Error("acknowledgement-missing provider pid is unavailable")
   scope.track("acknowledgement-missing provider", marker, child.pid)
   const structural = await readProviderStructural(child, "acknowledgement-missing provider")
@@ -1519,7 +1519,7 @@ qualificationTest("provider acknowledgement pipe closure self-cleans the publish
   const launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("provider", launchAttemptId)
   const readyPath = join(scope.root, "acknowledgement-closed-ready.json")
-  const child = spawn(node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] })
+  const child = (await fixtureSpawner())("provider-tree", node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track("acknowledgement-closed provider", marker, child.pid!)
   const structural = await readProviderStructural(child, "acknowledgement-closed provider")
@@ -1538,7 +1538,7 @@ qualificationTest("provider registration closes acknowledgement on an unauthoriz
   const launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("provider", launchAttemptId)
   const readyPath = join(scope.root, "unauthorized-registration-ready.json")
-  const child = spawn(node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] })
+  const child = (await fixtureSpawner())("provider-tree", node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track("unauthorized-registration provider", marker, child.pid!)
   const structural = await readProviderStructural(child, "unauthorized-registration provider")
@@ -1574,7 +1574,7 @@ qualificationTest("Handler acknowledgement pipe closure self-cleans its provider
   const configPath = join(scope.root, "handler-acknowledgement-closed.json")
   const providerReadyPath = join(scope.root, "handler-acknowledgement-closed-ready.json")
   await writePrivateFile(configPath, JSON.stringify({ phase: "active", recordPath, providerReadyPath, providerMode: "normal", timeoutMs: 2000 }))
-  const child = spawn(node, [handlerFixture, configPath], { argv0: handlerMarker, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] })
+  const child = (await fixtureSpawner())("darwin-handler", node, [handlerFixture, configPath], { argv0: handlerMarker, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track("acknowledgement-closed Handler", handlerMarker, child.pid!)
   const structural = await readProviderStructural(child, "Handler acknowledgement-closed provider")
@@ -1597,7 +1597,6 @@ qualificationTest("bounds the singleton Handler launch gate by timeoutMs", async
   const retainedDirectory = join(scope.root, "retained")
   await makePrivateDirectory(retainedDirectory)
   const handlerLog = join(scope.root, "gate-timeout-handlers.jsonl")
-  scope.identityLogs.add(handlerLog)
   const timeoutMs = 150
   const bootId = await adapter.bootId()
   const launchAttemptId = randomUUID()
@@ -1608,7 +1607,7 @@ qualificationTest("bounds the singleton Handler launch gate by timeoutMs", async
   await writePrivateHandlerRecord(recordPath, pendingHandlerRecord(scope.root, hostId, bootId, launchAttemptId, generation))
   await writePrivateFile(configPath, JSON.stringify({ root: scope.root, bootId, hostId, handlerLog, retainedDirectory, adapterMode: "darwin-real", timeoutMs }))
   const marker = agencyLaunchMarker("handler", launchAttemptId)
-  const child = spawn(node, [singletonFixture, "handler", configPath], {
+  const child = (await fixtureSpawner())("singleton-handler", node, [singletonFixture, "handler", configPath], {
     argv0: marker,
     detached: true,
     env: { ...process.env, AGENCY_HANDLER_RECORD: recordPath, AGENCY_HANDLER_GENERATION: generation },
@@ -1640,7 +1639,6 @@ qualificationTest("bounds singleton Handler phase pauses by timeoutMs", async t 
   const handlerLog = join(scope.root, "pause-timeout-handlers.jsonl")
   const eventLog = join(scope.root, "pause-timeout-events.log")
   const releasePath = join(scope.root, "release-never-created")
-  scope.identityLogs.add(handlerLog)
   const timeoutMs = 200
   const bootId = await adapter.bootId()
   const launchAttemptId = randomUUID()
@@ -1652,7 +1650,7 @@ qualificationTest("bounds singleton Handler phase pauses by timeoutMs", async t 
   await writePrivateFile(configPath, JSON.stringify(config))
   await writePrivateHandlerRecord(recordPath, pendingHandlerRecord(scope.root, hostId, bootId, launchAttemptId, generation))
   const marker = agencyLaunchMarker("handler", launchAttemptId)
-  const child = spawn(node, [singletonFixture, "handler", configPath], {
+  const child = (await fixtureSpawner())("singleton-handler", node, [singletonFixture, "handler", configPath], {
     argv0: marker,
     detached: true,
     env: { ...process.env, AGENCY_HANDLER_RECORD: recordPath, AGENCY_HANDLER_GENERATION: generation },
@@ -1692,13 +1690,12 @@ qualificationTest("bounds singleton launcher transition pauses by timeoutMs", as
   const releasePath = join(root, "release-never-created")
   const timeoutMs = 200
   const configPath = join(root, "launcher-pause-timeout.json")
-  scope.identityLogs.add(handlerLog)
   await writePrivateFile(configPath, JSON.stringify({ root, bootId: await adapter.bootId(), hostId: "launcher-pause-timeout-host", handlerLog, retainedDirectory, adapterMode: "darwin-real", timeoutMs, lockTimeoutSeconds: 2, eventLog, resultPath, releasePath, launcherPauseAt: "lock_acquired" }))
   const launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("handler", launchAttemptId)
   const setupStarted = Date.now()
   await new Promise(resolve => setTimeout(resolve, 600))
-  const child = spawn(node, [singletonFixture, "contender", configPath], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe"] })
+  const child = (await fixtureSpawner())("singleton-contender", node, [singletonFixture, "contender", configPath], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe"] }, { source: true })
   if (child.pid === undefined) throw new Error("launcher pause contender pid is unavailable")
   scope.track("launcher pause contender", marker, child.pid)
   const exit = await waitChild(child, 1000)
@@ -1786,7 +1783,6 @@ qualificationTest("converges 32 real lockf contenders and replaces an exactly de
   const handlerLog = join(scope.root, "handlers.jsonl")
   const eventLog = join(scope.root, "events.log")
   const releasePath = join(scope.root, "release")
-  scope.identityLogs.add(handlerLog)
   const config: FixtureConfig = {
     root: scope.root,
     bootId: "unused-real-darwin-boot",
@@ -2002,7 +1998,6 @@ registerWorkerFinalizer("Darwin fixture verification", async () => {
   }
   finalSurvivorCount = new Set(survivors.map(value => `${value.label}:${value.pid}`)).size
   if (finalSurvivorCount > 0) failures.push(new Error(`registered fixture survivors: ${JSON.stringify(survivors)}`))
-  try { await ownership?.finishSingletonOwnership() } catch (error) { failures.push(error) }
   if (failures.length > 0) throw new AggregateError(failures, `fixture survivor verification failed with ${finalSurvivorCount} registered and ${independentSurvivorCount} independent survivors`)
 })
 async function readyProviderGroup(processGroupId: number, required: (members: ProcessIdentity[]) => boolean, source: PlatformAdapter = adapter): Promise<ProcessIdentity[] | null> {

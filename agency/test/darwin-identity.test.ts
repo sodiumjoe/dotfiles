@@ -1,3 +1,5 @@
+import { workerScope } from "./fixtures/run-boundary.js"
+import { fixtureSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import { execFile, spawn, type ChildProcess } from "node:child_process"
 import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
@@ -5,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Readable } from "node:stream"
 import test, { type TestContext } from "node:test"
-import { pathToFileURL } from "node:url"
+import { pathToFileURL, fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 import {
   createDarwinAdapter,
@@ -105,7 +107,7 @@ async function readLine(stream: Readable): Promise<string> {
 async function stopGroup(child: ChildProcess): Promise<void> {
   if (child.pid === undefined) return
   try {
-    process.kill(-child.pid, "SIGKILL")
+    await signalFixturePid(child.pid, "SIGKILL")
   } catch (error) {
     if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ESRCH") throw error
   }
@@ -120,8 +122,9 @@ async function stopGroup(child: ChildProcess): Promise<void> {
   }, `fixture group ${child.pid} survived`)
 }
 
-function spawnMarked(t: TestContext, marker: string, args: readonly string[] = ["-e", processScript]): ChildProcess {
-  const child = spawn(node, [...args], { argv0: marker, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+async function spawnMarked(t: TestContext, marker: string, args: readonly string[] = ["-e", processScript]): Promise<ChildProcess> {
+  const source = args[0]?.endsWith("darwin-descendant.js") ?? false
+  const child = (await fixtureSpawner())(source ? "darwin-identity-tree" : "darwin-identity-leaf", node, args, { argv0: marker, detached: true, stdio: ["ignore", "pipe", "ignore"] }, { source })
   t.after(async () => stopGroup(child))
   return child
 }
@@ -149,7 +152,6 @@ darwinTest("qualifies fixed root-owned system tools", async () => {
 
 darwinTest("isolated provider environment prevents system Git fsmonitor activation", async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), "agency-darwin-git-config-"))
-  t.after(() => rm(root, { recursive: true, force: true }))
   const environment = { PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "xdg/config") }
   const checkout = join(root, "checkout"), systemConfig = join(root, "system.gitconfig")
   for (const path of [environment.HOME!, environment.XDG_CONFIG_HOME!, join(checkout, ".git/objects"), join(checkout, ".git/refs")]) await mkdir(path, { mode: 0o700, recursive: true })
@@ -195,7 +197,7 @@ darwinTest("uses only fixed commands with a bounded C-locale UTC execution contr
 
 darwinTest("observes exact marker-bound leader identity and distinguishes marker changes", async t => {
   const marker = agencyLaunchMarker("handler", crypto.randomUUID())
-  const child = spawnMarked(t, marker)
+  const child = await spawnMarked(t, marker)
   assert.notEqual(child.pid, undefined)
   const adapter = createDarwinAdapter()
   await waitFor(async () => await adapter.readProcess(child.pid!) !== null, "marked child was not observed")
@@ -217,8 +219,8 @@ darwinTest("observes exact marker-bound leader identity and distinguishes marker
 darwinTest("same-executable leaders retain distinct marker-bound births", async t => {
   const firstMarker = agencyLaunchMarker("provider", crypto.randomUUID())
   const secondMarker = agencyLaunchMarker("provider", crypto.randomUUID())
-  const firstChild = spawnMarked(t, firstMarker)
-  const secondChild = spawnMarked(t, secondMarker)
+  const firstChild = await spawnMarked(t, firstMarker)
+  const secondChild = await spawnMarked(t, secondMarker)
   const adapter = createDarwinAdapter()
   const [first, second] = await Promise.all([adapter.readProcess(firstChild.pid!), adapter.readProcess(secondChild.pid!)])
   assert.notEqual(first, null)
@@ -247,7 +249,7 @@ darwinTest("equal start-second observations remain distinct only through their m
 })
 
 darwinTest("present missing and malformed markers remain mismatching identities", async t => {
-  const children = [spawnMarked(t, node), spawnMarked(t, "agy-handler:not-a-uuid")]
+  const children = [await spawnMarked(t, node), await spawnMarked(t, "agy-handler:not-a-uuid")]
   const adapter = createDarwinAdapter()
   for (const child of children) {
     const observed = await adapter.readProcess(child.pid!)
@@ -266,7 +268,7 @@ darwinTest("returns null only after two targeted observations confirm PID absenc
 })
 
 darwinTest("returns null after a real marked child terminates", async t => {
-  const child = spawnMarked(t, agencyLaunchMarker("handler", crypto.randomUUID()))
+  const child = await spawnMarked(t, agencyLaunchMarker("handler", crypto.randomUUID()))
   const adapter = createDarwinAdapter()
   assert.notEqual(await adapter.readProcess(child.pid!), null)
   await stopGroup(child)
@@ -275,8 +277,7 @@ darwinTest("returns null after a real marked child terminates", async t => {
 
 darwinTest("enumerates stable complete groups independently of leader presence", async t => {
   const marker = agencyLaunchMarker("provider", crypto.randomUUID())
-  const leaderCode = `const {spawn}=require("node:child_process");const child=spawn(${JSON.stringify(node)},["-e",${JSON.stringify(processScript)},${JSON.stringify(marker)}],{stdio:"ignore"});process.stdout.write(String(child.pid)+"\\n");setInterval(()=>undefined,1000)`
-  const leader = spawnMarked(t, marker, ["-e", leaderCode])
+  const leader = await spawnMarked(t, marker, [fileURLToPath(new URL("./fixtures/darwin-descendant.js", import.meta.url)), "identity", marker])
   const descendantPid = Number(await readLine(leader.stdout!))
   const adapter = createDarwinAdapter()
   const members = await adapter.readGroup(leader.pid!)
@@ -285,11 +286,11 @@ darwinTest("enumerates stable complete groups independently of leader presence",
   assert.notEqual(descendant, undefined)
   assert.match(descendant!.birth, /^[0-9]+:unmarked:/)
   assert.ok(members.every(member => member.processGroupId === leader.pid && member.sessionId === leader.pid))
-  process.kill(leader.pid!, "SIGKILL")
+  await signalFixturePid(leader.pid!, "SIGKILL")
   await waitFor(async () => (await adapter.readProcess(leader.pid!)) === null, "leader survived")
   const leaderless = await adapter.readGroup(leader.pid!)
   assert.ok(leaderless.some(member => member.pid === descendantPid))
-  process.kill(descendantPid, "SIGKILL")
+  await signalFixturePid(descendantPid, "SIGKILL")
   await waitFor(async () => (await adapter.readGroup(leader.pid!)).length === 0, "leaderless group survived")
 })
 
@@ -355,8 +356,9 @@ darwinTest("fails a group observation when no complete stable pair exists", asyn
 
 darwinTest("rejects Darwin Handler publication without the expected launch marker", async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), "agency-darwin-unmarked-startup-"))
-  t.after(async () => rm(root, { recursive: true, force: true }))
   const stateUrl = pathToFileURL(join(process.cwd(), "dist/src/platform/private-state.js")).href
+  const launch = await fixtureSpawner()
+  ;(await workerScope()).artifact(root)
   const malformedBirth = "1780000000:unmarked:agy-handler:not-a-uuid"
   let handlerPid: number | undefined
   const adapter = {
@@ -381,7 +383,7 @@ darwinTest("rejects Darwin Handler publication without the expected launch marke
   t.after(async () => {
     if (handlerPid === undefined) return
     try {
-      process.kill(handlerPid, "SIGKILL")
+      await signalFixturePid(handlerPid, "SIGKILL")
     } catch (error) {
       if (typeof error !== "object" || error === null || !("code" in error) || error.code !== "ESRCH") throw error
     }
@@ -402,12 +404,13 @@ darwinTest("rejects Darwin Handler publication without the expected launch marke
     adapter,
     handler: { file: node, args: ["--input-type=module", "-e", script] },
     timeoutMs: 5000,
-  }), /launch marker/i)
+  }, { spawn: (file, args, options) => launch("singleton-handler", file, args, options) }), /launch marker/i)
 })
 
 darwinTest("binds Handler launchAttemptId into argv0 without changing the command vector", async t => {
   const root = await mkdtemp(join(await realpath(tmpdir()), "agency-darwin-startup-"))
-  t.after(async () => rm(root, { recursive: true, force: true }))
+  ;(await workerScope()).artifact(root)
+  const launch = await fixtureSpawner()
   const darwinUrl = pathToFileURL(join(process.cwd(), "dist/src/platform/darwin.js")).href
   const stateUrl = pathToFileURL(join(process.cwd(), "dist/src/platform/private-state.js")).href
   const script = `import{Socket}from"node:net";const status=new Socket({fd:3,readable:true,writable:true});const gate=new Socket({fd:4,readable:true,writable:true});const{createDarwinAdapter}=await import(${JSON.stringify(darwinUrl)});const{readHandlerRecord,writeHandlerRecord}=await import(${JSON.stringify(stateUrl)});const identity=await createDarwinAdapter().readProcess(process.pid);status.write(JSON.stringify({type:"identity",identity})+"\\n");await new Promise((resolve,reject)=>{gate.once("data",resolve);gate.once("error",reject)});gate.destroy();const record=await readHandlerRecord(process.env.AGENCY_HANDLER_RECORD);await writeHandlerRecord(process.env.AGENCY_HANDLER_RECORD,{...record,phase:"ready",writer:"handler",reconciliation:{classified:0,total:0,quarantined:0},reason:null});status.write(JSON.stringify({type:"gate_released",generation:process.env.AGENCY_HANDLER_GENERATION})+"\\n"+JSON.stringify({type:"ready",generation:process.env.AGENCY_HANDLER_GENERATION})+"\\n");status.end();setInterval(()=>undefined,1000)`
@@ -418,14 +421,14 @@ darwinTest("binds Handler launchAttemptId into argv0 without changing the comman
     adapter,
     handler: { file: node, args: ["--input-type=module", "-e", script] },
     timeoutMs: 5000,
-  })
+  }, { spawn: (file, args, options) => launch("singleton-handler", file, args, options) })
   assert.equal(result.disposition, "live")
   assert.notEqual(result.record.process, null)
   assert.match(result.record.process!.birth, new RegExp(`:agy-handler:${result.record.launchAttemptId}$`))
   const observed = await adapter.readProcess(result.record.process!.pid)
   assert.notEqual(observed, null)
   assert.equal(sameProcess(result.record.process!, observed!), true)
-  process.kill(-result.record.process!.processGroupId, "SIGKILL")
+  await signalFixturePid(result.record.process!.pid, "SIGKILL")
   await waitFor(async () => await adapter.readProcess(result.record.process!.pid) === null, "Handler fixture survived")
 })
 

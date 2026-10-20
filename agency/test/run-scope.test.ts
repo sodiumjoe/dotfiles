@@ -10,7 +10,7 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-function fixture(deadlineMs = 1000) {
+function fixture(deadlineMs = 1000, reporting: import("./fixtures/run-scope.js").Reporting = "direct") {
   const identity: ProcessIdentity = { bootId: "boot", pid: 123, birth: "10:fixture", parentPid: process.pid, processGroupId: 123, sessionId: 123, uid: 1, gid: 1 }
   const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null }) as unknown as ChildProcess
   let current: ProcessIdentity | null = identity
@@ -22,7 +22,7 @@ function fixture(deadlineMs = 1000) {
     signalGroup: async () => { throw new Error("synthetic adapter cannot signal") },
   }
   const scope = createSyntheticFixtureScope({ runId: "run", workerFile: "scope.test", deadlineMs, adapter, signal: (pid, value) => { signals.push([pid, value]) } })
-  const ref = scope.intent("provider")
+  const ref = scope.intent("provider", { reporting })
   const register = () => scope.spawn(ref, () => child, { closeAdmission() {} })
   const exit = (close = true) => { current = null; Object.assign(child, { exitCode: 0 }); child.emit("exit", 0, null); if (close) child.emit("close", 0, null) }
   return { child, scope, ref, register, exit, adapter, identity, signals, setCurrent(value: ProcessIdentity | null) { current = value } }
@@ -189,4 +189,29 @@ test("final absence waits through an unstable exit observation without treating 
   assert.equal(result.state, "settled", JSON.stringify(result.failures))
   assert.equal(result.launches[0]!.absent, true)
   assert.equal(reads, 3)
+})
+
+test("a detached launch with no executable records error and close without a terminal event", async () => {
+  const f = fixture(1000, "detached-handler")
+  const ref = f.ref
+  f.scope.spawn(ref, () => { Object.assign(f.child, { pid: undefined }); return f.child }, { closeAdmission() {} })
+  f.child.emit("error", new Error("ENOENT"))
+  f.child.emit("close", -2, null)
+  assert.equal((await f.scope.finish()).state, "settled")
+})
+
+for (const change of ["declared", "other-command", "new-start", "other-owner"]) test("exec identity adoption is confined to the declared Darwin helper: " + change, async () => {
+  let identity: ProcessIdentity | null = { bootId: "exec-boot", pid: 123, birth: "10:unmarked:/bin/sh", parentPid: process.pid, processGroupId: 456, sessionId: 456, uid: 1, gid: 1 }
+  const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null }) as unknown as ChildProcess
+  const scope = createSyntheticFixtureScope({ runId: "exec", workerFile: "exec.test", deadlineMs: 20,
+    adapter: { platform: "darwin", bootId: async () => "exec-boot", readProcess: async () => identity, readGroup: async () => [], signalGroup: async () => assert.fail("unexpected signal") }, signal: () => assert.fail("unexpected signal") })
+  const ref = scope.intent("darwin-exec-helper")
+  scope.spawn(ref, () => child, { closeAdmission() {} })
+  await scope.observe(ref)
+  identity = { ...identity, birth: change === "other-command" ? "10:unmarked:/bin/cat" : change === "new-start" ? "11:unmarked:/bin/sleep" : "10:unmarked:/bin/sleep", uid: change === "other-owner" ? 2 : 1 }
+  if (change === "declared") assert.equal((await scope.observe(ref))!.birth, "10:unmarked:/bin/sleep")
+  else await assert.rejects(scope.observe(ref), /identity mismatch/)
+  identity = null
+  child.emit("exit", 0, null); child.emit("close", 0, null)
+  assert.equal((await scope.finish()).state, change === "declared" ? "settled" : "incomplete")
 })

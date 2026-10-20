@@ -14,7 +14,7 @@ type Report = { launch: FixtureLaunchResult; ownGroup: boolean; pipesClosed: boo
 type Snapshot = { failures: string[]; children: FixtureConnection[]; launches: Report[] }
 type Declaration = { connection: FixtureConnection; parent: string | null }
 type Source = { ref: LaunchRef; socket: Socket; pid: number; role: string; sequence: number; complete: boolean; sealed: boolean; launches: Set<string>; ended: Promise<void>; sealWait?: ReturnType<typeof deferred<void>> }
-const sealRoles = new Set(["channel-prepared", "singleton-contender", "darwin-handler", "provider-tree", "agent-handler", "control-handler", "catalog-handler"])
+const sealRoles = new Set(["channel-prepared", "singleton-contender", "darwin-handler", "provider-tree", "darwin-identity-tree", "darwin-exec-tree", "agent-handler", "control-handler", "catalog-handler"])
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (reason: unknown) => void
@@ -249,6 +249,7 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
 export function connectFixture(config: FixtureConnection, local: FixtureScope): FixtureClient {
   const access = nativeFixtureAccess(local), socket = createConnection(config.socketPath), children = new Map<string, FixtureConnection>()
   const hello = deferred<void>(), closed = deferred<void>(), replies = new Map<number, ReturnType<typeof deferred<void>>>()
+  let sealed = false
   let sequence = 0, error: unknown, queued = false, chain = Promise.resolve(), finished: Promise<void> | undefined
   const fail = (reason: unknown) => { error ??= reason; access.fault(reason); hello.reject(reason); for (const pending of replies.values()) pending.reject(reason) }
   const request = async (frame: Frame): Promise<void> => {
@@ -289,12 +290,12 @@ export function connectFixture(config: FixtureConnection, local: FixtureScope): 
       return value
     },
     report() {
-      if (queued) return
+      if (queued || sealed || finished) return
       queued = true
       void publish("progress").catch(fail)
     },
     async checkpoint(phase = "progress") {
-      if (phase === "before-intentional-exit") await access.seal()
+      if (phase === "before-intentional-exit") { sealed = true; await access.seal() }
       await publish(phase)
     },
     finish() {

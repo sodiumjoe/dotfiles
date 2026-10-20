@@ -1,5 +1,5 @@
 import { LinuxObservationUnavailable } from "./linux.js"
-import { spawn, type ChildProcess } from "node:child_process"
+import { type ChildProcess } from "node:child_process"
 import { constants } from "node:fs"
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises"
 import { createConnection } from "node:net"
@@ -8,7 +8,7 @@ import { type Duplex } from "node:stream"
 import { DarwinObservationUnavailable } from "./darwin.js"
 import { assertPrivateSocket, unlinkStalePrivateSocket } from "./private-socket.js"
 import { assertPrivateDirectory, readHandlerRecord } from "./private-state.js"
-import { launchHandlerGeneration, type HandlerCommand, type StartTransition } from "./startup.js"
+import { launchHandlerGeneration, nativeStartupSpawn, type StartupDependencies, type HandlerCommand, type StartTransition } from "./startup.js"
 import { sameProcess, type HandlerInspection, type PlatformAdapter } from "./types.js"
 
 export type { HandlerCommand, StartTransition } from "./startup.js"
@@ -126,12 +126,12 @@ async function waitForLock(child: ChildProcess, ready: Duplex, timeoutMs: number
   })
 }
 
-async function acquireStartupLock(options: StartupLockOptions, handle: FileHandle): Promise<{ child: ChildProcess; release: Duplex }> {
+async function acquireStartupLock(options: StartupLockOptions, handle: FileHandle, dependencies: StartupDependencies): Promise<{ child: ChildProcess; release: Duplex }> {
   const timeoutSeconds = options.lockTimeoutSeconds ?? 10
   const argv = [process.execPath, "-e", LOCK_HOLDER_SOURCE]
   const command = commandWithTimeout(options.adapter.platform, 3, argv, timeoutSeconds)
   await assertLockHelper(command.file)
-  const child = spawn(command.file, command.args, {
+  const child = (dependencies.spawn ?? nativeStartupSpawn)(command.file, command.args, {
     stdio: ["ignore", "ignore", "pipe", handle.fd, "pipe", "pipe"],
   })
   const ready = pipe(child, 4)
@@ -147,7 +147,7 @@ async function acquireStartupLock(options: StartupLockOptions, handle: FileHandl
   }
 }
 
-export async function withStartupLock<T>(options: StartupLockOptions, work: (guard: StartupLockGuard) => Promise<T>): Promise<T> {
+export async function withStartupLock<T>(options: StartupLockOptions, work: (guard: StartupLockGuard) => Promise<T>, dependencies: StartupDependencies = {}): Promise<T> {
   const handle = await openStartupLock(options.root)
   let lock: Awaited<ReturnType<typeof acquireStartupLock>> | undefined
   const controller = new AbortController()
@@ -160,7 +160,7 @@ export async function withStartupLock<T>(options: StartupLockOptions, work: (gua
     },
   }
   try {
-    lock = await acquireStartupLock(options, handle)
+    lock = await acquireStartupLock(options, handle, dependencies)
     lock.child.once("exit", lost)
     lock.child.once("error", lost)
     guard.assertHeld()
@@ -273,7 +273,7 @@ async function waitForExisting(root: string, adapter: PlatformAdapter, deadline:
   }
 }
 
-export async function startOrConnect(options: StartOrConnectOptions): Promise<HandlerInspection> {
+export async function startOrConnect(options: StartOrConnectOptions, dependencies: StartupDependencies = {}): Promise<HandlerInspection> {
   const timeoutMs = options.timeoutMs ?? 5000
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("startup timeout must be a positive integer")
   const socketPath = expectedSocketPath(options.root)
@@ -309,9 +309,9 @@ export async function startOrConnect(options: StartOrConnectOptions): Promise<Ha
       ...(options.onTransition === undefined ? {} : { onTransition: options.onTransition }),
     }
     guard.assertHeld()
-    const launched = await launchHandlerGeneration(launchOptions)
+    const launched = await launchHandlerGeneration(launchOptions, dependencies)
     await assertPrivateSocket(options.root, "handler.sock")
     await socketAccepts(socketPath, Math.max(1, deadline - Date.now()))
     return launched
-  })
+  }, dependencies)
 }

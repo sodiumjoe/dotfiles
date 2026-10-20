@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import childProcess from "node:child_process"
 import { once } from "node:events"
-import { syncBuiltinESMExports } from "node:module"
 import { randomUUID } from "node:crypto"
 import { chmod, link, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile, type FileHandle } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -20,7 +19,7 @@ import { gate } from "./catalog-support.js"
 
 type Request = { attemptId: string; handlerGeneration: string; sha256: string }
 type FileSystem = { open: typeof open; rename: typeof rename; mkdir: typeof mkdir; rm: typeof rm }
-type Dependencies = { filesystem?: FileSystem; boundary?: (name: string) => Promise<void> }
+type Dependencies = { startup?: import("../src/platform/startup.js").StartupDependencies; filesystem?: FileSystem; boundary?: (name: string) => Promise<void> }
 type Result = { state: "cleanup_verified"; attemptId: string; archivePath: string; sha256: string }
 type Recover = (env: HandlerEnvironment, request: Request, dependencies?: Dependencies) => Promise<Result>
 async function operation(): Promise<Recover> {
@@ -316,10 +315,7 @@ test("offline maintenance holds the startup lock and releases it on failure", as
 test("recovery cannot publish after its startup-lock holder dies", async t => {
   const f = await fixture(t), recover = await operation(), spawn = childProcess.spawn
   let holder: ReturnType<typeof spawn> | undefined
-  childProcess.spawn = ((...args: Parameters<typeof spawn>) => { holder = spawn(...args); return holder }) as typeof spawn
-  syncBuiltinESMExports()
-  t.after(() => { childProcess.spawn = spawn; syncBuiltinESMExports() })
-  await assert.rejects(recover(f.env, f.request, { boundary: async name => {
+  await assert.rejects(recover(f.env, f.request, { startup: { spawn: (file, args, options) => { holder = spawn(file, [...args], options); return holder } }, boundary: async name => {
     if (name !== "archive_durable") return
     assert.ok(holder)
     const exited = once(holder, "exit")

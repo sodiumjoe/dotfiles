@@ -42,6 +42,7 @@ type Launch = {
 type Operation = FixtureResult["operations"][number] & { promise: Promise<unknown> }
 export type NativeFixtureAccess = {
   deadlineMs: number
+  signalPid(ref: LaunchRef, signal: NodeJS.Signals): Promise<void>
   sourceAlive(ref: LaunchRef): Promise<boolean>
   result(ref: LaunchRef): FixtureLaunchResult
   child(ref: LaunchRef): ChildProcess | null
@@ -58,6 +59,14 @@ export function nativeFixtureAccess(scope: FixtureScope): NativeFixtureAccess {
   const access = nativeAccess.get(scope)
   if (!access) throw new Error("Native reporting requires a native fixture scope")
   return access
+}
+function reportedIdentity(expected: ProcessIdentity, observed: ProcessIdentity, role: string): boolean {
+  return sameProcess(expected, observed) || role === "darwin-exec-helper"
+    && sameProcessGeneration(expected, observed)
+    && expected.pid !== expected.processGroupId
+    && expected.birth.endsWith(":unmarked:/bin/sh") && observed.birth.endsWith(":unmarked:/bin/sleep")
+    && expected.processGroupId === observed.processGroupId && expected.sessionId === observed.sessionId
+    && expected.uid === observed.uid && expected.gid === observed.gid
 }
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 
@@ -108,7 +117,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       const current = await bounded("observe", () => adapter.readProcess(value.result.pid!))
       if (!live(value)) return null
       if (!current || current.pid !== value.result.pid || (!value.result.identity && current.parentPid !== value.parentPid) || !sameProcess(current, current)
-        || value.result.identity && !sameProcess(value.result.identity, current)
+        || value.result.identity && !reportedIdentity(value.result.identity, current, value.result.role)
         || value.ownGroup && (current.processGroupId !== current.pid || current.sessionId !== current.pid)) throw new Error("Fixture identity mismatch")
       value.result.identity = structuredClone(current)
       return structuredClone(current)
@@ -143,6 +152,30 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
     operations: operations.map(({ label, state, error }) => ({ label, state, error })),
     failures, artifacts: [...artifacts],
   })
+  const deliver = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false): Promise<void> => {
+      const value = find(ref)
+      try {
+        if (absentIsSettled && value.attempted && !live(value)) return
+        if (!value.attempted || !live(value) || !await bounded("signal owner", value.authority, 15000)) throw new Error("Fixture terminal or missing identity")
+        if (!value.result.identity) await observe(ref)
+        const expected = value.result.identity
+        if (!expected || !live(value) || group && (expected.processGroupId !== expected.pid || expected.sessionId !== expected.pid)) throw new Error("Fixture missing identity")
+        if (await bounded("signal boot", () => adapter.bootId(), 15000) !== expected.bootId) throw new Error("Fixture identity boot mismatch")
+        const current = await bounded("signal identity", () => adapter.readProcess(expected.pid), 15000)
+        if (absentIsSettled && (!live(value) || current === null)) return
+        if (!live(value) || !current || !sameProcess(expected, current)) throw new Error("Fixture identity mismatch")
+        if (group) {
+          const members = await bounded("signal group", () => adapter.readGroup(expected.processGroupId), 15000)
+          if (new Set(members.map(member => member.pid)).size !== members.length || !members.some(member => sameProcess(expected, member))
+            || members.some(member => member.bootId !== expected.bootId || member.processGroupId !== expected.processGroupId || member.sessionId !== expected.sessionId || member.uid !== expected.uid || member.gid !== expected.gid || !sameProcess(member, member))) throw new Error("Fixture group identity mismatch")
+          if (members.some(member => ![...launches.values()].some(known => known.result.identity && sameProcess(known.result.identity, member)))) throw new Error("Unregistered fixture group member")
+          for (const member of members) if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
+          const last = await bounded("signal identity", () => adapter.readProcess(expected.pid), 15000)
+          if (!live(value) || !last || !sameProcess(expected, last)) throw new Error("Fixture identity changed")
+        }
+        sendSignal(group ? -expected.processGroupId : expected.pid, signal)
+      } catch (error) { value.failed = true; fail(value.result.role + " signal", error); throw error }
+  }
   const scope: FixtureScope = {
     intent(role, input = {}) {
       if (frozen || phase === "closed" || phase === "operations" && !operations.some(value => value.state === "pending")) throw new Error("Fixture admission closed")
@@ -187,28 +220,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       finalizers.push({ label, work })
     },
     artifact(path) { artifacts.add(path) },
-    async signal(ref, signal) {
-      const value = find(ref)
-      try {
-        if (!value.attempted || !live(value) || !await bounded("signal owner", value.authority, 15000)) throw new Error("Fixture terminal or missing identity")
-        if (!value.result.identity) await observe(ref)
-        const expected = value.result.identity
-        if (!expected || !live(value) || value.ownGroup && (expected.processGroupId !== expected.pid || expected.sessionId !== expected.pid)) throw new Error("Fixture missing identity")
-        if (await bounded("signal boot", () => adapter.bootId(), 15000) !== expected.bootId) throw new Error("Fixture identity boot mismatch")
-        const current = await bounded("signal identity", () => adapter.readProcess(expected.pid), 15000)
-        if (!live(value) || !current || !sameProcess(expected, current)) throw new Error("Fixture identity mismatch")
-        if (value.ownGroup) {
-          const members = await bounded("signal group", () => adapter.readGroup(expected.processGroupId), 15000)
-          if (new Set(members.map(member => member.pid)).size !== members.length || !members.some(member => sameProcess(expected, member))
-            || members.some(member => member.bootId !== expected.bootId || member.processGroupId !== expected.processGroupId || member.sessionId !== expected.sessionId || member.uid !== expected.uid || member.gid !== expected.gid || !sameProcess(member, member))) throw new Error("Fixture group identity mismatch")
-          if (members.some(member => ![...launches.values()].some(known => known.result.identity && sameProcess(known.result.identity, member)))) throw new Error("Unregistered fixture group member")
-          for (const member of members) if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
-          const last = await bounded("signal identity", () => adapter.readProcess(expected.pid), 15000)
-          if (!live(value) || !last || !sameProcess(expected, last)) throw new Error("Fixture identity changed")
-        }
-        sendSignal(value.ownGroup ? -expected.processGroupId : expected.pid, signal)
-      } catch (error) { value.failed = true; fail(value.result.role + " signal", error); throw error }
-    },
+    signal: (ref, signal) => deliver(ref, signal, find(ref).ownGroup),
     finish() {
       if (pending) return pending
       pending = (async () => {
@@ -219,7 +231,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
             if (!value.attempted) throw new Error("unspawned intent")
             if (!value.child && !value.remote) return
             if (value.result.pid === null && value.result.error && value.result.close === null) { value.result.absent = true; return }
-            if (value.result.reporting !== "direct" && !value.result.unavailable && !(value.result.close === true && value.result.exit)) throw new Error("reporting source unavailable")
+            if (value.result.reporting !== "direct" && !value.result.unavailable && !(value.result.close === true && (value.result.exit || value.result.pid === null && value.result.error))) throw new Error("reporting source unavailable")
             if (!value.result.unavailable) {
               if (value.remote && value.result.close !== true && !await value.authority()) throw new Error("Fixture source lost before terminal/close")
               await bounded(value.result.role + " close", () => value.closed)
@@ -263,6 +275,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   }
   if (native) nativeAccess.set(scope, {
     deadlineMs: options.deadlineMs,
+    signalPid: (ref, signal) => deliver(ref, signal, false, true),
     async sourceAlive(ref) {
       const value = find(ref), expected = value.result.identity
       if (!live(value) || !expected) return false
@@ -316,7 +329,8 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         if (prior.pid !== result.pid || prior.role !== result.role || prior.reporting !== result.reporting || value.ownGroup !== ownGroup
           || prior.exit && JSON.stringify(prior.exit) !== JSON.stringify(result.exit)
           || prior.close === true && result.close !== true || prior.error && prior.error !== result.error
-          || prior.identity && result.identity && !sameProcess(prior.identity, result.identity)) throw new Error("Conflicting fixture snapshot")
+          || prior.identity && result.identity && !reportedIdentity(prior.identity, result.identity, prior.role)) throw new Error("Conflicting fixture snapshot")
+        if (result.identity) prior.identity = structuredClone(result.identity)
         prior.exit = result.exit; prior.close = result.close; prior.error = result.error
       }
       if (value.result.close === true) value.close()
