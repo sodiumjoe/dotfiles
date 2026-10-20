@@ -23,15 +23,16 @@ export function cleanFixtureEnvironment(env: NodeJS.ProcessEnv = process.env): N
   delete result.AGENCY_FIXTURE_CONNECTION
   return result
 }
-export function registerFixtureChild<C extends ChildProcess>(runtime: FixtureRuntime, ref: LaunchRef, work: () => C): C {
+export function registerFixtureChild<C extends ChildProcess>(runtime: FixtureRuntime, ref: LaunchRef, work: () => C, execImage?: string): C {
   const { scope, client } = runtime
+  if (execImage) nativeFixtureAccess(scope).declareExec(ref, execImage)
   let child: C
   try {
     child = scope.spawn(ref, work, { closeAdmission(child) { for (const pipe of child.stdio.slice(3)) pipe?.destroy() } })
   } catch (error) { runtime.sealed || client?.report(); throw error }
   for (const event of ["error", "exit", "close"] as const) child.on(event, () => runtime.sealed || client?.report())
   runtime.sealed || client?.report()
-  if (!client) void scope.observe(ref).catch(() => {})
+  if (!client && !execImage) void scope.observe(ref).catch(() => {})
   return child
 }
 export async function fixtureSpawner() {

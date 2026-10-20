@@ -11,10 +11,11 @@ import { runAcpEndpoint } from "../../src/acp/endpoint.js"
 import { snapshotLaunchEnvironment } from "../../src/agent/environment.js"
 import { assertPrivateSocket } from "../../src/platform/private-socket.js"
 import { parseTaskRef } from "../../src/tasks/types.js"
-export type QualificationHooks={handlerEntry?:string;handlerOptions?:(options:HandlerOptions)=>HandlerOptions;enter?:(file:string,args:string[])=>Promise<number>}
+import type { StartupDependencies } from "../../src/platform/startup.js"
+export type QualificationHooks={startupDependencies?:StartupDependencies;handlerEntry?:string;handlerOptions?:(options:HandlerOptions)=>HandlerOptions;enter?:(file:string,args:string[])=>Promise<number>}
 export async function runQualification(argv:string[],hooks:QualificationHooks={}):Promise<number>{
   if(argv[0]!=="--config"||!argv[1])throw new Error("CONFIG_REQUIRED")
-  const c=await readPrivateConfig(argv[1]),args=argv.slice(2),control=privateControl(c,hooks.handlerEntry)
+  const c=await readPrivateConfig(argv[1]),args=argv.slice(2),control=privateControl(c,hooks.handlerEntry,hooks.startupDependencies)
   const ready=async()=>{const env=await control.environment(),owner=await control.inspect(env);if(!owner||owner.disposition!=="live"||owner.record.phase!=="ready")throw new Error("PRIVATE_HANDLER_NOT_READY");return owner}
   const connect=async()=>{const owner=await ready(),peer=await connectHandlerBridge({root:c.runtimeRoot,hostId:c.hostId,handlerGeneration:owner.record.generation});const h=await peer.ready;if(h.protocol!==c.binding.protocol||h.sourceRevision!==c.binding.sourceRevision||h.nodeVersion!==c.binding.nodeVersion){peer.close();throw new Error("PRIVATE_HELLO_CHANGED")}return peer}
   switch(args[0]){

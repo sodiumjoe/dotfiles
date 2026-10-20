@@ -8,7 +8,7 @@ import { nativeFixtureAccess, type FixtureScope, type FixtureLaunchResult, type 
 export type FixtureConnection = { socketPath: string; runId: string; ownerRef: LaunchRef; ownerToken: string }
 export type SnapshotPhase = "progress" | "complete" | "before-intentional-exit"
 export type FixtureClient = { prepareExit(ref: LaunchRef): Promise<void>; connection(ref: LaunchRef): FixtureConnection; report(): void; checkpoint(phase?: SnapshotPhase): Promise<void>; finish(): Promise<void> }
-export type FixtureReceiver = { connection(ref: LaunchRef): FixtureConnection; prepareExit(ref: LaunchRef): Promise<void>; close(): Promise<void> }
+export type FixtureReceiver = { connection(ref: LaunchRef): FixtureConnection; prepareExit(ref: LaunchRef): Promise<void>; settle(refs: readonly LaunchRef[]): Promise<void>; close(): Promise<void> }
 type Frame = Record<string, unknown>
 type Report = { launch: FixtureLaunchResult; ownGroup: boolean; pipesClosed: boolean }
 type Snapshot = { failures: string[]; children: FixtureConnection[]; launches: Report[] }
@@ -138,7 +138,7 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
             const parent = sources.get(declared.parent)
             if (!parent || !await alive(parent)) throw new Error("Fixture source parent lost")
           }
-          const identity = await scope.observe(supplied.ownerRef)
+          const identity = await access.admitSource(supplied.ownerRef)
           if (!identity || identity.pid !== frame.pid) throw new Error("Refused source identity")
           source = { ref: supplied.ownerRef, socket, pid: identity.pid, role: access.result(supplied.ownerRef).role, sequence: lastSequence, complete: false, sealed: false, launches: new Set(), ended: end.promise }
           sources.set(supplied.ownerRef.launchId, source)
@@ -240,6 +240,19 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
       if (source.sealed || source.complete) return
       if (!source.sealWait) { source.sealWait = deferred<void>(); await send(source.socket, { type: "seal", ref }) }
       await deadline(source.sealWait.promise, "source seal", Math.min(access.deadlineMs, 15000))
+    },
+    async settle(refs) {
+      const known = new Set(refs.map(ref => { if (ref.runId !== runId) throw new Error("Foreign source settlement"); return ref.launchId }))
+      let prior = -1
+      while (prior !== known.size) {
+        prior = known.size
+        for (const id of known) {
+          const source = await waitFor(() => sources.get(id), "source admission")
+          await waitFor(() => source.complete || source.sealed ? true : undefined, "source report completion")
+          await deadline(source.ended, "source disconnect", Math.min(access.deadlineMs, 30000))
+        }
+        for (const [id, declaration] of declarations) if (declaration.parent && known.has(declaration.parent)) known.add(id)
+      }
     },
     close() {
       if (closing) return closing

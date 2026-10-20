@@ -238,3 +238,57 @@ test("source completion racing preparation satisfies its accepted finite boundar
   await f.closed
   assert.equal((await f.scope.finish()).state, "settled", f.errors())
 })
+
+test("declared qualification exec binds the original shell handle once", { timeout: 15000 }, async t=>{
+  const root=await mkdtemp("/tmp/agv-"),scope=createNativeFixtureScope({runId:root,workerFile:"exec",deadlineMs:5000})
+  const receiver=await startFixtureReceiver(scope,join(root,"r.sock")),ref=scope.intent("qualification-shell"),access=(await import("./fixtures/run-scope.js")).nativeFixtureAccess(scope)
+  access.declareExec(ref,process.execPath)
+  const config=receiver.connection(ref),file=join(root,"source.mjs"),quote=(value:string)=>"'"+value.replaceAll("'","'\"'\"'")+"'"
+  const code=`import {connectFixture} from ${JSON.stringify(new URL("./fixtures/fixture-channel.js",import.meta.url).href)};import {createNativeFixtureScope} from ${JSON.stringify(new URL("./fixtures/run-scope.js",import.meta.url).href)};const config=JSON.parse(process.env.CONNECTION);const scope=createNativeFixtureScope({runId:config.runId,workerFile:config.ownerRef.launchId,deadlineMs:5000});const client=connectFixture(config,scope);await client.checkpoint();process.stdout.write('admitted');await new Promise(r=>process.stdin.once('data',r));await client.finish();`
+  await writeFile(file,code)
+  const child=scope.spawn(ref,()=>spawn("/bin/sh",["-c","read line; exec "+quote(process.execPath)+" "+quote(file)],{env:{...process.env,CONNECTION:JSON.stringify(config)},stdio:"pipe"}),{closeAdmission(){}})
+  t.after(async () => { child.stdin!.end(); await scope.finish() })
+  const closed=new Promise(resolve=>child.once("close",resolve)),observed=await scope.observe(ref)
+  assert.equal(observed?.pid,child.pid)
+  const admitted=new Promise(resolve=>child.stdout!.once("data",resolve));child.stdin!.write("go\n");await admitted
+  const current=await scope.observe(ref);assert.equal(current?.pid,child.pid);assert.notEqual(current?.birth,observed?.birth)
+  assert.throws(()=>access.declareExec(ref,process.execPath),/Undeclared fixture exec/)
+  child.stdin!.end("finish\n");await closed
+  const result=await scope.finish();assert.equal(result.state,"settled",JSON.stringify(result.failures));assert.equal(result.launches.length,1);assert.equal(result.launches[0]!.absent,true)
+})
+
+for (const mode of ["normal", "wrong-token"]) test("fixture source settlement is required before exported cleanup: " + mode, { timeout: 15000 }, async t => {
+  const f = await fixture(mode, t)
+  await f.closed
+  const settle = () => f.receiver.settle([f.ref])
+  if (mode === "normal") await settle()
+  else await assert.rejects(settle(), /source|report|deadline/i)
+})
+
+test("declared exec grants no signal before source admission", { timeout: 15000 }, async () => {
+  const scope = createNativeFixtureScope({ runId: "exec-refusal", workerFile: "exec-refusal", deadlineMs: 5000 })
+  const access = (await import("./fixtures/run-scope.js")).nativeFixtureAccess(scope), ref = scope.intent("qualification-shell")
+  access.declareExec(ref, process.execPath)
+  const child = scope.spawn(ref, () => spawn("/bin/sleep", ["0.2"], { stdio: "pipe" }), { closeAdmission() {} })
+  const closed = new Promise(resolve => child.once("close", resolve))
+  await assert.rejects(access.signalPid(ref, "SIGTERM"), /exec source not admitted/)
+  await closed
+  assert.equal((await scope.finish()).state, "incomplete")
+})
+
+for (const declared of [false, true]) test("qualification exec refuses an undeclared or mismatched image: " + declared, { timeout: 15000 }, async t => {
+  const scope = createNativeFixtureScope({ runId: crypto.randomUUID(), workerFile: "exec-refusal", deadlineMs: 5000 })
+  const access = (await import("./fixtures/run-scope.js")).nativeFixtureAccess(scope), ref = scope.intent("qualification-shell")
+  if (declared) access.declareExec(ref, "/not/the/declared/image")
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'"
+  const child = scope.spawn(ref, () => spawn("/bin/sh", ["-c", "read line; exec " + quote(process.execPath) + " -e " + quote("process.stdout.write('exec');process.stdin.resume()")], { stdio: "pipe" }), { closeAdmission() {} })
+  const closed = new Promise(resolve => child.once("close", resolve))
+  t.after(async () => { child.stdin!.end(); await closed; await scope.finish() })
+  await scope.observe(ref)
+  const ready = new Promise(resolve => child.stdout!.once("data", resolve))
+  child.stdin!.write("go\n"); await ready
+  await assert.rejects(access.admitSource(ref), /identity mismatch/i)
+  await assert.rejects(access.signalPid(ref, "SIGTERM"), /exec source not admitted|identity mismatch/i)
+  child.stdin!.end(); await closed
+  assert.equal((await scope.finish()).state, "incomplete")
+})

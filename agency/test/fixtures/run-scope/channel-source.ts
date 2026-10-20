@@ -64,7 +64,7 @@ if (mode === "wrong-token") {
     }
   }
   const ref = scope.intent("channel-leaf")
-  const child = scope.spawn(ref, () => spawn(process.execPath, ["-e", (mode === "normal" || mode === "late" || mode === "early-child") ? "process.exit(0)" : "setTimeout(() => process.exit(0), 500)"], { stdio: "ignore" }), { closeAdmission() {} })
+  const child = scope.spawn(ref, () => spawn(process.execPath, ["-e", (mode === "normal" || mode === "late" || mode === "early-child") ? "process.exit(0)" : "process.stdin.resume();process.stdin.on('end',()=>process.exit(0))"], { stdio: (mode === "normal" || mode === "late" || mode === "early-child") ? "ignore" : ["pipe", "ignore", "ignore"] }), { closeAdmission() {} })
   client.report()
   if (mode === "normal" || mode === "late" || mode === "early-child") {
     await new Promise<void>(resolve => child.once("close", () => resolve()))

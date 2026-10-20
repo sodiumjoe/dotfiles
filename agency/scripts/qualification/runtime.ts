@@ -21,7 +21,8 @@ async function boundOwner(c:PrivateConfig,owner:HandlerInspection|null):Promise<
   if(owner?.disposition==="live"&&owner.record.phase==="ready"&&!isDeepStrictEqual(JSON.parse((await privateFile(bindingPath(c,owner.record.generation))).toString("utf8")),ownerBinding(c,owner.record.generation)))throw new Error("PRIVATE_OWNER_BINDING_CHANGED")
   return owner
 }
-export function privateControl(c:PrivateConfig,handlerEntry=join(c.packageRoot,"dist/scripts/qualification/main.js")):ControlDependencies{return {...productionControlDependencies(),environment:()=>privateEnvironment(c),start:async env=>(await boundOwner(c,await startOrConnect({root:env.paths.runtimeRoot,hostId:c.hostId,adapter:env.adapter,handler:{file:c.node,args:[handlerEntry,"--config",c.configPath,"internal-handler"]}})))!,inspect:async env=>boundOwner(c,await inspectHandlerGeneration(env.paths.runtimeRoot,env.adapter))}}
+import type { StartupDependencies } from "../../src/platform/startup.js"
+export function privateControl(c:PrivateConfig,handlerEntry=join(c.packageRoot,"dist/scripts/qualification/main.js"),dependencies?:StartupDependencies):ControlDependencies{return {...productionControlDependencies(),environment:()=>privateEnvironment(c),start:async env=>(await boundOwner(c,await startOrConnect({root:env.paths.runtimeRoot,hostId:c.hostId,adapter:env.adapter,handler:{file:c.node,args:[handlerEntry,"--config",c.configPath,"internal-handler"]}},dependencies)))!,inspect:async env=>boundOwner(c,await inspectHandlerGeneration(env.paths.runtimeRoot,env.adapter))}}
 export async function privateHandlerOptions(c:PrivateConfig):Promise<HandlerOptions>{
   if(process.env.AGENCY_HANDLER_RECORD!==join(c.runtimeRoot,"handler.json")||!fstatSync(3).isSocket()||!fstatSync(4).isSocket())throw new Error("HANDLER_LAUNCH_REQUIRED")
   const env=await privateEnvironment(c),generation=id(process.env.AGENCY_HANDLER_GENERATION)

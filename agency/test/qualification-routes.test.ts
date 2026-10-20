@@ -1,3 +1,5 @@
+import { fixtureBridgeProcess } from "./fixtures/fixture-bridge.js"
+import { workerScope } from "./fixtures/run-boundary.js"
 import test from "node:test"
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
@@ -14,7 +16,7 @@ test("status and shutdown use only the private Handler",{timeout:90000},async t=
   assert.equal((await f.command(["doctor","--json"])).code,0)
   assert.ok((await readFile(join(f.root,"hook-entered.jsonl"),"utf8")).includes(owner.generation))
   assert.deepEqual(await f.sentinel(),[])
-  assert.equal((await f.command(["shutdown","--handler-generation",owner.generation,"--command-id",randomUUID(),"--json"])).code,0)
+  const stopped=await f.shutdown();assert.equal(stopped.code,0,stopped.stdout+stopped.stderr)
   await f.verifyCleanup()
 })
 
@@ -32,10 +34,11 @@ async function localBridge(f:Awaited<ReturnType<typeof qualificationFixture>>){
   const {connectBridge,buildSshCommand}=await import("../src/bridge/ssh.js"),{spawn}=await import("node:child_process"),{ordinaryPaths}=await import("../scripts/qualification/config.js"),{appendFile}=await import("node:fs/promises")
   const normal=ordinaryPaths(f.config.hostId),enrollment={inventoryId:randomUUID(),hostId:f.config.hostId,hostname:"synthetic-local",agyPath:f.config.launcherPath,loginShell:"/bin/sh"},built=buildSshCommand(enrollment)
   assert.equal(built.file,"ssh");assert.ok(built.argv.at(-1)!.includes(f.config.launcherPath));assert.ok(built.argv.at(-1)!.includes("internal-runtime-bridge"))
+  const awaitedScope=await workerScope()
   const transport=await connectBridge(enrollment,{action:"internal-runtime-bridge",requiredCapabilities:["host-identity","runtime-read"],processFactory(file,argv,options){
     assert.equal(file,"ssh");assert.deepEqual(argv,built.argv);assert.equal(options.env.NODE_OPTIONS,undefined)
-    const child=spawn("/bin/sh",["-c","printf 'fixture login noise\\n' >&2; "+argv.at(-1)!],{env:{...options.env,HOME:join(f.root,"home"),QUALIFICATION_ROOT:f.root,QUALIFICATION_SENTINEL:JSON.stringify({file:join(f.root,"sentinel.jsonl"),roots:[normal.persistentRoot,normal.runtimeRoot]}),NODE_OPTIONS:"--import="+new URL("./fixtures/qualification-sentinel.js",import.meta.url).href,AGENCY_TEST_EVIDENCE_ROOT:f.root},stdio:["pipe","pipe","pipe"]})
-    void appendFile(join(f.root,"ssh-bootstrap.jsonl"),JSON.stringify({pid:child.pid,file,argv,kind:"LOCAL SHELL; NO SSH"})+"\n",{mode:0o600});return child
+    const child=f.native("qualification-shell","/bin/sh",["-c","printf 'fixture login noise\\n' >&2; "+argv.at(-1)!],{env:{...options.env,HOME:join(f.root,"home"),QUALIFICATION_ROOT:f.root,QUALIFICATION_SENTINEL:JSON.stringify({file:join(f.root,"sentinel.jsonl"),roots:[normal.persistentRoot,normal.runtimeRoot]}),NODE_OPTIONS:"--import="+new URL("./fixtures/qualification-sentinel.js",import.meta.url).href,AGENCY_TEST_EVIDENCE_ROOT:f.root},stdio:["pipe","pipe","pipe"]},true)
+    void appendFile(join(f.root,"ssh-bootstrap.jsonl"),JSON.stringify({pid:child.pid,file,argv,kind:"LOCAL SHELL; NO SSH"})+"\n",{mode:0o600});const scope=awaitedScope;const launch=scope.snapshot().launches.find(value=>value.pid===child.pid)!;return fixtureBridgeProcess(scope,launch.ref,child)
   }})
   return transport
 }
@@ -142,10 +145,14 @@ local manager=require('sodium.agency.agentic').new_session({cwd=vim.fn.getcwd(),
 assert(vim.wait(20000,function() return manager.session_id~=nil end))
 vim.fn.writefile({vim.json.encode({sessionId=manager.session_id,endpoint=manager.agent.transport and manager.agent.transport.pid or vim.NIL})},${JSON.stringify(output)})
 require('agentic.session_registry').destroy_session()
-vim.wait(500,function() return false end)`)
-  const promise=promisify(execFile)(f.config.editor.shimPath,["--headless","-i","NONE","-l",script],{cwd:f.workspace,timeout:35000,env:{PATH:process.env.PATH,HOME:join(f.root,"home"),QUALIFICATION_ROOT:f.root,QUALIFICATION_SENTINEL:JSON.stringify({file:join(f.root,"sentinel.jsonl"),roots:[normal.persistentRoot,normal.runtimeRoot]}),NODE_OPTIONS:"--import="+new URL("./fixtures/qualification-sentinel.js",import.meta.url).href,AGENCY_TEST_EVIDENCE_ROOT:f.root,XDG_STATE_HOME:join(f.root,"state"),XDG_CACHE_HOME:join(f.root,"cache"),XDG_DATA_HOME:join(f.root,"data")}})
-  const pid=promise.child.pid!,identity=await f.adapter.readProcess(pid)
-  await promise
+vim.wait(500,function() return false end)
+AgencyFixture.close_all()
+AgencyFixture.complete()
+vim.fn.writefile({vim.json.encode(AgencyFixture.registry())},${JSON.stringify(join(f.root,"editor-registry.json"))})`)
+  const editor=f.native("editor",f.config.editor.shimPath,["--headless","-i","NONE","-l",script],{cwd:f.workspace,timeout:35000,env:{PATH:process.env.PATH,HOME:join(f.root,"home"),QUALIFICATION_ROOT:f.root,QUALIFICATION_SENTINEL:JSON.stringify({file:join(f.root,"sentinel.jsonl"),roots:[normal.persistentRoot,normal.runtimeRoot]}),NODE_OPTIONS:"--import="+new URL("./fixtures/qualification-sentinel.js",import.meta.url).href,AGENCY_TEST_EVIDENCE_ROOT:f.root,XDG_STATE_HOME:join(f.root,"state"),XDG_CACHE_HOME:join(f.root,"cache"),AGENCY_FIXTURE_PLUGIN_ROOT:f.config.editor.plugins[0]!.path,XDG_DATA_HOME:join(f.root,"data")}},true)
+  let editorError="";editor.stderr.on("data",b=>editorError+=String(b));editor.stdout.resume()
+  const closed=new Promise<void>(resolve=>editor.once("close",()=>resolve())),pid=editor.pid!,identity=await f.adapter.readProcess(pid)
+  await closed;assert.equal(editor.exitCode,0,editorError)
   assert.equal(await f.adapter.readProcess(pid),null);assert.ok(identity)
   const readback=JSON.parse(await readFile(output,"utf8"));assert.match(readback.sessionId,/^agency:/)
   const {inventoryLaunches}=await import("../src/handler/inventory.js"),launches=await inventoryLaunches(join(f.paths.persistentRoot,"launches")),provider=launches.find(row=>row.record.provider)?.record.provider
@@ -165,4 +172,44 @@ test("a live private Handler must retain its exact startup source and dist bindi
     }
   }finally{await writeFile(path,bytes)}
   assert.deepEqual(await f.sentinel(),[])
+})
+
+test("qualification launchers close before later providers and ignore foreign ownership files",{timeout:90000},async t=>{
+  const scope=await workerScope(),firstLaunch=scope.snapshot().launches.length,f=await qualificationFixture(t),{writeFile}=await import("node:fs/promises")
+  await writeFile(join(f.root,"ownership.jsonl"),JSON.stringify({pid:process.pid,identity:await f.adapter.readProcess(process.pid)})+"\n")
+  await writeFile(join(f.root,"launches.jsonl"),JSON.stringify({type:"spawn",pid:process.pid})+"\n")
+  assert.equal((await f.command(["status","--json"])).code,0)
+  const before=scope.snapshot().launches.slice(firstLaunch),command=before.find(value=>value.role==="qualification-command"&&value.close)
+  assert.ok(command?.exit);assert.equal(command.exit.code,0)
+  const owner=await f.owner();assert.ok(before.some(value=>value.pid===owner.process.pid&&value.reporting==="detached-handler"))
+  assert.equal(before.some(value=>value.role==="qualification-provider"),false)
+  const a=await acp(f),session=await a.peer.request("session/new",{cwd:f.workspace,mcpServers:[]})
+  assert.match(String(session.sessionId),/^agency:/)
+  await (await import("./control-support.js")).until(async()=>scope.snapshot().launches.some(value=>value.role==="qualification-provider"&&value.identity)?true:undefined,15000)
+  a.peer.close();a.child.stdin.end();await f.verifyCleanup()
+  const result=JSON.parse(await readFile(join(f.root,"result.json"),"utf8"))
+  assert.equal(result.cleanup,"verified");assert.ok(result.commands.some((value:any)=>value.code===0))
+  assert.equal(scope.snapshot().launches.some(value=>value.pid===process.pid),false)
+  assert.ok(await f.adapter.readProcess(process.pid))
+})
+
+test("failed qualification body retains nonzero command and verified cleanup", { timeout: 90000 }, async t => {
+  const {mkdtemp,writeFile}=await import("node:fs/promises"),{execFile}=await import("node:child_process"),{promisify}=await import("node:util")
+  const root=await mkdtemp("/tmp/agv-"),file=join(root,"qualification.test.mjs"),output=join(root,"fixture-root")
+  await writeFile(file,`import test from 'node:test';import assert from 'node:assert/strict';import {writeFile} from 'node:fs/promises';import {qualificationFixture} from ${JSON.stringify(new URL("./qualification-support.js",import.meta.url).href)};test('deliberate failed body',async t=>{const f=await qualificationFixture(t);await writeFile(${JSON.stringify(output)},f.root);assert.equal((await f.command(['status','--json'])).code,0);assert.notEqual((await f.command(['invalid-command','--json'])).code,0);throw new Error('deliberate qualification failure')})`)
+  const env={...process.env};delete env.NODE_TEST_CONTEXT;delete env.AGENCY_TEST_WORKER_RUN;delete env.AGENCY_FIXTURE_CONNECTION
+  await assert.rejects(promisify(execFile)(process.execPath,["--test",file],{env,timeout:60000}),error=>{assert.equal((error as {code:number}).code,1);assert.match((error as {stdout:string}).stdout,/deliberate qualification failure/);return true})
+  const result=JSON.parse(await readFile(join(await readFile(output,"utf8"),"result.json"),"utf8"))
+  assert.equal(result.cleanup,"verified");assert.ok(result.commands.some((command:any)=>command.code!==0))
+})
+
+test("qualification cleanup does not export verified after a refused queued signal",{timeout:90000},async()=>{
+  const {mkdtemp,writeFile}=await import("node:fs/promises"),{execFile}=await import("node:child_process"),{promisify}=await import("node:util")
+  const root=await mkdtemp("/tmp/agv-"),file=join(root,"qualification.test.mjs"),output=join(root,"fixture-root")
+  await writeFile(file,`import test from 'node:test';import {writeFile} from 'node:fs/promises';import {qualificationFixture} from ${JSON.stringify(new URL("./qualification-support.js",import.meta.url).href)};import {workerScope} from ${JSON.stringify(new URL("./fixtures/run-boundary.js",import.meta.url).href)};test('refused cleanup signal',async t=>{const f=await qualificationFixture(t);await writeFile(${JSON.stringify(output)},f.root);const scope=await workerScope();const ref=scope.intent('unspawned');void scope.signal(ref,'SIGTERM').catch(()=>{});await f.verifyCleanup()})`)
+  const env={...process.env};delete env.NODE_TEST_CONTEXT;delete env.AGENCY_TEST_WORKER_RUN;delete env.AGENCY_FIXTURE_CONNECTION
+  await assert.rejects(promisify(execFile)(process.execPath,["--test",file],{env,timeout:60000}))
+  const result=JSON.parse(await readFile(join(await readFile(output,"utf8"),"result.json"),"utf8"))
+  assert.equal(result.cleanup,"incomplete")
+  assert.match(result.error,/signal/)
 })

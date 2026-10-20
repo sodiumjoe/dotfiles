@@ -29,7 +29,7 @@ export type FixtureScope = {
   operation<T>(label: string, work: () => Promise<T>): Promise<T>
   finalizer(label: string, work: () => Promise<void>): void
   artifact(path: string): void
-  signal(ref: LaunchRef, value: NodeJS.Signals): Promise<void>
+  signal(ref: LaunchRef, value: NodeJS.Signals, options?: { allowAbsent: boolean }): Promise<void>
   finish(): Promise<FixtureResult>
   snapshot(): FixtureResult
 }
@@ -42,6 +42,9 @@ type Launch = {
 type Operation = FixtureResult["operations"][number] & { promise: Promise<unknown> }
 export type NativeFixtureAccess = {
   deadlineMs: number
+  settleChecks(): Promise<void>
+  declareExec(ref: LaunchRef, image: string): void
+  admitSource(ref: LaunchRef): Promise<ProcessIdentity | null>
   signalEditor(ref: LaunchRef, signal: NodeJS.Signals, group: boolean): Promise<"delivered" | "already-absent" | "awaiting-reap">
   signalPid(ref: LaunchRef, signal: NodeJS.Signals): Promise<void>
   sourceAlive(ref: LaunchRef): Promise<boolean>
@@ -87,7 +90,8 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   const finalizers: Array<{ label: string; work: () => Promise<void> }> = []
   let phase: "open" | "operations" | "finalizers" | "closed" = "open", pending: Promise<FixtureResult> | undefined
   let until = Infinity, frozen = false
-  const observations = new Set<Promise<unknown>>(), boundaries: Array<() => Promise<void>> = []
+  const execImages = new Map<string, string>()
+  const checks = new Set<Promise<unknown>>(), boundaries: Array<() => Promise<void>> = []
   const fail = (label: string, error: unknown) => { failures.push(label + ": " + message(error)) }
   const bounded = async <T>(label: string, work: () => Promise<T>, limitMs = 30000): Promise<T> => {
     const remaining = Math.min(options.deadlineMs, limitMs, until - Date.now())
@@ -126,8 +130,8 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   }
   const observe = (ref: LaunchRef): Promise<ProcessIdentity | null> => {
     const work = observeImpl(ref)
-    observations.add(work)
-    void work.finally(() => observations.delete(work)).catch(() => {})
+    checks.add(work)
+    void work.finally(() => checks.delete(work)).catch(() => {})
     return work
   }
   let localDrain: Promise<void> | undefined
@@ -163,9 +167,10 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       }
     }
   }
-  const deliver = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, editor = false): Promise<boolean | "awaiting-reap"> => {
+  const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, editor = false): Promise<boolean | "awaiting-reap"> => {
       const value = find(ref)
       try {
+        if (execImages.has(ref.launchId)) throw new Error("Fixture exec source not admitted")
         if (absentIsSettled && value.attempted && !live(value)) return false
         if (absentIsSettled && value.result.pid && await bounded("signal absence", () => signalObservation(value.result.pid!), 15000) === null) return false
         if (!value.attempted || !live(value) || !await bounded("signal owner", value.authority, 15000)) throw new Error("Fixture terminal or missing identity")
@@ -192,6 +197,12 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         sendSignal(group ? -expected.processGroupId : expected.pid, signal)
         return true
       } catch (error) { value.failed = true; fail(value.result.role + " signal", error); throw error }
+  }
+  const deliver: typeof deliverImpl = (...args) => {
+    const work = deliverImpl(...args)
+    checks.add(work)
+    void work.finally(() => checks.delete(work)).catch(() => {})
+    return work
   }
   const scope: FixtureScope = {
     intent(role, input = {}) {
@@ -237,7 +248,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       finalizers.push({ label, work })
     },
     artifact(path) { artifacts.add(path) },
-    signal: async (ref, signal) => { await deliver(ref, signal, find(ref).ownGroup) },
+    signal: async (ref, signal, input) => { await deliver(ref, signal, find(ref).ownGroup, input?.allowAbsent ?? false) },
     finish() {
       if (pending) return pending
       pending = (async () => {
@@ -292,6 +303,32 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   }
   if (native) nativeAccess.set(scope, {
     deadlineMs: options.deadlineMs,
+    async settleChecks() {
+      await bounded("fixture checks", async () => { while (checks.size) await Promise.allSettled([...checks]) })
+      if (failures.length) throw new Error(failures.join("; "))
+    },
+    declareExec(ref, image) {
+      const value = find(ref)
+      if (value.attempted || !["qualification-command", "qualification-shell", "editor"].includes(value.result.role) || !image.startsWith("/") || execImages.has(ref.launchId)) throw new Error("Undeclared fixture exec")
+      execImages.set(ref.launchId, image)
+    },
+    async admitSource(ref) {
+      const image = execImages.get(ref.launchId)
+      if (!image) return observe(ref)
+      const value = find(ref)
+      try {
+        if (!value.child || !live(value)) throw new Error("Exec source has no live actual handle")
+        const current = await bounded("exec source identity", () => signalObservation(value.result.pid!))
+        const prior = value.result.identity
+        if (!current || !live(value) || current.parentPid !== value.parentPid || !sameProcess(current, current)
+          || current.birth !== current.birth.split(":")[0] + (adapter.platform === "darwin" ? ":unmarked:" : ":") + image
+          || prior && (!sameProcessGeneration(prior, current) || prior.parentPid !== current.parentPid || prior.processGroupId !== current.processGroupId || prior.sessionId !== current.sessionId || prior.uid !== current.uid || prior.gid !== current.gid)
+          || value.ownGroup && (current.processGroupId !== current.pid || current.sessionId !== current.pid)) throw new Error("Declared exec identity mismatch")
+        value.result.identity = structuredClone(current)
+        execImages.delete(ref.launchId)
+        return structuredClone(current)
+      } catch (error) { value.failed = true; fail(value.result.role + " exec", error); closeAdmission(value); throw error }
+    },
     signalEditor: async (ref, signal, group) => { const outcome = await deliver(ref, signal, group, true, true); return outcome === "awaiting-reap" ? outcome : outcome ? "delivered" : "already-absent" },
     signalPid: async (ref, signal) => { await deliver(ref, signal, false, true) },
     async sourceAlive(ref) {
@@ -305,7 +342,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
     ownGroup: ref => find(ref).ownGroup,
     fault: error => fail("reporting", error),
     beforeAbsence(work) { boundaries.push(work) },
-    async seal() { frozen = true; await Promise.allSettled([...observations]) },
+    async seal() { frozen = true; await Promise.allSettled([...checks]) },
     async completeSource() {
       await drainLocal()
       frozen = true
