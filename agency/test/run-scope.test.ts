@@ -157,3 +157,36 @@ test("unspawned intent never grants identity or cleanup authority", async () => 
   assert.equal(result.launches[0]!.identity, null)
   assert.equal(result.state, "incomplete")
 })
+
+test("a retained generation that changes groups is not physically absent", async () => {
+  const f = fixture(20)
+  f.register()
+  await f.scope.observe(f.ref)
+  f.exit()
+  f.setCurrent({ ...f.identity, processGroupId: 999, sessionId: 999 })
+  const result = await f.scope.finish()
+  assert.equal(result.state, "incomplete")
+  assert.equal(result.launches[0]!.absent, false)
+})
+
+test("an unregistered group member refuses group cleanup without signaling it", async () => {
+  const f = fixture(20), ref = f.scope.intent("group", { ownGroup: true })
+  f.scope.spawn(ref, () => f.child, { closeAdmission() {} })
+  await f.scope.observe(ref)
+  f.adapter.readGroup = async () => [f.identity, { ...f.identity, pid: 124, birth: "11:unknown" }]
+  await assert.rejects(f.scope.signal(ref, "SIGKILL"), /group|registered/)
+  assert.deepEqual(f.signals, [])
+  f.exit()
+  await f.scope.finish()
+})
+
+test("final absence waits through an unstable exit observation without treating uncertainty as absence", async () => {
+  const f = fixture(1000)
+  f.register(); f.exit()
+  let reads = 0
+  f.adapter.readProcess = async () => { if (++reads < 3) throw new Error("unstable exit"); return null }
+  const result = await f.scope.finish()
+  assert.equal(result.state, "settled", JSON.stringify(result.failures))
+  assert.equal(result.launches[0]!.absent, true)
+  assert.equal(reads, 3)
+})
