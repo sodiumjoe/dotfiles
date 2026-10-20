@@ -1,3 +1,4 @@
+import { fixtureLeafSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -117,11 +118,12 @@ test("ACP native inventory and import preserve native history without launching 
 })
 
 test("explicit imported restore uses fresh environment and native load without transcript submission or external cleanup", async t => {
-  const sentinel = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>process.stdout.write('signal'));process.stdout.write('ready');setInterval(()=>{},1000)"], { stdio: ["ignore", "pipe", "pipe"] })
+  const sentinel = (await fixtureLeafSpawner("agent-sentinel"))(process.execPath, ["-e", "process.on('SIGTERM',()=>process.stdout.write('signal'));process.stdout.write('ready');setInterval(()=>{},1000)"], { stdio: ["ignore", "pipe", "pipe"] })
   let signals = ""
   sentinel.stdout.on("data", chunk => { signals += chunk })
   await new Promise<void>(resolve => sentinel.stdout.once("data", () => resolve()))
-  t.after(async () => { sentinel.kill("SIGKILL"); await new Promise<void>(resolve => sentinel.once("exit", () => resolve())) })
+  const sentinelClosed = new Promise<void>(resolve => sentinel.once("close", () => resolve()))
+  t.after(async () => { await signalFixturePid(sentinel.pid!, "SIGKILL"); await sentinelClosed })
   const f = await acpFixture(t), a = await f.connect()
   await a.request("initialize", { protocolVersion: 1 })
   const imported = await a.request("agency/import", { backendId: "codex-acp", nativeSessionId: "saved-native", cwd: f.workspace })

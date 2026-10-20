@@ -65,3 +65,17 @@ export async function sealFixtureSource(): Promise<void> {
   runtime.sealed = true
   await runtime.client?.checkpoint("before-intentional-exit")
 }
+export async function fixtureLeafSpawner(role: string): Promise<typeof spawn> {
+  const runtime = await fixtureRuntime()
+  return ((file, args, options) => {
+    const settings = options ?? {}, ref = runtime.scope.intent(role, { ownGroup: settings.detached ?? false })
+    return registerFixtureChild(runtime, ref, () => spawn(file, args ?? [], { ...settings, env: cleanFixtureEnvironment(settings.env) }))
+  }) as typeof spawn
+}
+export async function prepareFixtureExit(pid: number): Promise<void> {
+  const runtime = await fixtureRuntime()
+  const launch = runtime.scope.snapshot().launches.find(value => value.pid === pid)
+  if (!launch) throw new Error("No current-run fixture registration for " + pid)
+  if (launch.exit || launch.absent === true) return
+  await (runtime.client ?? await workerReceiver()).prepareExit(launch.ref)
+}

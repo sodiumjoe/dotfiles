@@ -42,6 +42,7 @@ type Launch = {
 type Operation = FixtureResult["operations"][number] & { promise: Promise<unknown> }
 export type NativeFixtureAccess = {
   deadlineMs: number
+  signalEditor(ref: LaunchRef, signal: NodeJS.Signals, group: boolean): Promise<"delivered" | "already-absent" | "awaiting-reap">
   signalPid(ref: LaunchRef, signal: NodeJS.Signals): Promise<void>
   sourceAlive(ref: LaunchRef): Promise<boolean>
   result(ref: LaunchRef): FixtureLaunchResult
@@ -152,17 +153,32 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
     operations: operations.map(({ label, state, error }) => ({ label, state, error })),
     failures, artifacts: [...artifacts],
   })
-  const deliver = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false): Promise<void> => {
+  const signalObservation = async (pid: number): Promise<ProcessIdentity | null> => {
+    const end = Date.now() + 15000
+    while (true) {
+      try { return await adapter.readProcess(pid) }
+      catch (error) {
+        if (!(error instanceof Error) || !error.name.endsWith("ObservationUnavailable") || Date.now() >= end) throw error
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+    }
+  }
+  const deliver = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, editor = false): Promise<boolean | "awaiting-reap"> => {
       const value = find(ref)
       try {
-        if (absentIsSettled && value.attempted && !live(value)) return
+        if (absentIsSettled && value.attempted && !live(value)) return false
+        if (absentIsSettled && value.result.pid && await bounded("signal absence", () => signalObservation(value.result.pid!), 15000) === null) return false
         if (!value.attempted || !live(value) || !await bounded("signal owner", value.authority, 15000)) throw new Error("Fixture terminal or missing identity")
         if (!value.result.identity) await observe(ref)
         const expected = value.result.identity
         if (!expected || !live(value) || group && (expected.processGroupId !== expected.pid || expected.sessionId !== expected.pid)) throw new Error("Fixture missing identity")
         if (await bounded("signal boot", () => adapter.bootId(), 15000) !== expected.bootId) throw new Error("Fixture identity boot mismatch")
-        const current = await bounded("signal identity", () => adapter.readProcess(expected.pid), 15000)
-        if (absentIsSettled && (!live(value) || current === null)) return
+        const current = await bounded("signal identity", () => signalObservation(expected.pid), 15000)
+        if (absentIsSettled && (!live(value) || current === null)) return false
+        if (editor && current && value.result.reporting === "editor-endpoint" && value.result.unavailable === "editor-handle-closed"
+          && adapter.platform === "darwin" && sameProcessGeneration(expected, current) && current.parentPid === expected.parentPid
+          && current.uid === expected.uid && current.gid === expected.gid && current.processGroupId === expected.processGroupId && current.sessionId === expected.sessionId
+          && /:unmarked:(?:\(node\)|<defunct>)$/.test(current.birth)) return "awaiting-reap"
         if (!live(value) || !current || !sameProcess(expected, current)) throw new Error("Fixture identity mismatch")
         if (group) {
           const members = await bounded("signal group", () => adapter.readGroup(expected.processGroupId), 15000)
@@ -170,10 +186,11 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
             || members.some(member => member.bootId !== expected.bootId || member.processGroupId !== expected.processGroupId || member.sessionId !== expected.sessionId || member.uid !== expected.uid || member.gid !== expected.gid || !sameProcess(member, member))) throw new Error("Fixture group identity mismatch")
           if (members.some(member => ![...launches.values()].some(known => known.result.identity && sameProcess(known.result.identity, member)))) throw new Error("Unregistered fixture group member")
           for (const member of members) if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
-          const last = await bounded("signal identity", () => adapter.readProcess(expected.pid), 15000)
+          const last = await bounded("signal identity", () => signalObservation(expected.pid), 15000)
           if (!live(value) || !last || !sameProcess(expected, last)) throw new Error("Fixture identity changed")
         }
         sendSignal(group ? -expected.processGroupId : expected.pid, signal)
+        return true
       } catch (error) { value.failed = true; fail(value.result.role + " signal", error); throw error }
   }
   const scope: FixtureScope = {
@@ -220,7 +237,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       finalizers.push({ label, work })
     },
     artifact(path) { artifacts.add(path) },
-    signal: (ref, signal) => deliver(ref, signal, find(ref).ownGroup),
+    signal: async (ref, signal) => { await deliver(ref, signal, find(ref).ownGroup) },
     finish() {
       if (pending) return pending
       pending = (async () => {
@@ -245,7 +262,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
                 const boot = await bounded("absence boot", () => adapter.bootId(), 15000)
                 if (value.result.identity && boot !== value.result.identity.bootId) throw new Error("absence boot mismatch")
                 try {
-                  const current = await bounded("absence identity", () => adapter.readProcess(value.result.pid!), 15000)
+                  const current = await bounded("absence identity", () => signalObservation(value.result.pid!), 15000)
                   let absent = current === null || value.result.identity !== null && !sameProcessGeneration(value.result.identity, current)
                   if (value.ownGroup) {
                     const members = await bounded("absence group", () => adapter.readGroup(value.result.pid!), 15000)
@@ -275,11 +292,12 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   }
   if (native) nativeAccess.set(scope, {
     deadlineMs: options.deadlineMs,
-    signalPid: (ref, signal) => deliver(ref, signal, false, true),
+    signalEditor: async (ref, signal, group) => { const outcome = await deliver(ref, signal, group, true, true); return outcome === "awaiting-reap" ? outcome : outcome ? "delivered" : "already-absent" },
+    signalPid: async (ref, signal) => { await deliver(ref, signal, false, true) },
     async sourceAlive(ref) {
       const value = find(ref), expected = value.result.identity
       if (!live(value) || !expected) return false
-      const current = await bounded("source identity", () => adapter.readProcess(expected.pid), 15000)
+      const current = await bounded("source identity", () => signalObservation(expected.pid), 15000)
       return live(value) && current !== null && sameProcess(expected, current)
     },
     result: ref => structuredClone(find(ref).result),

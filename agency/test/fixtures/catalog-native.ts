@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { watch } from "node:fs"
 
+await writeFile(join(process.cwd(), "native-environment.json"), JSON.stringify({ home: process.env.HOME, path: process.env.PATH, fixtureKeys: Object.keys(process.env).filter(key => key.startsWith("AGENCY_FIXTURE_") || key === "AGENCY_TEST_WORKER_RUN" || key === "NODE_TEST_CONTEXT") }), { mode: 0o600 })
 const directory = dirname(process.argv[1]!)
 let scenario: { fail?: boolean; models?: string[]; wait?: boolean } = {}
 try { scenario = JSON.parse(await readFile(join(directory, "scenario.json"), "utf8")) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }

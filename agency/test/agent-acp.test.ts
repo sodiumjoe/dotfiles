@@ -1,3 +1,4 @@
+import { fixtureLeafSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { PassThrough, Writable } from "node:stream"
@@ -165,8 +166,8 @@ test("completion racing cancel clears grace and contains observer exceptions", a
 })
 
 test("real fixture provider accepts cancellation and a subsequent turn", async t => {
-  const root = await privateRoot(t)
-  const child = spawn(process.execPath, [new URL("./fixtures/agent-provider.js", import.meta.url).pathname], { env: { ...process.env, FIXTURE_ROOT: root, FIXTURE_SCENARIO: "cancel" }, stdio: ["pipe", "pipe", "pipe"] })
+  const root = await privateRoot(t, { retainRoot: true })
+  const child = (await fixtureLeafSpawner("agent-acp.test"))(process.execPath, [new URL("./fixtures/agent-provider.js", import.meta.url).pathname], { env: { ...process.env, FIXTURE_ROOT: root, FIXTURE_SCENARIO: "cancel" }, stdio: ["pipe", "pipe", "pipe"] })
   const exited = once(child, "exit")
   const peer = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: sampleSpec().limits })
   try {
@@ -176,7 +177,7 @@ test("real fixture provider accepts cancellation and a subsequent turn", async t
     assert.deepEqual(await turn, { stopReason: "cancelled", text: "" })
     assert.deepEqual(await peer.prompt("second", new AbortController().signal, editorLimits), { stopReason: "end_turn", text: "answer:second" })
   } finally {
-    peer.close(); child.kill("SIGTERM"); await exited
+    peer.close(); await signalFixturePid(child.pid!, "SIGTERM"); await exited
     child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy()
   }
 })

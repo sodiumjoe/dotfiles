@@ -19,9 +19,9 @@ async function fixture(mode: string, t: test.TestContext) {
   const scope = createNativeFixtureScope({ runId: root, workerFile: "channel-test", deadlineMs: 5000 })
   scope.artifact(root)
   const receiver = await startFixtureReceiver(scope, join(root, "r.sock"))
-  const ref = scope.intent(mode === "sealed" || mode === "sealed-late" || mode === "seal-eof" ? "channel-prepared" : mode === "singleton" ? "singleton-contender" : "channel-source")
+  const ref = scope.intent(mode === "seal-complete" || mode === "sealed" || mode === "sealed-late" || mode === "seal-eof" ? "channel-prepared" : mode === "singleton" ? "singleton-contender" : mode.startsWith("editor-") ? "editor" : "channel-source")
   const connection = receiver.connection(ref)
-  const child = scope.spawn(ref, () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/run-scope/" + ((rawModes.includes(mode) || mode.startsWith("editor-")) ? "channel-raw.js" : "channel-source.js"), import.meta.url)), mode], {
+  const child = scope.spawn(ref, () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/run-scope/" + ((mode === "seal-complete" || rawModes.includes(mode) || mode.startsWith("editor-")) ? "channel-raw.js" : "channel-source.js"), import.meta.url)), mode], {
     env: { ...process.env, AGENCY_TEST_CONNECTION: JSON.stringify(connection), AGENCY_TEST_RELEASE: join(root, "release") }, stdio: mode === "ipc" ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
   }), { closeAdmission() {} })
   t.after(async () => {
@@ -222,11 +222,19 @@ test("a synchronous source spawn throw retains its original attempt without a no
   assert.match(launch.error!, /synchronous spawn failure/)
 })
 
-for (const [mode, outcome] of [["editor-delivery", "delivered"], ["editor-absent", "already-absent"]]) test("editor stop acknowledges its exact current launch: " + mode, async t => {
+for (const [mode, outcome] of [["editor-delivery", "delivered"], ["editor-absent", "already-absent"], ["editor-absent-unreported", "already-absent"]]) test("editor stop acknowledges its exact current launch: " + mode, async t => {
   const f = await fixture(mode!, t)
   await f.closed
   assert.equal(f.child.exitCode, 0, f.errors())
   assert.match(f.output(), new RegExp('"outcome":"' + outcome + '"'))
   const result = await f.scope.finish()
   assert.equal(result.state, "settled", JSON.stringify(result.failures))
+})
+
+test("source completion racing preparation satisfies its accepted finite boundary", async t => {
+  const f = await fixture("seal-complete", t)
+  while (!f.output().includes("ready")) await new Promise(resolve => setTimeout(resolve, 10))
+  await f.receiver.prepareExit(f.ref)
+  await f.closed
+  assert.equal((await f.scope.finish()).state, "settled", f.errors())
 })

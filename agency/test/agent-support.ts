@@ -1,4 +1,3 @@
-import { fixtureIdentity } from "./fixtures/ownership.js"
 import { PassThrough } from "node:stream"
 import { isDeepStrictEqual } from "node:util"
 import { EventEmitter } from "node:events"
@@ -58,28 +57,16 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
   const owned = new Map<string, LaunchRecord>(), seen = new Set<string>(), requests: Promise<unknown>[] = []
   const inventory = async () => ({ ...await createAgentStore(f.paths.persistentRoot).inventory(), launches: await inventoryLaunches(join(f.paths.persistentRoot, "launches")) })
   async function trackProviders(): Promise<void> {
-    for (const name of (await readdir(f.root)).filter(name => /^spawn-.*\.json$/.test(name))) {
-      const hint = JSON.parse(await readFile(join(f.root, name), "utf8")) as { pid: number; agentId: string; attempt: string }
-      if (seen.has(hint.attempt)) continue
-      assert.ok(Number.isSafeInteger(hint.pid) && hint.pid > 1)
-      const agent = await createAgentStore(f.paths.persistentRoot).readAgent(hint.agentId)
-      assert.ok(agent?.launch); assert.equal(agent.launch.launchAttemptId, hint.attempt)
-      const identity = await f.observe(hint.pid)
-      if (identity === null) {
-        for (let n = 0; n < 2; n++) { assert.equal(await f.observe(hint.pid), null); assert.deepEqual(await f.adapter.readGroup(hint.pid), []) }
-      } else {
-        assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), `agy-provider:${hint.attempt}`)
-        assert.equal(identity.bootId, await f.adapter.bootId())
-        assert.equal(identity.pid, identity.processGroupId); assert.equal(identity.pid, identity.sessionId)
-        assert.equal(identity.uid, process.getuid!()); assert.equal(identity.gid, process.getgid!())
-        const members = await verifyFixtureProviderGroup(identity, { readGroup: pid => f.adapter.readGroup(pid), observe: f.observe })
-        if (members === null) { seen.add(hint.attempt); continue }
-        for (const member of members) fixtureIdentity("provider-group", member)
-        const record: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: hint.agentId, providerGeneration: agent.launch.providerGeneration }, handlerGeneration: agent.launch.handlerGeneration, launchAttemptId: hint.attempt, launchBootId: identity.bootId, launchAttempted: true, provider: { kind: "process-group", group: { leader: identity, observed: members } }, phase: "active", reason: null }
-        await writeLaunchRecord(join(f.root, `owned-${hint.attempt}.json`), record)
-        owned.set(hint.attempt, record)
-      }
-      seen.add(hint.attempt)
+    const agents = (await createAgentStore(f.paths.persistentRoot).inventory()).agents
+    for (const item of f.registrations().filter(item => item.role.startsWith("agent-provider/"))) {
+      const attempt = item.role.slice("agent-provider/".length)
+      seen.add(attempt)
+      if (owned.has(attempt) || !item.identity) continue
+      const agent = agents.find(agent => agent.launch?.launchAttemptId === attempt)
+      if (!agent?.launch) continue
+      const identity = item.identity
+      const record: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: agent.definition.agentId, providerGeneration: agent.launch.providerGeneration }, handlerGeneration: agent.launch.handlerGeneration, launchAttemptId: attempt, launchBootId: identity.bootId, launchAttempted: true, provider: { kind: "process-group", group: { leader: identity, observed: [identity] } }, phase: "active", reason: null }
+      owned.set(attempt, record)
     }
   }
   const handler = () => readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
@@ -102,20 +89,12 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     assert.deepEqual(agents.issues, []); assert.deepEqual(probes.issues, [])
     assert.deepEqual(probes.launches, [])
     for (const record of owned.values()) {
-      const path = join(f.root, `${record.launchAttemptId}-supervisor-cleanup.json`)
-      await writeLaunchRecord(path, record)
-      assert.equal((await reconcileRecord(path, f.adapter, record)).record.phase, "cleanup_verified")
+      const registered = f.registrations().find(item => item.role === "agent-provider/" + record.launchAttemptId)
+      if (registered?.pid && await f.observe(registered.pid) !== null) await f.signal(record.provider!.group.leader, "SIGKILL")
       for (const identity of record.provider!.group.observed) await proveAbsent(identity)
     }
     for (const entry of launches) if (entry.record.provider) for (const identity of entry.record.provider.group.observed) await proveAbsent(identity)
     for (const identity of f.owned) await proveAbsent(identity)
-    const helpers = await readFile(join(f.root, "tools-helpers.jsonl"), "utf8").catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return ""; throw error })
-    for (const line of helpers.trim().split("\n").filter(Boolean)) {
-      const pid = JSON.parse(line).pid
-      assert.ok(Number.isSafeInteger(pid) && pid > 1)
-      await until(async () => await f.observe(pid) === null ? true : undefined)
-      assert.equal(await f.observe(pid), null)
-    }
     const evidence = { handlers: f.owned, providers: [...owned.values()], launches, agents, probes, survivors: [] }
     await writeFile(join(f.root, "agent-cleanup.json"), JSON.stringify(evidence), { mode: 0o600 })
     t.diagnostic("agent cleanup verified: " + JSON.stringify(evidence))

@@ -1,3 +1,4 @@
+import { fixtureBridgeSpawner } from "./fixtures/fixture-bridge.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { spawn } from "node:child_process"
@@ -16,7 +17,8 @@ for (const tasks of ["reject", "hold"] as const) test(`remote ordinary controls 
   if (tasks === "hold") await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
   const enrollment = { inventoryId: randomUUID(), hostId: f.paths.hostKey, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }
-  const transport = await connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  const spawnBridge = await fixtureBridgeSpawner()
+  const transport = await connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
   const call = async (argv: string[]): Promise<HostResult> => {
     const output: string[] = []
@@ -46,7 +48,8 @@ for (const tasks of ["reject", "hold"] as const) test(`independent editor entry 
   const f = await acpFixture(t, { tasks, entry: "synthetic" }), acp = await f.connect()
   await acp.request("initialize", { protocolVersion: 1 })
   const session = await acp.request("session/new", { cwd: f.workspace, mcpServers: [] }), target = await f.tuple(String(session.sessionId)), commandId = randomUUID(), ref = { hostId: f.paths.hostKey, target }
-  const transport = await connectBridge({ inventoryId: randomUUID(), hostId: ref.hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["entry-open", "runtime-entry-inspect"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: ref.hostId, handlerGeneration: target.handlerGeneration })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  const spawnBridge = await fixtureBridgeSpawner()
+  const transport = await connectBridge({ inventoryId: randomUUID(), hostId: ref.hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["entry-open", "runtime-entry-inspect"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: ref.hostId, handlerGeneration: target.handlerGeneration })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
   const deps = { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env: unknown, route: import("../src/hosts/router.js").HostRoute) => transport.request(route.channel, route.payload), start: async () => { throw new Error("start forbidden") }, stderr() {} }
   const call = async (argv: string[]) => {
@@ -71,4 +74,68 @@ for (const tasks of ["reject", "hold"] as const) test(`independent editor entry 
   assert.equal(await runRuntimeEntryHelper([commandId, "--target-json", JSON.stringify(ref)], deps, async () => { throw new Error("retired terminal forbidden") }), 75)
   assert.equal(await readFile(join(f.root, "entry-creations"), "utf8"), "1")
   transport.close(); await transport.closed; acp.close(); await f.verifyZeroSurvivors()
+})
+
+test("fixture bridge close waits for observation and coalesces validated signals", async () => {
+  const { fixtureBridgeProcess } = await import("./fixtures/fixture-bridge.js")
+  const { createSyntheticFixtureScope } = await import("./fixtures/run-scope.js")
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  let release!: () => void, reads = 0
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const signals: number[] = []
+  const identity = { bootId: "b", pid: 123, parentPid: process.pid, processGroupId: 123, sessionId: 123, uid: 1, gid: 1, birth: "1:fixture" }
+  let current: typeof identity | null = identity
+  const scope = createSyntheticFixtureScope({ runId: "bridge", workerFile: "bridge", deadlineMs: 1000, adapter: { platform: "darwin", bootId: async () => "b", readProcess: async () => { if (++reads === 1) await gate; return current }, readGroup: async () => [], signalGroup: async () => {} }, signal: pid => { signals.push(pid) } })
+  const ref = scope.intent("bridge")
+  const child = Object.assign(new EventEmitter(), { pid: 123, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), stdio: [], exitCode: null, signalCode: null, kill() { assert.fail("raw kill") } }) as unknown as import("node:child_process").ChildProcess
+  scope.spawn(ref, () => child, { closeAdmission() {} })
+  const bridge = fixtureBridgeProcess(scope, ref, child)
+  assert.equal(bridge.stdin, child.stdin)
+  assert.equal(bridge.stdout, child.stdout)
+  assert.equal(bridge.kill(), true)
+  assert.equal(bridge.kill(), true)
+  assert.deepEqual(signals, [])
+  release()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(signals, [123])
+  current = null
+  child.emit("exit", 0, null); child.emit("close", 0, null)
+  assert.equal((await scope.finish()).state, "settled")
+})
+
+test("control cleanup retains its root and ignores forged historical targets", async t => {
+  const { controlFixture } = await import("./control-support.js")
+  const { writeFile, lstat } = await import("node:fs/promises")
+  const f = await controlFixture(t)
+  const forged = JSON.stringify({ pid: process.pid, identity: await f.observe(process.pid) })
+  for (const name of ["owned-fake.json", "tools-helpers.jsonl", "owned-probe-00000000-0000-4000-8000-000000000000.json"]) await writeFile(join(f.root, name), forged)
+  await f.start()
+  await f.cleanup()
+  assert.equal((await lstat(f.root)).isDirectory(), true)
+})
+
+for (const mode of ["changed", "closed"] as const) test("fixture bridge refuses delivery after " + mode + " observation", async () => {
+  const { fixtureBridgeProcess } = await import("./fixtures/fixture-bridge.js")
+  const { createSyntheticFixtureScope } = await import("./fixtures/run-scope.js")
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const identity = { bootId: "b", pid: 321, parentPid: process.pid, processGroupId: 321, sessionId: 321, uid: 1, gid: 1, birth: "1:fixture" }
+  let current: typeof identity | null = identity
+  const signals: number[] = []
+  const scope = createSyntheticFixtureScope({ runId: mode, workerFile: "bridge", deadlineMs: 1000, adapter: { platform: "darwin", bootId: async () => "b", readProcess: async () => current, readGroup: async () => [], signalGroup: async () => {} }, signal: pid => { signals.push(pid) } })
+  const ref = scope.intent("bridge")
+  const child = Object.assign(new EventEmitter(), { pid: 321, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), stdio: [], exitCode: null, signalCode: null }) as unknown as import("node:child_process").ChildProcess
+  scope.spawn(ref, () => child, { closeAdmission() {} })
+  if (mode === "changed") { await scope.observe(ref); current = { ...identity, birth: "2:replacement" } }
+  else { Object.assign(child, { exitCode: 0 }); child.emit("exit", 0, null); child.emit("close", 0, null); current = null }
+  const bridge = fixtureBridgeProcess(scope, ref, child)
+  bridge.kill()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(signals, [])
+  current = null
+  if (mode === "changed") { child.emit("exit", 0, null); child.emit("close", 0, null) }
+  const result = await scope.finish()
+  assert.equal(result.state, mode === "changed" ? "incomplete" : "settled")
+  if (mode === "changed") assert.match(result.failures.join(";"), /identity/)
 })

@@ -1,5 +1,5 @@
 import { createTaskService } from "../../src/tasks/service.js"
-import { fixtureLaunch, fixtureSpawn } from "./ownership.js"
+import { fixtureRuntime, fixtureSpawner, finishFixtureSource } from "./fixture-spawn.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { spawn } from "node:child_process"
@@ -23,6 +23,7 @@ import type { PlatformPaths } from "../../src/platform/paths.js"
 import type { CatalogSnapshot, ProviderProfile } from "../../src/catalog/types.js"
 import type { AgentHandlerOptions } from "../agent-support.js"
 
+const spawnFixture = await fixtureSpawner()
 process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as AgentHandlerOptions & { paths: PlatformPaths; profile: ProviderProfile; profiles?: ProviderProfile[] }
 const root = dirname(config.paths.runtimeRoot), generation = process.env.AGENCY_HANDLER_GENERATION!
@@ -107,16 +108,11 @@ try {
         if (next.op === "stop" && next.state === "pending") await pause("stop-intent")
         if (next.op === "stop" && next.state === "completed") await pause("stop-receipt-after")
       } } }, { processFactory(options) {
-        let ownership: Promise<unknown> = Promise.resolve()
         const owner = createAgentProcess(options, { spawn: ((...args: Parameters<typeof spawn>) => {
-          const launch = fixtureLaunch("provider")
-          const child = spawn(...args)
-          ownership = fixtureSpawn(launch, child.pid)
-          void ownership.catch(() => undefined)
-          writeFileSync(join(root, `spawn-${options.spec.launchAttemptId}.json`), JSON.stringify({ pid: child.pid ?? null, agentId: options.spec.agentId, attempt: options.spec.launchAttemptId }), { mode: 0o600 })
+          const [file, argv, settings] = args
+          const child = spawnFixture("agent-provider/" + options.spec.launchAttemptId, file, argv ?? [], settings ?? {})
           return child
         }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
-          await ownership
           await writeLaunchRecord(path, record)
           if (record.launchAttempted && record.provider === null) await pause("attempted")
           if (record.provider !== null) await pause("identity")
@@ -129,3 +125,4 @@ try {
   await writeFile(join(root, "failure"), (error instanceof Error ? error.stack ?? error.message : String(error)).slice(0, 4096), { mode: 0o600 })
   process.exitCode = 1
 }
+await finishFixtureSource()

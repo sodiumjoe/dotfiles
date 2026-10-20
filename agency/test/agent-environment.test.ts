@@ -1,3 +1,4 @@
+import { fixtureLeafSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { spawn } from "node:child_process"
@@ -19,7 +20,7 @@ function captureThrownMessage(operation: () => unknown): string {
 
 async function readChildDigest(environment: LaunchEnvironment): Promise<{ code: number | null; output: string; error: string }> {
   const childSource = "const {createHash}=require('node:crypto');process.stdout.write(createHash('sha256').update(JSON.stringify([['BOUNDARY_A',process.env.BOUNDARY_A],['BOUNDARY_B',process.env.BOUNDARY_B]])).digest('hex'))"
-  const child = spawn(process.execPath, ["-e", childSource], { env: environment, stdio: ["ignore", "pipe", "pipe"] })
+  const child = (await fixtureLeafSpawner("agent-environment.test"))(process.execPath, ["-e", childSource], { env: environment, stdio: ["ignore", "pipe", "pipe"] })
   let output = "", error = ""
   child.stdout.setEncoding("utf8").on("data", chunk => { output += chunk })
   child.stderr.setEncoding("utf8").on("data", chunk => { error += chunk })
