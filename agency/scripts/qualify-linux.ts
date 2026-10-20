@@ -385,6 +385,11 @@ export const STAGED_COMPILED_PATHS = [
   "dist/src/platform/singleton.js",
   "dist/src/platform/startup.js",
   "dist/src/platform/private-socket.js",
+  "dist/test/fixtures/fixture-spawn.js",
+  "dist/test/fixtures/run-boundary.js",
+  "dist/test/fixtures/run-scope.js",
+  "dist/test/fixtures/fixture-channel.js",
+  "dist/test/fixtures/singleton-ownership.js",
   "dist/test/fixtures/handler.js",
   "dist/test/fixtures/provider-tree.js",
   "dist/test/fixtures/singleton-handler.js",
@@ -614,7 +619,11 @@ export async function remoteRun(input:BatchInput):Promise<CommandResult>{
 
 export function qualificationProcessEnvironment(input:BatchInput,current:NodeJS.ProcessEnv=process.env):NodeJS.ProcessEnv{
   assertBatchInput(input)
-  return {...current,PATH:"/usr/stripe/nodenv/versions/24.13.0/bin:/usr/bin:/bin",AGENCY_LINUX_REAL:"1",AGENCY_LINUX_PROCFS_UNIT:"",AGENCY_DIRECT_GROUP_ROOT:input.stateRoot,AGENCY_DIRECT_GROUP_BATCH:input.batchId}
+  const environment={...current}
+  delete environment.AGENCY_FIXTURE_CONNECTION
+  delete environment.AGENCY_TEST_WORKER_RUN
+  delete environment.NODE_TEST_CONTEXT
+  return {...environment,PATH:"/usr/stripe/nodenv/versions/24.13.0/bin:/usr/bin:/bin",AGENCY_LINUX_REAL:"1",AGENCY_FIXTURE_LEGACY_LINUX_RECEIPTS:"1",AGENCY_LINUX_PROCFS_UNIT:"",AGENCY_DIRECT_GROUP_ROOT:input.stateRoot,AGENCY_DIRECT_GROUP_BATCH:input.batchId}
 }
 
 export function createExecutionEnvelope(input:BatchInput,result:CommandResult):ExecutionEnvelope{

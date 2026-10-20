@@ -3,7 +3,7 @@ import test from "node:test"
 import { createHash, randomUUID } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
-import { mkdtemp, realpath, rm, readFile } from "node:fs/promises"
+import { mkdtemp, realpath, rm, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createLinuxAdapter } from "../src/platform/linux.js"
@@ -164,7 +164,7 @@ function preflightMetadata(){
   },bootId:boot,machineId:"a".repeat(32),home:"/pay/home/moon",validationParent:"/pay/home/moon/.acp-attachment-validation",runtimeParent:"/tmp",xdgStateHome:null}
 }
 const preflightResult=()=>({code:0,signal:null,stdout:JSON.stringify(preflightMetadata()),stderr:"",timedOut:false})
-const manifestPaths = ["package.json", ...["types","private-state","paths","host-id","launch-marker","darwin","linux","reconcile","singleton","startup","private-socket"].map(name => "dist/src/platform/"+name+".js"), ...["handler","provider-tree","singleton-handler"].map(name => "dist/test/fixtures/"+name+".js"), "dist/test/linux-platform.test.js", "dist/scripts/qualify-linux.js"]
+const manifestPaths = ["package.json", ...["types","private-state","paths","host-id","launch-marker","darwin","linux","reconcile","singleton","startup","private-socket"].map(name => "dist/src/platform/"+name+".js"), ...["fixture-spawn","run-boundary","run-scope","fixture-channel","singleton-ownership","handler","provider-tree","singleton-handler"].map(name => "dist/test/fixtures/"+name+".js"), "dist/test/linux-platform.test.js", "dist/scripts/qualify-linux.js"]
 function completeReceipt(): any {
   const key = randomUUID(), attemptId = randomUUID(), childKey = randomUUID()
   const sourceEntries = manifestPaths.map(compiledPath => ({ sourcePath: "agency/"+compiledPath.replace(/^dist\//,"").replace(/\.js$/,".ts"), sourceSha256: sha("source"), compiledPath, compiledSha256: sha(compiledPath==="package.json"?"source":"compiled") }))
@@ -281,7 +281,7 @@ synthetic("direct-group receipts encode slash and colon identities safely", asyn
     assert.equal(inventory.sourceEntries.length,d.STAGED_COMPILED_PATHS.length)
     assert.deepEqual(inventory.files.map((file:any)=>file.path),[...d.STAGED_COMPILED_PATHS,...d.STAGED_RAW_PATHS])
     for(const entry of inventory.sourceEntries)assert.match(entry.sourceSha256,/^[0-9a-f]{64}$/)
-    for(const fixture of ["handler","singleton-handler","provider-tree"])assert.ok(d.STAGED_COMPILED_PATHS.includes(`dist/test/fixtures/${fixture}.js`))
+    for(const fixture of ["handler","singleton-handler","provider-tree","fixture-spawn","run-boundary","run-scope","fixture-channel"])assert.ok(d.STAGED_COMPILED_PATHS.includes(`dist/test/fixtures/${fixture}.js`))
   })
   await t.test("index, working tree, and commit mismatches", async () => {
     const receipt=completeReceipt()
@@ -344,13 +344,15 @@ synthetic("direct-group inventory rejects incomplete launch registration", async
     child.kill=(signal:string)=>{signals.push(signal);if(failure==="accepted-timeout")return true;if(failure==="accepted-error"){queueMicrotask(()=>child.emit("error",new Error("post-delivery failure")));return true}queueMicrotask(()=>{child.signalCode=signal;child.emit("exit",null,signal)});return true}
     const status=new PassThrough(), ack=new PassThrough()
     const receiptPath=join(root,randomUUID()+".json")
+    let writes=0
     const promise=(leader as any)(join(root,"ready.json"),"normal",50,{
-      receiptPath,
+      finalFailureSink:(value:unknown)=>{writes++;return writeFile(receiptPath,JSON.stringify(value))},
       spawnDescendant:()=>child,
       socketForFd:(fd:number)=>{if(failure==="descriptor"&&fd===3)throw new Error("descriptor failure");return fd===3?status:ack},
     })
     await assert.rejects(promise)
     assert.deepEqual(signals,failure==="already-exited"?[]:["SIGKILL"])
+    assert.equal(writes,1)
     const evidence=JSON.parse(await readFile(receiptPath,"utf8"))
     assert.equal(evidence.pid,12345)
     assert.equal(evidence.ownership,"direct-unreaped-child-handle")
@@ -757,11 +759,13 @@ synthetic("correction batch propagates through real evidence validation helpers"
   assert.equal(result.attempts.every((value:any)=>value.batchId===d.CORRECTION_BATCH_ID),true)
   assert.equal(result.children.every((value:any)=>value.batchId===d.CORRECTION_BATCH_ID),true)
   assert.equal(result.execution?.code,fixture.receipt.execution.code)
-  const environment=d.qualificationProcessEnvironment(fixture.input,{RETAINED:"yes"})
+  const environment=d.qualificationProcessEnvironment(fixture.input,{RETAINED:"yes",AGENCY_FIXTURE_CONNECTION:"foreign",AGENCY_TEST_WORKER_RUN:"foreign",NODE_TEST_CONTEXT:"child-v8"})
   assert.equal(environment.RETAINED,"yes")
+  for(const key of ["AGENCY_FIXTURE_CONNECTION","AGENCY_TEST_WORKER_RUN","NODE_TEST_CONTEXT"])assert.equal(environment[key],undefined)
   assert.equal(environment.AGENCY_DIRECT_GROUP_BATCH,d.CORRECTION_BATCH_ID)
   assert.equal(environment.AGENCY_DIRECT_GROUP_ROOT,fixture.input.stateRoot)
   assert.equal(environment.AGENCY_LINUX_REAL,"1")
+  assert.equal(environment.AGENCY_FIXTURE_LEGACY_LINUX_RECEIPTS,"1")
   const execution={code:0,signal:null,stdout:"",stderr:"",timedOut:false}
   assert.deepEqual(d.createExecutionEnvelope(fixture.input,execution),{batchId:d.CORRECTION_BATCH_ID,binding:fixture.input.binding,result:execution})
   const handler=await readFile(new URL("../../test/fixtures/handler.ts",import.meta.url),"utf8")

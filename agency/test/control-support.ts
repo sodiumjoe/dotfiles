@@ -1,4 +1,4 @@
-import { fixtureLaunch, fixtureSpawn } from "./fixtures/ownership.js"
+import { fixtureRuntime, fixtureSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import { mkdtemp, realpath, rm, mkdir, readFile, writeFile, chown } from "node:fs/promises"
 import { join } from "node:path"
 import type { TestContext } from "node:test"
@@ -55,41 +55,28 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv, rootPolicy: { retainRoot?: boolean } = {}) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   const paths: PlatformPaths = { hostKey: "a".repeat(64), persistentRoot: join(root, "state"), runtimeRoot: join(root, "run"), handlerSocketPath: join(root, "run/handler.sock") }
-  const owned: ProcessIdentity[] = [], pending: Array<{ pid: number; marker: string }> = [], starts: Promise<unknown>[] = []
+  const { scope } = await fixtureRuntime(), spawnFixture = await fixtureSpawner()
+  scope.artifact(root)
+  const firstLaunch = scope.snapshot().launches.length
+  const registrations = () => scope.snapshot().launches.slice(firstLaunch)
+  const owned: ProcessIdentity[] = [], starts: Promise<unknown>[] = []
   const failedStarts: unknown[] = []
-  const cleanupBarriers: Array<() => Promise<void>> = []
+  const cleanupBarriers: Array<() => Promise<void>> = [], cleanupChecks: Array<() => Promise<void>> = []
   const providers: Array<{ child: ChildProcess; marker: string; attempt: string; record?: LaunchRecord }> = []
   async function observe(pid: number): Promise<ProcessIdentity | null> {
     return until(async () => { try { return await adapter.readProcess(pid) } catch (error) { if (!(error instanceof Error) || !error.name.endsWith("ObservationUnavailable")) throw error; return undefined } })
   }
-  async function authorize(expected: ProcessIdentity): Promise<boolean> {
-    return until(async () => {
-      try {
-        const current = await observe(expected.pid)
-        if (current === null) { assert.deepEqual(await adapter.readGroup(expected.pid), []); return false }
-        assert.ok(sameProcess(expected, current), "fixture generation changed")
-        assert.equal(await adapter.bootId(), expected.bootId)
-        const first = await adapter.readGroup(expected.pid), second = await adapter.readGroup(expected.pid)
-        const latest = await observe(expected.pid)
-        if (latest === null) { assert.deepEqual(second, []); assert.deepEqual(await adapter.readGroup(expected.pid), []); return false }
-        assert.ok(sameProcess(expected, latest), "fixture generation changed")
-        assert.deepEqual(first, second)
-        assert.equal(first.length, 1)
-        assert.ok(sameProcess(first[0]!, expected))
-        return true
-      } catch (error) {
-        if (!(error instanceof Error) || !error.name.endsWith("ObservationUnavailable")) throw error
-        return undefined
-      }
-    })
-  }
   async function signal(expected: ProcessIdentity, value: NodeJS.Signals): Promise<void> {
-    if (await authorize(expected) && await authorize(expected)) await adapter.signalGroup(expected.pid, value)
+    const launch = registrations().find(item => item.pid === expected.pid)
+    if (!launch) throw new Error("No current-run fixture registration")
+    if (launch.identity && !sameProcess(launch.identity, expected)) throw new Error("fixture generation changed")
+    const handler = ["agent-handler", "control-handler"].includes(launch.role)
+    await signalFixturePid(expected.pid, value, handler, !handler)
   }
   const verifyCatalogCleanup = async (): Promise<void> => {
     try {
@@ -105,25 +92,14 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
     await verifyCatalogCleanup()
     assertFixtureBatchHealthy()
     for (const barrier of cleanupBarriers) await barrier()
-    for (const item of pending) {
-      if (owned.some(identity => identity.pid === item.pid)) continue
-      const identity = await observe(item.pid)
-      if (identity === null) { assert.deepEqual(await adapter.readGroup(item.pid), []); continue }
-      assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), item.marker)
-      assert.equal(identity.pid, identity.processGroupId)
-      assert.equal(identity.pid, identity.sessionId)
-      assert.equal(identity.uid, process.getuid!())
-      assert.equal(identity.gid, process.getgid!())
-      owned.push(identity)
-    }
-    for (const identity of owned) {
-      await signal(identity, "SIGTERM")
+    for (const launch of registrations()) {
+      if (!launch.pid || launch.exit || launch.absent) continue
+      const owning = ["agent-handler", "control-handler", "catalog-worker"].includes(launch.role)
+      await signalFixturePid(launch.pid, "SIGTERM", owning)
       const deadline = Date.now() + 1000
-      while (await observe(identity.pid) !== null && Date.now() < deadline) await delay(25)
-      if (await observe(identity.pid) !== null) await signal(identity, "SIGKILL")
-      await until(async () => await observe(identity.pid) === null ? true : undefined)
-      assert.deepEqual(await adapter.readGroup(identity.pid), [])
-      assert.equal(await observe(identity.pid), null)
+      while (await observe(launch.pid) !== null && Date.now() < deadline) await delay(25)
+      if (await observe(launch.pid) !== null) await signalFixturePid(launch.pid, "SIGKILL")
+      await until(async () => await observe(launch.pid!) === null ? true : undefined)
     }
     for (const provider of providers) {
       if (provider.record === undefined) {
@@ -134,16 +110,13 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
         }
         continue
       }
-      const path = join(root, `${provider.attempt}-cleanup.json`)
-      await writeLaunchRecord(path, provider.record)
-      const result = await reconcileRecord(path, adapter, provider.record)
-      assert.notEqual(result.disposition, "quarantined")
+
       for (const identity of provider.record.provider!.group.observed) assert.equal(await observe(identity.pid), null)
       assert.deepEqual(await adapter.readGroup(provider.record.provider!.group.leader.pid), [])
     }
+    for (const check of cleanupChecks) await check()
     await writeFile(join(root, "cleanup.json"), JSON.stringify({ identities: owned, survivors: [], failedStarts: failedStarts.map(String) }), { mode: 0o600 })
-    if (rootPolicy.retainRoot) t.diagnostic("retained fixture root: " + root)
-    else await rm(root, { recursive: true })
+    t.diagnostic("retained fixture root: " + root)
   })().catch(error => { throw failFixtureBatch(error) })
   t.after(cleanup)
   await chown(root, process.getuid!(), process.getgid!())
@@ -154,18 +127,15 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   await writeFile(configPath, JSON.stringify({ paths, ...overrides }), { mode: 0o600 })
   const start = async (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
     assertFixtureBatchHealthy()
-    let marker: string | undefined, launch: ReturnType<typeof fixtureLaunch> | undefined
-    const operation = startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath], ...(handlerEnv === undefined ? {} : { env: handlerEnv }) }, onTransition: async (transition, pid) => {
-      if (transition === "launch_pending_written") { launch = fixtureLaunch("handler"); marker = `agy-handler:${(await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))).launchAttemptId}` }
+    const role = handlerFile?.endsWith("agent-handler.js") ? "agent-handler" : "control-handler"
+    const dependencies = { spawn: (file: string, args: readonly string[], options: import("node:child_process").SpawnOptions) => file === "/usr/bin/lockf" || file === "/usr/bin/flock" ? spawn(file, [...args], options) : spawnFixture(role, file, args, options, { source: true }) }
+    const operation = scope.operation("control start", () => startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath], ...(handlerEnv === undefined ? {} : { env: handlerEnv }) }, onTransition: async (transition, pid) => {
       if (transition === "handler_spawned" && pid !== undefined) {
-        assert.notEqual(marker, undefined)
-        pending.push({ pid, marker: marker! })
-        await fixtureSpawn(launch!, pid)
         const identity = await observe(pid)
-        if (identity !== null) { assert.equal(identity.birth.slice(identity.birth.indexOf(":") + 1), marker); owned.push(identity) }
+        if (identity) owned.push(identity)
       }
       await hook?.(transition)
-    } }).then(async result => { await verifyCatalogCleanup(); return result }, async error => {
+    } }, dependencies)).then(async result => { await verifyCatalogCleanup(); return result }, async error => {
       await verifyCatalogCleanup()
       throw error
     })
@@ -180,7 +150,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   const spawnProvider = async (): Promise<LaunchRecord> => {
     assertFixtureBatchHealthy()
     const attempt = randomUUID(), marker = `agy-provider:${attempt}`, ready = join(root, `${attempt}-ready.json`)
-    const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/provider-tree.js", import.meta.url)), "leader", ready, "normal", "5000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] })
+    const child = spawnFixture("provider-tree", process.execPath, [fileURLToPath(new URL("./fixtures/provider-tree.js", import.meta.url)), "leader", ready, "normal", "5000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }, { source: true })
     const provider: typeof providers[number] = { child, marker, attempt }
     providers.push(provider)
     child.on("error", () => undefined)
@@ -223,7 +193,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       return provider.record
     } finally { status.destroy(); ack.destroy() }
   }
-  return { root, paths, adapter, owned, start, call, signal, observe, configPath, spawnProvider, cleanup, beforeCleanup: (barrier: () => Promise<void>) => { cleanupBarriers.push(barrier) } }
+  return { root, paths, adapter, owned, registrations, start, call, signal, observe, configPath, spawnProvider, cleanup, beforeCleanup: (barrier: () => Promise<void>) => { cleanupBarriers.push(barrier) }, afterCleanup: (check: () => Promise<void>) => { cleanupChecks.push(check) } }
 }
 
 export async function privateRoot(t: TestContext, options: { retainRoot?: boolean } = {}): Promise<string> {

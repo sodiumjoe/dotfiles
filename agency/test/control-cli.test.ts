@@ -252,9 +252,9 @@ test("wrapper follows deployed relative symlinks, preserves arguments and ignore
   await chmod(wrapper, 0o755)
   await writeFile(join(repo, "agency/dist/src/main.js"), "process.stdout.write(JSON.stringify(process.argv.slice(2)))")
   await symlink("repo with spaces/home/bin/agy", join(root, "agy"))
-  const result = await promisify(execFile)(join(root, "agy"), ["status", "argument with spaces"], { cwd: "/", env: { ...process.env, HOME: user, NODENV_ROOT: undefined } })
+  const result = await promisify(execFile)(join(root, "agy"), ["status", "argument with spaces"], { timeout: 15000, cwd: "/", env: { ...process.env, HOME: user, NODENV_ROOT: undefined } })
   assert.deepEqual(JSON.parse(result.stdout), ["status", "argument with spaces"])
-  await assert.rejects(promisify(execFile)(join(root, "agy"), ["status"], { env: { ...process.env, HOME: root, NODENV_ROOT: undefined } }), (error: unknown) => (error as { code: number }).code === 69)
+  await assert.rejects(promisify(execFile)(join(root, "agy"), ["status"], { timeout: 15000, env: { ...process.env, HOME: root, NODENV_ROOT: undefined } }), (error: unknown) => (error as { code: number }).code === 69)
 })
 
 test("wrapper uses the pinned runtime under the configured nodenv root", async t => {
@@ -267,9 +267,9 @@ test("wrapper uses the pinned runtime under the configured nodenv root", async t
   await copyFile(fileURLToPath(new URL("../../../home/bin/agy", import.meta.url)), wrapper)
   await chmod(wrapper, 0o755)
   await writeFile(join(root, "agency/dist/src/main.js"), "process.stdout.write(JSON.stringify(process.argv.slice(2)))")
-  const result = await promisify(execFile)(wrapper, ["status", "argument with spaces"], { cwd: "/", env: { ...process.env, HOME: root, NODENV_ROOT: nodenv } })
+  const result = await promisify(execFile)(wrapper, ["status", "argument with spaces"], { timeout: 15000, cwd: "/", env: { ...process.env, HOME: root, NODENV_ROOT: nodenv } })
   assert.deepEqual(JSON.parse(result.stdout), ["status", "argument with spaces"])
-  await assert.rejects(promisify(execFile)(wrapper, ["status"], { env: { ...process.env, HOME: root, NODENV_ROOT: join(root, "missing") } }), (error: unknown) => (error as { code: number }).code === 69)
+  await assert.rejects(promisify(execFile)(wrapper, ["status"], { timeout: 15000, env: { ...process.env, HOME: root, NODENV_ROOT: join(root, "missing") } }), (error: unknown) => (error as { code: number }).code === 69)
 })
 
 test("wrapper reports a missing build without creating it", async t => {
@@ -278,7 +278,7 @@ test("wrapper reports a missing build without creating it", async t => {
   const wrapper = join(root, "home/bin/agy")
   await copyFile(fileURLToPath(new URL("../../../home/bin/agy", import.meta.url)), wrapper)
   await chmod(wrapper, 0o755)
-  await assert.rejects(promisify(execFile)(wrapper, ["status"], { env: { ...process.env } }), (error: unknown) => (error as { code: number; stderr: string }).code === 69 && /build/.test((error as { stderr: string }).stderr))
+  await assert.rejects(promisify(execFile)(wrapper, ["status"], { timeout: 15000, env: { ...process.env } }), (error: unknown) => (error as { code: number; stderr: string }).code === 69 && /build/.test((error as { stderr: string }).stderr))
 })
 
 test("doctor keeps inventory inspection available when runtime status is unreachable", async () => {

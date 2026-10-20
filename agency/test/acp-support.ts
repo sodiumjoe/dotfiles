@@ -1,4 +1,4 @@
-import { fixtureLaunch, fixtureSpawn } from "./fixtures/ownership.js"
+import { fixtureRuntime, fixtureLeafSpawner, fixtureSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
@@ -103,15 +103,18 @@ export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
 }
 
 export async function providerFixture(t: TestContext, backendId: ProviderId = "codex-acp") {
-  const root = await privateRoot(t), workspace = join(root, "workspace")
+  const root = await privateRoot(t, { retainRoot: true }), workspace = join(root, "workspace")
   await mkdir(workspace, { mode: 0o700 })
-  const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/acp-provider.js", import.meta.url))], { cwd: workspace, env: { FIXTURE_ROOT: root, FIXTURE_BACKEND: backendId }, stdio: ["pipe", "pipe", "pipe"] })
+  ;(await fixtureRuntime()).scope.artifact(root)
+  const child = (await fixtureLeafSpawner("acp-provider"))(process.execPath, [fileURLToPath(new URL("./fixtures/acp-provider.js", import.meta.url))], { cwd: workspace, env: { FIXTURE_ROOT: root, FIXTURE_BACKEND: backendId }, stdio: ["pipe", "pipe", "pipe"] })
+  const terminal = new Promise<void>(resolve => child.once("exit", () => resolve()))
   let exit: number | null | undefined
   child.once("exit", code => { exit = code })
   const peer = createAcpPeer(child.stdout, child.stdin)
   t.after(async () => {
     peer.close()
-    if (exit === undefined) { child.kill("SIGTERM"); await new Promise<void>(resolve => child.once("exit", () => resolve())) }
+    if (exit === undefined) await signalFixturePid(child.pid!, "SIGTERM")
+    await terminal
     assert.equal(child.killed || exit !== undefined, true)
     assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
     t.diagnostic(`fixture provider cleanup verified: pid ${child.pid}`)
@@ -171,40 +174,41 @@ export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
   const config = join(root, "endpoint.json"), socket = join(root, "nvim.sock")
   await writeFile(config, JSON.stringify({ paths: f.paths, environment: f.environment }), { mode: 0o600 })
   const executable = process.env.NVIM_TEST_EXECUTABLE ?? "/opt/homebrew/bin/nvim"
-  const ownershipPath = process.env.AGENCY_TEST_EVIDENCE_ROOT && join(process.env.AGENCY_TEST_EVIDENCE_ROOT, "ownership.jsonl")
-  const ownershipStart = ownershipPath ? (await readFile(ownershipPath, "utf8").catch(() => "")).split("\n").filter(Boolean).length : 0
-  const launch = fixtureLaunch("editor")
-  const child = spawn(executable, ["--headless", "-i", "NONE", "--listen", socket, "-u", join(repo, "tests/neovim/acp_minimal_init.lua")], {
+  const runtime = await fixtureRuntime(), spawnFixture = await fixtureSpawner()
+  runtime.scope.artifact(root)
+  const child = spawnFixture("editor", executable, ["--headless", "-i", "NONE", "--listen", socket, "-u", join(repo, "tests/neovim/acp_minimal_init.lua")], {
     detached: true, cwd: f.workspace, env: { ...process.env, HOME: f.environment.HOME, XDG_STATE_HOME: join(root, "state"), XDG_CACHE_HOME: join(root, "cache"),
       XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"), DOTFILES_TEST_ROOT: repo,
       AGENCY_FIXTURE_PLUGIN_ROOT: process.env.AGENCY_FIXTURE_PLUGIN_ROOT ?? join(process.env.HOME!, ".local/share/nvim/lazy/agentic.nvim"), AGENCY_FIXTURE_NODE: process.execPath,
       AGENCY_FIXTURE_ENDPOINT: fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)),
       AGENCY_FIXTURE_CONTROL: fileURLToPath(new URL("./fixtures/acp-control.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
-  })
+  }, { source: true })
+  const terminal = new Promise<void>(resolve => child.once("close", () => resolve()))
   let closed = false, exited = false, stderr = ""
   const endpoints = new Set<number>()
   child.once("exit", () => { exited = true })
-  await fixtureSpawn(launch, child.pid)
-  child.stderr.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-8192) })
+  child.stderr!.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-8192) })
   const lua = async (expression: string): Promise<JsonValue> => {
-    const source = `(function() local value = ${expression}; local endpoints = {}; for _,client in pairs(require('agentic.acp.agent_instance')._instances) do if client.transport and client.transport.pid then endpoints[#endpoints+1]=client.transport.pid end end; return vim.json.encode({value=value == nil and vim.NIL or value,endpoints=endpoints}) end)()`
+    const source = `(function() local value = ${expression}; local endpoints = {}; for _,client in pairs(require('agentic.acp.agent_instance')._instances) do if client.transport and client.transport.pid then endpoints[#endpoints+1]=client.transport.pid end end; return vim.json.encode({value=value == nil and vim.NIL or value,endpoints=endpoints,registry=AgencyFixture.registry()}) end)()`
     const result = await exec(executable, ["--server", socket, "--remote-expr", `luaeval(${JSON.stringify(source)})`], { timeout: 15000, maxBuffer: 1048576 })
-    const envelope = JSON.parse(result.stdout.trim()) as { value: JsonValue; endpoints: number[] }
+    const envelope = JSON.parse(result.stdout.trim()) as { value: JsonValue; endpoints: number[]; registry: { launches: Array<{pid: number | null; reporting: string}> } }
     for (const pid of envelope.endpoints) endpoints.add(pid)
+    for (const launch of envelope.registry.launches) if (launch.reporting === "editor-endpoint" && launch.pid) endpoints.add(launch.pid)
+    await writeFile(join(root, "registry.json"), JSON.stringify(envelope.registry), { mode: 0o600 })
     return envelope.value
   }
   async function exit(): Promise<void> {
     if (closed) return
     closed = true
+    let reportingFailure: unknown
     if (!exited) {
-      try { await lua("true"); await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("(function() vim.schedule(function() vim.cmd(\'qa!\') end); return true end)()")'], { timeout: 5000 }) } catch {}
-      try { await until(async () => exited ? true : undefined, 5000) } catch { child.kill("SIGKILL"); await new Promise<void>(resolve => child.once("exit", () => resolve())) }
+      try { await lua("AgencyFixture.close_all()"); await writeFile(join(root, "registry.json"), JSON.stringify(await lua("AgencyFixture.registry()")), { mode: 0o600 }); await lua("AgencyFixture.complete()"); await lua("AgencyFixture.registry()") } catch (error) { reportingFailure = error; await writeFile(join(root, "editor-failure.txt"), String(error)) }
+      try { await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("(function() vim.schedule(function() vim.cmd(\'qa!\') end); return true end)()")'], { timeout: 5000 }) } catch (error) { reportingFailure ??= error }
+      try { await until(async () => exited ? true : undefined, 5000) } catch { await signalFixturePid(child.pid!, "SIGKILL"); await terminal }
     }
+    await terminal
     assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
-    if (ownershipPath) {
-      const rows = (await readFile(ownershipPath, "utf8")).split("\n").filter(Boolean).slice(ownershipStart).map(line => JSON.parse(line))
-      for (const row of rows.filter(row => row.type === "intent" && row.role === "acp-endpoint")) assert.ok(rows.some(value => value.launchId === row.launchId && (value.type === "spawn" || value.type === "no-process")), "unclassified endpoint intent " + row.launchId)
-    }
+    if (reportingFailure) throw reportingFailure
     f.diagnostic(`fixture editor cleanup verified: pid ${child.pid}`)
     for (const pid of endpoints) {
       await until(async () => { try { process.kill(pid, 0); return undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return true } }, 5000)

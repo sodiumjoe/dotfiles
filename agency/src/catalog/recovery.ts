@@ -6,8 +6,9 @@ import { isDeepStrictEqual } from "node:util"
 import { ControlError } from "../control/protocol.js"
 import type { HandlerEnvironment } from "../handler/environment.js"
 import { assertPrivateDirectory, parseLaunchRecord, readHandlerRecord, writeLaunchRecordExpected, type PrivateStateFileSystem } from "../platform/private-state.js"
+import type { StartupDependencies } from "../platform/startup.js"
 import { withStartupLock } from "../platform/singleton.js"
-import { processBirthStart, type ManagedLaunchRecord, type ProcessIdentity } from "../platform/types.js"
+import { processBirthStart, sameProcessGeneration, type ManagedLaunchRecord, type ProcessIdentity } from "../platform/types.js"
 import { decodeJson, digest, readBoundedFile } from "./config.js"
 import { createCatalogStore } from "./store.js"
 import { hash, id, MAX_CATALOG_BYTES } from "./types.js"
@@ -15,7 +16,7 @@ import { hash, id, MAX_CATALOG_BYTES } from "./types.js"
 export type ProbeRecoveryRequest = { attemptId: string; handlerGeneration: string; sha256: string }
 export type ProbeRecoveryResult = { state: "cleanup_verified"; attemptId: string; archivePath: string; sha256: string }
 type RecoveryFileSystem = PrivateStateFileSystem & { mkdir: typeof mkdir }
-export type ProbeRecoveryDependencies = { filesystem?: RecoveryFileSystem; boundary?: (name: string) => Promise<void> }
+export type ProbeRecoveryDependencies = { startup?: StartupDependencies; filesystem?: RecoveryFileSystem; boundary?: (name: string) => Promise<void> }
 function refuse(message: string): never { throw new ControlError("INCOMPLETE", message) }
 const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT"
 
@@ -54,10 +55,12 @@ export async function recoverCatalogProbe(env: HandlerEnvironment, request: Prob
     const handlerStart = processBirthStart(handlerProcess.birth), leaderStart = processBirthStart(leader.birth)
     if (!owned(handlerProcess) || handlerProcess.birth !== `${handlerStart}:agy-handler:${handler.launchAttemptId}` || handlerProcess.pid !== handlerProcess.processGroupId || handlerProcess.pid !== handlerProcess.sessionId) refuse("Handler ownership is incomplete")
     if (!owned(leader) || leader.birth !== `${leaderStart}:agy-provider:${record.launchAttemptId}` || leader.pid !== leader.processGroupId || leader.pid !== leader.sessionId || leader.parentPid !== handlerProcess.pid || leader.pid === handlerProcess.pid) refuse("probe ownership is incomplete")
-    if (!group.observed.some(identity => isDeepStrictEqual(identity, leader)) || new Set(group.observed.map(identity => identity.pid)).size !== group.observed.length) refuse("retained process evidence omits the leader or repeats a PID")
+    if (!group.observed.some(identity => isDeepStrictEqual(identity, leader)) || new Set(group.observed.map(identity => `${identity.pid}\u0000${identity.birth}`)).size !== group.observed.length) refuse("retained process evidence omits the leader or repeats an identity")
     const identities = new Map<number, ProcessIdentity>()
     for (const identity of [leader, ...group.observed]) {
-      if (!owned(identity) || identity.processGroupId !== leader.pid || identity.sessionId !== leader.pid || identity.pid === handlerProcess.pid || (identities.has(identity.pid) && !isDeepStrictEqual(identities.get(identity.pid), identity))) refuse("retained process ownership is incomplete")
+      const previous = identities.get(identity.pid)
+      if (!owned(identity) || identity.processGroupId !== leader.pid || identity.sessionId !== leader.pid || identity.pid === handlerProcess.pid) refuse("retained process ownership is incomplete")
+      if (previous && !isDeepStrictEqual(previous, identity) && (identity.pid === leader.pid || !sameProcessGeneration(previous, identity) || !isDeepStrictEqual(previous, { ...identity, birth: previous.birth }))) refuse("retained process ownership is incomplete")
       identities.set(identity.pid, identity)
     }
     const inventory = await createCatalogStore(state).inventory()
@@ -149,5 +152,5 @@ export async function recoverCatalogProbe(env: HandlerEnvironment, request: Prob
     await unchanged(Buffer.from(JSON.stringify(replacement)))
     await verifyArchive()
     return { state: "cleanup_verified", attemptId: request.attemptId, archivePath, sha256: request.sha256 }
-  })
+  }, dependencies.startup)
 }

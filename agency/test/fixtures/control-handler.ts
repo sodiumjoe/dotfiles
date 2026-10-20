@@ -1,3 +1,4 @@
+import { fixtureSpawner, fixtureRuntime, finishFixtureSource, prepareFixtureExit } from "./fixture-spawn.js"
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -12,10 +13,16 @@ import { createCatalogService } from "../../src/catalog/service.js"
 import { observeConfig } from "../../src/catalog/config.js"
 import { writeLaunchRecord } from "../../src/platform/private-state.js"
 
+const spawnFixture = await fixtureSpawner()
 process.umask(0o077)
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as ControlFixtureConfig
 const root = dirname(config.paths.runtimeRoot)
 const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
+const signalGroup = adapter.signalGroup.bind(adapter)
+adapter.signalGroup = async (group, signal) => {
+  if ((await fixtureRuntime()).scope.snapshot().launches.some(value => value.pid === group && value.role === "catalog-worker")) await prepareFixtureExit(group)
+  await signalGroup(group, signal)
+}
 if (config.failBootIdOnce) {
   const bootId = adapter.bootId.bind(adapter)
   adapter.bootId = async () => { adapter.bootId = bootId; throw new Error("injected retained boot observation failure") }
@@ -27,10 +34,7 @@ if (config.failSignalGroup !== undefined) {
 try {
   await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), ...(config.catalog ? { catalogFactory: (context: Parameters<NonNullable<import("../../src/handler/daemon.js").HandlerOptions["catalogFactory"]>>[0]) => {
     const store = context.store
-    const probes = createProbeRuntime({ ...context, queue: context.mutations.queue, store, canStart: () => context.isReady() && !context.shutdownPending(), dependencies: { async publish(path, record) {
-      await writeLaunchRecord(path, record)
-      if (record.provider) await writeLaunchRecord(join(root, "owned-probe-" + record.launchAttemptId + ".json"), record)
-    }, env: { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"), CLAUDE_CONFIG_DIR: join(root, "config"), CODEX_HOME: join(root, "config"), PATH: "/usr/bin:/bin" } } })
+    const probes = createProbeRuntime({ ...context, queue: context.mutations.queue, store, canStart: () => context.isReady() && !context.shutdownPending(), workerFile: new URL("./catalog-driver-worker.js", import.meta.url).pathname, dependencies: { spawn: ((file, args, options) => spawnFixture("catalog-worker", file, args ?? [], options ?? {}, { source: true })) as typeof import("node:child_process").spawn, env: { HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "config"), CLAUDE_CONFIG_DIR: join(root, "config"), CODEX_HOME: join(root, "config"), PATH: "/usr/bin:/bin" } } })
     const service = createCatalogService({ ...context, queue: context.mutations.queue, store, probes })
     return { ...service, async initialize() {
       if (config.catalog!.scenario === "uncertain") {
@@ -71,3 +75,4 @@ try {
   await writeFile(join(root, "failure"), String(error), { mode: 0o600 })
   process.exitCode = 1
 }
+await finishFixtureSource()

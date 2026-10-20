@@ -10,7 +10,7 @@ export type AcpEndpointDependencies = { stdin: Readable; stdout: Writable; stder
 
 async function discover(): Promise<{ socketPath: string; generation: string }> {
   const env = await productionEnvironment(), inspection = await inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter)
-  if (!inspection || inspection.disposition !== "live" || inspection.record.phase !== "ready") throw new Error("Agency Handler unavailable; start it explicitly with agy up")
+  if (!inspection || inspection.disposition !== "live" || inspection.record.phase !== "ready") throw new Error("Agency Handler unavailable; start it with agy status")
   return { socketPath: await assertPrivateSocket(env.paths.runtimeRoot, "acp.sock"), generation: inspection.record.generation }
 }
 

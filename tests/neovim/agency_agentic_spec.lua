@@ -51,6 +51,31 @@ describe("native Agency Agentic adaptation", function()
         flush()
     end
 
+    for _, failed in ipairs({ "error", "disconnected" }) do
+        it("reconnects a cached " .. failed .. " client without replaying stale readiness callbacks", function()
+            local stale, ready = 0, 0
+            client.state = failed
+            client.protocol_version, client.capabilities = 1, {}
+            client.ready_listeners = { function() stale = stale + 1 end }
+            client._on_ready = function() stale = stale + 1 end
+            client.transport.stop = function() client:_set_state("disconnected") end
+            client.transport.start = function() client:_set_state("connected") end
+            client._setup_transport = function() end
+            local recovered = Instances.get_instance("agency", function() ready = ready + 1 end)
+            assert.are.equal(client, recovered)
+            assert.are.equal(client, Instances.get_instance("agency", function() ready = ready + 1 end))
+            assert.are.equal(0, ready)
+            local initialize = request("initialize")
+            client:_handle_message({ id = initialize.id, result = { protocolVersion = 1,
+                agentCapabilities = {}, agentInfo = { name = "agency", version = "1" }, authMethods = {} } })
+            flush()
+            assert.are.equal("ready", client.state)
+            assert.are.equal(2, ready)
+            assert.are.equal(0, stale)
+            assert.are.equal(0, #client.ready_listeners)
+        end)
+    end
+
     it("clears configuration from another backend before applying an empty snapshot", function()
         local co = require("agentic.acp.agent_config_options"):new({}, {})
         co:set_legacy_modes({ currentModeId = "old", availableModes = { { id = "old", name = "Old" } } })

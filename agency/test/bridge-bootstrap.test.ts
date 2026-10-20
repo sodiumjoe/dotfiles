@@ -15,7 +15,7 @@ test("login-shell noise and apostrophes cannot corrupt protocol stdout", async t
   await writeFile(agy, `#!/bin/sh\nprintf '{"protocol":"agency-bridge/2"}\\n'`)
   await chmod(agy, 0o700)
   const command = destinationShellCommand({ inventoryId: randomUUID(), hostId: "a".repeat(64), hostname: "devbox-a", agyPath: agy, loginShell: shell }, "internal-runtime-bridge")
-  const result = await promisify(execFile)("/bin/sh", ["-c", command], { env: { HOME: root, PATH: "/usr/bin:/bin" } })
+  const result = await promisify(execFile)("/bin/sh", ["-c", command], { timeout: 15000, env: { HOME: root, PATH: "/usr/bin:/bin" } })
   assert.equal(result.stdout, '{"protocol":"agency-bridge/2"}\n')
   assert.match(result.stderr, /login noise/)
 })

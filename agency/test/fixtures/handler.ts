@@ -97,11 +97,13 @@ function record(config: Config, launchAttemptId: string, bootId: string, changes
 }
 
 async function emit(config: Config, handler: ProcessIdentity, provider: { leader: ProcessIdentity; members: ProcessIdentity[] } | null): Promise<never> {
+  if (reporting) await reporting.sealFixtureSource()
   process.stdout.write(`${JSON.stringify({ type: "phase", phase: config.phase, handler, provider })}\n`)
   setInterval(() => undefined, 1000)
   return new Promise(() => undefined)
 }
 
+const reporting = process.env.AGENCY_FIXTURE_CONNECTION ? await import("./fixture-spawn.js") : undefined
 process.umask(0o077)
 if (process.argv.length !== 3) throw new Error("usage: handler <config>")
 const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as Config
@@ -119,7 +121,8 @@ await writePrivateLaunchRecord(config.recordPath, attempted)
 const marker = agencyLaunchMarker("provider", launchAttemptId)
 let evidenceAttempt = config.evidenceRoot === undefined ? null : await persistAttempt(join(config.evidenceRoot, "attempts"), config.batchId!, "provider", launchAttemptId, undefined, config.caseId!)
 const childReceipt = join(config.evidenceRoot === undefined ? dirname(config.providerReadyPath) : join(config.evidenceRoot, "children"), (evidenceAttempt?.expectedChildReceiptKey ?? randomUUID()) + ".json")
-const child = spawn(process.execPath, [providerFixture, "leader", config.providerReadyPath, config.providerMode, String(config.timeoutMs)], { argv0: marker, env: { ...process.env, AGENCY_PROVIDER_RECEIPT: childReceipt, AGENCY_PROVIDER_ATTEMPT: evidenceAttempt?.attemptId, AGENCY_PROVIDER_BATCH: config.batchId, AGENCY_PROVIDER_CASE: config.caseId, AGENCY_PROVIDER_LAUNCH: launchAttemptId }, detached: true, stdio: ["ignore", "ignore", "ignore", 3, 4] })
+const launch = process.env.AGENCY_FIXTURE_LEGACY_LINUX_RECEIPTS === "1" ? undefined : await (await import("./fixture-spawn.js")).fixtureSpawner()
+const child = launch ? launch("provider-tree", process.execPath, [providerFixture, "leader", config.providerReadyPath, config.providerMode, String(config.timeoutMs)], { argv0: marker, env: { ...process.env, AGENCY_PROVIDER_RECEIPT: childReceipt, AGENCY_PROVIDER_ATTEMPT: evidenceAttempt?.attemptId, AGENCY_PROVIDER_BATCH: config.batchId, AGENCY_PROVIDER_CASE: config.caseId, AGENCY_PROVIDER_LAUNCH: launchAttemptId }, detached: true, stdio: ["ignore", "ignore", "ignore", 3, 4] }, { source: true }) : spawn(process.execPath, [providerFixture, "leader", config.providerReadyPath, config.providerMode, String(config.timeoutMs)], { argv0: marker, env: { ...process.env, AGENCY_PROVIDER_RECEIPT: childReceipt, AGENCY_PROVIDER_ATTEMPT: evidenceAttempt?.attemptId, AGENCY_PROVIDER_BATCH: config.batchId, AGENCY_PROVIDER_CASE: config.caseId, AGENCY_PROVIDER_LAUNCH: launchAttemptId }, detached: true, stdio: ["ignore", "ignore", "ignore", 3, 4] })
 if (child.pid === undefined) throw new Error("provider leader pid is unavailable")
 if (evidenceAttempt !== null) evidenceAttempt = await updateAttempt(join(config.evidenceRoot!, "attempts"), evidenceAttempt, { phase: "spawned", pid: child.pid })
 const structural = await waitFor(async () => await exists(config.providerReadyPath) ? JSON.parse(await readFile(config.providerReadyPath, "utf8")) as { leaderPid: number; descendantPid: number } : null, "provider structural pids were not published", config.timeoutMs)

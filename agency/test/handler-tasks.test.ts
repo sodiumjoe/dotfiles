@@ -1,6 +1,7 @@
+import { fixtureBridgeSpawner } from "./fixtures/fixture-bridge.js"
+import { fixtureLeafSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { createHostRuntimeClient } from "../src/hosts/runtime.js"
-import { fixtureLaunch, fixtureSpawn } from "./fixtures/ownership.js"
 import { runtimeNetwork } from "./host-runtime-support.js"
 import { taskMcpPeer } from "./task-test-support.js"
 import { taskToolDescriptor } from "../src/tasks/mcp.js"
@@ -28,7 +29,8 @@ for (const tasks of ["hold", "reject"] as const) test(`task initialization ${tas
   const f = await acpFixture(t, { tasks,  })
   await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
-  const transport = await connectBridge({ inventoryId: randomUUID(), hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "task-read", "task-write"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  const spawnBridge = await fixtureBridgeSpawner()
+  const transport = await connectBridge({ inventoryId: randomUUID(), hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "task-read", "task-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
   const taskId = randomUUID(), request = { protocol: TASK_PROTOCOL, requestId: randomUUID(), hostId, handlerGeneration: record.generation, op: "inspect", taskId }
   const call = async () => parseTaskReply(await transport.request("task-read", request))
@@ -68,11 +70,9 @@ test("routed Handler task reports through its configured local helper with relay
   const servers = session.params!.mcpServers as any[], descriptor = servers.find(server => server.name === "agency_tasks")
   assert.deepEqual(descriptor, taskToolDescriptor(ref)); const configured = descriptor as { command: string; args: string[]; env: Array<{ name: string; value: string }> }; assert.equal(servers[0].name, "external"); assert.equal(servers.length, 2)
   laptop.router.close()
-  const helper = spawn(configured.command, [fileURLToPath(new URL("./fixtures/task-tools.js", import.meta.url)), ...configured.args, JSON.stringify(f.paths)], { env: { ...process.env, ...Object.fromEntries(configured.env.map((item: any) => [item.name, item.value])) }, stdio: ["pipe", "pipe", "pipe"] })
-  await fixtureSpawn(fixtureLaunch("task-tools"), helper.pid)
-  await appendFile(join(f.root, "tools-helpers.jsonl"), JSON.stringify({ pid: helper.pid }) + "\n", { mode: 0o600 })
+  const helper = (await fixtureLeafSpawner("task-tools"))(configured.command, [fileURLToPath(new URL("./fixtures/task-tools.js", import.meta.url)), ...configured.args, JSON.stringify(f.paths)], { env: { ...process.env, ...Object.fromEntries(configured.env.map((item: any) => [item.name, item.value])) }, stdio: ["pipe", "pipe", "pipe"] })
   const exited = new Promise<number | null>(resolve => helper.once("exit", resolve)), peer = taskMcpPeer(helper.stdout, helper.stdin)
-  t.after(async () => { peer.close(); helper.kill(); await exited })
+  t.after(async () => { peer.close(); await signalFixturePid(helper.pid!, "SIGTERM"); await exited })
   await peer.initialize()
   const published = await peer.call("agency_task_report", { report: { outcome: "completed", summary: "worker-local report" } }); assert.equal(published.isError, false)
   const files = await readdir(join(f.paths.persistentRoot, "tasks", taskId)); assert.deepEqual(files.sort(), ["record.json", "report.json"])

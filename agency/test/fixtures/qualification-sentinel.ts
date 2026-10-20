@@ -27,8 +27,4 @@ if(setting){
     object[key]=function(...args:any[]){for(const arg of args){if(arg&&typeof arg==="object"&&"path" in arg)check("net."+key,arg.path);else if(typeof arg==="string"&&arg.startsWith("/"))check("net."+key,arg)}return original.apply(this,args)}
   }
   syncBuiltinESMExports()
-  record({operation:"bootstrap",path:process.argv[1]??"node-e"})
-  const {createDarwinAdapter}=await import("../../src/platform/darwin.js"),{createLinuxAdapter}=await import("../../src/platform/linux.js")
-  const adapter=process.platform==="darwin"?createDarwinAdapter():createLinuxAdapter()
-  record({operation:"identity",path:process.argv[1]??"node-e",identity:await adapter.readProcess(process.pid)})
 }

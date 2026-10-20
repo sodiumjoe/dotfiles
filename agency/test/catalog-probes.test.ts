@@ -1,4 +1,4 @@
-import { fixtureIdentity } from "./fixtures/ownership.js"
+import { fixtureSpawner, fixtureRuntime, prepareFixtureExit } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
@@ -346,10 +346,6 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
     if (pid !== undefined) {
       const record = await readLaunchRecordForReconciliation(path)
       assert.notEqual(record.provider, null, `retained uncertain fixture root: ${root}`)
-      for (const identity of record.provider!.group.observed) fixtureIdentity("catalog-probe/" + scenario, identity)
-      const cleanup = join(root, "cleanup.json")
-      await writeLaunchRecord(cleanup, record)
-      assert.equal((await reconcileRecord(cleanup, adapter, record)).record.phase, "cleanup_verified")
       for (let observation = 0; observation < 2; observation++) {
         for (const identity of record.provider!.group.observed) assert.equal(await adapter.readProcess(identity.pid), null)
         assert.deepEqual(await adapter.readGroup(pid), [])
@@ -367,13 +363,25 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
   const evidence = await observeConfig(profile), store = createCatalogStore(root)
   const request: ProbeRequest = { profile, evidence, meta: { version: 2, hostId, handlerGeneration: generation, commandId, providerId: profile.id, attemptId, fingerprint: evidence.fingerprint, workPath: join(root, "catalog/work", attemptId) } }
   await store.writeCommand({ version: 1, commandId, hostId, handlerGeneration: generation, batchId: randomUUID(), fingerprints: [{ providerId: profile.id, fingerprint: evidence.fingerprint }], attempts: [{ providerId: profile.id, attemptId }], state: "pending", snapshotId: null }, null)
-  const runtime = createProbeRuntime({ paths: { hostKey: hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, queue: new MutationQueue(), store, generation, canStart: () => true, workerFile: fileURLToPath(new URL("./fixtures/catalog-worker.js", import.meta.url)), dependencies: { env: { HOME: join(root, "home"), PATH: "/usr/bin:/bin" }, spawn: ((...args: Parameters<typeof spawn>) => { const child = spawn(...args); pid = child.pid; workerClosed = new Promise(resolve => child.once("close", () => resolve())); return child }) as typeof spawn } })
+  const spawnFixture = await fixtureSpawner()
+  ;(await fixtureRuntime()).scope.artifact(root)
+  const signalGroup = adapter.signalGroup.bind(adapter)
+  adapter.signalGroup = async (group, signal) => { await prepareFixtureExit(group); await signalGroup(group, signal) }
+  const runtime = createProbeRuntime({ paths: { hostKey: hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, queue: new MutationQueue(), store, generation, canStart: () => true, workerFile: fileURLToPath(new URL("./fixtures/catalog-worker.js", import.meta.url)), dependencies: { env: { HOME: join(root, "home"), PATH: "/usr/bin:/bin" }, spawn: ((...args: Parameters<typeof spawn>) => { const child = spawnFixture("catalog-worker", args[0], args[1] ?? [], args[2] ?? {}, { source: true }); pid = child.pid; workerClosed = new Promise(resolve => child.once("close", () => resolve())); return child }) as typeof spawn } })
 
   const run = runtime.run(request, new AbortController().signal)
   operation = run
   const outcome = await run
   const diagnostic = await readProbeDiagnostic(request.meta)
   assert.ok(diagnostic)
+  const launches = (await fixtureRuntime()).scope.snapshot().launches
+  const worker = launches.find(value => value.role === "catalog-worker" && value.pid === pid)
+  assert.ok(worker)
+  if (scenario !== "native-launch-failure") {
+    const native = launches.find(value => value.role === "catalog-native" && value.ownerId === worker.ref.launchId)
+    assert.ok(native)
+    assert.deepEqual(JSON.parse(await readFile(join(request.meta.workPath, "native-environment.json"), "utf8")), { home: join(root, "home"), path: "/usr/bin:/bin", fixtureKeys: [] })
+  }
   assert.equal(diagnostic.stderrComplete, !ignoreTerm)
   if (scenario === "rpc-rejection") {
     assert.equal(outcome.result, null)

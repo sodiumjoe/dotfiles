@@ -1,17 +1,15 @@
 import assert from "node:assert/strict"
-import childProcess from "node:child_process"
-import { syncBuiltinESMExports } from "node:module"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
 import { launchHandlerGeneration } from "../src/platform/startup.js"
-import { spawn, type ChildProcess } from "node:child_process"
+import { type ChildProcess } from "node:child_process"
 import { fstatSync, readdirSync } from "node:fs"
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises"
 import { createConnection, Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Duplex } from "node:stream"
-import test, { after, type TestContext } from "node:test"
+import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { agencyLaunchMarker, parseAgencyLaunchMarker } from "../src/platform/launch-marker.js"
 import { bindPrivateSocket, unlinkStalePrivateSocket } from "../src/platform/private-socket.js"
@@ -25,11 +23,12 @@ import {
 } from "../src/platform/singleton.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../src/platform/types.js"
 
-import { finishSingletonOwnership, settleSingletonStarts, installSingletonOwnership, isSingletonLockRelease, killSingletonPid, ownedStartOrConnect as startOrConnect, preserveSingletonFixture, recordSingletonChild, singletonIntent, spawnSingletonContender } from "./fixtures/singleton-ownership.js"
+import { workerScope } from "./fixtures/run-boundary.js"
+import { fixtureSpawner } from "./fixtures/fixture-spawn.js"
+import { settleSingletonStarts, singletonDependencies, killSingletonPid, ownedStartOrConnect as startOrConnect, preserveSingletonFixture, spawnSingletonContender } from "./fixtures/singleton-ownership.js"
 
-installSingletonOwnership()
-after(finishSingletonOwnership)
 
+const rootRegistrations = new Map<string, number>()
 const fixturePath = fileURLToPath(new URL("./fixtures/singleton-handler.js", import.meta.url))
 const bootId = "task-3-boot"
 const hostId = "task-3-host"
@@ -138,6 +137,9 @@ async function fixtureRoot(t: TestContext): Promise<string> {
   const parent = await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? tmpdir())
   const root = await mkdtemp(join(parent, "agency-singleton-"))
   await chmod(root, 0o700)
+  const scope = await workerScope()
+  scope.artifact(root)
+  rootRegistrations.set(root, scope.snapshot().launches.length)
   const evidence = process.env.AGENCY_TEST_EVIDENCE_ROOT
   if (evidence !== undefined) {
     const registry = join(evidence, "fixture-roots.json")
@@ -240,17 +242,18 @@ async function stopIdentity(expected: ProcessIdentity, adapter: FakeAdapter): Pr
   await waitFor(async () => await adapter.readProcess(expected.pid) === null, `Handler ${expected.pid} survived cleanup`)
 }
 
-async function cleanupHandlers(root: string, handlerLog: string, adapter: FakeAdapter): Promise<void> {
-  const receipts: ProcessIdentity[] = []
-  for (const expected of await handlerIdentities(handlerLog)) {
-    await stopIdentity(expected, adapter)
-    assert.equal(await adapter.readProcess(expected.pid), null)
-    receipts.push(expected)
+async function cleanupHandlers(root: string, _handlerLog: string, _adapter: FakeAdapter): Promise<void> {
+  const scope = await workerScope(), start = rootRegistrations.get(root)
+  if (start === undefined) throw new Error("Missing fixture root registration")
+  const receipts = []
+  for (const launch of scope.snapshot().launches.slice(start)) {
+    if (launch.role !== "singleton-handler" || launch.pid === null) continue
+    if (!launch.exit) await killSingletonPid(launch.pid)
+    receipts.push(launch)
   }
   const receiptPath = join(root, "fixture-cleanup.json")
   await writeFile(receiptPath, JSON.stringify(receipts), { mode: 0o600 })
   assert.deepEqual(JSON.parse(await readFile(receiptPath, "utf8")), receipts)
-  await rm(root, { recursive: true, force: true })
 }
 
 async function exchange(path: string, request: string): Promise<string> {
@@ -347,7 +350,6 @@ test("rejects socket escape and symlink paths", async t => {
   const link = `${root}-link`
   await symlink(root, link)
   t.after(async () => rm(link, { force: true }))
-  t.after(async () => rm(root, { recursive: true, force: true }))
   await assert.rejects(bindPrivateSocket(link, "handler.sock"), /symlink|canonical/i)
 })
 
@@ -381,7 +383,6 @@ test("read-only inspection preserves live and ambiguous sockets", async t => {
   const adapter = new FakeAdapter(root)
   const server = await bindPrivateSocket(root, "handler.sock")
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
-  t.after(async () => rm(root, { recursive: true, force: true }))
   const current = identity(process.pid, process.ppid)
   await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, current))
   const live = await inspectHandlerGeneration(root, adapter)
@@ -398,7 +399,6 @@ test("unavailable boot and process observations preserve the socket as ambiguous
   const root = await fixtureRoot(t)
   const server = await bindPrivateSocket(root, "handler.sock")
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
-  t.after(async () => rm(root, { recursive: true, force: true }))
   await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(process.pid, process.ppid)))
   for (const stage of ["boot", "process"] as const) {
     const adapter = new FakeAdapter(root)
@@ -722,8 +722,8 @@ test("a pre-release Handler exits on either gate or status-peer EOF", async t =>
           reconciliation: null,
         }))
         t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
-        const launch = singletonIntent("singleton-direct-handler")
-        const child = spawn(process.execPath, [fixturePath, "handler", path], {
+        const launch = await fixtureSpawner()
+        const child = launch("singleton-handler", process.execPath, [fixturePath, "handler", path], {
           detached: true,
           env: {
             ...process.env,
@@ -732,7 +732,6 @@ test("a pre-release Handler exits on either gate or status-peer EOF", async t =>
           },
           stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
         })
-        await recordSingletonChild(launch, child)
         if (beforeIdentity) assert.deepEqual(await handlerIdentities(config.handlerLog), [])
         else await waitFor(async () => (await handlerIdentities(config.handlerLog)).length === 1, "Handler did not claim identity")
         const status = child.stdio[3] as Duplex
@@ -796,7 +795,6 @@ test("a post-gate readiness timeout detaches the launcher without duplicating th
 
 test("a missing Handler executable is a controlled classifiable launch failure", async t => {
   const root = await fixtureRoot(t)
-  t.after(async () => rm(root, { recursive: true, force: true }))
   const adapter = new FakeAdapter(root)
   await assert.rejects(startOrConnect({
     root,
@@ -913,24 +911,22 @@ test("closes the startup lock handle when helper release rejects", async t => {
   const adapter = new FakeAdapter(root)
   const server = await bindPrivateSocket(root, "handler.sock")
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
-  t.after(async () => rm(root, { recursive: true, force: true }))
   await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(process.pid, process.ppid)))
-  const originalEnd = Socket.prototype.end
+  const dependencies = await singletonDependencies(), originalSpawn = dependencies.spawn!
   let injected = false
-  Socket.prototype.end = function(this: Socket, ...args: Parameters<Socket["end"]>): Socket {
-    if (!isSingletonLockRelease(this)) return Reflect.apply(originalEnd, this, args)
-    this.destroy()
-    if (!injected) {
-      injected = true
-      throw new Error("injected lock release failure")
+  dependencies.spawn = (file, args, options) => {
+    const child = originalSpawn(file, args, options)
+    if (file === "/usr/bin/lockf" || file === "/usr/bin/flock") {
+      const release = (child.stdio as Array<Duplex | null>)[5]!
+      release.end = (() => {
+        release.destroy()
+        if (!injected) { injected = true; throw new Error("injected lock release failure") }
+        return release
+      }) as typeof release.end
     }
-    return this
-  } as typeof Socket.prototype.end
-  try {
-    await assert.rejects(startOrConnect({ root, hostId, adapter, handler: { file: process.execPath, args: [] } }), /injected lock release failure/)
-  } finally {
-    Socket.prototype.end = originalEnd
+    return child
   }
+  await assert.rejects(startOrConnect({ root, hostId, adapter, handler: { file: process.execPath, args: [] } }, dependencies), /injected lock release failure/)
   const lockStats = await lstat(join(root, "startup.lock"))
   const descriptorRoot = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd"
   const matchingDescriptors = readdirSync(descriptorRoot).filter(value => /^\d+$/.test(value)).filter(value => {
@@ -954,7 +950,6 @@ test("singleton fixtures require exact Handler and provider markers", async t =>
       for (const value of [`00:${marker}`, `-1:${marker}`, `1:prefix:${marker}`, `1:${marker}suffix`, `1:${marker.slice(0,-1)}`, `1:${marker.replace(role,role === "handler" ? "provider" : "handler")}`]) assert.equal(module.exactAgencyBirth(value, marker), false)
     }
     const root = await fixtureRoot(t)
-    t.after(() => rm(root, { recursive: true, force: true }))
     await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, identity(101)))
     const linux = await import("../src/platform/linux.js") as unknown as { LinuxObservationUnavailable: new (message: string) => Error }
     assert.equal(typeof linux.LinuxObservationUnavailable, "function")
@@ -968,11 +963,10 @@ test("singleton fixtures require exact Handler and provider markers", async t =>
 test("singleton fixtures enforce ownership at the Handler publication boundary", async t => {
   for (const platform of ["darwin", "linux"] as const) for (const defect of ["group", "session", "uid", "gid", "role", "prefix", "truncated", "noncanonical"]) await t.test(platform + " " + defect, async t => {
     const root = await fixtureRoot(t)
-    t.after(() => rm(root, { recursive: true, force: true }))
     const status = new PassThrough(), gate = new PassThrough()
     const child = Object.assign(new EventEmitter(), { pid: 801, stdio: [null, null, null, status, gate], exitCode: null, signalCode: null, unref: () => undefined })
     let observed = identity(801)
-    t.mock.method(childProcess, "spawn", (_file: string, _args: string[], options: { argv0: string }) => {
+    const spawnDependency: import("../src/platform/startup.js").StartupSpawn = (_file, _args, options) => {
       observed = identity(801, 1, "1780000000:" + options.argv0)
       if (defect === "group") observed.processGroupId = 802
       if (defect === "session") observed.sessionId = 802
@@ -982,10 +976,8 @@ test("singleton fixtures enforce ownership at the Handler publication boundary",
       if (defect === "prefix") observed.birth = "1780000000:prefix:" + options.argv0
       if (defect === "truncated") observed.birth = observed.birth.slice(0, -1)
       if (defect === "noncanonical") observed.birth = "01780000000:" + options.argv0
-      return child
-    })
-    syncBuiltinESMExports()
-    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports() })
+      return child as unknown as ChildProcess
+    }
     const transitions: string[] = []
     const adapter: PlatformAdapter = { platform, bootId: async () => bootId, readProcess: async () => observed, readGroup: async () => [], signalGroup: async () => assert.fail("unexpected signal") }
     await assert.rejects(launchHandlerGeneration({ root, hostId, adapter, handler: { file: "/injected", args: [] }, timeoutMs: 500,
@@ -994,7 +986,7 @@ test("singleton fixtures enforce ownership at the Handler publication boundary",
         if (transition === "handler_spawned") status.write(JSON.stringify({ type: "identity", identity: observed }) + "\n")
         if (transition === "identity_verified") throw new Error("invalid identity passed verification")
       },
-    }), /group|session|owner|marker|identity could not be verified/)
+    }, { spawn: spawnDependency }), /group|session|owner|marker|identity could not be verified/)
     assert.equal((await readHandlerRecord(join(root, "handler.json"))).phase, "launch_pending")
     assert.ok(!transitions.includes("identity_verified"))
   })
@@ -1003,7 +995,6 @@ test("singleton fixtures enforce ownership at the Handler publication boundary",
 test("singleton fixtures retain ambiguity diagnostics", async t => {
   for (const mode of ["observation", "mismatch"]) await t.test(mode, async t => {
     const root = await fixtureRoot(t), expected = identity(101), observed = { ...expected, uid: expected.uid + 1 }
-    t.after(() => rm(root, { recursive: true, force: true }))
     await writeHandlerRecord(join(root, "handler.json"), handlerRecord(root, expected))
     const adapter: PlatformAdapter = { platform: "darwin", bootId: async () => bootId, readProcess: async () => {
       if (mode === "observation") throw new DarwinObservationUnavailable("unstable PID", { cause: new Error("snapshot cause") })

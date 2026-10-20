@@ -371,9 +371,9 @@ const configPath = process.argv[3]
 if ((mode !== "handler" && mode !== "contender") || configPath === undefined) throw new Error("usage: singleton-handler <handler|contender> <config>")
 const config = JSON.parse(await readFile(configPath, "utf8")) as FixtureConfig
 if (mode === "handler") await runHandler(config)
-else if (process.env.AGENCY_SINGLETON_CONTENDER_LAUNCH !== undefined) {
-  const ownership = await import("./singleton-ownership.js")
-  ownership.installSingletonOwnership()
-  await ownership.registerSingletonContender()
-  await runContender(config, configPath, ownership.ownedStartOrConnect)
+else if (process.env.AGENCY_FIXTURE_CONNECTION !== undefined) {
+  const { ownedStartOrConnect } = await import("./singleton-ownership.js")
+  const { finishFixtureSource } = await import("./fixture-spawn.js")
+  await runContender(config, configPath, ownedStartOrConnect)
+  await finishFixtureSource()
 } else await runContender(config, configPath)

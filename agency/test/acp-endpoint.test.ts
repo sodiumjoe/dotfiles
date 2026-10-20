@@ -1,3 +1,4 @@
+import { fixtureLeafSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -38,14 +39,14 @@ test("endpoint stdin EOF detaches while a shared prompt remains live", async t =
 test("terminating a fresh endpoint process does not cancel or stop its provider", async t => {
   const f = await acpFixture(t), configPath = join(f.root, "endpoint-" + randomUUID() + ".json")
   await writeFile(configPath, JSON.stringify({ paths: f.paths, environment: f.environment }), { mode: 0o600 })
-  const child = spawn(process.execPath, [fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)), configPath], { cwd: f.workspace, stdio: ["pipe", "pipe", "pipe"] })
+  const child = (await fixtureLeafSpawner("acp-endpoint.test"))(process.execPath, [fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)), configPath], { cwd: f.workspace, stdio: ["pipe", "pipe", "pipe"] })
   child.stderr.on("data", () => undefined)
-  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM"); await until(async () => child.exitCode !== null || child.signalCode !== null ? true : undefined); assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" }); t.diagnostic(`endpoint cleanup verified: pid ${child.pid}`) })
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) await signalFixturePid(child.pid!, "SIGTERM"); await until(async () => child.exitCode !== null || child.signalCode !== null ? true : undefined); assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" }); t.diagnostic(`endpoint cleanup verified: pid ${child.pid}`) })
   const a = createAcpPeer(child.stdout, child.stdin), b = await f.connect()
   await a.request("initialize", { protocolVersion: 1, clientCapabilities: {} }); await b.request("initialize", { protocolVersion: 1, clientCapabilities: {} })
   const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [] })
   const pending = a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "held" }] }).catch(() => null)
-  await a.nextState("running"); child.kill("SIGTERM"); await pending
+  await a.nextState("running"); await signalFixturePid(child.pid!, "SIGTERM"); await pending
   await b.request("session/load", { sessionId: s.sessionId!, cwd: f.workspace, mcpServers: [] })
   await b.nextState("running"); await f.release("codex-acp"); await b.nextState("idle")
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/cancel").length, 0)
@@ -93,4 +94,12 @@ test("large prompts and tool results cross the byte relay and replay to another 
   stdin.end()
   assert.equal(await endpoint, 0)
   a.close()
+})
+
+test("editor endpoint and control entrypoints remain audited no-spawn leaves", async () => {
+  for (const name of ["acp-endpoint", "acp-control"]) {
+    const source = await readFile(new URL("../../test/fixtures/" + name + ".ts", import.meta.url), "utf8")
+    assert.doesNotMatch(source, /child_process|fixture-spawn|fixture-channel|ownership|spawn\(|fork\(|execFile\(/)
+    assert.match(source, /inspectHandlerGeneration/)
+  }
 })

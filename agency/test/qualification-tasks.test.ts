@@ -27,6 +27,7 @@ async function wrapper(f:QualificationFixture){const child=await f.spawn(["inter
 async function counts(f:QualificationFixture,ref:TaskRef){const tasks=await readdir(join(f.paths.persistentRoot,"tasks")),agents=await createAgentStore(f.paths.persistentRoot).inventory(),history=await rows(f),value={tasks:tasks.length,agents:agents.agents.length,starts:agents.commands.filter(c=>c.op==="start").length,sessions:history.filter(x=>x.method==="session/new").length,prompts:history.filter(x=>x.method==="session/prompt").length};assert.deepEqual(tasks,[ref.taskId]);assert.deepEqual(value,{tasks:1,agents:1,starts:1,sessions:1,prompts:1});await writeFile(join(f.root,"task-counts.json"),JSON.stringify(value),{mode:0o600})}
 
 test("the worker executes its injected default-ref MCP after all supervisor links exit",{timeout:90000},async t=>{
+  const {workerScope}=await import("./fixtures/run-boundary.js"),scope=await workerScope(),firstLaunch=scope.snapshot().launches.length
   const request=input("qualification-report"),f=await qualificationFixture(t,{provider:"reporting",taskInput:request});request.cwd=f.workspace
   const s=await supervisor(f),created=await s.peer.call("agency_task_create",{hostId:f.config.hostId,input:request});assert.equal(created.isError,false,JSON.stringify(created))
   const ref={hostId:f.config.hostId,taskId:request.taskId};assert.deepEqual(JSON.parse(created.content[0].text).ref,ref)
@@ -42,6 +43,12 @@ test("the worker executes its injected default-ref MCP after all supervisor link
   const replacement=await wrapper(f),a=await replacement.tasks.inspect(ref),b=await replacement.tasks.inspect(ref);assert.deepEqual(a,b);assert.deepEqual(a.report,report)
   const one=await waitForTask(replacement.tasks,ref,{timeoutMs:0}),two=await waitForTask(replacement.tasks,ref,{timeoutMs:0});assert.deepEqual(one,two);assert.equal(one.state,"reported")
   await counts(f,ref);assert.equal(await readFile(reportPath,"utf8"),JSON.stringify(report));await replacement.close();assert.deepEqual(await f.sentinel(),[])
+  await f.verifyCleanup()
+  const tracked=scope.snapshot().launches.slice(firstLaunch),helper=tracked.find(value=>value.role==="worker-task-mcp")
+  assert.ok(helper?.identity);assert.deepEqual(helper.exit,{code:0,signal:null});assert.equal(helper.close,true)
+  assert.ok(tracked.some(value=>value.role==="qualification-provider"&&value.ref.launchId===helper.ownerId))
+  for(const launch of tracked)if(launch.pid!==null)assert.equal(await f.adapter.readProcess(launch.pid),null)
+  assert.ok((await json(join(f.root,"cleanup.json"))).launches.every((value:any)=>value.pid===null||value.absent===true))
 })
 
 test("end_turn without an explicit report remains unreported",{timeout:90000},async t=>{

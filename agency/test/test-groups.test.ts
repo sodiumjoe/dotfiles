@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFile, readdir } from "node:fs/promises"
 import test from "node:test"
-import { deterministicFiles, nativeFiles, stressFiles, stressNames, stressPattern, testArguments, testExitCode } from "../scripts/test-groups.js"
+import { deterministicFiles, nativeFiles, stressFiles, stressNames, stressPattern, testArguments, testFiles, testExitCode } from "../scripts/test-groups.js"
 
 test("routine, native, stress, and complete test commands are available", async () => {
   const { scripts } = JSON.parse(await readFile("package.json", "utf8"))
@@ -38,4 +38,14 @@ test("runner preserves failures and treats missing exit status as failure", () =
   assert.equal(testExitCode({ status: 7, signal: null }), 7)
   assert.equal(testExitCode({ status: null, signal: "SIGTERM" }), 1)
   assert.equal(testExitCode({ status: null, signal: null, error: new Error("spawn failed") }), 1)
+  assert.equal(testExitCode({ status: null, signal: null }), 1)
+})
+
+test("selected stress workers are exact and normal selections include every file", () => {
+  assert.deepEqual(testFiles("stress"), ["singleton.test.js", "darwin-platform.test.js", "handler-control-plane.test.js"])
+  assert.deepEqual(testFiles("all"), [...deterministicFiles, ...nativeFiles])
+  for (const group of ["deterministic", "native", "stress", "all"] as const) {
+    assert.ok(testArguments(group).some(value => value.startsWith("--import=") && value.endsWith("/test/fixtures/run-boundary.js")))
+    assert.deepEqual(testArguments(group).filter(value => value.startsWith("dist/test/")), testFiles(group).map(file => "dist/test/" + file))
+  }
 })

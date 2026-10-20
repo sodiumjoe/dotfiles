@@ -1,3 +1,4 @@
+import { fixtureBridgeSpawner } from "./fixtures/fixture-bridge.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { spawn } from "node:child_process"
@@ -15,7 +16,8 @@ for (const tasks of ["reject", "hold"] as const) test(`ordinary host sessions ru
   const f = await acpFixture(t, { tasks })
   if (tasks === "hold") await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
-  const transport = await connectBridge({ inventoryId: randomUUID(), hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  const spawnBridge = await fixtureBridgeSpawner()
+  const transport = await connectBridge({ inventoryId: randomUUID(), hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
   const call = async (args: string[]) => {
     let output = ""

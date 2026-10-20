@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import childProcess from "node:child_process"
 import { once } from "node:events"
-import { syncBuiltinESMExports } from "node:module"
 import { randomUUID } from "node:crypto"
 import { chmod, link, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile, type FileHandle } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -20,7 +19,7 @@ import { gate } from "./catalog-support.js"
 
 type Request = { attemptId: string; handlerGeneration: string; sha256: string }
 type FileSystem = { open: typeof open; rename: typeof rename; mkdir: typeof mkdir; rm: typeof rm }
-type Dependencies = { filesystem?: FileSystem; boundary?: (name: string) => Promise<void> }
+type Dependencies = { startup?: import("../src/platform/startup.js").StartupDependencies; filesystem?: FileSystem; boundary?: (name: string) => Promise<void> }
 type Result = { state: "cleanup_verified"; attemptId: string; archivePath: string; sha256: string }
 type Recover = (env: HandlerEnvironment, request: Request, dependencies?: Dependencies) => Promise<Result>
 async function operation(): Promise<Recover> {
@@ -79,8 +78,43 @@ test("the next Handler reconciler must accept the recovered evidence", async t =
   assert.equal((await reconcileRecord(f.path, f.env.adapter, await readLaunchRecord(f.path))).record.phase, "cleanup_verified")
 })
 
-test("recovery rejects retained groups that omit the leader or contain duplicate PIDs", async t => {
-  for (const fault of ["missing-leader", "duplicate-pid"]) await t.test(fault, async t => {
+test("recovery preserves helper executable history when all retained processes are absent", async t => {
+  const f = await fixture(t), recover = await operation()
+  f.launch.provider!.group.observed.push({ ...f.helper, birth: "102:unmarked:replacement" }, { ...f.helper, birth: "102:unmarked:<defunct>" })
+  await writeLaunchRecord(f.path, f.launch)
+  const original = await readFile(f.path)
+  f.request.sha256 = digest(original)
+  const result = await recover(f.env, f.request)
+  assert.equal(result.state, "cleanup_verified")
+  assert.deepEqual(await readFile(join(f.archive, "launch.json")), original)
+  assert.deepEqual(await readLaunchRecord(f.path), { ...f.launch, phase: "cleanup_verified", reason: null })
+  assert.equal(f.calls.filter(pid => pid === f.helper.pid).length >= 2, true)
+  assert.equal((await reconcileRecord(f.path, f.env.adapter, await readLaunchRecord(f.path))).record.phase, "cleanup_verified")
+  assert.deepEqual(f.signals, [])
+})
+
+test("helper history never permits conflicting ownership or a present PID during recovery", async t => {
+  for (const fault of ["helper-start", "leader-executable", "parent", "uid", "group", "live-helper", "reused-helper"]) await t.test(fault, async t => {
+    const f = await fixture(t), recover = await operation()
+    const history = { ...f.helper, birth: "102:unmarked:replacement" }
+    if (fault === "helper-start") history.birth = "333:unmarked:replacement"
+    if (fault === "leader-executable") Object.assign(history, f.leader, { birth: "101:unmarked:replacement" })
+    if (fault === "parent") history.parentPid++
+    if (fault === "uid") history.uid++
+    if (fault === "group") history.processGroupId++
+    f.launch.provider!.group.observed.push(history)
+    if (fault === "live-helper" || fault === "reused-helper") f.processes.set(f.helper.pid, { ...history, birth: fault === "reused-helper" ? "333:unmarked:other" : history.birth })
+    await writeLaunchRecord(f.path, f.launch)
+    const original = await readFile(f.path)
+    f.request.sha256 = digest(original)
+    await assert.rejects(recover(f.env, f.request))
+    assert.deepEqual(await readFile(f.path), original)
+    assert.deepEqual(f.signals, [])
+  })
+})
+
+test("recovery rejects retained groups that omit the leader or repeat an identical observation", async t => {
+  for (const fault of ["missing-leader", "duplicate-identity"]) await t.test(fault, async t => {
     const f = await fixture(t), recover = await operation()
     f.launch.provider!.group.observed = fault === "missing-leader" ? [f.helper] : [f.leader, f.helper, f.leader]
     await writeLaunchRecord(f.path, f.launch)
@@ -281,10 +315,7 @@ test("offline maintenance holds the startup lock and releases it on failure", as
 test("recovery cannot publish after its startup-lock holder dies", async t => {
   const f = await fixture(t), recover = await operation(), spawn = childProcess.spawn
   let holder: ReturnType<typeof spawn> | undefined
-  childProcess.spawn = ((...args: Parameters<typeof spawn>) => { holder = spawn(...args); return holder }) as typeof spawn
-  syncBuiltinESMExports()
-  t.after(() => { childProcess.spawn = spawn; syncBuiltinESMExports() })
-  await assert.rejects(recover(f.env, f.request, { boundary: async name => {
+  await assert.rejects(recover(f.env, f.request, { startup: { spawn: (file, args, options) => { holder = spawn(file, [...args], options); return holder } }, boundary: async name => {
     if (name !== "archive_durable") return
     assert.ok(holder)
     const exited = once(holder, "exit")

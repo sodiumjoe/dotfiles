@@ -1,4 +1,3 @@
-import { fixtureIdentity } from "./fixtures/ownership.js"
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import assert from "node:assert/strict"
@@ -46,7 +45,7 @@ export function gate<T = void>() {
 }
 
 export async function catalogHandlerFixture(t: TestContext, options: { enabled?: ProviderId[]; wait?: boolean; scenario?: "uncertain" } = {}) {
-  const f = await controlFixture(t, {}, undefined, undefined, { retainRoot: true })
+  const f = await controlFixture(t)
   f.beforeCleanup(async () => {
     if (options.scenario === "uncertain") return
     let handler
@@ -64,14 +63,12 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
       await until(async () => await f.observe(handler!.process!.pid) === null ? true : undefined)
       assert.deepEqual(await f.adapter.readGroup(handler.process.pid), [])
     }
+  })
+  f.afterCleanup(async () => {
+    if (options.scenario === "uncertain") return
     const inventory = await createCatalogStore(f.paths.persistentRoot).inventory()
     assert.deepEqual(inventory.issues, [])
-    const independent = await Promise.all((await readdir(f.root)).filter(name => /^owned-probe-[0-9a-f-]+\.json$/.test(name)).map(async name => ({ path: join(f.root, name), record: await readLaunchRecordForReconciliation(join(f.root, name)) })))
-    for (const entry of [...inventory.launches, ...independent]) {
-      for (const identity of entry.record.provider?.group.observed ?? []) fixtureIdentity("handler-catalog-probe/" + entry.record.launchAttemptId, identity)
-      const path = join(f.root, entry.record.launchAttemptId + "-catalog-cleanup.json")
-      await writeLaunchRecord(path, entry.record)
-      assert.equal((await reconcileRecord(path, f.adapter, entry.record)).record.phase, "cleanup_verified")
+    for (const entry of inventory.launches) {
       if (entry.record.provider === null) { assert.equal(entry.record.launchAttempted, false); continue }
       for (let observation = 0; observation < 2; observation++) {
         for (const identity of entry.record.provider.group.observed) assert.equal(await f.observe(identity.pid), null)
