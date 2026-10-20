@@ -1,3 +1,4 @@
+import { registerWorkerFinalizer } from "./fixtures/run-boundary.js"
 import assert from "node:assert/strict"
 import { execFile, spawn, type ChildProcess, type ExecFileOptionsWithStringEncoding } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -1968,7 +1969,7 @@ qualificationTest("records the Darwin qualification trust and race limits", asyn
   assert.deepEqual(await readJson(path), evidence)
 })
 
-test.after(async () => {
+registerWorkerFinalizer("Darwin fixture verification", async () => {
   const failures: unknown[] = []
   const survivors: Array<{ label: string; pid: number }> = []
   for (const evidence of allEvidence) {

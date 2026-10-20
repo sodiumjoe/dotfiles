@@ -11,7 +11,7 @@ import { createConnection, Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type Duplex } from "node:stream"
-import test, { after, type TestContext } from "node:test"
+import test, { type TestContext } from "node:test"
 import { fileURLToPath } from "node:url"
 import { agencyLaunchMarker, parseAgencyLaunchMarker } from "../src/platform/launch-marker.js"
 import { bindPrivateSocket, unlinkStalePrivateSocket } from "../src/platform/private-socket.js"
@@ -25,10 +25,11 @@ import {
 } from "../src/platform/singleton.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../src/platform/types.js"
 
+import { registerWorkerFinalizer } from "./fixtures/run-boundary.js"
 import { finishSingletonOwnership, settleSingletonStarts, installSingletonOwnership, isSingletonLockRelease, killSingletonPid, ownedStartOrConnect as startOrConnect, preserveSingletonFixture, recordSingletonChild, singletonIntent, spawnSingletonContender } from "./fixtures/singleton-ownership.js"
 
 installSingletonOwnership()
-after(finishSingletonOwnership)
+registerWorkerFinalizer("singleton ownership", finishSingletonOwnership)
 
 const fixturePath = fileURLToPath(new URL("./fixtures/singleton-handler.js", import.meta.url))
 const bootId = "task-3-boot"

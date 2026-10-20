@@ -90,6 +90,7 @@ export const nativeFiles = [
   "darwin-identity.test.js",
   "darwin-platform.test.js",
   "fixture-channel.test.js",
+  "run-boundary.test.js",
   "git-worktree.test.js",
   "handler-agents.test.js",
   "handler-attachment.test.js",
