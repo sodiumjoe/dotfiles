@@ -100,7 +100,7 @@ test("Handler current returns every exact-directory live agent", async t => {
   await Promise.all(results.map(result => f.stop(result.command.target!)))
 })
 
-test("Handler crash during a prompt closes the client and verifies owned cleanup on restart", { timeout: 60000 }, async t => {
+test("Handler crash closes the client and explicit restore establishes new ownership", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t, { pauseAt: "prompt" })
   const ready = await f.waitCompleted(await f.start())
   const pending = f.prompt(ready.command.target!, "challenge")
@@ -111,8 +111,8 @@ test("Handler crash during a prompt closes the client and verifies owned cleanup
   await f.restart()
   const listed = await f.list()
   assert.equal(listed.agents[0]!.live, false)
-  assert.equal(listed.agents[0]!.cleanup, "verified")
-  assert.equal(listed.agents[0]!.record.phase, "recoverable")
+  assert.equal(listed.agents[0]!.cleanup, "unknown")
+  assert.equal(listed.agents[0]!.record.phase, "interrupted")
   const restored = await f.waitCompleted(await f.restore(ready.command.target!.agentId))
   assert.equal(restored.command.result?.outcome, "restored")
   assert.equal(restored.command.result?.session?.sessionId, ready.command.result?.session?.sessionId)
@@ -138,7 +138,7 @@ test("Handler restores a normally stopped conversation with a fresh process", { 
   await f.waitCompleted(await f.stop(restored.command.target!))
 })
 
-test("Handler crash after receipt visibility repairs durability without respawning", { timeout: 60000 }, async t => {
+test("Handler restart preserves a visible receipt without respawning", { timeout: 60000 }, async t => {
   const f = await agentHandlerFixture(t, { pauseAt: "receipt", failReceiptSync: true })
   const operation = f.start()
   void operation.catch(() => undefined)

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { createConnection, createServer } from "node:net"
 import { join } from "node:path"
-import { mkdir, readdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import test from "node:test"
 import { CATALOG_PROTOCOL, exchangeCatalog, parseCatalogReply, parseCatalogRequest, validateCatalogReply, type CatalogReply, type CatalogRequest } from "../src/catalog/protocol.js"
 import { parseRequest, parseReply, type ControlReply } from "../src/control/protocol.js"
@@ -47,23 +47,25 @@ test("one private socket dispatches catalog and unchanged control frames", async
 
 for (const corrupt of [false, true]) test(`real Handler keeps legacy status healthy with catalog corruption=${corrupt}`, { timeout: 60000 }, async t => {
   const f = await controlFixture(t)
+  const retainedPath = join(f.paths.persistentRoot, "catalog/commands", randomUUID() + ".json")
   if (corrupt) {
     await mkdir(join(f.paths.persistentRoot, "catalog"), { mode: 0o700 })
     await mkdir(join(f.paths.persistentRoot, "catalog/commands"), { mode: 0o700 })
-    await writeFile(join(f.paths.persistentRoot, "catalog/commands", randomUUID() + ".json"), "malformed", { mode: 0o600 })
+    await writeFile(retainedPath, "malformed", { mode: 0o600 })
   }
   const handler = await f.start()
   const reply = await exchangeCatalog(createConnection(f.paths.handlerSocketPath), { protocol: CATALOG_PROTOCOL, requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "model_list" })
   assert.ok(reply.ok && reply.result.state === "catalog")
   if (reply.ok && reply.result.state === "catalog") {
-    assert.equal(reply.result.discovery.state, corrupt ? "blocked" : "idle")
+    assert.equal(reply.result.discovery.state, "idle")
     assert.deepEqual(reply.result.providers.map(p => p.state), ["unconfigured", "unconfigured"])
   }
   const status = await f.call()
   assert.ok(status.ok && "phase" in status.result && status.result.phase === "ready")
   if (!corrupt) assert.equal((await readdir(f.paths.persistentRoot)).includes("catalog"), false)
   else {
-    const refused = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
-    assert.ok(!refused.ok && refused.error.code === "INCOMPLETE")
+    const stopped = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+    assert.ok(stopped.ok)
+    assert.equal(await readFile(retainedPath, "utf8"), "malformed")
   }
 })

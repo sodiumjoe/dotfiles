@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdir, unlink, writeFile } from "node:fs/promises"
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import test from "node:test"
 import { createCatalogService, type CatalogClock } from "../src/catalog/service.js"
@@ -453,4 +453,29 @@ test("discovery is explicit and display does not observe configuration", async t
   assert.equal(observations, 2)
   await f.service.list()
   assert.equal(observations, 2)
+})
+
+for (const kind of ["commands", "automatic"]) test(`a missing ${kind} receipt named by pending retirement cannot be reused`, async t => {
+  const f = await fixture(t), commandId = randomUUID(), marker = join(f.root, "retention/pending.json")
+  await mkdir(join(f.root, "retention"), { mode: 0o700 })
+  const bytes = JSON.stringify({ version: 1, entries: [{ path: "catalog/" + kind + "/" + commandId + ".json" }] })
+  await writeFile(marker, bytes, { mode: 0o600 })
+  await f.service.initialize()
+  await assert.rejects(f.service.refresh(commandId, f.generation), { code: "INCOMPLETE" })
+  assert.equal(f.started.length, 0)
+  assert.equal(await f.store.readCommand(commandId), null)
+  await f.service.freezeAndDrain(); await f.service.verifyDischarged()
+  assert.equal(await readFile(marker, "utf8"), bytes)
+})
+
+test("fresh catalog receipts and current retries ignore a malformed historical retirement marker", async t => {
+  const f = await fixture(t), commandId = randomUUID(), marker = join(f.root, "retention/pending.json")
+  await mkdir(join(f.root, "retention"), { mode: 0o700 })
+  await writeFile(marker, "{", { mode: 0o600 })
+  await f.service.initialize()
+  assert.equal((await f.service.refresh(commandId, f.generation)).command.state, "pending")
+  await f.completeProbe("claude-agent-acp"); await f.completeProbe("codex-acp")
+  assert.equal((await f.finish(commandId)).command.state, "completed")
+  await f.service.freezeAndDrain(); await f.service.verifyDischarged()
+  assert.equal(await readFile(marker, "utf8"), "{")
 })

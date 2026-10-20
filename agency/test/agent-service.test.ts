@@ -1085,3 +1085,16 @@ for (const malformed of [false, true]) test(`incomplete historical retirement ${
   await service.freezeAndDrain(true); await service.verifyDischarged()
   assert.equal(await readFile(marker, "utf8"), bytes)
 })
+
+test("a missing command named by pending retirement cannot be reused or reported absent", async t => {
+  const f = await agentServiceFixture(t), marker = join(f.root, "retention/pending.json")
+  await mkdir(join(f.root, "retention"), { mode: 0o700 })
+  const bytes = JSON.stringify({ version: 1, entries: [{ path: "agents/commands/" + f.input.commandId + ".json" }] })
+  await writeFile(marker, bytes, { mode: 0o600 })
+  await assert.rejects(f.service.start(f.input), { code: "INVALID_AGENT_STATE" })
+  await assert.rejects(f.service.commandReceipt(f.input.commandId, f.input.handlerGeneration), { code: "INVALID_AGENT_STATE" })
+  assert.equal(f.spawns(), 0)
+  assert.equal(await f.store.readCommand(f.input.commandId), null)
+  await f.service.freezeAndDrain(true); await f.service.verifyDischarged()
+  assert.equal(await readFile(marker, "utf8"), bytes)
+})

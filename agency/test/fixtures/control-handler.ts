@@ -42,7 +42,7 @@ try {
         await writeLaunchRecord(join(context.paths.persistentRoot, "catalog/probe-launches", attemptId + ".json"), { version: 2, owner: { kind: "catalog-probe", providerId: profile.id, commandId }, handlerGeneration: context.generation, launchAttemptId: attemptId, launchBootId: await adapter.bootId(), launchAttempted: true, phase: "launch_pending", provider: null, reason: null })
         await service.initialize()
         const view = await service.list()
-        if (view.discovery.state !== "idle" || view.providers.find(provider => provider.providerId === profile.id)?.refreshIssue?.code !== "PROBE_CLEANUP_UNVERIFIED") throw new Error("synthetic probe issue was not scoped")
+        if (view.discovery.state !== "idle" || view.providers.find(provider => provider.providerId === profile.id)?.refreshIssue !== undefined) throw new Error("historical probe issue affected current discovery")
         return
       }
       await service.initialize()

@@ -167,3 +167,15 @@ test("addressed historical import rejects mismatched creation evidence", async t
   await assert.rejects(service.sessionRecord((receipt.command as any).agentId), { code: "INVALID_AGENT_STATE" })
   await service.freezeAndDrain(false); await service.verifyDischarged()
 })
+
+test("fresh import and current discharge ignore a malformed historical retirement marker", async t => {
+  const f = await agentServiceFixture(t), marker = join(f.root, "retention/pending.json")
+  await mkdir(join(f.root, "retention"), { mode: 0o700 })
+  await writeFile(marker, "{", { mode: 0o600 })
+  const receipt = await f.service.importSession({ commandId: randomUUID(), handlerGeneration: f.context.state.handlerGeneration, backendId: "codex-acp", nativeSessionId: "saved-native", cwd: f.workspace })
+  assert.equal(receipt.command.result?.outcome, "imported")
+  assert.equal(receipt.durability, "verified")
+  assert.equal(f.spawns(), 0)
+  await f.service.freezeAndDrain(true); await f.service.verifyDischarged()
+  assert.equal(await readFile(marker, "utf8"), "{")
+})

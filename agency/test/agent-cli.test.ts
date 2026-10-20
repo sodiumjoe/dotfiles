@@ -358,7 +358,7 @@ test("a pinned V3 start compares the selection digest", async () => {
 test("offline visible receipt after failed fsync remains unverified until the owner repairs it", async t => {
   const lifecycle = await agentServiceFixture(t), f = fixture()
   lifecycle.failReceipt(true); await lifecycle.service.start(lifecycle.input)
-  await until(async () => (await lifecycle.store.readCommand(lifecycle.input.commandId))!.state === "completed" ? true : undefined)
+  await until(() => lifecycle.context.mutations.queue.run(async () => (await lifecycle.store.readCommand(lifecycle.input.commandId))!.state === "completed" ? true : undefined))
   f.deps.environment = async () => ({ paths: lifecycle.context.paths, adapter: lifecycle.context.adapter }); f.deps.inspect = async () => null; f.deps.agentStore = () => lifecycle.store
   const args = ["agent", "start", ...flags, "--command-id", lifecycle.input.commandId, "--handler-generation", lifecycle.input.handlerGeneration]
   assert.equal(await runControl(args, f.deps), 75); assert.equal(f.output().result.durability, "unverified")

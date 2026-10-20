@@ -1,4 +1,4 @@
-import { incompleteHistory } from "../handler/history.js"
+import { historyDiagnostic, incompleteHistory } from "../handler/history.js"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
@@ -115,10 +115,13 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   }
   async function accept(commandId: string): Promise<RefreshResult> {
     const historical = await store.readCommand(commandId), automatic = await store.readAutomatic(commandId)
+    if (!commands.has(commandId)) {
+      const diagnose = await historyDiagnostic(paths.persistentRoot)
+      if (diagnose("catalog/commands/" + commandId + ".json", historical !== null) || diagnose("catalog/automatic/" + commandId + ".json", automatic !== null)) throw new CatalogError("INCOMPLETE")
+    }
     if (automatic) throw new CatalogError("COMMAND_CONFLICT")
     if (historical && !commands.has(commandId)) {
       if (historical.handlerGeneration !== generation) throw new CatalogError("COMMAND_CONFLICT")
-      if (await incompleteHistory(paths.persistentRoot, "catalog/commands/" + commandId + ".json")) throw new CatalogError("INCOMPLETE")
       return receipt(historical.state === "pending" ? { ...historical, state: "interrupted" } : historical)
     }
     const retained = commands.get(commandId)

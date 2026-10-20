@@ -234,14 +234,14 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const command = commands.get(commandId) ?? intents.get(commandId)?.accepted
     if (command) return command
     const retained = await store.readCommand(commandId)
-    if (retained && (retained.hostId !== context.paths.hostKey || await incompleteHistory(root, "agents/commands/" + commandId + ".json"))) throw new AgentError("INVALID_AGENT_STATE")
+    if (retained && retained.hostId !== context.paths.hostKey || await incompleteHistory(root, "agents/commands/" + commandId + ".json", retained !== null)) throw new AgentError("INVALID_AGENT_STATE")
     return retained
   }
   async function retainedAgent(agentId: string): Promise<AgentRecord | null> {
     const current = records.get(agentId)
     if (current) return current
-    if (await incompleteHistory(root, "agents/records/" + agentId + ".json")) throw new AgentError("INVALID_AGENT_STATE")
     const record = await store.readAgent(agentId)
+    if (await incompleteHistory(root, "agents/records/" + agentId + ".json", record !== null)) throw new AgentError("INVALID_AGENT_STATE")
     if (!record) return null
     if (record.definition.hostId !== context.paths.hostKey) throw new AgentError("INVALID_AGENT_STATE")
     const created = await savedCommand(record.definition.createdCommandId)

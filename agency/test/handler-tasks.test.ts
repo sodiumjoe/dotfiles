@@ -94,7 +94,7 @@ test("routed Handler task reports through its configured local helper with relay
   local.close(); fresh.close(); await f.verifyZeroSurvivors()
 })
 
-test("expired failed worker retirement preserves task record and report bytes", { timeout: 90000 }, async t => {
+test("retained failed worker history preserves task record and report bytes", { timeout: 90000 }, async t => {
   const f = await acpFixture(t, { pauseAt: "session",  }), record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
   const local = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation }); t.after(() => local.close())
   const client = createHostTaskClient({ localHostId: hostId, route: (r, signal) => local.request(r.channel, r.payload, { ...(signal ? { signal } : {}) }) })
@@ -110,9 +110,8 @@ test("expired failed worker retirement preserves task record and report bytes", 
   client.close(); local.close(); await f.crashHandler()
   const runtimeStore = createAgentStore(f.paths.persistentRoot), failed = await runtimeStore.readAgent(agent.definition.agentId)
   assert.ok(failed && failed.version === 3); assert.equal(failed.session, null); assert.equal(failed.configurationState.verification.kind, "unknown")
-  await runtimeStore.writeAgent({ ...failed, configurationState: { ...failed.configurationState, verification: { kind: "verified" } } }, failed)
   await f.restart({ nativeAcp: true })
-  assert.equal((await f.inventory()).agents.some(value => value.definition.agentId === agent.definition.agentId), false)
+  assert.deepEqual((await f.inventory()).agents.find(value => value.definition.agentId === agent.definition.agentId), failed)
   assert.deepEqual(await Promise.all([readFile(join(directory, "record.json")), readFile(join(directory, "report.json"))]), before)
   const store = createTaskStore({ root: f.paths.persistentRoot, hostId }); await store.initialize()
   const forbidden = async (): Promise<never> => { throw new Error("runtime access after report") }
