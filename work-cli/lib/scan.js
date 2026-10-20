@@ -27,9 +27,9 @@ function scanOpenItems() {
       const title = getTitle(content);
       let hasOpenTasks = false;
       for (const line of tasks) {
-        if (/^- \[[ /]\] /.test(line)) {
-          const state = line.match(/^- \[(.)\]/)[1];
-          const item = line.replace(/^- \[.\] /, "");
+        if (/^[-*] \[[ /]\] /.test(line)) {
+          const state = line.match(/^[-*] \[(.)\]/)[1];
+          const item = line.replace(/^[-*] \[.\] /, "");
           results.push({
             filename: `${slug}.md`,
             title,
@@ -83,7 +83,7 @@ function syncCheck(dateStr) {
       const title = getTitle(content);
       for (const line of changelog) {
         if (line.includes(`✅ ${dateStr}`)) {
-          const item = line.replace(/^- \[x\] /, "");
+          const item = line.replace(/^[-*] \[x\] /, "");
           results.push({
             filename: `${slug}.md`,
             title,
@@ -115,9 +115,9 @@ function listTasks(filePath) {
     const range = findSectionLineRange(lines, "Tasks");
     if (!range) return results;
     for (let i = range.start + 1; i < range.end; i++) {
-      if (/^- \[[ /]\] /.test(lines[i])) {
-        const state = lines[i].match(/^- \[(.)\]/)[1];
-        const description = lines[i].replace(/^- \[.\] /, "");
+      if (/^[-*] \[[ /]\] /.test(lines[i])) {
+        const state = lines[i].match(/^[-*] \[(.)\]/)[1];
+        const description = lines[i].replace(/^[-*] \[.\] /, "");
         results.push({
           file: filePath,
           line: i + 1,
@@ -145,9 +145,9 @@ function listTasks(filePath) {
     const range = findSectionLineRange(lines, "Tasks");
     if (!range) continue;
     for (let i = range.start + 1; i < range.end; i++) {
-      if (/^- \[[ /]\] /.test(lines[i])) {
-        const state = lines[i].match(/^- \[(.)\]/)[1];
-        const description = lines[i].replace(/^- \[.\] /, "");
+      if (/^[-*] \[[ /]\] /.test(lines[i])) {
+        const state = lines[i].match(/^[-*] \[(.)\]/)[1];
+        const description = lines[i].replace(/^[-*] \[.\] /, "");
         results.push({ file: fp, line: i + 1, state, title, description });
       }
     }
@@ -167,10 +167,10 @@ function setTaskState(filePath, lineNum, state, dateStr) {
     if (idx < 0 || idx >= lines.length) {
       throw new Error(`line ${lineNum} out of range`);
     }
-    if (!/^- \[.\] /.test(lines[idx])) {
+    if (!/^[-*] \[.\] /.test(lines[idx])) {
       throw new Error(`line ${lineNum} is not a checkbox item`);
     }
-    let text = lines[idx].replace(/^- \[.\] /, "");
+    let text = lines[idx].replace(/^[-*] \[.\] /, "");
     if (state === "done") {
       if (!/ ✅ \d{4}-\d{2}-\d{2}$/.test(text)) {
         text = `${text} ✅ ${dateStr}`;

@@ -79,7 +79,7 @@ function doErrorDebug(dateStr, errors) {
   const workProjectPath = projectFile('work');
   if (fs.existsSync(workProjectPath)) {
     const content = fs.readFileSync(workProjectPath, 'utf-8');
-    if (/^- \[[ /]\] Fix tick error:/m.test(content)) return;
+    if (/^[-*] \[[ /]\] Fix tick error:/m.test(content)) return;
   }
   const projectRoot = REPO_ROOT;
   const prompt = `The work tick command encountered errors on ${dateStr}:
@@ -220,7 +220,7 @@ const commands = {
     }
     const content = fs.readFileSync(dailyNote, 'utf-8');
     const logLines = extractSection(content, 'Log');
-    const completed = logLines.filter(l => /^- \[x\]/.test(l));
+    const completed = logLines.filter(l => /^[-*] \[x\]/.test(l));
     const results = scanOpenItems();
 
     console.log('### Completed');
@@ -514,7 +514,7 @@ const commands = {
         const workProjectPath = projectFile('work');
         if (fs.existsSync(workProjectPath)) {
           const content = fs.readFileSync(workProjectPath, 'utf-8');
-          if (!/^- \[[ /]\] Review upstream skill drift/m.test(content)) {
+          if (!/^[-*] \[[ /]\] Review upstream skill drift/m.test(content)) {
             const doc = parse(content);
             appendToSection(doc, 'Tasks', [`- [ ] Review upstream skill drift: ${names} — run \`work check-upstream --diff\``]);
             fs.writeFileSync(workProjectPath, serialize(doc), 'utf-8');

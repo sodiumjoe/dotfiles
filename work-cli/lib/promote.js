@@ -28,7 +28,7 @@ function promote(dateStr, { quiet } = {}) {
     const fm = parseFrontmatter(content);
     if (fm.status !== "active" && fm.status !== "evergreen") continue;
     const tasks = extractSection(content, "Tasks");
-    const completed = tasks.filter((l) => /^- \[x\] /.test(l));
+    const completed = tasks.filter((l) => /^[-*] \[x\] /.test(l));
     if (completed.length === 0) continue;
     atomicRewrite(filePath, (c) => {
       const doc = parse(c);
@@ -37,8 +37,8 @@ function promote(dateStr, { quiet } = {}) {
       const toInsert = [];
       mutateSection(doc, "Tasks", (lines) => {
         return lines.filter((line) => {
-          if (/^- \[x\] /.test(line)) {
-            let text = line.replace(/^- \[x\] /, "");
+          if (/^[-*] \[x\] /.test(line)) {
+            let text = line.replace(/^[-*] \[x\] /, "");
             const hasDate = / ✅ \d{4}-\d{2}-\d{2}$/.test(text);
             if (!hasDate) {
               text = `${text} ✅ ${dateStr}`;

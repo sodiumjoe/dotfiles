@@ -16,8 +16,8 @@ function applyCloseTask(content, description, dateStr, { cancel } = {}) {
 
   mutateSection(doc, "Tasks", (lines) => {
     for (let i = 0; i < lines.length; i++) {
-      if (/^- \[[ /]\]/.test(lines[i])) {
-        const text = lines[i].replace(/^- \[.\] /, "");
+      if (/^[-*] \[[ /]\]/.test(lines[i])) {
+        const text = lines[i].replace(/^[-*] \[.\] /, "");
         if (text === description || text.includes(description)) {
           if (cancel) {
             lines[i] = `- [-] ${text}`;
@@ -43,8 +43,8 @@ function applyCloseTask(content, description, dateStr, { cancel } = {}) {
 
   mutateSection(doc, "Changelog", (lines) => {
     for (let i = 0; i < lines.length; i++) {
-      if (/^- \[ \]/.test(lines[i])) {
-        const text = lines[i].replace(/^- \[ \] /, "");
+      if (/^[-*] \[ \]/.test(lines[i])) {
+        const text = lines[i].replace(/^[-*] \[ \] /, "");
         if (text === description || text.includes(description)) {
           lines[i] = `- [x] ${text} ✅ ${dateStr}`;
           found = true;

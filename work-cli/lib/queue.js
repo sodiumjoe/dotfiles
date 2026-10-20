@@ -29,9 +29,9 @@ function dequeue(dateStr, section) {
   const sectionLines = extractSection(content, section);
   const checked = [];
   for (const line of sectionLines) {
-    const match = line.match(/^- \[x\] .+<!-- key:(.+?) -->/);
+    const match = line.match(/^[-*] \[x\] .+<!-- key:(.+?) -->/);
     if (match) {
-      checked.push({ key: match[1], label: line.replace(/<!-- key:.+? -->/, '').replace(/^- \[x\] /, '').trim() });
+      checked.push({ key: match[1], label: line.replace(/<!-- key:.+? -->/, '').replace(/^[-*] \[x\] /, '').trim() });
     }
   }
   if (checked.length === 0) return [];
@@ -40,7 +40,7 @@ function dequeue(dateStr, section) {
     const lines = c.split('\n');
     const filtered = lines.filter(line => {
       const m = line.match(/<!-- key:(.+?) -->/);
-      return !(m && keysToRemove.has(m[1]) && /^- \[x\]/.test(line));
+      return !(m && keysToRemove.has(m[1]) && /^[-*] \[x\]/.test(line));
     });
     return filtered.join('\n');
   });

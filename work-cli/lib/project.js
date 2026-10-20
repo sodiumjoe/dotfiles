@@ -120,12 +120,12 @@ function completeProjects({ quiet } = {}) {
     if (fm.status === "evergreen") continue;
     if (fm.permanent === "true" || fm.permanent === true) continue;
     const tasks = extractSection(content, "Tasks");
-    const openTasks = tasks.filter((l) => /^- \[[ /]\]/.test(l));
+    const openTasks = tasks.filter((l) => /^[-*] \[[ /]\]/.test(l));
     if (openTasks.length > 0) continue;
     if (hasActiveSiblingPlans(slug)) continue;
     const changelog = extractSection(content, "Changelog");
-    const openChangelog = changelog.filter((l) => /^- \[ \]/.test(l));
-    const done = changelog.filter((l) => /^- \[x\]/.test(l));
+    const openChangelog = changelog.filter((l) => /^[-*] \[ \]/.test(l));
+    const done = changelog.filter((l) => /^[-*] \[x\]/.test(l));
     if (done.length === 0) continue;
     if (openChangelog.length > 0) continue;
     atomicRewrite(filePath, (c) => {
@@ -395,8 +395,8 @@ function closeTasks(filePath, skipLines, dateStr, { quiet } = {}) {
     const tasks = [];
     for (let i = headerIdx + 1; i < lines.length; i++) {
       if (/^## /.test(lines[i])) break;
-      if (/^- \[[ /]\] /.test(lines[i])) {
-        const text = lines[i].replace(/^- \[.\] /, "");
+      if (/^[-*] \[[ /]\] /.test(lines[i])) {
+        const text = lines[i].replace(/^[-*] \[.\] /, "");
         const skip = skipSet.has(i + 1);
         tasks.push({ text, skip });
       }
@@ -422,7 +422,7 @@ function closeProject(slug, summary, dateStr, { quiet } = {}) {
   }
   const content = fs.readFileSync(filePath, "utf-8");
   const tasks = extractSection(content, "Tasks");
-  const openTasks = tasks.filter((l) => /^- \[[ /]\] /.test(l));
+  const openTasks = tasks.filter((l) => /^[-*] \[[ /]\] /.test(l));
   if (openTasks.length > 0) {
     throw new Error(
       `open tasks remain (${openTasks.length}); run close-tasks first`,

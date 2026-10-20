@@ -118,11 +118,11 @@ function formatUpgradeLines(upgrades) {
 }
 
 function parseUpgradeLine(line) {
-  const npmMatch = line.match(/^- \[x\] \[npm\] (.+?) .+ → .+$/);
+  const npmMatch = line.match(/^[-*] \[x\] \[npm\] (.+?) .+ → .+$/);
   if (npmMatch) {
     return { type: "npm", name: npmMatch[1] };
   }
-  const brewMatch = line.match(/^- \[x\] (.+?) .+ → .+$/);
+  const brewMatch = line.match(/^[-*] \[x\] (.+?) .+ → .+$/);
   if (brewMatch) {
     return { type: "brew", name: brewMatch[1] };
   }

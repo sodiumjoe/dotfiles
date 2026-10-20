@@ -1,5 +1,5 @@
 function parseCheckboxItem(line, lineNum) {
-  const match = line.match(/^- \[(.)\] (.*)$/);
+  const match = line.match(/^[-*] \[(.)\] (.*)$/);
   if (!match) return null;
   const state = match[1];
   let text = match[2];
@@ -43,7 +43,7 @@ function parseCheckboxItems(lines) {
 }
 
 function setState(line, newState) {
-  return line.replace(/^(- \[).(])/, `$1${newState}$2`);
+  return line.replace(/^([-*] \[).(])/, `$1${newState}$2`);
 }
 
 function parseWikilink(text) {
