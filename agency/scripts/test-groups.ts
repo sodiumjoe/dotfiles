@@ -1,4 +1,6 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process"
+import type { SpawnSyncReturns } from "node:child_process"
+import { readFile } from "node:fs/promises"
+import { runTests } from "./test-run.js"
 import { fileURLToPath } from "node:url"
 
 export const deterministicFiles = [
@@ -91,6 +93,7 @@ export const nativeFiles = [
   "darwin-platform.test.js",
   "fixture-channel.test.js",
   "run-boundary.test.js",
+  "test-run.test.js",
   "git-worktree.test.js",
   "handler-agents.test.js",
   "handler-attachment.test.js",
@@ -119,10 +122,13 @@ export const stressNames = [
 export const stressFiles = ["singleton.test.js", "darwin-platform.test.js", "handler-control-plane.test.js"]
 export const stressPattern = "^(?:" + stressNames.join("|") + ")$"
 export type TestGroup = "deterministic" | "native" | "stress" | "all"
+export function testFiles(group: TestGroup): string[] {
+  return [...(group === "deterministic" ? deterministicFiles : group === "native" ? nativeFiles : group === "stress" ? stressFiles : [...deterministicFiles, ...nativeFiles])]
+}
 export function testArguments(group: TestGroup): string[] {
-  const files = group === "deterministic" ? deterministicFiles : group === "native" ? nativeFiles : group === "stress" ? stressFiles : [...deterministicFiles, ...nativeFiles]
+  const files = testFiles(group)
   const filter = group === "stress" ? ["--test-name-pattern=" + stressPattern] : group === "all" ? [] : ["--test-skip-pattern=" + stressPattern]
-  return ["--test", "--test-concurrency=1", ...filter, ...files.map(file => "dist/test/" + file)]
+  return ["--import=" + new URL("../test/fixtures/run-boundary.js", import.meta.url).href, "--test", "--test-concurrency=1", ...filter, ...files.map(file => "dist/test/" + file)]
 }
 export function testExitCode(result: Pick<SpawnSyncReturns<Buffer>, "status" | "signal" | "error">): number {
   return result.error || result.signal ? 1 : result.status ?? 1
@@ -130,7 +136,11 @@ export function testExitCode(result: Pick<SpawnSyncReturns<Buffer>, "status" | "
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const group = process.argv[2]
   if (!["deterministic", "native", "stress", "all"].includes(group ?? "")) throw new Error("Expected deterministic, native, stress, or all")
-  const result = spawnSync(process.execPath, testArguments(group as TestGroup), { cwd: fileURLToPath(new URL("../../", import.meta.url)), stdio: "inherit" })
-  if (result.error) process.stderr.write(String(result.error) + "\n")
-  process.exitCode = testExitCode(result)
+  const cwd = fileURLToPath(new URL("../../", import.meta.url))
+  const manifest = JSON.parse(await readFile(new URL("../build-manifest.json", import.meta.url), "utf8"))
+  const run = await runTests({ group: group as TestGroup, command: [process.execPath, ...testArguments(group as TestGroup)],
+    workerFiles: testFiles(group as TestGroup).map(file => "dist/test/" + file), cwd, revision: manifest.sourceRevision,
+    ...(process.env.AGENCY_TEST_EVIDENCE_PARENT ? { evidenceParent: process.env.AGENCY_TEST_EVIDENCE_PARENT } : {}) })
+  process.stderr.write("test result: " + run.root + "/result.json (" + run.result.state + ")\n")
+  process.exitCode = run.code
 }
