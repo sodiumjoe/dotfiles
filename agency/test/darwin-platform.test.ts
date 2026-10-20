@@ -1538,7 +1538,7 @@ qualificationTest("provider registration closes acknowledgement on an unauthoriz
   const launchAttemptId = randomUUID()
   const marker = agencyLaunchMarker("provider", launchAttemptId)
   const readyPath = join(scope.root, "unauthorized-registration-ready.json")
-  const child = (await fixtureSpawner())("provider-tree", node, [providerFixture, "leader", readyPath, "normal", "1000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }, { source: true })
+  const child = (await fixtureSpawner())("provider-tree", node, [providerFixture, "leader", readyPath, "normal", "5000"], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"] }, { source: true })
   assert.notEqual(child.pid, undefined)
   scope.track("unauthorized-registration provider", marker, child.pid!)
   const structural = await readProviderStructural(child, "unauthorized-registration provider")
@@ -1556,7 +1556,7 @@ qualificationTest("provider registration closes acknowledgement on an unauthoriz
       signals.push({ processGroupId, signal })
     },
   }
-  await assert.rejects(registerProvider(child, scope, "unauthorized-registration provider", marker, structural, child.pid!, unauthorized))
+  await assert.rejects(registerProvider(child, scope, "unauthorized-registration provider", marker, structural, child.pid!, unauthorized), { code: "ERR_ASSERTION", actual: leader.uid + 1, expected: leader.uid })
   assert.deepEqual(signals, [])
   const exit = await waitChild(child, 1500)
   assert.notEqual(exit.code, 0)
