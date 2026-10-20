@@ -103,6 +103,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       })])
     } finally { clearTimeout(timer) }
   }
+  const drainChecks = () => bounded("fixture checks", async () => { while (checks.size) await Promise.allSettled([...checks]) })
   const find = (ref: LaunchRef): Launch => {
     const value = launches.get(ref.launchId)
     if (ref.runId !== options.runId || !value) throw new Error("Unknown fixture launch")
@@ -254,6 +255,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       pending = (async () => {
         await drainLocal()
         for (const boundary of boundaries) try { await bounded("reporting boundary", boundary) } catch (error) { fail("reporting", error) }
+        try { await drainChecks() } catch (error) { fail("fixture checks", error) }
         await Promise.allSettled([...launches.values()].map(async value => {
           try {
             if (!value.attempted) throw new Error("unspawned intent")
@@ -304,7 +306,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   if (native) nativeAccess.set(scope, {
     deadlineMs: options.deadlineMs,
     async settleChecks() {
-      await bounded("fixture checks", async () => { while (checks.size) await Promise.allSettled([...checks]) })
+      await drainChecks()
       if (failures.length) throw new Error(failures.join("; "))
     },
     declareExec(ref, image) {

@@ -110,3 +110,13 @@ test("interrupting the runner leaves its pre-spawn result running", { timeout: 1
   assert.equal(JSON.parse(await readFile(join(parent, root, "result.json"), "utf8")).state, "running")
   assert.equal((await scope.finish()).state, "settled")
 })
+
+test("handled operation rejection remains settled while a pending operation is incomplete", async () => {
+  const rejected = await run("b.result.operations.push({label:'expected rejection',state:'rejected',error:'expected'});" + save)
+  assert.equal(rejected.code, 0, JSON.stringify(rejected.result))
+  assert.equal(rejected.result.state, "passed")
+  assert.equal(rejected.result.workers[0]!.operations[0]!.state, "rejected")
+  const pending = await run("b.result.operations.push({label:'unsettled operation',state:'pending',error:null});" + save)
+  assert.equal(pending.code, 1)
+  assert.equal(pending.result.state, "incomplete")
+})

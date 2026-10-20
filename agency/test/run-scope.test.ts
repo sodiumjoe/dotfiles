@@ -215,3 +215,29 @@ for (const change of ["declared", "other-command", "new-start", "other-owner"]) 
   child.emit("exit", 0, null); child.emit("close", 0, null)
   assert.equal((await scope.finish()).state, change === "declared" ? "settled" : "incomplete")
 })
+
+test("finish waits for admitted signal checks before publishing a settled boundary", async () => {
+  const f = fixture(), entered = deferred<void>(), held = deferred<string>()
+  f.register()
+  await f.scope.observe(f.ref)
+  let reads = 0
+  f.adapter.bootId = async () => {
+    if (++reads === 1) { entered.resolve(); return held.promise }
+    return "boot"
+  }
+  const stop = assert.rejects(f.scope.signal(f.ref, "SIGTERM"), /boot mismatch/)
+  await entered.promise
+  f.exit()
+  const done = f.scope.finish()
+  let finished = false
+  void done.then(() => { finished = true })
+  await new Promise(resolve => setImmediate(resolve))
+  const publishedEarly = finished
+  held.resolve("changed-boot")
+  await stop
+  const result = await done
+  assert.equal(publishedEarly, false)
+  assert.equal(result.state, "incomplete")
+  assert.match(result.failures.join(";"), /boot mismatch/)
+  assert.deepEqual(f.signals, [])
+})

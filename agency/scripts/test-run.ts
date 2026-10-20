@@ -51,7 +51,7 @@ async function collect(root: string, expected: string[], result: TestRunResult):
       seen.add(b.workerFile)
       result.workers.push(b.result)
       result.artifacts.push(...b.result.artifacts)
-      if (b.result.state !== "settled" || b.result.failures.length || b.result.operations.some((o: any) => o.state !== "fulfilled")
+      if (b.result.state !== "settled" || b.result.failures.length || b.result.operations.some((o: any) => o.state === "pending")
         || b.result.launches.some((l: any) => l.absent !== true || l.unavailable === null && (l.close !== true && !(l.pid === null && l.error) || l.exit === null && !(l.pid === null && l.error)))) {
         result.unresolved.push(b.workerFile + ": " + (b.result.failures.join("; ") || "unsettled fixture evidence"))
       }
