@@ -38,7 +38,7 @@ async function pause(name: string): Promise<void> {
   paused = true
   await writeFile(join(root, "barrier.json"), JSON.stringify({ name, generation }), { mode: 0o600 })
   while (true) {
-    try { await readFile(join(root, "release-barrier")); return } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+    try { await readFile(join(root, name === "source-completion" ? "release-completion" : "release-barrier")); return } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
     await new Promise(resolve => setTimeout(resolve, 20))
   }
 }
@@ -136,4 +136,5 @@ try {
   await taskInitialization?.catch(() => undefined)
 }
 await pause("handler-completed")
+await pause("source-completion")
 await finishFixtureSource()

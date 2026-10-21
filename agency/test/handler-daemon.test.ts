@@ -186,3 +186,29 @@ test("control cleanup joins accepted shutdown completing during asynchronous cle
   assert.equal(await f.observe(current.process.pid), null)
   assert.deepEqual(await f.adapter.readGroup(current.process.pid), [])
 })
+
+for (const mismatch of ["generation", "identity"] as const) test(`accepted owner cleanup refuses changed Handler ${mismatch}`, { timeout: 20000 }, async t => {
+  const f = await controlFixture(t, { pauseAt: "handler-completed" }), started = await f.start(), current = started.record
+  assert.ok(current.process)
+  const path = join(f.paths.runtimeRoot, "handler.json")
+  const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.ok(reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted")
+  await until(async () => await fileExists(join(f.root, "handler-completed")) ? true : undefined)
+  const original = await readFile(path), receiver = await workerReceiver()
+  let preparations = 0
+  t.mock.method(receiver, "prepareExit", async () => { preparations++; throw new Error("changed acceptance attempted signal preparation") })
+  try {
+    const record = JSON.parse(original.toString())
+    if (mismatch === "generation") record.generation = randomUUID()
+    else record.process.parentPid++
+    await writeFile(path, JSON.stringify(record), { mode: 0o600 })
+    await assert.rejects(f.shutdownOwnedHandler({ generation: current.generation, process: current.process }), { code: "ERR_ASSERTION" })
+    assert.equal(preparations, 0)
+  } finally {
+    await writeFile(path, original, { mode: 0o600 })
+    await writeFile(join(f.root, "release-completion"), "released after strict refusal", { mode: 0o600 })
+  }
+  await f.cleanup()
+  assert.equal(await f.observe(current.process.pid), null)
+  assert.deepEqual(await f.adapter.readGroup(current.process.pid), [])
+})

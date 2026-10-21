@@ -13,7 +13,7 @@ import { waitForTask } from "../src/tasks/wait.js"
 import { connectHandlerBridge } from "../src/bridge/handler-client.js"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import assert from "node:assert/strict"
-import { test } from "node:test"
+import { test, type TestContext } from "node:test"
 import { randomUUID } from "node:crypto"
 import { spawn } from "node:child_process"
 import { appendFile, readFile, readdir, writeFile } from "node:fs/promises"
@@ -23,7 +23,9 @@ import { acpFixture } from "./acp-support.js"
 import { until, fileExists } from "./control-support.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { connectBridge } from "../src/bridge/ssh.js"
-import { shutdownFixtureHandler } from "./agent-support.js"
+import { agentHandlerFixture, shutdownFixtureHandler } from "./agent-support.js"
+import { workerReceiver } from "./fixtures/run-boundary.js"
+import { nativeFixtureAccess } from "./fixtures/run-scope.js"
 import { PROTOCOL } from "../src/control/protocol.js"
 import { TASK_PROTOCOL, parseTaskReply } from "../src/tasks/protocol.js"
 
@@ -72,6 +74,47 @@ test("Handler shutdown completes while task initialization remains held", { time
   assert.equal(final.close, true)
   assert.equal(await f.observe(record.process.pid), null)
 })
+
+for (const entry of ["direct", "callback"] as const) test(`agent cleanup ${entry} joins prior accepted shutdown before signal preparation`, { timeout: 60000 }, async t => {
+  let cleanup!: () => Promise<void>
+  const context = Object.create(t) as TestContext
+  context.diagnostic = t.diagnostic.bind(t)
+  context.after = fn => { cleanup = async () => { await fn?.(t, error => { if (error) throw error }) }; t.after(cleanup) }
+  const f = await agentHandlerFixture(context, { tasks: "hold", pauseAt: "source-completion" })
+  const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  assert.ok(record.process)
+  const reply = await f.control({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.ok(reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted")
+  await f.waitBarrier()
+  const { scope } = await fixtureRuntime(), launch = scope.snapshot().launches.find(value => value.pid === record.process!.pid)!
+  assert.deepEqual(launch.identity, record.process)
+  assert.equal(launch.exit, null)
+  assert.equal(launch.close, false)
+  const receiver = await workerReceiver(), prepare = receiver.prepareExit.bind(receiver), native = nativeFixtureAccess(scope), signal = native.signalPid.bind(native), observe = f.adapter.readProcess.bind(f.adapter)
+  let preparations = 0, deliveries = 0, observations = 0, released = false
+  const release = async () => {
+    if (released) return
+    assert.equal(await fileExists(join(f.root, "release-completion")), false)
+    assert.deepEqual(await observe(record.process!.pid), record.process)
+    released = true
+    await writeFile(join(f.root, "release-completion"), "released after cleanup decision", { mode: 0o600 })
+    await f.waitHandlerExit()
+  }
+  t.mock.method(receiver, "prepareExit", async (ref: import("./fixtures/run-scope.js").LaunchRef) => { preparations++; await release(); await prepare(ref) })
+  t.mock.method(native, "signalPid", async (...args: Parameters<typeof native.signalPid>) => { deliveries++; await signal(...args) })
+  t.mock.method(f.adapter, "readProcess", async (pid: number) => { if (pid === record.process!.pid && ++observations === 2) await release(); return observe(pid) })
+  await (entry === "direct" ? f.verifyZeroSurvivors() : cleanup())
+  assert.equal(released, true)
+  assert.equal(preparations, 0)
+  assert.equal(deliveries, 0)
+  assert.equal(await fileExists(join(f.root, "release-tasks")), false)
+  const final = scope.snapshot().launches.find(value => value.ref.launchId === launch.ref.launchId)!
+  assert.deepEqual(final.exit, { code: 0, signal: null })
+  assert.equal(final.close, true)
+  assert.equal(await f.observe(record.process.pid), null)
+  assert.deepEqual(await f.adapter.readGroup(record.process.pid), [])
+})
+
 test("held initialization cannot publish after Handler completion while its fixture source is live", { timeout: 60000 }, async t => {
   const f = await acpFixture(t, { tasks: "hold", pauseAt: "handler-completed" })
   await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)

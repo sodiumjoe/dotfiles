@@ -94,6 +94,40 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
     const handler = ["agent-handler", "control-handler"].includes(launch.role)
     await signalFixturePid(expected.pid, value, handler, !handler)
   }
+  const shutdownOwnedHandler = async (current: { generation: string; process: ProcessIdentity }, owner?: Parameters<typeof shutdownFixtureHandler>[1]): Promise<void> => {
+    const launch = registrations().find(value => value.pid === current.process.pid && ["agent-handler", "control-handler"].includes(value.role))
+    const accepted = launch && acceptedShutdowns.get(launch.ref.launchId)
+    if (!accepted) {
+      assert.ok(owner)
+      await shutdownFixtureHandler(current, owner)
+      return
+    }
+    assert.ok(launch)
+    assert.deepEqual(launch.identity, accepted.current.process)
+    assert.deepEqual(current, accepted.current)
+    await shutdownFixtureHandler(accepted.current, {
+      request: async () => accepted.reply,
+      track: async () => {
+        await owner?.track()
+        const current = await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))
+        assert.equal(current.generation, accepted.current.generation)
+        assert.deepEqual(current.process, accepted.current.process)
+      },
+      signal: () => signal(accepted.current.process, "SIGTERM"),
+      absent: async () => {
+        await until(async () => {
+          const observed = await observe(launch.pid!)
+          if (observed !== null) assert.deepEqual(observed, accepted.current.process)
+          return observed === null && registrations().find(value => value.ref.launchId === launch.ref.launchId)?.close === true ? true : undefined
+        })
+        for (let n = 0; n < 2; n++) {
+          assert.equal(await adapter.bootId(), accepted.current.process.bootId)
+          assert.equal(await observe(launch.pid!), null)
+          assert.deepEqual(await adapter.readGroup(launch.pid!), [])
+        }
+      },
+    })
+  }
   const verifyCatalogCleanup = async (): Promise<void> => {
     try {
       const evidence = JSON.parse(await readFile(join(root, "catalog-cleanup-failure.json"), "utf8"))
@@ -112,28 +146,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       if (!launch.pid || launch.exit || launch.absent) continue
       const accepted = acceptedShutdowns.get(launch.ref.launchId)
       if (accepted) {
-        assert.deepEqual(launch.identity, accepted.current.process)
-        await shutdownFixtureHandler(accepted.current, {
-          request: async () => accepted.reply,
-          track: async () => {
-            const current = await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))
-            assert.equal(current.generation, accepted.current.generation)
-            assert.deepEqual(current.process, accepted.current.process)
-          },
-          signal: () => signal(accepted.current.process, "SIGTERM"),
-          absent: async () => {
-            await until(async () => {
-              const observed = await observe(launch.pid!)
-              if (observed !== null) assert.deepEqual(observed, accepted.current.process)
-              return observed === null && registrations().find(value => value.ref.launchId === launch.ref.launchId)?.close === true ? true : undefined
-            })
-            for (let n = 0; n < 2; n++) {
-              assert.equal(await adapter.bootId(), accepted.current.process.bootId)
-              assert.equal(await observe(launch.pid!), null)
-              assert.deepEqual(await adapter.readGroup(launch.pid!), [])
-            }
-          },
-        })
+        await shutdownOwnedHandler(accepted.current)
         continue
       }
       const owning = ["agent-handler", "control-handler", "catalog-worker"].includes(launch.role)
@@ -243,7 +256,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       return provider.record
     } finally { status.destroy(); ack.destroy() }
   }
-  return { root, paths, adapter, owned, registrations, start, call, signal, observe, configPath, spawnProvider, cleanup, beforeCleanup: (barrier: () => Promise<void>) => { cleanupBarriers.push(barrier) }, afterCleanup: (check: () => Promise<void>) => { cleanupChecks.push(check) } }
+  return { root, paths, adapter, owned, registrations, start, call, signal, observe, configPath, spawnProvider, cleanup, shutdownOwnedHandler, beforeCleanup: (barrier: () => Promise<void>) => { cleanupBarriers.push(barrier) }, afterCleanup: (check: () => Promise<void>) => { cleanupChecks.push(check) } }
 }
 
 export async function privateRoot(t: TestContext, options: { retainRoot?: boolean } = {}): Promise<string> {
