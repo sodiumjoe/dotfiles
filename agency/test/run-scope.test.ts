@@ -531,3 +531,54 @@ for (const mode of ["eventual-absence", "never-reaped", "unavailable"] as const)
   assert.equal(retries, mode === "eventual-absence" ? 1 : 0)
   assert.ok(reads >= 3)
 })
+
+for (const mismatch of ["reply", "result"] as const) test(`fixture shutdown refuses changed ${mismatch} generation before cleanup`, async () => {
+  const f = fixture(), generation = "a".repeat(64)
+  let tracked = false
+  await assert.rejects(shutdownFixtureHandler({ generation, process: f.identity }, {
+    request: async () => ({ protocol: PROTOCOL, requestId: "fixture", handlerGeneration: mismatch === "reply" ? "replacement" : generation, ok: true, result: { state: "shutdown_accepted", commandId: "fixture", handlerGeneration: mismatch === "result" ? "replacement" : generation } }),
+    track: async () => { tracked = true }, signal: async () => { throw new Error("unexpected signal") }, absent: async () => { throw new Error("unexpected absence") },
+  }), /fixture shutdown generation changed/)
+  assert.equal(tracked, false)
+})
+
+for (const replaced of [false, true]) test(`nonaccepted fixture shutdown requires strict escalation${replaced ? " and refuses replacement identity" : ""}`, async () => {
+  const f = fixture(), generation = "a".repeat(64)
+  f.register()
+  await f.scope.observe(f.ref)
+  const cleanup = shutdownFixtureHandler({ generation, process: f.identity }, {
+    request: async () => ({ protocol: PROTOCOL, requestId: "fixture", handlerGeneration: generation, ok: false, error: { code: "INCOMPLETE", message: "not accepted" } }),
+    track: async () => { if (replaced) f.setCurrent({ ...f.identity, birth: "11:replacement" }) },
+    signal: async () => { await f.scope.signal(f.ref, "SIGTERM"); f.exit() },
+    absent: async () => { assert.equal(await f.adapter.readProcess(f.identity.pid), null) },
+  })
+  if (replaced) await assert.rejects(cleanup, /Fixture identity mismatch/)
+  else await cleanup
+  assert.deepEqual(f.signals, replaced ? [] : [[123, "SIGTERM"]])
+  if (replaced) f.exit()
+  const result = await f.scope.finish()
+  assert.equal(result.state, replaced ? "incomplete" : "settled")
+  assert.equal(result.launches[0]!.close, true)
+  assert.equal(result.launches[0]!.absent, true)
+  if (replaced) assert.ok(result.failures.some(value => value.includes("Fixture identity mismatch")))
+})
+
+test("accepted fixture shutdown remains incomplete while its original child stays live", async () => {
+  const f = fixture(), generation = "a".repeat(64)
+  f.register()
+  await f.scope.observe(f.ref)
+  await assert.rejects(shutdownFixtureHandler({ generation, process: f.identity }, {
+    request: async () => ({ protocol: PROTOCOL, requestId: "fixture", handlerGeneration: generation, ok: true, result: { state: "shutdown_accepted", commandId: "fixture", handlerGeneration: generation } }),
+    track: async () => { await new Promise(resolve => setImmediate(resolve)) },
+    signal: async () => { throw new Error("accepted shutdown must not escalate") },
+    absent: async () => { await until(async () => await f.adapter.readProcess(f.identity.pid) === null ? true : undefined, 30) },
+  }), /fixture observation timed out/)
+  assert.deepEqual(f.signals, [])
+  const pending = f.scope.snapshot().launches[0]!
+  assert.equal(pending.exit, null)
+  assert.equal(pending.close, false)
+  assert.equal(pending.absent, null)
+  assert.deepEqual(await f.adapter.readProcess(f.identity.pid), f.identity)
+  f.exit()
+  assert.equal((await f.scope.finish()).state, "settled")
+})

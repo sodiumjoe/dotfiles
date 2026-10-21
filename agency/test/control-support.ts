@@ -13,7 +13,7 @@ import { readHandlerRecord } from "../src/platform/private-state.js"
 import { startOrConnect, type StartTransition } from "../src/platform/singleton.js"
 import { sameProcess, type ProcessIdentity } from "../src/platform/types.js"
 import { exchange } from "../src/control/wire.js"
-import { PROTOCOL, type ControlRequest } from "../src/control/protocol.js"
+import { PROTOCOL, type ControlRequest, type ControlReply } from "../src/control/protocol.js"
 import type { PlatformPaths } from "../src/platform/paths.js"
 import type { ControlDependencies } from "../src/cli/control.js"
 import { ControlError } from "../src/control/protocol.js"
@@ -44,6 +44,21 @@ export async function fileExists(path: string): Promise<boolean> {
   try { await readFile(path); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error }
 }
 
+export async function shutdownFixtureHandler(current: { generation: string; process: ProcessIdentity }, owner: {
+  request(): Promise<import("../src/control/protocol.js").ControlReply>
+  track(): Promise<void>
+  signal(): Promise<void>
+  absent(): Promise<void>
+}): Promise<void> {
+  let reply: import("../src/control/protocol.js").ControlReply | undefined
+  try { reply = await owner.request() } catch {}
+  if (reply && (reply.handlerGeneration !== current.generation || reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted" && reply.result.handlerGeneration !== current.generation)) throw new Error("fixture shutdown generation changed")
+  const accepted = reply?.ok && "state" in reply.result && reply.result.state === "shutdown_accepted"
+  await owner.track()
+  if (!accepted) await owner.signal()
+  await owner.absent()
+}
+
 export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
 
 let fixtureBatchFailure: Error | undefined
@@ -65,6 +80,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   const firstLaunch = scope.snapshot().launches.length
   const registrations = () => scope.snapshot().launches.slice(firstLaunch)
   const owned: ProcessIdentity[] = [], starts: Promise<unknown>[] = []
+  const acceptedShutdowns = new Map<string, { current: { generation: string; process: ProcessIdentity }; reply: ControlReply }>()
   const failedStarts: unknown[] = []
   const cleanupBarriers: Array<() => Promise<void>> = [], cleanupChecks: Array<() => Promise<void>> = []
   const providers: Array<{ child: ChildProcess; marker: string; attempt: string; record?: LaunchRecord }> = []
@@ -94,6 +110,32 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
     for (const barrier of cleanupBarriers) await barrier()
     for (const launch of registrations()) {
       if (!launch.pid || launch.exit || launch.absent) continue
+      const accepted = acceptedShutdowns.get(launch.ref.launchId)
+      if (accepted) {
+        assert.deepEqual(launch.identity, accepted.current.process)
+        await shutdownFixtureHandler(accepted.current, {
+          request: async () => accepted.reply,
+          track: async () => {
+            const current = await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))
+            assert.equal(current.generation, accepted.current.generation)
+            assert.deepEqual(current.process, accepted.current.process)
+          },
+          signal: () => signal(accepted.current.process, "SIGTERM"),
+          absent: async () => {
+            await until(async () => {
+              const observed = await observe(launch.pid!)
+              if (observed !== null) assert.deepEqual(observed, accepted.current.process)
+              return observed === null && registrations().find(value => value.ref.launchId === launch.ref.launchId)?.close === true ? true : undefined
+            })
+            for (let n = 0; n < 2; n++) {
+              assert.equal(await adapter.bootId(), accepted.current.process.bootId)
+              assert.equal(await observe(launch.pid!), null)
+              assert.deepEqual(await adapter.readGroup(launch.pid!), [])
+            }
+          },
+        })
+        continue
+      }
       const owning = ["agent-handler", "control-handler", "catalog-worker"].includes(launch.role)
       await signalFixturePid(launch.pid, "SIGTERM", owning)
       const deadline = Date.now() + 1000
@@ -145,7 +187,15 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   }
   const call = async (request?: ControlRequest) => {
     const record = await readHandlerRecord(join(paths.runtimeRoot, "handler.json"))
-    return exchange(createConnection(paths.handlerSocketPath), request ?? { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: record.generation, op: "status" }, 5000)
+    const reply = await exchange(createConnection(paths.handlerSocketPath), request ?? { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: record.generation, op: "status" }, 5000)
+    if (request?.op === "shutdown" && reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted") {
+      if (request.handlerGeneration !== record.generation || reply.handlerGeneration !== record.generation || reply.result.handlerGeneration !== record.generation || !record.process) throw new Error("fixture shutdown generation changed")
+      const launch = registrations().find(value => value.pid === record.process!.pid && ["agent-handler", "control-handler"].includes(value.role))
+      assert.ok(launch)
+      assert.deepEqual(launch.identity, record.process)
+      acceptedShutdowns.set(launch.ref.launchId, { current: { generation: record.generation, process: record.process }, reply })
+    }
+    return reply
   }
   const spawnProvider = async (): Promise<LaunchRecord> => {
     assertFixtureBatchHealthy()

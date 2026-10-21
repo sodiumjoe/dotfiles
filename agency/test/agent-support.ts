@@ -12,7 +12,7 @@ import { ATTACHMENT_PROTOCOL, createNdjsonDecoder, parseAttachmentFrame, type At
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
 import { AgentError } from "../src/agent/types.js"
 import { splitLaunchSpec, startCommand } from "../src/agent/types.js"
-import { privateRoot, controlFixture, until, fileExists, failFixtureBatch } from "./control-support.js"
+import { privateRoot, controlFixture, until, fileExists, failFixtureBatch, shutdownFixtureHandler } from "./control-support.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import type { LaunchContext } from "../src/handler/launch-transitions.js"
 import { readHandlerRecord, readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
@@ -50,20 +50,7 @@ export async function verifyFixtureProviderGroup(identity: ProcessIdentity, io: 
   return members
 }
 
-export async function shutdownFixtureHandler(current: { generation: string; process: ProcessIdentity }, owner: {
-  request(): Promise<import("../src/control/protocol.js").ControlReply>
-  track(): Promise<void>
-  signal(): Promise<void>
-  absent(): Promise<void>
-}): Promise<void> {
-  let reply: import("../src/control/protocol.js").ControlReply | undefined
-  try { reply = await owner.request() } catch {}
-  if (reply && (reply.handlerGeneration !== current.generation || reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted" && reply.result.handlerGeneration !== current.generation)) throw new Error("fixture shutdown generation changed")
-  const accepted = reply?.ok && "state" in reply.result && reply.result.state === "shutdown_accepted"
-  await owner.track()
-  if (!accepted) await owner.signal()
-  await owner.absent()
-}
+export { shutdownFixtureHandler } from "./control-support.js"
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)

@@ -10,6 +10,8 @@ import { receiveStart } from "../src/handler/daemon.js"
 import { productionControlDependencies, runControl } from "../src/cli/control.js"
 import { inspectHandlerGeneration } from "../src/platform/singleton.js"
 import { readHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
+import { fixtureRuntime } from "./fixtures/fixture-spawn.js"
+import { workerReceiver } from "./fixtures/run-boundary.js"
 import { controlFixture, fileExists, until, launch } from "./control-support.js"
 
 test("runtime rejects unsupported Node and platform before production state access", () => {
@@ -150,4 +152,37 @@ test("malformed legacy settings remain inert and byte-preserved", { timeout: 200
   const diagnostic = JSON.parse(output.join(""))
   assert.deepEqual(diagnostic.result.runtimeIssues ?? [], [])
   assert.equal(await readFile(settings, "utf8"), content)
+})
+
+test("control cleanup joins accepted shutdown completing during asynchronous cleanup", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t, { pauseAt: "handler-completed" }), started = await f.start()
+  const current = started.record
+  assert.ok(current.process)
+  const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.ok(reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted")
+  await until(async () => await fileExists(join(f.root, "handler-completed")) ? true : undefined)
+  assert.equal(await readFile(join(f.root, "handler-completed"), "utf8"), current.generation)
+  const { scope } = await fixtureRuntime(), launch = f.registrations().find(value => value.pid === current.process!.pid)!
+  assert.equal(launch.exit, null)
+  assert.equal(launch.close, false)
+  let entered = false, completed = false, signalPreparations = 0
+  f.beforeCleanup(async () => { assert.notEqual(await f.observe(current.process!.pid), null); entered = true })
+  const complete = async () => {
+    assert.equal(entered, true)
+    if (completed) return
+    completed = true
+    await writeFile(join(f.root, "release-completion"), "released during cleanup", { mode: 0o600 })
+    await until(async () => scope.snapshot().launches.find(value => value.ref.launchId === launch.ref.launchId)?.close === true ? true : undefined)
+  }
+  const receiver = await workerReceiver(), prepare = receiver.prepareExit.bind(receiver), readProcess = f.adapter.readProcess.bind(f.adapter)
+  t.mock.method(receiver, "prepareExit", async (ref: import("./fixtures/run-scope.js").LaunchRef) => { signalPreparations++; await complete(); await prepare(ref) })
+  t.mock.method(f.adapter, "readProcess", async (pid: number) => { if (entered && pid === current.process!.pid) await complete(); return readProcess(pid) })
+  await f.cleanup()
+  assert.equal(completed, true)
+  assert.equal(signalPreparations, 0)
+  const final = scope.snapshot().launches.find(value => value.ref.launchId === launch.ref.launchId)!
+  assert.deepEqual(final.exit, { code: 0, signal: null })
+  assert.equal(final.close, true)
+  assert.equal(await f.observe(current.process.pid), null)
+  assert.deepEqual(await f.adapter.readGroup(current.process.pid), [])
 })

@@ -75,4 +75,13 @@ try {
   await writeFile(join(root, "failure"), String(error), { mode: 0o600 })
   process.exitCode = 1
 }
+if (config.pauseAt === "handler-completed") {
+  await writeFile(join(root, "handler-completed"), process.env.AGENCY_HANDLER_GENERATION!, { mode: 0o600 })
+  const deadline = Date.now() + 10000
+  while (true) {
+    try { await readFile(join(root, "release-completion")); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+    if (Date.now() >= deadline) throw new Error("fixture completion pause timed out")
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
 await finishFixtureSource()
