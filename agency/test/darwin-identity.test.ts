@@ -294,6 +294,43 @@ darwinTest("enumerates stable complete groups independently of leader presence",
   await waitFor(async () => (await adapter.readGroup(leader.pid!)).length === 0, "leaderless group survived")
 })
 
+darwinTest("selects only the requested group with bounded system commands", async () => {
+  const row = `${psRow({ pid: 42, pgid: 41 })}\n`
+  const scripted = scriptedExecutor([row, row])
+  assert.deepEqual((await createDarwinAdapter(scripted.execute).readGroup(41)).map(member => member.pid), [42])
+  assert.deepEqual(scripted.calls.map(call => [call.file, call.args]), [
+    ["/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"]],
+    ["/bin/ps", ["-ww", "-g", "41", "-o", "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="]],
+    ["/bin/ps", ["-ww", "-g", "41", "-o", "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="]],
+  ])
+  for (const call of scripted.calls) assert.deepEqual(call.options, { encoding: "utf8", env: { LANG: "C", TZ: "UTC" }, maxBuffer: 1024 * 1024, shell: false, timeout: 2000 })
+})
+
+darwinTest("requires two complete targeted group observations for absence", async () => {
+  const empty = { stdout: "", stderr: "", exitCode: 1 }
+  const absent = scriptedExecutor([empty, empty])
+  assert.deepEqual(await createDarwinAdapter(absent.execute).readGroup(41), [])
+  assert.equal(absent.calls.length, 3)
+  const row = `${psRow({ pid: 42, pgid: 41 })}\n`
+  const appearing = scriptedExecutor([empty, row, row, row])
+  assert.deepEqual((await createDarwinAdapter(appearing.execute).readGroup(41)).map(member => member.pid), [42])
+  assert.equal(appearing.calls.length, 5)
+})
+
+darwinTest("rejects failed, empty-successful, malformed and foreign group selections", async () => {
+  for (const output of [
+    { stdout: "", stderr: "", exitCode: 0 },
+    { stdout: "", stderr: "", exitCode: 2 },
+    { stdout: "", stderr: "permission denied", exitCode: 1 },
+    { stdout: `${psRow({ pid: 42, pgid: 41 })}\n`, stderr: "", exitCode: 1 },
+    { stdout: "malformed\n", stderr: "", exitCode: 0 },
+    { stdout: `${psRow({ pid: 42, pgid: 42 })}\n`, stderr: "", exitCode: 0 },
+  ]) {
+    const scripted = scriptedExecutor([output, output])
+    await assert.rejects(createDarwinAdapter(scripted.execute).readGroup(41), DarwinObservationUnavailable)
+  }
+})
+
 darwinTest("retries complete group pairs and never returns their intersection", async () => {
   const first = psRow({ pid: 41, pgid: 41, command: `agy-provider:${canonicalId}` })
   const second = psRow({ pid: 42, ppid: 41, pgid: 41 })
@@ -454,7 +491,4 @@ darwinTest("targeted process reads reject failed commands and unexpected rows", 
     `${psRow({ pid: 99 })}\n`,
     `${psRow({ pid: 41 })}\n${psRow({ pid: 99 })}\n`,
   ]) await assert.rejects(createDarwinAdapter(scriptedExecutor([result, result]).execute).readProcess(41), DarwinObservationUnavailable)
-  const group = scriptedExecutor([`${psRow({ pid: 41 })}\n`, `${psRow({ pid: 41 })}\n`])
-  await createDarwinAdapter(group.execute).readGroup(41)
-  assert.ok(group.calls.filter(call => call.file === "/bin/ps").every(call => call.args.includes("-axo")))
 })

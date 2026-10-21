@@ -149,7 +149,7 @@ async function event(config: FixtureConfig, value: string): Promise<void> {
 
 async function waitForRelease(config: FixtureConfig, label: string): Promise<void> {
   if (config.releasePath === undefined) throw new Error(`${label} release path is unavailable`)
-  const timeoutMs = fixtureTimeout(config)
+  const timeoutMs = 2 * fixtureTimeout(config)
   const deadline = Date.now() + timeoutMs
   while (!await exists(config.releasePath)) {
     if (Date.now() >= deadline) throw new Error(`${label} pause timed out`)

@@ -6,7 +6,7 @@ import { type PlatformAdapter, type ProcessIdentity } from "./types.js"
 const SYSCTL = "/usr/sbin/sysctl"
 const PS = "/bin/ps"
 const SYSCTL_ARGS = ["-n", "kern.bootsessionuuid"] as const
-const PS_ARGS = ["-ww", "-axo", "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="] as const
+const PS_FIELDS = "pid=,ppid=,pgid=,uid=,gid=,lstart=,command="
 const MAX_OUTPUT_BYTES = 1024 * 1024
 const MAX_SNAPSHOT_ROWS = 65_536
 const COMMAND_OPTIONS = {
@@ -165,13 +165,13 @@ const executeCommand: DarwinCommandExecutor = async (file, args, options) => new
   })
 })
 
-async function command(execute: DarwinCommandExecutor, file: string, args: readonly string[], missingProcess = false): Promise<string> {
+async function command(execute: DarwinCommandExecutor, file: string, args: readonly string[], allowAbsent = false): Promise<string> {
   try {
     await qualified(file)
     const result = await execute(file, args, COMMAND_OPTIONS)
-    if (missingProcess && result.exitCode === 1 && result.stdout === "" && result.stderr === "") return ""
+    if (allowAbsent && result.exitCode === 1 && result.stdout === "" && result.stderr === "") return ""
     if ((result.exitCode ?? 0) !== 0 || (result.stderr ?? "") !== "") throw unavailable(`${file} observation failed`)
-    if (missingProcess && result.stdout === "") throw unavailable(`${file} returned an empty successful observation`)
+    if (allowAbsent && result.stdout === "") throw unavailable(`${file} returned an empty successful observation`)
     if (typeof result.stdout !== "string") throw unavailable(`${file} returned non-text output`)
     if (Buffer.byteLength(result.stdout, "utf8") > MAX_OUTPUT_BYTES) throw unavailable(`${file} output exceeds 1 MiB`)
     return result.stdout
@@ -181,26 +181,25 @@ async function command(execute: DarwinCommandExecutor, file: string, args: reado
   }
 }
 
-async function snapshot(execute: DarwinCommandExecutor): Promise<Map<number, SnapshotRow>> {
-  try {
-    return parseSnapshot(await command(execute, PS, PS_ARGS))
-  } catch (error) {
-    if (error instanceof DarwinObservationUnavailable) throw error
-    throw unavailable("Darwin process snapshot is unavailable", error)
-  }
+async function groupSnapshot(execute: DarwinCommandExecutor, processGroupId: number): Promise<Map<number, SnapshotRow>> {
+  const output = await command(execute, PS, ["-ww", "-g", String(processGroupId), "-o", PS_FIELDS], true)
+  if (output === "") return new Map()
+  const rows = parseSnapshot(output)
+  if ([...rows.values()].some(row => row.processGroupId !== processGroupId)) throw unavailable(`Darwin process group ${processGroupId} returned unexpected rows`)
+  return rows
 }
 
 async function processRow(execute: DarwinCommandExecutor, pid: number): Promise<SnapshotRow | null> {
-  const output = await command(execute, PS, ["-ww", "-p", String(pid), "-o", PS_ARGS[2]], true)
+  const output = await command(execute, PS, ["-ww", "-p", String(pid), "-o", PS_FIELDS], true)
   if (output === "") return null
   const rows = parseSnapshot(output)
   if (rows.size !== 1 || !rows.has(pid)) throw unavailable(`Darwin PID ${pid} returned unexpected rows`)
   return rows.get(pid)!
 }
 
-function stableGroup(first: Map<number, SnapshotRow>, second: Map<number, SnapshotRow>, processGroupId: number): SnapshotRow[] | null {
-  const firstRows = [...first.values()].filter(row => row.processGroupId === processGroupId).sort((left, right) => left.pid - right.pid)
-  const secondRows = [...second.values()].filter(row => row.processGroupId === processGroupId).sort((left, right) => left.pid - right.pid)
+function stableGroup(first: Map<number, SnapshotRow>, second: Map<number, SnapshotRow>): SnapshotRow[] | null {
+  const firstRows = [...first.values()].sort((left, right) => left.pid - right.pid)
+  const secondRows = [...second.values()].sort((left, right) => left.pid - right.pid)
   if (firstRows.length !== secondRows.length) return null
   for (let index = 0; index < firstRows.length; index += 1) {
     if (!sameRow(firstRows[index]!, secondRows[index]!)) return null
@@ -231,7 +230,7 @@ export function createDarwinAdapter(execute: DarwinCommandExecutor = executeComm
       if (!positiveSafeInteger(processGroupId)) return []
       const boot = await bootId()
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const rows = stableGroup(await snapshot(execute), await snapshot(execute), processGroupId)
+        const rows = stableGroup(await groupSnapshot(execute, processGroupId), await groupSnapshot(execute, processGroupId))
         if (rows !== null) return rows.map(row => identity(boot, row))
       }
       throw unavailable(`Darwin process group ${processGroupId} did not have a stable complete observation`)

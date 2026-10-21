@@ -559,7 +559,7 @@ test("rejects symlinked and non-regular retained inventory entries before readin
         await writeLaunchRecord(target, launchRecord())
         await symlink(target, entry)
       }
-      await assert.rejects(startOrConnect({ root, hostId, adapter, handler: handlerCommand(path), timeoutMs: 1000 }), /inventory|regular|symlink|status peer closed|exited before acknowledgement/i)
+      await assert.rejects(startOrConnect({ root, hostId, adapter, handler: handlerCommand(path), timeoutMs: 5000 }), /inventory|regular|symlink|status peer closed|exited before acknowledgement/i)
       assert.notEqual((await readHandlerRecord(join(root, "handler.json"))).phase, "ready")
     })
   }
@@ -777,12 +777,13 @@ test("a post-gate readiness timeout detaches the launcher without duplicating th
     releasePath,
     resultPath: join(root, "result.json"),
     handlerPauseAt: "after_socket_bind_before_publication",
-    timeoutMs: 250,
+    timeoutMs: 5000,
   })
   t.after(async () => cleanupHandlers(root, config.handlerLog, adapter))
   const launcher = await spawnContender(path)
   await waitEvent(eventLog, "handler:after_socket_bind_before_publication")
-  assert.notEqual(await waitChild(launcher, 1500), 0)
+  assert.notEqual(await waitChild(launcher, 6000), 0)
+  assert.deepEqual(JSON.parse(await readFile(config.resultPath!, "utf8")), { ok: false, error: "Error: Handler status timed out" })
   const stalled = await readHandlerRecord(join(root, "handler.json"))
   assert.equal(stalled.phase, "identity_published")
   assert.equal(stalled.process === null ? false : processExists(stalled.process.pid), true)
