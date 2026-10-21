@@ -42,6 +42,7 @@ if (mode === "oversized") {
     await scope.observe(ref)
     const snapshot = () => ({ failures: scope.snapshot().failures, children: [], launches: scope.snapshot().launches.map(launch => ({ launch, ownGroup: mode === "live-disconnect", pipesClosed: mode !== "open-pipe" })) })
     const initial = snapshot()
+    if (mode === "unspawned") Object.assign(initial.launches[0]!.launch, { pid: null, identity: null, error: null })
     if (mode === "bad-observation") initial.launches[0]!.launch.identity!.parentPid = 999
     if (mode === "bad-late-observation") initial.launches[0]!.launch.identity = null
     const first = await request({ type: "snapshot", phase: "progress", snapshot: initial })
@@ -75,8 +76,7 @@ if (mode === "oversized") {
       }
       if (mode === "replay") sequence = 0
       if (mode === "seal-complete" || mode === "live-disconnect") {} else if (mode === "seal-eof") {
-        void request({ type: "snapshot", phase: "before-intentional-exit", snapshot: snapshot() })
-        socket.destroy()
+        socket.end(JSON.stringify({ type: "snapshot", seq: ++sequence, phase: "before-intentional-exit", snapshot: snapshot() }))
       } else process.stdout.write(JSON.stringify(await request(frame)) + "\n")
     }
     await closed

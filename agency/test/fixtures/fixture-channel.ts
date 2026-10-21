@@ -294,12 +294,16 @@ export function connectFixture(config: FixtureConnection, local: FixtureScope): 
     try { await deadline((async () => { await send(socket, { ...frame, seq }); await reply.promise })(), "fixture send and acknowledgement", Math.min(access.deadlineMs, 15000, reportingUntil - Date.now())) }
     finally { replies.delete(seq) }
   }
-  const snapshot = (): Snapshot => ({
-    failures: local.snapshot().failures, children: [...children.values()],
-    launches: local.snapshot().launches.map(launch => ({ launch, ownGroup: access.ownGroup(launch.ref), pipesClosed: (access.child(launch.ref)?.stdio?.slice(3) ?? []).every(stream => stream == null || "closed" in stream && stream.closed === true) })),
-  })
+  const snapshot = (phase: SnapshotPhase): Snapshot => {
+    const result = local.snapshot(), launches = result.launches.filter(launch => phase !== "progress" || launch.pid !== null || launch.error !== null)
+    const included = new Set(launches.filter(launch => launch.pid !== null).map(launch => launch.ref.launchId))
+    return {
+      failures: result.failures, children: [...children.values()].filter(child => included.has(child.ownerRef.launchId)),
+      launches: launches.map(launch => ({ launch, ownGroup: access.ownGroup(launch.ref), pipesClosed: (access.child(launch.ref)?.stdio?.slice(3) ?? []).every(stream => stream == null || "closed" in stream && stream.closed === true) })),
+    }
+  }
   const publish = (phase: SnapshotPhase) => {
-    chain = chain.then(async () => { await hello.promise; if (error) throw error; if (reportingClosed) throw new Error("Fixture reporting closed"); if (phase === "progress") queued = false; await request({ type: "snapshot", phase, snapshot: snapshot() }) })
+    chain = chain.then(async () => { await hello.promise; if (error) throw error; if (reportingClosed) throw new Error("Fixture reporting closed"); if (phase === "progress") queued = false; await request({ type: "snapshot", phase, snapshot: snapshot(phase) }) })
     void chain.catch(fail)
     return chain
   }

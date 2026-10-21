@@ -12,7 +12,7 @@ import { createDarwinAdapter } from "../src/platform/darwin.js"
 import { createLinuxAdapter } from "../src/platform/linux.js"
 import { connectFixture, startFixtureReceiver } from "./fixtures/fixture-channel.js"
 
-const rawModes = ["foreign-run", "foreign-ref", "wrong-pid", "replay", "unknown-field", "conflict", "omitted", "open-pipe", "outstanding", "unknown-message", "oversized", "sealed-late", "bad-observation", "bad-late-observation", "seal-eof"]
+const rawModes = ["foreign-run", "foreign-ref", "wrong-pid", "replay", "unknown-field", "conflict", "omitted", "open-pipe", "outstanding", "unknown-message", "oversized", "sealed-late", "bad-observation", "bad-late-observation", "seal-eof", "unspawned"]
 
 async function fixture(mode: string, t: test.TestContext) {
   const root = await mkdtemp("/tmp/agv-")
@@ -138,6 +138,7 @@ for (const mode of rawModes) test("refuses invalid or incomplete source evidence
   const result = await f.scope.finish()
   assert.equal(result.state, "incomplete")
   assert.ok(result.failures.length > 0)
+  if (mode === "seal-eof") assert.match(result.failures.join(";"), /Truncated fixture frame/)
   if (mode === "bad-observation") assert.equal(result.launches.filter(value => value.role === "raw-leaf").length, 1)
 })
 
@@ -151,6 +152,33 @@ for (const mode of ["failed-spawn", "largest"]) test("failed native spawn snapsh
   assert.equal(failed.length, mode === "largest" ? 32 : 1)
   assert.ok(failed.every(value => value.pid === null && value.close === true && value.error !== null))
   assert.ok(Buffer.byteLength(JSON.stringify(result)) < 65536)
+})
+
+for (const mode of ["pending-spawn", "pending-spawn-source"]) test("pending spawn progress preserves the later failed launch and complete source: " + mode, async t => {
+  const f = await fixture(mode, t)
+  await f.closed
+  assert.equal(f.child.exitCode, 0, f.errors() + JSON.stringify(f.scope.snapshot().failures))
+  assert.match(f.output(), /pending=\{"pid":null,"error":null\}/)
+  await f.receiver.settle([f.ref])
+  const result = await f.scope.finish()
+  assert.equal(result.state, "settled", JSON.stringify(result.failures))
+  const failed = result.launches.find(value => value.role === "pending-provider")!
+  assert.ok(failed)
+  assert.equal(failed.pid, null)
+  assert.equal(failed.error, "delayed spawn failure")
+  assert.equal(failed.close, true)
+  assert.equal(failed.absent, true)
+})
+
+test("final source completion rejects a remaining unspawned intent", async t => {
+  const f = await fixture("unspawned-complete", t)
+  await f.closed
+  assert.equal(f.child.exitCode, 0, f.errors())
+  assert.match(f.output(), /retained-original=.*unspawned intent/)
+  const result = await f.scope.finish()
+  assert.equal(result.state, "incomplete")
+  assert.match(result.failures.join(";"), /Unspawned report/)
+  await assert.rejects(f.receiver.settle([f.ref]), /source|report|complete|Unspawned/i)
 })
 
 test("application IPC rejects unknown messages and disconnects independently of reporting", async t => {

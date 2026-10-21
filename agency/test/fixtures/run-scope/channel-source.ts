@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process"
+import { spawn, type ChildProcess } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { access, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { createNativeFixtureScope } from "../run-scope.js"
@@ -12,6 +13,21 @@ const client = connectFixture(config, scope)
 process.stdout.write("application-started\n")
 if (mode === "wrong-token") {
   await client.finish().catch(() => {})
+} else if (mode === "pending-spawn" || mode === "pending-spawn-source") {
+  const ref = scope.intent("pending-provider")
+  if (mode === "pending-spawn-source") client.connection(ref)
+  const child = scope.spawn(ref, () => Object.assign(new EventEmitter(), { pid: undefined, exitCode: null, signalCode: null, stdio: [] }) as unknown as ChildProcess, { closeAdmission() {} })
+  client.report()
+  await client.checkpoint()
+  const pending = scope.snapshot().launches[0]!
+  process.stdout.write("pending=" + JSON.stringify({ pid: pending.pid, error: pending.error }) + "\n")
+  child.emit("error", new Error("delayed spawn failure"))
+  child.emit("close", -13, null)
+  client.report()
+  await client.finish()
+} else if (mode === "unspawned-complete") {
+  scope.intent("unspawned-provider")
+  try { await client.finish() } catch (error) { process.stdout.write("retained-original=" + String(error) + "\n") }
 } else if (mode === "throw") {
   const ref = scope.intent("thrown-provider")
   try { scope.spawn(ref, () => { throw new Error("synchronous spawn failure") }, { closeAdmission() {} }) } catch {}
