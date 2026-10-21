@@ -1,5 +1,5 @@
 import { fixtureBridgeSpawner } from "./fixtures/fixture-bridge.js"
-import { fixtureLeafSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
+import { fixtureRuntime, fixtureLeafSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { createHostRuntimeClient } from "../src/hosts/runtime.js"
 import { runtimeNetwork } from "./host-runtime-support.js"
@@ -23,6 +23,8 @@ import { acpFixture } from "./acp-support.js"
 import { until, fileExists } from "./control-support.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { connectBridge } from "../src/bridge/ssh.js"
+import { shutdownFixtureHandler } from "./agent-support.js"
+import { PROTOCOL } from "../src/control/protocol.js"
 import { TASK_PROTOCOL, parseTaskReply } from "../src/tasks/protocol.js"
 
 for (const tasks of ["hold", "reject"] as const) test(`task initialization ${tasks} preserves core and advertised capabilities`, { timeout: 60000 }, async t => {
@@ -49,8 +51,72 @@ for (const tasks of ["hold", "reject"] as const) test(`task initialization ${tas
 test("Handler shutdown completes while task initialization remains held", { timeout: 60000 }, async t => {
   const f = await acpFixture(t, { tasks: "hold",  })
   await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
+  const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  assert.ok(record.process)
+  assert.equal(await fileExists(join(f.root, "release-tasks")), false)
+  const reply = await f.control({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.ok(reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted")
+  assert.equal(reply.handlerGeneration, record.generation)
+  assert.equal(reply.result.handlerGeneration, record.generation)
+  const completed = await until(async () => await fileExists(join(f.root, "handler-completed")) ? JSON.parse(await readFile(join(f.root, "handler-completed"), "utf8")) as { generation: string; resources: string[] } : undefined)
+  assert.equal(completed.generation, record.generation)
+  t.diagnostic("Handler completed with held initialization: " + JSON.stringify(completed))
+  await f.waitHandlerExit()
+  assert.equal(await fileExists(join(f.root, "release-tasks")), false)
+  await f.verifyZeroSurvivors()
+  const { scope } = await fixtureRuntime(), launch = scope.snapshot().launches.find(value => value.pid === record.process!.pid)
+  assert.ok(launch)
+  await until(async () => scope.snapshot().launches.find(value => value.ref.launchId === launch.ref.launchId)?.close === true ? true : undefined)
+  const final = scope.snapshot().launches.find(value => value.ref.launchId === launch.ref.launchId)!
+  assert.deepEqual(final.exit, { code: 0, signal: null })
+  assert.equal(final.close, true)
+  assert.equal(await f.observe(record.process.pid), null)
+})
+test("held initialization cannot publish after Handler completion while its fixture source is live", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { tasks: "hold", pauseAt: "handler-completed" })
+  await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
+  const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  assert.ok(record.process)
+  let signals = 0
+  await assert.rejects(shutdownFixtureHandler({ generation: record.generation, process: record.process }, {
+    request: () => f.control({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }),
+    track: async () => {
+      await f.waitBarrier()
+      const completed = JSON.parse(await readFile(join(f.root, "handler-completed"), "utf8")) as { generation: string }
+      assert.equal(completed.generation, record.generation)
+    },
+    signal: async () => { signals++ },
+    absent: async () => { await until(async () => await f.observe(record.process!.pid) === null ? true : undefined, 100) },
+  }), /fixture observation timed out/)
+  assert.equal(signals, 0)
+  assert.ok(await f.observe(record.process.pid))
+  assert.equal(await fileExists(join(f.root, "release-tasks")), false)
+  await writeFile(join(f.root, "release-tasks"), "released after Handler completion", { mode: 0o600 })
+  await until(async () => await fileExists(join(f.root, "tasks-settled")) ? true : undefined)
+  await assert.rejects(readdir(join(f.paths.persistentRoot, "tasks")), { code: "ENOENT" })
+  await f.releaseBarrier()
+  await f.waitHandlerExit()
   await f.verifyZeroSurvivors()
 })
+
+test("a held release observed before Handler completion cannot initialize after shutdown", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { tasks: "hold", pauseAt: "tasks-released" })
+  await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
+  await writeFile(join(f.root, "release-tasks"), "released before Handler completion", { mode: 0o600 })
+  await f.waitBarrier()
+  const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  assert.ok(record.process)
+  const reply = await f.control({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.ok(reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted")
+  assert.equal(reply.result.handlerGeneration, record.generation)
+  await until(async () => await fileExists(join(f.root, "handler-completed")) ? true : undefined)
+  assert.equal(await fileExists(join(f.root, "tasks-settled")), false)
+  await f.releaseBarrier()
+  await f.waitHandlerExit()
+  await assert.rejects(readdir(join(f.paths.persistentRoot, "tasks")), { code: "ENOENT" })
+  await f.verifyZeroSurvivors()
+})
+
 test("routed Handler task reports through its configured local helper with relay absent", { timeout: 90000 }, async t => {
   const f = await acpFixture(t, {  }), record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
   const local = await connectHandlerBridge({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation }); t.after(() => local.close())

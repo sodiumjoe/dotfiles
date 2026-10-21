@@ -34,7 +34,7 @@ import type { AcpObservation } from "../src/agent/session-events.js"
 import type { ConfiguredLaunchContract, LaunchContract } from "../src/agent/contracts.js"
 import type { AgentCommand, AgentCommandV3, AgentRecord, AgentRecordV3, RuntimeLaunchSpec, LaunchSpec, SessionEvidence, StartInput, StartSelection, AgentTuple, CommandView } from "../src/agent/types.js"
 
-export type AgentHandlerOptions = { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean; providerScenario?: string }
+export type AgentHandlerOptions = { tasks?: "hold" | "reject"; entry?: "synthetic"; nativeAcp?: boolean; selectionCatalog?: boolean; legacyCount?: number; catalogState?: "missing" | "stale" | "prior-generation" | "failed"; pauseAt?: "tasks-released" | "handler-completed" | "intent" | "attempted" | "identity" | "session" | "prompt" | "ready" | "receipt" | "stop-intent" | "stop-cleanup" | "stop-verified" | "stop-receipt-before" | "stop-receipt-after"; failReceiptSync?: boolean; providerScenario?: string }
 
 export async function verifyFixtureProviderGroup(identity: ProcessIdentity, io: { readGroup(pid: number): Promise<ProcessIdentity[]>; observe(pid: number): Promise<ProcessIdentity | null> }): Promise<ProcessIdentity[] | null> {
   const members = await io.readGroup(identity.pid), again = await io.readGroup(identity.pid)
