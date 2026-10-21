@@ -376,8 +376,9 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         launches.set(result.ref.launchId, value)
       }
       value.authority = refusedAuthority
-      if (result.identity && (result.identity.parentPid !== parentPid || !sameProcess(result.identity, result.identity)
-        || ownGroup && (result.identity.processGroupId !== result.pid || result.identity.sessionId !== result.pid))) throw new Error("Fixture reported identity mismatch")
+      const identity = result.identity ?? value.result.identity
+      if (identity && (identity.parentPid !== parentPid || !sameProcess(identity, identity)
+        || ownGroup && (identity.processGroupId !== result.pid || identity.sessionId !== result.pid))) throw new Error("Fixture reported identity mismatch")
       if (prior) {
         if (prior.pid !== result.pid || prior.role !== result.role || prior.reporting !== result.reporting || value.ownGroup !== ownGroup
           || prior.exit && JSON.stringify(prior.exit) !== JSON.stringify(result.exit)

@@ -334,7 +334,7 @@ test("normal client completion retains a queued native check failure in its fina
   assert.match(result.failures.join(";"), /failed-source-leaf signal/)
 })
 
-test("rejected initial parent identity grants neither direct nor group signal authority while the source is live", async () => {
+test("rejected initial identity cannot regain direct or group signal authority through a null-identity snapshot", async () => {
   const scope = createNativeFixtureScope({ runId: crypto.randomUUID(), workerFile: "rejected-parent", deadlineMs: 5000 })
   const leafCode = "process.on('SIGTERM',()=>process.stdout.write('delivered-signal\\n'));process.stdout.write('ready\\n');setTimeout(()=>process.exit(0),3000)"
   const sourceCode = `const {spawn}=require('node:child_process');process.on('SIGTERM',()=>process.stdout.write('delivered-owner\\n'));const child=spawn(process.execPath,['-e',${JSON.stringify(leafCode)}],{stdio:['ignore','pipe','ignore']});child.stdout.on('data',chunk=>{process.stdout.write(chunk);if(String(chunk).includes('ready'))process.stdout.write('leaf-pid='+child.pid+'\\n')});child.once('close',()=>process.exit(0))`
@@ -349,11 +349,17 @@ test("rejected initial parent identity grants neither direct nor group signal au
   const rejected = { ...access.result(source), ref: { runId: source.runId, launchId: crypto.randomUUID() }, role: "rejected-leaf", ownerId: source.launchId, pid, identity }
   await assert.rejects(access.accept(rejected, 999, false, () => access.sourceAlive(source)), /reported identity mismatch/)
   assert.equal(child.exitCode, null)
+  let followup: unknown, direct: unknown, group: unknown
   try {
-    await assert.rejects(scope.signal(rejected.ref, "SIGTERM"), /terminal|missing identity|authority/i)
-    await assert.rejects(scope.signal(source, "SIGTERM"), /Unregistered fixture group member/)
+    followup = await access.accept({ ...rejected, identity: null }, 999, false, () => access.sourceAlive(source)).then(() => null, error => error)
+    direct = await scope.signal(rejected.ref, "SIGTERM").then(() => null, error => error)
+    group = await scope.signal(source, "SIGTERM").then(() => null, error => error)
   } finally { await closed }
   assert.doesNotMatch(output, /delivered-signal|delivered-owner/)
+  assert.match(String(followup), /reported identity mismatch/)
+  assert.match(String(direct), /terminal|missing identity|authority/i)
+  assert.match(String(group), /Unregistered fixture group member/)
+  assert.deepEqual(access.result(rejected.ref).identity, identity)
   const result = await scope.finish()
   assert.equal(result.state, "incomplete")
   assert.equal(result.launches.filter(value => value.role === "rejected-leaf").length, 1)
