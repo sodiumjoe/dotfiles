@@ -1,3 +1,4 @@
+import { nativeFixtureAccess } from "./fixtures/run-scope.js"
 import { fixtureRuntime, fixtureLeafSpawner, fixtureSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
@@ -125,14 +126,14 @@ export async function providerFixture(t: TestContext, backendId: ProviderId = "c
 }
 
 export async function acpFixture(t: TestContext, options: AgentHandlerOptions = {}) {
-  const cleanup: Array<() => unknown> = [], context = Object.create(t) as TestContext
+  const cleanup: Array<{ close: () => unknown; ownerBounded: boolean }> = [], context = Object.create(t) as TestContext
   context.diagnostic = t.diagnostic.bind(t)
-  context.after = fn => { cleanup.push(() => fn?.(t, error => { if (error) throw error })) }
+  context.after = fn => { cleanup.push({ close: () => fn?.(t, error => { if (error) throw error }), ownerBounded: false }) }
   t.after(async () => {
     const failures: unknown[] = []
-    for (const close of cleanup.reverse()) {
+    for (const { close, ownerBounded } of cleanup.reverse()) {
       let timer: NodeJS.Timeout | undefined
-      try { await Promise.race([Promise.resolve().then(close), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("ACP owner cleanup deadline")), 15000) })]) }
+      try { if (ownerBounded) await close(); else await Promise.race([Promise.resolve().then(close), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("ACP owner cleanup deadline")), 15000) })]) }
       catch (error) { failures.push(error) } finally { clearTimeout(timer) }
     }
     if (failures.length) throw new AggregateError(failures, "ACP fixture cleanup incomplete")
@@ -148,7 +149,7 @@ export async function acpFixture(t: TestContext, options: AgentHandlerOptions = 
     assert.ok(target)
     return target
   }
-  return { ...f, environment, tuple, onCleanup: (close: () => Promise<void>) => context.after(close), diagnostic: (message: string) => t.diagnostic(message),
+  return { ...f, environment, tuple, onCleanup: (close: () => Promise<void>) => { cleanup.push({ close, ownerBounded: true }) }, diagnostic: (message: string) => t.diagnostic(message),
     async connect() {
       const socket = createConnection(join(f.paths.runtimeRoot, "acp.sock"))
       socket.write(JSON.stringify({ jsonrpc: "2.0", method: "agency/connect", params: { handlerGeneration: (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation, environment } }) + "\n")
@@ -188,14 +189,15 @@ export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
       AGENCY_FIXTURE_PROCESS: fileURLToPath(new URL("./fixtures/editor-process.js", import.meta.url)),
       AGENCY_FIXTURE_CONTROL: fileURLToPath(new URL("./fixtures/acp-control.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
   }, { source: true })
+  const editorRef = runtime.scope.snapshot().launches.find(value => value.pid === child.pid)!.ref
   const terminal = new Promise<void>(resolve => child.once("close", () => resolve()))
   let cleanup: Promise<void> | undefined, exited = false, stderr = ""
   const endpoints = new Set<number>()
   child.once("exit", () => { exited = true })
   child.stderr!.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-8192) })
-  const lua = async (expression: string): Promise<JsonValue> => {
+  const lua = async (expression: string, timeoutMs = 15000): Promise<JsonValue> => {
     const source = `(function() local value = ${expression}; local endpoints = {}; for _,client in pairs(require('agentic.acp.agent_instance')._instances) do if client.transport and client.transport.pid then endpoints[#endpoints+1]=client.transport.pid end end; return vim.json.encode({value=value == nil and vim.NIL or value,endpoints=endpoints,registry=AgencyFixture.registry()}) end)()`
-    const result = await exec(executable, ["--server", socket, "--remote-expr", `luaeval(${JSON.stringify(source)})`], { timeout: 15000, maxBuffer: 1048576 })
+    const result = await exec(executable, ["--server", socket, "--remote-expr", `luaeval(${JSON.stringify(source)})`], { timeout: timeoutMs, maxBuffer: 1048576 })
     const envelope = JSON.parse(result.stdout.trim()) as { value: JsonValue; endpoints: number[]; registry: { launches: Array<{pid: number | null; reporting: string}> } }
     for (const pid of envelope.endpoints) endpoints.add(pid)
     for (const launch of envelope.registry.launches) if (launch.reporting === "editor-endpoint" && launch.pid) endpoints.add(launch.pid)
@@ -207,26 +209,44 @@ export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
     return cleanup
   }
   async function cleanupEditor(): Promise<void> {
+    const deadline = Date.now() + 15000, reportingUntil = Date.now() + 5000, failures: unknown[] = []
+    const remaining = (limitMs: number, reserveMs = 0) => Math.max(1, Math.min(limitMs, deadline - Date.now() - reserveMs))
     let reportingFailure: unknown
     if (!exited) {
       for (const expression of ["AgencyFixture.close_all()", "AgencyFixture.registry()", "AgencyFixture.complete()", "AgencyFixture.registry()"] ) {
+        const timeoutMs = reportingUntil - Date.now()
+        if (timeoutMs <= 0) { reportingFailure ??= new Error("editor reporting deadline"); break }
         try {
-          const value = await lua(expression)
+          const value = await lua(expression, timeoutMs)
           if (expression === "AgencyFixture.registry()") await writeFile(join(root, "registry.json"), JSON.stringify(value), { mode: 0o600 })
-        } catch (error) { reportingFailure ??= error; await writeFile(join(root, "editor-failure.txt"), String(reportingFailure)) }
+        } catch (error) { reportingFailure ??= error }
       }
-      try { await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("(function() vim.schedule(function() vim.cmd(\'qa!\') end); return true end)()")'], { timeout: 5000 }) } catch (error) { reportingFailure ??= error }
-      try { await until(async () => exited ? true : undefined, 5000) } catch { await signalFixturePid(child.pid!, "SIGKILL"); await until(async () => exited ? true : undefined, 5000) }
+      try { await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("(function() vim.schedule(function() vim.cmd(\'qa!\') end); return true end)()")'], { timeout: remaining(2000, 7000) }) } catch {}
+      try { await until(async () => exited ? true : undefined, remaining(1000, 7000)) }
+      catch {
+        try { await nativeFixtureAccess(runtime.scope).signalPid(editorRef, "SIGKILL", remaining(4000, 3000)) }
+        catch (error) { failures.push(error) }
+      }
     }
-    await Promise.race([terminal, new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error("editor close deadline")), 5000); timer.unref() })])
-    assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
-    f.diagnostic(`fixture editor cleanup verified: pid ${child.pid}`)
+    let timer: NodeJS.Timeout | undefined
+    try {
+      await Promise.race([terminal, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("editor close deadline")), remaining(3000)) })])
+      assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
+      f.diagnostic(`fixture editor cleanup verified: pid ${child.pid}`)
+    } catch (error) { failures.push(error) } finally { clearTimeout(timer) }
     for (const pid of endpoints) {
-      await until(async () => { try { process.kill(pid, 0); return undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return true } }, 5000)
-      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
-      f.diagnostic(`fixture endpoint cleanup verified: pid ${pid}`)
+      try {
+        await until(async () => { try { process.kill(pid, 0); return undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return true } }, remaining(3000))
+        assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
+        f.diagnostic(`fixture endpoint cleanup verified: pid ${pid}`)
+      } catch (error) { failures.push(error) }
     }
-    if (reportingFailure) throw reportingFailure
+    if (reportingFailure) {
+      nativeFixtureAccess(runtime.scope).fault(new Error("Editor reporting incomplete: " + String(reportingFailure)), editorRef)
+      try { await writeFile(join(root, "editor-failure.txt"), String(reportingFailure)) } catch (error) { failures.push(error) }
+      failures.unshift(reportingFailure)
+    }
+    if (failures.length) throw new AggregateError(failures, "Editor cleanup incomplete: " + failures.map(String).join("; "))
   }
   f.onCleanup(exit)
   await until(async () => {

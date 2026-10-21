@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { acpFixture, editorFixture } from "./acp-support.js"
+import { fixtureRuntime } from "./fixtures/fixture-spawn.js"
 
 test("a fresh native editor loads an existing logical agent without creating or canceling a conversation", { timeout: 60000 }, async t => {
   const f = await acpFixture(t), peer = await f.connect()
@@ -68,12 +69,13 @@ for (const mode of ["timeout", "dispose"]) test("editor control keeps native com
   await editor.exit()
 })
 
-for (const mode of ["control-body", "editor-body", "editor-death", "editor-complete-failure"]) test("nested fixture retains evidence after " + mode, { timeout: 60000 }, async () => {
+for (const mode of ["control-body", "editor-body", "editor-death", "editor-complete-failure", "editor-report-stall"]) test("nested fixture retains evidence after " + mode, { timeout: 60000 }, async () => {
   const { execFile } = await import("node:child_process")
   const { mkdtemp, readFile, readdir } = await import("node:fs/promises")
   const { fileURLToPath } = await import("node:url")
   const { join } = await import("node:path")
   const root = await mkdtemp("/tmp/agv-"), runId = crypto.randomUUID()
+  ;(await fixtureRuntime()).scope.artifact(root)
   const entry = fileURLToPath(new URL("../../test/fixtures/run-scope/lifecycle.test.mjs", import.meta.url))
   const env = { ...process.env, AGENCY_LIFECYCLE_CASE: mode, AGENCY_FIXTURE_DIST: fileURLToPath(new URL("../", import.meta.url)), AGENCY_TEST_WORKER_RUN: JSON.stringify({ runId, workerFiles: [entry], runRoot: root, revision: "stage5" }) }
   delete (env as NodeJS.ProcessEnv).NODE_TEST_CONTEXT
@@ -88,8 +90,17 @@ for (const mode of ["control-body", "editor-body", "editor-death", "editor-compl
   const boundaries = await readdir(join(root, "workers"))
   assert.equal(boundaries.length, 1)
   const boundary = JSON.parse(await readFile(join(root, "workers", boundaries[0]!), "utf8"))
-  assert.equal(boundary.result.state, ["editor-death", "editor-complete-failure"].includes(mode) ? "incomplete" : "settled", JSON.stringify(boundary.result.failures))
+  assert.equal(boundary.result.state, ["editor-death", "editor-complete-failure", "editor-report-stall"].includes(mode) ? "incomplete" : "settled", JSON.stringify(boundary.result.failures))
   assert.ok(boundary.result.artifacts.includes(retained))
+  if (mode === "editor-report-stall") {
+    const cleanup = JSON.parse(/editor-cleanup=([^\n]+)/.exec(result.stdout)![1]!)
+    assert.equal(cleanup.close, true)
+    assert.ok(cleanup.elapsedMs < 15000)
+    const editor = boundary.result.launches.find((item: any) => item.pid === cleanup.pid)
+    assert.equal(editor.close, true)
+    assert.deepEqual(editor.exit, { code: null, signal: "SIGKILL" })
+    assert.match(boundary.result.failures.join(";"), /source|complete|lost/)
+  }
   if (mode === "editor-complete-failure") {
     assert.match(boundary.result.failures.join(";"), /Outstanding editor control command/)
     assert.ok(boundary.result.launches.some((item: any) => item.reporting === "editor-control" && item.exit === null && item.absent === true))

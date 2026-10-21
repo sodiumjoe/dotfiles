@@ -48,6 +48,7 @@ export async function signalOwnedProcess(adapter: PlatformAdapter, request: Owne
   }
   await checkOwner()
   if (!await checkTarget()) return "already-absent"
+  if (!live()) throw new Error("Fixture terminal identity")
   send(group ? -expected.processGroupId : expected.pid, signal)
   return "delivered"
 }

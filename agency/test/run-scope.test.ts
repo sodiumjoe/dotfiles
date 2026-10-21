@@ -10,7 +10,7 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-function fixture(deadlineMs = 1000, reporting: import("./fixtures/run-scope.js").Reporting = "direct") {
+function fixture(deadlineMs = 1000, reporting: import("./fixtures/run-scope.js").Reporting = "direct", ownGroup = false) {
   const identity: ProcessIdentity = { bootId: "boot", pid: 123, birth: "10:fixture", parentPid: process.pid, processGroupId: 123, sessionId: 123, uid: 1, gid: 1 }
   const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null }) as unknown as ChildProcess
   let current: ProcessIdentity | null = identity
@@ -22,7 +22,7 @@ function fixture(deadlineMs = 1000, reporting: import("./fixtures/run-scope.js")
     signalGroup: async () => { throw new Error("synthetic adapter cannot signal") },
   }
   const scope = createSyntheticFixtureScope({ runId: "run", workerFile: "scope.test", deadlineMs, adapter, signal: (pid, value) => { signals.push([pid, value]) } })
-  const ref = scope.intent("provider", { reporting })
+  const ref = scope.intent("provider", { reporting, ownGroup })
   const register = () => scope.spawn(ref, () => child, { closeAdmission() {} })
   const exit = (close = true) => { current = null; Object.assign(child, { exitCode: 0 }); child.emit("exit", 0, null); if (close) child.emit("close", 0, null) }
   return { child, scope, ref, register, exit, adapter, identity, signals, setCurrent(value: ProcessIdentity | null) { current = value } }
@@ -313,4 +313,23 @@ for (const state of ["absent", "terminal", "unavailable"]) test("launch capture 
   }
   await assert.rejects(captureOwnedProcess(f.adapter, 123, process.pid, true))
   assert.deepEqual(f.signals, [])
+})
+
+for (const delayed of ["process", "group"]) test("expired signal authorization cannot deliver after a delayed " + delayed + " observation", async () => {
+  const f = fixture(40, "direct", delayed === "group"), held = deferred<ProcessIdentity | null>(), group = deferred<ProcessIdentity[]>()
+  const ref = f.ref
+  f.register()
+  await f.scope.observe(ref)
+  if (delayed === "process") f.adapter.readProcess = () => held.promise
+  else f.adapter.readGroup = () => group.promise
+  await assert.rejects(f.scope.signal(ref, "SIGTERM"), /signal authorization deadline/)
+  const result = await f.scope.finish()
+  assert.equal(result.state, "incomplete")
+  assert.match(result.failures.join(";"), /signal authorization deadline/)
+  assert.equal(f.child.exitCode, null)
+  held.resolve(f.identity); group.resolve([f.identity])
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(f.signals, [])
+  assert.equal(f.scope.snapshot().state, "incomplete")
+  f.exit()
 })

@@ -46,7 +46,7 @@ export type NativeFixtureAccess = {
   settleChecks(refs?: readonly LaunchRef[]): Promise<void>
   declareExec(ref: LaunchRef, image: string): void
   admitSource(ref: LaunchRef): Promise<ProcessIdentity | null>
-  signalPid(ref: LaunchRef, signal: NodeJS.Signals): Promise<void>
+  signalPid(ref: LaunchRef, signal: NodeJS.Signals, deadlineMs?: number): Promise<void>
   sourceAlive(ref: LaunchRef): Promise<boolean>
   result(ref: LaunchRef): FixtureLaunchResult
   child(ref: LaunchRef): ChildProcess | null
@@ -90,6 +90,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   const finalizers: Array<{ label: string; work: () => Promise<void> }> = []
   let phase: "open" | "operations" | "finalizers" | "closed" = "open", pending: Promise<FixtureResult> | undefined
   let until = Infinity, frozen = false
+  const refusedAuthority = async () => false
   const execImages = new Map<string, string>()
   const checks = new Map<Promise<unknown>, string>(), faults: Array<{ text: string; ref: LaunchRef | undefined }> = [], boundaries: Array<() => Promise<void>> = []
   const fail = (label: string, error: unknown, ref?: LaunchRef) => { const text = label + ": " + message(error); failures.push(text); faults.push({ text, ref }) }
@@ -175,25 +176,29 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       }
     }
   }
-  const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false): Promise<boolean> => {
-      const value = find(ref)
+  const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, deadlineMs = 15000): Promise<boolean> => {
+      const value = find(ref), authorizationUntil = Math.min(until, Date.now() + Math.min(options.deadlineMs, deadlineMs, 15000))
+      let active = true
+      const authorized = () => active && Date.now() < Math.min(until, authorizationUntil) && live(value) && value.authority !== refusedAuthority
+      const authorize = <T>(label: string, work: () => Promise<T>) => bounded(label, work, authorizationUntil - Date.now())
       try {
         if (execImages.has(ref.launchId)) throw new Error("Fixture exec source not admitted")
         if (absentIsSettled && value.attempted && !live(value)) return false
-        if (absentIsSettled && value.result.pid && await bounded("signal absence", () => signalObservation(value.result.pid!), 15000) === null) return false
-        if (!value.attempted || !live(value) || !await bounded("signal owner", value.authority, 15000)) throw new Error("Fixture terminal or missing identity")
-        if (!value.result.identity && !value.remote) await observe(ref)
+        if (absentIsSettled && value.result.pid && await authorize("signal absence", () => signalObservation(value.result.pid!)) === null) return false
+        if (!value.attempted || !live(value) || !await authorize("signal owner", value.authority)) throw new Error("Fixture terminal or missing identity")
+        if (!value.result.identity && !value.remote) await authorize("signal observation", () => observe(ref))
         const expected = value.result.identity
         if (!expected || !live(value) || group && (expected.processGroupId !== expected.pid || expected.sessionId !== expected.pid)) throw new Error("Fixture missing identity")
-        const outcome = await bounded("signal authorization", () => signalOwnedProcess(adapter, {
-          identity: expected, parentPid: value.remote ? null : value.parentPid, knownMembers: [...launches.values()].flatMap(known => known.result.identity ? [known.result.identity] : []), signal, group,
-        }, sendSignal, () => live(value)), 15000)
+        const outcome = await authorize("signal authorization", () => signalOwnedProcess(adapter, {
+          identity: expected, parentPid: value.remote ? null : value.parentPid, knownMembers: [...launches.values()].filter(known => known.authority !== refusedAuthority).flatMap(known => known.result.identity ? [known.result.identity] : []), signal, group,
+        }, sendSignal, authorized))
         if (outcome === "already-absent" && !absentIsSettled) throw new Error("Fixture identity mismatch")
-        if (group) for (const member of [...launches.values()].flatMap(known => known.result.identity && known.result.identity.processGroupId === expected.processGroupId ? [known.result.identity] : [])) {
+        if (group) for (const member of [...launches.values()].filter(known => known.authority !== refusedAuthority).flatMap(known => known.result.identity && known.result.identity.processGroupId === expected.processGroupId ? [known.result.identity] : [])) {
           if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
         }
         return outcome === "delivered"
       } catch (error) { value.failed = true; fail(value.result.role + " signal", error, ref); throw error }
+      finally { active = false }
   }
   const deliver: typeof deliverImpl = (...args) => {
     const work = deliverImpl(...args)
@@ -332,7 +337,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         return structuredClone(current)
       } catch (error) { value.failed = true; fail(value.result.role + " exec", error, ref); closeAdmission(value); throw error }
     },
-    signalPid: async (ref, signal) => { await deliver(ref, signal, false, true) },
+    signalPid: async (ref, signal, deadlineMs) => { await deliver(ref, signal, false, true, deadlineMs) },
     async sourceAlive(ref) {
       const value = find(ref), expected = value.result.identity
       if (!live(value) || !expected) return false
@@ -366,11 +371,11 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       if (!value) {
         let close!: () => void
         const closed = new Promise<void>(resolve => { close = resolve })
-        value = { result: structuredClone(result), child: null, attempted: true, ownGroup, closed, close, admission: null, members: [], failed: false, remote: true, parentPid, authority }
+        value = { result: structuredClone(result), child: null, attempted: true, ownGroup, closed, close, admission: null, members: [], failed: false, remote: true, parentPid, authority: refusedAuthority }
         value.result.absent = null
         launches.set(result.ref.launchId, value)
-        value.authority = authority
       }
+      value.authority = refusedAuthority
       if (result.identity && (result.identity.parentPid !== parentPid || !sameProcess(result.identity, result.identity)
         || ownGroup && (result.identity.processGroupId !== result.pid || result.identity.sessionId !== result.pid))) throw new Error("Fixture reported identity mismatch")
       if (prior) {
@@ -381,6 +386,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         if (result.identity) prior.identity = structuredClone(result.identity)
         prior.exit = result.exit; prior.close = result.close; prior.error = result.error
       }
+      value.authority = authority
       if (value.result.close === true) value.close()
     },
     unavailable(ref, reason) { find(ref).result.unavailable = reason },
