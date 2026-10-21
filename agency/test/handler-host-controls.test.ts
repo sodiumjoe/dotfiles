@@ -139,3 +139,112 @@ for (const mode of ["changed", "closed"] as const) test("fixture bridge refuses 
   assert.equal(result.state, mode === "changed" ? "incomplete" : "settled")
   if (mode === "changed") assert.match(result.failures.join(";"), /identity/)
 })
+
+for (const transition of ["before kill", "absence observation", "identity observation", "first authorization observation", "last authorization observation"] as const) test("fixture bridge terminal transition during " + transition + " joins close and physical absence", async () => {
+  const { fixtureBridgeProcess } = await import("./fixtures/fixture-bridge.js")
+  const { createSyntheticFixtureScope } = await import("./fixtures/run-scope.js")
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const identity = { bootId: "b", pid: 456, parentPid: process.pid, processGroupId: 456, sessionId: 456, uid: 1, gid: 1, birth: "1:fixture" }
+  let current: typeof identity | null = identity, reads = 0, entered!: () => void, release!: () => void
+  const observing = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  const gateRead = transition === "absence observation" ? 2 : transition === "identity observation" ? 2 : transition === "first authorization observation" ? 3 : transition === "last authorization observation" ? 4 : 0
+  const signals: number[] = []
+  const scope = createSyntheticFixtureScope({ runId: transition, workerFile: "bridge", deadlineMs: 1000, adapter: { platform: "linux", bootId: async () => "b", readProcess: async () => { if (++reads === gateRead) { entered(); await gate }; return current }, readGroup: async () => [], signalGroup: async () => {} }, signal: pid => { signals.push(pid) } })
+  const ref = scope.intent("bridge")
+  const child = Object.assign(new EventEmitter(), { pid: 456, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), stdio: [], exitCode: null, signalCode: null, kill() { assert.fail("raw kill") } }) as unknown as import("node:child_process").ChildProcess
+  scope.spawn(ref, () => child, { closeAdmission() {} })
+  if (transition !== "identity observation") await scope.observe(ref)
+  const bridge = fixtureBridgeProcess(scope, ref, child)
+  let unrelated = false
+  scope.finalizer("unrelated", async () => { unrelated = true })
+  const terminal = () => { Object.assign(child, { exitCode: 0 }); child.emit("exit", 0, null) }
+  if (transition === "before kill") terminal()
+  assert.equal(bridge.kill(), true)
+  assert.equal(bridge.kill(), true)
+  if (transition !== "before kill") { await observing; terminal(); release() }
+  let finished = false
+  const pending = scope.finish().then(result => { finished = true; return result })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(unrelated, true)
+  assert.equal(finished, false)
+  assert.deepEqual(signals, [])
+  assert.deepEqual(scope.snapshot().launches[0]!.exit, { code: 0, signal: null })
+  assert.equal(scope.snapshot().launches[0]!.close, false)
+  assert.equal(scope.snapshot().launches[0]!.absent, null)
+  child.emit("close", 0, null)
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(finished, false)
+  current = null
+  const result = await pending
+  assert.equal(result.state, "settled", result.failures.join("; "))
+  assert.equal(result.launches[0]!.close, true)
+  assert.equal(result.launches[0]!.absent, true)
+  assert.deepEqual(result.operations, [])
+})
+
+for (const refusal of ["birth", "bootId", "parentPid", "processGroupId", "sessionId", "uid", "gid", "observedBoot", "observation"] as const) test("fixture bridge retains " + refusal + " refusal across terminal observation", async () => {
+  const { fixtureBridgeProcess } = await import("./fixtures/fixture-bridge.js")
+  const { createSyntheticFixtureScope } = await import("./fixtures/run-scope.js")
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const identity = { bootId: "b", pid: 654, parentPid: process.pid, processGroupId: 654, sessionId: 654, uid: 1, gid: 1, birth: "1:fixture" }
+  let boot = "b", current: typeof identity | null = identity, reads = 0, entered!: () => void, release!: () => void
+  const observing = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
+  const signals: number[] = []
+  const scope = createSyntheticFixtureScope({ runId: refusal, workerFile: "bridge", deadlineMs: 1000, adapter: { platform: "linux", bootId: async () => boot, readProcess: async () => {
+    if (++reads === (refusal === "observedBoot" ? 2 : 3)) { entered(); await gate; if (refusal === "observation") throw new Error("observation refused") }
+    return current
+  }, readGroup: async () => [], signalGroup: async () => {} }, signal: pid => { signals.push(pid) } })
+  const ref = scope.intent("bridge")
+  const child = Object.assign(new EventEmitter(), { pid: 654, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), stdio: [], exitCode: null, signalCode: null, kill() { assert.fail("raw kill") } }) as unknown as import("node:child_process").ChildProcess
+  scope.spawn(ref, () => child, { closeAdmission() {} })
+  await scope.observe(ref)
+  const bridge = fixtureBridgeProcess(scope, ref, child)
+  let unrelated = false
+  scope.finalizer("unrelated", async () => { unrelated = true })
+  bridge.kill(); bridge.kill()
+  await observing
+  if (refusal === "observedBoot") boot = "replacement-boot"
+  else if (refusal === "birth") current = { ...identity, birth: "2:replacement" }
+  else if (refusal === "bootId") current = { ...identity, bootId: "replacement-boot" }
+  else if (refusal !== "observation") current = { ...identity, [refusal]: identity[refusal] + 1 }
+  Object.assign(child, { exitCode: 0 }); child.emit("exit", 0, null); child.emit("close", 0, null)
+  release()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  current = null
+  const result = await scope.finish()
+  assert.equal(result.state, "incomplete")
+  assert.match(result.failures.join("; "), refusal === "observation" ? /observation refused/ : refusal === "observedBoot" ? /bridge signal:.*boot mismatch/ : /identity mismatch/)
+  assert.equal(unrelated, true)
+  assert.deepEqual(signals, [])
+  assert.equal(result.launches[0]!.close, true)
+  assert.equal(result.launches[0]!.absent, refusal === "observedBoot" ? null : true)
+})
+
+for (const missing of ["close", "absence", "observation completion"] as const) test("fixture bridge cleanup remains bounded and incomplete without " + missing, async () => {
+  const { fixtureBridgeProcess } = await import("./fixtures/fixture-bridge.js")
+  const { createSyntheticFixtureScope } = await import("./fixtures/run-scope.js")
+  const { EventEmitter } = await import("node:events")
+  const { PassThrough } = await import("node:stream")
+  const identity = { bootId: "b", pid: 789, parentPid: process.pid, processGroupId: 789, sessionId: 789, uid: 1, gid: 1, birth: "1:fixture" }
+  let current: typeof identity | null = identity, release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), signals: number[] = []
+  const scope = createSyntheticFixtureScope({ runId: missing, workerFile: "bridge", deadlineMs: 120, adapter: { platform: "linux", bootId: async () => "b", readProcess: async () => { if (missing === "observation completion") await gate; return current }, readGroup: async () => [], signalGroup: async () => {} }, signal: pid => { signals.push(pid) } })
+  const ref = scope.intent("bridge")
+  const child = Object.assign(new EventEmitter(), { pid: 789, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), stdio: [], exitCode: null, signalCode: null, kill() { assert.fail("raw kill") } }) as unknown as import("node:child_process").ChildProcess
+  scope.spawn(ref, () => child, { closeAdmission() {} })
+  const bridge = fixtureBridgeProcess(scope, ref, child)
+  let unrelated = false
+  scope.finalizer("unrelated", async () => { unrelated = true })
+  if (missing !== "observation completion") { Object.assign(child, { exitCode: 0 }); child.emit("exit", 0, null); if (missing !== "close") child.emit("close", 0, null) }
+  if (missing === "close") current = null
+  bridge.kill(); bridge.kill()
+  const result = await scope.finish()
+  release()
+  assert.equal(result.state, "incomplete")
+  assert.match(result.failures.join("; "), /deadline/)
+  assert.equal(unrelated, true)
+  assert.deepEqual(signals, [])
+  assert.notEqual(result.launches[0]!.close && result.launches[0]!.absent, true)
+})

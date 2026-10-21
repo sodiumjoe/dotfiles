@@ -16,7 +16,7 @@ export async function captureOwnedProcess(adapter: PlatformAdapter, pid: number,
     || ownGroup && (identity.processGroupId !== pid || identity.sessionId !== pid)) throw new Error("Fixture launch capture unavailable or mismatched")
   return { identity: structuredClone(identity), ownerIdentity: structuredClone(ownerIdentity) }
 }
-export async function signalOwnedProcess(adapter: PlatformAdapter, request: OwnedSignal, send: (pid: number, signal: NodeJS.Signals) => void, live: () => boolean = () => true, authorize: () => Promise<boolean> = async () => true): Promise<"delivered" | "already-absent"> {
+export async function signalOwnedProcess(adapter: PlatformAdapter, request: OwnedSignal, send: (pid: number, signal: NodeJS.Signals) => void, live: () => boolean = () => true, authorize: () => Promise<boolean> = async () => true, terminal: () => boolean = () => false): Promise<"delivered" | "already-absent" | "already-terminal"> {
   const { identity: expected, ownerIdentity: owner, knownMembers, signal, group } = request
   const parentPid = owner ? owner.pid : request.parentPid === null ? null : request.parentPid ?? expected.parentPid
   if (!valid(expected) || owner && (!valid(owner) || owner.bootId !== expected.bootId || expected.parentPid !== owner.pid)
@@ -33,12 +33,13 @@ export async function signalOwnedProcess(adapter: PlatformAdapter, request: Owne
   if (await adapter.bootId() !== expected.bootId) throw new Error("Fixture identity boot mismatch")
   const checkTarget = async () => {
     const current = await adapter.readProcess(expected.pid)
+    if (current !== null && (!valid(current) || !sameProcess(expected, current) || parentPid !== null && current.parentPid !== parentPid)) throw new Error("Fixture identity mismatch")
     if (!live()) throw new Error("Fixture terminal identity")
-    if (current === null) return false
-    if (!valid(current) || !sameProcess(expected, current) || parentPid !== null && current.parentPid !== parentPid) throw new Error("Fixture identity mismatch")
-    return true
+    if (terminal()) return "already-terminal" as const
+    return current === null ? "already-absent" as const : "present" as const
   }
-  if (!await checkTarget()) return "already-absent"
+  const first = await checkTarget()
+  if (first === "already-absent") return first
   if (group) {
     const members = await adapter.readGroup(expected.processGroupId)
     if (new Set(members.map(member => member.pid)).size !== members.length || !members.some(member => sameProcess(expected, member))
@@ -48,8 +49,10 @@ export async function signalOwnedProcess(adapter: PlatformAdapter, request: Owne
   }
   await checkOwner()
   if (!await authorize()) throw new Error("Fixture source authority lost")
-  if (!await checkTarget()) return "already-absent"
+  const last = await checkTarget()
+  if (last !== "present") return last
   if (!live()) throw new Error("Fixture terminal identity")
+  if (terminal()) return "already-terminal"
   send(group ? -expected.processGroupId : expected.pid, signal)
   return "delivered"
 }

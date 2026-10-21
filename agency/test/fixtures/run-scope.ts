@@ -30,7 +30,7 @@ export type FixtureScope = {
   operation<T>(label: string, work: () => Promise<T>): Promise<T>
   finalizer(label: string, work: () => Promise<void>): void
   artifact(path: string): void
-  signal(ref: LaunchRef, value: NodeJS.Signals, options?: { allowAbsent: boolean }): Promise<void>
+  signal(ref: LaunchRef, value: NodeJS.Signals, options?: { allowAbsent: boolean; allowTerminal?: boolean }): Promise<void>
   finish(): Promise<FixtureResult>
   snapshot(): FixtureResult
 }
@@ -123,13 +123,13 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
     value.admission = null
     if (close) try { close() } catch (error) { value.failed = true; fail(value.result.role + " admission", error, value.result.ref) }
   }
-  const observeImpl = async (ref: LaunchRef): Promise<ProcessIdentity | null> => {
+  const observeImpl = async (ref: LaunchRef, retainTerminalObservation = false): Promise<ProcessIdentity | null> => {
     const value = find(ref)
     try {
       if (!value.attempted) throw new Error("Unspawned fixture identity")
       if (!value.result.pid || !live(value)) return null
       const current = await bounded("observe", () => adapter.readProcess(value.result.pid!))
-      if (!live(value)) return null
+      if (!live(value) && (!retainTerminalObservation || current === null)) return null
       if (!current || current.pid !== value.result.pid || (!value.result.identity && current.parentPid !== value.parentPid) || !sameProcess(current, current)
         || value.result.identity && !reportedIdentity(value.result.identity, current, value.result.role)
         || value.ownGroup && (current.processGroupId !== current.pid || current.sessionId !== current.pid)) throw new Error("Fixture identity mismatch")
@@ -137,8 +137,8 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       return structuredClone(current)
     } catch (error) { value.failed = true; fail(value.result.role + " observation", error, ref); closeAdmission(value); throw error }
   }
-  const observe = (ref: LaunchRef): Promise<ProcessIdentity | null> => {
-    const work = observeImpl(ref)
+  const observe = (ref: LaunchRef, retainTerminalObservation = false): Promise<ProcessIdentity | null> => {
+    const work = observeImpl(ref, retainTerminalObservation)
     checks.set(work, ref.launchId)
     void work.finally(() => checks.delete(work)).catch(() => {})
     return work
@@ -176,23 +176,41 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       }
     }
   }
-  const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, deadlineMs = 15000): Promise<boolean> => {
+  const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, deadlineMs = 15000, terminalIsSettled = false): Promise<boolean> => {
       const value = find(ref), authorizationUntil = Math.min(until, Date.now() + Math.min(options.deadlineMs, deadlineMs, 15000))
-      let active = true
-      const authorized = () => active && Date.now() < Math.min(until, authorizationUntil) && live(value) && value.authority !== refusedAuthority && value.authorityCurrent()
+      let active = true, observedBoot = value.result.identity?.bootId
+      const sourceAuthorized = () => active && Date.now() < Math.min(until, authorizationUntil) && value.authority !== refusedAuthority && value.authorityCurrent()
+      const terminal = () => terminalIsSettled && value.result.exit !== null
+      const authorized = () => sourceAuthorized() && (terminalIsSettled || live(value))
+      const terminalSettled = async () => {
+        if (!terminal()) return false
+        if (!observedBoot || await authorize("signal boot", () => adapter.bootId()) !== observedBoot) throw new Error("Fixture identity boot mismatch")
+        if (!sourceAuthorized()) throw new Error("Fixture signal authorization deadline or authority lost")
+        return true
+      }
       const authorize = <T>(label: string, work: () => Promise<T>) => bounded(label, work, authorizationUntil - Date.now())
       try {
+        if (terminalIsSettled && (!value.attempted || value.remote || !value.child || value.ownGroup || value.result.reporting !== "direct")) throw new Error("Fixture terminal settlement requires a local direct child")
         if (execImages.has(ref.launchId)) throw new Error("Fixture exec source not admitted")
         if (absentIsSettled && value.attempted && !live(value)) return false
-        if (absentIsSettled && value.result.pid && await authorize("signal absence", () => signalObservation(value.result.pid!)) === null) return false
+        if (absentIsSettled && value.result.pid) {
+          const current = await authorize("signal absence", () => signalObservation(value.result.pid!))
+          if (terminalIsSettled && current && (current.pid !== value.result.pid || current.parentPid !== value.parentPid || !sameProcess(current, current)
+            || value.result.identity && !sameProcess(value.result.identity, current))) throw new Error("Fixture identity mismatch")
+          if (current) observedBoot ??= current.bootId
+          if (current === null || terminalIsSettled && await terminalSettled()) return false
+        }
         const authority = await authorize("signal owner", value.authority)
-        if (!value.attempted || !live(value) || !authority) throw new Error("Fixture terminal or missing identity")
-        if (!value.result.identity && !value.remote) await authorize("signal observation", () => observe(ref))
+        if (!value.attempted || !authority) throw new Error("Fixture terminal or missing identity")
+        if (terminalIsSettled && await terminalSettled()) return false
+        if (!live(value)) throw new Error("Fixture terminal or missing identity")
+        if (!value.result.identity && !value.remote) await authorize("signal observation", () => observe(ref, terminalIsSettled))
+        if (terminalIsSettled && await terminalSettled()) return false
         const expected = value.result.identity
         if (!expected || !live(value) || group && (expected.processGroupId !== expected.pid || expected.sessionId !== expected.pid)) throw new Error("Fixture missing identity")
         const outcome = await authorize("signal authorization", () => signalOwnedProcess(adapter, {
           identity: expected, parentPid: value.remote && authority === "prepared" ? null : value.parentPid, knownMembers: [...launches.values()].filter(known => known.authority !== refusedAuthority).flatMap(known => known.result.identity ? [known.result.identity] : []), signal, group,
-        }, sendSignal, authorized, async () => Boolean(await value.authority())))
+        }, sendSignal, authorized, async () => Boolean(await value.authority()), terminal))
         if (outcome === "already-absent" && !absentIsSettled) throw new Error("Fixture identity mismatch")
         if (group) for (const member of [...launches.values()].filter(known => known.authority !== refusedAuthority).flatMap(known => known.result.identity && known.result.identity.processGroupId === expected.processGroupId ? [known.result.identity] : [])) {
           if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
@@ -251,7 +269,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       finalizers.push({ label, work })
     },
     artifact(path) { artifacts.add(path) },
-    signal: async (ref, signal, input) => { await deliver(ref, signal, find(ref).ownGroup, input?.allowAbsent ?? false) },
+    signal: async (ref, signal, input) => { await deliver(ref, signal, find(ref).ownGroup, input?.allowAbsent ?? false, 15000, input?.allowTerminal ?? false) },
     finish() {
       if (pending) return pending
       pending = (async () => {

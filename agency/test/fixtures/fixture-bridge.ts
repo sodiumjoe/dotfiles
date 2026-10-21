@@ -9,7 +9,7 @@ export function fixtureBridgeProcess(scope: FixtureScope, ref: LaunchRef, child:
   if (!child.stdin || !child.stdout || !child.stderr) throw new Error("Fixture bridge requires piped streams")
   let pending: Promise<void> | undefined
   const facade = Object.assign(new EventEmitter(), { stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, kill() {
-    pending ??= scope.signal(ref, "SIGTERM", { allowAbsent: true })
+    pending ??= scope.signal(ref, "SIGTERM", { allowAbsent: true, allowTerminal: true })
     void pending.catch(() => {})
     return true
   } })

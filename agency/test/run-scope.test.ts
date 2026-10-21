@@ -582,3 +582,16 @@ test("accepted fixture shutdown remains incomplete while its original child stay
   f.exit()
   assert.equal((await f.scope.finish()).state, "settled")
 })
+
+test("terminal settlement preserves final source authorization refusal", async () => {
+  const { signalOwnedProcess } = await import("./fixtures/fixture-signal.js")
+  const f = fixture(), entered = deferred<void>(), release = deferred<void>()
+  let terminal = false
+  f.adapter.readProcess = async () => { entered.resolve(); await release.promise; return f.identity }
+  const result = signalOwnedProcess(f.adapter, { identity: f.identity, knownMembers: [f.identity], signal: "SIGTERM", group: false }, (pid, signal) => f.signals.push([pid, signal]), () => true, async () => false, () => terminal)
+  await entered.promise
+  terminal = true
+  release.resolve()
+  await assert.rejects(result, /source authority lost/)
+  assert.deepEqual(f.signals, [])
+})
