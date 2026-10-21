@@ -203,13 +203,13 @@ test("failed qualification body retains nonzero command and verified cleanup", {
   assert.equal(result.cleanup,"verified");assert.ok(result.commands.some((command:any)=>command.code!==0))
 })
 
-test("qualification cleanup does not export verified after a refused queued signal",{timeout:90000},async()=>{
+for(const owned of [true,false])test("qualification cleanup scopes refused signals: "+(owned?"owned":"unrelated"),{timeout:90000},async()=>{
   const {mkdtemp,writeFile}=await import("node:fs/promises"),{execFile}=await import("node:child_process"),{promisify}=await import("node:util")
   const root=await mkdtemp("/tmp/agv-"),file=join(root,"qualification.test.mjs"),output=join(root,"fixture-root")
-  await writeFile(file,`import test from 'node:test';import {writeFile} from 'node:fs/promises';import {qualificationFixture} from ${JSON.stringify(new URL("./qualification-support.js",import.meta.url).href)};import {workerScope} from ${JSON.stringify(new URL("./fixtures/run-boundary.js",import.meta.url).href)};test('refused cleanup signal',async t=>{const f=await qualificationFixture(t);await writeFile(${JSON.stringify(output)},f.root);const scope=await workerScope();const ref=scope.intent('unspawned');void scope.signal(ref,'SIGTERM').catch(()=>{});await f.verifyCleanup()})`)
+  await writeFile(file,`import test from 'node:test';import {writeFile} from 'node:fs/promises';import {qualificationFixture} from ${JSON.stringify(new URL("./qualification-support.js",import.meta.url).href)};import {workerScope} from ${JSON.stringify(new URL("./fixtures/run-boundary.js",import.meta.url).href)};test('refused cleanup signal',async t=>{const f=await qualificationFixture(t);await writeFile(${JSON.stringify(output)},f.root);const scope=await workerScope();let ref;if(${owned}){const child=f.native('qualification-command',process.execPath,['-e','process.exit(0)'],{env:process.env});await new Promise(resolve=>child.once('close',resolve));ref=scope.snapshot().launches.find(value=>value.pid===child.pid).ref}else ref=scope.intent('unspawned');void scope.signal(ref,'SIGTERM').catch(()=>{});await f.verifyCleanup()})`)
   const env={...process.env};delete env.NODE_TEST_CONTEXT;delete env.AGENCY_TEST_WORKER_RUN;delete env.AGENCY_FIXTURE_CONNECTION
   await assert.rejects(promisify(execFile)(process.execPath,["--test",file],{env,timeout:60000}))
   const result=JSON.parse(await readFile(join(await readFile(output,"utf8"),"result.json"),"utf8"))
-  assert.equal(result.cleanup,"incomplete")
-  assert.match(result.error,/signal/)
+  assert.equal(result.cleanup,owned?"incomplete":"verified")
+  if(owned)assert.match(result.error,/signal/)
 })

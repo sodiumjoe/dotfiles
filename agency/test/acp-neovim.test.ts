@@ -25,11 +25,14 @@ test("installed editor transport retains native handles and reports unavailable 
   assert.equal(await editor.lua("AgencyFixture.adapter_probe('early')"), true)
   assert.equal(await editor.lua("AgencyFixture.adapter_probe('failure')"), true)
   assert.equal(await editor.lua("AgencyFixture.adapter_probe('stop')"), true)
+  assert.equal(await editor.lua("AgencyFixture.adapter_probe('closed')"), true)
   const registry = await editor.lua("AgencyFixture.registry()") as any
   assert.ok(registry.launches.some((item: any) => item.error !== null && item.pid === null))
   assert.ok(registry.launches.some((item: any) => item.exit !== null))
   assert.ok(registry.launches.some((item: any) => item.unavailable === "editor-handle-closed" && item.exit === null && item.close === null))
   assert.ok(registry.stops.some((item: any) => item.outcome === "delivered" || item.outcome === "already-absent"))
+  assert.ok(registry.infrastructure.every((item: any) => item.reaped === true))
+  assert.equal(registry.infrastructure.filter((item: any) => item.action === "capture").length, 3)
   await editor.exit()
 })
 
@@ -54,7 +57,6 @@ for (const mode of ["timeout", "dispose"]) test("editor control keeps native com
         return AgencyFixture.system({vim.env.AGENCY_FIXTURE_NODE,"-e","setInterval(()=>{},1000)"},opts,callback)
       end})
       control.command({"status"},{timeout_ms=${mode === "timeout" ? 100 : 10000}},function(err) control_result=err end)
-      assert(not pcall(AgencyFixture.complete))
       ${mode === "dispose" ? "control.close()" : ""}
       assert(vim.wait(5000,function() for _,v in ipairs(AgencyFixture.registry().launches) do if v.reporting=="editor-control" and v.exit==vim.NIL and v.error==vim.NIL then return false end end; return true end,10))
       AgencyFixture.flush()
@@ -66,7 +68,7 @@ for (const mode of ["timeout", "dispose"]) test("editor control keeps native com
   await editor.exit()
 })
 
-for (const mode of ["control-body", "editor-body", "editor-death"]) test("nested fixture retains evidence after " + mode, { timeout: 60000 }, async () => {
+for (const mode of ["control-body", "editor-body", "editor-death", "editor-complete-failure"]) test("nested fixture retains evidence after " + mode, { timeout: 60000 }, async () => {
   const { execFile } = await import("node:child_process")
   const { mkdtemp, readFile, readdir } = await import("node:fs/promises")
   const { fileURLToPath } = await import("node:url")
@@ -86,8 +88,12 @@ for (const mode of ["control-body", "editor-body", "editor-death"]) test("nested
   const boundaries = await readdir(join(root, "workers"))
   assert.equal(boundaries.length, 1)
   const boundary = JSON.parse(await readFile(join(root, "workers", boundaries[0]!), "utf8"))
-  assert.equal(boundary.result.state, mode === "editor-death" ? "incomplete" : "settled", JSON.stringify(boundary.result.failures))
+  assert.equal(boundary.result.state, ["editor-death", "editor-complete-failure"].includes(mode) ? "incomplete" : "settled", JSON.stringify(boundary.result.failures))
   assert.ok(boundary.result.artifacts.includes(retained))
+  if (mode === "editor-complete-failure") {
+    assert.match(boundary.result.failures.join(";"), /Outstanding editor control command/)
+    assert.ok(boundary.result.launches.some((item: any) => item.reporting === "editor-control" && item.exit === null && item.absent === true))
+  }
   if (mode !== "editor-death") assert.ok(boundary.result.launches.every((item: any) => item.absent === true))
   const adapter = process.platform === "darwin" ? (await import("../src/platform/darwin.js")).createDarwinAdapter() : (await import("../src/platform/linux.js")).createLinuxAdapter()
   const { until } = await import("./control-support.js")

@@ -7,7 +7,7 @@ import { connectFixture, type FixtureConnection } from "../fixture-channel.js"
 const config = JSON.parse(process.env.AGENCY_TEST_CONNECTION!) as FixtureConnection
 const mode = process.argv[2]
 if (mode === "wrong-token") config.ownerToken = "wrong"
-const scope = createNativeFixtureScope({ runId: config.runId, workerFile: "channel-source", deadlineMs: 5000 })
+const scope = createNativeFixtureScope({ runId: config.runId, workerFile: "channel-source", deadlineMs: mode === "timed-complete" ? 1000 : 5000 })
 const client = connectFixture(config, scope)
 process.stdout.write("application-started\n")
 if (mode === "wrong-token") {
@@ -27,6 +27,16 @@ if (mode === "wrong-token") {
   }
   await Promise.all(closed)
   await client.finish()
+} else if (mode === "failed-complete" || mode === "timed-complete" || mode === "queued-check-complete") {
+  const ref = scope.intent("failed-source-leaf")
+  const child = scope.spawn(ref, () => spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" }), { closeAdmission() {} })
+  await new Promise<void>(resolve => child.once("close", () => resolve()))
+  if (mode === "queued-check-complete") void scope.signal(ref, "SIGTERM").catch(() => {})
+  else if (mode === "timed-complete") {
+    scope.finalizer("held cleanup", () => new Promise<void>(() => {}))
+    scope.finalizer("other owner cleanup", async () => { process.stdout.write("other-cleanup-attempted\n") })
+  } else scope.finalizer("local cleanup", async () => { throw new Error("original local failure") })
+  try { await client.finish() } catch (error) { process.stdout.write("retained-original=" + String(error) + "\n") }
 } else if (mode === "ipc") {
   process.on("message", value => {
     if (value === "disconnect") process.disconnect?.()

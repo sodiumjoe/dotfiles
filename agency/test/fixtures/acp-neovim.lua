@@ -4,15 +4,16 @@ local config = vim.json.decode(assert(vim.env.AGENCY_FIXTURE_CONNECTION))
 vim.env.AGENCY_FIXTURE_CONNECTION = nil
 local socket = assert(uv.new_pipe(false))
 local launches, handles, stops, failures, pending, outgoing = {}, {}, {}, {}, {}, {}
-local commands = {}
+local commands, infrastructure, authorities = {}, {}, {}
+local completion_error
 local last_handle
 local sequence, connected, completed, frozen, buffer = 0, false, false, false, ""
 local null = vim.NIL
 local function fail(reason) failures[#failures + 1] = tostring(reason) end
-local function transmit(frame, stop)
+local function transmit(frame)
     sequence = sequence + 1
     frame.seq = sequence
-    pending[sequence] = stop or true
+    pending[sequence] = true
     local text = vim.json.encode(frame) .. "\n"
     if #text > 65536 then fail("Oversized fixture frame"); return end
     if connected then socket:write(text, function(err) if err then fail(err) end end)
@@ -44,25 +45,42 @@ local function launch(role, reporting)
     launches[id] = value
     return value
 end
-local stop_scheduled = 0
+local function process_command(request)
+    local evidence = { action = request.action, pid = null, code = null, signal = null, stdout = "", stderr = "", reaped = false }
+    infrastructure[#infrastructure + 1] = evidence
+    local object = vim.system({ assert(vim.env.AGENCY_FIXTURE_NODE), assert(vim.env.AGENCY_FIXTURE_PROCESS) }, { stdin = vim.json.encode(request), text = true })
+    evidence.pid = object.pid
+    local result = object:wait(5000)
+    evidence.code, evidence.signal = result.code, result.signal
+    evidence.stdout, evidence.stderr, evidence.reaped = result.stdout or "", result.stderr or "", true
+    assert(result.code == 0, evidence.stderr ~= "" and evidence.stderr or "Fixture process command failed")
+    return vim.json.decode(result.stdout)
+end
+local function capture(value)
+    local ok, result = pcall(process_command, { action = "capture", pid = value.pid, parentPid = vim.fn.getpid(), ownGroup = value.reporting == "editor-endpoint" })
+    if ok then value.identity = result.identity; authorities[value.ref.launchId] = result
+    else authorities[value.ref.launchId] = { error = tostring(result) } end
+end
 local function stop(value, signal)
     assert(signal == "SIGTERM" or signal == "SIGKILL", "Unsupported fixture signal")
-    for _, item in ipairs(stops) do
-        if item.ref.launchId == value.ref.launchId and item.outcome == "queued" then
-            item.requested[#item.requested + 1] = signal
-            if signal == "SIGKILL" then item.signal = signal end
-            return true
-        end
-    end
-    local item = { ref = value.ref, signal = signal, requested = { signal }, outcome = "queued" }
+    local item = { ref = value.ref, signal = signal, outcome = "requested" }
     stops[#stops + 1] = item
-    stop_scheduled = stop_scheduled + 1
-    vim.schedule(function()
-        snapshot()
-        transmit({ type = "editor-stop", ref = value.ref, signal = item.signal }, item)
-        stop_scheduled = stop_scheduled - 1
+    local ok, result = pcall(function()
+        if value.exit ~= null or value.pid == null and value.error ~= null then return "already-absent" end
+        local handle = handles[value.ref.launchId]
+        assert(value.reporting ~= "editor-endpoint" or handle and not handle:is_closing(), "Fixture stop refused after handle close")
+        local object = AgencyFixture.system_objects and AgencyFixture.system_objects[value.ref.launchId]
+        assert(value.reporting ~= "editor-control" or object and not object:is_closing(), "Fixture stop refused after system close")
+        local authority = authorities[value.ref.launchId]
+        assert(authority and authority.identity and authority.ownerIdentity, "Fixture stop refused without launch capture: " .. tostring(authority and authority.error))
+        local known = {}
+        for _, captured in pairs(authorities) do if captured.identity then known[#known + 1] = captured.identity end end
+        return process_command({ action = "signal", identity = authority.identity, ownerIdentity = authority.ownerIdentity, knownMembers = known, signal = signal, group = value.reporting == "editor-endpoint" })
     end)
-    return true
+    item.outcome = ok and result or "refused-identity"
+    if not ok then item.error = tostring(result); fail(result) end
+    report()
+    return ok
 end
 transmit({ type = "hello", connection = config, pid = vim.fn.getpid() })
 socket:connect(config.socketPath, function(err)
@@ -80,10 +98,8 @@ socket:connect(config.socketPath, function(err)
             buffer = buffer:sub(index + 1)
             if not ok or frame.type ~= "ack" or not pending[frame.seq] then fail("Invalid fixture acknowledgement")
             else
-                local item = pending[frame.seq]
                 pending[frame.seq] = nil
                 if frame.accepted ~= true then fail(frame.error or "Fixture report refused") end
-                if type(item) == "table" then item.outcome = frame.outcome or "refused-identity" end
             end
         end
     end)
@@ -93,15 +109,21 @@ end)
 local local_uv = setmetatable({}, { __index = uv })
 local_uv.spawn = function(command, opts, callback)
     local value = launch("acp-endpoint", "editor-endpoint")
-    local ok, handle, pid = pcall(original_spawn, command, opts, function(code, signal)
+    local capturing, terminal = true, nil
+    local function on_exit(code, signal)
         value.exit = { code = signal == 0 and code or null, signal = signal == 0 and null or (signal == 9 and "SIGKILL" or "SIGTERM") }
         report()
         local succeeded, reason = pcall(callback, code, signal)
         if not succeeded then value.error = tostring(reason); report(); error(reason) end
+    end
+    local ok, handle, pid = pcall(original_spawn, command, opts, function(code, signal)
+        if capturing then terminal = { code, signal } else on_exit(code, signal) end
     end)
     if not ok then value.error = tostring(handle); report(); error(handle) end
-    if handle then value.pid = pid; handles[value.ref.launchId] = handle; last_handle = handle
+    if handle then value.pid = pid; handles[value.ref.launchId] = handle; last_handle = handle; capture(value)
     else value.error = tostring(pid) end
+    capturing = false
+    if terminal then vim.schedule(function() on_exit(terminal[1], terminal[2]) end) end
     report()
     return handle, pid
 end
@@ -123,7 +145,7 @@ function AgencyFixture.registry()
     refresh()
     local result = {}
     for _, value in pairs(launches) do result[#result + 1] = value end
-    return { launches = result, commands = commands, stops = stops, failures = failures, pending = vim.tbl_count(pending) }
+    return { launches = result, commands = commands, stops = stops, failures = failures, infrastructure = infrastructure, captures = authorities, pending = vim.tbl_count(pending), completed = completed }
 end
 function AgencyFixture.system(args, opts, callback)
     local value = launch("acp-control", "editor-control")
@@ -149,9 +171,10 @@ function AgencyFixture.system(args, opts, callback)
     end)
     if not ok then value.error = tostring(object); report(); error(object) end
     value.pid = object.pid
-    report()
     AgencyFixture.system_objects = AgencyFixture.system_objects or {}
     AgencyFixture.system_objects[value.ref.launchId] = object
+    capture(value)
+    report()
     return { kill = function(_, signal) return stop(value, signal == 9 and "SIGKILL" or "SIGTERM") end }
 end
 function AgencyFixture.close_all()
@@ -160,19 +183,26 @@ function AgencyFixture.close_all()
     return true
 end
 function AgencyFixture.flush()
-    assert(vim.wait(15000, function() return not scheduled and stop_scheduled == 0 and next(pending) == nil end, 10), "Fixture reporting deadline")
+    assert(vim.wait(15000, function() return not scheduled and next(pending) == nil end, 10), "Fixture reporting deadline")
     assert(#failures == 0, table.concat(failures, "; "))
     return true
 end
 function AgencyFixture.complete()
-    if completed then return true end
+    if completed then if completion_error then error(completion_error) end; return true end
     frozen = true
-    for _, value in pairs(launches) do if value.reporting == "editor-control" then assert(value.exit ~= null or value.pid == null and value.error ~= null, "Outstanding editor control command") end end
-    AgencyFixture.flush()
-    snapshot("complete")
-    AgencyFixture.flush()
+    local ok, reason = pcall(function()
+        for _, value in pairs(launches) do if value.reporting == "editor-control" then assert(value.exit ~= null or value.pid == null and value.error ~= null, "Outstanding editor control command") end end
+        AgencyFixture.flush()
+    end)
+    if not ok then completion_error = tostring(reason); fail(reason) end
+    if not vim.wait(5000, function() return not scheduled and next(pending) == nil end, 10) then completion_error = completion_error or "Fixture progress reporting deadline"; fail("Fixture progress reporting deadline") end
     completed = true
+    snapshot("complete")
+    local drained = vim.wait(5000, function() return next(pending) == nil end, 10)
+    if not drained then completion_error = completion_error or "Fixture final reporting deadline"; fail("Fixture final reporting deadline") end
     socket:shutdown(function() socket:close() end)
+    if not vim.wait(5000, function() return socket:is_closing() end, 10) then completion_error = completion_error or "Fixture disconnect deadline"; fail("Fixture disconnect deadline") end
+    if completion_error then error(completion_error) end
     return true
 end
 function AgencyFixture.adapter_probe(mode)
@@ -180,11 +210,12 @@ function AgencyFixture.adapter_probe(mode)
         local handle = local_uv.spawn("/missing-agency-fixture", { args = {}, detached = true }, function() end)
         assert(handle == nil)
     else
-        local transport = transport_module.create_stdio_transport({ command = assert(vim.env.AGENCY_FIXTURE_NODE), args = { "-e", mode == "early" and "process.exit(0)" or "setInterval(()=>{},1000)" } }, { on_state_change = function() end, on_message = function() end })
+        local transport = transport_module.create_stdio_transport({ command = assert(vim.env.AGENCY_FIXTURE_NODE), args = { "-e", mode == "early" and "process.exit(0)" or mode == "closed" and "setTimeout(()=>process.exit(0),1000)" or "setInterval(()=>{},1000)" } }, { on_state_change = function() end, on_message = function() end })
         transport:start()
         local handle = transport.process
         assert(handle == last_handle)
-        if mode == "stop" then transport:stop(); assert(handle:is_closing())
+        if mode == "closed" then handle:close(); assert(handle:is_closing())
+        elseif mode == "stop" then transport:stop(); assert(handle:is_closing())
         else assert(vim.wait(5000, function() return transport.process == nil end, 10)) end
     end
     AgencyFixture.flush()

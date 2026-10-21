@@ -6,12 +6,12 @@ import { EventEmitter, once } from "node:events"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import type { ChildProcess } from "node:child_process"
-import { createNativeFixtureScope, createSyntheticFixtureScope } from "./fixtures/run-scope.js"
+import { createNativeFixtureScope, createSyntheticFixtureScope, nativeFixtureAccess } from "./fixtures/run-scope.js"
 import { createDarwinAdapter } from "../src/platform/darwin.js"
 import { createLinuxAdapter } from "../src/platform/linux.js"
 import { connectFixture, startFixtureReceiver } from "./fixtures/fixture-channel.js"
 
-const rawModes = ["foreign-run", "foreign-ref", "wrong-pid", "replay", "unknown-field", "conflict", "omitted", "open-pipe", "outstanding", "editor-refusal", "oversized", "sealed-late", "bad-observation", "seal-eof"]
+const rawModes = ["foreign-run", "foreign-ref", "wrong-pid", "replay", "unknown-field", "conflict", "omitted", "open-pipe", "outstanding", "unknown-message", "oversized", "sealed-late", "bad-observation", "bad-late-observation", "seal-eof"]
 
 async function fixture(mode: string, t: test.TestContext) {
   const root = await mkdtemp("/tmp/agv-")
@@ -222,15 +222,6 @@ test("a synchronous source spawn throw retains its original attempt without a no
   assert.match(launch.error!, /synchronous spawn failure/)
 })
 
-for (const [mode, outcome] of [["editor-delivery", "delivered"], ["editor-absent", "already-absent"], ["editor-absent-unreported", "already-absent"]]) test("editor stop acknowledges its exact current launch: " + mode, async t => {
-  const f = await fixture(mode!, t)
-  await f.closed
-  assert.equal(f.child.exitCode, 0, f.errors())
-  assert.match(f.output(), new RegExp('"outcome":"' + outcome + '"'))
-  const result = await f.scope.finish()
-  assert.equal(result.state, "settled", JSON.stringify(result.failures))
-})
-
 test("source completion racing preparation satisfies its accepted finite boundary", async t => {
   const f = await fixture("seal-complete", t)
   while (!f.output().includes("ready")) await new Promise(resolve => setTimeout(resolve, 10))
@@ -281,9 +272,10 @@ for (const declared of [false, true]) test("qualification exec refuses an undecl
   const access = (await import("./fixtures/run-scope.js")).nativeFixtureAccess(scope), ref = scope.intent("qualification-shell")
   if (declared) access.declareExec(ref, "/not/the/declared/image")
   const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'"
-  const child = scope.spawn(ref, () => spawn("/bin/sh", ["-c", "read line; exec " + quote(process.execPath) + " -e " + quote("process.stdout.write('exec');process.stdin.resume()")], { stdio: "pipe" }), { closeAdmission() {} })
+  const child = scope.spawn(ref, () => spawn("/bin/sh", ["-c", "printf ready; read line; exec " + quote(process.execPath) + " -e " + quote("process.stdout.write('exec');process.stdin.resume()")], { stdio: "pipe" }), { closeAdmission() {} })
   const closed = new Promise(resolve => child.once("close", resolve))
   t.after(async () => { child.stdin!.end(); await closed; await scope.finish() })
+  await once(child.stdout!, "data")
   await scope.observe(ref)
   const ready = new Promise(resolve => child.stdout!.once("data", resolve))
   child.stdin!.write("go\n"); await ready
@@ -291,4 +283,53 @@ for (const declared of [false, true]) test("qualification exec refuses an undecl
   await assert.rejects(access.signalPid(ref, "SIGTERM"), /exec source not admitted|identity mismatch/i)
   child.stdin!.end(); await closed
   assert.equal((await scope.finish()).state, "incomplete")
+})
+
+test("failed client completion retains final launches and isolates later source checks", { timeout: 20000 }, async t => {
+  const f = await fixture("failed-complete", t)
+  await f.closed
+  assert.equal(f.child.exitCode, 0, f.errors())
+  assert.match(f.output(), /retained-original=.*original local failure/)
+  const leaf = f.scope.snapshot().launches.find(value => value.role === "failed-source-leaf")
+  assert.ok(leaf, JSON.stringify(f.scope.snapshot()))
+  assert.equal(leaf.close, true)
+  await f.receiver.settle([f.ref])
+  await assert.rejects(nativeFixtureAccess(f.scope).settleChecks([f.ref, leaf.ref]), /original local failure/)
+  const ref = f.scope.intent("channel-source"), connection = f.receiver.connection(ref)
+  const child = f.scope.spawn(ref, () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/run-scope/channel-source.js", import.meta.url)), "normal"], {
+    env: { ...process.env, AGENCY_TEST_CONNECTION: JSON.stringify(connection) }, stdio: "ignore",
+  }), { closeAdmission() {} })
+  await new Promise<void>(resolve => child.once("close", () => resolve()))
+  await f.receiver.settle([ref])
+  const closure = f.scope.snapshot().launches.filter(value => value.ref.launchId === ref.launchId || value.ownerId === ref.launchId).map(value => value.ref)
+  await nativeFixtureAccess(f.scope).settleChecks(closure)
+  const result = await f.scope.finish()
+  assert.equal(result.state, "incomplete")
+  assert.equal(result.failures.filter(value => value.includes("original local failure")).length, 1)
+  assert.ok(result.launches.every(value => value.absent === true))
+})
+
+test("timed out owner finalization still publishes final launches and disconnects", { timeout: 15000 }, async t => {
+  const f = await fixture("timed-complete", t)
+  await f.closed
+  assert.equal(f.child.exitCode, 0, f.errors())
+  assert.match(f.output(), /other-cleanup-attempted/)
+  assert.match(f.output(), /retained-original=.*held cleanup deadline/)
+  await f.receiver.settle([f.ref])
+  const result = await f.scope.finish()
+  assert.equal(result.state, "incomplete")
+  assert.ok(result.launches.some(value => value.role === "failed-source-leaf" && value.close === true && value.absent === true))
+  assert.match(result.failures.join(";"), /held cleanup deadline/)
+})
+
+test("normal client completion retains a queued native check failure in its final snapshot", { timeout: 15000 }, async t => {
+  const f = await fixture("queued-check-complete", t)
+  await f.closed
+  assert.equal(f.child.exitCode, 0, f.errors())
+  assert.match(f.output(), /retained-original=.*failed-source-leaf signal/)
+  await f.receiver.settle([f.ref])
+  const result = await f.scope.finish()
+  assert.equal(result.state, "incomplete")
+  assert.ok(result.launches.some(value => value.role === "failed-source-leaf" && value.close === true && value.absent === true))
+  assert.match(result.failures.join(";"), /failed-source-leaf signal/)
 })

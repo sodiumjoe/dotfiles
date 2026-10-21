@@ -241,3 +241,76 @@ test("finish waits for admitted signal checks before publishing a settled bounda
   assert.match(result.failures.join(";"), /boot mismatch/)
   assert.deepEqual(f.signals, [])
 })
+
+test("owner cleanup releases an unresolved operation before the final join", async () => {
+  const f = fixture(100), held = deferred<number>()
+  f.register()
+  f.scope.operation("held application", () => held.promise)
+  f.scope.finalizer("owner cleanup", async () => { f.exit(); held.resolve(7) })
+  const result = await f.scope.finish()
+  assert.equal(result.state, "settled", JSON.stringify(result.failures))
+  assert.equal(result.operations[0]!.state, "fulfilled")
+  assert.equal(result.launches[0]!.absent, true)
+})
+
+test("a timed out finalizer does not suppress another owner cleanup", async () => {
+  const f = fixture(100), called: string[] = []
+  f.register()
+  f.scope.finalizer("held cleanup", () => new Promise<void>(() => {}))
+  f.scope.finalizer("resource cleanup", async () => { called.push("resource"); f.exit() })
+  const result = await f.scope.finish()
+  assert.deepEqual(called, ["resource"])
+  assert.equal(result.state, "incomplete")
+  assert.match(result.failures.join(";"), /held cleanup deadline/)
+})
+
+for (const change of ["boot", "parent", "terminal", "unavailable"]) test("fresh signals refuse changed ownership: " + change, async () => {
+  const f = fixture(100)
+  f.register()
+  await f.scope.observe(f.ref)
+  if (change === "boot") f.adapter.bootId = async () => "other-boot"
+  if (change === "parent") f.setCurrent({ ...f.identity, parentPid: 999 })
+  if (change === "terminal") f.exit()
+  if (change === "unavailable") f.adapter.readProcess = async () => { throw new Error("observation unavailable") }
+  await assert.rejects(f.scope.signal(f.ref, "SIGTERM"))
+  assert.deepEqual(f.signals, [])
+  f.adapter.readProcess = async () => null
+  f.adapter.bootId = async () => "boot"
+  f.exit()
+  assert.equal((await f.scope.finish()).state, "incomplete")
+})
+
+for (const change of ["none", "continue", "birth", "boot", "owner", "parent", "unknown-member", "terminal", "unavailable", "owner-after-group", "target-after-group"]) test("owner-local signal authorization: " + change, async () => {
+  const { signalOwnedProcess } = await import("./fixtures/fixture-signal.js")
+  const f = fixture(100), owner = { ...f.identity, pid: process.pid, parentPid: 1, processGroupId: 456, sessionId: 456 }
+  let current: ProcessIdentity | null = { ...f.identity }, currentOwner = { ...owner }
+  if (change === "birth") current.birth = "11:replacement"
+  if (change === "boot") f.adapter.bootId = async () => "new-boot"
+  if (change === "owner") currentOwner.birth = "12:other-owner"
+  if (change === "parent") current.parentPid = 999
+  if (change === "terminal") current.birth = "10:unmarked:(node)"
+  f.adapter.readProcess = async pid => {
+    if (change === "unavailable") throw new Error("observation unavailable")
+    return pid === owner.pid ? currentOwner : current
+  }
+  f.adapter.readGroup = async () => {
+    if (change === "owner-after-group") currentOwner = { ...owner, birth: "12:other-owner" }
+    if (change === "target-after-group") current = { ...f.identity, birth: "11:replacement" }
+    return change === "unknown-member" ? [current!, { ...f.identity, pid: 124 }] : [f.identity]
+  }
+  const signal = change === "continue" ? "SIGCONT" : "SIGTERM"
+  const run = () => signalOwnedProcess(f.adapter, { identity: f.identity, ownerIdentity: owner, knownMembers: [f.identity], signal, group: true }, (pid, signal) => { f.signals.push([pid, signal]) })
+  if (change === "none" || change === "continue") { assert.equal(await run(), "delivered"); assert.deepEqual(f.signals, [[-123, signal]]) }
+  else { await assert.rejects(run()); assert.deepEqual(f.signals, []) }
+})
+
+for (const state of ["absent", "terminal", "unavailable"]) test("launch capture refuses delayed or unavailable identity: " + state, async () => {
+  const { captureOwnedProcess } = await import("./fixtures/fixture-signal.js")
+  const f = fixture(100)
+  f.adapter.readProcess = async () => {
+    if (state === "unavailable") throw new Error("observation unavailable")
+    return state === "absent" ? null : { ...f.identity, birth: "10:unmarked:<defunct>" }
+  }
+  await assert.rejects(captureOwnedProcess(f.adapter, 123, process.pid, true))
+  assert.deepEqual(f.signals, [])
+})

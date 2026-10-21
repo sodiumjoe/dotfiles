@@ -1,3 +1,4 @@
+import { signalOwnedProcess } from "./fixture-signal.js"
 import { randomUUID } from "node:crypto"
 import type { ChildProcess } from "node:child_process"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
@@ -42,16 +43,15 @@ type Launch = {
 type Operation = FixtureResult["operations"][number] & { promise: Promise<unknown> }
 export type NativeFixtureAccess = {
   deadlineMs: number
-  settleChecks(): Promise<void>
+  settleChecks(refs?: readonly LaunchRef[]): Promise<void>
   declareExec(ref: LaunchRef, image: string): void
   admitSource(ref: LaunchRef): Promise<ProcessIdentity | null>
-  signalEditor(ref: LaunchRef, signal: NodeJS.Signals, group: boolean): Promise<"delivered" | "already-absent" | "awaiting-reap">
   signalPid(ref: LaunchRef, signal: NodeJS.Signals): Promise<void>
   sourceAlive(ref: LaunchRef): Promise<boolean>
   result(ref: LaunchRef): FixtureLaunchResult
   child(ref: LaunchRef): ChildProcess | null
   ownGroup(ref: LaunchRef): boolean
-  fault(error: unknown): void
+  fault(error: unknown, ref?: LaunchRef): void
   beforeAbsence(work: () => Promise<void>): void
   seal(): Promise<void>
   completeSource(): Promise<void>
@@ -91,8 +91,8 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   let phase: "open" | "operations" | "finalizers" | "closed" = "open", pending: Promise<FixtureResult> | undefined
   let until = Infinity, frozen = false
   const execImages = new Map<string, string>()
-  const checks = new Set<Promise<unknown>>(), boundaries: Array<() => Promise<void>> = []
-  const fail = (label: string, error: unknown) => { failures.push(label + ": " + message(error)) }
+  const checks = new Map<Promise<unknown>, string>(), faults: Array<{ text: string; ref: LaunchRef | undefined }> = [], boundaries: Array<() => Promise<void>> = []
+  const fail = (label: string, error: unknown, ref?: LaunchRef) => { const text = label + ": " + message(error); failures.push(text); faults.push({ text, ref }) }
   const bounded = async <T>(label: string, work: () => Promise<T>, limitMs = 30000): Promise<T> => {
     const remaining = Math.min(options.deadlineMs, limitMs, until - Date.now())
     if (remaining <= 0) throw new Error(label + " deadline")
@@ -103,7 +103,14 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       })])
     } finally { clearTimeout(timer) }
   }
-  const drainChecks = () => bounded("fixture checks", async () => { while (checks.size) await Promise.allSettled([...checks]) })
+  const drainChecks = (refs?: readonly LaunchRef[]) => bounded("fixture checks", async () => {
+    const selected = refs && new Set(refs.map(ref => { find(ref); return ref.launchId }))
+    while (true) {
+      const pending = [...checks].filter(([, id]) => !selected || selected.has(id)).map(([promise]) => promise)
+      if (!pending.length) return
+      await Promise.allSettled(pending)
+    }
+  })
   const find = (ref: LaunchRef): Launch => {
     const value = launches.get(ref.launchId)
     if (ref.runId !== options.runId || !value) throw new Error("Unknown fixture launch")
@@ -113,7 +120,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   const closeAdmission = (value: Launch) => {
     const close = value.admission
     value.admission = null
-    if (close) try { close() } catch (error) { value.failed = true; fail(value.result.role + " admission", error) }
+    if (close) try { close() } catch (error) { value.failed = true; fail(value.result.role + " admission", error, value.result.ref) }
   }
   const observeImpl = async (ref: LaunchRef): Promise<ProcessIdentity | null> => {
     const value = find(ref)
@@ -127,26 +134,26 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         || value.ownGroup && (current.processGroupId !== current.pid || current.sessionId !== current.pid)) throw new Error("Fixture identity mismatch")
       value.result.identity = structuredClone(current)
       return structuredClone(current)
-    } catch (error) { value.failed = true; fail(value.result.role + " observation", error); closeAdmission(value); throw error }
+    } catch (error) { value.failed = true; fail(value.result.role + " observation", error, ref); closeAdmission(value); throw error }
   }
   const observe = (ref: LaunchRef): Promise<ProcessIdentity | null> => {
     const work = observeImpl(ref)
-    checks.add(work)
+    checks.set(work, ref.launchId)
     void work.finally(() => checks.delete(work)).catch(() => {})
     return work
   }
   let localDrain: Promise<void> | undefined
   const drainLocal = (): Promise<void> => {
     if (localDrain) return localDrain
-    phase = "operations"
+    phase = "finalizers"
     until = Date.now() + Math.min(options.deadlineMs, 120000)
     localDrain = (async () => {
-      try { await bounded("operations", async () => { await Promise.allSettled(operations.map(value => value.promise)) }) }
-      catch (error) { fail("operations", error) }
-      phase = "finalizers"
       await Promise.allSettled(finalizers.map(async value => {
-        try { await bounded(value.label, value.work) } catch (error) { fail(value.label, error) }
+        try { await bounded(value.label, value.work, Math.max(1, options.deadlineMs / 3)) } catch (error) { fail(value.label, error) }
       }))
+      phase = "operations"
+      try { await bounded("operations", async () => { await Promise.allSettled(operations.map(value => value.promise)) }, Math.max(1, options.deadlineMs / 3)) }
+      catch (error) { fail("operations", error) }
       for (const value of launches.values()) if (value.failed) closeAdmission(value)
     })()
     return localDrain
@@ -168,40 +175,29 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       }
     }
   }
-  const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, editor = false): Promise<boolean | "awaiting-reap"> => {
+  const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false): Promise<boolean> => {
       const value = find(ref)
       try {
         if (execImages.has(ref.launchId)) throw new Error("Fixture exec source not admitted")
         if (absentIsSettled && value.attempted && !live(value)) return false
         if (absentIsSettled && value.result.pid && await bounded("signal absence", () => signalObservation(value.result.pid!), 15000) === null) return false
         if (!value.attempted || !live(value) || !await bounded("signal owner", value.authority, 15000)) throw new Error("Fixture terminal or missing identity")
-        if (!value.result.identity) await observe(ref)
+        if (!value.result.identity && !value.remote) await observe(ref)
         const expected = value.result.identity
         if (!expected || !live(value) || group && (expected.processGroupId !== expected.pid || expected.sessionId !== expected.pid)) throw new Error("Fixture missing identity")
-        if (await bounded("signal boot", () => adapter.bootId(), 15000) !== expected.bootId) throw new Error("Fixture identity boot mismatch")
-        const current = await bounded("signal identity", () => signalObservation(expected.pid), 15000)
-        if (absentIsSettled && (!live(value) || current === null)) return false
-        if (editor && current && value.result.reporting === "editor-endpoint" && value.result.unavailable === "editor-handle-closed"
-          && adapter.platform === "darwin" && sameProcessGeneration(expected, current) && current.parentPid === expected.parentPid
-          && current.uid === expected.uid && current.gid === expected.gid && current.processGroupId === expected.processGroupId && current.sessionId === expected.sessionId
-          && /:unmarked:(?:\(node\)|<defunct>)$/.test(current.birth)) return "awaiting-reap"
-        if (!live(value) || !current || !sameProcess(expected, current)) throw new Error("Fixture identity mismatch")
-        if (group) {
-          const members = await bounded("signal group", () => adapter.readGroup(expected.processGroupId), 15000)
-          if (new Set(members.map(member => member.pid)).size !== members.length || !members.some(member => sameProcess(expected, member))
-            || members.some(member => member.bootId !== expected.bootId || member.processGroupId !== expected.processGroupId || member.sessionId !== expected.sessionId || member.uid !== expected.uid || member.gid !== expected.gid || !sameProcess(member, member))) throw new Error("Fixture group identity mismatch")
-          if (members.some(member => ![...launches.values()].some(known => known.result.identity && sameProcess(known.result.identity, member)))) throw new Error("Unregistered fixture group member")
-          for (const member of members) if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
-          const last = await bounded("signal identity", () => signalObservation(expected.pid), 15000)
-          if (!live(value) || !last || !sameProcess(expected, last)) throw new Error("Fixture identity changed")
+        const outcome = await bounded("signal authorization", () => signalOwnedProcess(adapter, {
+          identity: expected, parentPid: value.remote ? null : value.parentPid, knownMembers: [...launches.values()].flatMap(known => known.result.identity ? [known.result.identity] : []), signal, group,
+        }, sendSignal, () => live(value)), 15000)
+        if (outcome === "already-absent" && !absentIsSettled) throw new Error("Fixture identity mismatch")
+        if (group) for (const member of [...launches.values()].flatMap(known => known.result.identity && known.result.identity.processGroupId === expected.processGroupId ? [known.result.identity] : [])) {
+          if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
         }
-        sendSignal(group ? -expected.processGroupId : expected.pid, signal)
-        return true
-      } catch (error) { value.failed = true; fail(value.result.role + " signal", error); throw error }
+        return outcome === "delivered"
+      } catch (error) { value.failed = true; fail(value.result.role + " signal", error, ref); throw error }
   }
   const deliver: typeof deliverImpl = (...args) => {
     const work = deliverImpl(...args)
-    checks.add(work)
+    checks.set(work, args[0].launchId)
     void work.finally(() => checks.delete(work)).catch(() => {})
     return work
   }
@@ -268,6 +264,9 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
               if (!value.result.exit && !(value.result.error && value.result.pid === null)) throw new Error("missing terminal event")
             }
             if (value.result.pid === null) { value.result.absent = true; return }
+          } catch (error) { fail(value.result.role, error, value.result.ref) }
+          if (value.result.pid === null) return
+          try {
             const absenceUntil = Math.min(until, Date.now() + Math.min(options.deadlineMs, 15000))
             await bounded("final absence", async () => {
               while (true) {
@@ -294,7 +293,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
                 await new Promise<void>(resolve => setTimeout(resolve, Math.min(25, Math.max(1, absenceUntil - Date.now()))))
               }
             }, 15000)
-          } catch (error) { fail(value.result.role, error) }
+          } catch (error) { fail(value.result.role, error, value.result.ref) }
         }))
         phase = "closed"
         return snapshot()
@@ -305,9 +304,11 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   }
   if (native) nativeAccess.set(scope, {
     deadlineMs: options.deadlineMs,
-    async settleChecks() {
-      await drainChecks()
-      if (failures.length) throw new Error(failures.join("; "))
+    async settleChecks(refs) {
+      await drainChecks(refs)
+      const selected = refs && new Set(refs.map(ref => ref.launchId))
+      const errors = faults.filter(value => !selected || !value.ref || selected.has(value.ref.launchId))
+      if (errors.length) throw new Error(errors.map(value => value.text).join("; "))
     },
     declareExec(ref, image) {
       const value = find(ref)
@@ -329,9 +330,8 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         value.result.identity = structuredClone(current)
         execImages.delete(ref.launchId)
         return structuredClone(current)
-      } catch (error) { value.failed = true; fail(value.result.role + " exec", error); closeAdmission(value); throw error }
+      } catch (error) { value.failed = true; fail(value.result.role + " exec", error, ref); closeAdmission(value); throw error }
     },
-    signalEditor: async (ref, signal, group) => { const outcome = await deliver(ref, signal, group, true, true); return outcome === "awaiting-reap" ? outcome : outcome ? "delivered" : "already-absent" },
     signalPid: async (ref, signal) => { await deliver(ref, signal, false, true) },
     async sourceAlive(ref) {
       const value = find(ref), expected = value.result.identity
@@ -342,9 +342,9 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
     result: ref => structuredClone(find(ref).result),
     child: ref => find(ref).child,
     ownGroup: ref => find(ref).ownGroup,
-    fault: error => fail("reporting", error),
+    fault: (error, ref) => { if (ref) find(ref); fail("reporting", error, ref) },
     beforeAbsence(work) { boundaries.push(work) },
-    async seal() { frozen = true; await Promise.allSettled([...checks]) },
+    async seal() { frozen = true; await Promise.allSettled([...checks.keys()]) },
     async completeSource() {
       await drainLocal()
       frozen = true
@@ -353,40 +353,31 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
           if (!value.attempted) throw new Error("unspawned intent")
           if (value.child) await bounded(value.result.role + " close", () => value.closed)
           if (value.child && !value.result.exit && !(value.result.error && value.result.pid === null)) throw new Error("missing terminal event")
-        } catch (error) { fail(value.result.role, error) }
+        } catch (error) { fail(value.result.role, error, value.result.ref) }
       }))
+      try { await drainChecks() } catch (error) { fail("fixture checks", error) }
       if (failures.length) throw new Error(failures.join("; "))
     },
     async accept(result, parentPid, ownGroup, authority) {
       if (result.ref.runId !== options.runId) throw new Error("Foreign fixture ref")
       let value = launches.get(result.ref.launchId)
+      const prior = value?.result
       if (value && (!value.remote || value.result.ownerId !== result.ownerId)) throw new Error("Conflicting fixture owner")
       if (!value) {
         let close!: () => void
         const closed = new Promise<void>(resolve => { close = resolve })
         value = { result: structuredClone(result), child: null, attempted: true, ownGroup, closed, close, admission: null, members: [], failed: false, remote: true, parentPid, authority }
-        value.result.identity = null
         value.result.absent = null
-        value.authority = async () => false
         launches.set(result.ref.launchId, value)
-        if (result.pid !== null && !result.exit) {
-          if (!await authority()) throw new Error("Fixture source lost")
-          let identity: ProcessIdentity | null
-          try { identity = await bounded("report identity", () => adapter.readProcess(result.pid!)) }
-          catch (error) {
-            if (await bounded("report absence", () => adapter.readProcess(result.pid!)) !== null) throw error
-            identity = null
-          }
-          if (identity && (identity.parentPid !== parentPid || identity.pid !== result.pid || result.identity && !sameProcess(result.identity, identity))) throw new Error("Fixture reported identity mismatch")
-          value.result.identity = identity
-        } else if (result.identity) value.result.identity = structuredClone(result.identity)
         value.authority = authority
-      } else {
-        const prior = value.result
+      }
+      if (result.identity && (result.identity.parentPid !== parentPid || !sameProcess(result.identity, result.identity)
+        || ownGroup && (result.identity.processGroupId !== result.pid || result.identity.sessionId !== result.pid))) throw new Error("Fixture reported identity mismatch")
+      if (prior) {
         if (prior.pid !== result.pid || prior.role !== result.role || prior.reporting !== result.reporting || value.ownGroup !== ownGroup
           || prior.exit && JSON.stringify(prior.exit) !== JSON.stringify(result.exit)
           || prior.close === true && result.close !== true || prior.error && prior.error !== result.error
-          || prior.identity && result.identity && !reportedIdentity(prior.identity, result.identity, prior.role)) throw new Error("Conflicting fixture snapshot")
+          || prior.identity && result.identity && (!reportedIdentity(prior.identity, result.identity, prior.role) || prior.identity.parentPid !== result.identity.parentPid)) throw new Error("Conflicting fixture snapshot")
         if (result.identity) prior.identity = structuredClone(result.identity)
         prior.exit = result.exit; prior.close = result.close; prior.error = result.error
       }

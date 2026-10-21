@@ -13,7 +13,7 @@ type Frame = Record<string, unknown>
 type Report = { launch: FixtureLaunchResult; ownGroup: boolean; pipesClosed: boolean }
 type Snapshot = { failures: string[]; children: FixtureConnection[]; launches: Report[] }
 type Declaration = { connection: FixtureConnection; parent: string | null }
-type Source = { ref: LaunchRef; socket: Socket; pid: number; role: string; sequence: number; complete: boolean; sealed: boolean; launches: Set<string>; ended: Promise<void>; sealWait?: ReturnType<typeof deferred<void>> }
+type Source = { ref: LaunchRef; socket: Socket; pid: number; role: string; sequence: number; complete: boolean; sealed: boolean; launches: Set<string>; failures: Set<string>; ended: Promise<void>; sealWait?: ReturnType<typeof deferred<void>> }
 const sealRoles = new Set(["channel-prepared", "singleton-contender", "darwin-handler", "provider-tree", "darwin-identity-tree", "darwin-exec-tree", "agent-handler", "control-handler", "catalog-handler", "catalog-worker"])
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 function deferred<T>() {
@@ -51,6 +51,7 @@ function launch(value: unknown, runId: string): asserts value is FixtureLaunchRe
   if (typeof value.role !== "string" || !value.role || typeof value.ownerId !== "string"
     || value.pid !== null && (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0)
     || value.error !== null && typeof value.error !== "string"
+    || ![null, false, true].includes(value.absent as boolean | null)
     || ![null, false, true].includes(value.close as boolean | null)
     || !["direct", "detached-handler", "editor-endpoint", "editor-control"].includes(value.reporting as string)
     || ![null, "editor-handle-closed", "editor-api-completion"].includes(value.unavailable as string | null)
@@ -120,11 +121,11 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
     const end = deferred<void>()
     socket.once("close", () => {
       sockets.delete(socket); end.resolve()
-      if (!source || !source.complete && !source.sealed) access.fault(new Error("Fixture source lost before complete"))
+      if (!source || !source.complete && !source.sealed) access.fault(new Error("Fixture source lost before complete"), source?.ref)
     })
     receive(socket, frame => {
       chain = chain.then(async () => {
-        let outcome: string | undefined, seal = false, complete = false
+        let seal = false, complete = false
         if (!Number.isSafeInteger(frame.seq) || (frame.seq as number) <= lastSequence) throw new Error("Invalid fixture sequence")
         lastSequence = frame.seq as number
         if (frame.type === "hello") {
@@ -140,7 +141,7 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
           }
           const identity = await access.admitSource(supplied.ownerRef)
           if (!identity || identity.pid !== frame.pid) throw new Error("Refused source identity")
-          source = { ref: supplied.ownerRef, socket, pid: identity.pid, role: access.result(supplied.ownerRef).role, sequence: lastSequence, complete: false, sealed: false, launches: new Set(), ended: end.promise }
+          source = { ref: supplied.ownerRef, socket, pid: identity.pid, role: access.result(supplied.ownerRef).role, sequence: lastSequence, complete: false, sealed: false, launches: new Set(), failures: new Set(), ended: end.promise }
           sources.set(supplied.ownerRef.launchId, source)
         } else {
           if (!source || source.complete || source.sealed) throw new Error("Fixture source unavailable or sealed")
@@ -149,10 +150,9 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
             if (!["progress", "complete", "before-intentional-exit"].includes(frame.phase as string)) throw new Error("Invalid snapshot phase")
             keys(frame.snapshot, ["failures", "children", "launches"])
             const data = frame.snapshot as unknown as Snapshot
-            if (!Array.isArray(data.failures) || data.failures.length || !Array.isArray(data.launches) || !Array.isArray(data.children)) throw new Error("Failed source report")
+            if (!Array.isArray(data.failures) || data.failures.some(value => typeof value !== "string") || !Array.isArray(data.launches) || !Array.isArray(data.children)) throw new Error("Invalid source report")
             const ids = new Set(data.launches.map(item => item.launch.ref.launchId))
             if (ids.size !== data.launches.length || [...source.launches].some(id => !ids.has(id))) throw new Error("Omitted or duplicate fixture launch")
-            if (!await alive(source)) throw new Error("Fixture source identity lost")
             for (const child of data.children) {
               connection(child, runId, socketPath)
               if (!data.launches.some(item => item.launch.ref.launchId === child.ownerRef.launchId)) throw new Error("Undeclared child source")
@@ -175,6 +175,10 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
               }
               source.launches.add(reported.ref.launchId)
             }
+            for (const failure of data.failures) if (!source.failures.has(failure)) {
+              source.failures.add(failure)
+              access.fault(new Error(failure), source.ref)
+            }
             for (const child of data.children) declarations.set(child.ownerRef.launchId, { connection: child, parent: source.ref.launchId })
             if (frame.phase === "before-intentional-exit") {
               if (!sealRoles.has(source.role)) throw new Error("Undeclared seal source")
@@ -192,6 +196,7 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
                   access.unavailable(item.launch.ref, item.launch.reporting === "editor-control" ? "editor-api-completion" : "editor-handle-closed")
                   continue
                 }
+                if (data.failures.length) continue
                 const leaf = source.role === "singleton-contender" && item.launch.role === "singleton-handler" && !declarations.has(item.launch.ref.launchId)
                 if (item.launch.reporting !== "detached-handler" || !item.pipesClosed || !leaf && !declarations.has(item.launch.ref.launchId)) throw new Error("Outstanding undeclared child or launcher pipe")
                 if (!leaf) await waitFor(() => sources.get(item.launch.ref.launchId), "detached source admission")
@@ -205,25 +210,17 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
             ref(frame.ref, runId)
             if (!source.launches.has(frame.ref.launchId) || declarations.get(frame.ref.launchId)?.parent !== source.ref.launchId || !await alive(source)) throw new Error("Refused child preparation")
             await receiver.prepareExit(frame.ref)
-          } else if (frame.type === "editor-stop") {
-            keys(frame, ["type", "seq", "ref", "signal"])
-            ref(frame.ref, runId)
-            if (source.role !== "editor" || !source.launches.has(frame.ref.launchId) || typeof frame.signal !== "string" || !["SIGTERM", "SIGKILL"].includes(frame.signal) || !await alive(source)) throw new Error("Refused editor identity")
-            const target = access.result(frame.ref)
-            if (!["editor-endpoint", "editor-control"].includes(target.reporting)) throw new Error("Refused non-editor stop")
-            if (target.exit || target.pid === null && target.error) outcome = "already-absent"
-            else outcome = await access.signalEditor(frame.ref, frame.signal as NodeJS.Signals, target.reporting === "editor-endpoint")
           } else throw new Error("Unknown fixture message")
         }
-        await send(socket, { type: "ack", seq: frame.seq, accepted: true, ...(outcome ? { outcome } : {}) })
+        await send(socket, { type: "ack", seq: frame.seq, accepted: true })
         if (source && seal) { source.sealed = true; source.sealWait?.resolve() }
         if (source && complete) { source.complete = true; source.sealWait?.resolve() }
       }).catch(error => {
-        access.fault(error)
+        access.fault(error, source?.ref)
         source?.sealWait?.reject(error)
-        void send(socket, { type: "ack", seq: frame.seq, accepted: false, error: errorText(error), ...(frame.type === "editor-stop" ? { outcome: "refused-identity" } : {}) }).catch(() => {}).finally(() => socket.end())
+        void send(socket, { type: "ack", seq: frame.seq, accepted: false, error: errorText(error) }).catch(() => {}).finally(() => socket.end())
       })
-    }, error => { access.fault(error); source?.sealWait?.reject(error) })
+    }, error => { access.fault(error, source?.ref); source?.sealWait?.reject(error) })
   })
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve) })
   const receiver: FixtureReceiver = {
@@ -338,8 +335,15 @@ export function connectFixture(config: FixtureConnection, local: FixtureScope): 
     finish() {
       if (finished) return finished
       finished = (async () => {
-        try { await chain; if (!sealed) { await access.completeSource(); await client.checkpoint("complete") }; socket.end(); await deadline(closed.promise, "fixture disconnect", Math.min(access.deadlineMs, 30000)) }
-        catch (error) { fail(error); socket.destroy(); throw error }
+        let original: unknown
+        try { await deadline(chain, "fixture report drain", Math.min(access.deadlineMs, 15000)) } catch (error) { original = error }
+        if (!sealed) {
+          try { await access.completeSource() } catch (error) { original ??= error }
+          try { await client.checkpoint("complete") } catch (error) { original ??= error }
+        }
+        try { socket.end(); await deadline(closed.promise, "fixture disconnect", Math.min(access.deadlineMs, 30000)) }
+        catch (error) { original ??= error; socket.destroy() }
+        if (original) throw original
       })()
       return finished
     },

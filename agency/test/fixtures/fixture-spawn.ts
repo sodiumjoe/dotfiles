@@ -32,7 +32,7 @@ export function registerFixtureChild<C extends ChildProcess>(runtime: FixtureRun
   } catch (error) { runtime.sealed || client?.report(); throw error }
   for (const event of ["error", "exit", "close"] as const) child.on(event, () => runtime.sealed || client?.report())
   runtime.sealed || client?.report()
-  if (!client && !execImage) void scope.observe(ref).catch(() => {})
+  if (!execImage) void scope.observe(ref).then(() => { runtime.sealed || client?.report() }, () => {})
   return child
 }
 export async function fixtureSpawner() {

@@ -66,6 +66,7 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
   }
   const native=(role:string,file:string,args:string[],options:SpawnOptions,source=false):ChildProcessWithoutNullStreams=>{
     const ref=scope.intent(role,{ownGroup:options.detached??false}),environment=cleanFixtureEnvironment(options.env)
+    if(role==="editor"){environment.AGENCY_FIXTURE_NODE=process.execPath;environment.AGENCY_FIXTURE_PROCESS=fileURLToPath(new URL("./fixtures/editor-process.js",import.meta.url))}
     refs.add(ref.launchId)
     if(source){sourceRefs.push(ref);environment.AGENCY_FIXTURE_CONNECTION=JSON.stringify(receiver.connection(ref))}
     const child=registerFixtureChild(runtime,ref,()=>nodeSpawn(file,args,{...options,env:environment,stdio:"pipe"}),source&&(role==="qualification-command"||role==="qualification-shell"||role==="editor")?(role==="editor"?config.editor!.executable:config.node):undefined)
@@ -97,34 +98,53 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
   }
   const owner=async()=>{const inspection=await inspectHandlerGeneration(runtimeRoot,adapter);assert.ok(inspection?.disposition==="live"&&inspection.record.phase==="ready"&&inspection.record.process);return {generation:inspection.record.generation,process:inspection.record.process}}
   const sentinel=async()=> (await readFile(sentinelFile,"utf8").catch(()=>"")).trim().split("\n").filter(Boolean).map(line=>JSON.parse(line))
-  let cleaned=false
-  const verifyCleanup=async()=>{
-    if(cleaned)return
-    for(const peer of peers)peer.close()
-    for(const child of children)child.stdin.end()
-    await until(async()=>pending.size===0?true:undefined,30000)
-    const inventory=await createAgentStore(persistentRoot).inventory().catch(()=>null)
-    await writeFile(join(root,"before-cleanup.json"),JSON.stringify({inventory,launches:launches()}),{mode:0o600})
-    const current=await inspectHandlerGeneration(runtimeRoot,adapter)
-    if(current?.disposition==="live"){
-      const expected=current.record.process
-      assert.ok(expected&&launches().some(value=>value.identity&&sameProcess(value.identity,expected)),"private owner is not registered in this run")
-      const reply=await shutdown()
-      assert.equal(reply.code,0,reply.stdout+reply.stderr)
+  let cleanup:Promise<void>|undefined
+  const verifyCleanup=()=>{cleanup??=cleanupOwned();return cleanup}
+  const cleanupOwned=async()=>{
+    const failures:unknown[]=[],end=Date.now()+60000
+    const attempt=async(label:string,work:()=>Promise<unknown>,ms=15000)=>{
+      let timer:NodeJS.Timeout|undefined
+      try{await Promise.race([Promise.resolve().then(work),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error(label+" deadline")),Math.max(1,Math.min(ms,end-Date.now())))})])}
+      catch(error){failures.push(error)}finally{clearTimeout(timer)}
     }
-    await until(async()=>pending.size===0?true:undefined,30000)
-    await receiver.settle(sourceRefs)
-    for(const launch of launches())if(launch.pid!==null){
-      await until(async()=>{const actual=await adapter.readProcess(launch.pid!);return !actual||launch.identity&&!sameProcessGeneration(launch.identity,actual)?true:undefined},15000)
+    for(const peer of peers)try{peer.close()}catch(error){failures.push(error)}
+    for(const child of children)try{child.stdin.end()}catch(error){failures.push(error)}
+    await attempt("private owner shutdown",async()=>{
+      const inventory=await createAgentStore(persistentRoot).inventory().catch(()=>null)
+      await writeFile(join(root,"before-cleanup.json"),JSON.stringify({inventory,launches:launches()}),{mode:0o600})
+      const current=await inspectHandlerGeneration(runtimeRoot,adapter)
+      if(current?.disposition==="live"){
+        const expected=current.record.process
+        assert.ok(expected&&launches().some(value=>value.identity&&sameProcess(value.identity,expected)),"private owner is not registered in this run")
+        const reply=await shutdown()
+        assert.equal(reply.code,0,reply.stdout+reply.stderr)
+      }
+    })
+    for(const child of children)await attempt("owned command stop",async()=>{
+      const launch=launches().find(value=>value.pid===child.pid)
+      assert.ok(launch,"unregistered owned command")
+      if(child.exitCode===null&&child.signalCode===null)await nativeFixtureAccess(scope).signalPid(launch.ref,"SIGTERM")
+    },5000)
+    await attempt("owned command join",()=>until(async()=>pending.size===0?true:undefined,5000),5000)
+    for(const child of children)await attempt("owned command kill",async()=>{
+      const launch=launches().find(value=>value.pid===child.pid)
+      assert.ok(launch,"unregistered owned command")
+      if(child.exitCode===null&&child.signalCode===null)await nativeFixtureAccess(scope).signalPid(launch.ref,"SIGKILL")
+    },5000)
+    await attempt("owned command close",()=>until(async()=>pending.size===0?true:undefined,5000),5000)
+    await attempt("fixture reports",()=>receiver.settle(sourceRefs))
+    for(const launch of launches())if(launch.pid!==null)await attempt(launch.role+" absence",async()=>{
+      await until(async()=>{const actual=await adapter.readProcess(launch.pid!);return !actual||launch.identity&&!sameProcessGeneration(launch.identity,actual)?true:undefined},Math.max(1,Math.min(15000,end-Date.now())))
       if(launch.pid===launch.identity?.processGroupId)assert.deepEqual(await adapter.readGroup(launch.pid),[])
-    }
-    await nativeFixtureAccess(scope).settleChecks()
-    assert.deepEqual(errors,[]);assert.deepEqual(await sentinel(),[])
+    })
+    await attempt("fixture checks",()=>nativeFixtureAccess(scope).settleChecks(launches().map(value=>value.ref)))
+    await attempt("private fixture isolation",async()=>{assert.deepEqual(errors,[]);assert.deepEqual(await sentinel(),[])})
+    if(failures.length)throw new AggregateError(failures,"qualification cleanup incomplete: "+failures.map(String).join("; "))
     const values=launches().map(value=>({...value,absent:value.pid===null?value.absent:true})),identities=values.flatMap(value=>value.identity?[value.identity]:[])
     await writeFile(join(root,"cleanup.json"),JSON.stringify({identities,launches:values,survivors:[],verifiedAt:Date.now()}),{mode:0o600})
     await writeFile(join(root,"result.json"),JSON.stringify({revision:config.binding.sourceRevision,commands:commandResults,identities,cleanup:"verified",root,runtimeRoot}),{mode:0o600})
     if(evidence)await cp(root,join(evidence,"fixtures",root.split("/").at(-1)!),{recursive:true,filter:async path=>!(await lstat(path)).isSocket()})
-    cleaned=true;t.diagnostic("retained qualification fixture: "+root)
+    t.diagnostic("retained qualification fixture: "+root)
   }
   t.after(async()=>{try{await verifyCleanup()}catch(error){await writeFile(join(root,"result.json"),JSON.stringify({revision:config.binding.sourceRevision,commands:commandResults,launches:launches(),cleanup:"incomplete",error:String(error),root,runtimeRoot}),{mode:0o600});throw new AggregateError([error],"qualification fixture retained "+root)}})
   const result:QualificationFixture={config,paths,root,workspace,adapter,command,shutdown,spawn:childSpawn,native,owner,sentinel,verifyCleanup,async bridge(){const current=await owner(),peer=await connectHandlerBridge({root:runtimeRoot,hostId,handlerGeneration:current.generation});peers.add(peer);return peer}}

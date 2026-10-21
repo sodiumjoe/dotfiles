@@ -1,4 +1,4 @@
-import { fixtureSpawner, fixtureRuntime, prepareFixtureExit } from "./fixtures/fixture-spawn.js"
+import { fixtureSpawner, fixtureRuntime, prepareFixtureExit, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
@@ -336,13 +336,19 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
   const ignoreTerm = scenario === "ignore-term"
   if (catalogFixtureFailure) throw catalogFixtureFailure
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), "agy-catalog-")), adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
-  let pid: number | undefined, operation: Promise<unknown> | undefined, workerClosed: Promise<void> | undefined
+  let pid: number | undefined, operation: Promise<unknown> | undefined, workerClosed: Promise<void> | undefined, operationDone = false, workerDone = false
+  const controller = new AbortController()
   const attemptId = randomUUID(), generation = randomUUID(), commandId = randomUUID(), hostId = "a".repeat(64)
   const path = join(root, "catalog/probe-launches", attemptId + ".json")
   t.after(async () => {
     try {
-    await operation?.catch(() => undefined)
-    await workerClosed
+    controller.abort()
+    if (pid !== undefined && !workerDone) {
+      try { await until(async () => workerDone ? true : undefined, 1000) }
+      catch { await signalFixturePid(pid, "SIGKILL", true) }
+    }
+    await until(async () => !operation || operationDone ? true : undefined, 5000)
+    await until(async () => !workerClosed || workerDone ? true : undefined, 5000)
     if (pid !== undefined) {
       const record = await readLaunchRecordForReconciliation(path)
       assert.notEqual(record.provider, null, `retained uncertain fixture root: ${root}`)
@@ -367,10 +373,11 @@ for (const scenario of ["normal", "ignore-term", "verbose-stderr", "rpc-rejectio
   ;(await fixtureRuntime()).scope.artifact(root)
   const signalGroup = adapter.signalGroup.bind(adapter)
   adapter.signalGroup = async (group, signal) => { await prepareFixtureExit(group); await signalGroup(group, signal) }
-  const runtime = createProbeRuntime({ paths: { hostKey: hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, queue: new MutationQueue(), store, generation, canStart: () => true, workerFile: fileURLToPath(new URL("./fixtures/catalog-worker.js", import.meta.url)), dependencies: { env: { HOME: join(root, "home"), PATH: "/usr/bin:/bin" }, spawn: ((...args: Parameters<typeof spawn>) => { const child = spawnFixture("catalog-worker", args[0], args[1] ?? [], args[2] ?? {}, { source: true }); pid = child.pid; workerClosed = new Promise(resolve => child.once("close", () => resolve())); return child }) as typeof spawn } })
+  const runtime = createProbeRuntime({ paths: { hostKey: hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, queue: new MutationQueue(), store, generation, canStart: () => true, workerFile: fileURLToPath(new URL("./fixtures/catalog-worker.js", import.meta.url)), dependencies: { env: { HOME: join(root, "home"), PATH: "/usr/bin:/bin" }, spawn: ((...args: Parameters<typeof spawn>) => { const child = spawnFixture("catalog-worker", args[0], args[1] ?? [], args[2] ?? {}, { source: true }); pid = child.pid; workerClosed = new Promise(resolve => child.once("close", () => { workerDone = true; resolve() })); return child }) as typeof spawn } })
 
-  const run = runtime.run(request, new AbortController().signal)
+  const run = runtime.run(request, controller.signal)
   operation = run
+  void run.then(() => { operationDone = true }, () => { operationDone = true })
   const outcome = await run
   const diagnostic = await readProbeDiagnostic(request.meta)
   assert.ok(diagnostic)
