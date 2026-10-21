@@ -95,10 +95,11 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
   if (Buffer.byteLength(socketPath) >= 100) throw new Error("Fixture socket path too long")
   const declarations = new Map<string, Declaration>(), sources = new Map<string, Source>(), sockets = new Set<Socket>()
   let closing: Promise<void> | undefined, accepting = true
+  const current = (source: Source) => !source.socket.destroyed && !source.complete && !source.sealed && access.result(source.ref).exit === null
   const alive = async (source: Source) => {
     const until = Date.now() + Math.min(access.deadlineMs, 15000)
-    while (!source.socket.destroyed && !source.complete && !source.sealed) {
-      try { return await access.sourceAlive(source.ref) }
+    while (current(source)) {
+      try { const observed = await access.sourceAlive(source.ref); return observed && current(source) }
       catch (error) {
         if (Date.now() >= until) throw error
         await new Promise<void>(resolve => setTimeout(resolve, 10))
@@ -167,7 +168,11 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
               const reported = { ...item.launch, ownerId: source.ref.launchId }
               await access.accept(reported, source.pid, item.ownGroup, async () => {
                 const independent = sources.get(reported.ref.launchId)
-                return owner.sealed && owner.launches.has(reported.ref.launchId) || independent !== undefined && (independent.sealed || await alive(independent)) || await alive(owner)
+                if (owner.sealed && owner.launches.has(reported.ref.launchId) || independent !== undefined && (independent.sealed || await alive(independent))) return "prepared"
+                return await alive(owner)
+              }, () => {
+                const independent = sources.get(reported.ref.launchId)
+                return owner.sealed && owner.launches.has(reported.ref.launchId) || independent !== undefined && (independent.sealed || current(independent)) || current(owner)
               })
               if (reported.unavailable) {
                 if (source.role !== "editor") throw new Error("Undeclared editor evidence")
@@ -278,14 +283,15 @@ export async function startFixtureReceiver(scope: FixtureScope, socketPath: stri
 export function connectFixture(config: FixtureConnection, local: FixtureScope): FixtureClient {
   const access = nativeFixtureAccess(local), socket = createConnection(config.socketPath), children = new Map<string, FixtureConnection>()
   const hello = deferred<void>(), closed = deferred<void>(), replies = new Map<number, ReturnType<typeof deferred<void>>>()
-  let sealed = false
+  let sealed = false, reportingClosed = false, reportingUntil = Infinity
   let sequence = 0, error: unknown, queued = false, chain = Promise.resolve(), finished: Promise<void> | undefined
-  const fail = (reason: unknown) => { error ??= reason; access.fault(reason); hello.reject(reason); for (const pending of replies.values()) pending.reject(reason) }
+  const fail = (reason: unknown) => { if (reportingClosed) return; error ??= reason; access.fault(reason); hello.reject(reason); for (const pending of replies.values()) pending.reject(reason) }
   const request = async (frame: Frame): Promise<void> => {
     if (error) throw error
+    if (reportingClosed || Date.now() >= reportingUntil) throw new Error("Fixture reporting deadline")
     const seq = ++sequence, reply = deferred<void>()
     replies.set(seq, reply)
-    try { await send(socket, { ...frame, seq }); await deadline(reply.promise, "fixture acknowledgement", Math.min(access.deadlineMs, 15000)) }
+    try { await deadline((async () => { await send(socket, { ...frame, seq }); await reply.promise })(), "fixture send and acknowledgement", Math.min(access.deadlineMs, 15000, reportingUntil - Date.now())) }
     finally { replies.delete(seq) }
   }
   const snapshot = (): Snapshot => ({
@@ -293,7 +299,7 @@ export function connectFixture(config: FixtureConnection, local: FixtureScope): 
     launches: local.snapshot().launches.map(launch => ({ launch, ownGroup: access.ownGroup(launch.ref), pipesClosed: (access.child(launch.ref)?.stdio?.slice(3) ?? []).every(stream => stream == null || "closed" in stream && stream.closed === true) })),
   })
   const publish = (phase: SnapshotPhase) => {
-    chain = chain.then(async () => { await hello.promise; if (error) throw error; if (phase === "progress") queued = false; await request({ type: "snapshot", phase, snapshot: snapshot() }) })
+    chain = chain.then(async () => { await hello.promise; if (error) throw error; if (reportingClosed) throw new Error("Fixture reporting closed"); if (phase === "progress") queued = false; await request({ type: "snapshot", phase, snapshot: snapshot() }) })
     void chain.catch(fail)
     return chain
   }
@@ -336,13 +342,18 @@ export function connectFixture(config: FixtureConnection, local: FixtureScope): 
       if (finished) return finished
       finished = (async () => {
         let original: unknown
-        try { await deadline(chain, "fixture report drain", Math.min(access.deadlineMs, 15000)) } catch (error) { original = error }
+        if (!sealed) try { await access.completeSource() } catch (reason) { original = reason }
+        reportingUntil = Date.now() + Math.min(access.deadlineMs, 30000)
+        const remaining = () => Math.max(0, reportingUntil - Date.now())
+        try { await deadline(chain, "fixture report drain", Math.min(15000, remaining() / 2)) }
+        catch (reason) { original ??= reason; fail(reason) }
         if (!sealed) {
-          try { await access.completeSource() } catch (error) { original ??= error }
-          try { await client.checkpoint("complete") } catch (error) { original ??= error }
+          try { await deadline(client.checkpoint("complete"), "fixture final report", Math.min(15000, remaining() / 2)) }
+          catch (reason) { original ??= reason; fail(new Error("fixture final report: " + errorText(reason))) }
         }
-        try { socket.end(); await deadline(closed.promise, "fixture disconnect", Math.min(access.deadlineMs, 30000)) }
-        catch (error) { original ??= error; socket.destroy() }
+        try { socket.end(); await deadline(closed.promise, "fixture disconnect", remaining()) }
+        catch (reason) { original ??= reason; fail(reason); socket.destroy() }
+        finally { reportingClosed = true }
         if (original) throw original
       })()
       return finished

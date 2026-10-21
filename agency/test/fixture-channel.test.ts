@@ -3,6 +3,7 @@ import test from "node:test"
 import { mkdtemp, chmod, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { EventEmitter, once } from "node:events"
+import { createServer, Socket } from "node:net"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import type { ChildProcess } from "node:child_process"
@@ -21,8 +22,8 @@ async function fixture(mode: string, t: test.TestContext) {
   const receiver = await startFixtureReceiver(scope, join(root, "r.sock"))
   const ref = scope.intent(mode === "seal-complete" || mode === "sealed" || mode === "sealed-late" || mode === "seal-eof" ? "channel-prepared" : mode === "singleton" ? "singleton-contender" : mode.startsWith("editor-") ? "editor" : "channel-source")
   const connection = receiver.connection(ref)
-  const child = scope.spawn(ref, () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/run-scope/" + ((mode === "seal-complete" || rawModes.includes(mode) || mode.startsWith("editor-")) ? "channel-raw.js" : "channel-source.js"), import.meta.url)), mode], {
-    env: { ...process.env, AGENCY_TEST_CONNECTION: JSON.stringify(connection), AGENCY_TEST_RELEASE: join(root, "release") }, stdio: mode === "ipc" ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
+  const child = scope.spawn(ref, () => spawn(process.execPath, [fileURLToPath(new URL("./fixtures/run-scope/" + ((mode === "seal-complete" || mode === "live-disconnect" || rawModes.includes(mode) || mode.startsWith("editor-")) ? "channel-raw.js" : "channel-source.js"), import.meta.url)), mode], {
+    env: { ...process.env, AGENCY_TEST_CONNECTION: JSON.stringify(connection), AGENCY_TEST_RELEASE: join(root, "release") }, stdio: mode === "ipc" ? ["ignore", "pipe", "pipe", "ipc"] : [mode === "live-disconnect" ? "pipe" : "ignore", "pipe", "pipe"],
   }), { closeAdmission() {} })
   t.after(async () => {
     if (child.connected) child.disconnect()
@@ -363,5 +364,103 @@ test("rejected initial identity cannot regain direct or group signal authority t
   const result = await scope.finish()
   assert.equal(result.state, "incomplete")
   assert.equal(result.launches.filter(value => value.role === "rejected-leaf").length, 1)
+  assert.ok(result.launches.every(value => value.absent === true))
+})
+
+for (const group of [false, true]) test("remote live source loss revokes final delivery, group=" + group, { timeout: 15000 }, async () => {
+  const scope = createNativeFixtureScope({ runId: crypto.randomUUID(), workerFile: "source-loss", deadlineMs: 2000 })
+  const leafCode = "process.on('SIGTERM',()=>process.stdout.write('late-delivery\\n'));process.stdout.write('ready\\n');setTimeout(()=>process.exit(0),1200)"
+  const sourceCode = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e',${JSON.stringify(leafCode)}],{detached:true,stdio:['ignore','pipe','ignore']});child.stdout.on('data',b=>{process.stdout.write(b);if(String(b).includes('ready'))process.stdout.write('leaf-pid='+child.pid+'\\n')});process.stdin.resume();process.stdin.once('end',()=>process.exit(0))`
+  const source = scope.intent("channel-source"), child = scope.spawn(source, () => spawn(process.execPath, ["-e", sourceCode], { stdio: ["pipe", "pipe", "ignore"] }), { closeAdmission() {} })
+  let output = ""
+  const closed = new Promise<void>(resolve => child.once("close", resolve))
+  await new Promise<void>(resolve => { child.stdout!.on("data", chunk => { output += chunk; if (/leaf-pid=\d+/.test(output)) resolve() }) })
+  await scope.observe(source)
+  const access = nativeFixtureAccess(scope), adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
+  const pid = Number(/leaf-pid=(\d+)/.exec(output)![1]), identity = await adapter.readProcess(pid)
+  assert.ok(identity)
+  let checks = 0
+  const leaf = { ...access.result(source), ref: { runId: source.runId, launchId: crypto.randomUUID() }, role: "orphan-leaf", ownerId: source.launchId, pid, identity, close: null }
+  await access.accept(leaf, child.pid!, true, async () => {
+    const admitted = await access.sourceAlive(source)
+    if (++checks === 1) { child.stdin!.end(); await closed; access.fault(new Error("Fixture source lost before complete"), source) }
+    return admitted
+  })
+  const outcome = await (group ? scope.signal(leaf.ref, "SIGTERM") : access.signalPid(leaf.ref, "SIGTERM")).then(() => null, error => error)
+  await new Promise(resolve => setTimeout(resolve, 1400))
+  const result = await scope.finish()
+  assert.ok(outcome instanceof Error, "unexpected delivery after source loss, group=" + group)
+  assert.match(result.failures.join(";"), /source lost/)
+  assert.equal(result.state, "incomplete")
+  assert.equal(result.launches.find(value => value.pid === pid)!.absent, true)
+})
+
+test("normal client completion bounds a stalled progress write and preserves local failure", { timeout: 5000 }, async t => {
+  const root = await mkdtemp("/tmp/agv-"), socketPath = join(root, "r.sock"), frames: any[] = []
+  let disconnected = false
+  const server = createServer(socket => {
+    socket.once("close", () => { disconnected = true })
+    let buffer = ""
+    socket.on("data", chunk => {
+      buffer += String(chunk)
+      while (buffer.includes("\n")) {
+        const index = buffer.indexOf("\n"), frame = JSON.parse(buffer.slice(0, index)); buffer = buffer.slice(index + 1); frames.push(frame)
+        socket.write(JSON.stringify({ type: "ack", seq: frame.seq, accepted: true }) + "\n")
+      }
+    })
+    socket.on("end", () => socket.end())
+  })
+  await new Promise<void>(resolve => server.listen(socketPath, resolve))
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
+  const scope = createNativeFixtureScope({ runId: root, workerFile: "stalled-writer", deadlineMs: 100 })
+  const config = { socketPath, runId: root, ownerRef: { runId: root, launchId: "source" }, ownerToken: "token" }
+  const client = connectFixture(config, scope)
+  await client.checkpoint()
+  let release!: () => void, entered!: () => void
+  const held = new Promise<void>(resolve => { entered = resolve }), originalWrite = Socket.prototype.write
+  t.mock.method(Socket.prototype, "write", function(this: Socket, ...args: any[]) {
+    if (typeof args[0] === "string" && args[0].includes('"phase":"progress"')) {
+      release = () => args.at(-1)(); entered(); return true
+    }
+    return (originalWrite as any).apply(this, args)
+  })
+  let cleaned = 0
+  scope.finalizer("local owner cleanup", async () => { cleaned++; throw new Error("original stalled local failure") })
+  client.report(); await held
+  const started = Date.now(), finish = client.finish()
+  assert.equal(client.finish(), finish)
+  const result = await Promise.race([finish.then(() => null, error => error), new Promise<Error>(resolve => setTimeout(() => resolve(new Error("unbounded finish")), 1500))])
+  const beforeRelease = frames.length
+  release()
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.equal(cleaned, 1)
+  assert.match(String(result), /original stalled local failure/)
+  assert.ok(Date.now() - started < 500)
+  assert.equal(disconnected, true)
+  assert.equal(frames.length, beforeRelease)
+  assert.equal((await scope.finish()).state, "incomplete")
+  assert.match(scope.snapshot().failures.join(";"), /fixture final report/)
+})
+
+for (const group of [false, true]) test("receiver disconnect revokes a still-live parent's signal authority, group=" + group, async t => {
+  const f = await fixture("live-disconnect", t), access = nativeFixtureAccess(f.scope), accept = access.accept.bind(access)
+  let calls = 0
+  access.accept = (launch, parent, ownGroup, authority, current) => accept(launch, parent, ownGroup, async () => {
+    const admitted = await authority()
+    if (++calls === 1) {
+      f.child.stdin!.end("disconnect\n")
+      while (!f.output().includes("disconnected")) await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    return admitted
+  }, current)
+  while (!f.output().includes("ready")) await new Promise(resolve => setTimeout(resolve, 5))
+  const leaf = f.scope.snapshot().launches.find(value => value.role === "raw-leaf")!
+  const outcome = await (group ? f.scope.signal(leaf.ref, "SIGTERM") : access.signalPid(leaf.ref, "SIGTERM")).then(() => null, error => error)
+  assert.equal(f.child.exitCode, null)
+  await f.closed
+  const result = await f.scope.finish()
+  assert.ok(outcome instanceof Error)
+  assert.match(result.failures.join(";"), /source lost/)
+  assert.equal(result.state, "incomplete")
   assert.ok(result.launches.every(value => value.absent === true))
 })

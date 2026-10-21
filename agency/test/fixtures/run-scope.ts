@@ -38,7 +38,7 @@ type Launch = {
   result: FixtureLaunchResult; child: ChildProcess | null; attempted: boolean; ownGroup: boolean
   closed: Promise<void>; close: () => void; admission: (() => void) | null
   members: ProcessIdentity[]; failed: boolean; remote: boolean; parentPid: number
-  authority: () => Promise<boolean>
+  authority: () => Promise<boolean | "prepared">; authorityCurrent: () => boolean
 }
 type Operation = FixtureResult["operations"][number] & { promise: Promise<unknown> }
 export type NativeFixtureAccess = {
@@ -55,7 +55,7 @@ export type NativeFixtureAccess = {
   beforeAbsence(work: () => Promise<void>): void
   seal(): Promise<void>
   completeSource(): Promise<void>
-  accept(result: FixtureLaunchResult, parentPid: number, ownGroup: boolean, authority: () => Promise<boolean>): Promise<void>
+  accept(result: FixtureLaunchResult, parentPid: number, ownGroup: boolean, authority: () => Promise<boolean | "prepared">, authorityCurrent?: () => boolean): Promise<void>
   unavailable(ref: LaunchRef, reason: FixtureLaunchResult["unavailable"]): void
 }
 const nativeAccess = new WeakMap<FixtureScope, NativeFixtureAccess>()
@@ -179,19 +179,20 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
   const deliverImpl = async (ref: LaunchRef, signal: NodeJS.Signals, group: boolean, absentIsSettled = false, deadlineMs = 15000): Promise<boolean> => {
       const value = find(ref), authorizationUntil = Math.min(until, Date.now() + Math.min(options.deadlineMs, deadlineMs, 15000))
       let active = true
-      const authorized = () => active && Date.now() < Math.min(until, authorizationUntil) && live(value) && value.authority !== refusedAuthority
+      const authorized = () => active && Date.now() < Math.min(until, authorizationUntil) && live(value) && value.authority !== refusedAuthority && value.authorityCurrent()
       const authorize = <T>(label: string, work: () => Promise<T>) => bounded(label, work, authorizationUntil - Date.now())
       try {
         if (execImages.has(ref.launchId)) throw new Error("Fixture exec source not admitted")
         if (absentIsSettled && value.attempted && !live(value)) return false
         if (absentIsSettled && value.result.pid && await authorize("signal absence", () => signalObservation(value.result.pid!)) === null) return false
-        if (!value.attempted || !live(value) || !await authorize("signal owner", value.authority)) throw new Error("Fixture terminal or missing identity")
+        const authority = await authorize("signal owner", value.authority)
+        if (!value.attempted || !live(value) || !authority) throw new Error("Fixture terminal or missing identity")
         if (!value.result.identity && !value.remote) await authorize("signal observation", () => observe(ref))
         const expected = value.result.identity
         if (!expected || !live(value) || group && (expected.processGroupId !== expected.pid || expected.sessionId !== expected.pid)) throw new Error("Fixture missing identity")
         const outcome = await authorize("signal authorization", () => signalOwnedProcess(adapter, {
-          identity: expected, parentPid: value.remote ? null : value.parentPid, knownMembers: [...launches.values()].filter(known => known.authority !== refusedAuthority).flatMap(known => known.result.identity ? [known.result.identity] : []), signal, group,
-        }, sendSignal, authorized))
+          identity: expected, parentPid: value.remote && authority === "prepared" ? null : value.parentPid, knownMembers: [...launches.values()].filter(known => known.authority !== refusedAuthority).flatMap(known => known.result.identity ? [known.result.identity] : []), signal, group,
+        }, sendSignal, authorized, async () => Boolean(await value.authority())))
         if (outcome === "already-absent" && !absentIsSettled) throw new Error("Fixture identity mismatch")
         if (group) for (const member of [...launches.values()].filter(known => known.authority !== refusedAuthority).flatMap(known => known.result.identity && known.result.identity.processGroupId === expected.processGroupId ? [known.result.identity] : [])) {
           if (!value.members.some(prior => sameProcess(prior, member))) value.members.push(structuredClone(member))
@@ -214,7 +215,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       const closed = new Promise<void>(resolve => { close = resolve })
       launches.set(ref.launchId, {
         result: { ref, role, ownerId: options.workerFile, pid: null, identity: null, error: null, exit: null, close: null, absent: null, reporting: input.reporting ?? "direct", unavailable: null },
-        child: null, attempted: false, ownGroup: input.ownGroup ?? false, closed, close, admission: null, members: [], failed: false, remote: false, parentPid: process.pid, authority: async () => true,
+        child: null, attempted: false, ownGroup: input.ownGroup ?? false, closed, close, admission: null, members: [], failed: false, remote: false, parentPid: process.pid, authority: async () => true, authorityCurrent: () => true,
       })
       return ref
     },
@@ -363,7 +364,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       try { await drainChecks() } catch (error) { fail("fixture checks", error) }
       if (failures.length) throw new Error(failures.join("; "))
     },
-    async accept(result, parentPid, ownGroup, authority) {
+    async accept(result, parentPid, ownGroup, authority, authorityCurrent = () => true) {
       if (result.ref.runId !== options.runId) throw new Error("Foreign fixture ref")
       let value = launches.get(result.ref.launchId)
       const prior = value?.result
@@ -371,7 +372,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
       if (!value) {
         let close!: () => void
         const closed = new Promise<void>(resolve => { close = resolve })
-        value = { result: structuredClone(result), child: null, attempted: true, ownGroup, closed, close, admission: null, members: [], failed: false, remote: true, parentPid, authority: refusedAuthority }
+        value = { result: structuredClone(result), child: null, attempted: true, ownGroup, closed, close, admission: null, members: [], failed: false, remote: true, parentPid, authority: refusedAuthority, authorityCurrent: () => false }
         value.result.absent = null
         launches.set(result.ref.launchId, value)
       }
@@ -388,6 +389,7 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
         prior.exit = result.exit; prior.close = result.close; prior.error = result.error
       }
       value.authority = authority
+      value.authorityCurrent = authorityCurrent
       if (value.result.close === true) value.close()
     },
     unavailable(ref, reason) { find(ref).result.unavailable = reason },

@@ -213,3 +213,22 @@ for(const owned of [true,false])test("qualification cleanup scopes refused signa
   assert.equal(result.cleanup,owned?"incomplete":"verified")
   if(owned)assert.match(result.error,/signal/)
 })
+
+for (const mode of ["signal", "shutdown"]) test("qualification owner revokes expired " + mode + " continuation", { timeout: 70000 }, async () => {
+  const { execFile } = await import("node:child_process"), { mkdtemp, readFile } = await import("node:fs/promises"), { fileURLToPath } = await import("node:url")
+  const root = await mkdtemp("/tmp/agv-"), output = join(root, "outcome.json"), entry = fileURLToPath(new URL("../../test/fixtures/run-scope/qualification-deadline.test.mjs", import.meta.url))
+  const env = { ...process.env, AGENCY_FIXTURE_DIST: fileURLToPath(new URL("../", import.meta.url)), AGENCY_DEADLINE_CASE: mode, AGENCY_DEADLINE_OUTPUT: output, AGENCY_TEST_WORKER_RUN: JSON.stringify({ runId: crypto.randomUUID(), workerFiles: [entry], runRoot: root, revision: "final-fixes" }) }
+  delete (env as NodeJS.ProcessEnv).NODE_TEST_CONTEXT
+  delete (env as NodeJS.ProcessEnv).AGENCY_FIXTURE_CONNECTION
+  ;(await workerScope()).artifact(root)
+  const result = await new Promise<{code: number; stdout: string; stderr: string}>((resolve, reject) => execFile(process.execPath, ["--import=" + new URL("./fixtures/run-boundary.js", import.meta.url).href, "--test", entry], { env, timeout: 60000 }, (error, stdout, stderr) => {
+    if (error && (typeof error.code !== "number" || error.killed || error.signal)) reject(error)
+    else resolve({ code: typeof error?.code === "number" ? error.code : 0, stdout, stderr })
+  }))
+  assert.notEqual(result.code, 0, result.stdout + result.stderr)
+  const summary = JSON.parse(await readFile(output, "utf8")), exported = JSON.parse(await readFile(join(summary.root, "result.json"), "utf8"))
+  assert.equal(exported.cleanup, "incomplete")
+  assert.match(exported.error, /deadline/)
+  if (mode === "signal") { assert.doesNotMatch(summary.output, /late-delivery/); assert.equal(summary.boundary.state, "incomplete") }
+  else assert.equal(summary.after, summary.before, "expired shutdown spawned a new command")
+})

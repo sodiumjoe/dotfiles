@@ -115,3 +115,70 @@ for (const mode of ["control-body", "editor-body", "editor-death", "editor-compl
     assert.ok(registry.launches.some((item: any) => item.reporting === "editor-endpoint" && item.exit !== null))
   }
 })
+
+for (const mode of ["reject", "eof", "write", "write-return"]) test("Lua completion memoizes final acknowledgement " + mode, { timeout: 20000 }, async () => {
+  const { createServer } = await import("node:net")
+  const { mkdtemp, writeFile, readFile } = await import("node:fs/promises")
+  const { join } = await import("node:path")
+  const { fileURLToPath } = await import("node:url")
+  const { spawn } = await import("node:child_process")
+  const root = await mkdtemp("/tmp/agv-"), socketPath = join(root, "r.sock"), frames: any[] = []
+  let disconnected = false
+  const server = createServer(socket => {
+    socket.once("close", () => { disconnected = true })
+    let buffer = ""
+    socket.on("data", bytes => {
+      buffer += String(bytes)
+      while (buffer.includes("\n")) {
+        const index = buffer.indexOf("\n"), frame = JSON.parse(buffer.slice(0, index)); buffer = buffer.slice(index + 1); frames.push(frame)
+        if (frame.phase === "complete" && mode === "eof") { socket.end(); continue }
+        socket.write(JSON.stringify({ type: "ack", seq: frame.seq, accepted: frame.phase !== "complete" || mode.startsWith("write"), error: "rejected final snapshot" }) + "\n")
+      }
+    })
+    socket.on("end", () => socket.end())
+  })
+  await new Promise<void>(resolve => server.listen(socketPath, resolve))
+  const runtime = await fixtureRuntime(), ref = runtime.scope.intent("finite-editor"), output = join(root, "completion.json"), script = join(root, "complete.lua")
+  runtime.scope.artifact(root)
+  const config = { socketPath, runId: ref.runId, ownerRef: ref, ownerToken: "finite-token" }
+  await writeFile(script, `vim.opt.runtimepath:append(assert(vim.env.AGENCY_FIXTURE_PLUGIN_ROOT))
+_G.final_write_attempts = 0
+${mode.startsWith("write") ? `local new_pipe = vim.uv.new_pipe
+vim.uv.new_pipe = function(...)
+    local pipe = new_pipe(...)
+    local methods = getmetatable(pipe).__index
+    local write = methods.write
+    methods.write = function(handle, text, callback)
+        if handle == pipe and vim.json.decode(text).phase == "complete" then
+            final_write_attempts = final_write_attempts + 1
+            ${mode === "write-return" ? 'return nil, "injected final write error"' : 'return write(handle, text, function(err) callback(err or "injected final write error") end)'}
+        end
+        return write(handle, text, callback)
+    end
+    vim.uv.new_pipe = new_pipe
+    return pipe
+end` : ""}
+dofile(${JSON.stringify(fileURLToPath(new URL("../../test/fixtures/acp-neovim.lua", import.meta.url)))})
+AgencyFixture.flush()
+local first, reason = pcall(AgencyFixture.complete)
+local second, repeated = pcall(AgencyFixture.complete)
+vim.fn.writefile({vim.json.encode({first=first,reason=tostring(reason),second=second,repeated=tostring(repeated),attempts=final_write_attempts,registry=AgencyFixture.registry()})},${JSON.stringify(output)})
+vim.api.nvim_clear_autocmds({event="VimLeavePre"})
+vim.cmd("qa!")`)
+  const child = runtime.scope.spawn(ref, () => spawn(process.env.NVIM_TEST_EXECUTABLE ?? "nvim", ["--headless", "-u", "NONE", "-i", "NONE", "-l", script], {
+    env: { ...process.env, AGENCY_FIXTURE_CONNECTION: JSON.stringify(config) }, stdio: ["ignore", "ignore", "pipe"], timeout: 15000,
+  }), { closeAdmission() {} })
+  let stderr = ""; child.stderr!.on("data", chunk => { stderr += chunk })
+  await new Promise<void>(resolve => child.once("close", resolve))
+  await new Promise<void>(resolve => server.close(() => resolve()))
+  assert.equal(child.exitCode, 0, stderr)
+  const result = JSON.parse(await readFile(output, "utf8"))
+  assert.equal(frames.filter(value => value.phase === "complete").length, mode === "write-return" ? 0 : 1)
+  if (mode.startsWith("write")) assert.equal(result.attempts, 1)
+  assert.equal(disconnected, true)
+  assert.equal(result.first, false, JSON.stringify(result))
+  assert.equal(result.second, false)
+  assert.equal(result.reason, result.repeated)
+  assert.match(result.reason, mode === "reject" ? /rejected final snapshot/ : mode === "eof" ? /receiver closed/ : /injected final write error/)
+  assert.match(result.registry.failures.join(";"), mode === "reject" ? /rejected final snapshot/ : mode === "eof" ? /receiver closed/ : /injected final write error/)
+})

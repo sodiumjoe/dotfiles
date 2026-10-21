@@ -333,3 +333,44 @@ for (const delayed of ["process", "group"]) test("expired signal authorization c
   assert.equal(f.scope.snapshot().state, "incomplete")
   f.exit()
 })
+
+for (const group of [false, true]) test("final source authorization follows delayed target observations, group=" + group, async () => {
+  const { signalOwnedProcess } = await import("./fixtures/fixture-signal.js")
+  const f = fixture(), entered = deferred<void>(), release = deferred<void>()
+  let reads = 0, sourceAlive = true
+  f.adapter.readProcess = async () => {
+    if (!group && ++reads === 1) { entered.resolve(); await release.promise }
+    return f.identity
+  }
+  f.adapter.readGroup = async () => { entered.resolve(); await release.promise; return [f.identity] }
+  const result = signalOwnedProcess(f.adapter, { identity: f.identity, parentPid: null, knownMembers: [f.identity], signal: "SIGTERM", group }, (pid, signal) => f.signals.push([pid, signal]), () => true, async () => sourceAlive)
+  await entered.promise
+  sourceAlive = false
+  release.resolve()
+  await assert.rejects(result, /source authority lost/)
+  assert.deepEqual(f.signals, [])
+})
+
+test("target generation is checked after the final asynchronous source refresh", async () => {
+  const { signalOwnedProcess } = await import("./fixtures/fixture-signal.js")
+  const f = fixture(), entered = deferred<void>(), release = deferred<void>()
+  const result = signalOwnedProcess(f.adapter, { identity: f.identity, parentPid: null, knownMembers: [f.identity], signal: "SIGTERM", group: false }, (pid, signal) => f.signals.push([pid, signal]), () => true, async () => { entered.resolve(); await release.promise; return true })
+  await entered.promise
+  f.setCurrent({ ...f.identity, birth: "replacement" })
+  release.resolve()
+  await assert.rejects(result, /identity mismatch/)
+  assert.deepEqual(f.signals, [])
+})
+
+test("source disconnect during the final target observation revokes delivery", async () => {
+  const { signalOwnedProcess } = await import("./fixtures/fixture-signal.js")
+  const f = fixture(), entered = deferred<void>(), release = deferred<void>()
+  let reads = 0, sourceConnected = true
+  f.adapter.readProcess = async () => { if (++reads === 2) { entered.resolve(); await release.promise }; return f.identity }
+  const result = signalOwnedProcess(f.adapter, { identity: f.identity, parentPid: null, knownMembers: [f.identity], signal: "SIGTERM", group: false }, (pid, signal) => f.signals.push([pid, signal]), () => sourceConnected, async () => true)
+  await entered.promise
+  sourceConnected = false
+  release.resolve()
+  await assert.rejects(result, /terminal/)
+  assert.deepEqual(f.signals, [])
+})

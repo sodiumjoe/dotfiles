@@ -16,7 +16,7 @@ export async function captureOwnedProcess(adapter: PlatformAdapter, pid: number,
     || ownGroup && (identity.processGroupId !== pid || identity.sessionId !== pid)) throw new Error("Fixture launch capture unavailable or mismatched")
   return { identity: structuredClone(identity), ownerIdentity: structuredClone(ownerIdentity) }
 }
-export async function signalOwnedProcess(adapter: PlatformAdapter, request: OwnedSignal, send: (pid: number, signal: NodeJS.Signals) => void, live: () => boolean = () => true): Promise<"delivered" | "already-absent"> {
+export async function signalOwnedProcess(adapter: PlatformAdapter, request: OwnedSignal, send: (pid: number, signal: NodeJS.Signals) => void, live: () => boolean = () => true, authorize: () => Promise<boolean> = async () => true): Promise<"delivered" | "already-absent"> {
   const { identity: expected, ownerIdentity: owner, knownMembers, signal, group } = request
   const parentPid = owner ? owner.pid : request.parentPid === null ? null : request.parentPid ?? expected.parentPid
   if (!valid(expected) || owner && (!valid(owner) || owner.bootId !== expected.bootId || expected.parentPid !== owner.pid)
@@ -44,9 +44,10 @@ export async function signalOwnedProcess(adapter: PlatformAdapter, request: Owne
     if (new Set(members.map(member => member.pid)).size !== members.length || !members.some(member => sameProcess(expected, member))
       || members.some(member => !valid(member) || member.bootId !== expected.bootId || member.processGroupId !== expected.processGroupId
         || member.sessionId !== expected.sessionId || member.uid !== expected.uid || member.gid !== expected.gid)) throw new Error("Fixture group identity mismatch")
-    if (members.some(member => !knownMembers.some(known => sameProcess(known, member) && (!owner || known.parentPid === member.parentPid)))) throw new Error("Unregistered fixture group member")
+    if (members.some(member => !knownMembers.some(known => sameProcess(known, member) && (parentPid === null || known.parentPid === member.parentPid)))) throw new Error("Unregistered fixture group member")
   }
   await checkOwner()
+  if (!await authorize()) throw new Error("Fixture source authority lost")
   if (!await checkTarget()) return "already-absent"
   if (!live()) throw new Error("Fixture terminal identity")
   send(group ? -expected.processGroupId : expected.pid, signal)

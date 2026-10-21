@@ -5,19 +5,25 @@ vim.env.AGENCY_FIXTURE_CONNECTION = nil
 local socket = assert(uv.new_pipe(false))
 local launches, handles, stops, failures, pending, outgoing = {}, {}, {}, {}, {}, {}
 local commands, infrastructure, authorities = {}, {}, {}
-local completion_error
+local completion_error, final_sequence, final_accepted
 local last_handle
 local sequence, connected, completed, frozen, buffer = 0, false, false, false, ""
 local null = vim.NIL
-local function fail(reason) failures[#failures + 1] = tostring(reason) end
+local function fail(reason)
+    failures[#failures + 1] = tostring(reason)
+    if completed then completion_error = completion_error or tostring(reason) end
+end
 local function transmit(frame)
     sequence = sequence + 1
     frame.seq = sequence
     pending[sequence] = true
     local text = vim.json.encode(frame) .. "\n"
-    if #text > 65536 then fail("Oversized fixture frame"); return end
-    if connected then socket:write(text, function(err) if err then fail(err) end end)
+    if #text > 65536 then fail("Oversized fixture frame"); return sequence end
+    if connected then
+        local ok, request, reason = pcall(socket.write, socket, text, function(err) if err then fail(err) end end)
+        if not ok then fail(request) elseif not request then fail(reason or "Fixture write failed") end
     else outgoing[#outgoing + 1] = text end
+    return sequence
 end
 local function refresh()
     for id, handle in pairs(handles) do
@@ -30,7 +36,7 @@ local function snapshot(phase)
     local reports = {}
     for _, value in pairs(launches) do reports[#reports + 1] = { launch = value, ownGroup = value.reporting == "editor-endpoint", pipesClosed = true } end
     table.sort(reports, function(a, b) return a.launch.ref.launchId < b.launch.ref.launchId end)
-    transmit({ type = "snapshot", phase = phase or "progress", snapshot = { failures = failures, children = {}, launches = reports } })
+    return transmit({ type = "snapshot", phase = phase or "progress", snapshot = { failures = failures, children = {}, launches = reports } })
 end
 local scheduled = false
 local function report()
@@ -88,7 +94,7 @@ socket:connect(config.socketPath, function(err)
     connected = true
     socket:read_start(function(read_err, bytes)
         if read_err then fail(read_err) end
-        if not bytes then if not completed then fail("Fixture receiver closed") end; pending = {}; return end
+        if not bytes then if not completed or next(pending) ~= nil then fail("Fixture receiver closed") end; pending = {}; return end
         buffer = buffer .. bytes
         if #buffer > 65536 then fail("Oversized fixture acknowledgement"); return end
         while true do
@@ -99,7 +105,8 @@ socket:connect(config.socketPath, function(err)
             if not ok or frame.type ~= "ack" or not pending[frame.seq] then fail("Invalid fixture acknowledgement")
             else
                 pending[frame.seq] = nil
-                if frame.accepted ~= true then fail(frame.error or "Fixture report refused") end
+                if frame.accepted ~= true then fail(frame.error or "Fixture report refused")
+                elseif frame.seq == final_sequence then final_accepted = true end
             end
         end
     end)
@@ -188,7 +195,7 @@ function AgencyFixture.flush()
     return true
 end
 function AgencyFixture.complete()
-    if completed then if completion_error then error(completion_error) end; return true end
+    if completed then if completion_error then error(completion_error, 0) end; return true end
     frozen = true
     local ok, reason = pcall(function()
         for _, value in pairs(launches) do if value.reporting == "editor-control" then assert(value.exit ~= null or value.pid == null and value.error ~= null, "Outstanding editor control command") end end
@@ -197,12 +204,21 @@ function AgencyFixture.complete()
     if not ok then completion_error = tostring(reason); fail(reason) end
     if not vim.wait(5000, function() return not scheduled and next(pending) == nil end, 10) then completion_error = completion_error or "Fixture progress reporting deadline"; fail("Fixture progress reporting deadline") end
     completed = true
-    snapshot("complete")
+    final_sequence = snapshot("complete")
     local drained = vim.wait(5000, function() return next(pending) == nil end, 10)
     if not drained then completion_error = completion_error or "Fixture final reporting deadline"; fail("Fixture final reporting deadline") end
-    socket:shutdown(function() socket:close() end)
-    if not vim.wait(5000, function() return socket:is_closing() end, 10) then completion_error = completion_error or "Fixture disconnect deadline"; fail("Fixture disconnect deadline") end
-    if completion_error then error(completion_error) end
+    if drained and not final_accepted then fail("Fixture final acknowledgement unavailable") end
+    local disconnected, disconnect_error = pcall(function()
+        if socket:is_closing() then return end
+        local request, reason = socket:shutdown(function(err)
+            if err then fail(err) end
+            if not socket:is_closing() then socket:close() end
+        end)
+        if not request then fail(reason or "Fixture disconnect failed"); socket:close() end
+    end)
+    if not disconnected then fail(disconnect_error) end
+    if not vim.wait(5000, function() return socket:is_closing() end, 10) then fail("Fixture disconnect deadline"); socket:close() end
+    if completion_error then error(completion_error, 0) end
     return true
 end
 function AgencyFixture.adapter_probe(mode)

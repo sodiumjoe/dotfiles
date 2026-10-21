@@ -36,17 +36,26 @@ if (mode === "oversized") {
   const hello = await request({ type: "hello", connection: supplied, pid: mode === "wrong-pid" ? process.ppid : process.pid })
   process.stdout.write(JSON.stringify(hello) + "\n")
   if (hello.accepted === true) {
-    const ref = scope.intent("raw-leaf", { reporting: mode === "open-pipe" ? "detached-handler" : "direct" })
-    const child = scope.spawn(ref, () => spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 800)"], { stdio: mode === "open-pipe" ? ["ignore", "ignore", "ignore", "pipe"] : "ignore" }), { closeAdmission() {} })
+    const ref = scope.intent("raw-leaf", { reporting: mode === "open-pipe" ? "detached-handler" : "direct", ownGroup: mode === "live-disconnect" })
+    const child = scope.spawn(ref, () => spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 800)"], { detached: mode === "live-disconnect", stdio: mode === "open-pipe" ? ["ignore", "ignore", "ignore", "pipe"] : "ignore" }), { closeAdmission() {} })
     const closed = new Promise<void>(resolve => child.once("close", () => resolve()))
     await scope.observe(ref)
-    const snapshot = () => ({ failures: scope.snapshot().failures, children: [], launches: scope.snapshot().launches.map(launch => ({ launch, ownGroup: false, pipesClosed: mode !== "open-pipe" })) })
+    const snapshot = () => ({ failures: scope.snapshot().failures, children: [], launches: scope.snapshot().launches.map(launch => ({ launch, ownGroup: mode === "live-disconnect", pipesClosed: mode !== "open-pipe" })) })
     const initial = snapshot()
     if (mode === "bad-observation") initial.launches[0]!.launch.identity!.parentPid = 999
     if (mode === "bad-late-observation") initial.launches[0]!.launch.identity = null
     const first = await request({ type: "snapshot", phase: "progress", snapshot: initial })
     process.stdout.write(JSON.stringify(first) + "\n")
     if (first.accepted === true) {
+      if (mode === "live-disconnect") {
+        process.stdout.write("ready\n")
+        process.stdin.resume()
+        await new Promise<void>(resolve => process.stdin.once("data", () => resolve()))
+        socket.end()
+        await new Promise<void>(resolve => socket.closed ? resolve() : socket.once("close", resolve))
+        process.stdout.write("disconnected\n")
+        await closed
+      }
       if (mode === "seal-complete") {
         process.stdout.write("ready\n")
         await sealRequest
@@ -65,7 +74,7 @@ if (mode === "oversized") {
         process.stdout.write(JSON.stringify(await request({ type: "snapshot", phase: "before-intentional-exit", snapshot: snapshot() })) + "\n")
       }
       if (mode === "replay") sequence = 0
-      if (mode === "seal-complete") {} else if (mode === "seal-eof") {
+      if (mode === "seal-complete" || mode === "live-disconnect") {} else if (mode === "seal-eof") {
         void request({ type: "snapshot", phase: "before-intentional-exit", snapshot: snapshot() })
         socket.destroy()
       } else process.stdout.write(JSON.stringify(await request(frame)) + "\n")

@@ -80,21 +80,23 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
     timer.unref();child.once("close",()=>clearTimeout(timer))
     return child
   }
-  const childSpawn=async(argv:string[])=>{
+  const childSpawn=async(argv:string[],remaining=()=>Infinity)=>{
+    remaining()
     const source=!["acp","internal-task-tools","internal-runtime-bridge"].includes(argv[0]??"")
     return source?native("qualification-command",config.launcherPath,argv,{cwd:workspace,env},true):native("qualification-command",config.node,[fixtureEntry,"--config",config.configPath,...argv],{cwd:workspace,env})
   }
-  const command=async(argv:string[])=>{const child=await childSpawn(argv);let stdout="",stderr="";child.stdout.on("data",b=>stdout+=String(b));child.stderr.on("data",b=>stderr+=String(b));child.stdin.end();const code=await completed.get(child)!;return {code,stdout,stderr}}
-  const shutdown=async():Promise<CommandResult>=>{
+  const command=async(argv:string[],remaining=()=>Infinity)=>{const child=await childSpawn(argv,remaining);let stdout="",stderr="";child.stdout.on("data",b=>stdout+=String(b));child.stderr.on("data",b=>stderr+=String(b));child.stdin.end();const code=await completed.get(child)!;return {code,stdout,stderr}}
+  const shutdown=async(remaining=()=>Infinity):Promise<CommandResult>=>{
+    remaining()
     const current=await owner(),args=["shutdown","--stop-agents","--handler-generation",current.generation,"--command-id",randomUUID(),"--json"]
-    const first=await command(args)
+    const first=await command(args,remaining)
     if(first.code!==75)return first
     const envelope=JSON.parse(first.stdout)
     assert.equal(envelope.error.code,"INCOMPLETE")
     assert.match(envelope.error.message,/did not have a stable complete observation|same process generation changed identity/)
     assert.equal(envelope.handlerGeneration,current.generation)
-    await until(async()=>{try{return await adapter.readProcess(current.process.pid)===null?true:undefined}catch(error){if(error instanceof Error&&error.name.endsWith("ObservationUnavailable"))return undefined;throw error}},15000)
-    return command(args)
+    await until(async()=>{remaining();try{return await adapter.readProcess(current.process.pid)===null?true:undefined}catch(error){if(error instanceof Error&&error.name.endsWith("ObservationUnavailable"))return undefined;throw error}},Math.min(15000,remaining()))
+    return command(args,remaining)
   }
   const owner=async()=>{const inspection=await inspectHandlerGeneration(runtimeRoot,adapter);assert.ok(inspection?.disposition==="live"&&inspection.record.phase==="ready"&&inspection.record.process);return {generation:inspection.record.generation,process:inspection.record.process}}
   const sentinel=async()=> (await readFile(sentinelFile,"utf8").catch(()=>"")).trim().split("\n").filter(Boolean).map(line=>JSON.parse(line))
@@ -102,34 +104,37 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
   const verifyCleanup=()=>{cleanup??=cleanupOwned();return cleanup}
   const cleanupOwned=async()=>{
     const failures:unknown[]=[],end=Date.now()+60000
-    const attempt=async(label:string,work:()=>Promise<unknown>,ms=15000)=>{
-      let timer:NodeJS.Timeout|undefined
-      try{await Promise.race([Promise.resolve().then(work),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error(label+" deadline")),Math.max(1,Math.min(ms,end-Date.now())))})])}
-      catch(error){failures.push(error)}finally{clearTimeout(timer)}
+    const attempt=async(label:string,work:(remaining:()=>number)=>Promise<unknown>,ms=15000)=>{
+      const deadline=Math.min(end,Date.now()+ms)
+      let active=true,timer:NodeJS.Timeout|undefined
+      const remaining=()=>{const value=deadline-Date.now();if(!active||value<=0)throw new Error(label+" deadline");return value}
+      try{remaining();await Promise.race([Promise.resolve().then(()=>{remaining();return work(remaining)}),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{active=false;reject(new Error(label+" deadline"))},remaining())})])}
+      catch(error){failures.push(error)}finally{active=false;clearTimeout(timer)}
     }
     for(const peer of peers)try{peer.close()}catch(error){failures.push(error)}
     for(const child of children)try{child.stdin.end()}catch(error){failures.push(error)}
-    await attempt("private owner shutdown",async()=>{
+    await attempt("private owner shutdown",async remaining=>{
       const inventory=await createAgentStore(persistentRoot).inventory().catch(()=>null)
+      remaining()
       await writeFile(join(root,"before-cleanup.json"),JSON.stringify({inventory,launches:launches()}),{mode:0o600})
       const current=await inspectHandlerGeneration(runtimeRoot,adapter)
       if(current?.disposition==="live"){
         const expected=current.record.process
         assert.ok(expected&&launches().some(value=>value.identity&&sameProcess(value.identity,expected)),"private owner is not registered in this run")
-        const reply=await shutdown()
+        const reply=await shutdown(remaining)
         assert.equal(reply.code,0,reply.stdout+reply.stderr)
       }
     })
-    for(const child of children)await attempt("owned command stop",async()=>{
+    for(const child of children)await attempt("owned command stop",async remaining=>{
       const launch=launches().find(value=>value.pid===child.pid)
       assert.ok(launch,"unregistered owned command")
-      if(child.exitCode===null&&child.signalCode===null)await nativeFixtureAccess(scope).signalPid(launch.ref,"SIGTERM")
+      if(child.exitCode===null&&child.signalCode===null)await nativeFixtureAccess(scope).signalPid(launch.ref,"SIGTERM",remaining())
     },5000)
     await attempt("owned command join",()=>until(async()=>pending.size===0?true:undefined,5000),5000)
-    for(const child of children)await attempt("owned command kill",async()=>{
+    for(const child of children)await attempt("owned command kill",async remaining=>{
       const launch=launches().find(value=>value.pid===child.pid)
       assert.ok(launch,"unregistered owned command")
-      if(child.exitCode===null&&child.signalCode===null)await nativeFixtureAccess(scope).signalPid(launch.ref,"SIGKILL")
+      if(child.exitCode===null&&child.signalCode===null)await nativeFixtureAccess(scope).signalPid(launch.ref,"SIGKILL",remaining())
     },5000)
     await attempt("owned command close",()=>until(async()=>pending.size===0?true:undefined,5000),5000)
     await attempt("fixture reports",()=>receiver.settle(sourceRefs))
