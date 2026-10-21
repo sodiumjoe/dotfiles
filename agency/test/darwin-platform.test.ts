@@ -1681,7 +1681,7 @@ qualificationTest("bounds singleton Handler phase pauses by timeoutMs", async t 
   childPipe(child, 4).destroy()
 })
 
-qualificationTest("bounds singleton launcher transition pauses by timeoutMs", async t => {
+for (const startupDelayMs of [0, 1100]) qualificationTest(`bounds singleton launcher transition pauses by timeoutMs after ${startupDelayMs}ms startup`, async t => {
   const scope = await FixtureScope.create(t)
   const root = scope.root
   const retainedDirectory = join(root, "retained")
@@ -1697,15 +1697,19 @@ qualificationTest("bounds singleton launcher transition pauses by timeoutMs", as
   const marker = agencyLaunchMarker("handler", launchAttemptId)
   const setupStarted = Date.now()
   await new Promise(resolve => setTimeout(resolve, 600))
-  const child = (await fixtureSpawner())("singleton-contender", node, [singletonFixture, "contender", configPath], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe"] }, { source: true })
+  const child = (await fixtureSpawner())("singleton-contender", node, ["--import=data:text/javascript," + encodeURIComponent(`await new Promise(resolve => setTimeout(resolve, ${startupDelayMs}))`), singletonFixture, "contender", configPath], { argv0: marker, detached: true, stdio: ["ignore", "ignore", "pipe"] }, { source: true })
   if (child.pid === undefined) throw new Error("launcher pause contender pid is unavailable")
   scope.track("launcher pause contender", marker, child.pid)
-  const exit = await waitChild(child, 1000)
+  const timing = { spawnedAt: Date.now(), exitAt: null as number | null, closeAt: null as number | null }
+  child.once("exit", () => { timing.exitAt = Date.now() })
+  child.once("close", () => { timing.closeAt = Date.now() })
+  t.after(async () => { await writePrivateFile(join(root, "launcher-pause-timing.json"), JSON.stringify({ ...timing, resultAt: await lstat(resultPath).then(value => value.mtimeMs, () => null) })) })
+  const exit = await waitChild(child, 5000)
   const events = await lines(eventLog)
   const started = Number(events.find(value => value.startsWith("launcher:pause_started:"))?.split(":").at(-1))
   assert.ok(Number.isSafeInteger(started))
   assert.ok(started - setupStarted >= 600)
-  const elapsed = Date.now() - started
+  const elapsed = (await lstat(resultPath)).mtimeMs - started
   assert.equal(exit.signal, null)
   assert.notEqual(exit.code, null)
   assert.notEqual(exit.code, 0)

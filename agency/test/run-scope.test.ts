@@ -3,6 +3,7 @@ import test from "node:test"
 import { EventEmitter } from "node:events"
 import type { ChildProcess } from "node:child_process"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
+import { registerFixtureChild } from "./fixtures/fixture-spawn.js"
 import { createSyntheticFixtureScope } from "./fixtures/run-scope.js"
 
 function deferred<T>() {
@@ -460,4 +461,73 @@ for (const delayed of ["process", "group", "unavailable"]) test("expired final a
   await new Promise(resolve => setImmediate(resolve))
   assert.deepEqual(scope.snapshot(), published)
   assert.equal(probes, started)
+})
+
+for (const terminated of [false, true]) test(`known leaf exec defers first observation until initialization${terminated ? " and refuses a terminated handle" : ""}`, async () => {
+  const f = fixture(), shell = { ...f.identity, birth: "10:/bin/sh" }, node = { ...f.identity, birth: "10:/pinned/node" }
+  let initialized = false, reads = 0
+  f.adapter.readProcess = async () => { reads++; return initialized ? node : shell }
+  Reflect.apply(registerFixtureChild, undefined, [{ scope: f.scope }, f.ref, () => f.child, undefined, { observeAfterExec: true }])
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(reads, 0)
+  initialized = true
+  if (terminated) f.exit()
+  assert.deepEqual(await f.scope.observe(f.ref), terminated ? null : node)
+  assert.equal(reads, terminated ? 0 : 1)
+  f.adapter.readProcess = async () => null
+  if (!terminated) f.exit()
+  assert.equal((await f.scope.finish()).state, "settled")
+})
+
+import { shutdownFixtureHandler } from "./agent-support.js"
+import { until } from "./control-support.js"
+
+for (const outcome of ["reaped", "unreaped", "failed-request"] as const) test(`accepted fixture shutdown joins asynchronous owner exit: ${outcome}`, async () => {
+  const f = fixture(), generation = "a".repeat(64)
+  f.register()
+  await f.scope.observe(f.ref)
+  let tracked = false, absence = false
+  const cleanup = shutdownFixtureHandler({ generation, process: f.identity }, {
+    request: async () => {
+      if (outcome === "failed-request") throw new Error("request unavailable")
+      return { protocol: PROTOCOL, requestId: "fixture", handlerGeneration: generation, ok: true, result: { state: "shutdown_accepted", commandId: "fixture", handlerGeneration: generation } }
+    },
+    track: async () => {
+      await new Promise(resolve => setImmediate(resolve))
+      tracked = true
+      if (outcome !== "failed-request") {
+        f.exit()
+        if (outcome === "unreaped") f.setCurrent(f.identity)
+      }
+    },
+    signal: async () => { assert.equal(tracked, true); await f.scope.signal(f.ref, "SIGKILL"); f.exit() },
+    absent: async () => { await until(async () => await f.adapter.readProcess(f.identity.pid) === null ? true : undefined, 30); absence = true },
+  })
+  if (outcome === "unreaped") await assert.rejects(cleanup, /fixture observation timed out/)
+  else await cleanup
+  assert.equal(absence, outcome !== "unreaped")
+  assert.deepEqual(f.signals, outcome === "failed-request" ? [[123, "SIGKILL"]] : [])
+  f.setCurrent(null)
+  assert.equal((await f.scope.finish()).state, "settled")
+})
+
+import { PROTOCOL } from "../src/control/protocol.js"
+
+import { retryQualificationShutdown } from "./qualification-support.js"
+
+for (const mode of ["eventual-absence", "never-reaped", "unavailable"] as const) test(`qualification terminal uncertainty waits for physical absence: ${mode}`, async () => {
+  const generation = "fixture-generation", terminal = { pid: 123, state: "terminal" }
+  let current: typeof terminal | null = terminal, observedAbsent = false, retries = 0, reads = 0
+  const first = { code: 75, stdout: JSON.stringify({ error: { code: "INCOMPLETE", message: "terminal process remains unreaped" }, handlerGeneration: generation }), stderr: "" }
+  const work = retryQualificationShutdown(first, generation, () => until(async () => {
+    reads++
+    if (mode === "unavailable") return undefined
+    if (current === null) { observedAbsent = true; return true }
+    if (mode === "eventual-absence" && reads === 2) current = null
+    return undefined
+  }, 50).then(() => undefined), async () => { assert.equal(observedAbsent, true); retries++; return { code: 0, stdout: "complete", stderr: "" } })
+  if (mode === "eventual-absence") assert.equal((await work).code, 0)
+  else await assert.rejects(work, /fixture observation timed out/)
+  assert.equal(retries, mode === "eventual-absence" ? 1 : 0)
+  assert.ok(reads >= 3)
 })

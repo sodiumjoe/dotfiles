@@ -29,7 +29,7 @@ async function executeDescriptor(signal:AbortSignal){
   assert.equal(descriptor.command,config.launcherPath);assert.deepEqual(descriptor.env,[])
   const launch=scope.intent("worker-task-mcp");helperRef=launch
   const command=descriptor.command;assert.equal(typeof command,"string");assert.ok(typeof command==="string")
-  helper=registerFixtureChild(runtime,launch,()=>spawn(command,args,{cwd:process.cwd(),env:cleanFixtureEnvironment(),stdio:"pipe"}))
+  helper=registerFixtureChild(runtime,launch,()=>spawn(command,args,{cwd:process.cwd(),env:cleanFixtureEnvironment(),stdio:"pipe"}),undefined,{observeAfterExec:true})
   const current=helper,exit=new Promise<number|null>((resolve,reject)=>{current.once("close",resolve);current.once("error",reject)});let stderr="";current.stderr.on("data",b=>stderr+=String(b))
   let identity
   const peer=taskMcpPeer(current.stdout,current.stdin),abort=()=>{void stop()};signal.addEventListener("abort",abort,{once:true})

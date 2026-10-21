@@ -50,6 +50,21 @@ export async function verifyFixtureProviderGroup(identity: ProcessIdentity, io: 
   return members
 }
 
+export async function shutdownFixtureHandler(current: { generation: string; process: ProcessIdentity }, owner: {
+  request(): Promise<import("../src/control/protocol.js").ControlReply>
+  track(): Promise<void>
+  signal(): Promise<void>
+  absent(): Promise<void>
+}): Promise<void> {
+  let reply: import("../src/control/protocol.js").ControlReply | undefined
+  try { reply = await owner.request() } catch {}
+  if (reply && (reply.handlerGeneration !== current.generation || reply.ok && "state" in reply.result && reply.result.state === "shutdown_accepted" && reply.result.handlerGeneration !== current.generation)) throw new Error("fixture shutdown generation changed")
+  const accepted = reply?.ok && "state" in reply.result && reply.result.state === "shutdown_accepted"
+  await owner.track()
+  if (!accepted) await owner.signal()
+  await owner.absent()
+}
+
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
   const workspace = join(f.root, "workspace"), otherWorkspace = join(f.root, "other-workspace")
@@ -80,9 +95,10 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     await trackProviders(); await releaseBarrier(); await Promise.allSettled(requests)
     const current = await handler().catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return null })
     if (current?.process && await f.observe(current.process.pid) !== null) {
-      try { await f.call({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }) } catch {}
-      await trackProviders()
-      await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process)
+      await shutdownFixtureHandler({ generation: current.generation, process: current.process }, {
+        request: () => f.call({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true }),
+        track: trackProviders, signal: () => f.signal(current.process!, "SIGKILL"), absent: () => proveAbsent(current.process!),
+      })
     }
     await trackProviders()
     const agents = await inventory(), launches = await inventoryLaunches(join(f.paths.persistentRoot, "launches")), probes = await createCatalogStore(f.paths.persistentRoot).inventory()

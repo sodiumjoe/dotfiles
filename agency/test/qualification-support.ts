@@ -21,6 +21,15 @@ import { fixtureRuntime, registerFixtureChild, cleanFixtureEnvironment } from ".
 import { workerReceiver } from "./fixtures/run-boundary.js"
 import { nativeFixtureAccess, type LaunchRef } from "./fixtures/run-scope.js"
 type CommandResult={code:number;stdout:string;stderr:string}
+export async function retryQualificationShutdown(first: CommandResult, generation: string, absent: () => Promise<void>, retry: () => Promise<CommandResult>): Promise<CommandResult> {
+  if(first.code!==75)return first
+  const envelope=JSON.parse(first.stdout)
+  assert.equal(envelope.error.code,"INCOMPLETE")
+  assert.match(envelope.error.message,/did not have a stable complete observation|same process generation changed identity|^terminal process remains unreaped$/)
+  assert.equal(envelope.handlerGeneration,generation)
+  await absent()
+  return retry()
+}
 export type QualificationFixture={config:PrivateConfig;paths:PlatformPaths;root:string;workspace:string;adapter:PlatformAdapter;command(argv:string[]):Promise<CommandResult>;shutdown():Promise<CommandResult>;spawn(argv:string[]):Promise<ChildProcessWithoutNullStreams>;native(role:string,file:string,args:string[],options:SpawnOptions,source?:boolean):ChildProcessWithoutNullStreams;owner():Promise<{generation:string;process:ProcessIdentity}>;bridge():Promise<Awaited<ReturnType<typeof connectHandlerBridge>>>;sentinel():Promise<Array<{pid:number;operation:string;path:string}>>;verifyCleanup():Promise<void>}
 export async function qualificationFixture(t:TestContext,options:{provider?:"ordinary"|"reporting";editor?:boolean;taskInput?:TaskCreateInput}={}):Promise<QualificationFixture>{
   const root=await mkdtemp(process.platform==="darwin"?"/private/tmp/qq-":"/tmp/qq-"),runtimeRoot=await mkdtemp(process.platform==="darwin"?"/private/tmp/qr-":"/tmp/qr-"),persistentRoot=join(root,"p"),workspace=join(root,"workspace"),packageRoot=fileURLToPath(new URL("../../",import.meta.url))
@@ -90,13 +99,7 @@ export async function qualificationFixture(t:TestContext,options:{provider?:"ord
     remaining()
     const current=await owner(),args=["shutdown","--stop-agents","--handler-generation",current.generation,"--command-id",randomUUID(),"--json"]
     const first=await command(args,remaining)
-    if(first.code!==75)return first
-    const envelope=JSON.parse(first.stdout)
-    assert.equal(envelope.error.code,"INCOMPLETE")
-    assert.match(envelope.error.message,/did not have a stable complete observation|same process generation changed identity/)
-    assert.equal(envelope.handlerGeneration,current.generation)
-    await until(async()=>{remaining();try{return await adapter.readProcess(current.process.pid)===null?true:undefined}catch(error){if(error instanceof Error&&error.name.endsWith("ObservationUnavailable"))return undefined;throw error}},Math.min(15000,remaining()))
-    return command(args,remaining)
+    return retryQualificationShutdown(first,current.generation,()=>until(async()=>{remaining();try{return await adapter.readProcess(current.process.pid)===null?true:undefined}catch(error){if(error instanceof Error&&error.name.endsWith("ObservationUnavailable"))return undefined;throw error}},Math.min(15000,remaining())).then(()=>undefined),()=>command(args,remaining))
   }
   const owner=async()=>{const inspection=await inspectHandlerGeneration(runtimeRoot,adapter);assert.ok(inspection?.disposition==="live"&&inspection.record.phase==="ready"&&inspection.record.process);return {generation:inspection.record.generation,process:inspection.record.process}}
   const sentinel=async()=> (await readFile(sentinelFile,"utf8").catch(()=>"")).trim().split("\n").filter(Boolean).map(line=>JSON.parse(line))
