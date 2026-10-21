@@ -271,36 +271,38 @@ function createScope(options: ScopeOptions, adapter: PlatformAdapter, sendSignal
             }
             if (value.result.pid === null) { value.result.absent = true; return }
           } catch (error) { fail(value.result.role, error, value.result.ref) }
-          if (value.result.pid === null) return
+        }))
+        for (const value of launches.values()) {
+          if (value.result.pid === null) continue
           try {
             const absenceUntil = Math.min(until, Date.now() + Math.min(options.deadlineMs, 15000))
-            await bounded("final absence", async () => {
-              while (true) {
-                if (Date.now() >= absenceUntil) throw new Error("unresolved absence deadline")
-                const boot = await bounded("absence boot", () => adapter.bootId(), 15000)
-                if (value.result.identity && boot !== value.result.identity.bootId) throw new Error("absence boot mismatch")
-                try {
-                  const current = await bounded("absence identity", () => signalObservation(value.result.pid!), 15000)
-                  let absent = current === null || value.result.identity !== null && !sameProcessGeneration(value.result.identity, current)
-                  if (value.ownGroup) {
-                    const members = await bounded("absence group", () => adapter.readGroup(value.result.pid!), 15000)
-                    if (members.length) absent = false
-                    for (const member of value.members) {
-                      const observed = await bounded("absence member", () => adapter.readProcess(member.pid), 15000)
-                      if (observed && sameProcessGeneration(member, observed)) absent = false
-                    }
+            const absence = <T>(label: string, work: () => Promise<T>) => bounded(label, work, absenceUntil - Date.now())
+            while (true) {
+              if (Date.now() >= absenceUntil) throw new Error("unresolved absence deadline")
+              const boot = await absence("absence boot", () => adapter.bootId())
+              if (value.result.identity && boot !== value.result.identity.bootId) throw new Error("absence boot mismatch")
+              try {
+                const current = await absence("absence identity", () => adapter.readProcess(value.result.pid!))
+                let absent = current === null || value.result.identity !== null && !sameProcessGeneration(value.result.identity, current)
+                if (value.ownGroup) {
+                  const members = await absence("absence group", () => adapter.readGroup(value.result.pid!))
+                  if (members.length) absent = false
+                  for (const member of value.members) {
+                    const observed = await absence("absence member", () => adapter.readProcess(member.pid))
+                    if (observed && sameProcessGeneration(member, observed)) absent = false
                   }
-                  value.result.absent = absent
-                  if (absent) return
-                } catch (error) {
-                  value.result.absent = null
-                  if (Date.now() >= absenceUntil) throw error
                 }
-                await new Promise<void>(resolve => setTimeout(resolve, Math.min(25, Math.max(1, absenceUntil - Date.now()))))
+                if (Date.now() >= absenceUntil) throw new Error("unresolved absence deadline")
+                value.result.absent = absent
+                if (absent) break
+              } catch (error) {
+                if (Date.now() >= absenceUntil) throw error
+                value.result.absent = null
               }
-            }, 15000)
+              await new Promise<void>(resolve => setTimeout(resolve, Math.min(25, Math.max(1, absenceUntil - Date.now()))))
+            }
           } catch (error) { fail(value.result.role, error, value.result.ref) }
-        }))
+        }
         phase = "closed"
         return snapshot()
       })()

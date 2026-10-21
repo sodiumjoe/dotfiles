@@ -6,9 +6,9 @@ import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
 import { createSyntheticFixtureScope } from "./fixtures/run-scope.js"
 
 function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>(done => { resolve = done })
-  return { promise, resolve }
+  let resolve!: (value: T) => void, reject!: (error: Error) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 function fixture(deadlineMs = 1000, reporting: import("./fixtures/run-scope.js").Reporting = "direct", ownGroup = false) {
   const identity: ProcessIdentity = { bootId: "boot", pid: 123, birth: "10:fixture", parentPid: process.pid, processGroupId: 123, sessionId: 123, uid: 1, gid: 1 }
@@ -373,4 +373,91 @@ test("source disconnect during the final target observation revokes delivery", a
   release.resolve()
   await assert.rejects(result, /terminal/)
   assert.deepEqual(f.signals, [])
+})
+
+async function finalAbsenceFixture(count: number) {
+  const identities = Array.from({ length: count }, (_, index): ProcessIdentity => ({ bootId: "boot", pid: 1000 + index, birth: "10:fixture", parentPid: process.pid, processGroupId: 1000 + index, sessionId: 1000 + index, uid: 1, gid: 1 }))
+  const adapter: PlatformAdapter = {
+    platform: "linux", bootId: async () => "boot",
+    readProcess: async pid => identities.find(identity => identity.pid === pid) ?? null,
+    readGroup: async () => [], signalGroup: async () => assert.fail("unexpected signal"),
+  }
+  const scope = createSyntheticFixtureScope({ runId: "absence", workerFile: "absence.test", deadlineMs: 120000, adapter, signal: () => assert.fail("unexpected signal") })
+  for (const identity of identities) {
+    const child = Object.assign(new EventEmitter(), { pid: identity.pid, exitCode: null, signalCode: null }) as unknown as ChildProcess
+    const ref = scope.intent("group-" + identity.pid, { ownGroup: true })
+    scope.spawn(ref, () => child, { closeAdmission() {} })
+    await scope.observe(ref)
+    child.emit("exit", 0, null); child.emit("close", 0, null)
+  }
+  adapter.readProcess = async () => null
+  return { scope, adapter }
+}
+
+test("final absence observes every admitted launch without flooding finite observation work", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 })
+  const { scope, adapter } = await finalAbsenceFixture(189)
+  let finite = Promise.resolve()
+  adapter.readGroup = () => {
+    const observation = finite.then(() => new Promise<void>(resolve => setTimeout(resolve, 100)))
+    finite = observation
+    return observation.then(() => [])
+  }
+  let result: Awaited<ReturnType<typeof scope.finish>> | undefined
+  void scope.finish().then(value => { result = value })
+  for (let index = 0; index < 500 && !result; index++) {
+    await new Promise(resolve => setImmediate(resolve))
+    t.mock.timers.tick(100)
+  }
+  assert.ok(result, "finish did not respect its existing scope budget")
+  assert.equal(result.state, "settled", JSON.stringify(result.failures))
+  assert.equal(result.launches.length, 189)
+  assert.equal(result.launches.filter(value => value.absent === true).length, 189)
+  assert.equal(result.launches.every(value => value.identity?.bootId === "boot" && value.exit?.code === 0 && value.close === true), true)
+})
+
+test("hung and unavailable absence observations remain incomplete while unrelated launches are observed", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 })
+  const { scope, adapter } = await finalAbsenceFixture(3)
+  adapter.readGroup = pid => pid === 1000 ? new Promise(() => {}) : pid === 1001 ? Promise.reject(new Error("observation unavailable")) : Promise.resolve([])
+  let result: Awaited<ReturnType<typeof scope.finish>> | undefined
+  void scope.finish().then(value => { result = value })
+  for (let index = 0; index < 400 && !result; index++) {
+    await new Promise(resolve => setImmediate(resolve))
+    t.mock.timers.tick(100)
+  }
+  assert.ok(result)
+  assert.equal(result.state, "incomplete")
+  assert.deepEqual(result.launches.map(value => value.absent), [null, null, true])
+  assert.equal(result.failures.length, 2)
+  assert.ok(Date.now() < 121000)
+})
+
+for (const delayed of ["process", "group", "unavailable"]) test("expired final absence cannot publish success or start more probes after delayed " + delayed, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 })
+  const { scope, adapter } = await finalAbsenceFixture(1), boot = deferred<string>(), entered = deferred<void>(), held = deferred<ProcessIdentity | null>(), group = deferred<ProcessIdentity[]>()
+  let probes = 0
+  adapter.bootId = () => boot.promise
+  adapter.readProcess = async () => { probes++; if (delayed !== "group") { entered.resolve(); return held.promise }; return null }
+  adapter.readGroup = async () => { probes++; entered.resolve(); return group.promise }
+  const done = scope.finish()
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(1000)
+  boot.resolve("boot")
+  await entered.promise
+  t.mock.timers.tick(14001)
+  const result = await done, published = scope.snapshot(), started = probes
+  assert.equal(result.state, "incomplete")
+  assert.equal(result.launches[0]!.absent, null)
+  if (delayed === "unavailable") {
+    adapter.readProcess = async () => { probes++; const error = new Error("observation unavailable"); error.name = "LinuxObservationUnavailable"; throw error }
+    const error = new Error("observation unavailable"); error.name = "LinuxObservationUnavailable"
+    held.reject(error)
+  } else held.resolve(null)
+  group.resolve([])
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(100)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(scope.snapshot(), published)
+  assert.equal(probes, started)
 })
