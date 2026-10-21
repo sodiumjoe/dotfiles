@@ -13,7 +13,7 @@ import type { HostRoute } from "../src/hosts/router.js"
 const execute = (file:string,args:string[],options:import("node:child_process").ExecFileOptions={})=>promisify(execFile)(file,args,{timeout:15000,...options,encoding:"utf8"})
 const binding = { sourceRevision: "a".repeat(40), sourceDigest: "b".repeat(64), distDigest: "c".repeat(64), nodeVersion: "v24.13.0", protocol: "agency-bridge/2" } as const
 const sample = (root: string): PrivateConfig => ({ version: 1, batchId: randomUUID(), hostId: "a".repeat(64), packageRoot: join(root,"pkg"), persistentRoot: join(root,"p"), runtimeRoot: join(root,"r"), node: process.execPath, launcherPath: join(root,"p/agy"), configPath: join(root,"p/config.json"), editor: null, binding, taskCreate: null })
-async function fixture(t: test.TestContext) { const root = await mkdtemp("/private/tmp/qc-"); t.after(() => rm(root,{recursive:true,force:true})); return {root, config: sample(root)} }
+async function fixture(t: test.TestContext) { const root = await mkdtemp(process.platform === "darwin" ? "/private/tmp/qc-" : "/tmp/qc-"); t.after(() => rm(root,{recursive:true,force:true})); return {root, config: sample(root)} }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex")
 test("private descriptors carry explicit candidate paths and refs", async t => {
   const {config} = await fixture(t), ref = {hostId:config.hostId, taskId:randomUUID()}

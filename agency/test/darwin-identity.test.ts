@@ -469,7 +469,7 @@ darwinTest("binds Handler launchAttemptId into argv0 without changing the comman
   await waitFor(async () => await adapter.readProcess(result.record.process!.pid) === null, "Handler fixture survived")
 })
 
-test("Darwin process groups preserve unstable identity observation diagnostics", async () => {
+darwinTest("Darwin process groups preserve unstable identity observation diagnostics", async () => {
   const command = agencyLaunchMarker("handler",canonicalId)
   const { execute } = scriptedExecutor([psRow({pid:401,ppid:402,command}),psRow({pid:401,ppid:1,command})])
   await assert.rejects(createDarwinAdapter(execute).readProcess(401), error => {
