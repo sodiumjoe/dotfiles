@@ -5,7 +5,7 @@ import { chmod, mkdir, open, readFile, rename, rm, symlink, writeFile } from "no
 import { join } from "node:path"
 import test from "node:test"
 import { readShutdownReceipt, writeShutdownReceipt, assertSameShutdown, type ShutdownReceipt } from "../src/handler/receipt.js"
-import { shutdownHandler, type ShutdownContext } from "../src/handler/shutdown.js"
+import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "../src/handler/shutdown.js"
 import { type HandlerStatus, type ControlRequest } from "../src/control/protocol.js"
 import { privateRoot, launch } from "./control-support.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
@@ -193,4 +193,37 @@ test("shutdown verifies catalog discharge outside the shared mutation queue", { 
   const reply = await shutdownHandler(request(), ctx)
   assert.equal(reply.ok, true)
   assert.equal(verified, true)
+})
+
+for (const sync of [false, true]) test(`failed agent drain still attempts catalog and resumes both services (sync=${sync})`, async t => {
+  const ctx = await context(t), command = { ...request(), stopAgents: true }
+  const attempts: string[] = [], resumed: string[] = []
+  ctx.agents = { assertOrdinaryShutdownSafe() {}, freezeAndDrain() { attempts.push("agents"); if (sync) throw new Error("agent drain failed"); return Promise.reject(new Error("agent drain failed")) }, async verifyDischarged() {}, resume() { resumed.push("agents") } }
+  ctx.catalog = { async freezeAndDrain() { attempts.push("catalog") }, async verifyDischarged() {}, resume() { resumed.push("catalog") } }
+  const reply = await shutdownHandler(command, ctx)
+  assert.deepEqual(attempts.sort(), ["agents", "catalog"])
+  assert.equal(reply.ok, false)
+  assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
+  assert.equal(ctx.state.phase, "ready")
+  assert.deepEqual(resumed.sort(), ["agents", "catalog"])
+})
+
+for (const failures of [[new Error("agents"), new Error("catalog")], [undefined, null]]) test(`service drain retains both rejection values (${String(failures[0])})`, async t => {
+  const ctx = await context(t)
+  ctx.agents = { assertOrdinaryShutdownSafe() {}, async freezeAndDrain() { throw failures[0] }, async verifyDischarged() {}, resume() {} }
+  ctx.catalog = { async freezeAndDrain() { throw failures[1] }, async verifyDischarged() {}, resume() {} }
+  await assert.rejects(drainHandlerServices(ctx, true), error => { assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, failures); return true })
+})
+
+test("service drain joins the remaining catalog operation after agent failure", async t => {
+  const ctx = await context(t), entered = Promise.withResolvers<void>(), held = Promise.withResolvers<void>()
+  ctx.agents = { assertOrdinaryShutdownSafe() {}, async freezeAndDrain() { throw new Error("agents") }, async verifyDischarged() {}, resume() {} }
+  ctx.catalog = { freezeAndDrain() { entered.resolve(); return held.promise }, async verifyDischarged() {}, resume() {} }
+  let settled = false
+  const operation = drainHandlerServices(ctx, true)
+  void operation.then(() => { settled = true }, () => { settled = true })
+  await entered.promise
+  assert.equal(settled, false)
+  held.resolve()
+  await assert.rejects(operation, AggregateError)
 })

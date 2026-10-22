@@ -36,6 +36,15 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
   return receipt
 }
 
+export async function drainHandlerServices(context: Pick<ShutdownContext, "agents" | "catalog">, stopAgents: boolean): Promise<void> {
+  const results = await Promise.allSettled([
+    Promise.resolve().then(() => context.agents?.freezeAndDrain(stopAgents)),
+    Promise.resolve().then(() => context.catalog?.freezeAndDrain()),
+  ])
+  const failures = results.filter(result => result.status === "rejected").map(result => result.reason)
+  if (failures.length) throw new AggregateError(failures, "Handler service drain failed")
+}
+
 export async function shutdownHandler(request: ShutdownRequest, context: ShutdownContext): Promise<ControlReply> {
   try {
     if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
@@ -52,8 +61,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
       if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler has not completed startup")
       if (!request.stopAgents) context.agents?.assertOrdinaryShutdownSafe()
       const operation = Promise.resolve().then(async () => {
-        await context.agents?.freezeAndDrain(request.stopAgents)
-        await context.catalog?.freezeAndDrain()
+        await drainHandlerServices(context, request.stopAgents)
         await context.catalog?.verifyDischarged()
         return context.mutations.queue.run(async () => {
           if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
