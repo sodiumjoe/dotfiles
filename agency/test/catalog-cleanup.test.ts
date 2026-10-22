@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test, { type TestContext } from "node:test"
 import fs, { access } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
+import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { gate, syntheticProbeFixture } from "./catalog-support.js"
 import type { ProbeOutcome } from "../src/catalog/probes.js"
@@ -184,7 +185,7 @@ for (const fault of ["sync", "stat", "close", "write", "marker"] as const) test(
   assert.deepEqual(f.signals, ["SIGTERM"])
 })
 
-test("late preparation after probe expiry cannot create capture files or spawn", async t => {
+test("late preparation after probe expiry cannot spawn and permits fresh discharge", async t => {
   const f = await syntheticProbeFixture(t), entered = gate(), held = gate(), cleanupQueued = gate()
   const queueRun = f.queue.run.bind(f.queue)
   let queued = 0
@@ -204,6 +205,19 @@ test("late preparation after probe expiry cannot create capture files or spawn",
   assert.equal(f.spawnInvoked(), false)
   assert.deepEqual(f.signals, [])
   await assert.rejects(access(f.request.meta.workPath), { code: "ENOENT" })
+  await f.runtime.verifyDischarged()
+  assert.deepEqual([...f.runtime.issues!()], [])
+  f.store.writeProbeMeta = writeMeta
+  const commandId = randomUUID(), attemptId = randomUUID()
+  const next = { ...f.request, meta: { ...f.request.meta, commandId, attemptId, workPath: join(f.root, "catalog/work", attemptId) } }
+  await f.store.writeCommand({ version: 1, commandId, hostId: next.meta.hostId, handlerGeneration: f.generation, batchId: randomUUID(), fingerprints: [{ providerId: f.profile.id, fingerprint: next.evidence.fingerprint }], attempts: [{ providerId: f.profile.id, attemptId }], state: "pending", snapshotId: null }, null)
+  f.bindRequest(next); f.releaseWorkerIdentity(); f.releaseResult()
+  const later = await f.runtime.run(next, new AbortController().signal)
+  assert.equal(later.error, null)
+  assert.equal(later.record.phase, "cleanup_verified")
+  await f.runtime.verifyDischarged()
+  assert.equal(outcome!.error?.code, "PROBE_CLEANUP_UNVERIFIED")
+  assert.equal(outcome!.result, null)
 })
 
 test("expired physical observation never authorizes a late probe signal or discharge", async t => {

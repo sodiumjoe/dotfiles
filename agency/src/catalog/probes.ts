@@ -98,7 +98,10 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         check()
         for (const attempt of current.values()) {
           if (attempt.cleanupFailed && attempt.repairable) {
-            try { await publishClean(attempt, check); attempt.publicationFailed = false; attempt.cleanupFailed = false }
+            try {
+              if (attempt.transition || attempt.spawnInvoked) await publishClean(attempt, check)
+              check(); attempt.publicationFailed = false; attempt.cleanupFailed = false
+            }
             catch { attempt.cleanupFailed = true }
           }
           check()
