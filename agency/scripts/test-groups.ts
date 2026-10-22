@@ -64,6 +64,7 @@ export const deterministicFiles = [
   "run-scope.test.js",
   "runtime-bridge.test.js",
   "runtime-entry.test.js",
+  "startup-lock-errors.test.js",
   "task-cli.test.js",
   "task-client.test.js",
   "task-endpoint.test.js",

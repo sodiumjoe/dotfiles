@@ -150,6 +150,8 @@ async function acquireStartupLock(options: StartupLockOptions, handle: FileHandl
 export async function withStartupLock<T>(options: StartupLockOptions, work: (guard: StartupLockGuard) => Promise<T>, dependencies: StartupDependencies = {}): Promise<T> {
   const handle = await openStartupLock(options.root)
   let lock: Awaited<ReturnType<typeof acquireStartupLock>> | undefined
+  let failed = false
+  let failure: unknown
   const controller = new AbortController()
   const lost = (): void => { controller.abort(new Error("startup lock holder was lost")) }
   const guard: StartupLockGuard = {
@@ -167,12 +169,21 @@ export async function withStartupLock<T>(options: StartupLockOptions, work: (gua
     const result = await work(guard)
     guard.assertHeld()
     return result
+  } catch (error) {
+    failed = true
+    failure = error
+    throw error
   } finally {
     try {
       if (lock !== undefined) {
         lock.child.off("exit", lost)
         lock.child.off("error", lost)
-        await releaseStartupLock(lock.child, lock.release)
+        try {
+          await releaseStartupLock(lock.child, lock.release)
+        } catch (error) {
+          if (failed) throw new AggregateError([failure, error], "startup work and lock release failed")
+          throw error
+        }
       }
     } finally {
       await handle.close()
@@ -180,13 +191,25 @@ export async function withStartupLock<T>(options: StartupLockOptions, work: (gua
   }
 }
 
+function startupLockExitError(code: number | null, signal: NodeJS.Signals | null): Error | undefined {
+  if (code === 0 && signal === null) return undefined
+  return new Error(`startup lock helper exited with code ${code} and signal ${signal}`)
+}
+
 async function releaseStartupLock(child: ChildProcess, release: Duplex): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) { release.end(); return }
+  if (child.exitCode !== null || child.signalCode !== null) {
+    release.end()
+    const error = startupLockExitError(child.exitCode, child.signalCode)
+    if (error !== undefined) throw error
+    return
+  }
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("startup lock helper did not exit")), 1000)
-    child.once("exit", () => {
+    child.once("exit", (code, signal) => {
       clearTimeout(timer)
-      resolve()
+      const error = startupLockExitError(code, signal)
+      if (error === undefined) resolve()
+      else reject(error)
     })
     child.once("error", error => {
       clearTimeout(timer)
