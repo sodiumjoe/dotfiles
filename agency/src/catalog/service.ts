@@ -22,6 +22,17 @@ const empty = (providerId: ProviderId): ProviderSnapshot => ({ providerId, finge
 const view = ({ commandId, handlerGeneration, state, snapshotId }: RefreshCommand): RefreshView => ({ commandId, handlerGeneration, state, snapshotId })
 const diagnostic = (issue: string): string => /^[\x20-\x7e]{1,480}$/.test(issue) ? issue : "probe evidence entry has an unprintable or oversized name"
 const systemClock: CatalogClock = { now: Date.now }
+async function bounded<T>(operation: (check: () => void) => Promise<T>): Promise<T> {
+  const deadline = performance.now() + 15000
+  const check = (): void => { if (performance.now() >= deadline) throw new CatalogError("INCOMPLETE") }
+  let timer: NodeJS.Timeout | undefined
+  try {
+    check()
+    const value = await Promise.race([operation(check), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CatalogError("INCOMPLETE")), Math.max(1, deadline - performance.now())) })])
+    check()
+    return value
+  } finally { clearTimeout(timer) }
+}
 
 export function createCatalogService(options: { paths: PlatformPaths; generation: string; queue: MutationQueue; store: CatalogStore; probes: ProbeRuntime; isReady(): boolean; shutdownPending(): boolean; readProfiles?: typeof readProfiles; observeConfig?: typeof observeConfig; clock?: CatalogClock }): CatalogService {
   const { paths, generation, queue, store, probes } = options, clock = options.clock ?? systemClock
@@ -35,10 +46,12 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   const owners = () => [...commands.values()]
   function latch(error: unknown, inventory = false): void { blocked ??= failure(error); inventoryBlocked ||= inventory }
   const canStart = () => initialized && !closed && !frozen && !blocked && options.isReady() && !options.shutdownPending()
-  async function config(): Promise<Config> {
-    profiles = (await (options.readProfiles ?? readProfiles)(paths.persistentRoot)).filter(p => p.enabled).sort((a, b) => a.id < b.id ? -1 : 1)
+  async function config(check: () => void): Promise<Config> {
+    const configured = await (options.readProfiles ?? readProfiles)(paths.persistentRoot)
+    check()
+    profiles = configured.filter(p => p.enabled).sort((a, b) => a.id < b.id ? -1 : 1)
     const evidence = new Map<ProviderId, ConfigEvidence>(), errors = new Map<ProviderId, CatalogFailure>()
-    for (const p of profiles) { try { evidence.set(p.id, await (options.observeConfig ?? observeConfig)(p)) } catch (error) { errors.set(p.id, failure(error)) } }
+    for (const p of profiles) { try { evidence.set(p.id, await (options.observeConfig ?? observeConfig)(p)) } catch (error) { errors.set(p.id, failure(error)) }; check() }
     return { profiles, evidence, errors, fingerprints: [...evidence].map(([providerId, e]) => ({ providerId, fingerprint: e.fingerprint })) }
   }
   async function persist(value: RefreshCommand, expected: RefreshCommand | null): Promise<void> {
@@ -49,12 +62,15 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
       else if (!isDeepStrictEqual(visible, expected)) latch(new CatalogError("CATALOG_UNAVAILABLE"), true)
     }
   }
-  async function receipt(command: RefreshCommand): Promise<RefreshResult> {
+  async function receipt(command: RefreshCommand, check: () => void): Promise<RefreshResult> {
+    check()
     const snapshot = command.snapshotId === null ? null : await store.readSnapshot(command.snapshotId)
+    check()
     if (command.state === "completed" && (snapshot === null || snapshot.hostId !== paths.hostKey || snapshot.handlerGeneration !== command.handlerGeneration)) throw new CatalogError("CATALOG_UNAVAILABLE")
     return { state: "refresh", command: view(command), snapshot }
   }
-  async function finalize(batch: Batch): Promise<void> {
+  async function finalize(batch: Batch, check: () => void): Promise<void> {
+    check()
     if (active !== batch || !batch.finished) return
     const interrupted = () => frozen || closed || options.shutdownPending() || !options.isReady()
     let interrupt = interrupted()
@@ -72,25 +88,31 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
         batch.snapshot = { version: 1, hostId: paths.hostKey, snapshotId: randomUUID(), handlerGeneration: generation, createdAt: clock.now(), providers }
       }
       await store.writeSnapshot(batch.snapshot)
+      check()
       interrupt = interrupted()
       if (!interrupt) {
-        try { await store.publishCurrent(batch.snapshot); interrupt = interrupted(); if (!interrupt) current = batch.snapshot }
+        try { await store.publishCurrent(batch.snapshot); check() }
         finally {
           const observed = await store.readCurrent()
           if (isDeepStrictEqual(observed, batch.snapshot)) diskCurrent = observed
           else if (!isDeepStrictEqual(observed, diskCurrent)) latch(new CatalogError("CATALOG_UNAVAILABLE"), true)
         }
+        check()
+        interrupt = interrupted()
+        if (!interrupt) current = batch.snapshot
       }
     }
     for (const commandId of batch.commands) {
+      check()
       const previous = owner(commandId)!
       const updated: RefreshCommand = previous.state !== "pending" ? previous : { ...previous, state: interrupt ? "interrupted" : "completed", snapshotId: interrupt ? null : batch.snapshot!.snapshotId }
       await persist(updated, previous)
+      check()
     }
     if (active === batch) active = null
   }
   function launch(batch: Batch): void {
-    if (batch.started || active !== batch) return
+    if (batch.started || active !== batch || !canStart()) return
     batch.started = true
     batch.operation = (async () => {
       for (const request of batch.requests) {
@@ -110,32 +132,40 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
         else if (outcome.error === null) probeIssues.delete(request.meta.providerId)
       }
       batch.finished = true
-      await queue.run(async () => { try { await finalize(batch) } catch (error) { if (inventoryBlocked) latch(error, true) } })
+      try { await bounded(check => queue.run(() => finalize(batch, check))) } catch (error) { if (inventoryBlocked) latch(error, true) }
     })().catch(error => { batch.finished = true; latch(error) })
   }
-  async function accept(commandId: string): Promise<RefreshResult> {
-    const historical = await store.readCommand(commandId), automatic = await store.readAutomatic(commandId)
+  async function accept(commandId: string, check: () => void): Promise<RefreshResult> {
+    check()
+    const historical = await store.readCommand(commandId)
+    check()
+    const automatic = await store.readAutomatic(commandId)
+    check()
     if (!commands.has(commandId)) {
       const diagnose = await historyDiagnostic(paths.persistentRoot)
+      check()
       if (diagnose("catalog/commands/" + commandId + ".json", historical !== null) || diagnose("catalog/automatic/" + commandId + ".json", automatic !== null)) throw new CatalogError("INCOMPLETE")
     }
     if (automatic) throw new CatalogError("COMMAND_CONFLICT")
     if (historical && !commands.has(commandId)) {
       if (historical.handlerGeneration !== generation) throw new CatalogError("COMMAND_CONFLICT")
-      return receipt(historical.state === "pending" ? { ...historical, state: "interrupted" } : historical)
+      return receipt(historical.state === "pending" ? { ...historical, state: "interrupted" } : historical, check)
     }
     const retained = commands.get(commandId)
     if (retained && retained.handlerGeneration !== generation) throw new CatalogError("COMMAND_CONFLICT")
-    if (retained && active?.finished) { await finalize(active); return receipt(owner(commandId)!) }
-    if (retained && retained.state !== "pending") return receipt(retained)
-    if (!canStart()) throw new CatalogError("CATALOG_UNAVAILABLE")
+    if (retained && active?.finished) { await finalize(active, check); return receipt(owner(commandId)!, check) }
+    if (retained && retained.state !== "pending") return receipt(retained, check)
+    if (!canStart() || active?.finished) throw new CatalogError("CATALOG_UNAVAILABLE")
     if (retained) {
       if (active?.id !== retained.batchId) throw new CatalogError("COMMAND_CONFLICT")
       await persist(retained, retained)
+      check()
       launch(active)
-      return receipt(retained)
+      return receipt(retained, check)
     }
-    const observed = active?.config ?? await config()
+    const observed = active?.config ?? await config(check)
+    check()
+    if (!canStart()) throw new CatalogError("CATALOG_UNAVAILABLE")
     if (active && active.commands.filter(id => commands.has(id)).length >= 32) throw new CatalogError("INCOMPLETE")
     const batch: Batch = active ?? { id: randomUUID(), config: observed, requests: [], commands: [], controller: new AbortController(), operation: null, snapshot: null, finished: false, started: false, outcomes: new Map() }
     if (!active) {
@@ -155,8 +185,9 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
       if (batch.commands.length === 0 && active === batch) active = null
       throw error
     }
+    check()
     launch(batch)
-    return receipt(command)
+    return receipt(command, check)
   }
   async function initialize(): Promise<void> {
     try { profiles = (await (options.readProfiles ?? readProfiles)(paths.persistentRoot)).filter(p => p.enabled) }
@@ -191,16 +222,21 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
         return structuredClone({ snapshotId: current.snapshotId, provider, profile, configuration })
       })
     },
-    async refresh(commandId, expectedGeneration) { id(commandId); if (expectedGeneration !== generation) throw new CatalogError("STALE_HANDLER"); return queue.run(() => accept(commandId)) },
+    async refresh(commandId, expectedGeneration) { id(commandId); if (expectedGeneration !== generation) throw new CatalogError("STALE_HANDLER"); return bounded(check => queue.run(() => accept(commandId, check))) },
     async freezeAndDrain() {
       frozen = true
       const batch = active
       batch?.controller.abort()
-      if (batch?.operation) await batch.operation
-      if (batch && active === batch) {
-        batch.finished = true
-        await queue.run(async () => { try { await finalize(batch) } catch (error) { latch(error, true) } })
-      }
+      try {
+        await bounded(async check => {
+          if (batch?.operation) await batch.operation
+          check()
+          if (batch && active === batch) {
+            batch.finished = true
+            await queue.run(() => finalize(batch, check))
+          }
+        })
+      } catch { throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
     },
     resume() { if (closed) return; frozen = false },
     async verifyDischarged() { await probes.verifyDischarged(); if (blocked || active || owners().some(c => c.state === "pending")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") },

@@ -12,6 +12,7 @@ import { writeLaunchRecord } from "../src/platform/private-state.js"
 import type { HandlerGenerationRecord, PlatformAdapter } from "../src/platform/types.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import { agentServiceFixture } from "./agent-support.js"
+import { gate } from "./catalog-support.js"
 import { until } from "./control-support.js"
 
 const generation = randomUUID(), marker = randomUUID()
@@ -227,4 +228,93 @@ test("service drain joins the remaining catalog operation after agent failure", 
   assert.equal(settled, false)
   held.resolve()
   await assert.rejects(operation, AggregateError)
+})
+
+function trackedShutdown(operation: ReturnType<typeof shutdownHandler>) {
+  let result: Awaited<ReturnType<typeof shutdownHandler>> | undefined
+  const done = operation.then(value => { result = value })
+  return { done, result: () => result }
+}
+
+for (const stage of ["drain", "catalog-verify", "queue", "agent-verify", "receipt"] as const) test(`shutdown deadline bounds held ${stage} and rejects late acceptance`, async t => {
+  const ctx = await context(t), command = { ...request(), stopAgents: true }, entered = gate(), release = gate()
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000000 })
+  t.mock.method(performance, "now", () => Date.now())
+  let catalogAttempted = false, published = 0, verified = 0, resumed = 0
+  const hold = async () => { entered.resolve(); await release.promise }
+  ctx.agents = { assertOrdinaryShutdownSafe() {}, async freezeAndDrain() { if (stage === "drain") await hold() }, async verifyDischarged() { verified++; if (stage === "agent-verify") await hold() }, resume() { resumed++ } }
+  ctx.catalog = { async freezeAndDrain() { catalogAttempted = true }, async verifyDischarged() { if (stage === "catalog-verify") await hold() }, resume() { resumed++ } }
+  ctx.publishReceipt = async (root, value) => { published++; if (stage === "receipt") await hold(); await writeShutdownReceipt(root, value) }
+  const queued = stage === "queue" ? ctx.mutations.queue.run(hold) : Promise.resolve()
+  const first = trackedShutdown(shutdownHandler(command, ctx))
+  await entered.promise
+  await new Promise<void>(resolve => setImmediate(resolve))
+  t.mock.timers.tick(7500)
+  const duplicate = trackedShutdown(shutdownHandler({ ...command, requestId: randomUUID() }, ctx))
+  const pending = ctx.pending!.operation
+  try {
+    t.mock.timers.tick(7500)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(first.result()?.ok, false)
+    assert.equal(duplicate.result()?.ok, false)
+    assert.equal(catalogAttempted, true)
+    assert.notEqual(ctx.pending, undefined)
+    assert.equal(ctx.accepted, undefined)
+    assert.equal(ctx.state.phase, "ready")
+    assert.equal(resumed, 0)
+    assert.equal((await shutdownHandler(request(), ctx)).ok, false)
+    assert.equal(published, stage === "receipt" ? 1 : 0)
+  } finally { release.resolve(); await queued; await first.done; await duplicate.done; await pending.catch(() => undefined); await ctx.mutations.queue.run(async () => undefined) }
+  assert.equal(ctx.accepted, undefined)
+  assert.equal(ctx.state.phase, "ready")
+  assert.equal(ctx.pending, undefined)
+  assert.equal(resumed, 2)
+  assert.equal((await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId)) !== null, stage === "receipt")
+  assert.equal((await shutdownHandler(command, ctx)).ok, true)
+  assert.equal(ctx.state.phase, "draining")
+  assert.ok(verified >= 1)
+  assert.equal(published, stage === "receipt" ? 2 : 1)
+})
+
+for (const mutation of ["generation", "phase"] as const) test(`shutdown deadline continuation preserves ${mutation} checks`, async t => {
+  const ctx = await context(t), entered = gate(), release = gate()
+  const queued = ctx.mutations.queue.run(async () => { entered.resolve(); await release.promise })
+  await entered.promise
+  const command = request(), operation = shutdownHandler(command, ctx)
+  await new Promise<void>(resolve => setImmediate(resolve))
+  if (mutation === "generation") ctx.record.generation = randomUUID()
+  else ctx.state.phase = "reconciling"
+  release.resolve(); await queued
+  const reply = await operation
+  assert.equal(reply.ok, false)
+  assert.equal(ctx.accepted, undefined)
+  assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
+})
+
+for (const stage of ["agent-verify", "receipt"] as const) for (const mutation of ["generation", "phase"] as const) test(`shutdown continuation rejects ${mutation} change during ${stage}`, async t => {
+  const ctx = await context(t), command = request(), entered = gate(), release = gate()
+  const hold = async () => { entered.resolve(); await release.promise }
+  ctx.agents = { assertOrdinaryShutdownSafe() {}, async freezeAndDrain() {}, async verifyDischarged() { if (stage === "agent-verify") await hold() }, resume() {} }
+  ctx.publishReceipt = async (root, value) => { if (stage === "receipt") await hold(); await writeShutdownReceipt(root, value) }
+  const operation = shutdownHandler(command, ctx)
+  await entered.promise
+  if (mutation === "generation") ctx.record.generation = randomUUID()
+  else ctx.state.phase = "reconciling"
+  release.resolve()
+  const reply = await operation
+  assert.equal(reply.ok, false)
+  assert.equal(ctx.accepted, undefined)
+  assert.equal(ctx.state.phase, mutation === "phase" ? "reconciling" : "ready")
+  assert.equal((await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId)) !== null, stage === "receipt")
+})
+
+test("shutdown deadline observes raw rejection when the first wait is already expired", async t => {
+  const ctx = await context(t)
+  let reads = 0
+  t.mock.method(performance, "now", () => reads++ === 0 ? 1000000 : 1015000)
+  assert.equal((await shutdownHandler(request(), ctx)).ok, false)
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(ctx.pending, undefined)
+  assert.equal(ctx.accepted, undefined)
+  assert.equal(ctx.state.phase, "ready")
 })

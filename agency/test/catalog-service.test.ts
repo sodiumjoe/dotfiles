@@ -13,7 +13,7 @@ import { privateRoot, until } from "./control-support.js"
 
 const result = (providerId: ProviderId, modelId = "a"): ProbeResult => ({ models: [{ providerId, modelId, resolvedModelId: null, displayName: "Model", reasoning: { state: "unknown" }, modes: { state: "unknown" }, availability: "advertised" }], providerVersion: null, providerVersionSource: "unknown" })
 async function fixture(t: Parameters<typeof privateRoot>[0], retainedRoot?: string) {
-  const root = retainedRoot ?? await privateRoot(t)
+  const root = retainedRoot ?? await privateRoot(t, { retainRoot: true })
   let now = 1000000, ready = true, shutdown = false
   const blocked = new Set<ProviderId>()
   const profiles: ProviderProfile[] = ["claude-agent-acp", "codex-acp"].map(id => ({ id: id as ProviderId, enabled: true, executable: "/fixture/native", adapterPackageJson: "/fixture/package.json", sdkPackageJson: id === "codex-acp" ? null : "/fixture/sdk.json", configurationFiles: [] }))
@@ -479,4 +479,99 @@ test("fresh catalog receipts and current retries ignore a malformed historical r
   assert.equal((await f.finish(commandId)).command.state, "completed")
   await f.service.freezeAndDrain(); await f.service.verifyDischarged()
   assert.equal(await readFile(marker, "utf8"), "{")
+})
+
+function deadlineClock(t: test.TestContext): void {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000000 })
+  t.mock.method(performance, "now", () => Date.now())
+}
+function tracked<T>(operation: Promise<T>) {
+  let result: PromiseSettledResult<T> | undefined
+  const done = operation.then(value => { result = { status: "fulfilled", value } }, reason => { result = { status: "rejected", reason } })
+  return { done, result: () => result }
+}
+async function deadlineFixture(t: test.TestContext) {
+  const f = await fixture(t)
+  deadlineClock(t)
+  const entries = new Map(f.profiles.map(profile => [profile.id, gate()]))
+  const run = f.probes.run
+  f.probes.run = (request, signal) => { const operation = run(request, signal); entries.get(request.meta.providerId)!.resolve(); return operation }
+  await f.service.initialize()
+  return { ...f, entries, async completeAll() { for (const profile of f.profiles) { await entries.get(profile.id)!.promise; await f.completeProbe(profile.id) } } }
+}
+
+for (const stage of ["snapshot", "current", "current-read", "command", "command-read"] as const) test(`catalog deadline bounds held ${stage} and permits explicit repair without replay`, async t => {
+  const f = await deadlineFixture(t), command = randomUUID(), entered = gate(), release = gate()
+  await f.service.refresh(command, f.generation)
+  const writeSnapshot = f.store.writeSnapshot, publishCurrent = f.store.publishCurrent, writeCommand = f.store.writeCommand, readCommand = f.store.readCommand, readCurrent = f.store.readCurrent
+  const hold = async () => { entered.resolve(); await release.promise }
+  f.store.writeSnapshot = async value => { if (stage === "snapshot") await hold(); await writeSnapshot(value) }
+  f.store.publishCurrent = async value => { if (stage === "current") await hold(); await publishCurrent(value) }
+  f.store.readCurrent = async () => { const value = await readCurrent(); if (stage === "current-read") await hold(); return value }
+  f.store.writeCommand = async (value, expected) => { if (stage === "command" && value.state === "completed") await hold(); await writeCommand(value, expected) }
+  f.store.readCommand = async id => { const value = await readCommand(id); if (stage === "command-read" && value?.state === "completed") await hold(); return value }
+  await f.completeAll(); await entered.promise
+  let queueReleased = false
+  const queued = f.queue.run(async () => { queueReleased = true })
+  const drain = tracked(f.service.freezeAndDrain())
+  try {
+    t.mock.timers.tick(15000)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(drain.result()?.status, "rejected")
+    assert.equal((drain.result() as PromiseRejectedResult).reason.code, "PROBE_CLEANUP_UNVERIFIED")
+    assert.equal(queueReleased, false)
+  } finally { release.resolve(); await queued; await drain.done; await f.queue.run(async () => undefined) }
+  if (stage === "snapshot" || stage === "current" || stage === "current-read") assert.equal((await f.service.list()).providers[0]!.verifiedAt, null)
+  await assert.rejects(f.service.verifyDischarged(), { code: "PROBE_CLEANUP_UNVERIFIED" })
+  f.service.resume()
+  await assert.rejects(f.service.refresh(randomUUID(), f.generation), { code: "CATALOG_UNAVAILABLE" })
+  assert.equal((await f.service.refresh(command, f.generation)).command.state, "completed")
+  assert.equal(f.started.length, 2)
+  await f.service.freezeAndDrain(); await f.service.verifyDischarged()
+})
+
+for (const stage of ["queue", "configuration", "command"] as const) test(`catalog deadline prevents late ${stage} admission`, async t => {
+  const f = await deadlineFixture(t), command = randomUUID(), entered = gate(), release = gate()
+  let queueOperation: Promise<void> | undefined
+  if (stage === "queue") queueOperation = f.queue.run(async () => { entered.resolve(); await release.promise })
+  if (stage === "configuration") {
+    const read = f.options.readProfiles
+    f.options.readProfiles = async () => { entered.resolve(); await release.promise; return read() }
+  }
+  if (stage === "command") {
+    const write = f.store.writeCommand
+    f.store.writeCommand = async (value, expected) => { entered.resolve(); await release.promise; await write(value, expected) }
+  }
+  const refresh = tracked(f.service.refresh(command, f.generation))
+  await entered.promise
+  try {
+    t.mock.timers.tick(15000)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(refresh.result()?.status, "rejected")
+    assert.equal((refresh.result() as PromiseRejectedResult).reason.code, "INCOMPLETE")
+  } finally { release.resolve(); await queueOperation; await refresh.done; await f.queue.run(async () => undefined) }
+  assert.equal(f.started.length, 0)
+  assert.equal((await f.service.refresh(command, f.generation)).command.state, "pending")
+  await f.entries.get("claude-agent-acp")!.promise
+  assert.equal(f.started.length, 1)
+  await f.service.freezeAndDrain(); await f.service.verifyDischarged()
+})
+
+test("catalog deadline bounds a queued drain while abort starts immediately", async t => {
+  const f = await deadlineFixture(t), command = randomUUID(), entered = gate(), release = gate()
+  await f.service.refresh(command, f.generation); await f.entries.get("claude-agent-acp")!.promise
+  const queueOperation = f.queue.run(async () => { entered.resolve(); await release.promise })
+  await entered.promise
+  const drain = tracked(f.service.freezeAndDrain())
+  assert.equal(f.pending.length, 0)
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve))
+    t.mock.timers.tick(15000)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(drain.result()?.status, "rejected")
+  } finally { release.resolve(); await queueOperation; await drain.done; await f.queue.run(async () => undefined) }
+  assert.equal((await f.store.readCommand(command))!.state, "pending")
+  await f.service.freezeAndDrain(); await f.service.verifyDischarged()
+  assert.equal((await f.store.readCommand(command))!.state, "interrupted")
+  assert.equal(f.started.length, 1)
 })

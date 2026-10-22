@@ -19,11 +19,25 @@ export type ShutdownContext = {
   catalog?: Pick<CatalogService, "freezeAndDrain" | "resume" | "verifyDischarged">
   agents?: Pick<AgentService, "assertOrdinaryShutdownSafe" | "freezeAndDrain" | "resume" | "verifyDischarged">
   accepted?: ShutdownReceipt
-  pending?: { request: ShutdownRequest; operation: Promise<ShutdownReceipt> }
+  pending?: { request: ShutdownRequest; operation: Promise<ShutdownReceipt>; deadline: number }
 }
 
-async function admit(request: ShutdownRequest, context: ShutdownContext): Promise<ShutdownReceipt> {
+function checkDeadline(deadline: number): void { if (performance.now() >= deadline) throw new ControlError("INCOMPLETE", "shutdown deadline exceeded; outcome remains unverified") }
+async function bounded(operation: Promise<ShutdownReceipt>, deadline: number): Promise<ShutdownReceipt> {
+  let timer: NodeJS.Timeout | undefined
+  void operation.catch(() => undefined)
+  try {
+    checkDeadline(deadline)
+    const value = await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ControlError("INCOMPLETE", "shutdown deadline exceeded; outcome remains unverified")), Math.max(1, deadline - performance.now())) })])
+    checkDeadline(deadline)
+    return value
+  } finally { clearTimeout(timer) }
+}
+
+async function admit(request: ShutdownRequest, context: ShutdownContext, check: () => void): Promise<ShutdownReceipt> {
+  check()
   const previous = await readShutdownReceipt(context.paths.persistentRoot, request.commandId)
+  check()
   if (previous !== null) {
     assertSameShutdown(previous, request)
     if (previous.hostId !== context.record.hostId || !isDeepStrictEqual(previous.handlerIdentity, context.record.process)) throw new ControlError("COMMAND_CONFLICT")
@@ -31,6 +45,7 @@ async function admit(request: ShutdownRequest, context: ShutdownContext): Promis
   if (context.record.process === null) throw new ControlError("INCOMPLETE", "Handler identity unavailable")
   const receipt: ShutdownReceipt = { version: 1, commandId: request.commandId, handlerGeneration: context.record.generation, hostId: context.record.hostId, handlerIdentity: context.record.process, stopAgents: request.stopAgents, state: "accepted" }
   await (context.publishReceipt ?? writeShutdownReceipt)(context.paths.persistentRoot, receipt)
+  check()
   context.accepted = receipt
   context.state.phase = "draining"
   return receipt
@@ -56,22 +71,35 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
     } else if (context.pending !== undefined) {
       if (context.pending.request.commandId !== request.commandId) throw new ControlError("INCOMPLETE", "shutdown already in progress")
       assertSameShutdown(context.pending.request, request)
-      receipt = await context.pending.operation
+      receipt = await bounded(context.pending.operation, context.pending.deadline)
     } else {
       if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler has not completed startup")
       if (!request.stopAgents) context.agents?.assertOrdinaryShutdownSafe()
+      const deadline = performance.now() + 15000
+      const check = (): void => {
+        checkDeadline(deadline)
+        if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
+        if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler is not ready")
+      }
       const operation = Promise.resolve().then(async () => {
+        check()
         await drainHandlerServices(context, request.stopAgents)
+        check()
         await context.catalog?.verifyDischarged()
+        check()
         return context.mutations.queue.run(async () => {
-          if (request.handlerGeneration !== context.record.generation) throw new ControlError("STALE_HANDLER")
-          if (context.state.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler is not ready")
+          check()
           try { await context.agents?.verifyDischarged() } catch { throw new ControlError("INCOMPLETE", "agent cleanup or command durability remains unverified") }
-          return await admit(request, context)
+          check()
+          return await admit(request, context, check)
         })
+      }).finally(() => {
+        if (context.pending?.operation !== operation) return
+        delete context.pending
+        if (context.accepted === undefined && context.state.phase === "ready") { context.catalog?.resume(); context.agents?.resume() }
       })
-      context.pending = { request, operation }
-      try { receipt = await operation } finally { delete context.pending; if (context.accepted === undefined && context.state.phase === "ready") { context.catalog?.resume(); context.agents?.resume() } }
+      context.pending = { request, operation, deadline }
+      receipt = await bounded(operation, deadline)
     }
     return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: context.record.generation, ok: true, result: { state: "shutdown_accepted", commandId: receipt.commandId, handlerGeneration: receipt.handlerGeneration } }
   } catch (error) { return errorReply({ ...request, handlerGeneration: context.record.generation }, controlError(error, "INCOMPLETE")) }
