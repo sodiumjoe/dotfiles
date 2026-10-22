@@ -3,15 +3,15 @@ import { cp, lstat, readlink, writeFile } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { startOrConnect, type StartOrConnectOptions } from "../../src/platform/singleton.js"
 import { type StartupDependencies, type StartupSpawn } from "../../src/platform/startup.js"
-import { fixtureRuntime, fixtureSpawner, signalFixturePid } from "./fixture-spawn.js"
+import { fixtureRuntime, fixtureSpawner, registerFixtureChild, signalFixturePid } from "./fixture-spawn.js"
 
 export async function singletonDependencies(): Promise<StartupDependencies> {
   const launch = await fixtureSpawner()
-  const { client } = await fixtureRuntime()
+  const runtime = await fixtureRuntime(), { client } = runtime
   const spawnDependency: StartupSpawn = (file, args, options) => {
     if (file === "/usr/bin/lockf" || file === "/usr/bin/flock") {
-      const child = spawn(file, [...args], options)
-      return child
+      const ref = runtime.scope.intent("startup-lock", { ownGroup: false, reporting: "direct" })
+      return registerFixtureChild(runtime, ref, () => spawn(file, [...args], options), undefined, { observeAfterExec: true })
     }
     return launch("singleton-handler", file, args, options, { reporting: client ? "detached-handler" : "direct" })
   }

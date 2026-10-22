@@ -16,6 +16,7 @@ import { bindPrivateSocket, unlinkStalePrivateSocket } from "../src/platform/pri
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { readHandlerRecord, readLaunchRecord, writeHandlerRecord, writeLaunchRecord } from "../src/platform/private-state.js"
 import {
+  withStartupLock,
   assertStartupLockMetadata,
   inspectHandlerGeneration,
   startupLockCommand,
@@ -23,8 +24,12 @@ import {
 } from "../src/platform/singleton.js"
 import { RUNTIME_RECORD_VERSION, sameProcess, type HandlerGenerationRecord, type LaunchRecord, type PlatformAdapter, type ProcessIdentity } from "../src/platform/types.js"
 
+import { createDarwinAdapter } from "../src/platform/darwin.js"
+import { createLinuxAdapter } from "../src/platform/linux.js"
+import { privateRoot, until } from "./control-support.js"
+import { nativeFixtureAccess } from "./fixtures/run-scope.js"
 import { workerScope } from "./fixtures/run-boundary.js"
-import { fixtureSpawner } from "./fixtures/fixture-spawn.js"
+import { fixtureRuntime, fixtureSpawner } from "./fixtures/fixture-spawn.js"
 import { settleSingletonStarts, singletonDependencies, killSingletonPid, ownedStartOrConnect as startOrConnect, preserveSingletonFixture, spawnSingletonContender } from "./fixtures/singleton-ownership.js"
 
 
@@ -1007,4 +1012,38 @@ test("singleton fixtures retain ambiguity diagnostics", async t => {
     if (mode === "observation") assert.match(inspection.diagnostic?.reason ?? "", /unstable PID.*snapshot cause/)
     else assert.deepEqual(inspection.diagnostic?.observed, observed)
   })
+})
+
+test("singleton startup helper is admitted as a direct child", { timeout: 20000 }, async t => {
+  const receipt: { pid?: number | undefined; error?: string; exit?: { code: number | null; signal: NodeJS.Signals | null }; close: boolean } = { close: false }
+  const observe = (child: ChildProcess): void => {
+    receipt.pid = child.pid
+    child.once("error", error => { receipt.error = String(error) })
+    child.once("exit", (code, signal) => { receipt.exit = { code, signal } })
+    child.once("close", () => { receipt.close = true })
+  }
+  const closed = () => until(async () => receipt.close ? true : undefined)
+  t.after(async () => { try { if (receipt.pid !== undefined) await closed() } finally { t.diagnostic("startup helper receipt: " + JSON.stringify(receipt)) } })
+  const root = await privateRoot(t, { retainRoot: true })
+  const { scope } = await fixtureRuntime(), offset = scope.snapshot().launches.length
+  const dependencies = await singletonDependencies(), original = dependencies.spawn!
+  dependencies.spawn = (file, args, options) => { const child = original(file, args, options); observe(child); return child }
+  const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
+  const admissions = await withStartupLock({ root, adapter }, async guard => {
+    guard.assertHeld()
+    return scope.snapshot().launches.slice(offset).filter(value => value.role === "startup-lock")
+  }, dependencies)
+  await closed()
+  assert.equal(receipt.error, undefined)
+  assert.deepEqual(receipt.exit, { code: 0, signal: null })
+  assert.equal(receipt.close, true)
+  assert.equal(admissions.length, 1)
+  const admission = admissions[0]!
+  assert.equal(admission.pid, receipt.pid)
+  assert.equal(typeof admission.pid, "number")
+  assert.equal(admission.reporting, "direct")
+  assert.equal(nativeFixtureAccess(scope).ownGroup(admission.ref), false)
+  const terminal = scope.snapshot().launches.find(value => value.ref.launchId === admission.ref.launchId)!
+  assert.deepEqual(terminal.exit, { code: 0, signal: null })
+  assert.equal(terminal.close, true)
 })

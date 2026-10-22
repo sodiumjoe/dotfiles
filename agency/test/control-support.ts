@@ -1,4 +1,4 @@
-import { fixtureRuntime, fixtureSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
+import { fixtureRuntime, fixtureSpawner, registerFixtureChild, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import { mkdtemp, realpath, rm, mkdir, readFile, writeFile, chown } from "node:fs/promises"
 import { join } from "node:path"
 import type { TestContext } from "node:test"
@@ -70,12 +70,12 @@ export function failFixtureBatch(error: unknown): Error {
   return fixtureBatchFailure
 }
 
-export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv) {
+export async function controlFixture(t: TestContext, overrides: Omit<ControlFixtureConfig, "paths"> = {}, handlerFile?: string, handlerEnv?: NodeJS.ProcessEnv, observeStartupHelper?: (child: ChildProcess, file: string, args: readonly string[], options: import("node:child_process").SpawnOptions) => void) {
   assertFixtureBatchHealthy()
   const root = await mkdtemp(join(await realpath(process.env.AGENCY_TEST_FIXTURE_ROOT ?? "/tmp"), process.env.AGENCY_TEST_FIXTURE_ROOT ? "f-" : "agy-control-"))
   const adapter = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   const paths: PlatformPaths = { hostKey: "a".repeat(64), persistentRoot: join(root, "state"), runtimeRoot: join(root, "run"), handlerSocketPath: join(root, "run/handler.sock") }
-  const { scope } = await fixtureRuntime(), spawnFixture = await fixtureSpawner()
+  const runtime = await fixtureRuntime(), { scope } = runtime, spawnFixture = await fixtureSpawner()
   scope.artifact(root)
   const firstLaunch = scope.snapshot().launches.length
   const registrations = () => scope.snapshot().launches.slice(firstLaunch)
@@ -183,7 +183,17 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
   const start = async (timeoutMs = 5000, hook?: (transition: StartTransition) => Promise<void>) => {
     assertFixtureBatchHealthy()
     const role = handlerFile?.endsWith("agent-handler.js") ? "agent-handler" : "control-handler"
-    const dependencies = { spawn: (file: string, args: readonly string[], options: import("node:child_process").SpawnOptions) => file === "/usr/bin/lockf" || file === "/usr/bin/flock" ? spawn(file, [...args], options) : spawnFixture(role, file, args, options, { source: true }) }
+    const dependencies = { spawn: (file: string, args: readonly string[], options: import("node:child_process").SpawnOptions) => {
+      if (file === "/usr/bin/lockf" || file === "/usr/bin/flock") {
+        const ref = runtime.scope.intent("startup-lock", { ownGroup: false, reporting: "direct" })
+        return registerFixtureChild(runtime, ref, () => {
+          const child = spawn(file, [...args], options)
+          observeStartupHelper?.(child, file, args, options)
+          return child
+        }, undefined, { observeAfterExec: true })
+      }
+      return spawnFixture(role, file, args, options, { source: true })
+    } }
     const operation = scope.operation("control start", () => startOrConnect({ root: paths.runtimeRoot, hostId: paths.hostKey, adapter, timeoutMs, lockTimeoutSeconds: 20, handler: { file: process.execPath, args: [handlerFile ?? fileURLToPath(new URL("./fixtures/control-handler.js", import.meta.url)), configPath], ...(handlerEnv === undefined ? {} : { env: handlerEnv }) }, onTransition: async (transition, pid) => {
       if (transition === "handler_spawned" && pid !== undefined) {
         const identity = await observe(pid)

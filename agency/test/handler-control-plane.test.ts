@@ -1,3 +1,6 @@
+import type { ChildProcess } from "node:child_process"
+import { fixtureRuntime } from "./fixtures/fixture-spawn.js"
+import { nativeFixtureAccess } from "./fixtures/run-scope.js"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises"
@@ -159,4 +162,32 @@ test("a mismatched generation on the real socket is rejected before shutdown", {
   const f = await controlFixture(t), current = await f.start()
   await assert.rejects(f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: randomUUID(), op: "shutdown", commandId: randomUUID(), stopAgents: true }), /STALE_HANDLER/)
   assert.equal((await f.start()).record.generation, current.record.generation)
+})
+
+test("control startup helper is admitted as a direct child", { timeout: 20000 }, async t => {
+  const receipt: { pid?: number | undefined; error?: string; exit?: { code: number | null; signal: NodeJS.Signals | null }; close: boolean } = { close: false }
+  const observe = (child: ChildProcess): void => {
+    receipt.pid = child.pid
+    child.once("error", error => { receipt.error = String(error) })
+    child.once("exit", (code, signal) => { receipt.exit = { code, signal } })
+    child.once("close", () => { receipt.close = true })
+  }
+  const closed = () => until(async () => receipt.close ? true : undefined)
+  t.after(async () => { try { if (receipt.pid !== undefined) await closed() } finally { t.diagnostic("startup helper receipt: " + JSON.stringify(receipt)) } })
+  const f = await controlFixture(t, {}, undefined, undefined, observe)
+  const { scope } = await fixtureRuntime(), offset = scope.snapshot().launches.length
+  await f.start()
+  await closed()
+  assert.equal(receipt.error, undefined)
+  assert.deepEqual(receipt.exit, { code: 0, signal: null })
+  assert.equal(receipt.close, true)
+  const admissions = scope.snapshot().launches.slice(offset).filter(value => value.role === "startup-lock")
+  assert.equal(admissions.length, 1)
+  const admission = admissions[0]!
+  assert.equal(admission.pid, receipt.pid)
+  assert.equal(typeof admission.pid, "number")
+  assert.equal(admission.reporting, "direct")
+  assert.equal(nativeFixtureAccess(scope).ownGroup(admission.ref), false)
+  assert.deepEqual(admission.exit, { code: 0, signal: null })
+  assert.equal(admission.close, true)
 })
