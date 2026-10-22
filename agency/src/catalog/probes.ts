@@ -87,7 +87,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         }
       }
       recomputeIssues()
-      if (running || blockedProviders.size || unscopedIssues.size
+      if (running || blockedProviders.size
         || [...current.values()].some(attempt => !attempt.done || attempt.cleanupFailed || (attempt.transition ? !attempt.transition.durable() : attempt.spawnInvoked))
         || accepted.some(entry => entry.record.phase !== "cleanup_verified")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
     })

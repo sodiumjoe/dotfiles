@@ -59,7 +59,7 @@ export async function shutdownFixtureHandler(current: { generation: string; proc
   await owner.absent()
 }
 
-export type ControlFixtureConfig = { paths: PlatformPaths; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
+export type ControlFixtureConfig = { paths: PlatformPaths; terminationFixture?: { initializeHold?: boolean; drain?: "fail" | "hold"; taskClose?: "sync" | "reject" | "hold"; catalogCloseHold?: boolean; endpointCloseReject?: boolean; lateTask?: "resolve" | "reject" }; pauseAt?: string; mutateAt?: string; mutate?: "add" | "replace"; delayMs?: number; failSignalGroup?: number; failSignalMessage?: string; failBootIdOnce?: boolean; catalog?: { profiles: ProviderProfile[]; scenario: "normal" | "uncertain" } }
 
 let fixtureBatchFailure: Error | undefined
 export function assertFixtureBatchHealthy(): void {

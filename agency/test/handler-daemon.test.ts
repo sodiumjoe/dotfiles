@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto"
 import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
+import { createConnection } from "node:net"
+import { once } from "node:events"
 import test from "node:test"
 import { connectHandlerBridge } from "../src/bridge/handler-client.js"
 import { assertRuntime } from "../src/handler/environment.js"
@@ -110,16 +112,18 @@ test("termination before readiness preserves retained history", { timeout: 20000
   const record = launch({ launchBootId: await f.adapter.bootId(), launchAttempted: false })
   const path = join(f.paths.persistentRoot, "launches", `${record.launchAttemptId}.json`)
   await writeLaunchRecord(path, record)
-  const started = f.start()
+  const started = assert.rejects(f.start())
   await until(async () => await fileExists(join(f.root, "paused")) ? true : undefined)
   await f.signal(f.owned[0]!, "SIGTERM")
   await f.signal(f.owned[0]!, "SIGINT")
-  assert.notEqual(await f.observe(f.owned[0]!.pid), null)
-  assert.equal(JSON.parse(await readFile(path, "utf8")).phase, "launch_pending")
-  await writeFile(join(f.root, "release"), "release", { mode: 0o600 })
-  await assert.rejects(started)
+  const before = JSON.stringify(record)
+  await started
   await until(async () => await f.observe(f.owned[0]!.pid) === null ? true : undefined)
-  assert.equal(JSON.parse(await readFile(path, "utf8")).phase, "launch_pending")
+  const child = await until(async () => f.registrations().find(value => value.pid === f.owned[0]!.pid && value.close) ?? undefined)
+  assert.deepEqual(child.exit, { code: 70, signal: null })
+  assert.equal(JSON.stringify(JSON.parse(await readFile(path, "utf8"))), before)
+  assert.notEqual((await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).phase, "ready")
+  await assertSocketsAbsent(f)
 })
 
 test("production Handler eventually publishes a private generation-bound bridge after readiness", { timeout: 20000 }, async t => {
@@ -211,4 +215,77 @@ for (const mismatch of ["generation", "identity"] as const) test(`accepted owner
   await f.cleanup()
   assert.equal(await f.observe(current.process.pid), null)
   assert.deepEqual(await f.adapter.readGroup(current.process.pid), [])
+})
+
+async function assertSocketsAbsent(f: Awaited<ReturnType<typeof controlFixture>>): Promise<void> {
+  for (const name of ["handler.sock", "attachment.sock", "bridge.sock", "acp.sock"]) {
+    await until(async () => await lstat(join(f.paths.runtimeRoot, name)).then(() => false, error => { if (error.code !== "ENOENT") throw error; return true }) ? true : undefined)
+  }
+}
+
+async function assertSignalExit(f: Awaited<ReturnType<typeof controlFixture>>, code: number, timeoutMs = 5000): Promise<void> {
+  const child = await until(async () => f.registrations().find(value => value.pid === f.owned[0]!.pid && value.close) ?? undefined, timeoutMs)
+  assert.deepEqual(child.exit, { code, signal: null })
+  await until(async () => await f.observe(f.owned[0]!.pid) === null ? true : undefined)
+}
+
+test("signal during catalog initialization drains constructed services without creating agents", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t, { terminationFixture: { initializeHold: true } }), started = assert.rejects(f.start())
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes("catalog-initialize") ? true : undefined, () => undefined))
+  await f.signal(f.owned[0]!, "SIGTERM")
+  await started
+  await assertSignalExit(f, 70)
+  await assertSocketsAbsent(f)
+  const events = await readFile(join(f.root, "termination-events"), "utf8")
+  assert.match(events, /catalog-drain/)
+  assert.match(events, /catalog-close/)
+  assert.doesNotMatch(events, /agents-created/)
+})
+
+for (const drain of [undefined, "fail", "hold"] as const) test(`ready signal termination handles catalog drain ${drain ?? "success"}`, { timeout: 25000 }, async t => {
+  const f = await controlFixture(t, { terminationFixture: drain ? { drain } : {} })
+  await f.start()
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes("tasks-ready") ? true : undefined, () => undefined))
+  const before = Date.now()
+  await f.signal(f.owned[0]!, "SIGTERM")
+  await assertSignalExit(f, drain ? 70 : 0, 18000)
+  const elapsed = Date.now() - before
+  if (drain === "hold") { assert.ok(elapsed >= 14500); assert.ok(elapsed < 18000) }
+  if (drain !== "hold") await assertSocketsAbsent(f)
+  const events = await readFile(join(f.root, "termination-events"), "utf8")
+  assert.match(events, /catalog-drain/)
+  if (drain !== "hold") { assert.match(events, /catalog-close/); assert.match(events, /agents-close/); assert.match(events, /tasks-close/) }
+})
+
+for (const taskClose of ["sync", "reject", "hold"] as const) test(`independent daemon closure survives task ${taskClose}`, { timeout: 25000 }, async t => {
+  const f = await controlFixture(t, { terminationFixture: { taskClose, endpointCloseReject: true, catalogCloseHold: taskClose !== "hold" } })
+  await f.start()
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes("tasks-ready") ? true : undefined, () => undefined))
+  const socket = createConnection(f.paths.handlerSocketPath)
+  socket.on("error", () => undefined)
+  t.after(() => socket.destroy())
+  await once(socket, "connect")
+  let disconnected = false
+  socket.once("close", () => { disconnected = true })
+  await f.signal(f.owned[0]!, "SIGTERM")
+  await until(async () => disconnected ? true : undefined)
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes("endpoint:attachment.sock") ? true : undefined))
+  await assertSocketsAbsent(f)
+  assert.notEqual(await f.observe(f.owned[0]!.pid), null)
+  const events = await readFile(join(f.root, "termination-events"), "utf8")
+  for (const value of ["tasks-close", "catalog-close", "agents-close", "endpoint:handler.sock", "endpoint:bridge.sock", "endpoint:acp.sock"]) assert.ok(events.includes(value), value)
+  if (taskClose !== "hold") await writeFile(join(f.root, "release-close"), "release")
+  await assertSignalExit(f, 70, 18000)
+})
+
+for (const lateTask of ["resolve", "reject"] as const) test(`late task ${lateTask} after explicit daemon closure is observed`, { timeout: 20000 }, async t => {
+  const f = await controlFixture(t, { terminationFixture: { lateTask, taskClose: "reject" } })
+  const started = await f.start()
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes("tasks-created") ? true : undefined, () => undefined))
+  const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: started.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.equal(reply.ok, true)
+  await assertSocketsAbsent(f)
+  await writeFile(join(f.root, "release-task"), "release")
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes(lateTask === "resolve" ? "tasks-close" : "task-initialize-rejected") ? true : undefined))
+  await assertSignalExit(f, 0)
 })

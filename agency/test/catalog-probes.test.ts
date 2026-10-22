@@ -73,6 +73,8 @@ for (const fault of ["directory-sync", "persistent-directory-sync", "stderr-clos
   const retained = (await restartedStore.inventory()).metadata.find(meta => meta.attemptId === f.request.meta.attemptId)!
   assert.equal(retainProbeDiagnostic((await readProbeDiagnostic(retained))!, Date.now() + 604800001), true)
   assert.deepEqual([...f.processes.values()], [])
+  assert.ok(f.runtime.diagnostics!().some(issue => issue.includes(f.request.meta.attemptId)))
+  await f.runtime.verifyDischarged()
 })
 
 

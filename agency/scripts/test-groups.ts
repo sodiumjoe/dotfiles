@@ -47,6 +47,7 @@ export const deterministicFiles = [
   "handler-inventory.test.js",
   "handler-mutations.test.js",
   "handler-shutdown.test.js",
+  "handler-termination.test.js",
   "host-human-cli.test.js",
   "host-inventory.test.js",
   "host-router.test.js",
