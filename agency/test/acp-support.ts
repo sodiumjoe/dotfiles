@@ -20,6 +20,17 @@ import { agentTuple } from "../src/agent/recovery.js"
 import { until } from "./control-support.js"
 
 export type ObservedFrame = { id?: string | number; method?: string; params?: JsonObject; result?: JsonObject }
+export async function readAcpRequestLog(path: string): Promise<ObservedFrame[]> {
+  try {
+    const lines = (await readFile(path, "utf8")).split("\n")
+    lines.pop()
+    return lines.map(line => JSON.parse(line))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return []
+    throw error
+  }
+}
+
 export type AcpPeer = {
   delayResponse(method: string): Promise<void>
   releaseResponse(method: string): Promise<void>
@@ -164,7 +175,7 @@ export async function acpFixture(t: TestContext, options: AgentHandlerOptions = 
       assert.ok(reply.ok && reply.result.state === "command")
       return f.waitCompleted(reply.result)
     },
-    async requests(backend: ProviderId): Promise<ObservedFrame[]> { try { return (await readFile(join(f.root, backend + ".jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line)) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error } },
+    async requests(backend: ProviderId): Promise<ObservedFrame[]> { return readAcpRequestLog(join(f.root, backend + ".jsonl")) },
     async release(_backend: ProviderId) { await writeFile(join(f.root, "release-prompt"), "released", { mode: 0o600 }) },
   }
 }

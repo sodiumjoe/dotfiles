@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 export const deterministicFiles = [
   "acp-core.test.js",
   "acp-protocol.test.js",
+  "acp-request-log.test.js",
   "acp-wire.test.js",
   "agent-attachment-cli.test.js",
   "agent-attachment-protocol.test.js",
