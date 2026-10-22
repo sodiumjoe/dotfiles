@@ -72,7 +72,7 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
   async function finalize(batch: Batch, check: () => void): Promise<void> {
     check()
     if (active !== batch || !batch.finished) return
-    const interrupted = () => frozen || closed || options.shutdownPending() || !options.isReady()
+    const interrupted = () => batch.controller.signal.aborted || frozen || closed || options.shutdownPending() || !options.isReady()
     let interrupt = interrupted()
     if (!interrupt) {
       if (batch.snapshot === null) {
@@ -226,7 +226,7 @@ export function createCatalogService(options: { paths: PlatformPaths; generation
     async freezeAndDrain() {
       frozen = true
       const batch = active
-      batch?.controller.abort()
+      if (batch && !batch.finished) batch.controller.abort()
       try {
         await bounded(async check => {
           if (batch?.operation) await batch.operation

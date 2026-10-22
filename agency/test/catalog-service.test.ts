@@ -575,3 +575,32 @@ test("catalog deadline bounds a queued drain while abort starts immediately", as
   assert.equal((await f.store.readCommand(command))!.state, "interrupted")
   assert.equal(f.started.length, 1)
 })
+
+test("catalog interrupted discovery survives drain deadline and resume without publishing partial results", async t => {
+  const f = await deadlineFixture(t), command = randomUUID(), entered = gate(), release = gate()
+  await f.service.refresh(command, f.generation)
+  await f.entries.get("claude-agent-acp")!.promise
+  await f.completeProbe("claude-agent-acp")
+  await f.entries.get("codex-acp")!.promise
+  const queued = f.queue.run(async () => { entered.resolve(); await release.promise })
+  await entered.promise
+  const drain = tracked(f.service.freezeAndDrain())
+  assert.equal(f.pending.length, 0)
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve))
+    t.mock.timers.tick(15000)
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(drain.result()?.status, "rejected")
+  } finally { release.resolve(); await queued; await drain.done; await f.queue.run(async () => undefined) }
+  f.service.resume()
+  const retry = await f.service.refresh(command, f.generation)
+  assert.equal(retry.command.state, "interrupted")
+  assert.equal(retry.snapshot, null)
+  assert.equal(await f.store.readCurrent(), null)
+  assert.deepEqual((await f.service.list()).providers.map(provider => provider.verifiedAt), [null, null])
+  assert.equal(f.started.length, 2)
+  await f.service.verifyDischarged()
+  assert.equal((await f.service.refresh(randomUUID(), f.generation)).command.state, "pending")
+  assert.equal(f.started.length, 3)
+  await f.service.freezeAndDrain(); await f.service.verifyDischarged()
+})
