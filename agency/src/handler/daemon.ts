@@ -157,7 +157,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   })
   const onSignal = (): void => {
     if (termination) return
-    interruptedStartup = state.phase !== "ready"
+    interruptedStartup = shutdown === undefined
     termination = true
     void terminate().then(error => {
       if (error) {

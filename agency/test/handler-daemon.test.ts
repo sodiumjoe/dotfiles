@@ -289,3 +289,16 @@ for (const lateTask of ["resolve", "reject"] as const) test(`late task ${lateTas
   await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes(lateTask === "resolve" ? "tasks-close" : "task-initialize-rejected") ? true : undefined))
   await assertSignalExit(f, 0)
 })
+
+test("signal joins accepted shutdown without treating draining as interrupted startup", { timeout: 20000 }, async t => {
+  const f = await controlFixture(t, { terminationFixture: { taskClose: "hold" } })
+  const started = await f.start()
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes("tasks-ready") ? true : undefined, () => undefined))
+  const reply = await f.call({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: started.record.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true })
+  assert.equal(reply.ok, true)
+  await until(async () => await readFile(join(f.root, "termination-events"), "utf8").then(v => v.includes("tasks-close") ? true : undefined))
+  await f.signal(f.owned[0]!, "SIGTERM")
+  await writeFile(join(f.root, "release-task-close"), "release")
+  await assertSignalExit(f, 0)
+  await assertSocketsAbsent(f)
+})

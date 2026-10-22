@@ -159,13 +159,18 @@ test("unspawned intent never grants identity or cleanup authority", async () => 
   assert.equal(result.state, "incomplete")
 })
 
-test("a retained generation that changes groups is not physically absent", async () => {
+test("a retained generation that changes groups is not physically absent", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 })
   const f = fixture(20)
   f.register()
   await f.scope.observe(f.ref)
   f.exit()
   f.setCurrent({ ...f.identity, processGroupId: 999, sessionId: 999 })
-  const result = await f.scope.finish()
+  const done = f.scope.finish()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(f.scope.snapshot().launches[0]!.absent, false)
+  t.mock.timers.tick(21)
+  const result = await done
   assert.equal(result.state, "incomplete")
   assert.equal(result.launches[0]!.absent, false)
 })
@@ -515,19 +520,26 @@ import { PROTOCOL } from "../src/control/protocol.js"
 
 import { retryQualificationShutdown } from "./qualification-support.js"
 
-for (const mode of ["eventual-absence", "never-reaped", "unavailable"] as const) test(`qualification terminal uncertainty waits for physical absence: ${mode}`, async () => {
+for (const mode of ["eventual-absence", "never-reaped", "unavailable"] as const) test(`qualification terminal uncertainty waits for physical absence: ${mode}`, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 })
+  const observations = Array.from({ length: 3 }, () => deferred<void>())
   const generation = "fixture-generation", terminal = { pid: 123, state: "terminal" }
   let current: typeof terminal | null = terminal, observedAbsent = false, retries = 0, reads = 0
   const first = { code: 75, stdout: JSON.stringify({ error: { code: "INCOMPLETE", message: "terminal process remains unreaped" }, handlerGeneration: generation }), stderr: "" }
   const work = retryQualificationShutdown(first, generation, () => until(async () => {
-    reads++
+    observations[reads++]?.resolve()
     if (mode === "unavailable") return undefined
     if (current === null) { observedAbsent = true; return true }
     if (mode === "eventual-absence" && reads === 2) current = null
     return undefined
   }, 50).then(() => undefined), async () => { assert.equal(observedAbsent, true); retries++; return { code: 0, stdout: "complete", stderr: "" } })
-  if (mode === "eventual-absence") assert.equal((await work).code, 0)
-  else await assert.rejects(work, /fixture observation timed out/)
+  const result = mode === "eventual-absence" ? work.then(value => assert.equal(value.code, 0)) : assert.rejects(work, /fixture observation timed out/)
+  for (const observation of observations) {
+    await observation.promise
+    await new Promise(resolve => setImmediate(resolve))
+    t.mock.timers.tick(20)
+  }
+  await result
   assert.equal(retries, mode === "eventual-absence" ? 1 : 0)
   assert.ok(reads >= 3)
 })
