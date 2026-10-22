@@ -52,6 +52,17 @@ type CurrentProbe = {
 }
 export function createProbeRuntime(options: { paths: PlatformPaths; adapter: PlatformAdapter; queue: MutationQueue; store: CatalogStore; generation: string; canStart(): boolean; workerFile?: string; dependencies?: ProbeDependencies }): ProbeRuntime {
   const { paths, adapter, queue, store, generation } = options, deps = options.dependencies ?? {}, publish = deps.publish ?? writeLaunchRecord, now = deps.now ?? (() => performance.now())
+  const cleanupBudget = 4000 + 1000 + (deps.closeMs ?? 1000)
+  const checkDeadline = (deadline: number): void => { if (now() >= deadline) throw new CatalogError("PROBE_TIMEOUT") }
+  const bounded = async <T>(operation: () => Promise<T>, deadline: number): Promise<T> => {
+    let timer: NodeJS.Timeout | undefined
+    try {
+      checkDeadline(deadline)
+      const value = await Promise.race([operation(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CatalogError("PROBE_TIMEOUT")), Math.max(1, deadline - now())) })])
+      checkDeadline(deadline)
+      return value
+    } finally { clearTimeout(timer) }
+  }
   let accepted: InventoryEntry[] = [], running = false
   const blockedProviders = new Map<ProviderId, CatalogFailure>()
   const current = new Map<string, CurrentProbe>()
@@ -60,7 +71,8 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
   function accept(path: string, record: LaunchRecord): void {
     accepted = [...accepted.filter(e => e.path !== path), { path, record: structuredClone(record) }].sort((a, b) => a.path < b.path ? -1 : 1)
   }
-  async function publishClean(attempt: CurrentProbe): Promise<void> {
+  async function publishClean(attempt: CurrentProbe, check: () => void): Promise<void> {
+    check()
     const transition = attempt.transition
     if (!transition || !attempt.repairable) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
     let record = transition.current()
@@ -68,29 +80,35 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
       if (!attempt.group || !attempt.evidence || !isLiveCleanupEvidence(attempt.evidence, attempt.group)) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
       if (record.phase !== "cleanup_verified") {
         record = { ...record, phase: "cleanup_pending", provider: { kind: "process-group", group: structuredClone(attempt.evidence.group) }, reason: null }
-        await transition.publish(record)
+        await transition.publish(record); check()
       }
       record = { ...record, phase: "cleanup_verified", provider: { kind: "process-group", group: structuredClone(attempt.evidence.group) }, reason: null }
     } else {
-      if (record.launchAttempted) { record = { ...record, launchAttempted: false }; await transition.publish(record) }
+      if (record.launchAttempted) { record = { ...record, launchAttempted: false }; await transition.publish(record); check() }
       record = { ...record, launchAttempted: false, phase: "cleanup_verified", provider: null, reason: null }
     }
-    await transition.publish(record)
+    check(); await transition.publish(record); check()
   }
   async function verifyDischarged(): Promise<void> {
-    await Promise.allSettled([...current.values()].map(attempt => attempt.completion))
-    await queue.run(async () => {
-      for (const attempt of current.values()) {
-        if (attempt.cleanupFailed && attempt.repairable) {
-          try { await publishClean(attempt); attempt.publicationFailed = false; attempt.cleanupFailed = false }
-          catch { attempt.cleanupFailed = true }
+    const deadline = now() + cleanupBudget, check = () => checkDeadline(deadline)
+    try {
+      await bounded(() => Promise.allSettled([...current.values()].map(attempt => attempt.completion)), deadline)
+      await bounded(() => Promise.allSettled([...current.values()].flatMap(attempt => attempt.mutations)), deadline)
+      await bounded(() => queue.run(async () => {
+        check()
+        for (const attempt of current.values()) {
+          if (attempt.cleanupFailed && attempt.repairable) {
+            try { await publishClean(attempt, check); attempt.publicationFailed = false; attempt.cleanupFailed = false }
+            catch { attempt.cleanupFailed = true }
+          }
+          check()
         }
-      }
-      recomputeIssues()
-      if (running || blockedProviders.size
-        || [...current.values()].some(attempt => !attempt.done || attempt.cleanupFailed || (attempt.transition ? !attempt.transition.durable() : attempt.spawnInvoked))
-        || accepted.some(entry => entry.record.phase !== "cleanup_verified")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-    })
+        recomputeIssues()
+        if (running || blockedProviders.size
+          || [...current.values()].some(attempt => !attempt.done || attempt.cleanupFailed || (attempt.transition ? !attempt.transition.durable() : attempt.spawnInvoked))
+          || accepted.some(entry => entry.record.phase !== "cleanup_verified")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
+      }), deadline)
+    } catch { recomputeIssues(); throw new CatalogError("PROBE_CLEANUP_UNVERIFIED") }
   }
   async function run(input: ProbeRequest, signal: AbortSignal): Promise<ProbeOutcome> {
     const request = structuredClone(input), m = parseProbeMeta(request.meta), path = join(paths.persistentRoot, "catalog/probe-launches", m.attemptId + ".json")
@@ -105,20 +123,22 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     let stage: ProbeStage = "preparation", diagnosticCreated = false, workerStderr: FileHandle | undefined, nativeStderr: FileHandle | undefined, stderrFailed = false, disconnected = false
     let finish!: () => void, nativeReport!: () => void
     const completed = new Promise<void>(resolve => { finish = () => { finished = true; resolve() } }), reported = new Promise<void>(resolve => { nativeReport = resolve })
-    const fail = (cause: unknown, at: ProbeStage = stage): void => { diagnostic.firstFailure ??= probeFailureDetail(at, cause); error ??= failure(cause instanceof CatalogError ? cause : new CatalogError("PROBE_FAILED")); finish() }
+    const fail = (cause: unknown, at: ProbeStage = stage): void => { if (finalized) return; diagnostic.firstFailure ??= probeFailureDetail(at, cause); error ??= failure(cause instanceof CatalogError ? cause : new CatalogError("PROBE_FAILED")); finish() }
     const abort = (): void => fail(new CatalogError("INCOMPLETE"), "cancelled")
     let timer = setTimeout(() => fail(new CatalogError("PROBE_TIMEOUT"), "timeout"), 5000), discoveryDeadline = preparationDeadline
     signal.addEventListener("abort", abort, { once: true })
-    const bounded = async <T>(operation: Promise<T>, deadline: number): Promise<T> => {
-      let timer: NodeJS.Timeout | undefined
-      try {
-        if (now() >= deadline) throw new CatalogError("PROBE_TIMEOUT")
-        const value = await Promise.race([operation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new CatalogError("PROBE_TIMEOUT")), Math.max(1, deadline - now())) })])
-        if (now() >= deadline) throw new CatalogError("PROBE_TIMEOUT")
-        return value
-      } finally { clearTimeout(timer) }
+    const checkPreparation = (): void => {
+      if (cleaning || finalized || finished || signal.aborted || !options.canStart()) throw new CatalogError("INCOMPLETE")
+      checkDeadline(preparationDeadline)
+    }
+    const openStderr = async (name: "worker.stderr" | "native.stderr"): Promise<FileHandle> => {
+      checkPreparation()
+      const handle = await openProbeStderr(m.workPath, name)
+      try { checkPreparation(); return handle }
+      catch (cause) { void handle.close().catch(() => undefined); throw cause }
     }
     const update = async (next: ManagedLaunchRecord): Promise<void> => {
+      if (finalized) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
       try { await attempt.transition!.publish(next) }
       catch (cause) { attempt.publicationFailed = true; throw cause }
       finally { record = attempt.transition!.current() }
@@ -162,7 +182,8 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
           const registration = queue.run(async () => {
             try {
               if (cleaning) { attempt.unresolved = true; throw new CatalogError("PROBE_FAILED") }
-              const member = await bounded(adapter.readProcess(v.pid as number), discoveryDeadline)
+              const member = await bounded(() => adapter.readProcess(v.pid as number), discoveryDeadline)
+              if (cleaning || finalized) throw new CatalogError("PROBE_FAILED")
               diagnostic.nativeIdentity = member
               if (!member || member.pid !== v.pid || !attempt.group) { attempt.unresolved = true; throw new CatalogError("PROBE_FAILED") }
               try { attempt.group.observeMember(member) } catch (cause) { attempt.unresolved = true; throw cause }
@@ -206,19 +227,20 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     try {
       const admission = queue.run(async () => {
         if (!options.canStart() || signal.aborted || finished || accepted.some(e => e.record.launchAttemptId === m.attemptId)) throw new CatalogError("INCOMPLETE")
-        record.launchBootId = await bounded(adapter.bootId(), preparationDeadline)
+        record.launchBootId = await bounded(() => adapter.bootId(), preparationDeadline); checkPreparation()
         if (m.fingerprint !== request.evidence.fingerprint || m.providerId !== request.profile.id) throw new CatalogError("CONFIG_CHANGED")
-        await store.writeProbeMeta(m)
+        await store.writeProbeMeta(m); checkPreparation()
         const catalog = join(paths.persistentRoot, "catalog")
-        await privateProbeDirectory(catalog, "probe-launches")
+        await privateProbeDirectory(catalog, "probe-launches"); checkPreparation()
         attempt.transition = createProbeTransition({ path, initial: record, io: { publish, read: readLaunchRecordForReconciliation }, accept: value => accept(path, value) })
-        const work = await privateProbeDirectory(catalog, "work")
-        await privateProbeDirectory(work, m.attemptId, true)
-        await beginProbeCapture(m.workPath, diagnostic); await writeProbeDiagnostic(m.workPath, diagnostic)
+        const work = await privateProbeDirectory(catalog, "work"); checkPreparation()
+        await privateProbeDirectory(work, m.attemptId, true); checkPreparation()
+        await beginProbeCapture(m.workPath, diagnostic); checkPreparation()
+        await writeProbeDiagnostic(m.workPath, diagnostic); checkPreparation()
         diagnosticCreated = true
-        workerStderr = await openProbeStderr(m.workPath, "worker.stderr"); nativeStderr = await openProbeStderr(m.workPath, "native.stderr")
-        await update(record); await update({ ...record, launchAttempted: true })
-        if (!options.canStart() || signal.aborted || finished || cleaning || now() >= preparationDeadline) throw new CatalogError("INCOMPLETE")
+        workerStderr = await openStderr("worker.stderr"); nativeStderr = await openStderr("native.stderr")
+        await update(record); checkPreparation()
+        await update({ ...record, launchAttempted: true }); checkPreparation()
         attempt.spawnInvoked = true; stage = "worker-launch"
         attempt.owner = spawnOwnedChild({ launchAttemptId: m.attemptId,
           spawn: () => (deps.spawn ?? spawn)(process.execPath, [options.workerFile ?? fileURLToPath(new URL("./worker.js", import.meta.url))], { argv0: agencyLaunchMarker("provider", m.attemptId), detached: true, shell: false, cwd: m.workPath, env: cleanProbeEnvironment(deps.env ?? process.env), stdio: ["ignore", "pipe", "pipe", "ipc", nativeStderr!.fd] }),
@@ -236,7 +258,7 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
         for (const stream of [child.stdout, child.stderr]) stream?.on("error", cause => { if (stream === child.stderr) stderrFailed = true; fail(cause, "worker-stream") })
         child.on("message", receive); stage = "worker-registration"
         attempt.capture = captureLiveProcess({ owner: attempt.owner, adapter, launchBootId: record.launchBootId, marker: agencyLaunchMarker("provider", m.attemptId), deadline: preparationDeadline, now })
-        attempt.group = await attempt.capture
+        attempt.group = await attempt.capture; checkPreparation()
         diagnostic.workerIdentity = attempt.group.identity().leader
         await update({ ...record, phase: "readiness", provider: { kind: "process-group", group: attempt.group.identity() } })
         if (!finished && !cleaning && now() < preparationDeadline && options.canStart() && !signal.aborted) {
@@ -252,9 +274,11 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
     } catch (cause) { fail(cause) }
     finally { clearTimeout(timer); signal.removeEventListener("abort", abort) }
     stage = "cleanup"; cleaning = true
-    const epoch = ++attempt.epoch, cleanupDeadline = now() + 4000 + 1000 + (deps.closeMs ?? 1000)
-    let expired = false
-    const expiration = setTimeout(() => { expired = true }, Math.max(1, cleanupDeadline - now()))
+    const epoch = ++attempt.epoch, cleanupDeadline = now() + cleanupBudget
+    const checkCleanup = (): void => {
+      checkDeadline(cleanupDeadline)
+      if (finalized || epoch !== attempt.epoch) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
+    }
     const stopWorkerAndGroup = async (): Promise<void> => {
       if (!attempt.owner) {
         if (attempt.spawnInvoked) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
@@ -263,63 +287,76 @@ export function createProbeRuntime(options: { paths: PlatformPaths; adapter: Pla
       const owner = attempt.owner
       if (!disconnected && owner.child.connected) void send({ type: "stop" })
       try {
-        const group = attempt.group ?? (attempt.capture ? await bounded(attempt.capture, cleanupDeadline) : undefined)
+        const group = attempt.group ?? (attempt.capture ? await bounded(() => attempt.capture!, cleanupDeadline) : undefined)
         if (!group) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
         attempt.group = group
         attempt.evidence = await group.cleanup({ deadline: cleanupDeadline, terminateMs: 4000, absenceMs: 1000, transportCloseMs: deps.closeMs ?? 1000 })
         attempt.physicalComplete = isLiveCleanupEvidence(attempt.evidence, group) && owner.snapshot().terminal?.kind === "exit" && owner.snapshot().closed
-        if (attempt.startAttempted && !attempt.native && !disconnected) await bounded(Promise.race([reported, owner.closed]), cleanupDeadline)
-        const sent = await bounded(Promise.allSettled(sends), cleanupDeadline)
+        if (attempt.startAttempted && !attempt.native && !disconnected) await bounded(() => Promise.race([reported, owner.closed]), cleanupDeadline)
+        const sent = await bounded(() => Promise.allSettled(sends), cleanupDeadline)
         if (sent.some(value => value.status === "rejected")) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
       } finally {
         if (owner.child.connected) { try { owner.child.disconnect() } catch { } }
         attempt.ipcComplete = disconnected || !owner.child.connected
       }
     }
-    const physical = stopWorkerAndGroup()
+    let physicalSucceeded = false
+    const physical = stopWorkerAndGroup().then(() => { checkCleanup(); physicalSucceeded = true }, cause => { attempt.physicalComplete = false; throw cause })
     const pendingPublication = queue.run(async () => {
+      checkCleanup()
       if (attempt.transition && attempt.spawnInvoked && attempt.group) await update({ ...attempt.transition.current(), phase: "cleanup_pending", provider: { kind: "process-group", group: attempt.group.identity() }, reason: null })
     })
     attempt.mutations.push(pendingPublication)
-    const outcomes = await Promise.allSettled([physical, ...attempt.mutations])
-    if (outcomes[0]?.status === "rejected") attempt.physicalComplete = false
-    attempt.repairable = attempt.physicalComplete && attempt.ipcComplete && nativeComplete()
+    const settled = Promise.allSettled([physical, ...attempt.mutations])
     try {
-      if (expired || now() >= cleanupDeadline || epoch !== attempt.epoch || attempt.publicationFailed || !attempt.repairable) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-      if (attempt.transition) await queue.run(() => publishClean(attempt))
-      else if (attempt.spawnInvoked) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
-      if (expired || now() >= cleanupDeadline || epoch !== attempt.epoch) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
+      try { await bounded(() => settled, cleanupDeadline) }
+      finally { attempt.repairable = physicalSucceeded && attempt.physicalComplete && attempt.ipcComplete && nativeComplete() }
+      checkCleanup()
+      if (attempt.publicationFailed || !attempt.repairable) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
+      if (attempt.transition) {
+        const publication = queue.run(() => publishClean(attempt, checkCleanup))
+        attempt.mutations.push(publication); void publication.catch(() => undefined)
+        await bounded(() => publication, cleanupDeadline)
+      } else if (attempt.spawnInvoked) throw new CatalogError("PROBE_CLEANUP_UNVERIFIED")
+      checkCleanup()
     } catch (cause) {
       attempt.cleanupFailed = true
       diagnostic.firstFailure ??= probeFailureDetail("cleanup", cause)
       error = failure(new CatalogError("PROBE_CLEANUP_UNVERIFIED"))
-    } finally { clearTimeout(expiration); recomputeIssues() }
+    } finally { recomputeIssues() }
     record = attempt.transition?.current() ?? record
     if (signal.aborted) error ??= failure(new CatalogError("INCOMPLETE"))
     const captureFailure = (cause: unknown): void => {
+      if (finalized) return
       diagnostic.firstFailure ??= probeFailureDetail("diagnostic-write", cause)
       stderrFailed = true
       error ??= failure(new CatalogError("PROBE_FAILED"))
       unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId)
     }
     try {
-      if (diagnosticCreated) {
-        for (const handle of [workerStderr, nativeStderr]) {
-          try { await handle?.sync() } catch (cause) { captureFailure(cause) }
+      try {
+        if (diagnosticCreated) {
+          for (const handle of [workerStderr, nativeStderr]) {
+            try { await bounded(() => handle!.sync(), cleanupDeadline) } catch (cause) { captureFailure(cause) }
+          }
+          try { diagnostic.workerStderrBytes = (await bounded(() => workerStderr!.stat(), cleanupDeadline)).size } catch (cause) { captureFailure(cause) }
+          try { diagnostic.nativeStderrBytes = (await bounded(() => nativeStderr!.stat(), cleanupDeadline)).size } catch (cause) { captureFailure(cause) }
         }
-        try { diagnostic.workerStderrBytes = (await workerStderr?.stat())?.size ?? 0 } catch (cause) { captureFailure(cause) }
-        try { diagnostic.nativeStderrBytes = (await nativeStderr?.stat())?.size ?? 0 } catch (cause) { captureFailure(cause) }
+      } finally {
+        const closes = [workerStderr, nativeStderr].map(async handle => { try { await handle?.close() } catch (cause) { captureFailure(cause) } })
+        await bounded(() => Promise.all(closes), cleanupDeadline)
       }
-      const closed = await Promise.allSettled([workerStderr?.close(), nativeStderr?.close()])
-      for (const value of closed) if (value.status === "rejected") captureFailure(value.reason)
       if (diagnosticCreated) {
         diagnostic.stderrComplete = !stderrFailed && diagnostic.firstFailure?.stage !== "diagnostic-write" && record.phase === "cleanup_verified" && (!attempt.spawnInvoked || !!attempt.owner?.snapshot().closed) && (!attempt.startAttempted || nativeComplete()) && !!workerStderr && !!nativeStderr
         diagnostic.failed = error !== null
         diagnostic.finishedAt = Date.now()
-        try { await writeProbeDiagnostic(m.workPath, diagnostic) }
+        try { await bounded(() => writeProbeDiagnostic(m.workPath, diagnostic), cleanupDeadline) }
         catch (cause) { captureFailure(cause); diagnostic.stderrComplete = false; diagnostic.failed = true; throw cause }
-        try { await completeProbeCapture(m.workPath) }
-        catch { unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId) }
+        try { await bounded(() => completeProbeCapture(m.workPath), cleanupDeadline) }
+        catch (cause) {
+          unscopedIssues.add("probe diagnostics unavailable: " + m.attemptId)
+          if (now() >= cleanupDeadline) captureFailure(cause)
+        }
       }
     } catch (cause) { captureFailure(cause) }
     finally { finalized = true; attempt.owner?.child.off("message", receive); attempt.done = true; running = false; complete() }

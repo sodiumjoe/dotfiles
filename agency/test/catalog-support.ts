@@ -9,7 +9,7 @@ import { CatalogError, type ProviderProfile, type ProviderId } from "../src/cata
 import { randomUUID } from "node:crypto"
 import { ChildProcess } from "node:child_process"
 import { PassThrough } from "node:stream"
-import { createProbeRuntime, type ProbeRequest } from "../src/catalog/probes.js"
+import { createProbeRuntime, type ProbeRequest, type ProbeDependencies } from "../src/catalog/probes.js"
 import { createCatalogStore } from "../src/catalog/store.js"
 import { observeConfig } from "../src/catalog/config.js"
 import { MutationQueue } from "../src/handler/mutations.js"
@@ -121,7 +121,7 @@ export async function catalogHandlerFixture(t: TestContext, options: { enabled?:
   }
 }
 
-export async function syntheticProbeFixture(t: TestContext, scenario = "success", scheduled = false) {
+export async function syntheticProbeFixture(t: TestContext, scenario = "success", scheduled = false, dependencies: Partial<ProbeDependencies> = {}) {
   const f = await profileFixture(t), store = createCatalogStore(f.root), generation = randomUUID(), batchId = randomUUID()
   let attemptId: string = randomUUID(), commandId: string = randomUUID()
   const evidence = await observeConfig(f.profile), queue = new MutationQueue()
@@ -216,6 +216,7 @@ export async function syntheticProbeFixture(t: TestContext, scenario = "success"
       void readLaunchRecordForReconciliation(path).then(record => { durableAtSpawn = record.launchAttempted; spawnObserved.resolve() })
       return child
     }) as typeof import("node:child_process").spawn,
+    ...dependencies,
   } })
   function assertSpawn(file: unknown, args: unknown, options: unknown) {
     if (file !== process.execPath || !Array.isArray(args) || typeof options !== "object" || options === null || !(options as { detached?: boolean }).detached) throw new Error("invalid worker spawn")

@@ -491,18 +491,19 @@ test("physical cleanup precedes held native publication and late publication can
   assert.equal(outcome.result, null)
 })
 
-test("held terminal publication retains run and explicit discharge until its mutation settles", { timeout: 15000 }, async t => {
+test("held terminal publication expires existing waits and requires fresh discharge", { timeout: 15000 }, async t => {
   const f = await syntheticProbeFixture(t, "held-cleanup-publication"); f.releaseWorkerIdentity(); f.releaseResult()
   let settled = false
   const operation = f.runtime.run(f.request, new AbortController().signal).then(value => { settled = true; return value })
   await f.cleanupPublication.promise
-  const inspected = gate(), verified = f.runtime.verifyDischarged().finally(() => inspected.resolve())
+  const inspected = gate(), verified = assert.rejects(f.runtime.verifyDischarged(), { code: "PROBE_CLEANUP_UNVERIFIED" }).finally(() => inspected.resolve())
   let discharged = false; void inspected.promise.then(() => { discharged = true })
   await new Promise<void>(resolve => setImmediate(resolve))
   assert.equal(settled, false); assert.equal(discharged, false)
   f.advanceClock(10000); f.releaseCleanupPublication()
   const outcome = await operation
   await verified
+  await f.runtime.verifyDischarged()
   assert.equal(outcome.error?.code, "PROBE_CLEANUP_UNVERIFIED")
   assert.equal(outcome.result, null)
 })

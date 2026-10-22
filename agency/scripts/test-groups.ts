@@ -31,6 +31,7 @@ export const deterministicFiles = [
   "bridge-protocol.test.js",
   "bridge-ssh.test.js",
   "catalog-cli.test.js",
+  "catalog-cleanup.test.js",
   "catalog-config.test.js",
   "catalog-diagnostics.test.js",
   "catalog-drivers.test.js",
