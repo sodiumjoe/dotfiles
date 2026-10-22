@@ -14,7 +14,7 @@ import { AgentError } from "../src/agent/types.js"
 import { splitLaunchSpec, startCommand } from "../src/agent/types.js"
 import { privateRoot, controlFixture, until, fileExists, failFixtureBatch, shutdownFixtureHandler } from "./control-support.js"
 import { MutationQueue } from "../src/handler/mutations.js"
-import type { LaunchContext } from "../src/handler/launch-transitions.js"
+import type { LaunchContext, LaunchTransitionIO } from "../src/handler/launch-transitions.js"
 import { readHandlerRecord, readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { LaunchRecord, ProcessIdentity } from "../src/platform/types.js"
 import { createAgentService, type AgentService } from "../src/agent/service.js"
@@ -305,7 +305,7 @@ export function agentGate() {
   return { promise, resolve }
 }
 
-export async function syntheticAgentProcess(t: TestContext, scenario: string, startupEnvelope = false, settings: { onUpdate?(event: AcpObservation): void } = {}) {
+export async function syntheticAgentProcess(t: TestContext, scenario: string, startupEnvelope = false, settings: { onUpdate?(event: AcpObservation): void; transitionIO?: Partial<LaunchTransitionIO> } = {}) {
   const root = await privateRoot(t), spec = sampleSpec(), contract = sampleContract(), beforeSpawn = agentGate(), publication = agentGate(), spawned = agentGate(), absentEntered = agentGate(), absentReleased = agentGate(), terminated = agentGate(), cleanupObservation = agentGate(), removalEntered = agentGate(), removalReleased = agentGate()
   const path = join(root, "launches", spec.launchAttemptId + ".json")
   await mkdir(join(root, "launches"), { mode: 0o700 })
@@ -321,7 +321,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
   const child = new EventEmitter() as ChildProcess
   let unrefs = 0
   Object.assign(child, { pid: 12345, stdin: peer.writable, stdout: peer.readable, stderr: new PassThrough(), exitCode: null, signalCode: null, unref() { unrefs++ } })
-  let live = false, count = 0, cleanupStarted = false, absenceStarted = false, failCleanupPublication = scenario === "cleanup-publication-after-write", lateAbsenceReads = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, attemptPublished = false, readbackFailed = false, earlyWrites = 0, invalidation = "", checks = 0, spawnInputReleases = 0, releasesAtSpawn = -1
+  let live = false, count = 0, absenceStarted = false, failCleanupPublication = scenario === "cleanup-publication-after-write", lateAbsenceReads = 0, observedOptions: SpawnOptions | undefined, identityPublished = false, attemptPublished = false, readbackFailed = false, earlyWrites = 0, invalidation = "", checks = 0, spawnInputReleases = 0, releasesAtSpawn = -1
   const signals: NodeJS.Signals[] = []
   let identity: ProcessIdentity = { pid: 12345, bootId: "boot-a", birth: `100:agy-provider:${spec.launchAttemptId}`, parentPid: process.pid, processGroupId: 12345, sessionId: 12345, uid: process.getuid!(), gid: process.getgid!() }
   if (scenario === "identity-mismatch") identity.birth = "100:other"
@@ -334,7 +334,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
     state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 1, total: 1, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] },
     mutations: { queue: new MutationQueue(), accepted: [] }, shutdownPending: () => false,
     adapter: { platform: "linux", bootId: async () => {
-      if (scenario === "cleanup-boot-hang" && cleanupStarted) { cleanupObservation.resolve(); return new Promise<string>(() => undefined) }
+      if (scenario === "cleanup-boot-hang" && identityPublished) { cleanupObservation.resolve(); return new Promise<string>(() => undefined) }
       return "boot-a"
     }, readProcess: async () => {
       if (scenario === "absence-paused" && absenceStarted) lateAbsenceReads++
@@ -371,8 +371,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
     async publish(file, record) {
       if (scenario === "attempt-write" && record.launchAttempted && !record.provider) throw new Error("attempt write failed")
       if (scenario === "restore-failure" && !record.launchAttempted) throw new Error("restore failed")
-      if (record.phase === "cleanup_pending") cleanupStarted = true
-      await writeLaunchRecord(file, record)
+      await (settings.transitionIO?.publish ?? writeLaunchRecord)(file, record)
       if (record.phase === "cleanup_verified" && failCleanupPublication) throw new Error("cleanup publication after write")
       if (record.launchAttempted && !record.provider) attemptPublished = true
       if (record.provider) identityPublished = true
@@ -380,7 +379,7 @@ export async function syntheticAgentProcess(t: TestContext, scenario: string, st
       if (scenario === "publication-never" && record.launchAttempted && !record.provider) { beforeSpawn.resolve(); await new Promise<void>(() => undefined) }
       if (scenario === "identity-publication-paused" && record.provider) { beforeSpawn.resolve(); await publication.promise }
     },
-    async read(file) { if (scenario === "attempt-readback" && attemptPublished && !readbackFailed) { readbackFailed = true; throw new Error("readback failed") }; return readLaunchRecordForReconciliation(file) },
+    async read(file) { if (scenario === "attempt-readback" && attemptPublished && !readbackFailed) { readbackFailed = true; throw new Error("readback failed") }; return (settings.transitionIO?.read ?? readLaunchRecordForReconciliation)(file) },
   }, now: () => Date.now() })
   return { failCleanupPublication(value: boolean) { failCleanupPublication = value }, emitStderr(bytes: Buffer) { child.stderr!.emit("data", bytes) }, emitProcess(event: "exit" | "close", code: number | null, signal: NodeJS.Signals | null) { live = false; if (event === "exit") Object.assign(child, { exitCode: code, signalCode: signal }); child.emit(event, code, signal) }, emitError(event: "error" | "stdin_error" | "stdout_error" | "stderr_error", error: Error) { if (event === "error") child.emit("error", error); else child[event.split("_")[0] as "stdin" | "stdout" | "stderr"]!.emit("error", error) }, owner, root, spec, context, signals, requests: peer.sent, beforeSpawn, removalEntered: removalEntered.promise, releaseRemoval: removalReleased.resolve, spawned: spawned.promise, absentEntered: absentEntered.promise, releaseAbsence: absentReleased.resolve, lateAbsenceReads: () => lateAbsenceReads, terminated: terminated.promise, cleanupObservation: cleanupObservation.promise, releasePublication: publication.resolve, spawnCount: () => count, spawnInputReleases: () => spawnInputReleases, releasesAtSpawn: () => releasesAtSpawn, unrefs: () => unrefs, record: () => readLaunchRecordForReconciliation(path), writesBeforeIdentity: () => earlyWrites, options: () => observedOptions, invalidate: (why: string) => { invalidation = why }, replaceIdentity() { identity.birth = `200:agy-provider:${spec.launchAttemptId}` }, eof: () => peer.readable.end(), pipesDestroyed: () => child.stdin!.destroyed && child.stdout!.destroyed && child.stderr!.destroyed }
 }

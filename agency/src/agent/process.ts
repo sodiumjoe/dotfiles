@@ -94,7 +94,13 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
         checkCleanup()
       }), cleanupDeadline, "CLEANUP_UNVERIFIED")
     }
+    const stopCapturedGroup = async (): Promise<void> => {
+      if (!liveGroup || cleanupEvidence) return
+      cleanupEvidence = await liveGroup.cleanup({ deadline: cleanupDeadline, terminateMs: phases.processTerminateMs, absenceMs: phases.absenceMs, transportCloseMs: phases.transportCloseMs, retry: true })
+      checkCleanup()
+    }
     cleaning = bounded(async () => {
+      await stopCapturedGroup()
       await bounded(() => preparation?.catch(() => undefined) ?? Promise.resolve(), cleanupDeadline, "CLEANUP_UNVERIFIED")
       checkCleanup()
       if (!published && !spawnInvoked) return structuredClone(current)
@@ -103,15 +109,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       } else {
         if (!owned || !liveGroup) throw new AgentError("CLEANUP_UNVERIFIED")
         const group = liveGroup
-        if (!cleanupEvidence) {
-          let publicationFailure: unknown
-          try { await publishCleanup(() => beginOwnedCleanup(context, current, group, dependencies.transitionIO)) }
-          catch (error) { publicationFailure = error }
-          checkCleanup()
-          cleanupEvidence = await group.cleanup({ deadline: cleanupDeadline, terminateMs: phases.processTerminateMs, absenceMs: phases.absenceMs, transportCloseMs: phases.transportCloseMs, retry: true })
-          checkCleanup()
-          if (publicationFailure) throw publicationFailure
-        }
+        await stopCapturedGroup()
         if (snapshot().phase !== "cleanup_verified" && snapshot().phase !== "cleanup_pending") {
           await publishCleanup(() => beginOwnedCleanup(context, current, group, dependencies.transitionIO))
         }

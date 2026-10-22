@@ -18,6 +18,7 @@ import { lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
 import { agentFailure } from "../src/agent/types.js"
+import { writeLaunchRecord } from "../src/platform/private-state.js"
 import { verifyFixtureProviderGroup, syntheticAgentProcess } from "./agent-support.js"
 
 test("agent process publishes a managed launch and spawns in the exact caller directory with profile-derived adapter routing", async t => {
@@ -293,6 +294,134 @@ test("a terminal leader with a surviving descendant remains unresolved without s
   f.emitProcess("exit", 0, null); f.emitProcess("close", 0, null)
   await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
   assert.deepEqual(f.signals, [])
+})
+
+test("captured cleanup stops the child while the history mutation queue is held", async t => {
+  const f = await syntheticAgentProcess(t, "normal")
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const entered = Promise.withResolvers<void>(), held = Promise.withResolvers<void>()
+  const reads = [t.mock.method(f.context.adapter, "readProcess"), t.mock.method(f.context.adapter, "readGroup")]
+  const queued = f.context.mutations.queue.run(async () => { entered.resolve(); await held.promise })
+  await entered.promise
+  const cleanup = f.owner.cleanup(), rejected = assert.rejects(cleanup, { code: "CLEANUP_UNVERIFIED" })
+  let signalsWhileHeld: NodeJS.Signals[], processWhileHeld: unknown
+  try {
+    assert.equal(f.owner.cleanup(), cleanup)
+    await new Promise(resolve => setImmediate(resolve))
+    signalsWhileHeld = [...f.signals]; processWhileHeld = await f.context.adapter.readProcess(12345)
+    assert.notEqual(f.owner.record().phase, "cleanup_verified")
+    t.mock.timers.tick(8001)
+    await rejected
+  } finally { held.resolve(); await queued }
+  await f.context.mutations.queue.run(async () => undefined)
+  assert.deepEqual(signalsWhileHeld, ["SIGTERM"])
+  assert.equal(processWhileHeld, null)
+  assert.notEqual(f.owner.record().phase, "cleanup_verified")
+  const observations = reads.map(read => read.mock.callCount())
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.deepEqual(reads.map(read => read.mock.callCount()), observations)
+})
+
+test("captured cleanup establishes absence before a held cleanup publication", async t => {
+  const entered = Promise.withResolvers<void>(), held = Promise.withResolvers<void>(), publications: string[] = []
+  const f = await syntheticAgentProcess(t, "normal", false, { transitionIO: { async publish(file, record) {
+    publications.push(record.phase)
+    if (record.phase === "cleanup_pending") { entered.resolve(); await held.promise }
+    await writeLaunchRecord(file, record)
+  } } })
+  await f.owner.initialize(new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const reads = [t.mock.method(f.context.adapter, "readProcess"), t.mock.method(f.context.adapter, "readGroup")]
+  const cleanup = f.owner.cleanup(), rejected = assert.rejects(cleanup, { code: "CLEANUP_UNVERIFIED" })
+  let signalsWhileHeld: NodeJS.Signals[], processWhileHeld: unknown
+  try {
+    await entered.promise
+    signalsWhileHeld = [...f.signals]; processWhileHeld = await f.context.adapter.readProcess(12345)
+    t.mock.timers.tick(8001)
+    await rejected
+  } finally { held.resolve() }
+  await f.context.mutations.queue.run(async () => undefined)
+  assert.deepEqual(signalsWhileHeld, ["SIGTERM"])
+  assert.equal(processWhileHeld, null)
+  assert.equal(publications.includes("cleanup_verified"), false)
+  assert.equal(f.owner.record().phase, "cleanup_pending")
+  const observations = reads.map(read => read.mock.callCount())
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.deepEqual(reads.map(read => read.mock.callCount()), observations)
+})
+
+test("captured cleanup stops the child without releasing readiness publication", async t => {
+  const f = await syntheticAgentProcess(t, "identity-publication-paused")
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() })
+  const initialization = f.owner.initialize(new AbortController().signal)
+  const initializationRejected = assert.rejects(initialization, { code: "STARTUP_TIMEOUT" })
+  await f.beforeSpawn.promise
+  const reads = [t.mock.method(f.context.adapter, "readProcess"), t.mock.method(f.context.adapter, "readGroup")]
+  const cleanup = f.owner.cleanup(), rejected = assert.rejects(cleanup, { code: "CLEANUP_UNVERIFIED" })
+  let signalsWhileHeld: NodeJS.Signals[], processWhileHeld: unknown
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    signalsWhileHeld = [...f.signals]; processWhileHeld = await f.context.adapter.readProcess(12345)
+    t.mock.timers.tick(8001)
+    await Promise.all([rejected, initializationRejected])
+  } finally { f.releasePublication() }
+  await f.context.mutations.queue.run(async () => undefined)
+  assert.deepEqual(signalsWhileHeld, ["SIGTERM"])
+  assert.equal(processWhileHeld, null)
+  assert.deepEqual(f.requests, [])
+  await assert.rejects(f.owner.prompt("late admission", new AbortController().signal), { code: "NOT_READY" })
+  assert.notEqual(f.owner.record().phase, "cleanup_verified")
+  const observations = reads.map(read => read.mock.callCount())
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.deepEqual(reads.map(read => read.mock.callCount()), observations)
+})
+
+for (const afterWrite of [false, true]) test(`cleanup publication failure afterWrite=${afterWrite} follows physical absence and permits durability-only retry`, async t => {
+  let failing = true, processAtPublication: unknown
+  const f = await syntheticAgentProcess(t, "normal", false, { transitionIO: { async publish(file, record) {
+    if (record.phase === "cleanup_pending" && failing) {
+      processAtPublication = await f.context.adapter.readProcess(12345)
+      if (afterWrite) await writeLaunchRecord(file, record)
+      throw new Error("cleanup publication failed")
+    }
+    await writeLaunchRecord(file, record)
+  } } })
+  await f.owner.initialize(new AbortController().signal)
+  const reads = [t.mock.method(f.context.adapter, "readProcess"), t.mock.method(f.context.adapter, "readGroup")]
+  await assert.rejects(f.owner.cleanup(), { code: "CLEANUP_UNVERIFIED" })
+  assert.equal(processAtPublication, null)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.equal(f.owner.record().phase, afterWrite ? "cleanup_pending" : "readiness")
+  assert.equal(f.owner.record().launchAttemptId, f.spec.launchAttemptId)
+  const observations = reads.map(read => read.mock.callCount())
+  failing = false
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.deepEqual(reads.map(read => read.mock.callCount()), observations)
+})
+
+test("cleanup stops a group captured after cleanup starts without initializing ACP", async t => {
+  const f = await syntheticAgentProcess(t, "normal"), readProcess = f.context.adapter.readProcess
+  const entered = Promise.withResolvers<void>(), held = Promise.withResolvers<void>()
+  let capture = true
+  f.context.adapter.readProcess = async pid => {
+    if (capture) { capture = false; entered.resolve(); await held.promise }
+    return readProcess(pid)
+  }
+  const initialization = f.owner.initialize(new AbortController().signal)
+  const initializationRejected = assert.rejects(initialization, { code: "STARTUP_FAILED" })
+  await entered.promise
+  const cleanup = f.owner.cleanup()
+  void cleanup.catch(() => undefined)
+  held.resolve()
+  await initializationRejected
+  assert.equal((await cleanup).phase, "cleanup_verified")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.deepEqual(f.requests, [])
 })
 
 test("visible cleanup publication failure needs a durability-only retry", async t => {

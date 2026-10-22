@@ -168,6 +168,7 @@ test("incomplete forced lifecycle cleanup leaves Handler status and live ownersh
   f.context.shutdownPending = () => ctx.pending !== undefined
   await f.service.start(f.input)
   await until(async () => (await f.service.command(f.input.commandId, f.input.handlerGeneration)).command.state === "completed" ? true : undefined)
+  const launchBeforeCleanup = structuredClone(f.context.mutations.accepted[0]!.record)
   const read = f.context.adapter.readProcess, signal = f.context.adapter.signalGroup
   let signals = 0
   f.context.adapter.signalGroup = async (...args) => { signals++; return signal(...args) }
@@ -178,7 +179,7 @@ test("incomplete forced lifecycle cleanup leaves Handler status and live ownersh
   assert.equal(ctx.pending, undefined); assert.equal(ctx.state.phase, "ready")
   assert.equal(await readShutdownReceipt(ctx.paths.persistentRoot, command.commandId), null)
   assert.equal((await f.service.list()).agents[0]!.cleanup, "unverified")
-  assert.equal(f.context.mutations.accepted[0]!.record.phase, "cleanup_pending")
+  assert.deepEqual(f.context.mutations.accepted[0]!.record, launchBeforeCleanup)
   assert.equal(signals, 0)
   f.context.adapter.signalGroup = signal
   f.context.adapter.readProcess = read
