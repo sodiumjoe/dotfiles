@@ -33,8 +33,8 @@ describe("native Agency Agentic adaptation", function()
         for index = #frames, 1, -1 do if frames[index].method == method then return frames[index] end end
         error("missing request " .. method)
     end
-    local function reply(frame, backend, snapshot, target)
-        client:_handle_message({ id = frame.id, result = { sessionId = logical, _meta = { agency = {
+    local function reply(frame, backend, snapshot, target, session)
+        client:_handle_message({ id = frame.id, result = { sessionId = session or logical, _meta = { agency = {
             version = 1, binding = target or binding, backendId = backend or "codex-acp", turnId = vim.NIL,
             configuration = snapshot or { configOptions = {}, models = vim.NIL, modes = vim.NIL, availableCommands = {} },
         } } } })
@@ -412,6 +412,133 @@ describe("native Agency Agentic adaptation", function()
         flush()
     end
 
+    for _, failed in ipairs({ "error", "disconnected" }) do
+        it("invalidates idle attachments on transport " .. failed, function()
+            local manager, called = opened(), 0
+            state(manager, nil, "idle")
+            local guarded = integration.guard_callback(manager, { epoch = manager._agency_epoch }, function() called = called + 1 end)
+            local before = #frames
+            client:_set_state(failed)
+            guarded()
+            flush()
+            assert.are.equal(0, called)
+            assert.is_false(manager.is_generating)
+            assert.is_nil(manager.status_animation._state)
+            assert.are.equal(logical, manager.session_id)
+            assert.are.equal(before, #frames)
+        end)
+
+        it("clears active attachments and drains wire callbacks once on transport " .. failed, function()
+            local manager = opened()
+            manager:_handle_input_submit("admitted")
+            local prompt = request("session/prompt")
+            state(manager, prompt.params._meta.agency.submissionId, "running")
+            permission("permission-disconnect")
+            assert.is_true(manager.permission_manager:has_pending())
+            local staged = integration.stage_context(manager, { { type = "text", text = "pending context" } })
+            manager._agency_initial_context = { { type = "text", text = "initial context" } }
+            manager:_handle_input_submit("pending")
+            local pending = request("session/prompt")
+            assert.is_not_nil(staged.submission)
+            local calls, failure = 0, nil
+            local callback = client.callbacks[prompt.id]
+            client.callbacks[prompt.id] = function(result, err)
+                calls, failure = calls + 1, err
+                callback(result, err)
+            end
+            local before = #frames
+            client:_set_state(failed)
+            client:_set_state("disconnected")
+            flush()
+            assert.is_false(manager.is_generating)
+            assert.is_false(manager._agency_running)
+            assert.is_nil(manager.status_animation._state)
+            assert.is_false(manager.permission_manager:has_pending())
+            assert.are.same({}, manager._agency_admissions)
+            assert.is_nil(manager._agency_initial_submission)
+            assert.is_nil(staged.submission)
+            assert.are.equal(1, calls)
+            assert.are.equal(ACPClient.ERROR_CODES.TRANSPORT_ERROR, failure.code)
+            assert.are.equal(failed, failure.message)
+            assert.are.same({}, client.callbacks)
+            client:_handle_message({ id = pending.id, result = { stopReason = "end_turn" } })
+            flush()
+            assert.is_false(manager.is_generating)
+            assert.are.equal(before, #frames)
+        end)
+    end
+
+    it("discards already queued session updates and native finishes after transport loss", function()
+        local manager = opened()
+        manager:_handle_input_submit("input")
+        local prompt = request("session/prompt")
+        client:_handle_message({ method = "agency/session_state", params = { sessionId = logical,
+            binding = binding, turnId = prompt.params._meta.agency.submissionId, state = "running" } })
+        client:_handle_message({ id = prompt.id, result = { stopReason = "end_turn" } })
+        client:_set_state("disconnected")
+        flush()
+        assert.is_false(manager.is_generating)
+        assert.is_false(manager._agency_running)
+        assert.is_nil(manager.status_animation._state)
+    end)
+
+    it("handles transport loss from a fast event without using editor APIs there", function()
+        local manager = opened()
+        manager:_handle_input_submit("input")
+        state(manager, request("session/prompt").params._meta.agency.submissionId, "running")
+        permission("permission-fast-disconnect")
+        local finished, fast, ok, err = false, false, false, nil
+        local timer = vim.uv.new_timer()
+        timer:start(0, 0, function()
+            fast = vim.in_fast_event()
+            ok, err = pcall(client._set_state, client, "disconnected")
+            timer:close()
+            finished = true
+        end)
+        assert.is_true(vim.wait(1000, function() return finished end))
+        flush()
+        assert.is_true(fast)
+        assert.is_true(ok, tostring(err))
+        assert.is_false(manager.is_generating)
+        assert.is_false(manager.permission_manager:has_pending())
+        assert.is_nil(manager.status_animation._state)
+    end)
+
+    it("invalidates every attachment on a shared client and permits explicit reload", function()
+        local first = opened()
+        state(first, "turn-a", "running")
+        local second_id = "agency:66666666-6666-4666-8666-666666666666"
+        local second_binding = vim.tbl_extend("force", binding, { agentId = second_id:sub(8) })
+        local second = integration.open({ record = { version = 3,
+            definition = { agentId = second_binding.agentId, cwd = vim.fn.getcwd(), backendId = "codex-acp" },
+            launch = second_binding }, live = true })
+        flush()
+        reply(request("session/load"), nil, nil, second_binding, second_id)
+        flush()
+        assert.are.equal(second_id, second.session_id)
+        second:_handle_input_submit("second input")
+        local before = #frames
+        client:_set_state("disconnected")
+        flush()
+        for _, manager in ipairs({ first, second }) do
+            assert.is_false(manager.is_generating)
+            assert.is_false(manager._agency_running)
+            assert.is_nil(manager.status_animation._state)
+        end
+        assert.are.equal(before, #frames)
+        client:_set_state("ready")
+        first:load_acp_session(logical)
+        reply(request("session/load"))
+        flush()
+        first:_handle_input_submit("after reload")
+        state(first, request("session/prompt").params._meta.agency.submissionId, "running")
+        assert.is_true(first.is_generating)
+        assert.is_false(second.is_generating)
+        vim.api.nvim_set_current_tabpage(second.tab_page_id)
+        Registry.destroy_session(second.tab_page_id)
+        vim.cmd("tabclose!")
+    end)
+
     it("treats nil permission callbacks as frontend abandonment", function()
         local manager = opened()
         permission("permission-a")
@@ -532,6 +659,15 @@ describe("native Agency Agentic adaptation", function()
         permission("direct-permission")
         manager.permission_manager:clear()
         assert.are.equal("selected", frames[#frames].result.outcome.outcome)
+        local epoch, calls, failure = manager._agency_epoch, 0, nil
+        client:send_prompt(logical, { { type = "text", text = "direct input" } }, function(_, err)
+            calls, failure = calls + 1, err
+        end)
+        client:_set_state("disconnected")
+        flush()
+        assert.are.equal(1, calls)
+        assert.are.equal(ACPClient.ERROR_CODES.TRANSPORT_ERROR, failure.code)
+        assert.are.equal(epoch, manager._agency_epoch)
         manager:destroy()
         assert.are.equal(logical, request("session/cancel").params.sessionId)
         Config.acp_providers.direct_fixture = nil

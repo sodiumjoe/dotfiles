@@ -34,6 +34,17 @@ local function invoke(manager, captured, callback, ...)
     return result
 end
 
+local function unavailable(manager)
+    manager._agency_admissions, manager._agency_initial_submission = {}, nil
+    for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
+    manager._agency_epoch = manager._agency_epoch + 1
+    manager._agency_running, manager.is_generating = false, false
+    vim.schedule(M.guard_callback(manager, { epoch = manager._agency_epoch }, function()
+        manager.permission_manager:clear()
+        manager.status_animation:stop()
+    end))
+end
+
 local function replay_notification(client, handlers, params, dispatch)
     local batch = handlers._agency_replay_batch
     if not batch then
@@ -151,13 +162,22 @@ function M.install()
     local Client = require("agentic.acp.acp_client")
     local Instances = require("agentic.acp.agent_instance")
     local methods = { { Manager, { "new", "new_session", "load_acp_session", "_cancel_session", "destroy", "_build_handlers", "_on_session_update", "_handle_input_submit" } },
-        { Client, { "create_session", "load_session", "send_prompt", "cancel_session", "stop_generation", "__with_subscriber", "_handle_notification", "__handle_request_permission", "_send_request", "_send_notification", "_subscribe", "__send_result" } } }
+        { Client, { "_set_state", "create_session", "load_session", "send_prompt", "cancel_session", "stop_generation", "__with_subscriber", "_handle_notification", "__handle_request_permission", "_send_request", "_send_notification", "_subscribe", "__send_result" } } }
     for _, entry in ipairs(methods) do
         for _, name in ipairs(entry[2]) do assert(type(entry[1][name]) == "function", "Unsupported Agentic API: " .. name) end
     end
     local native = {}
     for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = entry[1][name] end end
     local sm, acp = native[Manager], native[Client]
+    function Client:_set_state(state)
+        if agency(self) and (state == "error" or state == "disconnected") then
+            for _, handlers in pairs(self.subscribers) do
+                local manager = handlers._agency_owner
+                if manager and not manager._agency_destroyed and manager._agency_epoch == handlers._agency_epoch then unavailable(manager) end
+            end
+        end
+        return acp._set_state(self, state)
+    end
     local get_instance = Instances.get_instance
     Instances.get_instance = function(name, on_ready)
         local client = Instances._instances[name]
@@ -495,12 +515,7 @@ function M.install()
                         end
                         if manager._agency_initial_submission == admitted then manager._agency_initial_context = nil end
                     end
-                    if params.state == "unavailable" then
-                        manager._agency_admissions, manager._agency_initial_submission = {}, nil
-                        for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
-                        manager._agency_epoch = manager._agency_epoch + 1
-                        manager.permission_manager:clear()
-                    end
+                    if params.state == "unavailable" then unavailable(manager) end
                     manager._agency_running = params.state == "running"
                     manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil
                     if params.configuration then configuration(manager, params.configuration) end
