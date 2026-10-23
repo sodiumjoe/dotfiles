@@ -39,6 +39,23 @@ const pending = (e: EditorFixture) => wait(e, "fixture_manager.permission_manage
 const decide = (e: EditorFixture, option: string) => run(e, `fixture_manager.permission_manager:resolve('fixture-tool',${JSON.stringify(option)})`)
 const transcript = (e: EditorFixture) => e.lua("vim.api.nvim_buf_get_lines(fixture_manager.widget.buf_nrs.chat,0,-1,false)") as Promise<string[]>
 const decisions = async (f: AcpFixture, backend: ProviderId = "codex-acp") => (await f.requests(backend)).filter(frame => frame.result?.outcome)
+for (const backend of ["codex-acp", "claude-agent-acp"] as const) test("new native chat input passes through during a working " + backend + " turn", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t), e = await editorFixture(f), sid = await start(e, backend), target = await f.tuple(sid)
+  await submit(e, "held")
+  await wait(e, "fixture_manager._agency_admission.accepted")
+  await run(e, `vim.api.nvim_buf_set_lines(fixture_manager.widget.buf_nrs.input,0,-1,false,{'change direction'}); fixture_manager.widget:_submit_input()`)
+  await until(async () => (await f.requests(backend)).filter(frame => frame.method === "session/prompt").length === 2 ? true : undefined)
+  await wait(e, "fixture_manager._agency_admission.accepted")
+  await until(async () => (await transcript(e)).some(line => line.includes("answer:change direction")) ? true : undefined)
+  assert.equal(await e.lua("fixture_manager.is_generating"), true)
+  await f.release(backend); await idle(e)
+  const requests = await f.requests(backend)
+  assert.deepEqual(requests.filter(frame => ["session/prompt", "session/cancel"].includes(frame.method!)).map(frame => frame.method), ["session/prompt", "session/prompt"])
+  assert.equal((await transcript(e)).filter(line => line === "change direction").length, 1)
+  assert.deepEqual(await e.lua("vim.api.nvim_buf_get_lines(fixture_manager.widget.buf_nrs.input,0,-1,false)"), [""])
+  assert.deepEqual(await f.tuple(sid), target)
+})
+
 test("new command discovers backends from a cold native client and selects without fast-event errors", { timeout: 60000 }, async t => {
   const f = await acpFixture(t), e = await editorFixture(f)
   await run(e, `AgencyFixture.commands(); fixture_fast=false; vim.ui.select=function(items,opts,callback)
@@ -569,12 +586,12 @@ test("provider editor RPC follows the submitting attachment across editor replac
   await attach(f, b, sid); await pending(b)
   assert.equal(await rpc(), a.pid)
   const first = String(await a.lua("fixture_manager._agency_local_submission"))
-  await run(b, `fixture_busy=nil; fixture_duplicate=nil; fixture_manager.agent:_send_request('session/prompt',
-    {sessionId=fixture_manager.session_id,prompt={{type='text',text='busy'}},_meta={agency={version=1,submissionId=${JSON.stringify(randomUUID())},editor=vim.v.servername}}},
-    function(_,err) fixture_busy=err end); fixture_manager.agent:_send_request('session/prompt',
+  await run(b, `fixture_extra=nil; fixture_duplicate=nil; fixture_manager.agent:_send_request('session/prompt',
+    {sessionId=fixture_manager.session_id,prompt={{type='text',text='extra'}},_meta={agency={version=1,submissionId=${JSON.stringify(randomUUID())},editor=vim.v.servername}}},
+    function(_,err) fixture_extra=err or false end); fixture_manager.agent:_send_request('session/prompt',
     {sessionId=fixture_manager.session_id,prompt={{type='text',text='permission'}},_meta={agency={version=1,submissionId=${JSON.stringify(first)},editor=vim.v.servername}}},
     function(_,err) fixture_duplicate=err or false end)`)
-  await wait(b, "fixture_busy ~= nil")
+  await wait(b, "fixture_extra ~= nil")
   assert.equal(await rpc(), a.pid)
   await run(a, "fixture_manager.agent:stop_generation(fixture_manager.session_id)"); await idle(a); await idle(b)
   await wait(b, "fixture_duplicate ~= nil")
@@ -652,4 +669,42 @@ test("the shared runtime entry driver binds and inspects a real headless editor 
   assert.equal(await e.lua(registry + "._agency_entry.editorId"), editor.editorId)
   assert.deepEqual(await e.lua("fixture_notifications"), [])
   acp.close()
+})
+for (const backend of ["codex-acp", "claude-agent-acp"] as const) test("native overlap cancellation stop and restore remains usable " + backend, { timeout: 120000 }, async t => {
+  const f = await acpFixture(t), e = await editorFixture(f)
+  const sid = await start(e, backend), original = await f.tuple(sid)
+  await submit(e, "held")
+  await until(async () => (await f.requests(backend)).filter(frame => frame.method === "session/prompt").length === 1 ? true : undefined)
+  await submit(e, "second")
+  await submit(e, "third")
+  await until(async () => (await f.requests(backend)).filter(frame => frame.method === "session/prompt").length === 3 ? true : undefined)
+  await until(async () => (await transcript(e)).some(line => line.includes("answer:third")) ? true : undefined)
+  assert.equal(await e.lua("fixture_manager.is_generating"), true)
+  assert.equal((await f.requests(backend)).filter(frame => frame.method === "session/cancel").length, 0)
+  assert.deepEqual(await f.tuple(sid), original)
+  await run(e, "fixture_manager.agent:stop_generation(fixture_manager.session_id)")
+  await idle(e)
+  assert.equal((await f.requests(backend)).filter(frame => frame.method === "session/cancel").length, 1)
+  await submit(e, "after cancel")
+  await idle(e)
+  await until(async () => (await transcript(e)).some(line => line.includes("answer:after cancel")) ? true : undefined)
+  await f.stopSession(sid)
+  const stopped = (await f.page({ limit: 100 })).agents.find(value => "definition" in value.record && value.record.definition.agentId === original.agentId)!
+  assert.equal(stopped.record.phase, "stopped")
+  assert.equal(stopped.cleanup, "verified")
+  await f.restoreSession(sid)
+  await run(e, `fixture_manager:load_acp_session(${JSON.stringify(sid)},'Restored')`)
+  assert.equal(await ready(e), sid)
+  const restored = await f.tuple(sid)
+  assert.equal(restored.agentId, original.agentId)
+  assert.notEqual(restored.providerGeneration, original.providerGeneration)
+  assert.equal((await f.requests(backend)).filter(frame => frame.method === "session/prompt").length, 4)
+  await submit(e, "after restore")
+  await idle(e)
+  await until(async () => (await transcript(e)).some(line => line.includes("answer:after restore")) ? true : undefined)
+  const frames = await f.requests(backend)
+  assert.deepEqual(frames.filter(frame => frame.method === "session/prompt").map(frame => (frame.params!.prompt as JsonObject[]).filter(block => block.type === "text").map(block => block.text).join("")), ["held", "second", "third", "after cancel", "after restore"])
+  assert.equal(frames.filter(frame => frame.method === "session/load").length, 1)
+  assert.equal(await e.lua("vim.v.errmsg"), "")
+  await f.stopSession(sid)
 })

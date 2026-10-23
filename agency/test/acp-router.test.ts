@@ -168,13 +168,52 @@ test("duplicate pending connection IDs cannot dispatch another mutation or recei
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/set_config_option").length, 0)
 })
 
+for (const backend of ["codex-acp", "claude-agent-acp"] as const) test("overlapping prompts pass through without cancellation: " + backend, async t => {
+  const f = await acpFixture(t), a = await f.connect(), b = await f.connect()
+  await a.request("initialize", initialize); await b.request("initialize", initialize)
+  const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: meta(backend) })
+  const id = randomUUID(), firstParams = { sessionId: s.sessionId!, prompt: [{ type: "text", text: "held" }], _meta: { agency: { version: 1, submissionId: id } } }
+  const pending = a.request("session/prompt", firstParams)
+  await a.nextState("running")
+  await b.request("session/load", { sessionId: s.sessionId!, cwd: f.workspace, mcpServers: [] })
+  try {
+    const second = await b.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "second" }], _meta: { other: "preserved" } })
+    const third = await a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "third" }] })
+    assert.equal(second.stopReason, "end_turn"); assert.equal(third.stopReason, "end_turn")
+    const duplicate = b.request("session/prompt", firstParams)
+    const frames = await f.requests(backend)
+    assert.deepEqual(frames.filter(frame => ["session/prompt", "session/cancel"].includes(frame.method!)).map(frame => frame.method), ["session/prompt", "session/prompt", "session/prompt"])
+    assert.equal(b.drain("agency/session_state").at(-1)!.state, "running")
+    await f.release(backend); await pending; await duplicate
+    await a.nextState("idle")
+  } finally { await f.release(backend); await pending }
+})
+
+test("provider rejection of another prompt preserves native error and existing permissions", async t => {
+  const f = await acpFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const s = await c.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  const pending = c.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "permission" }] })
+  const permission = await c.next("session/request_permission")
+  try {
+    await assert.rejects(c.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "provider-busy" }] }), error => {
+      assert.equal((error as any).code, -32042); assert.equal((error as Error).message, "Provider busy"); return true
+    })
+    c.respond(permission.id, { outcome: { outcome: "selected", optionId: "allow-once" } })
+    assert.equal((await pending).stopReason, "end_turn")
+    assert.equal((await c.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "after" }] })).stopReason, "end_turn")
+    assert.equal((await f.requests("codex-acp")).filter(frame => frame.method === "session/new").length, 1)
+  } finally { await c.request("session/cancel", { sessionId: s.sessionId! }); await pending }
+})
+
 test("explicit cancellation targets a previous turn ID without cancelling the current turn", async t => {
   const f = await acpFixture(t), c = await f.connect()
   await c.request("initialize", initialize)
   const s = await c.request("session/new", { cwd: f.workspace, mcpServers: [] }), previous = randomUUID()
   await c.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "first" }], _meta: { agency: { version: 1, submissionId: previous } } })
-  const pending = c.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "held" }] })
-  await c.nextState("running")
+  const current = randomUUID()
+  const pending = c.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "held" }], _meta: { agency: { version: 1, submissionId: current } } })
+  while ((await c.nextState("running")).turnId !== current) {}
   await c.request("session/cancel", { sessionId: s.sessionId!, _meta: { agency: { version: 1, turnId: previous } } })
   assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/cancel").length, 0)
   await c.request("session/cancel", { sessionId: s.sessionId! }); assert.equal((await pending).stopReason, "cancelled")

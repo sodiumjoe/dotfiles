@@ -23,7 +23,7 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
   let initialized = false, closed = false
   const send = (frame: JsonObject): void => { if (!closed) input.send(frame) }
   const notify = (method: string, params: JsonObject, meta?: JsonObject): void => send({ jsonrpc: "2.0", method, params, ...(meta ? { _meta: meta } : {}) })
-  const state = (sessionId: string, binding: Binding, configuration = false): void => notify("agency/session_state", json({ sessionId, binding: binding.target, turnId: binding.turnId, state: binding.invalid ? "unavailable" : binding.turnId ? "running" : "idle", ...(configuration ? { configuration: binding.configuration } : {}) }))
+  const state = (sessionId: string, binding: Binding, configuration = false, submission?: { submissionId: string; state: string }): void => notify("agency/session_state", json({ sessionId, binding: binding.target, turnId: binding.turnId, state: binding.invalid ? "unavailable" : binding.turnId ? "running" : "idle", ...(submission ? { submissionId: submission.submissionId, submissionState: submission.state } : {}), ...(configuration ? { configuration: binding.configuration } : {}) }))
   const current = (sessionId: string, binding: Binding): boolean => !closed && bindings.get(sessionId) === binding && !binding.invalid
   const checkBinding = (sessionId: string, binding: Binding): void => { if (!current(sessionId, binding)) throw new AgentError("STALE_ATTACHMENT") }
   const detach = (binding: Binding): void => {
@@ -48,8 +48,7 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
       const meta = cloneWireJson(object(value.params?._meta ?? {})) as JsonObject
       notify("session/update", { ...value.params, sessionId, update: value.update as JsonObject, _meta: { ...meta, agency: { version: 1, seq: value.seq, replay } } }, value.meta)
     } else if (value.kind === "turn") {
-      binding.turnId = value.state === "accepted" || value.state === "running" ? value.submissionId : null
-      if (!replay) state(sessionId, binding)
+      if (!replay) state(sessionId, binding, false, value)
     } else if (value.kind === "lifecycle" && value.phase !== "ready" && !replay) invalidate(sessionId, binding)
   }
   const requireBinding = (sessionId: unknown): [string, Binding] => {
@@ -74,7 +73,10 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
     const deliver = (value: ConversationNotification): void => {
       if (!current(sessionId, binding)) return
       if (value.kind === "closed") invalidate(sessionId, binding)
-      else event(sessionId, binding, value.event, false)
+      else {
+        if (value.event.kind === "turn") binding.turnId = value.currentTurn && ["accepted", "running"].includes(value.currentTurn.state) ? value.currentTurn.submissionId : null
+        event(sessionId, binding, value.event, false)
+      }
     }
     const configuration = (snapshot: SessionConfiguration): void => { if (current(sessionId, binding)) { binding.configuration = snapshot; state(sessionId, binding, true) } }
     try {

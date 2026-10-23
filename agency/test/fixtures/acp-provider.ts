@@ -11,7 +11,8 @@ const options = [
   { id: "mode", name: "Mode", type: "select", category: "mode", currentValue: "agent-full-access", options: [{ value: "agent-full-access", name: "Full access" }, { value: "read-only", name: "Read only" }] },
 ]
 if (process.env.FIXTURE_SELECTION) options[0]!.options.push({ value: "model-c", name: "C" })
-let modelId = "legacy-a", modeId = "normal", sessionId = "native-session", promptId: string | number | null = null
+let modelId = "legacy-a", modeId = "normal", sessionId = "native-session"
+const promptIds = new Set<string | number>()
 let permission: (() => void) | undefined, release: (() => void) | undefined
 const send = (frame: unknown) => { process.stdout.write(JSON.stringify(frame) + "\n") }
 const reply = (id: string | number, result: unknown) => send({ jsonrpc: "2.0", id, result })
@@ -73,16 +74,17 @@ async function dispatch(request: { id: string | number; method?: string; params?
     await writeFile(statePath, JSON.stringify(snapshot()), { mode: 0o600 })
     reply(request.id, snapshot())
   } else if (request.method === "session/cancel") {
-    const current = promptId
-    promptId = null
+    const current = [...promptIds]
+    promptIds.clear()
     permission?.(); permission = undefined; release?.(); release = undefined
-    if (current !== null) reply(current, { stopReason: "cancelled" })
+    for (const id of current) reply(id, { stopReason: "cancelled" })
   } else if (request.method === "session/prompt") {
     if (params.sessionId !== sessionId || !Array.isArray(params.prompt)) throw new Error("wrong prompt")
     const text = params.prompt.filter((value: { type: string }) => value.type === "text").map((value: { text: string }) => value.text).join("\n")
     if (text === "auth-required") { send({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "AUTH_REQUIRED" } }); return }
     if (text === "fail") { process.exit(2) }
-    promptId = request.id
+    if (text === "provider-busy") { send({ jsonrpc: "2.0", id: request.id, error: { code: -32042, message: "Provider busy", data: { retry: true } } }); return }
+    promptIds.add(request.id)
     if (text === "permission") {
       const wait = new Promise<void>(resolve => { permission = resolve })
       const failure = setInterval(() => { void exists("fail-permission").then(ready => { if (ready) process.exit(2) }) }, 10)
@@ -96,7 +98,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
       timer.unref()
     })
     await barrier("prompt")
-    if (promptId !== request.id) return
+    if (!promptIds.has(request.id)) return
     if (text === "echo") {
       update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "ec" } })
       update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "ho" } })
@@ -112,7 +114,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
     }
     if (text === "history") for (let index = 0; index < 8300; index++) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: String(index) } })
     update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${text}` } })
-    promptId = null
+    promptIds.delete(request.id)
     reply(request.id, { stopReason: "end_turn" })
   } else if (request.method === "authenticate") throw new Error("interactive fixture auth forbidden")
   else send({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Unsupported fixture method" } })

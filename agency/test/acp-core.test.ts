@@ -18,7 +18,6 @@ test("structured admission hashes content and provider metadata while retaining 
   await turns.submitAcp(request)
   await turns.submitAcp({ ...request, meta: { agency: { version: 1, origin: "other" }, extension: "kept" } })
   await assert.rejects(turns.submitAcp({ ...request, meta: { extension: "changed" } }), { code: "COMMAND_CONFLICT" })
-  await assert.rejects(turns.submitAcp({ ...request, submissionId: randomUUID() }), { code: "BUSY" })
   const settled = turns.settledAcp(request.submissionId)
   answer.resolve({ stopReason: "end_turn", _meta: { provider: "preserved" } })
   assert.deepEqual(await settled, { stopReason: "end_turn", _meta: { provider: "preserved" } })

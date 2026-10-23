@@ -11,7 +11,7 @@ export type ConversationEvent =
 export type RetainedEvent = ConversationEvent & { seq: number; encodedBytes: number }
 export type ConversationMetadata = { phase: AgentPhase; session: SessionEvidence | NativeSessionIdentity | null; selection: StartSelection | null; cwd: string; failure: AgentFailure | null; title: ReturnType<typeof displayTitle> | null; plan: unknown[]; planTruncated: boolean; usage: { used: number; size: number; cost?: unknown } | null }
 export type ConversationSnapshot = { target: AgentTuple; metadata: ConversationMetadata; firstSeq: number; lastSeq: number; historyTruncated: boolean; events: RetainedEvent[]; currentTurn: { submissionId: string; state: TurnState } | null }
-export type ConversationNotification = { kind: "event"; event: RetainedEvent; firstSeq: number; historyTruncated: boolean } | { kind: "closed" }
+export type ConversationNotification = { kind: "event"; event: RetainedEvent; currentTurn: ConversationSnapshot["currentTurn"]; firstSeq: number; historyTruncated: boolean } | { kind: "closed" }
 export type ConversationListener = (notification: ConversationNotification) => void
 export type ConversationObservation = { snapshot: ConversationSnapshot; close(): void }
 export type ConversationDisplay = { title: string | null; activity: "working" | "idle" }
@@ -23,6 +23,7 @@ export function createConversation(target: AgentTuple, limits: { bytes?: number;
   const listeners = new Set<ConversationListener>(), events: RetainedEvent[] = []
   const metadata: ConversationMetadata = { phase: "starting", session: null, selection: null, cwd: "", failure: null, title: null, plan: [], planTruncated: false, usage: null }
   let bytes = 0, lastSeq = 0, historyTruncated = false, closed = false, currentTurn: ConversationSnapshot["currentTurn"] = null
+  const outstanding = new Map<string, { submissionId: string; state: TurnState }>()
   const firstSeq = (): number => events[0]?.seq ?? lastSeq + 1
   const notify = (value: ConversationNotification): void => {
     for (const listener of [...listeners]) {
@@ -51,8 +52,13 @@ export function createConversation(target: AgentTuple, limits: { bytes?: number;
         metadata.failure = cloneWireJson(value.failure ?? null)
       } else if (value.kind === "submitted") {
         fallbackTitle(value.text)
-        currentTurn = { submissionId: value.submissionId, state: "accepted" }
-      } else if (value.kind === "turn") currentTurn = { submissionId: value.submissionId, state: value.state }
+        currentTurn = { submissionId: value.submissionId, state: "accepted" }; outstanding.set(value.submissionId, currentTurn)
+      } else if (value.kind === "turn") {
+        const turn = { submissionId: value.submissionId, state: value.state }
+        if (["accepted", "running"].includes(value.state)) outstanding.set(value.submissionId, turn)
+        else outstanding.delete(value.submissionId)
+        currentTurn = [...outstanding.values()].at(-1) ?? turn
+      }
       else if (value.kind === "update") {
         const update = value.update
         if (update.sessionUpdate === "session_info_update" && typeof update.title === "string" && update.title.trim()) metadata.title = displayTitle(update.title)
@@ -79,7 +85,7 @@ export function createConversation(target: AgentTuple, limits: { bytes?: number;
       while (events.length > maxEvents || bytes > maxBytes) {
         bytes -= wireJsonBytes(events.shift()!); historyTruncated = true
       }
-      notify({ kind: "event", event, firstSeq: firstSeq(), historyTruncated })
+      notify({ kind: "event", event, currentTurn, firstSeq: firstSeq(), historyTruncated })
       return lastSeq
     },
     observe(listener) {
@@ -91,7 +97,7 @@ export function createConversation(target: AgentTuple, limits: { bytes?: number;
     close() {
       if (closed) return
       closed = true; notify({ kind: "closed" }); listeners.clear(); events.length = 0; bytes = 0
-      metadata.plan = []; metadata.usage = null; metadata.title = null; metadata.session = null; metadata.selection = null; currentTurn = null
+      outstanding.clear(); metadata.plan = []; metadata.usage = null; metadata.title = null; metadata.session = null; metadata.selection = null; currentTurn = null
     },
   }
 }

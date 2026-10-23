@@ -1,3 +1,4 @@
+import { ProviderRequestError } from "../agent/types.js"
 import { id, keys, object } from "../catalog/types.js"
 import type { JsonObject } from "../agent/session-config.js"
 import { agentFailure } from "../agent/types.js"
@@ -38,7 +39,8 @@ export function parseAgencyMeta(params: JsonObject, allowed: readonly string[]):
   } catch { throw new AcpError(-32602, "Invalid Agency metadata") }
 }
 
-export function acpError(requestId: RpcId | null, error: unknown): { jsonrpc: string; id: RpcId | null; error: { code: number; message: string; data?: JsonObject } } {
+export function acpError(requestId: RpcId | null, error: unknown): { jsonrpc: string; id: RpcId | null; error: JsonObject } {
+  if (error instanceof ProviderRequestError) return { jsonrpc: "2.0", id: requestId, error: structuredClone(error.providerError) }
   if (error instanceof AcpError) return { jsonrpc: "2.0", id: requestId, error: { code: error.code, message: error.message } }
   const failure = agentFailure(error)
   return { jsonrpc: "2.0", id: requestId, error: { code: -32000, message: failure.message, data: { agency: { code: failure.code } } } }

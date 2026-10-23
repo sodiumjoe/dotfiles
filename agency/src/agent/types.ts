@@ -64,6 +64,9 @@ export class AgentError extends Error {
 }
 export function invalidAgent(): never { throw new AgentError("INVALID_AGENT_STATE") }
 export function parsePermissionEvidence(value: unknown): PermissionEvidence { if (value !== "fixture-contract-v1" && value !== "agency-deny-all-v1") invalidAgent(); return value }
+export class ProviderRequestError extends AgentError {
+  constructor(readonly providerError: JsonObject) { super("STARTUP_FAILED") }
+}
 export function agentFailure(error: unknown): AgentFailure { const code = error instanceof AgentError ? error.code : "INTERNAL"; return { code, message: new AgentError(code).message, ...(error instanceof AgentError && error.diagnostic !== undefined ? { diagnostic: parseFailureDiagnostic(error.diagnostic) } : {}) } }
 function checked<T>(operation: () => T): T { try { return operation() } catch { return invalidAgent() } }
 export function agentText(value: unknown, max = 256): string { return checked(() => { const result = text(value, max); if (!result.trim()) invalidAgent(); return result }) }

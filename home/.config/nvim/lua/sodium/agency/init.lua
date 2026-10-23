@@ -188,12 +188,12 @@ function M.setup(deps)
         if opts.annotations and #annotations == 0 then callback({ state = "rejected", error = failure("EMPTY_INPUT") }); return false end
         local function send(err, manager)
             if err then callback({ state = "rejected", error = err }); return false end
-            if manager.is_generating or not manager:can_submit_prompt() then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
+            if not manager:can_submit_prompt() then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
             local content = {}
             for _, item in ipairs(annotations) do content[#content + 1] = { type = "text", text = item.text } end
-            local entry = Adapter.stage_context(manager, content, function()
+            local entry = Adapter.stage_context(manager, content, function(submissionId)
                 api.accept_annotations(annotations)
-                callback({ state = "accepted", submissionId = manager._agency_local_submission })
+                callback({ state = "accepted", submissionId = submissionId })
             end, function(error) callback({ state = "rejected", error = error }) end)
             if not manager:_handle_input_submit(text) then
                 Adapter.unstage_context(manager, entry)

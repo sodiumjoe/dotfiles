@@ -567,6 +567,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
       if (request.method === "session/load") peer.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "restored history" } } } })
       return reply
     }, notification(request, send) {
+      methodHistory.push(request.method)
       const pending = pendingPrompts.get(input.spec.agentId)
       if (request.method === "session/cancel" && pending) send({ jsonrpc: "2.0", id: pending.request.id, result: { stopReason: "cancelled" } })
     }, prompt(request, send) {
@@ -638,6 +639,9 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] } })
     },
     permissionReplies(agent: string) { return structuredClone(peers.get(agent)?.permissionReplies ?? []) },
+    emitUpdate(agent: string, update: import("../src/agent/session-config.js").JsonObject) {
+      peers.get(agent)!.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update } })
+    },
     fault(agent: string) { peers.get(agent)!.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "tool_call", toolCallId: [] } } }) },
     updateConfiguration(agent: string, configOptions: import("../src/agent/session-config.js").JsonObject[]) {
       nativeSnapshots.set(agent, { configOptions: structuredClone(configOptions) })
@@ -651,7 +655,12 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
       nativeSnapshots.set(heldSetter.agentId, structuredClone(heldSetter.reply.result))
       heldSetter.peer.send(heldSetter.reply); heldSetter = undefined
     },
-    completePrompt(agent: string, answer = "answer:challenge", stopReason = "end_turn") { const pending = pendingPrompts.get(agent); if (!pending) throw new Error("prompt not pending"); if (answer) pending.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } }); pending.send({ jsonrpc: "2.0", id: pending.request.id, result: { stopReason } }) },
+    completePrompt(agent: string, answer = "answer:challenge", stopReason = "end_turn", promptIndex?: number) {
+      const peer = peers.get(agent), request = promptIndex === undefined ? pendingPrompts.get(agent)?.request : peer?.sent.filter(value => value.method === "session/prompt")[promptIndex]
+      if (!peer || !request) throw new Error("prompt not pending")
+      if (answer) peer.send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } } } })
+      peer.send({ jsonrpc: "2.0", id: request.id, result: { stopReason } })
+    },
     emitStderr(agent: string, bytes: Buffer) { const provider = [...processes.values()].find(value => value.agentId === agent); if (!provider) throw new Error("provider not live"); provider.child.stderr!.emit("data", bytes) },
     exit(agent: string) { const owner = [...processes.entries()].find(([, value]) => value.agentId === agent); if (!owner) throw new Error("provider not live"); const [pid, value] = owner; processes.delete(pid); value.child.emit("exit", 1, null); value.child.emit("close", 1, null) },
     cleanupOwned: () => Promise.all(owners.map(owner => owner.cleanup())), stateRemovalCalls: () => stateRemovalCalls, releaseStateRemoval: stateRemovalReleased.resolve,

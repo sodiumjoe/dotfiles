@@ -21,7 +21,7 @@ import { createAgentProcess, type OwnedAgentProcess } from "./process.js"
 import type { LaunchEnvironment } from "./environment.js"
 import { agentTuple, retainUnspawnedRestore } from "./recovery.js"
 import type { AgentStateIssue, AgentStore } from "./store.js"
-import { AGENT_LIMITS, AgentError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity, type LegacyAgentRecord } from "./types.js"
+import { AGENT_LIMITS, AgentError, ProviderRequestError, agentFailure, parseAgentRecordV3, parseAgentCommandV3, parsePromptInput, parseStartInput, parseStopInput, requestedSettingsDigest, startSelectionDigest, runtimeSpec as specOf, ownedRecord, type AgentCommand as AgentCommandV2, type AgentCommandV3, type OwnedAgentRecord, type AgentFailure, type AgentList, type AgentRecordV3 as AgentRecord, type AgentView, type CommandView, type CurrentAgents, type PromptInput, type PromptView, type StartInput, type StopInput, type NativeSessionIdentity, type LegacyAgentRecord } from "./types.js"
 import { parseRestoreRequest, type RestoreRequest } from "./types.js"
 import { createConversation, type Conversation, type ConversationListener, type ConversationObservation } from "./conversation.js"
 import { createTurnCoordinator, type AcpSubmissionRequest, type SubmissionReceipt, type SubmissionRequest, type TurnCoordinator } from "./turns.js"
@@ -73,7 +73,7 @@ export type AgentService = {
   createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
 type LivePrompt = { controller: AbortController; promise: Promise<TurnResult | JsonObject> }
-type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; contract: ConfiguredLaunchContract; backend: Backend; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompt: LivePrompt | null; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
+type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; contract: ConfiguredLaunchContract; backend: Backend; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompts: Set<LivePrompt>; conversation: Conversation; turns?: TurnCoordinator; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
 
 export type AgentServiceDependencies = {
   processFactory: typeof createAgentProcess
@@ -99,26 +99,37 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     return op.owner.respond(requestId, result)
   } })
   const configuring = new Set<string>()
-  const echoes = new Map<Live, { blocks: JsonObject[]; index: number; offset: number; held: AcpObservation[]; bytes: number }>()
+  type Echo = { blocks: JsonObject[]; index: number; offset: number; bytes: number }
+  type Echoes = { pending: Set<Echo>; held: Array<{ echo: Echo; event: AcpObservation }> }
+  const echoes = new Map<Live, Echoes>()
+  const flushEchoes = (state: Echoes): AcpObservation[] => {
+    for (const { echo } of state.held) state.pending.delete(echo)
+    const held = state.held.map(value => value.event)
+    state.held = []
+    return held
+  }
   const displayUpdates = (op: Live, event: AcpObservation): AcpObservation[] => {
-    const echo = echoes.get(op), expected = echo?.blocks[echo.index]
-    if (!echo) return [event]
-    const flush = (): AcpObservation[] => { echoes.delete(op); return [...echo.held, event] }
-    if (event.replay || !op.ready || event.update.sessionUpdate !== "user_message_chunk") return echo.held.length ? flush() : [event]
-    if (!expected) return flush()
-    const actual = event.update.content as JsonObject
-    if (expected.type === "text" && actual.type === "text" && typeof expected.text === "string" && typeof actual.text === "string") {
-      const suffix = expected.text.slice(echo.offset)
-      const { text: _expectedText, ...expectedFields } = expected, { text: _actualText, ...actualFields } = actual
-      if (!actual.text.length || !suffix.startsWith(actual.text) || canonicalJson(expectedFields) !== canonicalJson(actualFields)) return flush()
-      echo.offset += actual.text.length
-      echo.held.push(event); echo.bytes += Buffer.byteLength(JSON.stringify(event))
-      if (echo.offset === expected.text.length) { echo.index++; echo.offset = 0; echo.held = []; echo.bytes = 0 }
-      else if (echo.held.length >= 8192 || echo.bytes >= 4194304) { echoes.delete(op); return echo.held }
-      return []
-    }
-    if (canonicalJson(expected) !== canonicalJson(actual)) return flush()
-    echo.index++; return []
+    const state = echoes.get(op)
+    if (!state?.pending.size) return [event]
+    const actual = event.update.content as JsonObject | undefined
+    const echo = !event.replay && op.ready && event.update.sessionUpdate === "user_message_chunk" ? [...state.pending].find(candidate => {
+      const expected = candidate.blocks[candidate.index]
+      if (!expected || !actual) return false
+      if (expected.type === "text" && actual.type === "text" && typeof expected.text === "string" && typeof actual.text === "string") {
+        const { text: _expectedText, ...expectedFields } = expected, { text: _actualText, ...actualFields } = actual
+        return actual.text.length > 0 && expected.text.slice(candidate.offset).startsWith(actual.text) && canonicalJson(expectedFields) === canonicalJson(actualFields)
+      }
+      return canonicalJson(expected) === canonicalJson(actual)
+    }) : undefined
+    if (!echo) return [...flushEchoes(state), event]
+    const expected = echo.blocks[echo.index]!
+    if (expected.type === "text" && typeof expected.text === "string") {
+      echo.offset += String(actual!.text).length
+      state.held.push({ echo, event }); echo.bytes += Buffer.byteLength(JSON.stringify(event))
+      if (echo.offset === expected.text.length) { echo.index++; echo.offset = 0; state.held = state.held.filter(value => value.echo !== echo); echo.bytes = 0 }
+      else if (state.held.length >= 8192 || echo.bytes >= 4194304) return flushEchoes(state)
+    } else echo.index++
+    return []
   }
   const configurationListeners = new Map<Live, Set<(snapshot: SessionConfiguration) => void>>()
   const publishConfiguration = (op: Live): void => {
@@ -148,7 +159,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const agentId = op.initial.definition.agentId, tuple = agentTuple(op.initial)
     const related = [...commands.values()].filter(command => command.target && isDeepStrictEqual(command.target, tuple))
     const original = commands.get(op.accepted.commandId)
-    if (op.retired || !op.cleanupVerified || !op.terminalAgent || !op.terminalAgentDurable || op.prompt || dirtyAgents.has(agentId)) return
+    if (op.retired || !op.cleanupVerified || !op.terminalAgent || !op.terminalAgentDurable || op.prompts.size || op.turns?.busy() || dirtyAgents.has(agentId)) return
     if (!original || original.state !== "completed" || dirty.has(original.commandId)) return
     if (!related.length || related.some(command => command.state === "pending" || dirty.has(command.commandId))) return
     op.retired = true
@@ -540,11 +551,11 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const accepted = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: kind, input: durableInput, agentId, target: agentTuple(record), state: "pending", result: null })
         const conversation = createConversation(agentTuple(record))
         conversation.append({ kind: "lifecycle", phase: record.phase, cwd, session: record.session })
-        const op: Live = { initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, contract, backend, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompt: null, conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
+        const op: Live = { initial: record, accepted, environment: mergeBackendEnvironment(request.environment, backend.environmentDefaults), nativeParams: params, contract, backend, controller: new AbortController(), deadline: performance.now() + AGENT_LIMITS.startupMs, prompts: new Set(), conversation, cleanupVerified: false, ready: false, started: false, uncertain: null, terminalAgent: null, terminalAgentDurable: false, retired: false, result: null, fault: null }
         op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invoke: (text, limits) => invoke(op, text, limits), invokeAcp: params => invokeAcp(op, params), onAccepted: request => {
           if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
           op.editor!.begin(request.submissionId, request.originConnectionId ? { connectionId: request.originConnectionId, attachment: request.originAttachment!, ...(request.editorAddress === undefined ? {} : { address: request.editorAddress }) } : undefined)
-        }, cancel: submissionId => { op.editor?.end(submissionId); permissionBroker.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: submissionId => { op.editor?.end(submissionId); permissionBroker.invalidate(agentTuple(op.initial)); retire(op) } })
+        }, cancel: _submissionId => { op.editor?.revoke(); permissionBroker.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: submissionId => { op.editor?.end(submissionId); if (!op.turns!.busy()) permissionBroker.invalidate(agentTuple(op.initial)); retire(op) } })
         checkCommandDeadline(); acceptingOperation = op
         operations.set(agentId, op); intents.set(request.commandId, op)
         const durableRecord = previousAgent ? record : parseAgentRecordV3({ ...record, settings: {} })
@@ -750,8 +761,15 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   function invokeAcp(op: Live, params: JsonObject): Promise<JsonObject> {
     return invokeProvider(op, (owner, signal) => {
-      echoes.set(op, { blocks: params.prompt as JsonObject[], index: 0, offset: 0, held: [], bytes: 0 })
-      return owner.request("session/prompt", withNativeSession(params, op.providerSession!.sessionId), signal).finally(() => { const held = echoes.get(op)?.held ?? []; echoes.delete(op); for (const event of held) retainUpdate(op, event) })
+      const echo: Echo = { blocks: params.prompt as JsonObject[], index: 0, offset: 0, bytes: 0 }
+      const state = echoes.get(op) ?? { pending: new Set<Echo>(), held: [] }
+      echoes.set(op, state); state.pending.add(echo)
+      return owner.request("session/prompt", withNativeSession(params, op.providerSession!.sessionId), signal).finally(() => {
+        const held = state.held.some(value => value.echo === echo) ? flushEchoes(state) : []
+        state.pending.delete(echo)
+        if (!state.pending.size && echoes.get(op) === state) echoes.delete(op)
+        for (const event of held) retainUpdate(op, event)
+      })
     })
   }
   function retainUpdate(op: Live, event: AcpObservation): void {
@@ -774,27 +792,28 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   function invokeProvider<T extends TurnResult | JsonObject>(op: Live, call: (owner: OwnedAgentProcess, signal: AbortSignal) => Promise<T>): Promise<T> {
       let pending!: Promise<T>
+      let active!: LivePrompt
       const controller = new AbortController()
       const abort = (): void => controller.abort()
       op.controller.signal.addEventListener("abort", abort, { once: true })
       if (op.controller.signal.aborted) controller.abort()
       pending = Promise.resolve().then(async () => {
         try {
-          await queue.run(() => validateLiveOperation(op))
+          await validateLiveOperation(op)
           if (controller.signal.aborted) throw new AgentError("STARTUP_FAILED")
           const result = await call(op.owner!, controller.signal)
           await queue.run(() => validateLiveOperation(op))
           return result
         } catch (error) {
           const failure = errorFor(error)
-          if (!controller.signal.aborted && !op.controller.signal.aborted && !closed) await failOperation(op, failure)
+          if (!(error instanceof ProviderRequestError) && !controller.signal.aborted && !op.controller.signal.aborted && !closed) await failOperation(op, failure)
           throw failure
         } finally {
           op.controller.signal.removeEventListener("abort", abort)
-          if (op.prompt?.promise === pending) op.prompt = null
+          op.prompts.delete(active); retire(op)
         }
       })
-      op.prompt = { controller, promise: pending }
+      active = { controller, promise: pending }; op.prompts.add(active)
     return pending
   }
   async function prompt(raw: PromptInput): Promise<PromptView> {
@@ -809,13 +828,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const retained = intents.get(command.commandId), candidate = retained ?? operations.get(command.target!.agentId)
     const op = candidate && isDeepStrictEqual(agentTuple(candidate.initial), command.target) ? candidate : undefined
     if (op) intents.set(command.commandId, op)
-    const activePrompt = op?.prompt?.promise
+    const activePrompts = [...op?.prompts ?? []].map(active => active.promise)
     op?.editor?.close()
     op?.controller.abort()
     if (op) permissionBroker.invalidate(agentTuple(op.initial))
     const operation = (async () => {
       try {
-        await activePrompt?.catch(() => undefined)
+        await Promise.allSettled(activePrompts)
         await queue.run(async () => {
           if (closed) throw new AgentError("NOT_READY")
           if (op?.terminalAgent && !op.terminalAgentDurable) await publishTerminalAgent(op, op.terminalAgent.next, op.terminalAgent.expected)
@@ -863,7 +882,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   const pageIssues = (): AgentStateIssue[] => [...historical?.issues ?? [], ...runtimeIssues.values()].filter((issue, index, all) => all.findIndex(other => isDeepStrictEqual(issue, other)) === index)
   const pageAgents = (activeOnly: boolean): AgentView[] => [...records.values()].filter(record => (!activeOnly || active(record))).map(agentView)
   const ordinary = (): void => {
-    if (!initialized || accepting || launchAdmissions.size || stopping || stops.size || [...operations.values()].some(op => op.prompt) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "restoring", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 2 && e.record.owner.kind === "agent" && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
+    if (!initialized || accepting || launchAdmissions.size || stopping || stops.size || [...operations.values()].some(op => op.prompts.size) || [...commands.values()].some(c => c.state === "pending") || [...records.values()].some(r => ["starting", "ready", "restoring", "stopping"].includes(r.phase)) || context.mutations.accepted.some(e => e.record.version === 2 && e.record.owner.kind === "agent" && e.record.phase !== "cleanup_verified")) throw new ControlError("ACTIVE_AGENTS")
   }
   return {
     start, restore, stop, prompt, command, setSession, importSession,
@@ -1019,8 +1038,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           for (const op of [...operations.values(), ...intents.values()]) {
             admitted.add(op)
             if (!op.ready) op.controller.abort()
-            if (op.prompt) {
-              const active = op.prompt
+            for (const active of op.prompts) {
               active.controller.abort()
               if (!prompts.has(active)) prompts.set(active, active.promise.then(() => undefined, () => undefined))
             }
@@ -1075,6 +1093,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     },
     resume() { if (!closed) frozen = false },
     async verifyDischarged() { ordinary(); if (dirty.size || dirtyAgents.size || runtimeIssues.size) throw new AgentError("INCOMPLETE") },
-    close() { closed = true; frozen = true; permissions.close(); for (const op of new Set([...operations.values(), ...intents.values()])) { op.editor?.close(); clearTimeout(op.watchdog); op.prompt?.controller.abort(); op.owner?.dispose(); op.controller.abort(); op.turns?.close(op.fault); op.conversation.close() } },
+    close() { closed = true; frozen = true; permissions.close(); for (const op of new Set([...operations.values(), ...intents.values()])) { op.editor?.close(); clearTimeout(op.watchdog); for (const active of op.prompts) active.controller.abort(); op.owner?.dispose(); op.controller.abort(); op.turns?.close(op.fault); op.conversation.close() } },
   }
 }

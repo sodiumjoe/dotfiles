@@ -123,15 +123,15 @@ test("late settlement uses retained answer events but never reconstructs evicted
   turns.close(null); conversation.close()
 })
 
-test("accepted admission runs once and cannot be stolen by busy or duplicate requests", async () => {
+test("accepted admission runs once per unique native request", async () => {
   const conversation = createConversation(target), answer = Promise.withResolvers<TurnResult>(), origins: string[] = []
   const admission = { onAccepted: (request: { originConnectionId?: string }) => { origins.push(request.originConnectionId!) } }
   const turns = createTurnCoordinator({ ...admission, target, conversation, validate: async () => {}, invokeAcp: async () => { await answer.promise; return { stopReason: "end_turn" } }, cancel: async () => {} })
   const request = { submissionId: randomUUID(), prompt: [{ type: "text", text: "one" }], originConnectionId: "a" }
   await turns.submitAcp(request)
   await turns.submitAcp({ ...request, originConnectionId: "b" })
-  await assert.rejects(turns.submitAcp({ ...request, submissionId: randomUUID(), originConnectionId: "b" }), { code: "BUSY" })
-  assert.deepEqual(origins, ["a"])
+  await turns.submitAcp({ ...request, submissionId: randomUUID(), originConnectionId: "b" })
+  assert.deepEqual(origins, ["a", "b"])
   const settled = turns.settledAcp(request.submissionId)
   answer.resolve({ stopReason: "end_turn", text: "" }); await settled
   turns.close(null); conversation.close()
@@ -170,5 +170,48 @@ test("failed durable admission leaves the turn and routing available for a human
   assert.equal(turns.busy(), false); assert.equal(routed, 0); assert.equal(invoked, 0); assert.equal(turns.inspect(request.submissionId), null)
   failure = false; await turns.submitAcp({ ...request, submissionId: randomUUID() })
   assert.equal(routed, 1)
+  turns.close(null); conversation.close()
+})
+
+for (const reverse of [false, true]) test("native submissions pass through and remain working until all settle: " + reverse, async () => {
+  const conversation = createConversation(target), answers = [Promise.withResolvers<any>(), Promise.withResolvers<any>()]
+  let calls = 0
+  const turns = createTurnCoordinator({ target, conversation, validate: async () => {}, invokeAcp: async () => answers[calls++]!.promise, cancel: async () => {} })
+  const requests = [0, 1].map(index => ({ submissionId: randomUUID(), prompt: [{ type: "text", text: String(index) }] }))
+  for (const request of requests) await turns.submitAcp(request)
+  await turns.submitAcp(requests[0]!)
+  assert.equal(calls, 2)
+  const order = reverse ? [1, 0] : [0, 1]
+  const one = order[0]!, two = order[1]!
+  const firstDone = turns.settledAcp(requests[one]!.submissionId)
+  answers[one]!.resolve({ stopReason: "end_turn" }); await firstDone
+  assert.equal(turns.busy(), true)
+  assert.equal(conversation.display().activity, "working")
+  assert.equal(conversation.observe(() => {}).snapshot.currentTurn?.submissionId, requests[two]!.submissionId)
+  const lastDone = turns.settledAcp(requests[two]!.submissionId)
+  answers[two]!.resolve({ stopReason: "end_turn" }); await lastDone
+  assert.equal(turns.busy(), false); assert.equal(conversation.display().activity, "idle")
+  turns.close(null); conversation.close()
+})
+
+test("closing overlapping native requests rejects every waiter", async () => {
+  const conversation = createConversation(target)
+  const turns = createTurnCoordinator({ target, conversation, validate: async () => {}, invokeAcp: () => new Promise(() => {}), cancel: async () => {} })
+  const ids = [randomUUID(), randomUUID()]
+  for (const submissionId of ids) await turns.submitAcp({ submissionId, prompt: [{ type: "text", text: "pending" }] })
+  const done = ids.map(id => assert.rejects(turns.settledAcp(id), { code: "STARTUP_FAILED" }))
+  turns.close({ code: "STARTUP_FAILED", message: "startup failed" }); await Promise.all(done)
+  conversation.close()
+})
+
+for (const legacyFirst of [true, false]) test("legacy projections exclude native overlap in both directions: " + legacyFirst, async () => {
+  const conversation = createConversation(target), answer = Promise.withResolvers<any>()
+  const turns = createTurnCoordinator({ target, conversation, validate: async () => {}, invokeAcp: () => answer.promise, invoke: () => answer.promise, cancel: async () => {} })
+  const legacy = { submissionId: randomUUID(), text: "legacy", limits: EDITOR_TURN_LIMITS }
+  const native = { submissionId: randomUUID(), prompt: [{ type: "text", text: "native" }] }
+  if (legacyFirst) { await turns.submit(legacy); await assert.rejects(turns.submitAcp(native), { code: "BUSY" }) }
+  else { await turns.submitAcp(native); await assert.rejects(turns.submit(legacy), { code: "BUSY" }) }
+  const pending = turns.settledAcp(legacyFirst ? legacy.submissionId : native.submissionId)
+  answer.resolve({ stopReason: "end_turn", text: "answer" }); await pending
   turns.close(null); conversation.close()
 })

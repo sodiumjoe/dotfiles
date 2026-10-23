@@ -880,3 +880,97 @@ test("closing a blocked write disposes its timer as well as the RPC deadline", a
   await assert.rejects(pending)
   assert.equal(active.size, 0)
 })
+
+test("native overlapping prompts retain independent responses and permissions", async t => {
+  const requests: any[] = []
+  const peer = scriptedAcp(t, "exact", { prompt(request) { requests.push(request) } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  const send = (text: string) => peer.connection.request("session/prompt", { sessionId: "fixture-session", prompt: [{ type: "text", text }] })
+  const first = send("first"), second = send("second"), third = send("third")
+  void first.catch(() => {}); void second.catch(() => {}); void third.catch(() => {})
+  assert.equal(requests.length, 3)
+  peer.send({ jsonrpc: "2.0", id: 91, method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "pending", title: "Write" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } })
+  peer.send({ jsonrpc: "2.0", id: requests[1].id, error: { code: -32600, message: "Provider busy", data: { retry: true } } })
+  await assert.rejects(second, error => {
+    assert.deepEqual((error as any).providerError, { code: -32600, message: "Provider busy", data: { retry: true } }); return true
+  })
+  await peer.connection.respond(91, { outcome: { outcome: "selected", optionId: "allow" } })
+  peer.send({ jsonrpc: "2.0", id: requests[2].id, result: { stopReason: "refusal", _meta: { third: true } } })
+  assert.deepEqual(await third, { stopReason: "refusal", _meta: { third: true } })
+  peer.send({ jsonrpc: "2.0", id: requests[0].id, result: { stopReason: "end_turn" } })
+  assert.deepEqual(await first, { stopReason: "end_turn" })
+  assert.equal(peer.sent.filter(value => value.method === "session/cancel").length, 0)
+})
+
+test("native cancellation only watches the requests pending when sent", async t => {
+  const requests: any[] = []
+  const peer = scriptedAcp(t, "exact", { prompt(request) { requests.push(request) } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const send = () => peer.connection.request("session/prompt", { sessionId: "fixture-session", prompt: [{ type: "text", text: "pending" }] })
+  const first = send(); void first.catch(() => {})
+  await peer.connection.cancelPrompt()
+  const second = send(); void second.catch(() => {})
+  peer.send({ jsonrpc: "2.0", id: requests[0].id, result: { stopReason: "cancelled" } }); await first
+  await new Promise<void>(resolve => setImmediate(resolve))
+  t.mock.timers.tick(5001)
+  await peer.connection.cancelPrompt()
+  assert.equal(peer.sent.filter(value => value.method === "session/cancel").length, 2)
+  peer.send({ jsonrpc: "2.0", id: requests[1].id, result: { stopReason: "cancelled" } }); await second
+})
+
+test("native prompt capacity rejects only the extra request", async t => {
+  const requests: any[] = []
+  const peer = scriptedAcp(t, "exact", { prompt(request) { requests.push(request) } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  const send = () => peer.connection.request("session/prompt", { sessionId: "fixture-session", prompt: [{ type: "text", text: "pending" }] })
+  const pending = Array.from({ length: 128 }, send)
+  for (const result of pending) void result.catch(() => {})
+  await assert.rejects(send(), error => {
+    assert.equal((error as any).providerError?.code, -32000); return true
+  })
+  assert.equal(requests.length, 128)
+  for (const request of requests) peer.send({ jsonrpc: "2.0", id: request.id, result: { stopReason: "end_turn" } })
+  assert.equal((await Promise.all(pending)).length, 128)
+})
+
+test("later cancellation retains its own grace after the earlier request settles", async t => {
+  const requests: any[] = []
+  const peer = scriptedAcp(t, "exact", { prompt(request) { requests.push(request) } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const send = () => peer.connection.request("session/prompt", { sessionId: "fixture-session", prompt: [{ type: "text", text: "pending" }] })
+  const first = send(); void first.catch(() => {})
+  await peer.connection.cancelPrompt()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  t.mock.timers.tick(4000)
+  const second = send(); void second.catch(() => {})
+  await peer.connection.cancelPrompt()
+  peer.send({ jsonrpc: "2.0", id: requests[0].id, result: { stopReason: "cancelled" } }); await first
+  await new Promise<void>(resolve => setImmediate(resolve))
+  t.mock.timers.tick(1001)
+  peer.send({ jsonrpc: "2.0", id: requests[1].id, result: { stopReason: "cancelled" } })
+  assert.deepEqual(await second, { stopReason: "cancelled" })
+})
+
+test("a rejected legacy prompt cannot change the active answer limit", async t => {
+  let original: any
+  const peer = scriptedAcp(t, "exact", { prompt(request) { original = request } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  const pending = peer.connection.prompt("first", new AbortController().signal, editorLimits)
+  await assert.rejects(peer.connection.prompt("second", new AbortController().signal, { ...editorLimits, outputBytes: 1 }), { code: "NOT_READY" })
+  peer.send(updateFrame({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "answer" } }))
+  peer.send({ jsonrpc: "2.0", id: original.id, result: { stopReason: "end_turn" } })
+  assert.deepEqual(await pending, { stopReason: "end_turn", text: "answer" })
+})
+
+for (const legacyFirst of [true, false]) test("transport protects legacy projection from native overlap: " + legacyFirst, async t => {
+  let original: any
+  const peer = scriptedAcp(t, "exact", { prompt(request) { original = request } })
+  await peer.connection.initialize(sampleAgent(), sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  const native = () => peer.connection.request("session/prompt", { sessionId: "fixture-session", prompt: [{ type: "text", text: "native" }] })
+  const legacy = () => peer.connection.prompt("legacy", new AbortController().signal, editorLimits)
+  const pending = legacyFirst ? legacy() : native()
+  await assert.rejects(legacyFirst ? native() : legacy(), { code: "NOT_READY" })
+  peer.send({ jsonrpc: "2.0", id: original.id, result: { stopReason: "end_turn" } }); await pending
+})

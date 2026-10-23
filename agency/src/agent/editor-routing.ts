@@ -20,6 +20,7 @@ export async function startEditorRouting(runtimeRoot: string): Promise<EditorRou
   type Attachment = { token: string; address: string | null }
   type Route = { submissionId: string; attachment: Attachment }
   const attachments = new Map<string, Attachment>(), pairs = new Set<{ downstream: Socket; upstream: Socket }>()
+  const outstanding = new Set<string>()
   let route: Route | null = null, closed = false, unavailable = false
   const revoke = (): void => { route = null; for (const pair of pairs) { pair.downstream.destroy(); pair.upstream.destroy() }; pairs.clear() }
   const address = (value: string | null): string | null => {
@@ -36,7 +37,7 @@ export async function startEditorRouting(runtimeRoot: string): Promise<EditorRou
     downstream.on("close", dispose); upstream.on("close", dispose); upstream.on("error", dispose)
     downstream.pipe(upstream); upstream.pipe(downstream)
   })
-  const close = (): void => { if (closed) return; closed = true; revoke(); attachments.clear(); server.close() }
+  const close = (): void => { if (closed) return; closed = true; outstanding.clear(); revoke(); attachments.clear(); server.close() }
   server.on("error", () => { if (closed || unavailable) return; unavailable = true; revoke(); server.close() })
   return {
     path,
@@ -57,10 +58,14 @@ export async function startEditorRouting(runtimeRoot: string): Promise<EditorRou
       const attachment = origin ? attachments.get(origin.connectionId) : undefined
       if (closed || origin && (!attachment || attachment.token !== origin.attachment)) throw new AgentError("STALE_ATTACHMENT")
       const nextAddress = origin?.address === undefined ? attachment?.address ?? null : address(origin.address)
+      if (outstanding.has(submissionId)) return
+      const idle = outstanding.size === 0
+      outstanding.add(submissionId)
+      if (!idle) return
       revoke()
       if (attachment) { attachment.address = nextAddress; if (!unavailable) route = { submissionId, attachment } }
     },
-    end(submissionId) { if (route?.submissionId === submissionId) revoke() },
+    end(submissionId) { if (outstanding.delete(submissionId) && !outstanding.size) revoke() },
     revoke, close,
   }
 }

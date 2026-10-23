@@ -81,6 +81,47 @@ test("cooperative cancellation preserves the provider and cannot cancel the next
   assert.equal((await f.service.current(f.workspace)).agents[0]!.record.phase, "ready")
 })
 
+test("cancellation submitted with a prompt reaches it after dispatch", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const submissionId = randomUUID()
+  const submitted = f.service.submitAcp(target, { submissionId, prompt: [{ type: "text", text: "pending" }] })
+  const cancelled = f.service.cancel(target, submissionId)
+  await Promise.all([submitted, cancelled])
+  await f.promptEntered
+  assert.equal(f.methodHistory.filter(method => method === "session/cancel").length, 1)
+  assert.equal((await f.service.settledAcp(target, submissionId)).stopReason, "cancelled")
+})
+
+test("unmatched partial echoes retain provider stream order across requests", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  for (const text of ["abcdef", "xyz"]) await f.service.submitAcp(target, { submissionId: randomUUID(), prompt: [{ type: "text", text }] })
+  await until(async () => f.methodHistory.filter(method => method === "session/prompt").length === 2 ? true : undefined)
+  for (const text of ["a", "x", "b", "q"]) f.emitUpdate(target.agentId, { sessionUpdate: "user_message_chunk", content: { type: "text", text } })
+  const observation = await f.service.observe(target, () => {})
+  assert.deepEqual(observation.snapshot.events.filter(event => event.kind === "update").map(event => event.kind === "update" && (event.update.content as { text: string }).text), ["a", "x", "b", "q"])
+  observation.close()
+})
+
+test("an old unmatched echo completion cannot discard a newer echo matcher", async t => {
+  const f = await agentServiceFixture(t, { prompt: "hang" })
+  const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!
+  const ids = [randomUUID(), randomUUID(), randomUUID()]
+  const submit = (index: number, text: string) => f.service.submitAcp(target, { submissionId: ids[index]!, prompt: [{ type: "text", text }] })
+  await submit(0, "abcdef"); await submit(1, "xyz")
+  await until(async () => f.methodHistory.filter(method => method === "session/prompt").length === 2 ? true : undefined)
+  for (const text of ["a", "x", "q"]) f.emitUpdate(target.agentId, { sessionUpdate: "user_message_chunk", content: { type: "text", text } })
+  f.completePrompt(target.agentId, "", "end_turn", 1); await f.service.settledAcp(target, ids[1]!)
+  await submit(2, "third")
+  await until(async () => f.methodHistory.filter(method => method === "session/prompt").length === 3 ? true : undefined)
+  f.completePrompt(target.agentId, "", "end_turn", 0); await f.service.settledAcp(target, ids[0]!)
+  f.emitUpdate(target.agentId, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "third" } })
+  const observation = await f.service.observe(target, () => {})
+  assert.deepEqual(observation.snapshot.events.filter(event => event.kind === "update").map(event => event.kind === "update" && (event.update.content as { text: string }).text), ["a", "x", "q"])
+  observation.close()
+})
+
 test("stop closes the old projection and restored observers receive only the new generation", async t => {
   const f = await agentServiceFixture(t)
   const ready = await completed(f.service, (await f.service.start(f.input)).command), target = ready.command.target!, service = f.service

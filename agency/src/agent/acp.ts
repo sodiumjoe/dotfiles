@@ -4,7 +4,7 @@ import { cloneWireJson, encodeWireJson } from "../acp/wire-json.js"
 import { object } from "../catalog/types.js"
 import type { ConfiguredLaunchContract } from "./contracts.js"
 import { configurationSnapshot, projectRestorableSettings, validateConfiguration, validateMetadata, type JsonObject, type SessionConfiguration } from "./session-config.js"
-import { normalizeAgentRecord, AgentError, agentFailure, agentText, type AgentRecord, type AgentRecordV3, type SessionStart, type AgentFailure, type AgentLimits, type PromptResult } from "./types.js"
+import { normalizeAgentRecord, AgentError, ProviderRequestError, agentFailure, agentText, type AgentRecord, type AgentRecordV3, type SessionStart, type AgentFailure, type AgentLimits, type PromptResult } from "./types.js"
 import { validateTurnInput, validateStructuredContent, validateNativeUpdate, validateNativePromptResponse, LEGACY_TURN_LIMITS, type AcpObservation, type TurnOptions } from "./session-events.js"
 
 export type ProviderSession = { sessionId: string; protocolVersion: 1; result: JsonObject; capabilities: JsonObject; configuration: SessionConfiguration }
@@ -31,15 +31,23 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   const { readable, writable, limits } = input, now = input.now ?? (() => performance.now())
   const pending = new Map<number, Pending>(), providerRequests = new Set<string | number>(), writes = new Set<(error?: Error | null) => void>()
   let nextId = 0, closed = false, failure: AgentError | null = null
-  let sessionId: string | null = null, loading = false, ready = false, promptActive = false, cancellation: Promise<void> | undefined
+  let sessionId: string | null = null, loading = false, ready = false, legacyActive = false, cancellation: Promise<void> | undefined
   let configuration = configurationSnapshot({}), capabilities: JsonObject = {}, initialization: Promise<ProviderSession> | undefined
   let startupDeadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity), initializationTimer: NodeJS.Timeout | undefined
-  let promptText = "", promptTextLimit = 0, cancelTimer: NodeJS.Timeout | undefined
+  let promptText = "", promptTextLimit = 0
+  const prompts = new Set<number>(), cancelledPrompts = new Map<number, NodeJS.Timeout>()
+  const finishPrompt = (id: number): void => {
+    prompts.delete(id); clearTimeout(cancelledPrompts.get(id)); cancelledPrompts.delete(id)
+    if (!cancelledPrompts.size) cancellation = undefined
+    if (!prompts.size) providerRequests.clear()
+  }
   const faultDeferred = Promise.withResolvers<AgentFailure>()
   const fail = (error: unknown): void => {
     if (failure) return
     failure = error instanceof AgentError ? error : new AgentError("INVALID_PROTOCOL")
-    clearTimeout(initializationTimer); clearTimeout(cancelTimer)
+    clearTimeout(initializationTimer)
+    for (const timer of cancelledPrompts.values()) clearTimeout(timer)
+    cancelledPrompts.clear()
     for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.dispose(); waiter.reject(failure) }
     pending.clear(); providerRequests.clear()
     for (const finish of [...writes]) finish(failure)
@@ -66,14 +74,19 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     writes.add(finish)
     try { writable.write(bytes, finish) } catch (error) { finish(error as Error) }
   })
-  const request = (method: string, raw: JsonObject, signal?: AbortSignal): Promise<JsonObject> => {
+  const request = (method: string, raw: JsonObject, signal?: AbortSignal, projected = false): Promise<JsonObject> => {
     let params: JsonObject
-    try { check(); if (pending.size >= 128) throw new AgentError("INVALID_PROTOCOL"); params = withoutAgencyMetadata(raw) } catch (error) { return Promise.reject(error) }
+    try {
+      check()
+      if (pending.size >= 128) throw method === "session/prompt" ? new ProviderRequestError({ code: -32000, message: "Too many pending requests" }) : new AgentError("INVALID_PROTOCOL")
+      params = withoutAgencyMetadata(raw)
+    } catch (error) { return Promise.reject(error) }
     const id = ++nextId
     if (method === "session/prompt") {
-      if (!ready || promptActive || params.sessionId !== sessionId || !Array.isArray(params.prompt)) return Promise.reject(new AgentError("NOT_READY"))
+      if (!ready || legacyActive || projected && prompts.size > 0 || params.sessionId !== sessionId || !Array.isArray(params.prompt)) return Promise.reject(new AgentError("NOT_READY"))
       try { params.prompt.forEach(validateStructuredContent) } catch { return Promise.reject(new AgentError("INVALID_PROTOCOL")) }
-      promptActive = true; cancellation = undefined; promptText = ""
+      prompts.add(id)
+      if (projected) { legacyActive = true; promptText = "" }
     }
     const result = new Promise<JsonObject>((resolve, reject) => {
       const abort = () => fail(new AgentError("STARTUP_FAILED"))
@@ -84,7 +97,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (signal?.aborted) abort()
       if (!failure) void write({ id, method, params }).catch(fail)
     })
-    return method === "session/prompt" ? result.finally(() => { promptActive = false; clearTimeout(cancelTimer); cancelTimer = undefined }) : result
+    return method === "session/prompt" ? result.finally(() => { finishPrompt(id); if (projected) legacyActive = false }) : result
   }
   const applyResult = (result: JsonObject, method: string) => {
     validateConfiguration(result)
@@ -123,7 +136,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (update.sessionUpdate === "config_option_update") applyResult({ configOptions: update.configOptions! }, "update")
       if (update.sessionUpdate === "available_commands_update") configuration.availableCommands = (update.availableCommands ?? []) as JsonObject[]
       if (update.sessionUpdate === "current_mode_update" && configuration.modes) configuration.modes.currentModeId = update.currentModeId!
-      if (update.sessionUpdate === "agent_message_chunk" && promptActive && promptTextLimit > 0) {
+      if (update.sessionUpdate === "agent_message_chunk" && legacyActive && promptTextLimit > 0) {
         const content = object(update.content)
         if (content.type === "text" && typeof content.text === "string" && Buffer.byteLength(promptText) < promptTextLimit) {
           const bytes = Buffer.from(content.text)
@@ -143,7 +156,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (!Number.isSafeInteger(error.code) || typeof error.message !== "string" || !error.message.length) throw new AgentError("INVALID_PROTOCOL")
       pending.delete(frame.id); clearTimeout(waiter.timer); waiter.dispose()
       const code = ["session/new", "session/load"].includes(waiter.method) && error.code === -32000 && error.message === "Authentication required" ? "AUTH_REQUIRED" : waiter.method === "session/load" && error.code === -32602 && error.message === "Session not found" ? "SESSION_UNAVAILABLE" : "STARTUP_FAILED"
-      waiter.reject(Object.assign(new AgentError(code), { providerCode: error.code, noMutation: error.code === -32602 || error.code === -32601 })); return
+      waiter.reject(Object.assign(waiter.method === "session/prompt" ? new ProviderRequestError(structuredClone(error) as JsonObject) : new AgentError(code), { providerCode: error.code, noMutation: error.code === -32602 || error.code === -32601 })); return
     }
     const result = object(frame.result) as JsonObject
     if (waiter.method === "initialize") {
@@ -154,7 +167,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     if (waiter.method === "session/new") sessionId = agentText(result.sessionId, 1024)
     if (waiter.method === "session/load" && result.sessionId !== undefined && result.sessionId !== sessionId) throw new AgentError("INVALID_PROTOCOL")
     if (waiter.method === "session/prompt") validateNativePromptResponse(result)
-    if (waiter.method === "session/prompt") { promptActive = false; clearTimeout(cancelTimer); cancelTimer = undefined; providerRequests.clear() }
+    if (waiter.method === "session/prompt") finishPrompt(frame.id)
     applyResult(result, waiter.method)
     if (waiter.method === "session/set_model" && configuration.models && !result.models) { configuration.models.currentModelId = waiter.params.modelId!; configuration.revision++ }
     if (waiter.method === "session/set_mode" && configuration.modes && !result.modes) { configuration.modes.currentModeId = waiter.params.modeId!; configuration.revision++ }
@@ -230,11 +243,18 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       })()
     },
     async prompt(text, signal, turnLimits = LEGACY_TURN_LIMITS) {
-      validateTurnInput(text, turnLimits); promptTextLimit = turnLimits.outputBytes
-      const result = await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, signal)
+      validateTurnInput(text, turnLimits)
+      if (prompts.size) throw new AgentError("NOT_READY")
+      promptTextLimit = turnLimits.outputBytes
+      const result = await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, signal, true)
       return { stopReason: result.stopReason as PromptResult["stopReason"], text: promptText }
     },
-    cancelPrompt() { if (!promptActive) return Promise.resolve(); cancelTimer ??= setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), 5000); return cancellation ??= write({ method: "session/cancel", params: { sessionId } }) },
+    cancelPrompt() {
+      if (!prompts.size) return Promise.resolve()
+      if ([...prompts].every(id => cancelledPrompts.has(id))) return cancellation ?? Promise.resolve()
+      for (const id of prompts) if (!cancelledPrompts.has(id)) cancelledPrompts.set(id, setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), 5000))
+      return cancellation = write({ method: "session/cancel", params: { sessionId } })
+    },
     close() {
       if (closed) return
       closed = true; fail(new AgentError("STARTUP_FAILED"))

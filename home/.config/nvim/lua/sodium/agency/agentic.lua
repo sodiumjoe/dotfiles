@@ -24,6 +24,7 @@ local function invoke(manager, captured, callback, ...)
     vim.schedule = function(fn)
         schedule(M.guard_callback(manager, captured, function()
             fn()
+            if manager._agency_running ~= nil then manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil end
             if manager.is_generating then manager:_start_spinner("generating") end
         end))
     end
@@ -86,6 +87,8 @@ local function lifecycle(manager, callback, ...)
         manager._agency_epoch = (manager._agency_epoch or 0) + 1
         manager._agency_binding, manager._agency_turn_id = nil, nil
         manager._agency_local_submission, manager._agency_permissions = nil, {}
+        for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
+        manager._agency_running, manager._agency_admissions, manager._agency_initial_submission = false, {}, nil
     end
     manager._agency_depth = depth + 1
     local args = { n = select("#", ...), ... }
@@ -279,7 +282,6 @@ function M.install()
 
     function Manager:_handle_input_submit(input)
         if not agency(self.agent) then return sm._handle_input_submit(self, input) end
-        if self.is_generating and not input:match("^/new%s") and input ~= "/new" then return false end
         self.history_to_send = nil
         self._agency_input = input
         self._agency_captured_context = { selections = self.code_selection:get_selections(),
@@ -375,39 +377,52 @@ function M.install()
         local manager = assert(self.subscribers[id])._agency_owner
         local submission = require("sodium.agency.control").uuid()
         manager._agency_local_submission, manager._agency_turn_id = submission, submission
-        local captured, input = token(manager, true, true), manager._agency_input
+        local captured, input = token(manager, true, false), manager._agency_input
         local context = manager._agency_captured_context
         local initial = manager._agency_initial_context
-        if initial then vim.list_extend(prompt, vim.deepcopy(initial)) end
+        if initial and not manager._agency_initial_submission then
+            manager._agency_initial_submission = submission
+            vim.list_extend(prompt, vim.deepcopy(initial))
+        end
         local staged = {}
         for _, entry in ipairs(manager._agency_pending_context or {}) do
-            staged[#staged + 1] = entry
-            vim.list_extend(prompt, vim.deepcopy(entry.content))
+            if not entry.submission then
+                entry.submission = submission
+                staged[#staged + 1] = entry
+                vim.list_extend(prompt, vim.deepcopy(entry.content))
+            end
         end
         local admission = { accepted = false, entries = staged }
         manager._agency_admission = admission
+        manager._agency_admissions = manager._agency_admissions or {}
+        manager._agency_admissions[submission] = admission
         self:_send_request("session/prompt", { sessionId = id, prompt = prompt, _meta = { agency = { version = 1, submissionId = submission, editor = vim.v.servername } } }, function(result, err)
-            if err and not admission.accepted then
-                M.guard_callback(manager, token(manager, false, false), function()
-                    if manager._agency_epoch ~= captured.epoch or not vim.deep_equal(manager._agency_binding, captured.binding) then return end
-                    for _, entry in ipairs(staged) do if entry.rejected then entry.rejected(err) end end
-                    local buffer = manager.widget.buf_nrs.input
-                    if vim.api.nvim_buf_is_valid(buffer) and table.concat(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), "\n") == "" then
-                        vim.api.nvim_buf_set_lines(buffer, 0, -1, false, vim.split(input or "", "\n", { plain = true }))
-                    end
-                    if context then
-                        for _, selection in ipairs(context.selections) do
-                            local found = false
-                            for _, existing in ipairs(manager.code_selection:get_selections()) do if vim.deep_equal(existing, selection) then found = true; break end end
-                            if not found then manager.code_selection:add(selection) end
+            vim.schedule(M.guard_callback(manager, captured, function()
+                manager._agency_admissions[submission] = nil
+                if err and not admission.accepted then
+                    if manager._agency_initial_submission == submission then manager._agency_initial_submission = nil end
+                    for _, entry in ipairs(staged) do entry.submission = nil end
+                    M.guard_callback(manager, token(manager, false, false), function()
+                        if manager._agency_epoch ~= captured.epoch or not vim.deep_equal(manager._agency_binding, captured.binding) then return end
+                        for _, entry in ipairs(staged) do if entry.rejected then entry.rejected(err) end end
+                        local buffer = manager.widget.buf_nrs.input
+                        if vim.api.nvim_buf_is_valid(buffer) and table.concat(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), "\n") == "" then
+                            vim.api.nvim_buf_set_lines(buffer, 0, -1, false, vim.split(input or "", "\n", { plain = true }))
                         end
-                        for _, file in ipairs(context.files) do manager.file_list:add(file) end
-                        manager.diagnostics_list:add_many(context.diagnostics)
-                        manager._is_first_message = context.first
-                    end
-                end)()
-            end
-            M.guard_callback(manager, captured, function() invoke(manager, captured, callback, result, err) end)()
+                        if context then
+                            for _, selection in ipairs(context.selections) do
+                                local found = false
+                                for _, existing in ipairs(manager.code_selection:get_selections()) do if vim.deep_equal(existing, selection) then found = true; break end end
+                                if not found then manager.code_selection:add(selection) end
+                            end
+                            for _, file in ipairs(context.files) do manager.file_list:add(file) end
+                            manager.diagnostics_list:add_many(context.diagnostics)
+                            if manager._agency_local_submission == submission then manager._is_first_message = context.first end
+                        end
+                    end)()
+                end
+                M.guard_callback(manager, captured, function() invoke(manager, captured, callback, result, err) end)()
+            end))
         end)
     end
 
@@ -468,18 +483,26 @@ function M.install()
                 else
                     manager._agency_binding = vim.deepcopy(params.binding)
                     if type(params.turnId) == "string" then manager._agency_turn_id = params.turnId end
-                    if params.state == "running" and params.turnId == manager._agency_local_submission and manager._agency_admission then
-                        if not manager._agency_admission.accepted then
-                            manager._agency_admission.accepted = true
-                            for _, entry in ipairs(manager._agency_admission.entries) do
+                    local admitted = params.submissionId or params.turnId
+                    local admission = manager._agency_admissions and manager._agency_admissions[admitted]
+                    if admission and (params.submissionState == "running" or params.submissionState == nil and params.state == "running") then
+                        if not admission.accepted then
+                            admission.accepted = true
+                            for _, entry in ipairs(admission.entries) do
                                 M.unstage_context(manager, entry)
-                                if entry.accepted then entry.accepted() end
+                                if entry.accepted then entry.accepted(admitted) end
                             end
                         end
-                        manager._agency_initial_context = nil
+                        if manager._agency_initial_submission == admitted then manager._agency_initial_context = nil end
                     end
-                    manager.is_generating = params.state == "running"
-                    if params.state == "unavailable" then manager._agency_epoch = manager._agency_epoch + 1; manager.permission_manager:clear() end
+                    if params.state == "unavailable" then
+                        manager._agency_admissions, manager._agency_initial_submission = {}, nil
+                        for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
+                        manager._agency_epoch = manager._agency_epoch + 1
+                        manager.permission_manager:clear()
+                    end
+                    manager._agency_running = params.state == "running"
+                    manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil
                     if params.configuration then configuration(manager, params.configuration) end
                     if manager.is_generating then manager:_start_spinner("generating") else manager.status_animation:stop() end
                 end
@@ -490,7 +513,7 @@ function M.install()
             local handlers = self.subscribers[params.sessionId]
             local meta = params._meta and params._meta.agency
             if handlers and meta and type(meta.submissionId) == "string" and not meta.replay
-                and meta.submissionId == handlers._agency_owner._agency_local_submission then return end
+                and handlers._agency_owner._agency_admissions and handlers._agency_owner._agency_admissions[meta.submissionId] then return end
         end
         return acp._handle_notification(self, request_id, method, params)
     end
