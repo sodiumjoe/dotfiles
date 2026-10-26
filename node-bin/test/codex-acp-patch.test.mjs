@@ -11,7 +11,11 @@ const installed = await readFile(new URL("../node_modules/@agentclientprotocol/c
 const original = installed
   .replace(/      const resolvers = threadResolvers\.get\(turnId\) \?\? new Set\(\);\n      resolvers\.add\(resolve\);\n      threadResolvers\.set\(turnId, resolvers\);/, "      threadResolvers.set(turnId, resolve);")
   .replace("    const resolvers = threadResolvers?.get(event.turn.id);\n    if (resolvers)", "    const resolve = threadResolvers?.get(event.turn.id);\n    if (resolve)")
-  .replace("      for (const resolve of resolvers) resolve(event);", "      resolve(event);\n      return;");
+  .replace("      for (const resolve of resolvers) resolve(event);", "      resolve(event);\n      return;")
+  .replace("  async getInterruptibleTurnId(sessionState, requestName) {\n    const pendingTurnStart = this.pendingTurnStarts.get(sessionState.sessionId);\n    if (requestName !== \"Close\" && pendingTurnStart) {\n      const turnId = await pendingTurnStart.promise;\n      if (turnId) return turnId;\n    }\n    if (sessionState.currentTurnId) {\n      return sessionState.currentTurnId;\n    }\n    if (requestName === \"Close\") {\n      pendingTurnStart?.resolve(null);\n    }\n    logger.log(`${requestName} request rejected: no current turn`, { sessionId: sessionState.sessionId });\n    return null;\n  }\n", "  async getInterruptibleTurnId(sessionState, requestName) {\n    if (sessionState.currentTurnId) {\n      return sessionState.currentTurnId;\n    }\n    const pendingTurnStart = this.pendingTurnStarts.get(sessionState.sessionId);\n    if (!pendingTurnStart) {\n      logger.log(`${requestName} request rejected: no current turn`, { sessionId: sessionState.sessionId });\n      return null;\n    }\n    if (requestName === \"Close\") {\n      pendingTurnStart.resolve(null);\n      return null;\n    }\n    const turnId = await pendingTurnStart.promise;\n    if (!turnId) {\n      logger.log(`${requestName} request rejected: no current turn`, { sessionId: sessionState.sessionId });\n    }\n    return turnId;\n  }\n")
+  .replace("    sessionState.lastTokenUsage = null;\n    const activePrompt = this.trackActivePrompt(params.sessionId);", "    sessionState.currentTurnId = null;\n    sessionState.lastTokenUsage = null;\n    const activePrompt = this.trackActivePrompt(params.sessionId);")
+  .replace("      if (sessionState.currentTurnId === activePrompt.currentTurn?.turnId) {\n        sessionState.currentTurnId = null;\n      }\n      if (this.pendingTurnStarts.get(params.sessionId) === pendingTurnStart) {\n        this.pendingTurnStarts.delete(params.sessionId);\n      }\n      pendingTurnStart?.resolve(null);", "      sessionState.currentTurnId = null;\n      const registeredPendingTurnStart = this.pendingTurnStarts.get(params.sessionId);\n      if (registeredPendingTurnStart !== void 0) {\n        this.pendingTurnStarts.delete(params.sessionId);\n        registeredPendingTurnStart.resolve(null);\n      }")
+  .replace("        this.clearPlanTurnState();\n        if (this.sessionState.currentTurnId === notification.params.turn.id) {\n          this.sessionState.currentTurnId = null;\n        }\n        return null;", "        this.clearPlanTurnState();\n        this.sessionState.currentTurnId = null;\n        return null;");
 assert.equal(createHash("sha256").update(original).digest("hex"), "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8");
 
 async function fixture(t, { version = "1.7.0", name = "@agentclientprotocol/codex-acp", source = original } = {}) {
@@ -51,11 +55,11 @@ for (const [label, options] of [
   assert.deepEqual(await readdir(path.join(root, "dist")), ["index.js"]);
 });
 
-test("postinstall executable resolves its own package directory", async t => {
+for (const [label, executable] of [["test Node", process.execPath], ...(process.env.CODEX_ACP_TEST_INSTALL_NODE ? [["install Node", process.env.CODEX_ACP_TEST_INSTALL_NODE]] : [])]) test("postinstall executable resolves its own package directory: " + label, async t => {
   const { project, bundle } = await fixture(t);
   const script = path.join(project, "patch-codex-acp.mjs");
   await writeFile(script, await readFile(new URL("../patch-codex-acp.mjs", import.meta.url)));
-  const result = spawnSync(process.execPath, [script], { cwd: tmpdir(), env: {}, timeout: 3000, encoding: "utf8" });
+  const result = spawnSync(executable, [script], { cwd: tmpdir(), env: {}, timeout: 3000, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.notDeepEqual(await readFile(bundle), Buffer.from(original));
   assert.equal((await stat(bundle)).mode & 0o777, 0o751);

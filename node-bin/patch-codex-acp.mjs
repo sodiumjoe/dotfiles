@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const originalHash = "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8";
-const patchedHash = "865e8e60cf840e516333a0a86f6b48b2d312da359c2c1ee4111db444d2b4e718";
+const patchedHash = "c3f5b9212df7962fc7f95ccffe05841f31a9ca22d625cf5cf6c304d8bf9ffd78";
 const replacements = [
   [
     `      threadResolvers.set(turnId, resolve);`,
@@ -30,6 +30,76 @@ const replacements = [
       }
       for (const resolve of resolvers) resolve(event);
     }`
+  ],
+  [
+    `  async getInterruptibleTurnId(sessionState, requestName) {
+    if (sessionState.currentTurnId) {
+      return sessionState.currentTurnId;
+    }
+    const pendingTurnStart = this.pendingTurnStarts.get(sessionState.sessionId);
+    if (!pendingTurnStart) {
+      logger.log(\`\${requestName} request rejected: no current turn\`, { sessionId: sessionState.sessionId });
+      return null;
+    }
+    if (requestName === "Close") {
+      pendingTurnStart.resolve(null);
+      return null;
+    }
+    const turnId = await pendingTurnStart.promise;
+    if (!turnId) {
+      logger.log(\`\${requestName} request rejected: no current turn\`, { sessionId: sessionState.sessionId });
+    }
+    return turnId;
+  }
+`,
+    `  async getInterruptibleTurnId(sessionState, requestName) {
+    const pendingTurnStart = this.pendingTurnStarts.get(sessionState.sessionId);
+    if (requestName !== "Close" && pendingTurnStart) {
+      const turnId = await pendingTurnStart.promise;
+      if (turnId) return turnId;
+    }
+    if (sessionState.currentTurnId) {
+      return sessionState.currentTurnId;
+    }
+    if (requestName === "Close") {
+      pendingTurnStart?.resolve(null);
+    }
+    logger.log(\`\${requestName} request rejected: no current turn\`, { sessionId: sessionState.sessionId });
+    return null;
+  }
+`
+  ],
+  [
+    `    sessionState.currentTurnId = null;
+    sessionState.lastTokenUsage = null;
+    const activePrompt = this.trackActivePrompt(params.sessionId);`,
+    `    sessionState.lastTokenUsage = null;
+    const activePrompt = this.trackActivePrompt(params.sessionId);`
+  ],
+  [
+    `      sessionState.currentTurnId = null;
+      const registeredPendingTurnStart = this.pendingTurnStarts.get(params.sessionId);
+      if (registeredPendingTurnStart !== void 0) {
+        this.pendingTurnStarts.delete(params.sessionId);
+        registeredPendingTurnStart.resolve(null);
+      }`,
+    `      if (sessionState.currentTurnId === activePrompt.currentTurn?.turnId) {
+        sessionState.currentTurnId = null;
+      }
+      if (this.pendingTurnStarts.get(params.sessionId) === pendingTurnStart) {
+        this.pendingTurnStarts.delete(params.sessionId);
+      }
+      pendingTurnStart?.resolve(null);`
+  ],
+  [
+    `        this.clearPlanTurnState();
+        this.sessionState.currentTurnId = null;
+        return null;`,
+    `        this.clearPlanTurnState();
+        if (this.sessionState.currentTurnId === notification.params.turn.id) {
+          this.sessionState.currentTurnId = null;
+        }
+        return null;`
   ]
 ];
 
@@ -58,6 +128,6 @@ export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_mo
   }
 }
 
-if (import.meta.main) {
+if (process.argv[1] && await realpath(process.argv[1]) === await realpath(fileURLToPath(import.meta.url))) {
   await patchCodexAcp();
 }

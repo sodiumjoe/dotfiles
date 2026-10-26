@@ -283,3 +283,52 @@ for (const agency of [false, true]) test("load retains native session identity f
   assert.ok(p.starts().every(frame => frame.params.threadId === "fixture-session"));
   p.assertReplies();
 });
+
+for (const agency of [false, true]) test("cancel retains the active native target after overlapping start rejection: " + (agency ? "Agency" : "direct"), { timeout: 18000 }, async t => {
+  const p = await peer(t, { agency });
+  const first = p.prompt("active"); await p.acknowledge(0, "active");
+  const rejected = p.prompt("reject");
+  await until(() => p.starts()[1], "rejected native start"); p.rejectStart(1);
+  const failure = (await p.results([rejected]))[0].error;
+  assert.equal(agency ? failure.providerCode : failure.code, -32603);
+  p.notify("session/cancel", { sessionId: "fixture-session" });
+  assert.equal((await p.results([first]))[0].stopReason, "cancelled");
+  assert.equal(p.nativeRequests.filter(frame => frame.method === "turn/interrupt").length, 1);
+  const next = p.prompt("reuse"); await p.acknowledge(2, "reuse", { turnId: "reused-turn" });
+  p.complete(); assert.equal((await p.results([next]))[0].stopReason, "end_turn");
+  p.assertReplies();
+});
+
+for (const outcome of ["start", "reject", "older-completes"]) test("cancel during pending start retains ownership: " + outcome, { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  const first = p.prompt("active"); await p.acknowledge(0, "active", { turnId: "first-turn" });
+  const second = p.prompt("pending");
+  const release = await p.acknowledge(1, "pending", { held: true, turnId: outcome === "older-completes" ? "second-turn" : "first-turn" });
+  if (outcome === "older-completes") {
+    p.complete("completed", "first-turn");
+    assert.equal((await p.results([first]))[0].stopReason, "end_turn");
+  }
+  p.notify("session/cancel", { sessionId: "fixture-session" });
+  await bounded(p.request("session/set_mode", { sessionId: "fixture-session", modeId: "agent-full-access" }), "ACP barrier after pending cancel");
+  if (outcome === "reject") p.rejectStart(1); else release();
+  const results = await p.results([first, second]);
+  assert.equal(results[0].stopReason, outcome === "older-completes" ? "end_turn" : "cancelled");
+  if (outcome === "reject") assert.equal(results[1].error.code, -32603);
+  else assert.equal(results[1].stopReason, "cancelled");
+  assert.equal(p.nativeRequests.filter(frame => frame.method === "turn/interrupt").length, 1);
+  const next = p.prompt("reuse"); await p.acknowledge(2, "reuse", { turnId: "reused-turn" });
+  p.complete(); assert.equal((await p.results([next]))[0].stopReason, "end_turn");
+  p.assertReplies();
+});
+
+test("older completion preserves the newer native cancellation target", { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  const first = p.prompt("older"); await p.acknowledge(0, "older", { turnId: "first-turn" });
+  const second = p.prompt("newer"); await p.acknowledge(1, "newer", { turnId: "second-turn" });
+  p.complete("completed", "first-turn");
+  assert.equal((await p.results([first]))[0].stopReason, "end_turn");
+  p.notify("session/cancel", { sessionId: "fixture-session" });
+  assert.equal((await p.results([second]))[0].stopReason, "cancelled");
+  assert.deepEqual(p.nativeRequests.filter(frame => frame.method === "turn/interrupt").map(frame => frame.params.turnId), ["second-turn"]);
+  p.assertReplies();
+});
