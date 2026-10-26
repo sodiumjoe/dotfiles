@@ -8,7 +8,16 @@ import test from "node:test";
 import { patchCodexAcp } from "../patch-codex-acp.mjs";
 
 const installed = await readFile(new URL("../node_modules/@agentclientprotocol/codex-acp/dist/index.js", import.meta.url), "utf8");
-const legacy = installed
+const lateStart = installed
+  .replace("    } finally {\n      if (sessionState) {\n        sessionState.agentMessageTextClosed = true;\n        sessionState.agentMessageTextByTurn?.clear();\n        sessionState.completedAgentMessageTurns?.clear();\n      }\n      if (this.getSessionGeneration(params.sessionId) === closeGeneration) {", "    } finally {\n      if (this.getSessionGeneration(params.sessionId) === closeGeneration) {")
+  .replace("    if (resolveInterruptedTurn) {\n      completeAgentMessageTurn(sessionState, sessionState.sessionId, turnId);\n      this.codexAcpClient.markTurnStale({", "    if (resolveInterruptedTurn) {\n      this.codexAcpClient.markTurnStale({")
+  .replace("  async interruptPromptTurn(turn, requestName) {\n    completeAgentMessageTurn(this.sessions.get(turn.threadId), turn.threadId, turn.turnId);\n    this.codexAcpClient.markTurnStale({", "  async interruptPromptTurn(turn, requestName) {\n    this.codexAcpClient.markTurnStale({")
+  .replace("      case \"agentMessage\": {\n        this.rememberAgentMessagePhase(event.item);\n        const items = this.agentMessageItems(event);\n        if (!items || items.get(event.item.id) === null) return null;\n        const streamed = items.get(event.item.id) ?? \"\";\n        items.set(event.item.id, null);\n        if (!event.item.text.startsWith(streamed)) {\n          logger.log(\"Completed agent message diverged\", { threadId: event.threadId, turnId: event.turnId, itemId: event.item.id, streamedLength: streamed.length, completedLength: event.item.text.length });\n          return null;\n        }\n        const suffix = event.item.text.slice(streamed.length);\n        return suffix.length > 0 ? createAgentTextMessageChunk(suffix, event.item.id, createCodexMessagePhaseMeta(event.item.phase)) : null;\n      }\n      case \"plan\": {", "      case \"agentMessage\":\n        this.rememberAgentMessagePhase(event.item);\n        return null;\n      case \"plan\": {")
+  .replace("  agentMessageItems(event) {\n    if (this.sessionState.agentMessageTextClosed) return null;\n    const key = JSON.stringify([event.threadId, event.turnId]);\n    if (this.sessionState.completedAgentMessageTurns?.has(key)) return null;\n    const turns = this.sessionState.agentMessageTextByTurn ??= new Map();\n    let items = turns.get(key);\n    if (!items) {\n      items = new Map();\n      turns.set(key, items);\n    }\n    return items;\n  }\n  async createTextEvent(event) {\n    const items = this.agentMessageItems(event);\n    if (!items || items.get(event.itemId) === null) return null;\n    items.set(event.itemId, (items.get(event.itemId) ?? \"\") + event.delta);\n    const phase = this.agentMessagePhases.get(event.itemId) ?? null;\n    return createAgentTextMessageChunk(event.delta, event.itemId, createCodexMessagePhaseMeta(phase));\n  }\n", "  async createTextEvent(event) {\n    const phase = this.agentMessagePhases.get(event.itemId) ?? null;\n    return createAgentTextMessageChunk(event.delta, event.itemId, createCodexMessagePhaseMeta(phase));\n  }\n")
+  .replace("  async handleNotification(notification) {\n    if (notification.method === \"turn/completed\") {\n      completeAgentMessageTurn(this.sessionState, notification.params.threadId, notification.params.turn.id);\n    }\n    await this.flushPendingErrors();", "  async handleNotification(notification) {\n    await this.flushPendingErrors();")
+  .replace("function completeAgentMessageTurn(sessionState, threadId, turnId) {\n  if (!sessionState || sessionState.agentMessageTextClosed) return;\n  const key = JSON.stringify([threadId, turnId]);\n  sessionState.agentMessageTextByTurn?.delete(key);\n  const completed = sessionState.completedAgentMessageTurns ??= new Set();\n  completed.add(key);\n  if (completed.size > 64) completed.delete(completed.values().next().value);\n}\nvar CodexEventHandler = class _CodexEventHandler {", "var CodexEventHandler = class _CodexEventHandler {");
+assert.equal(createHash("sha256").update(lateStart).digest("hex"), "a792e8776fa77b4157ce5ee984b9b4027b25158da573554a7531044fa72c7ba1");
+const legacy = lateStart
   .replaceAll("if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {", "if (this.promptShouldStop(params.sessionId, activePrompt)) {")
   .replace(/([ ]*)if \(this\.activePrompts\.get\(params\.sessionId\) === activePrompt \|\| sessionState\.currentTurnId === null\) \{\n[ ]*sessionState\.currentTurnId = turnId;\n[ ]*\}/g, "$1sessionState.currentTurnId = turnId;")
   .replace("          pendingTurnStart = null;\n          ensurePendingTurnStart();\n          const implementationPromise", "          const implementationPromise")
@@ -94,6 +103,23 @@ test("patch upgrades exact previous overlap bundle to the full correction", asyn
 
 test("patch rejects partial late-start correction without mutation", async t => {
   const mixed = legacy.replace("          if (this.promptShouldStop(params.sessionId, activePrompt)) {", "          if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {");
+  const { root, bundle } = await fixture(t, { source: mixed });
+  await assert.rejects(patchCodexAcp(root), /Unsupported codex-acp/);
+  assert.deepEqual(await readFile(bundle), Buffer.from(mixed));
+  assert.equal((await stat(bundle)).mode & 0o777, 0o751);
+  assert.deepEqual(await readdir(path.join(root, "dist")), ["index.js"]);
+});
+
+test("patch upgrades exact late-start bundle to completed-text correction", async t => {
+  const previous = await fixture(t, { source: lateStart });
+  await patchCodexAcp(previous.root);
+  assert.deepEqual(await readFile(previous.bundle), Buffer.from(installed));
+  assert.equal((await stat(previous.bundle)).mode & 0o777, 0o751);
+  assert.deepEqual(await readdir(path.join(previous.root, "dist")), ["index.js"]);
+});
+
+test("patch rejects partial completed-text correction without mutation", async t => {
+  const mixed = lateStart.replace("var CodexEventHandler = class _CodexEventHandler {", "function completeAgentMessageTurn() {}\nvar CodexEventHandler = class _CodexEventHandler {");
   const { root, bundle } = await fixture(t, { source: mixed });
   await assert.rejects(patchCodexAcp(root), /Unsupported codex-acp/);
   assert.deepEqual(await readFile(bundle), Buffer.from(mixed));

@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 const originalHash = "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8";
 const overlapHash = "c3f5b9212df7962fc7f95ccffe05841f31a9ca22d625cf5cf6c304d8bf9ffd78";
-const patchedHash = "a792e8776fa77b4157ce5ee984b9b4027b25158da573554a7531044fa72c7ba1";
+const lateStartHash = "a792e8776fa77b4157ce5ee984b9b4027b25158da573554a7531044fa72c7ba1";
+const patchedHash = "3f4ee4031599a2342a32f23b2e54f0b7fdb0dc09b4cb047cecbf242e37c34367";
 const replacements = [
   [
     `      threadResolvers.set(turnId, resolve);`,
@@ -170,6 +171,102 @@ const lateStartReplacements = [
   ]
 ];
 
+const completedTextReplacements = [
+  [
+    `var CodexEventHandler = class _CodexEventHandler {`,
+    `function completeAgentMessageTurn(sessionState, threadId, turnId) {
+  if (!sessionState || sessionState.agentMessageTextClosed) return;
+  const key = JSON.stringify([threadId, turnId]);
+  sessionState.agentMessageTextByTurn?.delete(key);
+  const completed = sessionState.completedAgentMessageTurns ??= new Set();
+  completed.add(key);
+  if (completed.size > 64) completed.delete(completed.values().next().value);
+}
+var CodexEventHandler = class _CodexEventHandler {`
+  ],
+  [
+    `  async handleNotification(notification) {
+    await this.flushPendingErrors();`,
+    `  async handleNotification(notification) {
+    if (notification.method === "turn/completed") {
+      completeAgentMessageTurn(this.sessionState, notification.params.threadId, notification.params.turn.id);
+    }
+    await this.flushPendingErrors();`
+  ],
+  [
+    `  async createTextEvent(event) {
+    const phase = this.agentMessagePhases.get(event.itemId) ?? null;
+    return createAgentTextMessageChunk(event.delta, event.itemId, createCodexMessagePhaseMeta(phase));
+  }
+`,
+    `  agentMessageItems(event) {
+    if (this.sessionState.agentMessageTextClosed) return null;
+    const key = JSON.stringify([event.threadId, event.turnId]);
+    if (this.sessionState.completedAgentMessageTurns?.has(key)) return null;
+    const turns = this.sessionState.agentMessageTextByTurn ??= new Map();
+    let items = turns.get(key);
+    if (!items) {
+      items = new Map();
+      turns.set(key, items);
+    }
+    return items;
+  }
+  async createTextEvent(event) {
+    const items = this.agentMessageItems(event);
+    if (!items || items.get(event.itemId) === null) return null;
+    items.set(event.itemId, (items.get(event.itemId) ?? "") + event.delta);
+    const phase = this.agentMessagePhases.get(event.itemId) ?? null;
+    return createAgentTextMessageChunk(event.delta, event.itemId, createCodexMessagePhaseMeta(phase));
+  }
+`
+  ],
+  [
+    `      case "agentMessage":
+        this.rememberAgentMessagePhase(event.item);
+        return null;
+      case "plan": {`,
+    `      case "agentMessage": {
+        this.rememberAgentMessagePhase(event.item);
+        const items = this.agentMessageItems(event);
+        if (!items || items.get(event.item.id) === null) return null;
+        const streamed = items.get(event.item.id) ?? "";
+        items.set(event.item.id, null);
+        if (!event.item.text.startsWith(streamed)) {
+          logger.log("Completed agent message diverged", { threadId: event.threadId, turnId: event.turnId, itemId: event.item.id, streamedLength: streamed.length, completedLength: event.item.text.length });
+          return null;
+        }
+        const suffix = event.item.text.slice(streamed.length);
+        return suffix.length > 0 ? createAgentTextMessageChunk(suffix, event.item.id, createCodexMessagePhaseMeta(event.item.phase)) : null;
+      }
+      case "plan": {`
+  ],
+  [
+    `  async interruptPromptTurn(turn, requestName) {
+    this.codexAcpClient.markTurnStale({`,
+    `  async interruptPromptTurn(turn, requestName) {
+    completeAgentMessageTurn(this.sessions.get(turn.threadId), turn.threadId, turn.turnId);
+    this.codexAcpClient.markTurnStale({`
+  ],
+  [
+    `    if (resolveInterruptedTurn) {
+      this.codexAcpClient.markTurnStale({`,
+    `    if (resolveInterruptedTurn) {
+      completeAgentMessageTurn(sessionState, sessionState.sessionId, turnId);
+      this.codexAcpClient.markTurnStale({`
+  ],
+  [
+    `    } finally {
+      if (this.getSessionGeneration(params.sessionId) === closeGeneration) {`,
+    `    } finally {
+      if (sessionState) {
+        sessionState.agentMessageTextClosed = true;
+        sessionState.agentMessageTextByTurn?.clear();
+        sessionState.completedAgentMessageTurns?.clear();
+      }
+      if (this.getSessionGeneration(params.sessionId) === closeGeneration) {`
+  ]
+];
+
 export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_modules/@agentclientprotocol/codex-acp/", import.meta.url))) {
   const metadata = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
   if (metadata.name !== "@agentclientprotocol/codex-acp" || metadata.version !== "1.7.0") {
@@ -179,9 +276,9 @@ export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_mo
   const source = await readFile(bundle, "utf8");
   const hash = createHash("sha256").update(source).digest("hex");
   if (hash === patchedHash) return;
-  if (hash !== originalHash && hash !== overlapHash) throw new Error("Unsupported codex-acp source: expected pristine 1.7.0 or an exact supported patch");
+  if (hash !== originalHash && hash !== overlapHash && hash !== lateStartHash) throw new Error("Unsupported codex-acp source: expected pristine 1.7.0 or an exact supported patch");
   let patched = source;
-  for (const [before, after] of [...(hash === originalHash ? replacements : []), ...lateStartReplacements]) {
+  for (const [before, after] of [...(hash === originalHash ? replacements : []), ...(hash !== lateStartHash ? lateStartReplacements : []), ...completedTextReplacements]) {
     if (patched.split(before).length !== 2) throw new Error("Unsupported codex-acp source: ambiguous overlap patch");
     patched = patched.replace(before, after);
   }

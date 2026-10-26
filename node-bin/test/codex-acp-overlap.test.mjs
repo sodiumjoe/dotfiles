@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -35,7 +35,7 @@ async function bounded(promise, description) {
 }
 const turn = (status = "inProgress", id = "shared-turn") => ({ id, items: [], itemsView: "notLoaded", status, error: null, startedAt: null, completedAt: null, durationMs: null });
 
-async function peer(t, { agency = false, load = false, holdUnsubscribe = false } = {}) {
+async function peer(t, { agency = false, load = false, holdUnsubscribe = false, holdInterrupt = false } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "acp-overlap-"));
   const socketPath = path.join(root, "native.sock");
   let native, child, relayPid, connection, wire, stderr = "", nextId = 0, active = null, barrierId = 100;
@@ -61,7 +61,7 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false }
         case "skills/list": result = { data: [] }; break;
         case "mcpServerStatus/list": result = { data: [], nextCursor: null }; break;
         case "thread/goal/get": result = { goal: null }; break;
-        case "turn/interrupt": reply(message, {}); complete("interrupted", message.params.turnId); return;
+        case "turn/interrupt": reply(message, {}); if (!holdInterrupt) complete("interrupted", message.params.turnId); return;
         default: result = {};
       }
       reply(message, result);
@@ -109,7 +109,7 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false }
   });
   server.listen(socketPath);
   await once(server, "listening");
-  const env = { PATH: path.dirname(process.execPath) + ":/usr/bin:/bin", HOME: root, CODEX_HOME: root, XDG_CONFIG_HOME: root, XDG_DATA_HOME: root, XDG_STATE_HOME: root, XDG_CACHE_HOME: root, CODEX_PATH: relay, AGENCY_FAKE_CODEX_SOCKET: socketPath };
+  const env = { PATH: path.dirname(process.execPath) + ":/usr/bin:/bin", HOME: root, CODEX_HOME: root, XDG_CONFIG_HOME: root, XDG_DATA_HOME: root, XDG_STATE_HOME: root, XDG_CACHE_HOME: root, CODEX_PATH: relay, AGENCY_FAKE_CODEX_SOCKET: socketPath, APP_SERVER_LOGS: root };
   child = spawn(bin, [], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   child.on("error", error => { stderr += String(error); });
   child.stderr.on("data", bytes => { stderr += bytes; });
@@ -152,7 +152,14 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false }
   }
   const starts = () => nativeRequests.filter(frame => frame.method === "turn/start");
   return {
-    nativeRequests, outbound, inbound, updates, starts, request, notify, complete, sendNative, reply,
+    nativeRequests, outbound, inbound, updates, starts, request, notify, complete, sendNative, reply, root,
+    async log() { return await readFile(path.join(root, "app-server.log"), "utf8"); },
+    text(delta, itemId = "message", turnId = active) {
+      sendNative({ method: "item/agentMessage/delta", params: { threadId: "fixture-session", turnId, itemId, delta } });
+    },
+    completedText(text, itemId = "message", turnId = active) {
+      sendNative({ method: "item/completed", params: { threadId: "fixture-session", turnId, item: { type: "agentMessage", id: itemId, text, phase: "final_answer" } } });
+    },
     assertReplies() {
       const ids = outbound.filter(frame => frame.method && Object.hasOwn(frame, "id")).map(frame => frame.id);
       assert.deepEqual(inbound.filter(frame => !frame.method && Object.hasOwn(frame, "id")).map(frame => frame.id).sort(), ids.sort());
@@ -178,13 +185,14 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false }
       await until(() => inbound.some(frame => frame.params?.update?.sessionUpdate === "usage_update" && frame.params.update.used === 42), "ACP usage metadata");
     },
     prompt(text) { return request("session/prompt", { sessionId: "fixture-session", prompt: [{ type: "text", text }] }); },
-    async acknowledge(index, marker, { held = false, turnId = "shared-turn", method = "turn/start" } = {}) {
+    async acknowledge(index, marker, { held = false, turnId = "shared-turn", method = "turn/start", markerDelta = true } = {}) {
       const requests = () => nativeRequests.filter(frame => frame.method === method);
       await until(() => requests()[index], "native turn/start " + index + " " + stderr);
       const frame = requests()[index]; active = turnId;
       if (held) return () => reply(frame, { turn: turn("inProgress", turnId), ...(method === "review/start" ? { reviewThreadId: "fixture-session" } : {}) });
       reply(frame, { turn: turn("inProgress", active), ...(method === "review/start" ? { reviewThreadId: "fixture-session" } : {}) });
       sendNative({ method: "turn/started", params: { threadId: "fixture-session", turn: turn("inProgress", active) } });
+      if (!markerDelta) { await this.barrier(active); return; }
       sendNative({ method: "item/agentMessage/delta", params: { threadId: "fixture-session", turnId: active, itemId: marker, delta: marker } });
       await until(() => inbound.some(event => event.params?.update?.content?.text === marker), "ACP marker " + marker + " " + stderr);
     },
@@ -459,5 +467,91 @@ test("request abort still interrupts its late native start and permits reuse", {
   const next = p.prompt("reuse"); await p.acknowledge(1, "reuse", { turnId: "reuse-turn" });
   p.complete(); assert.equal((await p.results([next]))[0].stopReason, "end_turn");
   assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt").map(x => x.params.turnId), ["aborted-turn"]);
+  p.assertReplies();
+});
+
+const assistantTexts = frames => frames.flatMap(frame => {
+  const update = frame.params?.update ?? frame.update;
+  return update?.sessionUpdate === "agent_message_chunk" && update.content?.type === "text" ? [update.content.text] : [];
+});
+
+for (const agency of [false, true]) for (const scenario of [
+  { name: "completed only", deltas: [], completed: "complete response", want: ["complete response"] },
+  { name: "missing suffix", deltas: ["hello", " "], completed: "hello world", want: ["hello", " ", "world"] },
+  { name: "identical", deltas: ["same"], completed: "same", want: ["same"] },
+  { name: "divergent", deltas: ["streamed secret"], completed: "different secret", want: ["streamed secret"], divergent: true },
+  { name: "empty completion", deltas: [], completed: "", want: [] },
+  { name: "short completion", deltas: ["longer"], completed: "", want: ["longer"], divergent: true },
+  { name: "unicode suffix", deltas: ["\ud83d\ude00"], completed: "\ud83d\ude00 suffix", want: ["\ud83d\ude00", " suffix"] },
+  { name: "split surrogate", deltas: ["\ud83d"], completed: "\ud83d\ude00 suffix", want: ["\ud83d", "\ude00 suffix"] },
+].filter(scenario => !agency || scenario.name !== "split surrogate")) test("completed text " + scenario.name + ": " + (agency ? "Agency" : "direct"), { timeout: 18000 }, async t => {
+  const p = await peer(t, { agency });
+  const pending = p.prompt("text case"); await p.acknowledge(0, "unused", { markerDelta: false });
+  for (const delta of scenario.deltas) p.text(delta);
+  p.completedText(scenario.completed);
+  p.completedText(scenario.completed);
+  p.text("late duplicate");
+  await p.barrier();
+  assert.deepEqual(assistantTexts(p.inbound), scenario.want);
+  if (agency) assert.deepEqual(assistantTexts(p.updates), scenario.want);
+  if (scenario.completed.startsWith(scenario.deltas.join("")) && scenario.completed.length > scenario.deltas.join("").length) {
+    const fallback = p.inbound.filter(frame => frame.params?.update?.sessionUpdate === "agent_message_chunk").at(-1).params.update;
+    assert.equal(fallback.messageId, "message");
+    assert.deepEqual(fallback._meta, { codex: { phase: "final_answer" } });
+  }
+  const logs = (await p.log()).split("\n").filter(line => line.includes("Completed agent message diverged"));
+  assert.equal(logs.length, scenario.divergent ? 1 : 0);
+  if (scenario.divergent) {
+    const context = JSON.parse(logs[0].slice(logs[0].indexOf("{")));
+    assert.deepEqual({ ...context, pid: 0 }, { pid: 0, threadId: "fixture-session", turnId: "shared-turn", itemId: "message", streamedLength: scenario.deltas.join("").length, completedLength: scenario.completed.length });
+    assert.ok(!logs[0].includes("secret"));
+  }
+  p.complete(); assert.equal((await p.results([pending]))[0].stopReason, "end_turn");
+  p.completedText(scenario.completed, "message", "shared-turn"); p.text("post-terminal", "other", "shared-turn");
+  await p.barrier("shared-turn");
+  assert.deepEqual(assistantTexts(p.inbound), scenario.want);
+  p.assertReplies();
+});
+
+for (const agency of [false, true]) test("completed text survives overlapping handler replacement: " + (agency ? "Agency" : "direct"), { timeout: 18000 }, async t => {
+  const p = await peer(t, { agency });
+  const a = p.prompt("A"); await p.acknowledge(0, "unused", { markerDelta: false });
+  p.text("prefix"); await p.barrier();
+  const b = p.prompt("B"); await p.acknowledge(1, "unused", { markerDelta: false });
+  p.completedText("prefix suffix"); p.completedText("second item", "second"); await p.barrier();
+  assert.deepEqual(assistantTexts(p.inbound), ["prefix", " suffix", "second item"]);
+  if (agency) assert.deepEqual(assistantTexts(p.updates), ["prefix", " suffix", "second item"]);
+  p.complete(); assert.deepEqual((await p.results([a,b])).map(x => x.stopReason), ["end_turn", "end_turn"]);
+  const c = p.prompt("C"); await p.acknowledge(2, "unused", { turnId: "another-turn", markerDelta: false });
+  p.completedText("reused item"); await p.barrier(); p.complete(); await p.results([c]);
+  assert.deepEqual(assistantTexts(p.inbound), ["prefix", " suffix", "second item", "reused item"]);
+  p.assertReplies();
+});
+
+for (const agency of [false, true]) test("completed text suffix arrives after cancel acknowledgement: " + (agency ? "Agency" : "direct"), { timeout: 18000 }, async t => {
+  const p = await peer(t, { agency, holdInterrupt: true });
+  const a = p.prompt("cancel"); await p.acknowledge(0, "unused", { markerDelta: false });
+  p.text("before cancel"); await p.barrier();
+  p.notify("session/cancel", { sessionId: "fixture-session" });
+  await until(() => p.nativeRequests.some(x => x.method === "turn/interrupt"), "cancel interrupt acknowledged");
+  await p.barrier(); p.completedText("before cancel final"); await p.barrier();
+  assert.deepEqual(assistantTexts(p.inbound), ["before cancel", " final"]);
+  if (agency) assert.deepEqual(assistantTexts(p.updates), ["before cancel", " final"]);
+  p.complete("interrupted"); assert.equal((await p.results([a]))[0].stopReason, "cancelled");
+  const b = p.prompt("reuse"); await p.acknowledge(1, "unused", { turnId: "reuse", markerDelta: false });
+  p.completedText("fresh"); await p.barrier(); p.complete(); await p.results([b]);
+  assert.deepEqual(assistantTexts(p.inbound), ["before cancel", " final", "fresh"]);
+  p.assertReplies();
+});
+
+test("completed text starts fresh after close and load", { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  const a = p.prompt("close"); await p.acknowledge(0, "unused", { markerDelta: false });
+  p.text("old"); await p.barrier();
+  await bounded(p.request("session/close", { sessionId: "fixture-session" }), "close old text state"); await p.results([a]);
+  await bounded(p.request("session/load", { sessionId: "fixture-session", cwd: p.root, mcpServers: [] }), "reload text session");
+  const b = p.prompt("new"); await p.acknowledge(1, "unused", { turnId: "restored", markerDelta: false });
+  p.completedText("new text"); await p.barrier(); p.complete(); await p.results([b]);
+  assert.deepEqual(assistantTexts(p.inbound), ["old", "new text"]);
   p.assertReplies();
 });
