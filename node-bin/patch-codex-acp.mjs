@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const originalHash = "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8";
-const patchedHash = "c3f5b9212df7962fc7f95ccffe05841f31a9ca22d625cf5cf6c304d8bf9ffd78";
+const overlapHash = "c3f5b9212df7962fc7f95ccffe05841f31a9ca22d625cf5cf6c304d8bf9ffd78";
+const patchedHash = "a792e8776fa77b4157ce5ee984b9b4027b25158da573554a7531044fa72c7ba1";
 const replacements = [
   [
     `      threadResolvers.set(turnId, resolve);`,
@@ -103,6 +104,72 @@ const replacements = [
   ]
 ];
 
+const lateStartReplacements = [
+  [
+    `          activePrompt.currentTurn = turn;
+          if (this.promptShouldStop(params.sessionId, activePrompt)) {
+            this.interruptLateStartedTurn(turn);
+            return;
+          }
+          sessionState.currentTurnId = turnId;`,
+    `          activePrompt.currentTurn = turn;
+          if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {
+            this.interruptLateStartedTurn(turn);
+            return;
+          }
+          if (this.activePrompts.get(params.sessionId) === activePrompt || sessionState.currentTurnId === null) {
+            sessionState.currentTurnId = turnId;
+          }`
+  ],
+  [
+    `            activePrompt.currentTurn = turn;
+            if (this.promptShouldStop(params.sessionId, activePrompt)) {
+              this.interruptLateStartedTurn(turn);
+              return;
+            }
+            sessionState.currentTurnId = turnId;`,
+    `            activePrompt.currentTurn = turn;
+            if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {
+              this.interruptLateStartedTurn(turn);
+              return;
+            }
+            if (this.activePrompts.get(params.sessionId) === activePrompt || sessionState.currentTurnId === null) {
+              sessionState.currentTurnId = turnId;
+            }`
+  ],
+  [
+    `                activePrompt.currentTurn = turn;
+                if (this.promptShouldStop(params.sessionId, activePrompt)) {
+                  this.interruptLateStartedTurn(turn);
+                  return;
+                }
+                sessionState.currentTurnId = turnId;`,
+    `                activePrompt.currentTurn = turn;
+                if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {
+                  this.interruptLateStartedTurn(turn);
+                  return;
+                }
+                if (this.activePrompts.get(params.sessionId) === activePrompt || sessionState.currentTurnId === null) {
+                  sessionState.currentTurnId = turnId;
+                }`
+  ],
+  [
+    `          sessionState.currentTurnId = null;
+          const implementationPromise`,
+    `          sessionState.currentTurnId = null;
+          pendingTurnStart = null;
+          ensurePendingTurnStart();
+          const implementationPromise`
+  ],
+  [
+    `                recoverableSessionFailure = sessionState.sessionFailure;
+                promptNotificationsActive = true;`,
+    `                pendingTurnStart?.resolve(turnId);
+                recoverableSessionFailure = sessionState.sessionFailure;
+                promptNotificationsActive = true;`
+  ]
+];
+
 export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_modules/@agentclientprotocol/codex-acp/", import.meta.url))) {
   const metadata = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
   if (metadata.name !== "@agentclientprotocol/codex-acp" || metadata.version !== "1.7.0") {
@@ -112,12 +179,13 @@ export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_mo
   const source = await readFile(bundle, "utf8");
   const hash = createHash("sha256").update(source).digest("hex");
   if (hash === patchedHash) return;
-  if (hash !== originalHash) throw new Error("Unsupported codex-acp source: expected pristine 1.7.0 or the exact overlap patch");
+  if (hash !== originalHash && hash !== overlapHash) throw new Error("Unsupported codex-acp source: expected pristine 1.7.0 or an exact supported patch");
   let patched = source;
-  for (const [before, after] of replacements) {
+  for (const [before, after] of [...(hash === originalHash ? replacements : []), ...lateStartReplacements]) {
     if (patched.split(before).length !== 2) throw new Error("Unsupported codex-acp source: ambiguous overlap patch");
     patched = patched.replace(before, after);
   }
+  if (createHash("sha256").update(patched).digest("hex") !== patchedHash) throw new Error("Unsupported codex-acp source: unexpected patch result");
   const temporary = bundle + "." + randomUUID() + ".tmp";
   try {
     await writeFile(temporary, patched, { flag: "wx", mode: 0o600 });

@@ -8,7 +8,13 @@ import test from "node:test";
 import { patchCodexAcp } from "../patch-codex-acp.mjs";
 
 const installed = await readFile(new URL("../node_modules/@agentclientprotocol/codex-acp/dist/index.js", import.meta.url), "utf8");
-const original = installed
+const legacy = installed
+  .replaceAll("if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {", "if (this.promptShouldStop(params.sessionId, activePrompt)) {")
+  .replace(/([ ]*)if \(this\.activePrompts\.get\(params\.sessionId\) === activePrompt \|\| sessionState\.currentTurnId === null\) \{\n[ ]*sessionState\.currentTurnId = turnId;\n[ ]*\}/g, "$1sessionState.currentTurnId = turnId;")
+  .replace("          pendingTurnStart = null;\n          ensurePendingTurnStart();\n          const implementationPromise", "          const implementationPromise")
+  .replace("                pendingTurnStart?.resolve(turnId);\n                recoverableSessionFailure", "                recoverableSessionFailure");
+assert.equal(createHash("sha256").update(legacy).digest("hex"), "c3f5b9212df7962fc7f95ccffe05841f31a9ca22d625cf5cf6c304d8bf9ffd78");
+const original = legacy
   .replace(/      const resolvers = threadResolvers\.get\(turnId\) \?\? new Set\(\);\n      resolvers\.add\(resolve\);\n      threadResolvers\.set\(turnId, resolvers\);/, "      threadResolvers.set(turnId, resolve);")
   .replace("    const resolvers = threadResolvers?.get(event.turn.id);\n    if (resolvers)", "    const resolve = threadResolvers?.get(event.turn.id);\n    if (resolve)")
   .replace("      for (const resolve of resolvers) resolve(event);", "      resolve(event);\n      return;")
@@ -74,4 +80,23 @@ test("manifest and lock retain the exact supported provider graph", async () => 
   assert.equal(lock.packages["node_modules/" + metadata.name].version, "1.7.0");
   assert.equal(metadata.version, "1.7.0");
   assert.equal(manifest.scripts.postinstall, "node patch-codex-acp.mjs");
+});
+
+test("patch upgrades exact previous overlap bundle to the full correction", async t => {
+  const previous = await fixture(t, { source: legacy });
+  const pristine = await fixture(t);
+  await patchCodexAcp(previous.root); await patchCodexAcp(pristine.root);
+  assert.notDeepEqual(await readFile(previous.bundle), Buffer.from(legacy));
+  assert.deepEqual(await readFile(previous.bundle), await readFile(pristine.bundle));
+  assert.equal((await stat(previous.bundle)).mode & 0o777, 0o751);
+  assert.deepEqual(await readdir(path.join(previous.root, "dist")), ["index.js"]);
+});
+
+test("patch rejects partial late-start correction without mutation", async t => {
+  const mixed = legacy.replace("          if (this.promptShouldStop(params.sessionId, activePrompt)) {", "          if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {");
+  const { root, bundle } = await fixture(t, { source: mixed });
+  await assert.rejects(patchCodexAcp(root), /Unsupported codex-acp/);
+  assert.deepEqual(await readFile(bundle), Buffer.from(mixed));
+  assert.equal((await stat(bundle)).mode & 0o777, 0o751);
+  assert.deepEqual(await readdir(path.join(root, "dist")), ["index.js"]);
 });

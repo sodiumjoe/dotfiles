@@ -35,11 +35,11 @@ async function bounded(promise, description) {
 }
 const turn = (status = "inProgress", id = "shared-turn") => ({ id, items: [], itemsView: "notLoaded", status, error: null, startedAt: null, completedAt: null, durationMs: null });
 
-async function peer(t, { agency = false, load = false } = {}) {
+async function peer(t, { agency = false, load = false, holdUnsubscribe = false } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "acp-overlap-"));
   const socketPath = path.join(root, "native.sock");
-  let native, child, relayPid, connection, wire, stderr = "", nextId = 0, active = null;
-  const nativeRequests = [], outbound = [], inbound = [], deferred = new Map();
+  let native, child, relayPid, connection, wire, stderr = "", nextId = 0, active = null, barrierId = 100;
+  const nativeRequests = [], outbound = [], inbound = [], updates = [], deferred = new Map();
   const server = net.createServer(socket => {
     assert.equal(native, undefined);
     native = socket;
@@ -48,7 +48,7 @@ async function peer(t, { agency = false, load = false } = {}) {
       if (message.fixturePid) { relayPid = message.fixturePid; return; }
       nativeRequests.push(message);
       if (!Object.hasOwn(message, "id")) return;
-      if (message.method === "turn/start") return;
+      if (["turn/start", "review/start"].includes(message.method) || holdUnsubscribe && message.method === "thread/unsubscribe") return;
       let result;
       switch (message.method) {
         case "initialize": result = { userAgent: "fake-app-server", platformFamily: "unix", platformOs: "darwin" }; break;
@@ -79,25 +79,33 @@ async function peer(t, { agency = false, load = false } = {}) {
     connection?.close();
     wire?.end();
     child?.stdin.end();
-    let cleanupError;
-    try {
-      if (child) {
-        await until(() => child.exitCode !== null || child.signalCode !== null, "provider exit", 4500);
-        await until(() => child.stdout.destroyed && child.stderr.destroyed, "provider stdio close");
-      }
+    const errors = [];
+    const observe = async action => {
+      try { await action(); } catch (error) { errors.push(error.message); }
+    };
+    await observe(async () => {
+      if (child) await until(() => child.exitCode !== null || child.signalCode !== null, "provider exit", 4500);
+    });
+    native?.destroy();
+    if (child && child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await observe(() => until(() => child.exitCode !== null || child.signalCode !== null, "provider exit after kill"));
+    }
+    await observe(async () => {
+      if (child) await until(() => child.stdout.destroyed && child.stderr.destroyed, "provider stdio close");
+    });
+    await observe(async () => {
+      if (child && !relayPid) throw new Error("missing owned relay identity");
       if (relayPid) await until(() => {
         try { process.kill(relayPid, 0); return false; } catch (error) { if (error.code === "ESRCH") return true; throw error; }
       }, "relay absence");
-    } catch (error) {
-      cleanupError = error;
-      if (child && child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await once(child, "close"); }
-    } finally {
-      native?.destroy();
-      if (server.listening) await new Promise(resolve => server.close(resolve));
-      await rm(root, { recursive: true, force: true });
-    }
-    if (cleanupError) throw cleanupError;
-    t.diagnostic(JSON.stringify({ providerPid: child?.pid, relayPid, providerExit: child?.exitCode, providerSignal: child?.signalCode, stdioClosed: child?.stdout.destroyed && child?.stderr.destroyed, socketClosed: native?.destroyed }));
+    });
+    await observe(async () => {
+      if (server.listening) await bounded(new Promise(resolve => server.close(resolve)), "server close");
+    });
+    await rm(root, { recursive: true, force: true });
+    t.diagnostic(JSON.stringify({ providerPid: child?.pid, relayPid, providerExit: child?.exitCode, providerSignal: child?.signalCode, stdioClosed: child?.stdout.destroyed && child?.stderr.destroyed, socketClosed: native?.destroyed, errors }));
+    assert.deepEqual(errors, [], "cleanup errors");
   });
   server.listen(socketPath);
   await once(server, "listening");
@@ -125,7 +133,7 @@ async function peer(t, { agency = false, load = false } = {}) {
     const { normalizeAgentRecord, AGENT_LIMITS } = await import("../../agency/dist/src/agent/types.js");
     const { sampleAgent, sampleContract } = await import("../../agency/dist/test/agent-support.js");
     const record = normalizeAgentRecord(sampleAgent()); record.definition.cwd = root; record.settings = {};
-    connection = createAcpConnection({ readable: child.stdout, writable: wire, limits: AGENT_LIMITS, onUpdate: () => {} });
+    connection = createAcpConnection({ readable: child.stdout, writable: wire, limits: AGENT_LIMITS, onUpdate: update => updates.push(structuredClone(update)) });
     const result = await bounded(connection.initialize(record, sampleContract(), load ? { kind: "load", sessionId: "fixture-session", params: {} } : { kind: "new", params: {} }, new AbortController().signal), "Agency initialize");
     assert.equal(result.sessionId, "fixture-session");
     request = (method, params) => connection.request(method, params);
@@ -144,10 +152,25 @@ async function peer(t, { agency = false, load = false } = {}) {
   }
   const starts = () => nativeRequests.filter(frame => frame.method === "turn/start");
   return {
-    nativeRequests, outbound, inbound, starts, request, notify, complete,
+    nativeRequests, outbound, inbound, updates, starts, request, notify, complete, sendNative, reply,
     assertReplies() {
-      const ids = outbound.filter(frame => Object.hasOwn(frame, "id")).map(frame => frame.id);
-      assert.deepEqual(inbound.filter(frame => Object.hasOwn(frame, "id")).map(frame => frame.id).sort(), ids.sort());
+      const ids = outbound.filter(frame => frame.method && Object.hasOwn(frame, "id")).map(frame => frame.id);
+      assert.deepEqual(inbound.filter(frame => !frame.method && Object.hasOwn(frame, "id")).map(frame => frame.id).sort(), ids.sort());
+    },
+    async barrier(turnId = active) {
+      const count = ++barrierId;
+      const counts = { totalTokens: count, inputTokens: count, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
+      sendNative({ method: "thread/tokenUsage/updated", params: { threadId: "fixture-session", turnId, tokenUsage: { last: counts, total: counts, modelContextWindow: 1000 } } });
+      await until(() => inbound.some(frame => frame.params?.update?.sessionUpdate === "usage_update" && frame.params.update.used === count), "unique ACP processing barrier " + count);
+    },
+    async delta(marker, turnId = active) {
+      sendNative({ method: "item/agentMessage/delta", params: { threadId: "fixture-session", turnId, itemId: marker, delta: marker } });
+      await until(() => inbound.some(frame => frame.params?.update?.content?.text === marker), "ACP delta " + marker);
+      if (agency) await until(() => updates.some(event => event.update?.content?.text === marker), "Agency delta " + marker);
+    },
+    async approvePlan() {
+      const frame = await until(() => inbound.find(frame => frame.method === "session/request_permission"), "plan permission");
+      wire.write(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { outcome: { outcome: "selected", optionId: "implement_plan" } } }) + "\n");
     },
     async usage() {
       const counts = { totalTokens: 42, inputTokens: 30, cachedInputTokens: 5, outputTokens: 12, reasoningOutputTokens: 7 };
@@ -155,11 +178,12 @@ async function peer(t, { agency = false, load = false } = {}) {
       await until(() => inbound.some(frame => frame.params?.update?.sessionUpdate === "usage_update" && frame.params.update.used === 42), "ACP usage metadata");
     },
     prompt(text) { return request("session/prompt", { sessionId: "fixture-session", prompt: [{ type: "text", text }] }); },
-    async acknowledge(index, marker, { held = false, turnId = "shared-turn" } = {}) {
-      await until(() => starts()[index], "native turn/start " + index + " " + stderr);
-      const frame = starts()[index]; active = turnId;
-      if (held) return () => reply(frame, { turn: turn("inProgress", turnId) });
-      reply(frame, { turn: turn("inProgress", active) });
+    async acknowledge(index, marker, { held = false, turnId = "shared-turn", method = "turn/start" } = {}) {
+      const requests = () => nativeRequests.filter(frame => frame.method === method);
+      await until(() => requests()[index], "native turn/start " + index + " " + stderr);
+      const frame = requests()[index]; active = turnId;
+      if (held) return () => reply(frame, { turn: turn("inProgress", turnId), ...(method === "review/start" ? { reviewThreadId: "fixture-session" } : {}) });
+      reply(frame, { turn: turn("inProgress", active), ...(method === "review/start" ? { reviewThreadId: "fixture-session" } : {}) });
       sendNative({ method: "turn/started", params: { threadId: "fixture-session", turn: turn("inProgress", active) } });
       sendNative({ method: "item/agentMessage/delta", params: { threadId: "fixture-session", turnId: active, itemId: marker, delta: marker } });
       await until(() => inbound.some(event => event.params?.update?.content?.text === marker), "ACP marker " + marker + " " + stderr);
@@ -330,5 +354,110 @@ test("older completion preserves the newer native cancellation target", { timeou
   p.notify("session/cancel", { sessionId: "fixture-session" });
   assert.equal((await p.results([second]))[0].stopReason, "cancelled");
   assert.deepEqual(p.nativeRequests.filter(frame => frame.method === "turn/interrupt").map(frame => frame.params.turnId), ["second-turn"]);
+  p.assertReplies();
+});
+
+for (const agency of [false, true]) test("late admitted shared start preserves deltas and every callback: " + (agency ? "Agency" : "direct"), { timeout: 18000 }, async t => {
+  const p = await peer(t, { agency });
+  const a = p.prompt("A"); const release = await p.acknowledge(0, "A", { held: true });
+  const b = p.prompt("B"); await p.acknowledge(1, "B");
+  const c = p.prompt("C"); await p.acknowledge(2, "C");
+  release(); await p.barrier();
+  await p.delta("after-late-start"); p.complete();
+  assert.deepEqual((await p.results([a, b, c])).map(x => x.stopReason), ["end_turn", "end_turn", "end_turn"]);
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt"), []);
+  p.assertReplies();
+});
+
+for (const kind of ["prompt", "review", "implementation"]) test("late " + kind + " acknowledgement preserves newer distinct cancellation target", { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  if (kind === "implementation") await bounded(p.request("session/set_config_option", { sessionId: "fixture-session", configId: "collaboration_mode", value: "plan" }), "plan mode");
+  const a = p.prompt(kind === "review" ? "/review" : "older");
+  let index = 0;
+  if (kind === "implementation") {
+    await p.acknowledge(0, "plan", { turnId: "plan-turn" });
+    p.sendNative({ method: "item/completed", params: { threadId: "fixture-session", turnId: "plan-turn", item: { id: "plan-item", type: "plan", text: "Controlled plan" } } });
+    p.complete("completed", "plan-turn"); await p.approvePlan(); index = 1;
+  }
+  const release = await p.acknowledge(index, "older", { held: true, turnId: "older-turn", method: kind === "review" ? "review/start" : "turn/start" });
+  p.sendNative({ method: "turn/started", params: { threadId: "fixture-session", turn: turn("inProgress", "older-turn") } });
+  await p.barrier("older-turn");
+  const b = p.prompt("newer"); await p.acknowledge(kind === "review" ? 0 : index + 1, "newer", { turnId: "newer-turn" });
+  release(); await p.barrier("newer-turn");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt"), []);
+  p.notify("session/cancel", { sessionId: "fixture-session" });
+  assert.equal((await p.results([b]))[0].stopReason, "cancelled");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt").map(x => x.params.turnId), ["newer-turn"]);
+  p.complete("completed", "older-turn"); assert.equal((await p.results([a]))[0].stopReason, "end_turn");
+  p.assertReplies();
+});
+
+for (const outcome of ["reject", "complete"]) test("older late start becomes target after newer " + outcome, { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  const a = p.prompt("older"); const release = await p.acknowledge(0, "older", { held: true, turnId: "older-turn" });
+  const b = p.prompt("newer");
+  if (outcome === "reject") { await until(() => p.starts()[1], "rejected newer start"); p.rejectStart(1); }
+  else { await p.acknowledge(1, "newer", { turnId: "newer-turn" }); p.complete("completed", "newer-turn"); }
+  await p.results([b]); release(); await p.barrier("older-turn");
+  p.notify("session/cancel", { sessionId: "fixture-session" });
+  assert.equal((await p.results([a]))[0].stopReason, "cancelled");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt").map(x => x.params.turnId), ["older-turn"]);
+  p.assertReplies();
+});
+
+test("single-target cancellation has no fallback after newer distinct turn completes", { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  const a = p.prompt("older"); const release = await p.acknowledge(0, "older", { held: true, turnId: "older-turn" });
+  const b = p.prompt("newer"); await p.acknowledge(1, "newer", { turnId: "newer-turn" });
+  release(); await p.barrier("newer-turn");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt"), []);
+  p.complete("completed", "newer-turn"); await p.results([b]);
+  p.notify("session/cancel", { sessionId: "fixture-session" }); await p.barrier("older-turn");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt"), []);
+  p.complete("completed", "older-turn"); assert.equal((await p.results([a]))[0].stopReason, "end_turn");
+  p.assertReplies();
+});
+
+for (const afterClose of [false, true]) test("older admitted start is interrupted " + (afterClose ? "after close returns" : "during close"), { timeout: 18000 }, async t => {
+  const p = await peer(t, { holdUnsubscribe: !afterClose });
+  const a = p.prompt("older"); const release = await p.acknowledge(0, "older", { held: true, turnId: "older-turn" });
+  const b = p.prompt("newer"); const releaseB = await p.acknowledge(1, "newer", { held: true, turnId: "newer-turn" });
+  const closing = p.request("session/close", { sessionId: "fixture-session" });
+  const unsubscribe = await until(() => p.nativeRequests.find(x => x.method === "thread/unsubscribe"), "close unsubscribe");
+  if (afterClose) await bounded(closing, "session closed");
+  release(); releaseB();
+  await until(() => p.nativeRequests.filter(x => x.method === "turn/interrupt").length === 2, "late close interrupts");
+  if (!afterClose) { p.reply(unsubscribe, {}); await bounded(closing, "session closed"); }
+  assert.deepEqual((await p.results([a, b])).map(x => x.stopReason), ["cancelled", "cancelled"]);
+  p.assertReplies();
+});
+
+test("cancel during pending approved implementation targets implementation turn", { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  await bounded(p.request("session/set_config_option", { sessionId: "fixture-session", configId: "collaboration_mode", value: "plan" }), "plan mode");
+  const a = p.prompt("plan then implement"); await p.acknowledge(0, "plan", { turnId: "plan-turn" });
+  p.sendNative({ method: "item/completed", params: { threadId: "fixture-session", turnId: "plan-turn", item: { id: "plan-item", type: "plan", text: "Controlled plan" } } });
+  p.complete("completed", "plan-turn"); await p.approvePlan();
+  const release = await p.acknowledge(1, "implementation", { held: true, turnId: "implementation-turn" });
+  p.notify("session/cancel", { sessionId: "fixture-session" });
+  await bounded(p.request("session/set_mode", { sessionId: "fixture-session", modeId: "agent-full-access" }), "cancel admitted");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt"), []);
+  release();
+  assert.equal((await p.results([a]))[0].stopReason, "cancelled");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt").map(x => x.params.turnId), ["implementation-turn"]);
+  p.assertReplies();
+});
+
+test("request abort still interrupts its late native start and permits reuse", { timeout: 18000 }, async t => {
+  const p = await peer(t);
+  const a = p.prompt("abort pending"); const release = await p.acknowledge(0, "aborted", { held: true, turnId: "aborted-turn" });
+  const requestId = p.outbound.find(x => x.method === "session/prompt").id;
+  p.notify("$/cancel_request", { requestId });
+  await p.results([a]);
+  release();
+  await until(() => p.nativeRequests.some(x => x.method === "turn/interrupt" && x.params.turnId === "aborted-turn"), "aborted late start interrupted");
+  const next = p.prompt("reuse"); await p.acknowledge(1, "reuse", { turnId: "reuse-turn" });
+  p.complete(); assert.equal((await p.results([next]))[0].stopReason, "end_turn");
+  assert.deepEqual(p.nativeRequests.filter(x => x.method === "turn/interrupt").map(x => x.params.turnId), ["aborted-turn"]);
   p.assertReplies();
 });
