@@ -11,7 +11,9 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-const bin = path.join(packageRoot, "node_modules/.bin/codex-acp");
+const adapterPackage = process.env.AGENCY_CODEX_ACP_FIXTURE_PACKAGE ??
+  path.join(packageRoot, "node_modules/@agentclientprotocol/codex-acp");
+const adapterEntry = path.join(adapterPackage, "dist/index.js");
 const relay = fileURLToPath(new URL("fixtures/codex-app-server.mjs", import.meta.url));
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
 async function until(read, description, timeout = 3000) {
@@ -35,7 +37,8 @@ async function bounded(promise, description) {
 }
 const turn = (status = "inProgress", id = "shared-turn") => ({ id, items: [], itemsView: "notLoaded", status, error: null, startedAt: null, completedAt: null, durationMs: null });
 
-async function peer(t, { agency = false, load = false, holdUnsubscribe = false, holdInterrupt = false } = {}) {
+async function peer(t, { agency = false, load = false, holdUnsubscribe = false, holdInterrupt = false, publicSettings = false } = {}) {
+  assert.equal(JSON.parse(await readFile(path.join(adapterPackage, "package.json"), "utf8")).version, "1.7.0");
   const root = await mkdtemp(path.join(tmpdir(), "acp-overlap-"));
   const socketPath = path.join(root, "native.sock");
   let native, child, relayPid, connection, wire, stderr = "", nextId = 0, active = null, barrierId = 100;
@@ -54,7 +57,7 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false, 
         case "initialize": result = { userAgent: "fake-app-server", platformFamily: "unix", platformOs: "darwin" }; break;
         case "account/read": result = { account: null, requiresOpenaiAuth: false }; break;
         case "config/read": result = { config: {}, origins: {}, layers: [] }; break;
-        case "model/list": result = { data: [{ id: "model-a", model: "model-a", displayName: "Fixture", description: "Fixture", hidden: false, isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: "high", description: "High" }], defaultReasoningEffort: "high", inputModalities: ["text"], supportsPersonality: false }], nextCursor: null }; break;
+        case "model/list": result = { data: [{ id: "model-a", model: "model-a", displayName: "Fixture", description: "Fixture", hidden: false, isDefault: true, supportedReasoningEfforts: (publicSettings ? ["low", "high"] : ["high"]).map(reasoningEffort => ({ reasoningEffort, description: reasoningEffort })), defaultReasoningEffort: "high", inputModalities: ["text"], supportsPersonality: false }], nextCursor: null }; break;
         case "thread/start":
         case "thread/resume": result = { thread: thread(), model: "model-a", modelProvider: "openai", reasoningEffort: "high", serviceTier: null }; break;
         case "thread/read": result = { thread: thread() }; break;
@@ -103,14 +106,17 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false, 
     await observe(async () => {
       if (server.listening) await bounded(new Promise(resolve => server.close(resolve)), "server close");
     });
-    await rm(root, { recursive: true, force: true });
-    t.diagnostic(JSON.stringify({ providerPid: child?.pid, relayPid, providerExit: child?.exitCode, providerSignal: child?.signalCode, stdioClosed: child?.stdout.destroyed && child?.stderr.destroyed, socketClosed: native?.destroyed, errors }));
+    if (!publicSettings && errors.length === 0) {
+      await observe(() => rm(root, { recursive: true, force: true }));
+    }
+    if (publicSettings || errors.length) t.diagnostic(JSON.stringify({ root, stderr }));
+    t.diagnostic(JSON.stringify({ root, providerPid: child?.pid, relayPid, providerExit: child?.exitCode, providerSignal: child?.signalCode, stdioClosed: child?.stdout.destroyed && child?.stderr.destroyed, socketClosed: native?.destroyed, errors }));
     assert.deepEqual(errors, [], "cleanup errors");
   });
   server.listen(socketPath);
   await once(server, "listening");
   const env = { PATH: path.dirname(process.execPath) + ":/usr/bin:/bin", HOME: root, CODEX_HOME: root, XDG_CONFIG_HOME: root, XDG_DATA_HOME: root, XDG_STATE_HOME: root, XDG_CACHE_HOME: root, CODEX_PATH: relay, AGENCY_FAKE_CODEX_SOCKET: socketPath, APP_SERVER_LOGS: root };
-  child = spawn(bin, [], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
+  child = spawn(process.execPath, [adapterEntry], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   child.on("error", error => { stderr += String(error); });
   child.stderr.on("data", bytes => { stderr += bytes; });
   wire = new PassThrough();
@@ -131,10 +137,14 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false, 
   if (agency) {
     const { createAcpConnection } = await import("../../agency/dist/src/agent/acp.js");
     const { normalizeAgentRecord, AGENT_LIMITS } = await import("../../agency/dist/src/agent/types.js");
-    const { sampleAgent, sampleContract } = await import("../../agency/dist/test/agent-support.js");
-    const record = normalizeAgentRecord(sampleAgent()); record.definition.cwd = root; record.settings = {};
+    const { sampleAgent, sampleContract, sampleProductionContract } = await import("../../agency/dist/test/agent-support.js");
+    const record = normalizeAgentRecord(sampleAgent()); record.definition.cwd = root;
+    record.settings = publicSettings ? {
+      configValues: { model: "model-a", reasoning_effort: "low", mode: "read-only" }
+    } : {};
+    const contract = publicSettings ? sampleProductionContract() : sampleContract();
     connection = createAcpConnection({ readable: child.stdout, writable: wire, limits: AGENT_LIMITS, onUpdate: update => updates.push(structuredClone(update)) });
-    const result = await bounded(connection.initialize(record, sampleContract(), load ? { kind: "load", sessionId: "fixture-session", params: {} } : { kind: "new", params: {} }, new AbortController().signal), "Agency initialize");
+    const result = await bounded(connection.initialize(record, contract, load ? { kind: "load", sessionId: "fixture-session", params: {} } : { kind: "new", params: {} }, new AbortController().signal), "Agency initialize");
     assert.equal(result.sessionId, "fixture-session");
     request = (method, params) => connection.request(method, params);
     notify = (method, params) => connection.notify(method, params);
@@ -153,6 +163,7 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false, 
   const starts = () => nativeRequests.filter(frame => frame.method === "turn/start");
   return {
     nativeRequests, outbound, inbound, updates, starts, request, notify, complete, sendNative, reply, root,
+    snapshot: () => connection.snapshot(),
     async log() { return await readFile(path.join(root, "app-server.log"), "utf8"); },
     text(delta, itemId = "message", turnId = active) {
       sendNative({ method: "item/agentMessage/delta", params: { threadId: "fixture-session", turnId, itemId, delta } });
@@ -205,6 +216,35 @@ async function peer(t, { agency = false, load = false, holdUnsubscribe = false, 
     },
   };
 }
+
+test("Agency acknowledges public settings before a native config read", { timeout: 18000 }, async t => {
+  const p = await peer(t, { agency: true, publicSettings: true });
+  const value = id => p.snapshot().configOptions.find(option => option.id === id)?.currentValue;
+  const opened = p.inbound.find(frame => frame.result?.sessionId === "fixture-session").result;
+  assert.equal(opened.configOptions.find(option => option.id === "reasoning_effort").currentValue, "high");
+  assert.equal(value("model"), "model-a");
+  assert.equal(value("reasoning_effort"), "low");
+  assert.equal(value("mode"), "read-only");
+  assert.ok(p.outbound.some(frame => frame.method === "session/set_config_option" &&
+    frame.params.configId === "reasoning_effort" && frame.params.value === "low"));
+  assert.equal(p.nativeRequests.filter(frame => frame.method === "config/read").length, 0);
+  assert.equal(p.starts().length, 0);
+  const pending = p.prompt("public settings fixture");
+  await p.acknowledge(0, "fixture response");
+  assert.equal(p.starts().length, 1);
+  const native = p.starts()[0].params;
+  assert.equal(native.model, "model-a");
+  assert.equal(native.effort, "low");
+  assert.equal(native.input[0].text, "public settings fixture");
+  assert.equal(native.approvalPolicy, "on-request");
+  assert.deepEqual(native.sandboxPolicy, {
+    type: "workspaceWrite", writableRoots: [], networkAccess: false,
+    excludeTmpdirEnvVar: false, excludeSlashTmp: false
+  });
+  p.complete();
+  assert.equal((await p.results([pending]))[0].stopReason, "end_turn");
+  p.assertReplies();
+});
 
 for (const agency of [false, true]) test("shared native turn completes every overlapping ACP request: " + (agency ? "Agency" : "direct"), { timeout: 18000 }, async t => {
   const p = await peer(t, { agency });

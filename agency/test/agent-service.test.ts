@@ -190,6 +190,39 @@ for (const crashed of [false, true]) test(`restore retains identity and rotates 
   await service.freezeAndDrain(true)
 })
 
+test("public settings survive explicit Stop and Restore", async t => {
+  const f = await agentServiceFixture(t)
+  const started = await completed(f.service, (await f.service.start(f.input)).command)
+  const target = started.command.target!
+  await f.service.setSession(target, "session/set_config_option", { configId: "reasoning", value: "low" })
+  const before = (await f.store.readAgent(target.agentId))!
+  assert.equal(before.settings.configValues?.reasoning, "low")
+  const setters = f.methodHistory.filter(method => method === "session/set_config_option").length
+  const stop = { ...target, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  const request = {
+    commandId: randomUUID(), handlerGeneration: target.handlerGeneration,
+    agentId: target.agentId, environment: { PATH: "/restored/bin", FIXTURE: "fresh" }
+  }
+  const done = await completed(f.service, (await f.service.restore(request)).command)
+  assert.equal(done.command.result?.outcome, "restored")
+  const restored = (await f.store.readAgent(target.agentId))!
+  assert.equal(restored.definition.agentId, target.agentId)
+  assert.deepEqual(restored.session, before.session)
+  assert.notEqual(restored.launch!.providerGeneration, before.launch!.providerGeneration)
+  assert.deepEqual(restored.settings, before.settings)
+  const snapshot = await f.service.sessionSnapshot(done.command.target!)
+  assert.equal(snapshot.configOptions.find(option => option.id === "reasoning")!.currentValue, "low")
+  assert.equal(f.methodHistory.filter(method => method === "session/set_config_option").length, setters)
+  assert.deepEqual(f.methodHistory.filter(method => method === "session/new" || method === "session/load"), ["session/new", "session/load"])
+  await assert.rejects(f.service.sessionSnapshot(target), { code: "STALE_PROVIDER" })
+  const { NVIM, NVIM_SOCKET_PATH, ...environment } = f.spawnOptions.at(-1)!.env!
+  assert.deepEqual(environment, { ...request.environment, CODEX_PATH: f.profile.executable })
+  assert.equal(NVIM, NVIM_SOCKET_PATH)
+  assert.equal(f.spawns(), 2)
+})
+
 for (const callerOverride of [false, true]) test(`Codex start and Restore use the profile launcher with ${callerOverride ? "a conflicting" : "no"} caller override`, async t => {
   const defaults = Object.freeze({ CODEX_PATH: "/stale/backend-codex", MODEL_PROVIDER: "backend", DEFAULT_ONLY: "retained" })
   const f = await agentServiceFixture(t, { nativeLauncher: "codex wrapper with spaces", backendEnvironment: defaults })
