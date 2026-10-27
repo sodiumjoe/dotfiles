@@ -180,7 +180,7 @@ for (const crashed of [false, true]) test(`restore retains identity and rotates 
   assert.notEqual(restored.launch!.commandId, before.launch!.commandId)
   assert.equal(f.spawnOptions.at(-1)!.cwd, before.definition.cwd)
   const { NVIM, NVIM_SOCKET_PATH, ...environment } = f.spawnOptions.at(-1)!.env!
-  assert.deepEqual(environment, restoringEnvironment)
+  assert.deepEqual(environment, { ...restoringEnvironment, CODEX_PATH: f.profile.executable })
   assert.match(NVIM!, /\/editor-[a-f0-9-]+\.sock$/)
   assert.equal(NVIM_SOCKET_PATH, NVIM)
   assert.deepEqual(f.methodHistory.filter(method => method === "session/new" || method === "session/load"), ["session/new", "session/load"])
@@ -188,6 +188,36 @@ for (const crashed of [false, true]) test(`restore retains identity and rotates 
   await assert.rejects(service.restore({ ...request, environment: { SECRET: "changed" } }), { code: "COMMAND_CONFLICT" })
   assert.equal((await service.command(f.input.commandId, f.input.handlerGeneration)).command.result?.outcome, "started")
   await service.freezeAndDrain(true)
+})
+
+for (const callerOverride of [false, true]) test(`Codex start and Restore use the profile launcher with ${callerOverride ? "a conflicting" : "no"} caller override`, async t => {
+  const defaults = Object.freeze({ CODEX_PATH: "/stale/backend-codex", MODEL_PROVIDER: "backend", DEFAULT_ONLY: "retained" })
+  const f = await agentServiceFixture(t, { nativeLauncher: "codex wrapper with spaces", backendEnvironment: defaults })
+  const environment = Object.freeze({ PATH: "/caller/bin", MODEL_PROVIDER: "caller", EMPTY: "", ...(callerOverride ? { CODEX_PATH: "/stale/caller-codex" } : {}) })
+  const originalEnvironment = { ...environment }, originalDefaults = { ...defaults }
+  const started = await completed(f.service, (await f.service.start({ ...f.input, environment })).command)
+  assert.equal(started.command.result?.outcome, "started")
+  const { NVIM: startNvim, NVIM_SOCKET_PATH: startSocket, ...startEnvironment } = f.spawnOptions[0]!.env!
+  assert.deepEqual(startEnvironment, { PATH: "/caller/bin", MODEL_PROVIDER: "caller", EMPTY: "", DEFAULT_ONLY: "retained", CODEX_PATH: join(f.root, "codex wrapper with spaces") })
+  assert.equal(startNvim, startSocket)
+  const stop = { ...started.command.target!, commandId: randomUUID() }
+  await f.service.stop(stop)
+  assert.equal((await completed(f.service, stop)).command.result?.outcome, "stopped")
+  const restoreEnvironment = Object.freeze({ PATH: "/restore/bin", MODEL_PROVIDER: "restore", ...(callerOverride ? { CODEX_PATH: "/stale/restore-codex" } : {}) })
+  const originalRestore = { ...restoreEnvironment }
+  const request = { commandId: randomUUID(), handlerGeneration: f.input.handlerGeneration, agentId: started.command.target!.agentId, environment: restoreEnvironment }
+  const restored = await completed(f.service, (await f.service.restore(request)).command)
+  assert.equal(restored.command.result?.outcome, "restored")
+  assert.notEqual(restored.command.target!.providerGeneration, started.command.target!.providerGeneration)
+  assert.equal(restored.command.result!.session!.sessionId, started.command.result!.session!.sessionId)
+  const { NVIM: restoreNvim, NVIM_SOCKET_PATH: restoreSocket, ...restoredEnvironment } = f.spawnOptions.at(-1)!.env!
+  assert.deepEqual(restoredEnvironment, { PATH: "/restore/bin", MODEL_PROVIDER: "restore", DEFAULT_ONLY: "retained", CODEX_PATH: join(f.root, "codex wrapper with spaces") })
+  assert.equal(restoreNvim, restoreSocket)
+  assert.deepEqual(f.methodHistory.filter(method => method === "session/new" || method === "session/load"), ["session/new", "session/load"])
+  assert.deepEqual(environment, originalEnvironment)
+  assert.deepEqual(restoreEnvironment, originalRestore)
+  assert.deepEqual(defaults, originalDefaults)
+  await f.service.freezeAndDrain(true)
 })
 
 test("ordinary production contract starts and restores without qualification authority", async t => {

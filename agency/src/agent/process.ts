@@ -74,7 +74,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
   }
   let spawnOptions: SpawnOptions | undefined = {
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
-    env: { ...parseLaunchEnvironment(input.environment), ...(input.agentRecord ? {} : { CODEX_PATH: contract.executable }) },
+    env: { ...parseLaunchEnvironment(input.environment), ...(!input.agentRecord || contract.providerId === "codex-acp" ? { CODEX_PATH: contract.executable } : {}) },
   }
   function cleanup(): Promise<LaunchRecord> {
     if (cleaning) return cleaning

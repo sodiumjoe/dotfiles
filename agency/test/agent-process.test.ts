@@ -17,9 +17,9 @@ test("owned provider forwards observations and nonfatal cancellation through its
 import { lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { DarwinObservationUnavailable } from "../src/platform/darwin.js"
-import { agentFailure } from "../src/agent/types.js"
+import { agentFailure, normalizeAgentRecord } from "../src/agent/types.js"
 import { writeLaunchRecord } from "../src/platform/private-state.js"
-import { verifyFixtureProviderGroup, syntheticAgentProcess } from "./agent-support.js"
+import { verifyFixtureProviderGroup, syntheticAgentProcess, sampleAgent, sampleContract } from "./agent-support.js"
 
 test("agent process publishes a managed launch and spawns in the exact caller directory with profile-derived adapter routing", async t => {
   const f = await syntheticAgentProcess(t, "normal")
@@ -38,6 +38,18 @@ test("agent process publishes a managed launch and spawns in the exact caller di
   assert.equal(launch.phase, "readiness")
   assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
   await assert.rejects(lstat(join(f.root, "agents/provider-state")), { code: "ENOENT" })
+})
+
+for (const v3 of [false, true]) test(`non-Codex ${v3 ? "V3" : "legacy"} launch preserves its existing environment routing`, async t => {
+  const contract = { ...sampleContract(), providerId: "claude-agent-acp" as const, adapterPackage: "@agentclientprotocol/claude-agent-acp", executable: "/fixture/claude" }
+  const agentRecord = normalizeAgentRecord(sampleAgent())
+  agentRecord.definition.backendId = "claude-agent-acp"
+  agentRecord.launch!.configuration.providerId = "claude-agent-acp"
+  const f = await syntheticAgentProcess(t, "normal", false, { contract, ...(v3 ? { agentRecord } : {}) })
+  await f.owner.initialize(new AbortController().signal)
+  assert.equal(f.options()!.env!.CODEX_PATH, v3 ? "/caller/codex" : "/fixture/claude")
+  assert.equal(f.options()!.env!.FIXTURE, "yes")
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
 })
 
 test("owned restoration initializes the recorded provider session in a fresh process", async t => {

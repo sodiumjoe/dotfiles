@@ -1,4 +1,3 @@
-import { homedir } from "node:os"
 import { join } from "node:path"
 import { decodeJson, digest, readBoundedFile, readProfiles } from "../catalog/config.js"
 import { keys, object, providerId, text, type ProviderId } from "../catalog/types.js"
@@ -41,7 +40,7 @@ export async function readBackendConfig(root: string): Promise<BackendConfig> {
   const bytes = await readBoundedFile(join(catalog, "backends.json"), 65536, true)
   if (bytes !== null) return parseBackendConfig(decodeJson(bytes))
   if (!(await readProfiles(root)).some(profile => profile.enabled && profile.id === "codex-acp")) throw new AgentError("UNAVAILABLE")
-  return { version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: { CODEX_PATH: join(homedir(), "bin/acp-codex"), INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" }, initial: { modeId: "agent-full-access" }, compatibilityId: "codex-acp-1.7" }] }
+  return { version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" }, initial: { modeId: "agent-full-access" }, compatibilityId: "codex-acp-1.7" }] }
 }
 
 export function backendFingerprint(backend: Backend, manifest: unknown): string {

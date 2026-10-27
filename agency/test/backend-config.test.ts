@@ -1,7 +1,6 @@
 import assert from "node:assert/strict"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { homedir } from "node:os"
 import test from "node:test"
 import { backendFingerprint, mergeBackendEnvironment, parseBackendConfig, readBackendConfig } from "../src/agent/backend-config.js"
 import { projectRestorableSettings, nonRestorableOptionIds } from "../src/agent/session-config.js"
@@ -43,7 +42,7 @@ test("absent configuration uses Codex defaults only with an enabled Codex profil
   await save([profile])
   const value = await readBackendConfig(root)
   assert.equal(value.defaultBackendId, "codex-acp")
-  assert.deepEqual(value.backends[0]?.environmentDefaults, { CODEX_PATH: join(homedir(), "bin/acp-codex"), INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" })
+  assert.deepEqual(value.backends[0]?.environmentDefaults, { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" })
   assert.deepEqual(value.backends[0]?.initial, { modeId: "agent-full-access" })
   await save([{ ...profile, enabled: false }])
   await assert.rejects(readBackendConfig(root))

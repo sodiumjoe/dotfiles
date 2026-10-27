@@ -305,8 +305,8 @@ export function agentGate() {
   return { promise, resolve }
 }
 
-export async function syntheticAgentProcess(t: TestContext, scenario: string, startupEnvelope = false, settings: { onUpdate?(event: AcpObservation): void; transitionIO?: Partial<LaunchTransitionIO> } = {}) {
-  const root = await privateRoot(t), spec = sampleSpec(), contract = sampleContract(), beforeSpawn = agentGate(), publication = agentGate(), spawned = agentGate(), absentEntered = agentGate(), absentReleased = agentGate(), terminated = agentGate(), cleanupObservation = agentGate(), removalEntered = agentGate(), removalReleased = agentGate()
+export async function syntheticAgentProcess(t: TestContext, scenario: string, startupEnvelope = false, settings: { onUpdate?(event: AcpObservation): void; transitionIO?: Partial<LaunchTransitionIO>; contract?: ConfiguredLaunchContract; agentRecord?: AgentRecordV3 } = {}) {
+  const root = await privateRoot(t), spec = sampleSpec(), contract = settings.contract ?? sampleContract(), beforeSpawn = agentGate(), publication = agentGate(), spawned = agentGate(), absentEntered = agentGate(), absentReleased = agentGate(), terminated = agentGate(), cleanupObservation = agentGate(), removalEntered = agentGate(), removalReleased = agentGate()
   const path = join(root, "launches", spec.launchAttemptId + ".json")
   await mkdir(join(root, "launches"), { mode: 0o700 })
   const launch: LaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "boot-a", launchAttempted: false, provider: null, phase: "launch_pending", reason: null }
@@ -448,7 +448,7 @@ export function scriptedAcp(t: TestContext, scenario = "exact", settings: { onUp
   return { connection, sent, permissionReplies, readable, writable, send, replaceOptions(values: import("../src/agent/session-config.js").JsonObject[]) { options.splice(0, options.length, ...structuredClone(values)) }, triggerDrift() { send({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId: "plan" } } }) } }
 }
 
-export async function agentServiceFixture(t: TestContext, options: { cleanupOverride?: (agentId: string, cleanup: () => Promise<LaunchRecord>) => Promise<LaunchRecord>; hostId?: string; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
+export async function agentServiceFixture(t: TestContext, options: { nativeLauncher?: string; backendEnvironment?: Readonly<Record<string, string>>; cleanupOverride?: (agentId: string, cleanup: () => Promise<LaunchRecord>) => Promise<LaunchRecord>; hostId?: string; beforeOwnerPage?: boolean; pauseCleanup?: boolean; launchContracts?: Array<LaunchContract | ConfiguredLaunchContract>; productionCatalog?: boolean; advertiseUnsupportedClaude?: boolean; contract?: boolean; sessionLoad?: boolean; productionContract?: boolean; injectedOnly?: boolean; pause?: "attempted" | "spawn" | "ready"; pauseCommand?: boolean; pauseStateRemoval?: boolean; failStateRemoval?: boolean; failAfterStateRemoval?: boolean; prompt?: "normal" | "hang"; exitDuringInitialize?: boolean } = {}) {
   if (options.productionCatalog) options = { ...options, productionContract: true }
   const teardown: Array<() => unknown> = [], childContext = Object.create(t) as TestContext
   childContext.after = fn => { teardown.push(() => fn?.(t, error => { if (error) throw error })) }
@@ -473,7 +473,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
     service.stop = request => { const operation = stop(request); requests.push(operation); return operation }
     return service
   }
-  const directory = join(root, "catalog"), config = join(root, "declared.json"), executable = join(root, "native"), adapterPackageJson = join(root, "adapter.json")
+  const directory = join(root, "catalog"), config = join(root, "declared.json"), executable = join(root, options.nativeLauncher ?? "native"), adapterPackageJson = join(root, "adapter.json")
   if (!options.injectedOnly) await mkdir(directory, { mode: 0o700 })
   const providerFile = join(root, "agent-provider.js")
   await writeFile(config, "{}", { mode: 0o600 }); await writeFile(executable, "fixture", { mode: 0o700 }); await writeFile(adapterPackageJson, JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: options.productionContract ? "1.7.0" : "1.0.0", main: "agent-provider.js" }), { mode: 0o600 }); await writeFile(providerFile, await readFile(fileURLToPath(new URL("./fixtures/agent-provider.js", import.meta.url))), { mode: 0o600 })
@@ -486,7 +486,7 @@ export async function agentServiceFixture(t: TestContext, options: { cleanupOver
   const saveCatalog = async () => { if (!options.injectedOnly) { await catalogStore.writeSnapshot(snapshot); await catalogStore.publishCurrent(snapshot) } }
   await saveCatalog()
   const contract = { ...(options.productionContract ? productionLaunchContracts()[0]! : sampleStaticContract()), sessionLoad: options.sessionLoad ?? true }
-  if (!options.injectedOnly) await writeFile(join(directory, "backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: {}, initial: {}, compatibilityId: contract.id }] }), { mode: 0o600 })
+  if (!options.injectedOnly) await writeFile(join(directory, "backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: options.backendEnvironment ?? {}, initial: {}, compatibilityId: contract.id }] }), { mode: 0o600 })
   let refreshes = 0, catalogReads = 0, spawnCount = 0, failReceipt = false, failReady = false, holdReady = false, failTerminal = false, failTerminalBeforeRename = false, failInitialAgent = false, failInitialCommand = false, writingReady = false, writingTerminal = false, writingReceipt = false, receiptFailures = 0, readyFailures = 0, terminalFailures = 0, terminalWriteFailures = 0
   const base = createAgentStore(root, { mkdir, rename, rm, async open(path, flags, mode) {
     const handle = await open(path, flags, mode), sync = handle.sync.bind(handle)
