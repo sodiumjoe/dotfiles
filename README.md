@@ -12,6 +12,8 @@ cd .dotfiles
 
 `bootstrap.sh` prompts for the environment on first run, or takes it as a flag for non-interactive use (`./bootstrap.sh --env=devbox`). It stages prospective generated configs and checks every deployment destination before publishing the configs, reconciling symlinks, and writing `~/.dotfiles-env`. A failed preflight leaves the existing environment identity, canonical generated files, and live links unchanged. Bootstrap then installs the pinned npm tools in `node-bin/`.
 
+For `devbox`, bootstrap then installs Agency's build dependencies, builds it with Node 24.13.0, and runs `agy status --json` to start or reuse the devbox's local Handler. The pinned runtime must already exist under `${NODENV_ROOT:-$HOME/.nodenv}/versions/24.13.0/`; install it with `nodenv install 24.13.0` if missing. Agency setup failures produce a warning and leave the completed dotfile setup in place. Fix the reported error and rerun `./bootstrap.sh --env=devbox` from the repository. Bootstrap preserves existing provider profiles; creating agent sessions still requires a configured provider, as described in `agency/README.md`.
+
 Post-install:
 - `brew-sync` to install Homebrew packages (`brew.sh` is deprecated)
 - `./macos` to apply macOS defaults

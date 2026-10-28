@@ -19,6 +19,7 @@ class DeploymentFixture(unittest.TestCase):
         self.home_tree = self.repo / "home"
         for relative in [
             "bootstrap.sh",
+            "home/bin/agy",
             "home/bin/dotfiles-generate",
             "home/bin/dotfiles-reconcile",
             "home/bin/migrate-multi-env",
@@ -59,6 +60,7 @@ class DeploymentFixture(unittest.TestCase):
         self.environment = {
             **os.environ,
             "HOME": str(self.owner),
+            "NODENV_ROOT": str(self.owner / ".nodenv"),
             "DOTFILES_DIR": str(self.repo),
             "DOTFILES_TEST_PLATFORM": "Darwin",
             "PATH": f"{shim_dir}:{os.environ['PATH']}",
@@ -216,6 +218,138 @@ class BootstrapTest(DeploymentFixture):
 
     def test_successful_transition_on_linux_preserves_mutable_settings(self):
         self.assert_successful_transition("Linux")
+
+
+class AgencyBootstrapTest(DeploymentFixture):
+    def setUp(self):
+        super().setUp()
+        self.environment["DOTFILES_TEST_PLATFORM"] = "Linux"
+        self.environment["NODE_ENV"] = "production"
+        self.calls = self.root / "agency-calls"
+        self.environment["DOTFILES_TEST_CALLS"] = str(self.calls)
+        self.calls.write_text("")
+        self.node_bin = self.owner / ".nodenv/versions/24.13.0/bin"
+        self.node_bin.mkdir(parents=True)
+        self.write_executable(
+            self.node_bin / "node",
+            '#!/bin/sh\n'
+            'printf "agy %s\\n" "$*" >> "$DOTFILES_TEST_CALLS"\n'
+            'exit "${DOTFILES_TEST_STATUS_EXIT:-0}"\n',
+        )
+        self.write_executable(
+            self.root / "shims/npm",
+            '#!/bin/sh\n'
+            'printf "tools npm %s\\n" "$*" >> "$DOTFILES_TEST_CALLS"\n',
+        )
+        self.write_executable(
+            self.node_bin / "npm",
+            '#!/bin/sh\n'
+            'printf "agency npm %s\\n" "$*" >> "$DOTFILES_TEST_CALLS"\n'
+            'printf "runtime %s\\n" "$(command -v node)" >> "$DOTFILES_TEST_CALLS"\n'
+            'if [ "$1" = "$DOTFILES_TEST_FAIL_NPM" ]; then exit 1; fi\n'
+            'if [ "$1 $2" = "run build" ]; then\n'
+            '  mkdir -p agency/dist/src\n'
+            '  touch agency/dist/src/main.js\n'
+            'fi\n',
+        )
+        self.environment["DOTFILES_TEST_FAIL_NPM"] = ""
+
+    def write_executable(self, path, content):
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def startup_call(self):
+        return f"agy {self.repo.resolve()}/agency/dist/src/main.js status --json"
+
+    def test_devbox_builds_with_pinned_node_before_starting_handler(self):
+        self.environment.pop("NODENV_ROOT")
+        self.run_bootstrap("devbox")
+
+        self.assertEqual(self.calls.read_text().splitlines(), [
+            "tools npm install --prefix node-bin",
+            "tools npm run sync-bins --prefix node-bin",
+            "agency npm ci --include=dev --prefix agency",
+            f"runtime {self.node_bin}/node",
+            "agency npm run build --prefix agency",
+            f"runtime {self.node_bin}/node",
+            self.startup_call(),
+        ])
+
+    def test_other_environments_do_not_build_or_start_agency(self):
+        for environment in ["work", "home"]:
+            with self.subTest(environment=environment):
+                self.calls.write_text("")
+                self.run_bootstrap(environment)
+                self.assertNotIn("agency npm", self.calls.read_text())
+                self.assertNotIn("agy ", self.calls.read_text())
+
+    def test_repeated_bootstrap_uses_status_and_preserves_provider_settings(self):
+        profile = self.owner / ".local/state/agency/hosts/existing/catalog/providers.json"
+        profile.parent.mkdir(parents=True)
+        content = '{"version":1,"providers":[]}'
+        profile.write_text(content)
+        profile.chmod(0o600)
+
+        self.run_bootstrap("devbox")
+        self.run_bootstrap("devbox")
+
+        self.assertEqual(profile.read_text(), content)
+        self.assertEqual(profile.stat().st_mode & 0o777, 0o600)
+        agy_calls = [line for line in self.calls.read_text().splitlines() if line.startswith("agy ")]
+        self.assertEqual(agy_calls, [self.startup_call(), self.startup_call()])
+
+    def test_missing_pinned_node_warns_and_preserves_dotfile_setup(self):
+        (self.node_bin / "node").unlink()
+
+        result = self.run_bootstrap("devbox")
+
+        self.assertIn("Node 24.13.0", result.stderr)
+        self.assertIn("./bootstrap.sh --env=devbox", result.stderr)
+        self.assertNotIn("agency npm", self.calls.read_text())
+        self.assertNotIn("agy ", self.calls.read_text())
+        self.assertTrue((self.owner / "bin/agy").is_symlink())
+        self.assertEqual((self.owner / ".dotfiles-env").read_text(), "DOTFILES_ENV=devbox\n")
+
+    def test_dependency_failure_does_not_build_or_start(self):
+        self.environment["DOTFILES_TEST_FAIL_NPM"] = "ci"
+
+        result = self.run_bootstrap("devbox")
+
+        self.assertIn("Agency setup failed", result.stderr)
+        self.assertNotIn("agency npm run build", self.calls.read_text())
+        self.assertNotIn("agy ", self.calls.read_text())
+
+    def test_build_failure_does_not_start_stale_build(self):
+        self.environment["DOTFILES_TEST_FAIL_NPM"] = "run"
+        main = self.repo / "agency/dist/src/main.js"
+        main.parent.mkdir(parents=True)
+        main.write_text("stale build")
+
+        result = self.run_bootstrap("devbox")
+
+        self.assertIn("Agency setup failed", result.stderr)
+        self.assertIn("agency npm run build", self.calls.read_text())
+        self.assertNotIn("agy ", self.calls.read_text())
+        self.assertEqual(main.read_text(), "stale build")
+
+    def test_startup_failure_warns_without_failing_dotfile_setup(self):
+        self.environment["DOTFILES_TEST_STATUS_EXIT"] = "69"
+
+        result = self.run_bootstrap("devbox")
+
+        self.assertIn(self.startup_call(), self.calls.read_text())
+        self.assertIn("Agency setup failed", result.stderr)
+        self.assertIn("./bootstrap.sh --env=devbox", result.stderr)
+
+    def test_custom_nodenv_root_with_spaces(self):
+        custom = self.owner / "custom nodenv"
+        (self.owner / ".nodenv").rename(custom)
+        self.environment["NODENV_ROOT"] = str(custom)
+
+        self.run_bootstrap("devbox")
+
+        self.assertIn(f"runtime {custom}/versions/24.13.0/bin/node", self.calls.read_text())
+        self.assertIn(self.startup_call(), self.calls.read_text())
 
 
 class LegacyMigrationTest(DeploymentFixture):

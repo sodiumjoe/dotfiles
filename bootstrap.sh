@@ -109,9 +109,6 @@ if [ -d .git ]; then
 fi
 
 # --- Pinned npm tool binaries (ACP providers, language servers, formatters) ---
-#
-# Last on purpose: this is the only step that needs the network, and a registry
-# failure shouldn't abort the symlink and git-hook setup above.
 
 if command -v npm &>/dev/null; then
   echo "Installing node-bin packages..."
@@ -123,4 +120,20 @@ if command -v npm &>/dev/null; then
   npm run sync-bins --prefix node-bin || echo "bootstrap.sh: node-bin bin sync failed — run 'npm run sync-bins --prefix node-bin' after npm install succeeds" >&2
 else
   echo "npm not found, skipping node-bin (ACP providers will be unavailable)" >&2
+fi
+
+if [ "$DOTFILES_ENV" = devbox ]; then
+  (
+    agency_node_bin="${NODENV_ROOT:-$HOME/.nodenv}/versions/24.13.0/bin"
+    if [ ! -x "$agency_node_bin/node" ]; then
+      echo "bootstrap.sh: Agency requires Node 24.13.0; install it with 'nodenv install 24.13.0'" >&2
+      exit 1
+    fi
+    export PATH="$agency_node_bin:$PATH"
+    echo "Installing and building Agency..."
+    npm ci --include=dev --prefix agency || exit 1
+    npm run build --prefix agency || exit 1
+    echo "Starting Agency Handler..."
+    home/bin/agy status --json || exit 1
+  ) || echo "bootstrap.sh: Agency setup failed; fix the error above and rerun './bootstrap.sh --env=devbox' from '$PWD'" >&2
 fi
