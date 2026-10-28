@@ -46,7 +46,6 @@ remotes() {
 
   local host=$(_devbox_host_for_remote "$remote_name")
 
-  _devbox_sync "$host"
   _devbox_sync_loop "$host"
 
   _devbox_attach_tmux "$host"
@@ -76,7 +75,6 @@ remote() {
 
   local host=$(_devbox_host_for_remote "$remote_name")
 
-  _devbox_sync "$host"
   _devbox_sync_loop "$host"
 
   _devbox_attach_tmux "$host"

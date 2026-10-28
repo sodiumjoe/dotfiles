@@ -335,6 +335,11 @@ print -r -- "stale" > "$loop_pidfile"
 _devbox_sync_loop_stop() { : }
 _devbox_sync_preflight() { : }
 _devbox_remote_work_uri() { print -r -- "ssh://${1}//home/moon/stripe/work/" }
+_devbox_ssh() {
+  printf '%s\n' "$@" >| "$tmpdir/loop_ssh_args"
+  return "$remote_mkdir_exit"
+}
+: > "$tmpdir/loop_ssh_args"
 setopt noclobber
 run_capture _devbox_sync_loop "$loop_host"
 unsetopt noclobber
@@ -352,7 +357,44 @@ fi
 assert_eq "sync loop does not resolve conflicts by mtime" "absent" "$loop_prefer_newer"
 assert_contains "sync loop reuses SSH control master" "ControlMaster=auto" "$loop_args"
 assert_contains "sync loop reuses tmux control socket" "ControlPath=$HOME/.ssh/devbox-control/%C" "$loop_args"
+assert_contains "sync loop creates remote work directory" 'mkdir -p "$HOME/stripe/work"' "$(cat "$tmpdir/loop_ssh_args")"
+assert_contains "sync loop performs subsequent syncs" "-repeat 5" "$loop_args"
 rm -f "$loop_pidfile"
+
+echo "=== Test: failed remote directory creation prevents background sync ==="
+remote_mkdir_exit=1
+print -r -- "not called" >| "$tmpdir/unison_args"
+run_capture _devbox_sync_loop "$loop_host"
+assert_eq "sync loop returns remote mkdir failure" "1" "$capture_status"
+if [[ -f "$loop_pidfile" ]]; then
+  wait "$(cat "$loop_pidfile")" || true
+  rm -f "$loop_pidfile"
+fi
+assert_eq "sync loop does not start Unison after mkdir failure" "not called" "$(cat "$tmpdir/unison_args")"
+remote_mkdir_exit=0
+
+echo "=== Test: remote connections attach before foreground sync ==="
+_sodium_define_stripe_named_dirs() { : }
+ZDOTDIR="$repo_root/home/.config/zsh" source "$repo_root/home/.config/zsh/work.zsh"
+fetch_remotes() { print -r -- "[x]existing-devbox [running]" }
+fzf() { cat }
+_devbox_start_if_needed() { : }
+_devbox_host_for_remote() { print -r -- "remote-connect" }
+_devbox_sync() { print -r -- "sync" >> "$tmpdir/connection_calls" }
+_devbox_sync_loop() { print -r -- "loop" >> "$tmpdir/connection_calls" }
+_devbox_attach_tmux() { print -r -- "attach" >> "$tmpdir/connection_calls" }
+_devbox_sync_loop_stop() { print -r -- "stop" >> "$tmpdir/connection_calls" }
+pay() { : }
+tmux() { : }
+for connect_command in remotes remote; do
+  : > "$tmpdir/connection_calls"
+  run_capture "$connect_command" existing-devbox
+  assert_eq "$connect_command connects successfully" "0" "$capture_status"
+  assert_eq \
+    "$connect_command syncs in background before attach and in foreground after detach" \
+    $'loop\nattach\nstop\nsync' \
+    "$(cat "$tmpdir/connection_calls")"
+done
 
 echo ""
 echo "Results: $pass passed, $fail failed"

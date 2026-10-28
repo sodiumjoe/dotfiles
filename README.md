@@ -172,7 +172,7 @@ PR review recovery state lives in `.review/session.json`, which is written befor
 
 ### devbox
 
-Devbox initialization clones this repo and runs `bootstrap.sh`, which sets up everything: work-cli symlink, skills, agents, commands, hooks, generated instruction files. The `_devbox_sync` function in `home/.config/zsh/.zshrc` syncs `~/stripe/work/` bidirectionally via Unison on connect and disconnect, and `_devbox_sync_loop` maintains a persistent 5-second polling loop during active SSH sessions.
+Devbox initialization clones this repo and runs `bootstrap.sh`, which sets up everything: work-cli symlink, skills, agents, commands, hooks, generated instruction files. `remotes` and `remote` use `_devbox_sync_loop` in `home/.config/zsh/work_sync.zsh` to sync `~/stripe/work/` bidirectionally via Unison in the background, starting with the initial sync and polling every 5 seconds afterward. Connections wait for the setup checks, then attach tmux without waiting for the initial scan or transfer. Remote work files can be stale or absent until that sync finishes. On disconnect, the loop stops and `_devbox_sync` performs a final foreground sync.
 
 ## Update
 

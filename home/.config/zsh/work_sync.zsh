@@ -179,6 +179,7 @@ _devbox_sync_loop() {
   _devbox_sync_preflight "$host" || return
   remote_work_uri="$(_devbox_remote_work_uri "$host")" || return
   control_path="$(_devbox_control_path)" || return
+  _devbox_ssh "$host" 'mkdir -p "$HOME/stripe/work"' || return
   unison ~/stripe/work/ "$remote_work_uri" \
     -batch -copyonconflict -fastcheck true -silent \
     -sshargs "-o ControlMaster=auto -o ControlPersist=60 -o ControlPath=${(q)control_path}" \
