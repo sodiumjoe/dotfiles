@@ -23,12 +23,7 @@ function M.new(deps)
     local uuid = deps.uuid or require("sodium.agency.control").uuid
     local select_agent = deps.select_agent
         or function(agents, callback)
-            vim.ui.select(agents, {
-                prompt = "Agency agents",
-                format_item = function(view)
-                    return view.record.definition.agentId .. " · " .. view.record.phase
-                end,
-            }, callback)
+            return require("sodium.agency.picker").current(agents, callback)
         end
     local confirm_stop = deps.confirm_stop
         or function(target, callback)

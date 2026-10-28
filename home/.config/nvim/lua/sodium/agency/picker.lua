@@ -84,6 +84,32 @@ local function after_close(picker, valid, callback, notify)
     vim.schedule(finish)
 end
 
+function M.current(agents, callback)
+    local confirmed, completed = false, false
+    local function complete(view)
+        if completed then return end
+        completed = true
+        callback(view)
+    end
+    local items = {}
+    for _, row in ipairs(agents) do items[#items + 1] = row_item(row) end
+    return Snacks.picker({
+        title = "Agency conversations", items = items, format = "text", preview = agent_preview,
+        confirm = function(picker, item)
+            if not item or confirmed or completed then return end
+            confirmed = true
+            local view = vim.deepcopy(item.view)
+            after_close(picker, function() return not completed end, function() complete(view) end, function(message)
+                vim.notify("Agency: " .. message)
+                complete(nil)
+            end)
+        end,
+        on_close = function()
+            if not confirmed then vim.schedule(function() complete(nil) end) end
+        end,
+    })
+end
+
 local function owner_item(host, row, local_host, active)
     local record, launch = row.record, row.record.launch
     if record.version ~= 3 or not launch or launch == vim.NIL then return { issue = row, text = host.hostname .. " · unavailable session" } end
