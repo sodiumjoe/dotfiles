@@ -574,6 +574,100 @@ describe("Agency native commands", function()
             assert.are.equal("agency:" .. f.row.record.definition.agentId, f.manager.session_id)
         end)
     end
+    local function restore_transport()
+        local calls, control = {}, require("fixtures.agency_control")
+        package.loaded["sodium.agency"] = nil
+        api = require("sodium.agency").setup({
+            notify = function(value) notifications[#notifications + 1] = value end,
+            client = { command = function(argv, options, callback)
+                calls[#calls + 1] = { argv = argv, options = options, callback = callback }
+            end },
+        })
+        return calls, function(index, result, err)
+            assert.is_not_nil(calls[index], "missing control request " .. index)
+            calls[index].callback(err, result and { handlerGeneration = control.id(19), result = result })
+        end
+    end
+    for _, phase in ipairs({ "stopped", "interrupted" }) do
+        it("restores a historical " .. phase .. " session with unknown cleanup through the Handler", function()
+            local calls, respond = restore_transport()
+            local control, row = require("fixtures.agency_control"), vim.deepcopy(f.row)
+            row.record.phase, row.cleanup, row.live, row.launch = phase, "unknown", false, vim.NIL
+            local target = { agentId = row.record.definition.agentId,
+                handlerGeneration = control.id(19), providerGeneration = control.id(20) }
+            local result
+            api.restore(target.agentId, function(err, manager) assert.is_nil(err); result = manager end)
+            respond(1, control.page({ row }))
+            assert.are.same({ "status" }, assert(calls[2], "Restore did not reach Handler status").argv)
+            respond(2, { phase = "ready" })
+            assert.are.same({ "agent", "restore", target.agentId }, vim.list_slice(calls[3].argv, 1, 3))
+            assert.are.equal("--expected-handler-generation", calls[3].argv[6])
+            assert.are.equal(target.handlerGeneration, calls[3].argv[7])
+            assert.are.equal(row.record.definition.cwd, calls[3].options.cwd)
+            respond(3, { state = "command", durability = "verified", command = { version = 3,
+                commandId = calls[3].argv[5], handlerGeneration = target.handlerGeneration, state = "completed",
+                result = { outcome = "restored", target = target, failure = vim.NIL } } })
+            assert.is_nil(result)
+            local ready = control.agent(target)
+            ready.record.definition.cwd = row.record.definition.cwd
+            respond(4, control.page({ ready }))
+            f.flush()
+            assert.is_nil(result)
+            local load = f.request("session/load")
+            assert.are.equal("agency:" .. target.agentId, load.params.sessionId)
+            respond_fast(load, { sessionId = load.params.sessionId, _meta = { agency = { version = 1,
+                binding = target, backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } })
+            assert.is_not_nil(result)
+            assert.are.same(target, result._agency_binding)
+            assert.is_not.equal(row.record.launch.providerGeneration, result._agency_binding.providerGeneration)
+            assert.are.equal(4, #calls)
+            assert.are.same({}, notifications)
+            assert.are.equal(0, count("session/new"))
+            assert.are.equal(0, count("session/prompt"))
+        end)
+    end
+    for _, case in ipairs({
+        { code = "CLEANUP_UNVERIFIED", phase = "recoverable", cleanup = "unverified" },
+        { code = "NOT_READY", phase = "ready", cleanup = "unverified" },
+        { code = "INVALID_AGENT_STATE", phase = "interrupted", cleanup = "unknown" },
+    }) do
+        it("reports the Handler's Restore refusal " .. case.code .. " without attaching", function()
+            local calls, respond = restore_transport()
+            local row = vim.deepcopy(f.row)
+            row.record.phase, row.cleanup = case.phase, case.cleanup
+            row.live = case.phase == "ready"
+            if case.cleanup == "unknown" then row.launch = vim.NIL end
+            local expected, failure, manager = { code = case.code, message = "Handler refused Restore: " .. case.code }
+            local frames = #f.frames
+            api.restore(row.record.definition.agentId, function(err, restored) failure, manager = err, restored end)
+            respond(1, require("fixtures.agency_control").page({ row }))
+            respond(2, { phase = "ready" })
+            assert.are.same({ "agent", "restore", row.record.definition.agentId }, vim.list_slice(calls[3].argv, 1, 3))
+            respond(3, nil, expected)
+            assert.are.same(expected, failure)
+            assert.is_nil(manager)
+            assert.are.same({ expected.message }, notifications)
+            assert.are.equal(3, #calls)
+            assert.are.equal(frames, #f.frames)
+            assert.are.equal(f.manager, require("agentic.session_registry").sessions[vim.api.nvim_get_current_tabpage()])
+        end)
+    end
+    for _, race in ipairs({ "selection superseded", "origin tab closed" }) do
+        it("does not initiate Restore after " .. race, function()
+            local calls, respond = restore_transport()
+            if race == "origin tab closed" then vim.cmd("tabnew") end
+            local called = false
+            api.restore(f.row.record.definition.agentId, function() called = true end)
+            if race == "origin tab closed" then vim.cmd("tabclose!") else api.detach() end
+            local row = vim.deepcopy(f.row)
+            row.record.phase, row.cleanup, row.live, row.launch = "interrupted", "unknown", false, vim.NIL
+            respond(1, require("fixtures.agency_control").page({ row }))
+            assert.are.equal(1, #calls)
+            assert.is_false(called)
+            assert.are.same({}, notifications)
+            assert.are.equal(0, count("session/new"))
+        end)
+    end
     it("rejects invalid attachment and restoration identifiers without control requests", function()
         vim.cmd("AgencyAttach invalid")
         vim.cmd("AgencyRestore invalid")

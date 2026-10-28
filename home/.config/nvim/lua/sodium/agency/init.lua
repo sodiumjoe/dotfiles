@@ -121,13 +121,9 @@ function M.setup(deps)
                 if row.record.version == 3 and row.record.definition.agentId == id then
                     if expected and not vim.deep_equal(tuple(row), tuple(expected)) then err = failure("STALE_PROVIDER")
                     elseif action == "restore" then
-                        if (row.cleanup == "verified" or row.cleanup == "not_launched")
-                            and vim.tbl_contains({ "stopped", "recoverable" }, row.record.phase) then
-                            operations.restore(id, function(error, manager) report(error); if callback then callback(error, manager) end end,
-                                { tab = tab, buffer = vim.api.nvim_get_current_buf(), cwd = row.record.definition.cwd })
-                            return
-                        end
-                        err = failure("CLEANUP_UNVERIFIED")
+                        operations.restore(id, function(error, manager) report(error); if callback then callback(error, manager) end end,
+                            { tab = tab, buffer = vim.api.nvim_get_current_buf(), cwd = row.record.definition.cwd })
+                        return
                     elseif row.live and row.record.phase == "ready" and tuple(row) then
                         operations.attach(tuple(row), function(error, manager) report(error); if callback then callback(error, manager) end end,
                             { tab = tab, buffer = vim.api.nvim_get_current_buf(), cwd = row.record.definition.cwd })
