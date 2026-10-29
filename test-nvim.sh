@@ -6,6 +6,7 @@ user_home="$HOME"
 nvim_data_home="${XDG_DATA_HOME:-$user_home/.local/share}"
 PLENARY="$nvim_data_home/nvim/lazy/plenary.nvim"
 MINIMAL_INIT="$DOTFILES/tests/neovim/minimal_init.lua"
+[[ -f "$nvim_data_home/nvim/lazy/lazy.nvim/lua/lazy/init.lua" && -f "$PLENARY/lua/plenary/busted.lua" ]] || { echo "Install Neovim plugins with :Lazy sync first." >&2; exit 1; }
 target="${1:-$DOTFILES/tests/neovim/}"
 test_runtime_root="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-nvim.XXXXXX")"
 test_state_home="$test_runtime_root/state"
@@ -28,5 +29,5 @@ env \
   nvim --headless -i NONE \
   --cmd "set rtp^=$DOTFILES/home/.config/nvim" \
   --cmd "set rtp+=$PLENARY" \
-  -u "$DOTFILES/home/.config/nvim/init.lua" \
+  -u "$MINIMAL_INIT" \
   -c "PlenaryBustedDirectory $target {minimal_init = '$MINIMAL_INIT'}"

@@ -4,7 +4,7 @@ The private launcher runs the ordinary Handler, bridge, task tools and ACP endpo
 
 ## Invocation
 
-Use Node 24.13.0. Build the candidate once from the intended revision, allocate fresh private roots outside the checkout and ordinary Agency paths, and write a mode-0600 `PrivateConfig` from `config.ts`. Its `packageRoot` points to the built `agency` directory. `persistentRoot` and `runtimeRoot` must be distinct canonical private directories. `launcherPath` and `configPath` belong under the private persistent root. Create the launcher from `launcherText(config)` with executable mode. The tests in `test/qualification-support.ts` provide a complete synthetic setup.
+Use Node 24.13.0. Build the candidate once from the intended revision, allocate fresh private roots outside the checkout and ordinary Agency paths, and write a mode-0600 `PrivateConfig` from `config.ts`. Its `packageRoot` points to the built `agency` directory. `persistentRoot` and `runtimeRoot` must be distinct canonical private directories. `launcherPath` and `configPath` belong under the private persistent root. Create the launcher from `launcherText(config)` with executable mode.
 
 Invoke the private launcher directly:
 

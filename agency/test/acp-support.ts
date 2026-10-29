@@ -1,23 +1,16 @@
-import { nativeFixtureAccess } from "./fixtures/run-scope.js"
-import { fixtureRuntime, fixtureLeafSpawner, fixtureSpawner, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import assert from "node:assert/strict"
-import { spawn, execFile } from "node:child_process"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { Readable, Writable } from "node:stream"
 import type { TestContext } from "node:test"
-import { fileURLToPath } from "node:url"
-import { promisify } from "node:util"
 import type { ProviderId } from "../src/catalog/types.js"
-import type { JsonObject, JsonValue } from "../src/agent/session-config.js"
-import { privateRoot } from "./control-support.js"
+import type { JsonObject } from "../src/agent/session-config.js"
 import { type AgentHandlerOptions, agentHandlerFixture } from "./agent-support.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { agentTuple } from "../src/agent/recovery.js"
-import { until } from "./control-support.js"
 
 export type ObservedFrame = { id?: string | number; method?: string; params?: JsonObject; result?: JsonObject }
 export async function readAcpRequestLog(path: string): Promise<ObservedFrame[]> {
@@ -114,28 +107,6 @@ export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
   } as AcpPeer
 }
 
-export async function providerFixture(t: TestContext, backendId: ProviderId = "codex-acp") {
-  const root = await privateRoot(t, { retainRoot: true }), workspace = join(root, "workspace")
-  await mkdir(workspace, { mode: 0o700 })
-  ;(await fixtureRuntime()).scope.artifact(root)
-  const child = (await fixtureLeafSpawner("acp-provider"))(process.execPath, [fileURLToPath(new URL("./fixtures/acp-provider.js", import.meta.url))], { cwd: workspace, env: { FIXTURE_ROOT: root, FIXTURE_BACKEND: backendId }, stdio: ["pipe", "pipe", "pipe"] })
-  const terminal = new Promise<void>(resolve => child.once("exit", () => resolve()))
-  let exit: number | null | undefined
-  child.once("exit", code => { exit = code })
-  const peer = createAcpPeer(child.stdout, child.stdin)
-  t.after(async () => {
-    peer.close()
-    if (exit === undefined) await signalFixturePid(child.pid!, "SIGTERM")
-    await terminal
-    assert.equal(child.killed || exit !== undefined, true)
-    assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
-    t.diagnostic(`fixture provider cleanup verified: pid ${child.pid}`)
-  })
-  return { root, workspace, peer,
-    async requests(): Promise<ObservedFrame[]> { return (await readFile(join(root, backendId + ".jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line) as ObservedFrame) },
-  }
-}
-
 export async function acpFixture(t: TestContext, options: AgentHandlerOptions = {}) {
   const cleanup: Array<{ close: () => unknown; ownerBounded: boolean }> = [], context = Object.create(t) as TestContext
   context.diagnostic = t.diagnostic.bind(t)
@@ -178,91 +149,4 @@ export async function acpFixture(t: TestContext, options: AgentHandlerOptions = 
     async requests(backend: ProviderId): Promise<ObservedFrame[]> { return readAcpRequestLog(join(f.root, backend + ".jsonl")) },
     async release(_backend: ProviderId) { await writeFile(join(f.root, "release-prompt"), "released", { mode: 0o600 }) },
   }
-}
-
-export type AcpFixture = Awaited<ReturnType<typeof acpFixture>>
-export type EditorFixture = { lua(expression: string): Promise<JsonValue>; closeTab(): Promise<void>; exit(): Promise<void>; pid: number }
-const exec = promisify(execFile)
-
-export async function editorFixture(f: AcpFixture): Promise<EditorFixture> {
-  const repo = fileURLToPath(new URL("../../../", import.meta.url)), root = join(f.root, "editor-" + randomUUID().slice(0, 8))
-  await mkdir(root, { mode: 0o700 })
-  const config = join(root, "endpoint.json"), socket = join(root, "nvim.sock")
-  await writeFile(config, JSON.stringify({ paths: f.paths, environment: f.environment }), { mode: 0o600 })
-  const executable = process.env.NVIM_TEST_EXECUTABLE ?? "/opt/homebrew/bin/nvim"
-  const runtime = await fixtureRuntime(), spawnFixture = await fixtureSpawner()
-  runtime.scope.artifact(root)
-  const child = spawnFixture("editor", executable, ["--headless", "-i", "NONE", "--listen", socket, "-u", join(repo, "tests/neovim/acp_minimal_init.lua")], {
-    detached: true, cwd: f.workspace, env: { ...process.env, HOME: f.environment.HOME, XDG_STATE_HOME: join(root, "state"), XDG_CACHE_HOME: join(root, "cache"),
-      XDG_CONFIG_HOME: join(root, "config"), XDG_DATA_HOME: join(root, "data"), DOTFILES_TEST_ROOT: repo,
-      AGENCY_FIXTURE_PLUGIN_ROOT: process.env.AGENCY_FIXTURE_PLUGIN_ROOT ?? join(process.env.HOME!, ".local/share/nvim/lazy/agentic.nvim"), AGENCY_FIXTURE_NODE: process.execPath,
-      AGENCY_FIXTURE_ENDPOINT: fileURLToPath(new URL("./fixtures/acp-endpoint.js", import.meta.url)),
-      AGENCY_FIXTURE_PROCESS: fileURLToPath(new URL("./fixtures/editor-process.js", import.meta.url)),
-      AGENCY_FIXTURE_CONTROL: fileURLToPath(new URL("./fixtures/acp-control.js", import.meta.url)), AGENCY_FIXTURE_CONFIG: config }, stdio: ["ignore", "ignore", "pipe"],
-  }, { source: true })
-  const editorRef = runtime.scope.snapshot().launches.find(value => value.pid === child.pid)!.ref
-  const terminal = new Promise<void>(resolve => child.once("close", () => resolve()))
-  let cleanup: Promise<void> | undefined, exited = false, stderr = ""
-  const endpoints = new Set<number>()
-  child.once("exit", () => { exited = true })
-  child.stderr!.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-8192) })
-  const lua = async (expression: string, timeoutMs = 15000): Promise<JsonValue> => {
-    const source = `(function() local value = ${expression}; local endpoints = {}; for _,client in pairs(require('agentic.acp.agent_instance')._instances) do if client.transport and client.transport.pid then endpoints[#endpoints+1]=client.transport.pid end end; return vim.json.encode({value=value == nil and vim.NIL or value,endpoints=endpoints,registry=AgencyFixture.registry()}) end)()`
-    const result = await exec(executable, ["--server", socket, "--remote-expr", `luaeval(${JSON.stringify(source)})`], { timeout: timeoutMs, maxBuffer: 1048576 })
-    const envelope = JSON.parse(result.stdout.trim()) as { value: JsonValue; endpoints: number[]; registry: { launches: Array<{pid: number | null; reporting: string}> } }
-    for (const pid of envelope.endpoints) endpoints.add(pid)
-    for (const launch of envelope.registry.launches) if (launch.reporting === "editor-endpoint" && launch.pid) endpoints.add(launch.pid)
-    await writeFile(join(root, "registry.json"), JSON.stringify(envelope.registry), { mode: 0o600 })
-    return envelope.value
-  }
-  function exit(): Promise<void> {
-    cleanup ??= cleanupEditor()
-    return cleanup
-  }
-  async function cleanupEditor(): Promise<void> {
-    const deadline = Date.now() + 15000, reportingUntil = Date.now() + 5000, failures: unknown[] = []
-    const remaining = (limitMs: number, reserveMs = 0) => Math.max(1, Math.min(limitMs, deadline - Date.now() - reserveMs))
-    let reportingFailure: unknown
-    if (!exited) {
-      for (const expression of ["AgencyFixture.close_all()", "AgencyFixture.registry()", "AgencyFixture.complete()", "AgencyFixture.registry()"] ) {
-        const timeoutMs = reportingUntil - Date.now()
-        if (timeoutMs <= 0) { reportingFailure ??= new Error("editor reporting deadline"); break }
-        try {
-          const value = await lua(expression, timeoutMs)
-          if (expression === "AgencyFixture.registry()") await writeFile(join(root, "registry.json"), JSON.stringify(value), { mode: 0o600 })
-        } catch (error) { reportingFailure ??= error }
-      }
-      try { await exec(executable, ["--server", socket, "--remote-expr", 'luaeval("(function() vim.schedule(function() vim.cmd(\'qa!\') end); return true end)()")'], { timeout: remaining(2000, 7000) }) } catch {}
-      try { await until(async () => exited ? true : undefined, remaining(1000, 7000)) }
-      catch {
-        try { await nativeFixtureAccess(runtime.scope).signalPid(editorRef, "SIGKILL", remaining(4000, 3000)) }
-        catch (error) { failures.push(error) }
-      }
-    }
-    let timer: NodeJS.Timeout | undefined
-    try {
-      await Promise.race([terminal, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("editor close deadline")), remaining(3000)) })])
-      assert.throws(() => process.kill(child.pid!, 0), { code: "ESRCH" })
-      f.diagnostic(`fixture editor cleanup verified: pid ${child.pid}`)
-    } catch (error) { failures.push(error) } finally { clearTimeout(timer) }
-    for (const pid of endpoints) {
-      try {
-        await until(async () => { try { process.kill(pid, 0); return undefined } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return true } }, remaining(3000))
-        assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
-        f.diagnostic(`fixture endpoint cleanup verified: pid ${pid}`)
-      } catch (error) { failures.push(error) }
-    }
-    if (reportingFailure) {
-      nativeFixtureAccess(runtime.scope).fault(new Error("Editor reporting incomplete: " + String(reportingFailure)), editorRef)
-      try { await writeFile(join(root, "editor-failure.txt"), String(reportingFailure)) } catch (error) { failures.push(error) }
-      failures.unshift(reportingFailure)
-    }
-    if (failures.length) throw new AggregateError(failures, "Editor cleanup incomplete: " + failures.map(String).join("; "))
-  }
-  f.onCleanup(exit)
-  await until(async () => {
-    if (exited) throw new Error("fixture editor failed: " + stderr)
-    try { return await lua("true") === true ? true : undefined } catch { return undefined }
-  }, 15000)
-  return { pid: child.pid!, lua, closeTab: async () => { await lua("AgencyFixture.close_tab()") }, exit }
 }

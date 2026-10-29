@@ -1,1 +1,0 @@
-await import(process.env.AGENCY_TEST_BOUNDARY_MODULE)

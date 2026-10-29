@@ -5,7 +5,7 @@
   "scripts": {
     "sync-bins": "node sync-direct-bins.mjs",
     "postinstall": "node patch-codex-acp.mjs",
-    "test:codex-acp": "npm --prefix ../agency run build && node --test test/codex-acp-*.test.mjs"
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "^0.70.0",

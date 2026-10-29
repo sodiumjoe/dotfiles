@@ -1,9 +1,10 @@
+import type { LegacyLaunchRecord } from "../src/platform/types.js"
 import { fixtureRuntime, fixtureSpawner, registerFixtureChild, signalFixturePid } from "./fixtures/fixture-spawn.js"
 import { mkdtemp, realpath, rm, mkdir, readFile, writeFile, chown } from "node:fs/promises"
 import { join } from "node:path"
 import type { TestContext } from "node:test"
 import { randomUUID } from "node:crypto"
-import type { LaunchRecord, LegacyLaunchRecord } from "../src/platform/types.js"
+import type { LaunchRecord } from "../src/platform/types.js"
 import assert from "node:assert/strict"
 import { createConnection } from "node:net"
 import { fileURLToPath } from "node:url"
@@ -15,18 +16,9 @@ import { sameProcess, type ProcessIdentity } from "../src/platform/types.js"
 import { exchange } from "../src/control/wire.js"
 import { PROTOCOL, type ControlRequest, type ControlReply } from "../src/control/protocol.js"
 import type { PlatformPaths } from "../src/platform/paths.js"
-import type { ControlDependencies } from "../src/cli/control.js"
-import { ControlError } from "../src/control/protocol.js"
 import { spawn, type ChildProcess } from "node:child_process"
 import type { Duplex } from "node:stream"
-import { writeLaunchRecord } from "../src/platform/private-state.js"
-import { reconcileRecord } from "../src/platform/reconcile.js"
 import type { ProviderProfile } from "../src/catalog/types.js"
-
-export function unavailableControlDependencies(): ControlDependencies {
-  const unavailable = async (): Promise<never> => { throw new ControlError("UNAVAILABLE") }
-  return { environment: unavailable, start: unavailable, inspect: unavailable, call: unavailable, callCatalog: unavailable, receipt: unavailable, inventory: unavailable, cwd: () => { throw new Error("unexpected cwd lookup") }, now: Date.now, sleep: delay, stdout: () => undefined, stderr: () => undefined }
-}
 
 export const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 

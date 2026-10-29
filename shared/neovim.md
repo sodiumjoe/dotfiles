@@ -22,28 +22,12 @@ Entry point: `home/.config/nvim/init.lua`. Bootstraps lazy.nvim with interleaved
 
 ## Testing
 
-Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run single file: `./test-nvim.sh tests/neovim/markdown_spec.lua`.
+Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run a single file with `./test-nvim.sh tests/neovim/agency_stream_spec.lua`. Install plugins with `:Lazy sync` before running tests. The runner loads the real configuration with plugin installation and update checks disabled, and fails if configured plugins are missing. Runtime state and caches use temporary directories.
 
-Test files live in `tests/neovim/`. `minimal_init.lua` bootstraps the subprocess with all lazy plugin paths on rtp.
+The retained tests cover the primary Agency new-session mapping, submission and detach, ordered streaming bursts, tool and permission boundaries, completion, and a reader who scrolls away from the response. They use native Agentic UI classes with a controlled ACP transport. Helper functions, plugin declarations, configuration values and unrelated editor features do not have dedicated tests.
 
 Agency composes the pinned Agentic UI components in `home/.config/nvim/lua/sodium/agency/`, without native provider/session constructors. One agy attachment shares bounded conversation state across independent tab views. The local roster and model choices use the Handler; discovery is explicit. Native saved-session restore remains separate. See `agency/README.md` for commands, delivery inspection, read-only capability, and retention/restore limits.
 
-`npm run test:neovim-integration` in `agency/` owns fake Handler/provider and headless editor subprocesses, supplies an explicit private fixture CLI, and exercises real transport and UI components. Its editor loads no user init, history, provider credentials, or production hooks. Tests cover busy detach, cancellation, exact-directory inventory, UTF-8 fragmentation, complete native replay and overflow, and live visible/hidden retention. The deterministic package gate and `./test-nvim.sh` also cover native coexistence, mappings, annotations, review, and statusline.
+For editor changes, exercise an existing workflow case when the behavior affects these paths. Interactive UI and external provider behavior require separate manual verification. Avoid adding tests for declarations or implementation details.
 
-**Unit tests**: `markdown_spec`, `agentic_functions_spec`, `utils_spec`, `statusline_spec`, `review_spec` — pure function tests for extracted modules.
-
-**Behavioral tests**: `cursor_restore_spec`, `quickfix_spec`, `markdown_behavior_spec`, `colorscheme_spec`, `review_spec` — test autocmds, buffer-local keymaps, and review session behavior.
-
-**Registry tests**: `keymaps_spec` (core + plugin keymap declarations), `plugins_spec` (all expected plugins declared in specs).
-
-**Planning requirement**: every implementation plan that touches neovim code must include a testing section. Decide which category applies and describe what tests to add:
-- New extracted module or pure function → unit tests
-- New autocmd, keymap callback, or window behavior → behavioral test
-- New keymap declaration or plugin spec → registry test entry
-- If the change is untestable in headless plenary (e.g. requires interactive UI, external plugin runtime), state why explicitly
-
-Caveats:
-- Plenary subprocess doesn't fully initialize lazy.nvim plugins. Tests that need plugin side-effects (e.g. colorscheme augroups) must call the config function directly or `require` the spec module.
-- Insert-mode `feedkeys` is unreliable in headless. CR continuation tests invoke the callback directly from the buffer-local keymap table.
-- Window state leaks between tests in plenary. Create scratch buffers with `nvim_create_buf(false, true)` and delete them with `nvim_buf_delete(buf, { force = true })` in each test. Do not rely on `before_each`/`after_each` for window cleanup.
-- To test a local function from a plugin spec, extract the callback via the spec's `keys` table (e.g. find the entry matching the keymap lhs and call its function directly).
+Plenary workers load installed plugin paths through `minimal_init.lua`. Insert-mode `feedkeys` is unreliable in headless tests; invoke mapping callbacks directly when needed. Destroy test sessions and scratch buffers after each case to prevent editor state from leaking between cases.

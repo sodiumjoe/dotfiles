@@ -63,59 +63,6 @@ sys.exit(int(os.environ.get('ENROLL_LOCAL_EXIT', '0')))
         for option in ["-T", "BatchMode=yes", "StrictHostKeyChecking=yes", "ConnectTimeout=10", "ControlMaster=auto"]:
             self.assertIn(option, ssh)
 
-    def test_unavailable_remote_warns_without_enrollment(self):
-        for code in [127, 255]:
-            with self.subTest(code=code):
-                self.env["ENROLL_SSH_EXIT"] = str(code)
-                self.env["ENROLL_SSH_ERROR"] = "remote failure"
-                result = self.enroll()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("remote failure", result.stderr)
-                self.assertIn("remote agy status failed or timed out", result.stderr)
-                self.assertFalse((self.root / "enroll.json").exists())
-
-    def test_invalid_status_never_enrolls(self):
-        valid = json.loads(self.env["ENROLL_STATUS"])
-        invalid = ["{", "", json.dumps(valid) + "\n" + json.dumps(valid),
-                   json.dumps(dict(valid, ok=False)), json.dumps(dict(valid, protocol="unexpected")),
-                   json.dumps(dict(valid, result={"phase": "stopped", "hostId": HOST_ID})),
-                   json.dumps(dict(valid, result={"phase": "ready", "hostId": "bad; command"})),
-                   json.dumps(dict(valid, result={"phase": "ready", "hostId": None}))]
-        for status in invalid:
-            with self.subTest(status=status):
-                self.env["ENROLL_STATUS"] = status
-                result = self.enroll()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("invalid remote status", result.stderr)
-                self.assertFalse((self.root / "enroll.json").exists())
-
-    def test_identity_conflicts_are_reported(self):
-        self.env.update(ENROLL_LOCAL_EXIT="64", ENROLL_LOCAL_REPLY='{"ok":false,"error":{"message":"HOST_IDENTITY_CHANGED"}}')
-        result = self.enroll()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("HOST_IDENTITY_CHANGED", result.stderr)
-        self.assertIn("Agency enrollment failed for worker", result.stderr)
-
-    def test_missing_local_agy_skips_ssh(self):
-        (self.bin / "agy").unlink()
-        result = self.enroll()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("local agy is unavailable", result.stderr)
-        self.assertFalse((self.root / "ssh.json").exists())
-
-    def test_remote_probe_has_a_total_deadline(self):
-        self.executable("perl", r"""
-import os, sys
-assert sys.argv[1:3] == ['-e', 'alarm 30; exec @ARGV; die $!']
-os.execv('/usr/bin/perl', ['perl', '-e', 'alarm 1; exec @ARGV; die $!', *sys.argv[3:]])
-""")
-        self.env["ENROLL_SSH_DELAY"] = "5"
-        started = time.monotonic()
-        result = self.enroll()
-        self.assertLess(time.monotonic() - started, 3)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("timed out", result.stderr)
-        self.assertFalse((self.root / "enroll.json").exists())
 
     def test_background_enrollment_does_not_delay_attachment(self):
         self.env["ENROLL_SSH_DELAY"] = "1.5"

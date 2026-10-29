@@ -121,7 +121,11 @@ Three lockfiles, one rule: commit them, so every environment resolves to the sam
 
 ### Testing
 
-`test-env.sh` generates configs for all three environments and validates key properties (work-only permissions aren't in home, stripe plugins aren't in home, base hooks survive the overlay merge, Brewfile contents match environment, invalid environments are rejected). It also runs `test-home-reconcile.py` and `test-bootstrap.py`, which cover read-only preflight, failed transitions, mutable-config preservation, and migration from a dirty legacy checkout. These tests use temporary output trees and local Git fixtures; they do not modify live configuration or install packages.
+Run `bash test.sh` for the routine workflow suite. It builds Agency once and runs deployment, work-cli, Agency, packaged-provider, shell enrollment, Neovim and tmux tests. It requires Node 24.13.0 (uses the pinned nodenv installation when needed), Python 3, jq, Git, zsh, tmux, Neovim, installed Neovim plugins, and the existing Agency/node-bin dependencies. Missing dependencies fail the run. It prints elapsed time and the directory containing per-suite logs.
+
+Coverage concentrates on bootstrap and config regeneration, preservation of existing files and Markdown, work creation/completion/archive, review stash recovery, agent start/prompt/cancel/stop/restore, permission arbitration, remote routing, editor streaming and Hop selection/cancellation. External providers and SSH are replaced with local fixtures. Tests use temporary deployment trees and private tmux servers; they do not install packages or change live configuration.
+
+Helper/schema matrices, configuration and keymap inventories, legacy migrations, exhaustive race permutations and tests of test infrastructure have been removed. The suite deliberately trades those guarantees for a small set of everyday workflows. `bash test-env.sh`, `npm --prefix work-cli test`, `npm --prefix agency test`, `npm --prefix node-bin test` and `bash test-nvim.sh` remain available for targeted work. Agency's explicit Linux qualification command retains its operational fixtures separately.
 
 ## Agent Instruction Architecture
 

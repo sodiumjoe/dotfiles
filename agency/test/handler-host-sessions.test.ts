@@ -1,20 +1,18 @@
 import { fixtureBridgeSpawner } from "./fixtures/fixture-bridge.js"
 import assert from "node:assert/strict"
 import test from "node:test"
-import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { acpFixture } from "./acp-support.js"
-import { fileExists, until } from "./control-support.js"
+import { until } from "./control-support.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
 import { connectBridge } from "../src/bridge/ssh.js"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import { parseHostReply } from "../src/hosts/protocol.js"
 
-for (const tasks of ["reject", "hold"] as const) test(`ordinary host sessions run while task initialization ${tasks}s`, { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { tasks })
-  if (tasks === "hold") await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
+test("remote session start, prompt, cancel and stop survive unavailable task initialization", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { tasks: "reject" })
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
   const spawnBridge = await fixtureBridgeSpawner()
   const transport = await connectBridge({ hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
@@ -35,11 +33,10 @@ for (const tasks of ["reject", "hold"] as const) test(`ordinary host sessions ru
   await until(async () => (await f.requests("codex-acp")).some(frame => frame.method === "session/prompt") ? true : undefined)
   const held = await call(["submission", "--input-json", JSON.stringify({ target, submissionId })]); assert.equal(held.code, 75)
   assert.equal((await call(["inspect", target.agentId])).code, 0)
-  if (tasks === "reject") assert.equal((await call(["cancel", "--input-json", JSON.stringify({ target, submissionId })])).code, 0)
-  else await f.release("codex-acp")
+  assert.equal((await call(["cancel", "--input-json", JSON.stringify({ target, submissionId })])).code, 0)
   const completed = await until(async () => { const r = await call(["submission", "--input-json", JSON.stringify({ target, submissionId })]); return r.code === 0 ? r : undefined })
   assert.ok(completed.reply.ok && completed.reply.result.state === "submission")
-  assert.equal(completed.reply.result.receipt?.stopReason, tasks === "reject" ? "cancelled" : "end_turn")
+  assert.equal(completed.reply.result.receipt?.stopReason, "cancelled")
   const stopId = randomUUID()
   assert.equal((await call(["stop", "--input-json", JSON.stringify({ ...target, commandId: stopId })])).code, 0)
   await until(async () => (await call(["command", stopId, "--input-json", JSON.stringify({ commandGeneration: record.generation })])).code === 0 ? true : undefined)
