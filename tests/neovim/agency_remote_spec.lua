@@ -15,8 +15,10 @@ describe("Agency exact remote entry", function()
         assert.are.same({ commandId = f.id(9), hostId = row().hostId, target = row().target }, vim.json.decode(calls[1].argv[4]))
         assert.are.same({ "entry", "open" }, { calls[1].argv[1], calls[1].argv[2] })
         calls[1].callback(nil, { result = { receipt = { commandId = f.id(9), ref = row(), state = "opened", editor = { editorId = f.id(7), session = "entry", pane = "%1", tmuxSocketPath = "/fixture/tmux.sock" } },
-            enrollment = { inventoryId = f.id(8), hostId = string.rep("b", 64), hostname = "devbox-b", agyPath = "/opt/agy", loginShell = "/bin/bash" } } })
+            enrollment = { hostId = string.rep("b", 64), hostname = "devbox-b" } } })
         assert.are.same(before, vim.fn.winlayout()); assert.are.equal(1, #launches)
+        assert.is_truthy(launches[1][#launches[1]]:find("^exec 'agy' 'internal%-runtime%-entry' "))
+        assert.is_nil(launches[1][#launches[1]]:find(" -lc ", 1, true))
         assert.are.equal("ssh", launches[1][1]); assert.is_truthy(table.concat(launches[1], " "):find(f.id(9), 1, true))
         assert.is_truthy(table.concat(launches[1], " "):find("internal-runtime-entry", 1, true));
         assert.is_truthy(table.concat(launches[1], " "):find(row().hostId, 1, true));
@@ -29,7 +31,7 @@ describe("Agency exact remote entry", function()
             launch = function() launches = launches + 1 end, notify = function(value) notices[#notices + 1] = value end,
             control_path = function() return "/fixture/%C" end })
         api.enter(row()); callback(nil, { result = { receipt = { commandId = f.id(9), ref = row(), state = "opened", editor = { editorId = f.id(7), session = "entry", pane = "%1", tmuxSocketPath = "/fixture/tmux.sock" } },
-            enrollment = { inventoryId = f.id(8), hostId = string.rep("a", 64), hostname = "replacement", agyPath = "/opt/agy", loginShell = "/bin/bash" } } })
+            enrollment = { hostId = string.rep("a", 64), hostname = "replacement" } } })
         assert.are.equal(0, launches); assert.are.equal(1, #notices)
     end)
 end)

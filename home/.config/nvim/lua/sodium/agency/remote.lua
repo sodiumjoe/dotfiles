@@ -35,9 +35,9 @@ function M.new(deps)
                 assert(receipt.state == "opened" and receipt.commandId == command_id and vim.deep_equal(receipt.ref, ref) and type(receipt.editor) == "table")
                 assert(enrollment.hostId == ref.hostId)
                 assert(enrollment.hostname:match("^[%w][%w._-]*$"))
-                local helper = { enrollment.agyPath, "internal-runtime-entry", command_id, "--target-json", vim.json.encode(ref) }
+                local helper = { "agy", "internal-runtime-entry", command_id, "--target-json", vim.json.encode(ref) }
                 local quoted = {}; for _, value in ipairs(helper) do quoted[#quoted + 1] = quote(value) end
-                local destination = "exec " .. quote(enrollment.loginShell) .. " -lc " .. quote("exec " .. table.concat(quoted, " "))
+                local destination = "exec " .. table.concat(quoted, " ")
                 return { "ssh", "-t", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
                     "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "-o", "ControlMaster=auto", "-o", "ControlPersist=60",
                     "-o", "ControlPath=" .. (deps.control_path or control_path)(), "--", enrollment.hostname, destination }

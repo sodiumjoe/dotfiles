@@ -32,12 +32,12 @@ test("ordinary-path sentinel counts caught filesystem socket URL and rename trip
 })
 async function localBridge(f:Awaited<ReturnType<typeof qualificationFixture>>){
   const {connectBridge,buildSshCommand}=await import("../src/bridge/ssh.js"),{spawn}=await import("node:child_process"),{ordinaryPaths}=await import("../scripts/qualification/config.js"),{appendFile}=await import("node:fs/promises")
-  const normal=ordinaryPaths(f.config.hostId),enrollment={inventoryId:randomUUID(),hostId:f.config.hostId,hostname:"synthetic-local",agyPath:f.config.launcherPath,loginShell:"/bin/sh"},built=buildSshCommand(enrollment)
-  assert.equal(built.file,"ssh");assert.ok(built.argv.at(-1)!.includes(f.config.launcherPath));assert.ok(built.argv.at(-1)!.includes("internal-runtime-bridge"))
+  const normal=ordinaryPaths(f.config.hostId),enrollment={hostId:f.config.hostId,hostname:"synthetic-local"},built=buildSshCommand(enrollment)
+  assert.equal(built.file,"ssh");assert.equal(built.argv.at(-1),"exec agy internal-runtime-bridge")
   const awaitedScope=await workerScope()
   const transport=await connectBridge(enrollment,{action:"internal-runtime-bridge",requiredCapabilities:["host-identity","runtime-read"],processFactory(file,argv,options){
     assert.equal(file,"ssh");assert.deepEqual(argv,built.argv);assert.equal(options.env.NODE_OPTIONS,undefined)
-    const child=f.native("qualification-shell","/bin/sh",["-c","printf 'fixture login noise\\n' >&2; "+argv.at(-1)!],{env:{...options.env,HOME:join(f.root,"home"),QUALIFICATION_ROOT:f.root,QUALIFICATION_SENTINEL:JSON.stringify({file:join(f.root,"sentinel.jsonl"),roots:[normal.persistentRoot,normal.runtimeRoot]}),NODE_OPTIONS:"--import="+new URL("./fixtures/qualification-sentinel.js",import.meta.url).href,AGENCY_TEST_EVIDENCE_ROOT:f.root},stdio:["pipe","pipe","pipe"]},true)
+    const child=f.native("qualification-shell","/bin/sh",["-c","printf 'fixture login noise\\n' >&2; "+argv.at(-1)!],{env:{...options.env,PATH:f.config.persistentRoot+":"+process.env.PATH,HOME:join(f.root,"home"),QUALIFICATION_ROOT:f.root,QUALIFICATION_SENTINEL:JSON.stringify({file:join(f.root,"sentinel.jsonl"),roots:[normal.persistentRoot,normal.runtimeRoot]}),NODE_OPTIONS:"--import="+new URL("./fixtures/qualification-sentinel.js",import.meta.url).href,AGENCY_TEST_EVIDENCE_ROOT:f.root},stdio:["pipe","pipe","pipe"]},true)
     void appendFile(join(f.root,"ssh-bootstrap.jsonl"),JSON.stringify({pid:child.pid,file,argv,kind:"LOCAL SHELL; NO SSH"})+"\n",{mode:0o600});const scope=awaitedScope;const launch=scope.snapshot().launches.find(value=>value.pid===child.pid)!;return fixtureBridgeProcess(scope,launch.ref,child)
   }})
   return transport
@@ -62,7 +62,7 @@ test("reverse relay crosses the wrapper and closes without replay",{timeout:9000
   t.after(()=>bridge.close())
   let sends=0,cancels=0;const entered=Promise.withResolvers<void>(),cancelled=Promise.withResolvers<void>()
   bridge.register(["runtime-read","runtime-write"],async({channel,payload,signal})=>{if(channel==="runtime-write"){sends++;return {accepted:true}}if((payload as any).hold){entered.resolve();await new Promise<void>(resolve=>signal.addEventListener("abort",()=>{cancels++;cancelled.resolve();resolve()},{once:true}));return {cancelled:true}}return {source:sourceId,value:"reverse"}})
-  const transport=await localBridge(f),router=createHostRouter({hostId:relayId,inventory:{list:async()=>[{hostId:f.config.hostId,inventoryId:randomUUID(),hostname:"private",agyPath:f.config.launcherPath,loginShell:"/bin/sh"}]},local:async()=>{throw new Error("relay local forbidden")},connect:async()=>transport}),sourceRouter=createHostRouter({hostId:sourceId,inventory:{list:async()=>[]},local:(channel,payload,signal)=>bridge.dispatch(channel,payload,signal??new AbortController().signal),connect:async()=>{throw new Error("source outbound forbidden")}})
+  const transport=await localBridge(f),router=createHostRouter({hostId:relayId,inventory:{list:async()=>[{hostId:f.config.hostId,hostname:"private"}]},local:async()=>{throw new Error("relay local forbidden")},connect:async()=>transport}),sourceRouter=createHostRouter({hostId:sourceId,inventory:{list:async()=>[]},local:(channel,payload,signal)=>bridge.dispatch(channel,payload,signal??new AbortController().signal),connect:async()=>{throw new Error("source outbound forbidden")}})
   registerHostRouter({bridge,router:sourceRouter,hostId:sourceId,handlerGeneration:randomUUID()})
   const reads=createPagedReads((_channel,payload,signal)=>sourceRouter.request(payload as any,signal))
   t.after(()=>{reads.close();transport.close();router.close();sourceRouter.close()})

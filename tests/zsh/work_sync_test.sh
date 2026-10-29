@@ -380,6 +380,7 @@ fetch_remotes() { print -r -- "[x]existing-devbox [running]" }
 fzf() { cat }
 _devbox_start_if_needed() { : }
 _devbox_host_for_remote() { print -r -- "remote-connect" }
+_devbox_agency_enroll_background() { print -r -- "enroll" >> "$tmpdir/connection_calls" }
 _devbox_sync() { print -r -- "sync" >> "$tmpdir/connection_calls" }
 _devbox_sync_loop() { print -r -- "loop" >> "$tmpdir/connection_calls" }
 _devbox_attach_tmux() { print -r -- "attach" >> "$tmpdir/connection_calls" }
@@ -392,7 +393,7 @@ for connect_command in remotes remote; do
   assert_eq "$connect_command connects successfully" "0" "$capture_status"
   assert_eq \
     "$connect_command syncs in background before attach and in foreground after detach" \
-    $'loop\nattach\nstop\nsync' \
+    $'enroll\nloop\nattach\nstop\nsync' \
     "$(cat "$tmpdir/connection_calls")"
 done
 

@@ -78,7 +78,7 @@ test("changed host identity and a restarted owner are rejected before controls",
 })
 
 test("bridge version mismatch refuses mutation without a fallback helper", async t => {
-  const enrollment = { inventoryId: randomUUID(), hostId: "b".repeat(64), hostname: "legacy", agyPath: "/opt/agy", loginShell: "/bin/sh" }
+  const enrollment = { hostId: "b".repeat(64), hostname: "legacy" }
   let attempts = 0, mutations = 0
   const router = createHostRouter({ hostId: "a".repeat(64), inventory: { list: async () => [enrollment] }, local: async () => { mutations++; return {} }, connect: host => connectBridge(host, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-write"], processFactory: (_file, argv) => {
     attempts++; assert.ok(argv.at(-1)!.includes("internal-runtime-bridge"))

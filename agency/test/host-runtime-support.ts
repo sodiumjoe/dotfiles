@@ -32,7 +32,7 @@ export async function runtimeNetwork(t: TestContext) {
   }
   async function add(hostname: string, digit: string, handlerGeneration?: string) {
     const path = join(root, hostname); await mkdir(path, { mode: 0o700 })
-    const enrollment: HostEnrollment = { hostId: digit.repeat(64), inventoryId: randomUUID(), hostname, agyPath: "/opt/agency/agy", loginShell: "/bin/sh" }, generation = handlerGeneration ?? randomUUID(), hosts: HostEnrollment[] = []
+    const enrollment: HostEnrollment = { hostId: digit.repeat(64), hostname }, generation = handlerGeneration ?? randomUUID(), hosts: HostEnrollment[] = []
     const bridge = await createHandlerBridge({ root: path, identity: { hostId: enrollment.hostId, handlerGeneration: generation }, sourceRevision: "a".repeat(40) })
     const connect = (host: HostEnrollment) => connectBridge(host, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read"], processFactory })
     const router = createHostRouter({ hostId: enrollment.hostId, inventory: { list: async () => hosts }, local: (channel, payload, signal) => bridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect })

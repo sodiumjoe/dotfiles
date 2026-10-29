@@ -36,7 +36,7 @@ describe("Agency owner picker", function()
         assert.are.same({ commandId = fixture.id(9), hostId = ref.hostId, target = ref.target }, vim.json.decode(callbacks.argv[4]))
         callbacks.entry(nil, { result = { state = "entry", receipt = { commandId = fixture.id(9), ref = ref, state = "opened",
             editor = { editorId = fixture.id(8), session = "entry", pane = "%1", tmuxSocketPath = "/fixture/tmux.sock" } },
-            enrollment = { hostId = ref.hostId, hostname = "worker", agyPath = "/opt/agy", loginShell = "/bin/bash" } } })
+            enrollment = { hostId = ref.hostId, hostname = "worker" } } })
         assert.is_truthy(table.concat(entered[1], " "):find("internal-runtime-entry", 1, true))
         assert.are.equal(1, #entered)
         assert.are.same(layout, vim.fn.winlayout())

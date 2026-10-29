@@ -50,7 +50,7 @@ test("terminal helper rejects substituted provider tuples and owner identity", a
 test("remote entry returns the configured owner enrollment and stale opens never dispatch", async () => {
   const f = runtimeFixture(), localId = "b".repeat(64)
   f.deps.environment = async () => ({ paths: { hostKey: localId, runtimeRoot: "/fixture", persistentRoot: "/fixture" } as never, adapter: {} as never })
-  const enrollment = { inventoryId: randomUUID(), hostId: f.ref.hostId, hostname: "worker", agyPath: "/opt/agy", loginShell: "/bin/sh" }
+  const enrollment = { hostId: f.ref.hostId, hostname: "worker" }
   f.deps.hostInventory = () => ({ list: async () => [enrollment], enroll: async () => {} })
   assert.equal(await runControl(["entry", "open", "--input-json", JSON.stringify({ commandId: f.commandId, ...f.ref })], f.deps), 0)
   const reply = parseHostReply(JSON.parse(f.output.join(""))); assert.ok(reply.ok && reply.result.state === "entry"); assert.deepEqual(reply.result.enrollment, enrollment)

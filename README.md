@@ -14,6 +14,8 @@ cd .dotfiles
 
 For `devbox`, bootstrap then installs Agency's build dependencies, builds it with Node 24.13.0, and runs `agy status --json` to start or reuse the devbox's local Handler. The pinned runtime must already exist under `${NODENV_ROOT:-$HOME/.nodenv}/versions/24.13.0/`; install it with `nodenv install 24.13.0` if missing. Agency setup failures produce a warning and leave the completed dotfile setup in place. Fix the reported error and rerun `./bootstrap.sh --env=devbox` from the repository. Bootstrap preserves existing provider profiles; creating agent sessions still requires a configured provider, as described in `agency/README.md`.
 
+The laptop's `remote` and `remotes` commands automatically enroll the selected devbox with Agency in the background. They run remote `agy status --json` with a 30-second deadline, then save only its SSH hostname and host ID locally. Both hosts need `agy` on the noninteractive SSH session's PATH. Successful enrollment is quiet and repeated connections are a no-op. Enrollment failures warn without delaying or blocking terminal attachment; identity conflicts preserve the existing record. Enrollment persists after disconnect, so the global Agency picker can query previously visited devboxes while they are running.
+
 Post-install:
 - `brew-sync` to install Homebrew packages (`brew.sh` is deprecated)
 - `./macos` to apply macOS defaults

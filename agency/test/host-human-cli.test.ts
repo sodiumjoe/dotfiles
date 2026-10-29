@@ -11,7 +11,7 @@ function fixture() {
   const hostId = "a".repeat(64), remoteId = "b".repeat(64), generation = randomUUID(), output: string[] = [], calls: string[] = []
   const decision = { commandId: randomUUID(), ref: { hostId: remoteId, target: { agentId: randomUUID(), handlerGeneration: generation, providerGeneration: randomUUID() }, permissionId: randomUUID(), revision: 1 }, optionId: "allow" }
   const receipt = { ...decision, digest: canonicalDigest(decision), state: "applied" }
-  const hosts: import("../src/hosts/inventory.js").HostEnrollment[] = [{ hostId: remoteId, inventoryId: randomUUID(), hostname: "worker", agyPath: "/opt/agy", loginShell: "/bin/sh" }]
+  const hosts: import("../src/hosts/inventory.js").HostEnrollment[] = [{ hostId: remoteId, hostname: "worker" }]
   let drop = false
   const deps: ControlDependencies = { ...unavailableControlDependencies(), environment: async () => ({ paths: { hostKey: hostId, persistentRoot: "/fixture", runtimeRoot: "/fixture", handlerSocketPath: "/fixture/handler.sock" }, adapter: {} as never }),
     hostInventory: () => ({ list: async () => hosts, enroll: async host => { hosts.push(host) } }),
@@ -67,7 +67,7 @@ for (const action of ["roster", "permission"]) test(`single owner ${action} list
   assert.equal(f.reply().hostId, f.remoteId)
 })
 test("host enrollment writes configuration without Handler startup", async () => {
-  const f = fixture(), enrollment = { ...f.hosts[0]!, inventoryId: randomUUID(), hostId: "c".repeat(64), hostname: "new" }
+  const f = fixture(), enrollment = { ...f.hosts[0]!, hostId: "c".repeat(64), hostname: "new" }
   assert.equal(await runControl(["host", "enroll", "--input-json", JSON.stringify(enrollment), "--json"], f.deps), 0)
   assert.equal(f.hosts.length, 2); assert.deepEqual(f.calls, [])
 })

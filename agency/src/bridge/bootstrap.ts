@@ -9,6 +9,6 @@ export function posixQuote(value: string): string {
   return "'" + value.replaceAll("'", "'\\''") + "'"
 }
 export function destinationShellCommand(enrollment: HostEnrollment, action: "internal-runtime-bridge"): string {
-  const e = parseHostEnrollment(enrollment), command = `exec ${posixQuote(e.agyPath)} ${action} >&3 3>&-`
-  return `exec 3>&1; exec ${posixQuote(e.loginShell)} -lc ${posixQuote(command)} 1>&2`
+  parseHostEnrollment(enrollment)
+  return `exec agy ${action}`
 }

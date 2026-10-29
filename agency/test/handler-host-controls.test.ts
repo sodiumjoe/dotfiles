@@ -16,7 +16,7 @@ for (const tasks of ["reject", "hold"] as const) test(`remote ordinary controls 
   const f = await acpFixture(t, { tasks }), acp = await f.connect()
   if (tasks === "hold") await until(async () => await fileExists(join(f.root, "tasks-entered")) ? true : undefined)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
-  const enrollment = { inventoryId: randomUUID(), hostId: f.paths.hostKey, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }
+  const enrollment = { hostId: f.paths.hostKey, hostname: "fixture" }
   const spawnBridge = await fixtureBridgeSpawner()
   const transport = await connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: f.paths.hostKey, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
@@ -49,7 +49,7 @@ for (const tasks of ["reject", "hold"] as const) test(`independent editor entry 
   await acp.request("initialize", { protocolVersion: 1 })
   const session = await acp.request("session/new", { cwd: f.workspace, mcpServers: [] }), target = await f.tuple(String(session.sessionId)), commandId = randomUUID(), ref = { hostId: f.paths.hostKey, target }
   const spawnBridge = await fixtureBridgeSpawner()
-  const transport = await connectBridge({ inventoryId: randomUUID(), hostId: ref.hostId, hostname: "fixture", agyPath: "/opt/agy", loginShell: "/bin/sh" }, { action: "internal-runtime-bridge", requiredCapabilities: ["entry-open", "runtime-entry-inspect"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: ref.hostId, handlerGeneration: target.handlerGeneration })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  const transport = await connectBridge({ hostId: ref.hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["entry-open", "runtime-entry-inspect"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId: ref.hostId, handlerGeneration: target.handlerGeneration })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
   const deps = { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env: unknown, route: import("../src/hosts/router.js").HostRoute) => transport.request(route.channel, route.payload), start: async () => { throw new Error("start forbidden") }, stderr() {} }
   const call = async (argv: string[]) => {

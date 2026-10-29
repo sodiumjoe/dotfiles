@@ -19,15 +19,14 @@ function peerFactory(overrides = {}) {
   }
   return { calls, factory }
 }
-const enrollment = () => ({ inventoryId: randomUUID(), hostId: "a".repeat(64), hostname: "worker", agyPath: "/path with 'quote/agy", loginShell: "/bin/sh" })
+const enrollment = () => ({ hostId: "a".repeat(64), hostname: "worker" })
 
 for (const invalid of [
   { hostname: "-oProxyCommand=unexpected" },
   { hostname: "worker\nother" },
-  { agyPath: "relative/agy" },
-  { agyPath: "/tmp/../agy" },
-  { agyPath: "/tmp/agy/" },
-  { loginShell: "/bin/sh\u0000" },
+  { hostId: "invalid" },
+  { agyPath: "/opt/agy" },
+  { loginShell: "/bin/sh" },
 ]) test("SSH rejects invalid enrollment before process creation " + JSON.stringify(invalid), async () => {
   const f = peerFactory()
   await assert.rejects(connectBridge({ ...enrollment(), ...invalid }, {
@@ -46,7 +45,7 @@ test("SSH bootstrap is noninteractive and retains authentication only on the loc
       for (const arg of ["-T", "BatchMode=yes", "StrictHostKeyChecking=yes", "ConnectTimeout=10"]) assert.ok(command.argv.includes(arg))
       assert.equal(f.calls[0]!.env.SSH_AUTH_SOCK, process.env.SSH_AUTH_SOCK)
       assert.equal(command.argv.at(-1)!.includes(process.env.SSH_AUTH_SOCK!), false)
-      assert.ok(command.argv.at(-1)!.includes("internal-runtime-bridge"))
+      assert.equal(command.argv.at(-1), "exec agy internal-runtime-bridge")
       assert.throws(() => transport.request("snapshot", {}), /UNSUPPORTED_CAPABILITY/)
     } finally { transport.close() }
   } finally { if (prior === undefined) delete process.env.SSH_AUTH_SOCK; else process.env.SSH_AUTH_SOCK = prior }

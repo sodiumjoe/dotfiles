@@ -36,6 +36,41 @@ _devbox_ssh() {
   ssh -o ControlMaster=auto -o ControlPersist=60 -o ControlPath="$control_path" "$@"
 }
 
+_devbox_agency_enroll() {
+  local host="$1"
+  local control_path reply enrollment
+
+  if ! command -v agy >/dev/null 2>&1; then
+    print -u2 -- "Agency enrollment skipped for $host: local agy is unavailable"
+    return 1
+  fi
+  control_path="$(_devbox_control_path)" || return
+  if ! reply="$(perl -e 'alarm 30; exec @ARGV; die $!' ssh \
+    -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
+    -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
+    -o ControlMaster=auto -o ControlPersist=60 -o ControlPath="$control_path" \
+    -- "$host" 'exec agy status --json')"; then
+    print -u2 -- "Agency enrollment failed for $host: remote agy status failed or timed out"
+    return 1
+  fi
+  if ! enrollment="$(print -r -- "$reply" | jq -cse --arg hostname "$host" '
+    select(length == 1) | .[0]
+    | select(.protocol == "agency-control/2" and .ok == true and .result.phase == "ready")
+    | .result.hostId | select(type == "string" and test("^[a-f0-9]{64}$"))
+    | {hostname: $hostname, hostId: .}' 2>/dev/null)"; then
+    print -u2 -- "Agency enrollment failed for $host: invalid remote status"
+    return 1
+  fi
+  if ! reply="$(agy host enroll --input-json "$enrollment" --json 2>&1)"; then
+    print -u2 -- "Agency enrollment failed for $host: $reply"
+    return 1
+  fi
+}
+
+_devbox_agency_enroll_background() {
+  _devbox_agency_enroll "$1" </dev/null >/dev/null &!
+}
+
 _devbox_branch() {
   local remote_name="$1"
   print -r -- "${SODIUM_REMOTE_BRANCH_PREFIX:-moon}/$remote_name"

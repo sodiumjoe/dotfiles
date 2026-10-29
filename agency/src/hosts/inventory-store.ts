@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises"
+import { link, lstat, mkdir, open, readdir, rm, type FileHandle } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { basename, dirname, join } from "node:path"
 import { assertPrivateDirectory } from "../platform/private-state.js"
@@ -16,7 +16,7 @@ function encode(value: unknown): Buffer {
 }
 
 const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT"
-export function createInventoryStore(root: string, filesystem: { rename: typeof rename } = { rename }) {
+export function createInventoryStore(root: string, filesystem: { link: typeof link } = { link }) {
   const base = join(root, "bureau", "hosts"), identities = new Map<string, string>(), accepted = new Map<string, Buffer>()
   const checkIdentity = async (path: string, file = false): Promise<void> => {
     const stat = await lstat(path, { bigint: true }), identity = stat.dev + ":" + stat.ino
@@ -42,7 +42,7 @@ export function createInventoryStore(root: string, filesystem: { rename: typeof 
     return true
   }
   const pathFor = (key: string): string => {
-    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.json$/.test(key)) fail()
+    if (!/^(?:[a-f0-9]{64}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.json$/.test(key)) fail()
     return join(base, key)
   }
   const sync = async (path: string): Promise<void> => {
@@ -63,7 +63,7 @@ export function createInventoryStore(root: string, filesystem: { rename: typeof 
       if (!await directory(path, false)) return []
       const names = await readdir(path)
       for (const name of names) {
-        if (!/^[a-f0-9-]{36}\.json$/.test(name) && !/^\.[a-zA-Z0-9_-]+\.json\.[a-f0-9-]{36}\.tmp$/.test(name)) fail("UNEXPLAINED_STATE")
+        if (!/^(?:[a-f0-9]{64}|[a-f0-9-]{36})\.json$/.test(name) && !/^\.[a-zA-Z0-9_-]+\.json\.[a-f0-9-]{36}\.tmp$/.test(name)) fail("UNEXPLAINED_STATE")
         await checkIdentity(join(path, name), true)
       }
       return names.filter(name => name.endsWith(".json")).sort()
@@ -74,21 +74,24 @@ export function createInventoryStore(root: string, filesystem: { rename: typeof 
       if (previous !== null) fail("COMMAND_CONFLICT")
       await directory(dirname(path), true)
       const temporary = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
-      let handle: FileHandle | undefined, renamed = false
+      let handle: FileHandle | undefined
       try {
         handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
         await handle.writeFile(bytes); await handle.sync(); await handle.close(); handle = undefined
         const before = await readBytes(path)
-        if (before === null ? previous !== null : previous === null || !before.equals(previous)) fail("STATE_CHANGED")
+        if (before !== null) { if (before.equals(bytes)) return; fail("COMMAND_CONFLICT") }
         await directory(dirname(path), false)
-        await filesystem.rename(temporary, path); renamed = true
+        try { await filesystem.link(temporary, path) }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+          if ((await readBytes(path))?.equals(bytes)) return
+          fail("COMMAND_CONFLICT")
+        }
+        await rm(temporary)
         identities.delete(path); accepted.set(path, bytes); await checkIdentity(path, true)
         await sync(dirname(path))
         if (!(await readBytes(path))?.equals(bytes)) fail("STATE_CHANGED")
-      } catch (error) {
-        if (!renamed && (await readBoundedFile(path, RECORD_BYTES, true))?.equals(bytes)) { identities.delete(path); accepted.set(path, bytes) }
-        throw error
-      } finally { await handle?.close(); if (!renamed) await rm(temporary, { force: true }) }
+      } finally { await handle?.close(); await rm(temporary, { force: true }) }
     },
   }
 }

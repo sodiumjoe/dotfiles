@@ -230,7 +230,9 @@ Restart clears pending permissions and receipts. Old refs are stale, and inspect
 
 ## Host controls
 
-The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly, even when optional task coordination is unavailable. Configure destinations with `agy host enroll --input-json JSON --json` and inspect configuration with `agy host list --json`. Enrollment remains at `<persistentRoot>/bureau/hosts/<inventoryId>.json`. The directory name is retained for existing enrollments; it does not load Bureau settings or workflow state. Enrollment preserves trusted host/hostname identities and refuses conflicting replacements without rewriting existing bytes.
+The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly, even when optional task coordination is unavailable. Configure destinations with `agy host enroll --input-json '{"hostname":"devbox","hostId":"HOST_ID"}' --json` and inspect configuration with `agy host list --json`. The host ID is the destination's 64-character lowercase hex identity from `agy status --json`. Enrollment requires only the SSH hostname and expected host ID. Both remote entry and the control bridge invoke bare `agy` using the SSH session's PATH, so `ssh HOST 'agy doctor --json'` must work without an additional login shell.
+
+New enrollment records contain those two fields at `<persistentRoot>/bureau/hosts/<hostId>.json`. Existing UUID-named records remain readable and return the same two-field view without rewriting their bytes. The retained `bureau/hosts` directory does not load Bureau settings or workflow state. Repeating the same enrollment is a no-op; a changed identity or a different hostname for an enrolled identity is refused.
 
 `agy roster list --json` and `agy permission list --json` return `agency-host/1` aggregates with an available or unavailable observation per host. Roster aggregation reads every page from each owner; an unavailable observation is not a failed session. Use `--host HOST_ID` for a single owner, where roster limit/cursor filters are supported. Explicit `--local` roster and permission commands retain `agency-agent/3` output.
 
@@ -238,7 +240,7 @@ A permission decision uses its exact host, Handler and provider generations. Sup
 
 The host client does not mirror permission history or replay previous mutations.
 
-The bridge protocol is `agency-bridge/2`, with hello, request, reply and cancellation frames only. A version-1 peer fails explicitly with `UNSUPPORTED_BRIDGE_PROTOCOL` before any operation is dispatched. Both endpoints require a coordinated upgrade and explicit Handler restart; there is no alternate legacy helper or automatic mutation retry. SSH remains noninteractive, preserves destination login-shell quoting and protocol stdout isolation, and uses the local authentication agent without forwarding its socket path to the destination.
+The bridge protocol is `agency-bridge/2`, with hello, request, reply and cancellation frames only. A version-1 peer fails explicitly with `UNSUPPORTED_BRIDGE_PROTOCOL` before any operation is dispatched. Both endpoints require a coordinated upgrade and explicit Handler restart; there is no alternate legacy helper or automatic mutation retry. SSH remains noninteractive and uses the local authentication agent without forwarding its socket path to the destination. The SSH shell and `agy` must reserve stdout for the protocol and write diagnostics to stderr.
 
 ## Host sessions
 
