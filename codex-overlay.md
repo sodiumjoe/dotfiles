@@ -2,11 +2,7 @@
 
 ## Tool Usage
 
-Codex CLI operates primarily through shell commands. There are no dedicated file manipulation tools — use standard Unix commands:
-- `cat`, `head`, `tail` for reading files
-- Direct file editing via the agent's built-in capabilities
-- `grep`, `rg` for searching file contents
-- `find`, `fd` for finding files by pattern
+Use the tools exposed by the current session. Prefer `rg` for shell searches and the available patch or editing tools for file changes. Tool availability varies between Codex clients; do not assume a capability is absent because an older client lacked it.
 
 ## Skill Invocation
 
@@ -19,12 +15,9 @@ Available work skills:
 
 Before executing a plan, review it for completeness, accuracy, and risks.
 
-## Limitations
+## Client-specific capabilities
 
-The following Claude Code features are not available in Codex:
-- Agents (plan-reviewer, code-reviewer) — review manually or adapt to Codex's capabilities
-- Commands (/note, /name, /archive-plans, etc.) — use the `work` CLI directly
-- Hooks (SessionStart, PostToolUse) — configure in config.toml if equivalents exist
+Claude command names and agent definitions are not automatically available in Codex. Use `work` for work-tracking operations. For review or delegation, follow the shared workflow and the tools actually available in this session. If a required capability is unavailable, state the limitation and use an appropriate local alternative.
 
 ## External Integrations
 
