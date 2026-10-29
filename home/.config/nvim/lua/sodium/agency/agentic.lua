@@ -1,5 +1,6 @@
 local M = {}
 local installed = false
+local Stream = require("sodium.agency.stream")
 
 local function agency(client)
     return client and client.provider_config == require("agentic.config").acp_providers.agency
@@ -23,6 +24,7 @@ local function invoke(manager, captured, callback, ...)
     local schedule, args = vim.schedule, { n = select("#", ...), ... }
     vim.schedule = function(fn)
         schedule(M.guard_callback(manager, captured, function()
+            Stream.flush(manager)
             fn()
             if manager._agency_running ~= nil then manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil end
             if manager.is_generating then manager:_start_spinner("generating") end
@@ -35,11 +37,15 @@ local function invoke(manager, captured, callback, ...)
 end
 
 local function unavailable(manager)
+    local pending
+    if vim.in_fast_event() then pending = Stream.discard(manager) else Stream.flush(manager) end
     manager._agency_admissions, manager._agency_initial_submission = {}, nil
     for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
     manager._agency_epoch = manager._agency_epoch + 1
     manager._agency_running, manager.is_generating = false, false
+    if pending then pending.epoch = manager._agency_epoch end
     vim.schedule(M.guard_callback(manager, { epoch = manager._agency_epoch }, function()
+        if pending then Stream.flush(manager, pending) end
         manager.permission_manager:clear()
         manager.status_animation:stop()
     end))
@@ -54,6 +60,7 @@ local function replay_notification(client, handlers, params, dispatch)
         vim.schedule(M.guard_callback(manager, { epoch = handlers._agency_epoch }, function()
             if handlers._agency_replay_batch == batch then handlers._agency_replay_batch = nil end
             if client.subscribers[params.sessionId] ~= handlers then return end
+            Stream.flush(manager)
             local writer = manager.message_writer
             local capture, apply = writer._capture_scroll, writer._apply_scroll
             local own_capture, own_apply = rawget(writer, "_capture_scroll"), rawget(writer, "_apply_scroll")
@@ -94,6 +101,7 @@ end
 local function lifecycle(manager, callback, ...)
     local depth = manager._agency_depth or 0
     if depth == 0 then
+        Stream.discard(manager)
         if manager._agency_routed_permissions then manager._agency_routed_permissions.close(); manager._agency_routed_permissions = nil end
         manager._agency_epoch = (manager._agency_epoch or 0) + 1
         manager._agency_binding, manager._agency_turn_id = nil, nil
@@ -234,7 +242,10 @@ function M.install()
         Instances.get_instance = get
         if not ok then error(result) end
         manager = result
-        if manager then manager._agency_epoch, manager._agency_permissions = 0, {} end
+        if manager then
+            manager._agency_epoch, manager._agency_permissions = 0, {}
+            require("sodium.agency.animation").attach(manager.status_animation)
+        end
         return manager
     end
 
@@ -287,12 +298,24 @@ function M.install()
 
     function Manager:_build_handlers()
         local handlers = sm._build_handlers(self)
-        if agency(self.agent) then handlers._agency_owner, handlers._agency_epoch = self, self._agency_epoch end
+        if agency(self.agent) then
+            for name, handler in pairs(handlers) do
+                if name ~= "on_session_update" then
+                    handlers[name] = function(...)
+                        Stream.flush(self)
+                        return handler(...)
+                    end
+                end
+            end
+            handlers._agency_owner, handlers._agency_epoch = self, self._agency_epoch
+        end
         return handlers
     end
 
     function Manager:_on_session_update(update)
-        if not agency(self.agent) or update.sessionUpdate ~= "user_message_chunk" then return sm._on_session_update(self, update) end
+        if not agency(self.agent) then return sm._on_session_update(self, update) end
+        if update.sessionUpdate ~= "user_message_chunk" then return Stream.update(self, update, sm._on_session_update) end
+        Stream.flush(self)
         local restoring = self._is_restoring_session
         self._is_restoring_session = true
         local result = sm._on_session_update(self, update)
@@ -302,6 +325,7 @@ function M.install()
 
     function Manager:_handle_input_submit(input)
         if not agency(self.agent) then return sm._handle_input_submit(self, input) end
+        Stream.flush(self)
         self.history_to_send = nil
         self._agency_input = input
         self._agency_captured_context = { selections = self.code_selection:get_selections(),
@@ -462,7 +486,9 @@ function M.install()
     function Client:stop_generation(id)
         if not agency(self) then return acp.stop_generation(self, id) end
         local handlers = self.subscribers[id]
-        if not handlers or not handlers._agency_owner._agency_turn_id then return end
+        if not handlers then return end
+        Stream.flush(handlers._agency_owner)
+        if not handlers._agency_owner._agency_turn_id then return end
         self:_send_notification("session/cancel", { sessionId = id, _meta = { agency = { version = 1, turnId = handlers._agency_owner._agency_turn_id } } })
     end
 
