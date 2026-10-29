@@ -42,3 +42,5 @@ home/.claude/settings.json
 home/.codex/AGENTS.md
 home/.codex/config.toml
 .worktrees/
+__pycache__/
+!home/.config/tmux/hop/vendor/
