@@ -61,11 +61,33 @@ optional_destinations = [
     if environment not in enabled
 ]
 errors = []
-sources = {
-    source.relative_to(source_root): source
-    for source in source_root.rglob("*")
-    if source.is_symlink() or source.is_file()
+runtime_directories = {
+    pathlib.Path(".codex/plugins/cache"),
+    pathlib.Path(".codex/skills/.system"),
+    pathlib.Path(".codex/.tmp"),
+    pathlib.Path(".codex/tmp"),
 }
+
+
+def runtime_path(relative):
+    return relative in runtime_directories or (
+        relative.parent == pathlib.Path(".codex")
+        and (relative.name == "installation_id" or relative.match("*.sqlite*"))
+    )
+
+
+def source_files():
+    for directory, subdirs, filenames in os.walk(source_root, followlinks=False):
+        root = pathlib.Path(directory)
+        subdirs[:] = [name for name in subdirs if not runtime_path((root / name).relative_to(source_root))]
+        for name in subdirs + filenames:
+            source = root / name
+            relative = source.relative_to(source_root)
+            if not runtime_path(relative) and (source.is_symlink() or source.is_file()):
+                yield relative, source
+
+
+sources = dict(source_files())
 if arguments.generated_root is not None:
     for relative in generated_paths:
         sources.pop(relative, None)

@@ -3,6 +3,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -47,6 +48,92 @@ class ReconcileTest(unittest.TestCase):
         if executable:
             path.chmod(0o755)
         return path
+
+    def test_runtime_files_are_not_deployed_but_configuration_is(self):
+        runtime = [
+            ".codex/state_9.sqlite", ".codex/state_9.sqlite-wal", ".codex/state_9.sqlite-shm",
+            ".codex/goals_1.sqlite", ".codex/installation_id",
+            ".codex/plugins/cache/marketplace/plugin/code.py",
+            ".codex/skills/.system/example/SKILL.md", ".codex/.tmp/nested/payload",
+            ".codex/tmp/nested/payload",
+        ]
+        managed = [
+            ".codex/AGENTS.md", ".codex/config.toml", ".codex/plugins/manifest.json",
+            ".codex/skills/custom/SKILL.md", ".agents/skills/custom/SKILL.md",
+            ".config/tool/state.sqlite", ".config/tool/tmp/config", ".zshenv",
+        ]
+        for name in runtime + managed:
+            self.write(name)
+        self.run_reconcile(arguments=["--preflight"])
+        self.assertFalse((self.owner / ".zshenv").exists())
+        self.run_reconcile()
+        for name in runtime:
+            with self.subTest(name=name):
+                self.assertFalse(os.path.lexists(self.owner / name))
+                self.assertEqual((self.home_tree / name).read_text(), "content")
+        for name in managed:
+            with self.subTest(name=name):
+                self.assertEqual((self.owner / name).resolve(), (self.home_tree / name).resolve())
+        self.assertIn("changed=0", self.run_reconcile().stdout)
+
+    def test_runtime_destinations_are_preserved_without_conflicts(self):
+        self.write(".zshenv")
+        names = [".codex/memories_1.sqlite", ".codex/installation_id",
+                 ".codex/plugins/cache/plugin/data", ".codex/skills/.system/skill/SKILL.md"]
+        before = {}
+        for name in names:
+            self.write(name, "repository runtime")
+            live = self.owner / name
+            live.parent.mkdir(parents=True, exist_ok=True)
+            live.write_text("local runtime")
+            before[name] = live.stat()
+        for arguments in (["--preflight"], []):
+            self.run_reconcile(arguments=arguments)
+            for name in names:
+                with self.subTest(arguments=arguments, name=name):
+                    live = self.owner / name
+                    self.assertFalse(live.is_symlink())
+                    self.assertEqual(live.read_text(), "local runtime")
+                    self.assertEqual(live.stat().st_ino, before[name].st_ino)
+                    self.assertEqual(live.stat().st_mtime_ns, before[name].st_mtime_ns)
+
+    def test_runtime_directories_are_not_traversed(self):
+        self.write(".zshenv")
+        roots = [".codex/plugins/cache", ".codex/skills/.system", ".codex/.tmp", ".codex/tmp"]
+        for name in roots:
+            self.write(name + "/nested/payload")
+        wrapper = """import pathlib, runpy, sys
+script, root = sys.argv[1:]
+blocked = {pathlib.Path(root).resolve() / p for p in [
+    '.codex/plugins/cache', '.codex/skills/.system', '.codex/.tmp', '.codex/tmp']}
+def audit(event, args):
+    if event == 'os.scandir' and pathlib.Path(args[0]) in blocked:
+        raise RuntimeError('runtime directory was traversed')
+sys.addaudithook(audit)
+sys.argv = [script, '--preflight']
+runpy.run_path(script, run_name='__main__')"""
+        result = subprocess.run(
+            [sys.executable, "-c", wrapper, str(self.runner), str(self.home_tree)],
+            env={**os.environ, "HOME": str(self.owner), "DOTFILES_DIR": str(self.repo),
+                 "DOTFILES_ENV": "work"}, text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("preflight passed", result.stdout)
+        self.assertFalse((self.owner / ".zshenv").exists())
+
+    def test_runtime_directory_aliases_are_skipped_before_validation(self):
+        self.write(".zshenv")
+        external = self.root / "downloaded-cache"
+        external.mkdir()
+        for name, target in [(".codex/plugins/cache", external),
+                             (".codex/skills/.system", self.root / "missing")]:
+            source = self.home_tree / name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.symlink_to(target)
+        self.run_reconcile()
+        self.assertEqual((self.owner / ".zshenv").read_text(), "content")
+        self.assertFalse(os.path.lexists(self.owner / ".codex/plugins/cache"))
+        self.assertFalse(os.path.lexists(self.owner / ".codex/skills/.system"))
 
     def test_missing_home_tree_fails(self):
         result = self.run_reconcile(check=False)
@@ -357,7 +444,8 @@ class ReconcileTest(unittest.TestCase):
             if path.split("/", 1)[0] in obsolete_roots
         }
         self.assertEqual(stale, set())
-        self.assertFalse((repository / "home/.codex/skills").exists())
+        self.assertNotIn("home/.codex/skills", tracked)
+        self.assertFalse(any(path.startswith("home/.codex/skills/.system/") for path in tracked))
 
         for skill in (repository / "home/.agents/skills").iterdir():
             alias = repository / "home/.claude/skills" / skill.name

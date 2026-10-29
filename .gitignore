@@ -44,3 +44,10 @@ home/.codex/config.toml
 .worktrees/
 __pycache__/
 !home/.config/tmux/hop/vendor/
+/home/.codex/*.sqlite*
+/home/.codex/installation_id
+/home/.codex/plugins/cache/
+/home/.codex/skills/.system/
+/home/.codex/.tmp/
+/home/.codex/tmp/
+/nvim.log
