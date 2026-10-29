@@ -1,3 +1,6 @@
 #!/bin/sh
 unset CODEX_PATH
+if [ -d /deploy/codex-wrapper-hosts ]; then
+    exec /deploy/codex-wrapper-hosts/current/bin/codex "$@"
+fi
 exec codex "$@"

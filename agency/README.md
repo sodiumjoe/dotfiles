@@ -20,6 +20,8 @@ Source builds do not deploy configuration or restart existing editors, Handlers,
 
 Absent an explicit backend configuration, Agency uses the enabled Codex profile. Its default environment includes `INITIAL_AGENT_MODE=agent-full-access` and `MODEL_PROVIDER=litellm`; its initial mode is `agent-full-access`. Caller environment values take precedence over backend defaults. For Codex startup and Restore, Agency derives `CODEX_PATH` from the resolved provider profile executable at the final adapter spawn, overriding any backend or caller value. Discovery uses that same profile executable. Existing `CODEX_PATH` settings remain readable but cannot select another Codex launcher. To use a wrapper such as `~/bin/acp-codex`, configure its actual absolute path as the profile executable. Paths containing spaces are passed intact without shell expansion. A wrapper can select a nested executable through PATH or bootstrap logic; that nested executable remains outside the `declared-config-v1` identity boundary. Model and reasoning choices come from the provider rather than global Agentic overrides. The old read-only/high/deny-all editor policy is not imposed on ordinary ACP sessions.
 
+The shared `acp-codex` wrapper launches `/deploy/codex-wrapper-hosts/current/bin/codex` on hosts with that deployment root and uses `codex` from PATH elsewhere. Keep the profile pointed at the wrapper's actual file path, so new launches follow deployment updates instead of retaining a resolved deployment path.
+
 An optional private `catalog/backends.json` overrides backend defaults. It uses this shape; paths in environment values must be actual absolute paths, not shell-expanded placeholders:
 
 ```json
