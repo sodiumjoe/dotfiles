@@ -8,7 +8,7 @@ if [[ "$node_version" != 24.13.0 ]]; then
   [[ -x "$node_bin/node" ]] || { echo "Node 24.13.0 is required; install 24.13.0 with nodenv." >&2; exit 1; }
   export PATH="$node_bin:$PATH"
 fi
-for dependency in node npm python3 jq tmux nvim zsh git; do
+for dependency in node npm python3 jq tmux nvim zsh git unison; do
   command -v "$dependency" >/dev/null || { echo "Missing dependency: $dependency" >&2; exit 1; }
 done
 [[ -x agency/node_modules/.bin/tsc ]] || { echo "Run npm ci --prefix agency first." >&2; exit 1; }
@@ -33,7 +33,7 @@ run work-cli npm --prefix work-cli test
 run agency-build npm --prefix agency run build
 run agency bash -c 'cd agency && node dist/scripts/test-groups.js'
 run node-bin npm --prefix node-bin test
-run shell python3 tests/zsh/test_agency_enrollment.py
+run shell python3 -m unittest discover -s tests/zsh -p 'test_*.py'
 run neovim bash test-nvim.sh
 run tmux python3 tests/tmux/test_hop_integration.py
 printf 'All workflow tests passed in %ss. Logs: %s\n' "$SECONDS" "$logs"
