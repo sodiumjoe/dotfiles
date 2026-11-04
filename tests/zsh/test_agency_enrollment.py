@@ -60,7 +60,8 @@ sys.exit(int(os.environ.get('ENROLL_LOCAL_EXIT', '0')))
         self.assertEqual(args[4:], ["--json"])
         ssh = json.loads((self.root / "ssh.json").read_text())
         self.assertEqual(ssh[-3:], ["--", "worker", "exec agy status --json"])
-        for option in ["-T", "BatchMode=yes", "StrictHostKeyChecking=yes", "ConnectTimeout=10", "ControlMaster=auto"]:
+        for option in ["-T", "BatchMode=yes", "StrictHostKeyChecking=yes", "ConnectTimeout=10", "ControlMaster=no",
+                       f"ControlPath={self.root}/.ssh/devbox-control/%C"]:
             self.assertIn(option, ssh)
 
 

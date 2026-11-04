@@ -48,7 +48,7 @@ _devbox_agency_enroll() {
   if ! reply="$(perl -e 'alarm 30; exec @ARGV; die $!' ssh \
     -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 \
     -o ServerAliveInterval=5 -o ServerAliveCountMax=2 \
-    -o ControlMaster=auto -o ControlPersist=60 -o ControlPath="$control_path" \
+    -o ControlMaster=no -o ControlPath="$control_path" \
     -- "$host" 'exec agy status --json')"; then
     print -u2 -- "Agency enrollment failed for $host: remote agy status failed or timed out"
     return 1
