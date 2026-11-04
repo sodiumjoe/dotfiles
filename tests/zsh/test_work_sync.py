@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -116,6 +117,135 @@ exit 0
                 with self.assertRaises(ProcessLookupError):
                     os.kill(pid, 0)
             self.assertEqual(process.returncode, 0, (self.root / "shell.log").read_text())
+
+    def test_remotes_disconnect_finishes_sync_in_background(self):
+        self.assert_background_disconnect("remotes")
+
+    def test_remote_disconnect_finishes_sync_in_background(self):
+        self.assert_background_disconnect("remote worker")
+
+    def assert_background_disconnect(self, action):
+        self.write(self.local, "initial.md", "initial note")
+        self.write(self.remote, "remote.md", "remote note")
+        self.executable("unison", f"""
+import os, sys, time
+from pathlib import Path
+root = Path(os.environ['SYNC_TEST_CONTROL'])
+(root / 'transferring').touch()
+while not (root / 'release').exists(): time.sleep(0.05)
+os.execv({shutil.which('unison')!r}, ['unison', *sys.argv[1:]])
+""")
+        self.env["ZDOTDIR"] = str(ROOT / "home/.config/zsh")
+        script = r'''
+_sodium_define_stripe_named_dirs() { return 0; }
+source "$3"
+''' + self.setup + r'''
+_devbox_start_if_needed() { return 0; }
+_devbox_host_for_remote() { print -r -- "$SYNC_TEST_HOST"; }
+_devbox_agency_enroll_background() { return 0; }
+fetch_remotes() { print -r -- "[x]worker running"; }
+fzf() { cat; }
+pay() { return 0; }
+tmux() { return 0; }
+_devbox_attach_tmux() {
+  while [[ ! -f "$SYNC_TEST_CONTROL/transferring" ]]; do sleep 0.05; done
+  print -r -- "last local note" > "$HOME/stripe/work/late.md"
+  print -r -- "last remote note" > "$SYNC_TEST_REMOTE/late-remote.md"
+}
+''' + action + r'''
+print -r -- "returned" > "$SYNC_TEST_CONTROL/returned"
+while [[ ! -f "$SYNC_TEST_CONTROL/shell-stop" ]]; do sleep 0.05; done
+'''
+        self.env["SYNC_TEST_HOST"] = self.host
+        pidfile = Path(f"/tmp/unison-sync-{self.host}.pid")
+        with (self.root / "shell.log").open("w") as log:
+            process = subprocess.Popen(["zsh", "-f", "-c", script, "test",
+                                        str(ROOT / "home/.config/zsh/work_sync.zsh"), self.host,
+                                        str(ROOT / "home/.config/zsh/work.zsh")], env=self.env,
+                                       stdout=log, stderr=log, start_new_session=True)
+            try:
+                self.wait_for(lambda: (self.root / "transferring").exists(), process)
+                deadline = time.monotonic() + 2
+                while not (self.root / "returned").exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue((self.root / "returned").exists(), "Disconnect blocked on sync")
+                self.assertTrue(pidfile.exists(), "Final sync is no longer tracked")
+                pid = int(pidfile.read_text())
+                os.kill(pid, 0)
+                (self.root / "release").touch()
+                self.wait_for(lambda: not pidfile.exists(), process)
+                self.assertEqual((self.remote / "late.md").read_text().strip(), "last local note")
+                self.assertEqual((self.local / "late-remote.md").read_text().strip(), "last remote note")
+                self.assertEqual(list(Path('/tmp').glob(pidfile.name + '.*.finish')), [])
+                self.assertEqual(list(self.archives.glob("markdown-*.prf")), [])
+            finally:
+                (self.root / "release").touch()
+                (self.root / "shell-stop").touch()
+                self.stop_shell(process, pidfile)
+        self.assertEqual(process.returncode, 0, (self.root / "shell.log").read_text())
+        self.assertNotIn("exit 143", (self.root / "shell.log").read_text())
+
+    def test_reconnect_waits_for_previous_transfer_to_stop(self):
+        self.write(self.local, "note.md", "note")
+        self.executable("unison", r"""
+import os, signal, sys, time
+from pathlib import Path
+root = Path(os.environ['SYNC_TEST_CONTROL'])
+first = not (root / 'first-transfer').exists()
+if first:
+    (root / 'first-transfer').touch()
+else:
+    if not (root / 'first-stopped').exists(): (root / 'overlap').touch()
+    (root / 'second-transfer').touch()
+def stop(signum, frame):
+    if first:
+        (root / 'first-stopping').touch()
+        while not (root / 'allow-stop').exists(): time.sleep(0.01)
+        (root / 'first-stopped').touch()
+    sys.exit(128 + signum)
+signal.signal(signal.SIGTERM, stop)
+while True: time.sleep(0.05)
+""")
+        script = self.setup + r'''
+_devbox_sync_loop "$2"
+while [[ ! -f "$SYNC_TEST_CONTROL/first-transfer" ]]; do sleep 0.05; done
+_devbox_sync_loop_finish "$2"
+_devbox_sync_loop "$2" || exit
+while [[ ! -f "$SYNC_TEST_CONTROL/second-transfer" ]]; do sleep 0.05; done
+_devbox_sync_loop_stop "$2" || exit
+'''
+        pidfile = Path(f"/tmp/unison-sync-{self.host}.pid")
+        with (self.root / "shell.log").open("w") as log:
+            process = subprocess.Popen(["zsh", "-f", "-c", script, "test",
+                                        str(ROOT / "home/.config/zsh/work_sync.zsh"), self.host],
+                                       env=self.env, stdout=log, stderr=log, start_new_session=True)
+            try:
+                self.wait_for(lambda: (self.root / "first-stopping").exists(), process)
+                time.sleep(1)
+                self.assertFalse((self.root / "second-transfer").exists(),
+                                 "Reconnect started before the previous transfer stopped")
+                (self.root / "allow-stop").touch()
+                process.wait(timeout=10)
+                self.assertEqual(process.returncode, 0, (self.root / "shell.log").read_text())
+                self.assertTrue((self.root / "first-stopped").exists())
+                self.assertFalse((self.root / "overlap").exists(), "Reconnect overlapped Unison transfers")
+                self.assertFalse(pidfile.exists())
+            finally:
+                (self.root / "allow-stop").touch()
+                self.stop_shell(process, pidfile)
+
+    def stop_shell(self, process, pidfile):
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=10)
+        pidfile.unlink(missing_ok=True)
 
     def test_empty_note_replica_keeps_unison_deletion_protection(self):
         note = self.write(self.local, "note.md", "note")

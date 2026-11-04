@@ -53,8 +53,7 @@ remotes() {
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  _devbox_sync_loop_stop "$host"
-  _devbox_sync "$host"
+  _devbox_sync_loop_finish "$host"
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset
@@ -83,8 +82,7 @@ remote() {
   local exit_code=$?
   tmux unnest 2>/dev/null
 
-  _devbox_sync_loop_stop "$host"
-  _devbox_sync "$host"
+  _devbox_sync_loop_finish "$host"
 
   if [ $exit_code -eq 255 ] || [ $exit_code -eq 1 ]; then
     reset

@@ -210,14 +210,15 @@ _devbox_sync_loop() {
   local host="$1"
   local remote_work_uri
   local control_path
+  local pidfile="/tmp/unison-sync-${host}.pid"
 
-  _devbox_sync_loop_stop "$host"
+  _devbox_sync_loop_stop "$host" || return
   _devbox_sync_preflight "$host" || return
   remote_work_uri="$(_devbox_remote_work_uri "$host")" || return
   control_path="$(_devbox_control_path)" || return
   _devbox_ssh "$host" 'mkdir -p "$HOME/stripe/work"' || return
   python3 "${${(%):-%x}:A:h}/work_sync_markdown.py" \
-    --repeat 5 \
+    --repeat 5 --pidfile "$pidfile" \
     --sshargs "-o ControlMaster=auto -o ControlPersist=60 -o ControlPath=${(q)control_path}" \
     ~/stripe/work/ "$remote_work_uri" \
     -batch -copyonconflict -fastcheck true -silent \
@@ -227,18 +228,49 @@ _devbox_sync_loop() {
     -ignore 'Name node_modules' \
     -ignore 'Name fsmonitor--daemon*' \
     -logfile /tmp/unison-sync-${host}.log \
-    &>/dev/null &
-  echo $! >| /tmp/unison-sync-${host}.pid
+    </dev/null >>"/tmp/unison-sync-${host}.log" 2>&1 &!
+  echo $! >| "$pidfile"
+}
+
+_devbox_sync_loop_finish() {
+  local host="$1"
+  local pidfile="/tmp/unison-sync-${host}.pid"
+  local pid
+
+  [[ -f "$pidfile" ]] || return 0
+  pid=$(cat "$pidfile" 2>/dev/null) || return 0
+  [[ "$pid" == <-> && "$pid" -gt 1 ]] || return 1
+  if kill -0 "$pid" 2>/dev/null; then
+    : > "${pidfile}.${pid}.finish"
+  fi
 }
 
 _devbox_sync_loop_stop() {
+  setopt localoptions nonotify
   local host="$1"
   local pidfile="/tmp/unison-sync-${host}.pid"
-  if [[ -f "$pidfile" ]]; then
-    local pid=$(cat "$pidfile")
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null
+  local pid worker_command attempt
+
+  [[ -f "$pidfile" ]] || return 0
+  pid=$(cat "$pidfile" 2>/dev/null) || return 0
+  [[ "$pid" == <-> && "$pid" -gt 1 ]] || return 1
+  if kill -0 "$pid" 2>/dev/null; then
+    worker_command=$(ps -p "$pid" -o command=) || return
+    if [[ "$worker_command" != *"/work_sync_markdown.py "* ||
+          ( "$worker_command" != *"--pidfile $pidfile "* && "$worker_command" != *"ssh://${host}/"* ) ]]; then
+      print -u2 -- "devbox sync blocked: PID $pid is not the sync worker for $host"
+      return 1
     fi
-    rm -f "$pidfile"
+    kill "$pid" 2>/dev/null || return
+    wait "$pid" 2>/dev/null || true
+    for attempt in {1..120}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.05
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      print -u2 -- "devbox sync blocked: previous worker for $host has not stopped"
+      return 1
+    fi
   fi
+  rm -f -- "$pidfile" "${pidfile}.${pid}.finish"
 }

@@ -86,6 +86,7 @@ def sync(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repeat", type=float)
+    parser.add_argument("--pidfile", type=Path)
     parser.add_argument("--sshargs", default="")
     parser.add_argument("roots", nargs=2)
     parser.add_argument("unison_args", nargs=argparse.REMAINDER)
@@ -94,15 +95,30 @@ def main():
         parser.error("--repeat must be positive")
     for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(signum, stop)
-    while True:
-        try:
-            code = sync(args)
-        except (OSError, RuntimeError, ValueError) as error:
-            print(f"devbox Markdown sync failed: {error}", file=sys.stderr)
-            code = 3
-        if args.repeat is None:
-            return code
-        time.sleep(args.repeat)
+    finish = Path(f"{args.pidfile}.{os.getpid()}.finish") if args.pidfile else None
+    try:
+        while True:
+            final_pass = finish is not None and finish.exists()
+            try:
+                code = sync(args)
+            except (OSError, RuntimeError, ValueError) as error:
+                print(f"devbox Markdown sync failed: {error}", file=sys.stderr)
+                code = 3
+            if args.repeat is None or final_pass:
+                return code
+            deadline = time.monotonic() + args.repeat
+            while time.monotonic() < deadline:
+                if finish is not None and finish.exists():
+                    break
+                time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+    finally:
+        if finish is not None:
+            finish.unlink(missing_ok=True)
+            try:
+                if args.pidfile.read_text().strip() == str(os.getpid()):
+                    args.pidfile.unlink()
+            except FileNotFoundError:
+                pass
 
 
 if __name__ == "__main__":
