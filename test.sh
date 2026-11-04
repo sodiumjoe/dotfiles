@@ -28,9 +28,9 @@ run() {
   fi
 }
 
+run agency-build npm --prefix agency run build
 run deployment bash test-env.sh
 run work-cli npm --prefix work-cli test
-run agency-build npm --prefix agency run build
 run agency bash -c 'cd agency && node dist/scripts/test-groups.js'
 run node-bin npm --prefix node-bin test
 run shell python3 -m unittest discover -s tests/zsh -p 'test_*.py'
