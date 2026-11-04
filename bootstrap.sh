@@ -133,7 +133,7 @@ if [ "$DOTFILES_ENV" = devbox ]; then
     echo "Installing and building Agency..."
     npm ci --include=dev --prefix agency || exit 1
     npm run build --prefix agency || exit 1
-    echo "Configuring Agency provider..."
+    echo "Checking Agency provider..."
     "$agency_node_bin/node" agency/dist/scripts/setup-provider.js || exit 1
     echo "Starting Agency Handler..."
     home/bin/agy status --json || exit 1

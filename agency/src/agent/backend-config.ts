@@ -33,12 +33,13 @@ export function parseBackendConfig(input: unknown): BackendConfig {
 export async function readBackendConfig(root: string): Promise<BackendConfig> {
   await assertPrivateDirectory(root)
   const catalog = join(root, "catalog")
-  try { await assertPrivateDirectory(catalog) } catch (error) {
+  try {
+    await assertPrivateDirectory(catalog)
+    const bytes = await readBoundedFile(join(catalog, "backends.json"), 65536, true)
+    if (bytes !== null) return parseBackendConfig(decodeJson(bytes))
+  } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-    throw new AgentError("UNAVAILABLE")
   }
-  const bytes = await readBoundedFile(join(catalog, "backends.json"), 65536, true)
-  if (bytes !== null) return parseBackendConfig(decodeJson(bytes))
   if (!(await readProfiles(root)).some(profile => profile.enabled && profile.id === "codex-acp")) throw new AgentError("UNAVAILABLE")
   return { version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" }, initial: { modeId: "agent-full-access" }, compatibilityId: "codex-acp-1.7" }] }
 }

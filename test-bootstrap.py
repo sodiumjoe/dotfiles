@@ -173,43 +173,185 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
             "executable": str((self.home_tree / "bin/acp-codex").resolve()),
             "adapterPackageJson": str((self.adapter / "package.json").resolve()),
             "sdkPackageJson": None,
-            "configurationFiles": [str((self.home_tree / ".codex/config.toml").resolve())],
+            "configurationFiles": [str((self.owner / ".codex/config.toml").resolve())],
         }
 
-    def write_profile(self, providers):
-        self.catalog.mkdir(parents=True, mode=0o700, exist_ok=True)
+    def prepare_host_state(self):
+        self.host_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         for directory in [self.state / "agency", self.state / "agency/hosts", self.host_root]:
             directory.chmod(0o700)
+
+    def write_profile(self, providers):
+        self.prepare_host_state()
+        self.catalog.mkdir(mode=0o700, exist_ok=True)
         self.profile_path.write_text(json.dumps({"version": 1, "providers": providers}))
         self.profile_path.chmod(0o600)
+
+    def write_backend(self, compatibility_id="codex-acp-1.7"):
+        self.prepare_host_state()
+        self.catalog.mkdir(mode=0o700, exist_ok=True)
+        backend = self.catalog / "backends.json"
+        backend.write_text(json.dumps({
+            "version": 1, "defaultBackendId": "codex-acp", "backends": [{
+                "id": "codex-acp", "args": ["--custom"], "environmentDefaults": {},
+                "initial": {"modeId": "agent-full-access"}, "compatibilityId": compatibility_id,
+            }],
+        }))
+        backend.chmod(0o600)
+        return backend
+
+    def read_runtime(self, observe=True, check=True):
+        script = '''const { readProfiles, observeConfig } = await import(process.argv[1])
+const { readBackendConfig } = await import(process.argv[2])
+const profiles = await readProfiles(process.argv[3])
+const backends = await readBackendConfig(process.argv[3])
+const profile = profiles.find(p => p.enabled && p.id === backends.defaultBackendId)
+const evidence = process.argv[4] === "observe" ? await observeConfig(profile) : null
+process.stdout.write(JSON.stringify({ profiles, backends, evidence }))'''
+        result = subprocess.run(
+            [str(self.node), "--input-type=module", "-e", script,
+             (self.repo / "agency/dist/src/catalog/config.js").as_uri(),
+             (self.repo / "agency/dist/src/agent/backend-config.js").as_uri(),
+             str(self.host_root), "observe" if observe else "declare"],
+            cwd=self.root, env=self.environment, text=True, capture_output=True, timeout=10,
+        )
+        if check:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return json.loads(result.stdout)
+        return result
+
+    def run_provider_check(self):
+        return subprocess.run(
+            [str(self.node), str(self.repo / "agency/dist/scripts/setup-provider.js")],
+            cwd=self.root, env=self.environment, text=True, capture_output=True, timeout=10,
+        )
 
     def assert_setup_failed(self):
         result = self.run_bootstrap("devbox")
         self.assertIn("Agency setup failed", result.stderr)
         self.assertFalse(self.status_marker.exists(), result.stdout + result.stderr)
-        self.assertEqual(list(self.catalog.glob(".providers.*.tmp")), [])
+
+    def test_runtime_defaults_without_bootstrap(self):
+        self.prepare_host_state()
+        result = self.read_runtime()
+        self.assertEqual(result["profiles"], [self.standard_profile()])
+        self.assertEqual(result["backends"]["defaultBackendId"], "codex-acp")
+        self.assertEqual(result["backends"]["backends"][0]["environmentDefaults"], {
+            "INITIAL_AGENT_MODE": "agent-full-access", "MODEL_PROVIDER": "litellm",
+        })
+        self.assertFalse(self.catalog.exists())
+        self.assertFalse(self.profile_path.exists())
+
+    def test_runtime_defaults_with_existing_catalog(self):
+        self.prepare_host_state()
+        self.catalog.mkdir(mode=0o700)
+        result = self.read_runtime()
+        self.assertEqual(result["profiles"], [self.standard_profile()])
+        self.assertEqual(list(self.catalog.iterdir()), [])
+
+    def test_runtime_defaults_honor_backend_overrides(self):
+        backend = self.write_backend()
+        before = (backend.read_bytes(), backend.stat().st_ino)
+        result = self.read_runtime()
+        self.assertEqual(result["profiles"], [self.standard_profile()])
+        self.assertEqual(result["backends"]["backends"][0]["args"], ["--custom"])
+        self.assertEqual((backend.read_bytes(), backend.stat().st_ino), before)
+        self.assertFalse(self.profile_path.exists())
+
+    def test_runtime_declares_missing_adapter_and_validation_rejects_it(self):
+        self.prepare_host_state()
+        shutil.rmtree(self.adapter)
+        result = self.read_runtime(observe=False)
+        self.assertEqual(result["profiles"], [self.standard_profile()])
+        checked = self.run_provider_check()
+        self.assertNotEqual(checked.returncode, 0)
+        self.assertFalse(self.profile_path.exists())
+        self.assertFalse(self.catalog.exists())
+
+    def test_runtime_rejects_symlinked_profile_override(self):
+        self.write_profile([self.standard_profile()])
+        target = self.catalog / "other.json"
+        self.profile_path.rename(target)
+        self.profile_path.symlink_to(target)
+        before = target.read_bytes()
+        result = self.read_runtime(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.profile_path.is_symlink())
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_runtime_default_fingerprint_tracks_config_changes(self):
+        self.prepare_host_state()
+        first = self.read_runtime()["evidence"]["fingerprint"]
+        config = self.owner / ".codex/config.toml"
+        config.parent.mkdir()
+        config.write_text('model = "first-model"')
+        second = self.read_runtime()["evidence"]["fingerprint"]
+        config.write_text('model = "second-model"')
+        third = self.read_runtime()["evidence"]["fingerprint"]
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(second, third)
+        self.assertFalse(self.profile_path.exists())
+
+    def test_runtime_defaults_follow_deployed_symlinks(self):
+        self.prepare_host_state()
+        config = self.owner / ".codex/config.toml"
+        config.parent.mkdir()
+        first_config = self.root / "first config.toml"
+        second_config = self.root / "second config.toml"
+        first_config.write_text('model = "same-model"')
+        second_config.write_text('model = "same-model"')
+        config.symlink_to(first_config)
+        modules = self.repo / "node-bin/node_modules"
+        first_modules = self.root / "first packages"
+        second_modules = self.root / "second packages"
+        modules.rename(first_modules)
+        shutil.copytree(first_modules, second_modules)
+        modules.symlink_to(first_modules)
+        first = self.read_runtime()
+        self.assertEqual(first["profiles"][0]["configurationFiles"], [str(first_config.resolve())])
+        self.assertEqual(first["profiles"][0]["adapterPackageJson"], str((first_modules / "@agentclientprotocol/codex-acp/package.json").resolve()))
+        config.unlink()
+        config.symlink_to(second_config)
+        second = self.read_runtime()
+        self.assertEqual(second["profiles"][0]["configurationFiles"], [str(second_config.resolve())])
+        self.assertNotEqual(first["evidence"]["fingerprint"], second["evidence"]["fingerprint"])
+        modules.unlink()
+        modules.symlink_to(second_modules)
+        third = self.read_runtime()
+        self.assertEqual(third["profiles"][0]["adapterPackageJson"], str((second_modules / "@agentclientprotocol/codex-acp/package.json").resolve()))
+        self.assertNotEqual(second["evidence"]["fingerprint"], third["evidence"]["fingerprint"])
+        self.assertFalse(self.profile_path.exists())
+
+    def test_directory_config_fails_validation_without_profile_publication(self):
+        config = self.owner / ".codex/config.toml"
+        config.mkdir(parents=True)
+        result = self.run_provider_check()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.profile_path.exists())
+        self.assertTrue(config.is_dir())
+        self.assertFalse(self.catalog.exists())
+
+    def test_absent_config_passes_validation_without_profile_publication(self):
+        result = self.run_provider_check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.owner / ".codex").exists())
+        self.assertFalse(self.profile_path.exists())
+        self.assertFalse(self.catalog.exists())
 
     def test_fresh_devbox_configures_backend_before_status(self):
         result = self.run_bootstrap("devbox")
-        self.assertTrue(self.profile_path.is_file(), result.stdout + result.stderr)
-        self.assertEqual(json.loads(self.profile_path.read_text()), {"version": 1, "providers": [self.standard_profile()]})
-        self.assertEqual(self.profile_path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.catalog.stat().st_mode & 0o777, 0o700)
-        self.assertEqual(self.profile_path.stat().st_nlink, 1)
-        self.assertTrue(self.status_marker.exists())
+        self.assertTrue(self.status_marker.exists(), result.stdout + result.stderr)
         self.assertNotIn("Agency setup failed", result.stderr)
+        self.assertEqual(self.read_runtime()["profiles"], [self.standard_profile()])
+        self.assertFalse(self.profile_path.exists())
 
-    def test_repeat_bootstrap_preserves_profile_and_codex_settings(self):
+    def test_repeat_bootstrap_preserves_codex_settings_without_profile(self):
         self.run_bootstrap("devbox")
-        self.assertTrue(self.profile_path.is_file())
-        profile = self.profile_path.read_bytes()
-        inode = self.profile_path.stat().st_ino
         config = self.home_tree / ".codex/config.toml"
         config.write_text('model = "my-existing-model"')
         self.status_marker.unlink()
         result = self.run_bootstrap("devbox")
-        self.assertEqual(self.profile_path.read_bytes(), profile)
-        self.assertEqual(self.profile_path.stat().st_ino, inode)
+        self.assertFalse(self.profile_path.exists())
         self.assertEqual(config.read_text(), 'model = "my-existing-model"')
         self.assertTrue(self.status_marker.exists(), result.stdout + result.stderr)
         self.assertNotIn("Agency setup failed", result.stderr)
@@ -226,14 +368,7 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
         profile = self.standard_profile()
         profile.update(executable=str(wrapper.resolve()), adapterPackageJson=str((adapter / "package.json").resolve()), configurationFiles=[])
         self.write_profile([profile])
-        backend = self.catalog / "backends.json"
-        backend.write_text(json.dumps({
-            "version": 1, "defaultBackendId": "codex-acp", "backends": [{
-                "id": "codex-acp", "args": ["--custom"], "environmentDefaults": {},
-                "initial": {"modeId": "agent-full-access"}, "compatibilityId": "codex-acp-1.7",
-            }],
-        }))
-        backend.chmod(0o600)
+        backend = self.write_backend()
         before = {p: (p.read_bytes(), p.stat().st_ino) for p in [self.profile_path, backend]}
         result = self.run_bootstrap("devbox")
         self.assertNotIn("Agency setup failed", result.stderr)
@@ -296,7 +431,7 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
         self.assertTrue(self.catalog.is_symlink())
         self.assertEqual(json.loads((target / "providers.json").read_text())["providers"], [])
 
-    def test_backend_without_profile_is_preserved_without_enabling_codex(self):
+    def test_malformed_backend_without_profile_is_preserved_and_rejected(self):
         self.write_profile([])
         self.profile_path.unlink()
         backend = self.catalog / "backends.json"
@@ -306,20 +441,32 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
         self.assertFalse(self.profile_path.exists())
         self.assertEqual(backend.read_text(), "custom backend configuration")
 
-    def test_concurrent_setup_publishes_one_complete_profile(self):
+    def test_backend_without_profile_uses_runtime_default(self):
+        backend = self.write_backend()
+        before = (backend.read_bytes(), backend.stat().st_ino)
+        result = self.run_bootstrap("devbox")
+        self.assertNotIn("Agency setup failed", result.stderr)
+        self.assertTrue(self.status_marker.exists())
+        self.assertEqual((backend.read_bytes(), backend.stat().st_ino), before)
+        self.assertFalse(self.profile_path.exists())
+
+    def test_unsupported_backend_compatibility_is_preserved_and_rejected(self):
+        backend = self.write_backend(compatibility_id="unknown-compatibility")
+        before = backend.read_bytes()
+        self.assert_setup_failed()
+        self.assertEqual(backend.read_bytes(), before)
+        self.assertFalse(self.profile_path.exists())
+
+    def test_concurrent_validation_does_not_publish_profile(self):
         self.run_bootstrap("devbox")
-        self.assertTrue(self.profile_path.is_file())
-        self.profile_path.unlink()
         command = [str(self.node), str(self.repo / "agency/dist/scripts/setup-provider.js")]
         processes = [subprocess.Popen(command, env=self.environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(4)]
         try:
             results = [process.communicate(timeout=20) for process in processes]
             for process, (stdout, stderr) in zip(processes, results):
                 self.assertEqual(process.returncode, 0, stdout + stderr)
-            self.assertEqual(sum("Created" in stdout for stdout, _ in results), 1)
-            self.assertEqual(json.loads(self.profile_path.read_text()), {"version": 1, "providers": [self.standard_profile()]})
-            self.assertEqual(self.profile_path.stat().st_nlink, 1)
-            self.assertEqual(list(self.catalog.glob(".providers.*.tmp")), [])
+            self.assertFalse(self.profile_path.exists())
+            self.assertFalse(self.catalog.exists())
         finally:
             for process in processes:
                 if process.poll() is None:

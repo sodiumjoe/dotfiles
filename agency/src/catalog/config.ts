@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto"
 import { constants, type BigIntStats } from "node:fs"
 import { lstat, open, realpath } from "node:fs/promises"
-import { dirname, isAbsolute, join, normalize } from "node:path"
+import { homedir } from "node:os"
+import { basename, dirname, isAbsolute, join, normalize } from "node:path"
+import { fileURLToPath } from "node:url"
 import { isDeepStrictEqual } from "node:util"
 import { assertPrivateDirectory } from "../platform/private-state.js"
 import { absolutePath, CatalogError, invalid, keys, object, providerId, text, type ConfigEvidence, type ProviderProfile } from "./types.js"
@@ -59,13 +61,32 @@ export function parseProfile(input: unknown): ProviderProfile {
   if (id === "codex-acp" && v.sdkPackageJson !== null) invalid()
   return { id, enabled: v.enabled, executable: absolutePath(v.executable), adapterPackageJson: absolutePath(v.adapterPackageJson), sdkPackageJson: id === "codex-acp" ? null : absolutePath(v.sdkPackageJson), configurationFiles }
 }
+async function canonicalPath(path: string): Promise<string> {
+  try { return await realpath(path) }
+  catch (error) {
+    if (!missing(error) || dirname(path) === path) throw error
+    return join(await canonicalPath(dirname(path)), basename(path))
+  }
+}
+async function defaultProfiles(): Promise<ProviderProfile[]> {
+  const repo = fileURLToPath(new URL("../../../../", import.meta.url))
+  const home = process.env.HOME ?? homedir()
+  if (!isAbsolute(home)) invalid()
+  return [parseProfile({
+    id: "codex-acp", enabled: true,
+    executable: await canonicalPath(join(repo, "home/bin/acp-codex")),
+    adapterPackageJson: await canonicalPath(join(repo, "node-bin/node_modules/@agentclientprotocol/codex-acp/package.json")),
+    sdkPackageJson: null,
+    configurationFiles: [await canonicalPath(join(home, ".codex/config.toml"))],
+  })]
+}
 export async function readProfiles(root: string): Promise<ProviderProfile[]> {
   try {
     await assertPrivateDirectory(root)
     const catalog = join(root, "catalog")
-    try { await assertPrivateDirectory(catalog) } catch (error) { if (missing(error)) return []; throw error }
+    try { await assertPrivateDirectory(catalog) } catch (error) { if (missing(error)) return await defaultProfiles(); throw error }
     const bytes = await readBoundedFile(join(catalog, "providers.json"), 65536, true)
-    if (bytes === null) return []
+    if (bytes === null) return await defaultProfiles()
     const v = object(decodeJson(bytes))
     keys(v, ["version", "providers"])
     if (v.version !== 1 || !Array.isArray(v.providers) || v.providers.length > 2) invalid()
