@@ -1,3 +1,4 @@
+import type { AcpStartupDiagnostic } from "./failure-diagnostics.js"
 import type { Readable, Writable } from "node:stream"
 import { createAcpDecoder } from "../acp/protocol.js"
 import { cloneWireJson, encodeWireJson } from "../acp/wire-json.js"
@@ -34,6 +35,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   let sessionId: string | null = null, loading = false, ready = false, legacyActive = false, cancellation: Promise<void> | undefined
   let configuration = configurationSnapshot({}), capabilities: JsonObject = {}, initialization: Promise<ProviderSession> | undefined
   let startupDeadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity), initializationTimer: NodeJS.Timeout | undefined
+  let startupPhase: AcpStartupDiagnostic["phase"] = "initialize", startupStartedAt: number | undefined, replayUpdates = 0
   let promptText = "", promptTextLimit = 0
   const prompts = new Set<number>(), cancelledPrompts = new Map<number, NodeJS.Timeout>()
   const finishPrompt = (id: number): void => {
@@ -45,6 +47,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   const fail = (error: unknown): void => {
     if (failure) return
     failure = error instanceof AgentError ? error : new AgentError("INVALID_PROTOCOL")
+    if (failure.code === "STARTUP_TIMEOUT" && !failure.diagnostic && !ready && startupStartedAt !== undefined) failure = new AgentError(failure.code, { boundary: "acp_transport", causeCode: failure.code, startup: { phase: startupPhase, elapsedMs: Math.max(0, Math.floor(now() - startupStartedAt)), replayUpdates } })
     clearTimeout(initializationTimer)
     for (const timer of cancelledPrompts.values()) clearTimeout(timer)
     cancelledPrompts.clear()
@@ -133,6 +136,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (frame.method !== "session/update" || params.sessionId !== sessionId || !sessionId) throw new AgentError("INVALID_PROTOCOL")
       validateMetadata(params)
       const update = validateNativeUpdate(params.update, false) as JsonObject
+      if (loading) replayUpdates++
       if (update.sessionUpdate === "config_option_update") applyResult({ configOptions: update.configOptions! }, "update")
       if (update.sessionUpdate === "available_commands_update") configuration.availableCommands = (update.availableCommands ?? []) as JsonObject[]
       if (update.sessionUpdate === "current_mode_update" && configuration.modes) configuration.modes.currentModeId = update.currentModeId!
@@ -192,6 +196,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     initialize(raw, contract, session, signal) {
       return initialization ??= (async () => {
         const record = normalizeAgentRecord(raw)
+        startupStartedAt = now()
         startupDeadline = Math.min(startupDeadline, now() + limits.startupMs)
         initializationTimer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, startupDeadline - now()))
         try {
@@ -201,10 +206,12 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
           let result: JsonObject
           if (session.kind === "load") {
             if (capabilities.loadSession !== true) throw new AgentError("RESTORE_UNSUPPORTED")
-            sessionId = agentText(session.sessionId, 1024); loading = true
+            sessionId = agentText(session.sessionId, 1024); loading = true; startupPhase = "session/load"
             result = await request("session/load", { ...params, sessionId }, signal); loading = false
           } else {
+            startupPhase = "session/new"
             result = await request("session/new", params, signal)
+            startupPhase = "configuration"
             const selected = { ...(!configuration.models && record.settings.modelId ? { [contract.modelOption]: record.settings.modelId } : {}), ...record.settings.configValues, ...(!configuration.modes && record.settings.modeId && contract.modeOption ? { [contract.modeOption]: record.settings.modeId } : {}) }
             const legacySelections: { method: string; field: string; value: string }[] = []
             for (const [field, method, choices, key] of [["modelId", "session/set_model", "availableModels", "modelId"], ["modeId", "session/set_mode", "availableModes", "id"]] as const) {

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import { runTests } from "./test-run.js"
 
 export type TestGroup = "workflows"
-const files = ["handler-agents", "acp-router", "acp-endpoint", "acp-permissions", "handler-host-sessions", "live-process"]
+const files = ["handler-agents", "agent-startup", "acp-router", "acp-endpoint", "acp-permissions", "handler-host-sessions", "live-process"]
 const workerFiles = files.map(file => "dist/test/" + file + ".test.js")
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
 const manifest = JSON.parse(await readFile(new URL("../build-manifest.json", import.meta.url), "utf8"))
