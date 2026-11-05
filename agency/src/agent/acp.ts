@@ -1,7 +1,7 @@
 import type { AcpStartupDiagnostic } from "./failure-diagnostics.js"
 import type { Readable, Writable } from "node:stream"
 import { createAcpDecoder } from "../acp/protocol.js"
-import { cloneWireJson, encodeWireJson } from "../acp/wire-json.js"
+import { cloneWireJson, encodeWireJson, wireJsonBytes } from "../acp/wire-json.js"
 import { object } from "../catalog/types.js"
 import type { ConfiguredLaunchContract } from "./contracts.js"
 import { configurationSnapshot, projectRestorableSettings, validateConfiguration, validateMetadata, type JsonObject, type SessionConfiguration } from "./session-config.js"
@@ -36,6 +36,8 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   let configuration = configurationSnapshot({}), capabilities: JsonObject = {}, initialization: Promise<ProviderSession> | undefined
   let startupDeadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity), initializationTimer: NodeJS.Timeout | undefined
   let startupPhase: AcpStartupDiagnostic["phase"] = "initialize", startupStartedAt: number | undefined, replayUpdates = 0
+  const earlyUpdates: JsonObject[] = []
+  let earlyUpdateBytes = 0
   let promptText = "", promptTextLimit = 0
   const prompts = new Set<number>(), cancelledPrompts = new Map<number, NodeJS.Timeout>()
   const finishPrompt = (id: number): void => {
@@ -49,6 +51,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     failure = error instanceof AgentError ? error : new AgentError("INVALID_PROTOCOL")
     if (failure.code === "STARTUP_TIMEOUT" && !failure.diagnostic && !ready && startupStartedAt !== undefined) failure = new AgentError(failure.code, { boundary: "acp_transport", causeCode: failure.code, startup: { phase: startupPhase, elapsedMs: Math.max(0, Math.floor(now() - startupStartedAt)), replayUpdates } })
     clearTimeout(initializationTimer)
+    earlyUpdates.length = 0; earlyUpdateBytes = 0
     for (const timer of cancelledPrompts.values()) clearTimeout(timer)
     cancelledPrompts.clear()
     for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.dispose(); waiter.reject(failure) }
@@ -133,6 +136,15 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         if (new Set(optionIds).size !== optionIds.length) throw new AgentError("INVALID_PROTOCOL")
         providerRequests.add(id); input.onRequest?.(structuredClone(frame)); return
       }
+      if (frame.method === "session/update" && !sessionId && startupStartedAt !== undefined && startupPhase === "session/new" && [...pending.values()].some(waiter => waiter.method === "session/new")) {
+        const bytes = wireJsonBytes(frame) + 1
+        if (earlyUpdates.length >= 128 || bytes > 1048576 || earlyUpdateBytes + bytes > 8388608) throw new AgentError("INVALID_PROTOCOL")
+        validateMetadata(params); validateNativeUpdate(params.update, false)
+        const nativeSessionId = agentText(params.sessionId, 1024)
+        if (earlyUpdates.length && object(earlyUpdates[0]!.params).sessionId !== nativeSessionId) throw new AgentError("INVALID_PROTOCOL")
+        earlyUpdates.push(frame); earlyUpdateBytes += bytes
+        return
+      }
       if (frame.method !== "session/update" || params.sessionId !== sessionId || !sessionId) throw new AgentError("INVALID_PROTOCOL")
       validateMetadata(params)
       const update = validateNativeUpdate(params.update, false) as JsonObject
@@ -168,11 +180,20 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       capabilities = structuredClone(object(result.agentCapabilities)) as JsonObject
       if (capabilities.loadSession !== undefined && typeof capabilities.loadSession !== "boolean") throw new AgentError("INVALID_PROTOCOL")
     }
-    if (waiter.method === "session/new") sessionId = agentText(result.sessionId, 1024)
+    if (waiter.method === "session/new") {
+      const nativeSessionId = agentText(result.sessionId, 1024)
+      if (earlyUpdates.some(frame => object(frame.params).sessionId !== nativeSessionId)) throw new AgentError("INVALID_PROTOCOL")
+      sessionId = nativeSessionId
+    }
     if (waiter.method === "session/load" && result.sessionId !== undefined && result.sessionId !== sessionId) throw new AgentError("INVALID_PROTOCOL")
     if (waiter.method === "session/prompt") validateNativePromptResponse(result)
     if (waiter.method === "session/prompt") finishPrompt(frame.id)
     applyResult(result, waiter.method)
+    if (waiter.method === "session/new") {
+      const queued = earlyUpdates.splice(0); earlyUpdateBytes = 0
+      for (const frame of queued) { check(); receive(frame) }
+      check()
+    }
     if (waiter.method === "session/set_model" && configuration.models && !result.models) { configuration.models.currentModelId = waiter.params.modelId!; configuration.revision++ }
     if (waiter.method === "session/set_mode" && configuration.modes && !result.modes) { configuration.modes.currentModeId = waiter.params.modeId!; configuration.revision++ }
     pending.delete(frame.id); clearTimeout(waiter.timer); waiter.dispose(); waiter.resolve(structuredClone(result))
