@@ -107,6 +107,18 @@ process.stdin.on("data", (chunk: Buffer) => {
         if (scenario === "large-replay") await update({ sessionUpdate: "session_info_update", title: prompt })
         result = { stopReason: "end_turn" }
       } else throw new Error("unexpected fixture request")
+      if (scenario === "restore-fast-mode" && ["session/new", "session/load", "session/set_config_option"].includes(request.method)) {
+        let configOptions: unknown[] = options
+        if (scenario === "restore-fast-mode") {
+          const fast = JSON.parse(await readFile(join(root, "fast-mode.json"), "utf8"))
+          if (request.method !== "session/load" || Object.hasOwn(fast, "loadedValue")) {
+            const value = request.method !== "session/load" ? fast.savedValue : fast.loadedValue
+            configOptions = [...options, typeof value === "boolean" ? { id: "fast-mode", name: "Fast mode", type: "boolean", currentValue: value } : { id: "fast-mode", name: "Fast mode", type: "select", currentValue: value, options: [{ value: "off", name: "Off" }, { value: "on", name: "On" }] }]
+          }
+          if (request.method === "session/load" && fast.drop) configOptions = configOptions.filter(option => !(fast.drop as string[]).includes((option as { id: string }).id))
+          result = fast.omitConfiguration && request.method === "session/load" ? { sessionId: "fixture-session" } : { sessionId: "fixture-session", configOptions }
+        }
+      }
       send({ jsonrpc: "2.0", id: request.id, result })
     }).catch(() => { process.exitCode = 2; process.stdin.destroy(); process.stdout.destroy(); clearInterval(idle) })
   }

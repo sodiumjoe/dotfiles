@@ -157,6 +157,8 @@ SIGTERM and SIGINT instead begin one bounded termination attempt, including duri
 
 Control uses `agency-control/2`, agent lifecycle uses `agency-agent/3`, and the compatibility attachment stream uses `agency-attachment/1`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
 
+Codex Restore accepts a saved `fast-mode=off` (or boolean `false`) when the provider explicitly returns configuration options without fast mode. This reflects a model that no longer supports the feature. Enabled fast mode, missing model/mode/effort settings, unknown configuration, and unresolved fast-mode changes still require input. Settings the loaded provider continues to expose retain their native values.
+
 ## Transport bounds and failures
 
 ACP frames and queued writes have no byte quota. The endpoint relays bytes with stream backpressure, and the Handler inspects routing and control fields while retaining serialized tool payloads for forwarding and replay. Write deadlines still detect stalled connections. Launch records retain legacy frame and queued-write byte fields for compatibility; transport ignores those fields. Stderr capture remains bounded to 8 KiB. Healthy prompt turns and human permission waits have no qualification-era total-turn deadline or cumulative assistant-output quota.

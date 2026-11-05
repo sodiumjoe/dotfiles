@@ -1,3 +1,4 @@
+import { isImplicitDisabledCodexFastMode } from "./session-config.js"
 import { incompleteHistory, historyDiagnostic } from "../handler/history.js"
 import { underlyingFailureCode } from "./failure-diagnostics.js"
 import { createPermissionArbiter, type PermissionArbiter } from "./permission-arbiter.js"
@@ -686,20 +687,21 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   }
   function verifyLoadedConfiguration(op: Live, session: ProviderSession): void {
     const settings = projectRestorableSettings(session.configuration), saved = op.initial.settings
-    const required = new Set(op.initial.configurationState.nonRestorableOptionIds)
+    const required = new Set(op.initial.configurationState.nonRestorableOptionIds), pending = new Set<string>()
     for (const commandId of configurationPending.get(op.initial.definition.agentId) ?? []) {
       const command = commands.get(commandId) ?? historicalConfigurations.get(commandId)
       if (command?.version !== 3 || command.op !== "configure") continue
       for (const optionId of command.input.priorNonRestorableOptionIds as string[]) required.add(optionId)
       const desired = command.input.desired as RequestedSettings
       for (const optionId of command.input.optionIds as string[]) {
+        pending.add(optionId)
         if (optionId === "model" && desired.modelId && settings.modelId) continue
         if (optionId === "mode" && desired.modeId && settings.modeId) continue
         if (settings.configValues?.[optionId] === undefined && !(Object.hasOwn(session.result, "configOptions") && !session.configuration.configOptions.some(option => option.id === optionId))) throw new AgentError("SESSION_INPUT_REQUIRED")
       }
     }
     if (saved.modelId && !settings.modelId && !settings.configValues?.[op.contract.modelOption] || saved.modeId && !settings.modeId && (!op.contract.modeOption || !settings.configValues?.[op.contract.modeOption])) throw new AgentError("SESSION_INPUT_REQUIRED")
-    if (Object.keys(saved.configValues ?? {}).some(optionId => settings.configValues?.[optionId] === undefined)) throw new AgentError("SESSION_INPUT_REQUIRED")
+    if (Object.keys(saved.configValues ?? {}).some(optionId => settings.configValues?.[optionId] === undefined && !isImplicitDisabledCodexFastMode(op.contract.providerId, optionId, saved.configValues?.[optionId], session.result, required, pending))) throw new AgentError("SESSION_INPUT_REQUIRED")
     if (required.size && (!Object.hasOwn(session.result, "configOptions") || [...required].some(optionId => session.configuration.configOptions.some(option => option.id === optionId) && settings.configValues?.[optionId] === undefined))) throw new AgentError("SESSION_INPUT_REQUIRED")
   }
   async function setSession(target: AgentTuple, method: string, raw: JsonObject): Promise<JsonObject> {
