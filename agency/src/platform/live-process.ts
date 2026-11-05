@@ -143,13 +143,22 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
         }
       }
       const absenceDeadline = Math.min(limits.deadline, now() + limits.absenceMs)
-      if (await bounded(() => adapter.bootId(), absenceDeadline) !== launchBootId) throw new LiveProcessError("absence")
-      for (let pass = 0; pass < 2; pass++) {
-        if ((await bounded(() => adapter.readGroup(leader.processGroupId), absenceDeadline)).length) throw new LiveProcessError("absence")
-        for (const member of observed) {
-          const current = await bounded(() => adapter.readProcess(member.pid), absenceDeadline)
-          if (current && sameProcessGeneration(member, current)) throw new LiveProcessError("absence")
+      let passes = 0
+      while (passes < 2) {
+        let absent = false
+        try {
+          if (await bounded(() => adapter.bootId(), absenceDeadline) !== launchBootId) throw new LiveProcessError("absence")
+          absent = (await bounded(() => adapter.readGroup(leader.processGroupId), absenceDeadline)).length === 0
+          if (absent) for (const member of observed) {
+            const current = await bounded(() => adapter.readProcess(member.pid), absenceDeadline)
+            if (current && sameProcessGeneration(member, current)) { absent = false; break }
+          }
+        } catch (error) {
+          if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable)) throw error
+          absent = false
         }
+        passes = absent ? passes + 1 : 0
+        if (!absent) await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 25)), absenceDeadline)
       }
       check()
       const issued = Object.freeze({ launchAttemptId: owner.launchAttemptId, group: freezeGroup(structuredClone({ leader, observed })), terminal, transport })
