@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 const originalHash = "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8";
 const overlapHash = "c3f5b9212df7962fc7f95ccffe05841f31a9ca22d625cf5cf6c304d8bf9ffd78";
 const lateStartHash = "a792e8776fa77b4157ce5ee984b9b4027b25158da573554a7531044fa72c7ba1";
-const patchedHash = "3f4ee4031599a2342a32f23b2e54f0b7fdb0dc09b4cb047cecbf242e37c34367";
+const completedTextHash = "3f4ee4031599a2342a32f23b2e54f0b7fdb0dc09b4cb047cecbf242e37c34367";
+const patchedHash = "f52d7ed4d2bbd2e3749f48b6d9a2187df9d52d9c20ebde50e94a5f02c2b798d0";
 const replacements = [
   [
     `      threadResolvers.set(turnId, resolve);`,
@@ -267,6 +268,46 @@ var CodexEventHandler = class _CodexEventHandler {`
   ]
 ];
 
+const historyReplacements = [
+  [
+    `function mergeHistoryUpdates(responseItemFallbackUpdates, threadUpdates) {
+  const merged = [];
+  const seen = /* @__PURE__ */ new Set();
+  let fallbackIndex = 0;`,
+    `function mergeHistoryUpdates(responseItemFallbackUpdates, threadUpdates) {
+  const merged = [];
+  const seen = /* @__PURE__ */ new Set();
+  let fallbackIndex = 0;
+  const keyIndices = new Map(), contentIndices = new Map();
+  const addIndex = (map, key, index) => {
+    if (key === null) return;
+    const indices = map.get(key) ?? [];
+    indices.push(index);
+    map.set(key, indices);
+  };
+  responseItemFallbackUpdates.forEach((update, index) => {
+    addIndex(keyIndices, historyUpdateKey(update), index);
+    addIndex(contentIndices, historyUpdateContentKey(update), index);
+  });
+  const nextIndex = (map, key) => {
+    const indices = map.get(key) ?? [];
+    let low = 0, high = indices.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (indices[middle] < fallbackIndex) low = middle + 1;
+      else high = middle;
+    }
+    return indices[low] ?? Infinity;
+  };`
+  ],
+  [
+    `    const matchIndex = responseItemFallbackUpdates.findIndex((update, index) => index >= fallbackIndex && (targetKey !== null && historyUpdateKey(update) === targetKey || targetContentKey !== null && historyUpdateContentKey(update) === targetContentKey));
+    if (matchIndex === -1) {`,
+    `    const matchIndex = Math.min(nextIndex(keyIndices, targetKey), nextIndex(contentIndices, targetContentKey));
+    if (matchIndex === Infinity) {`
+  ]
+];
+
 export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_modules/@agentclientprotocol/codex-acp/", import.meta.url))) {
   const metadata = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
   if (metadata.name !== "@agentclientprotocol/codex-acp" || metadata.version !== "1.7.0") {
@@ -276,10 +317,10 @@ export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_mo
   const source = await readFile(bundle, "utf8");
   const hash = createHash("sha256").update(source).digest("hex");
   if (hash === patchedHash) return;
-  if (hash !== originalHash && hash !== overlapHash && hash !== lateStartHash) throw new Error("Unsupported codex-acp source: expected pristine 1.7.0 or an exact supported patch");
+  if (hash !== originalHash && hash !== overlapHash && hash !== lateStartHash && hash !== completedTextHash) throw new Error("Unsupported codex-acp source: expected pristine 1.7.0 or an exact supported patch");
   let patched = source;
-  for (const [before, after] of [...(hash === originalHash ? replacements : []), ...(hash !== lateStartHash ? lateStartReplacements : []), ...completedTextReplacements]) {
-    if (patched.split(before).length !== 2) throw new Error("Unsupported codex-acp source: ambiguous overlap patch");
+  for (const [before, after] of [...(hash === originalHash ? replacements : []), ...([originalHash, overlapHash].includes(hash) ? lateStartReplacements : []), ...(hash !== completedTextHash ? completedTextReplacements : []), ...historyReplacements]) {
+    if (patched.split(before).length !== 2) throw new Error("Unsupported codex-acp source: ambiguous patch");
     patched = patched.replace(before, after);
   }
   if (createHash("sha256").update(patched).digest("hex") !== patchedHash) throw new Error("Unsupported codex-acp source: unexpected patch result");
