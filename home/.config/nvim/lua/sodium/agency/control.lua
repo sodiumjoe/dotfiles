@@ -202,6 +202,10 @@ function M.new(deps)
         local args = { deps.executable or "agy" }
         vim.list_extend(args, argv)
         args[#args + 1] = "--json"
+        local input
+        for index, value in ipairs(args) do
+            if value == "--input-json" then input = args[index + 1]; args[index + 1] = "-"; break end
+        end
         local environment = vim.fn.environ()
         environment.NVIM = vim.v.servername
         local settled, job, timer, chunks, bytes = false, nil, nil, {}, 0
@@ -216,7 +220,7 @@ function M.new(deps)
             if job then pcall(job.kill, job, 15) end
             finish({ code = code, message = code:lower():gsub("_", " ") })
         end
-        local ok, handle = pcall(system, args, { cwd = options.cwd or vim.fn.getcwd(), env = environment,
+        local ok, handle = pcall(system, args, { cwd = options.cwd or vim.fn.getcwd(), env = environment, stdin = input,
             text = false, stdout = function(err, chunk)
                 if settled then return end
                 if err then fail("UNAVAILABLE"); return end
