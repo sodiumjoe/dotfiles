@@ -157,6 +157,10 @@ for (const launcher of ["node", "agy"]) test("actual " + launcher + " accepts lo
     child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal }))
   })
   child.stdout!.on("data", value => { stdout += value }); child.stderr!.on("data", value => { stderr += value })
+  if (launcher === "node") {
+    const launch = runtime.scope.snapshot().launches.find(value => value.pid === child.pid)
+    assert.ok(launch); await runtime.scope.observe(launch.ref)
+  }
   child.stdin!.end(JSON.stringify({ op: "forbidden-fixture", text: "λ".repeat(32768) }))
   assert.deepEqual(await closed, { code: 64, signal: null }); assert.equal(stderr, "")
   const reply = JSON.parse(stdout)
