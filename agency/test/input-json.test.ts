@@ -4,8 +4,9 @@ import { PassThrough, Readable } from "node:stream"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import { runTaskClient } from "../src/tasks/cli.js"
 import { readInputJson } from "../src/cli/input-json.js"
-import { fixtureSpawner } from "./fixtures/fixture-spawn.js"
+import { fixtureSpawner, fixtureRuntime, registerFixtureChild, cleanFixtureEnvironment } from "./fixtures/fixture-spawn.js"
 import { fileURLToPath } from "node:url"
+import { spawn as spawnProcess } from "node:child_process"
 
 const hostId = "a".repeat(64), commandId = "00000000-0000-4000-8000-000000000001"
 async function refuse(argv: string[], stdin: Readable) {
@@ -147,9 +148,10 @@ test("task write cancellation preserves unknown mutation outcome and its referen
 
 for (const launcher of ["node", "agy"]) test("actual " + launcher + " accepts long stdin and refuses own-op locally", { timeout: 10000 }, async () => {
   const spawn = await fixtureSpawner(), root = fileURLToPath(new URL("../../../", import.meta.url))
+  const runtime = await fixtureRuntime()
   const child = launcher === "node"
     ? spawn("stdin-cli-node", process.execPath, [fileURLToPath(new URL("../src/main.js", import.meta.url)), "session", "submit", "--host", hostId, "--input-json", "-", "--json"], { stdio: ["pipe", "pipe", "pipe"] })
-    : spawn("stdin-cli-wrapper", root + "home/bin/agy", ["session", "submit", "--host", hostId, "--input-json", "-", "--json"], { stdio: ["pipe", "pipe", "pipe"] })
+    : registerFixtureChild(runtime, runtime.scope.intent("stdin-cli-wrapper"), () => spawnProcess(root + "home/bin/agy", ["session", "submit", "--host", hostId, "--input-json", "-", "--json"], { stdio: ["pipe", "pipe", "pipe"], env: cleanFixtureEnvironment() }), undefined, { observeAfterExec: true })
   let stdout = "", stderr = ""
   const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal }))
