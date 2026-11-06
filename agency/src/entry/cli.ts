@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { readInputJson } from "../cli/input-json.js"
 import { isDeepStrictEqual } from "node:util"
 import { randomUUID } from "node:crypto"
 import { hash, id, keys, object } from "../catalog/types.js"
@@ -19,9 +20,10 @@ export async function runEntryClient(argv: readonly string[], deps: ControlDepen
     let ref: ReturnType<typeof parseEntryTarget> | undefined
     if (action === "open") {
       if (args.positional.length !== 2) throw new AgentError("USAGE")
-      const value = object(JSON.parse(args.flags.get("--input-json") ?? "null")); keys(value, ["commandId", "hostId", "target"])
+      const selected = args.flags.has("--host") ? hash(args.flags.get("--host")) : undefined
+      const value = object(await readInputJson(args.flags.get("--input-json"), deps)); keys(value, ["commandId", "hostId", "target"])
       commandId = id(value.commandId); ref = parseEntryTarget({ hostId: value.hostId, target: value.target })
-      if (args.flags.has("--host") && hash(args.flags.get("--host")) !== ref.hostId) throw new AgentError("USAGE")
+      if (selected && selected !== ref.hostId) throw new AgentError("USAGE")
     } else { if (args.positional.length !== 3 || !args.local && !args.flags.has("--host")) throw new AgentError("USAGE"); commandId = id(args.positional[2]) }
     executing = true
     const access = await openHostAccess(deps); close = access.close
@@ -43,7 +45,7 @@ export async function runEntryClient(argv: readonly string[], deps: ControlDepen
   } catch (error) {
     const code = error instanceof RuntimeOutcomeUnknown ? "OUTCOME_UNKNOWN" : error instanceof AgentError ? error.code : executing ? "UNAVAILABLE" : "USAGE"
     emit({ ok: false, error: { code, message: code === "USAGE" ? "Use entry open --input-json JSON or entry inspect COMMAND (--host HOST | --local)" : error instanceof Error ? error.message : String(error), ...(error instanceof RuntimeOutcomeUnknown ? { reference: error.reference } : {}) } })
-    return code === "USAGE" ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
+    return code === "USAGE" || code === "INPUT_TOO_LARGE" ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
   } finally { close?.() }
 }
 export async function runRuntimeEntryHelper(argv: readonly string[], deps: ControlDependencies, enter = (file: string, args: string[]) => new Promise<number>((resolve, reject) => {

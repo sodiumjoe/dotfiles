@@ -10,6 +10,7 @@ import { readHandlerRecord } from "../src/platform/private-state.js"
 import { connectBridge } from "../src/bridge/ssh.js"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import { parseHostReply } from "../src/hosts/protocol.js"
+import { Readable } from "node:stream"
 
 test("remote session start, prompt, cancel and stop survive unavailable task initialization", { timeout: 60000 }, async t => {
   const f = await acpFixture(t, { tasks: "reject" })
@@ -43,5 +44,43 @@ test("remote session start, prompt, cancel and stop survive unavailable task ini
   const requests = await f.requests("codex-acp")
   assert.equal(requests.filter(frame => frame.method === "session/new").length, 1)
   assert.equal(requests.filter(frame => frame.method === "session/prompt").length, 1)
+  transport.close(); await transport.closed; await f.verifyZeroSurvivors()
+})
+
+test("remote session receives one exact long Unicode prompt through stdin", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t, { tasks: "reject" })
+  const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
+  const spawnBridge = await fixtureBridgeSpawner()
+  const transport = await connectBridge({ hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  t.after(() => transport.close())
+  const call = async (action: string, input: object, argument?: string) => {
+    let output = ""
+    const code = await runControl(["session", action, ...(argument ? [argument] : []), "--input-json", "-", "--host", hostId, "--json"], {
+      ...productionControlDependencies(), stdin: Readable.from([Buffer.from(JSON.stringify(input))]),
+      environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env, route) => transport.request(route.channel, route.payload),
+      start: async () => { throw new Error("automatic startup forbidden") }, stdout: value => { output += value },
+    })
+    return { code, reply: parseHostReply(JSON.parse(output)) }
+  }
+  const commandId = randomUUID()
+  assert.equal((await call("start", { commandId, handlerGeneration: record.generation, cwd: f.workspace, backendId: "codex-acp" })).code, 0)
+  const command = await until(async () => {
+    const result = await call("command", { commandGeneration: record.generation }, commandId)
+    return result.reply.ok && result.reply.result.state === "session_command" && result.reply.result.receipt?.command.state === "completed" ? result.reply.result.receipt.command : undefined
+  })
+  assert.equal(command.result?.outcome, "started")
+  const target = command.target!, submissionId = randomUUID(), text = "stdin fixture λ🙂\n".repeat(100)
+  assert.equal((await call("submit", { target, submissionId, text })).code, 0)
+  const completed = await until(async () => {
+    const result = await call("submission", { target, submissionId })
+    return result.code === 0 && result.reply.ok && result.reply.result.state === "submission" ? result.reply.result.receipt : undefined
+  })
+  assert.ok(completed); assert.equal(completed.stopReason, "end_turn")
+  const requests = (await f.requests("codex-acp")).filter(frame => frame.method === "session/prompt")
+  assert.equal(requests.length, 1)
+  assert.deepEqual((requests[0]!.params as { prompt: unknown }).prompt, [{ type: "text", text }])
+  const stopId = randomUUID()
+  assert.equal((await call("stop", { ...target, commandId: stopId })).code, 0)
+  await until(async () => (await call("command", { commandGeneration: record.generation }, stopId)).code === 0 ? true : undefined)
   transport.close(); await transport.closed; await f.verifyZeroSurvivors()
 })

@@ -127,6 +127,8 @@ The CLI equivalent is `agy agent import --provider codex-acp --session <native-i
 
 ## CLI and protocol boundaries
 
+Every public `--input-json` flag accepts either inline JSON or `-` to read JSON from stdin. For example, `agy session submit --host HOST_ID --input-json - --json < submission.json` keeps the payload out of the process command line. Stdin must be noninteractive, contain valid UTF-8 JSON, and reach EOF within five seconds. Raw stdin is limited to 1 MiB; existing operation-specific schemas and limits still apply. Neovim's Agency command client sends its JSON this way while retaining the original payload for receipt validation.
+
 ```text
 agy status [--json]
 agy doctor [--json]

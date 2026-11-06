@@ -1,4 +1,5 @@
 import { runTaskClient } from "../tasks/cli.js"
+import type { Readable } from "node:stream"
 import { runSessionClient } from "../hosts/session-cli.js"
 import { runEntryClient } from "../entry/cli.js"
 import { runGitPrepare } from "../git/cli.js"
@@ -30,6 +31,7 @@ import { DarwinObservationUnavailable } from "../platform/darwin.js"
 import { LinuxObservationUnavailable } from "../platform/linux.js"
 
 export type ControlDependencies = {
+  stdin?: Readable & { isTTY?: boolean }
   hostInventory?(env: HandlerEnvironment): Pick<ReturnType<typeof createHostInventory>, "list" | "enroll">
   hostRoute?(env: HandlerEnvironment, route: HostRoute, signal?: AbortSignal): Promise<unknown>
   attachment?: Omit<AttachmentDependencies, "environment" | "inspect" | "stderr">
@@ -51,6 +53,7 @@ export type ControlDependencies = {
 
 export function productionControlDependencies(): ControlDependencies {
   return {
+    stdin: process.stdin,
     attachment: productionAttachmentStreams(),
     environment: productionEnvironment,
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),

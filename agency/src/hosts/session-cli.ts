@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { readInputJson } from "../cli/input-json.js"
 import { hash, id, keys, object } from "../catalog/types.js"
 import { AgentError } from "../agent/types.js"
 import { parseRuntimeSessionOperation, type RuntimeSessionRequest, type RuntimeSessionResult } from "../agent/session-controls.js"
@@ -34,11 +35,12 @@ export async function runSessionClient(argv: readonly string[], deps: ControlDep
       raw = { op: "agent_session_inspect", agentId: id(argument) }
     } else if (action === "command") {
       if (args.positional.length !== 3) throw new AgentError("USAGE")
-      const input = object(JSON.parse(flags.get("--input-json") ?? "null")); keys(input, ["commandGeneration"])
-      raw = { op: "agent_session_command", commandId: id(argument), commandGeneration: id(input.commandGeneration) }
+      const selectedCommand = id(argument)
+      const input = object(await readInputJson(flags.get("--input-json"), deps)); keys(input, ["commandGeneration"])
+      raw = { op: "agent_session_command", commandId: selectedCommand, commandGeneration: id(input.commandGeneration) }
     } else {
       if (args.positional.length !== 2 || !["start", "submit", "submission", "cancel", "stop"].includes(action ?? "")) throw new AgentError("USAGE")
-      const input = object(JSON.parse(flags.get("--input-json") ?? "null"))
+      const input = object(await readInputJson(flags.get("--input-json"), deps))
       raw = action === "start" || action === "stop" ? { op: action === "start" ? "agent_session_start" : "agent_stop", input } : { ...input, op: "agent_session_" + action }
       if (Object.hasOwn(input, "op")) throw new AgentError("USAGE")
     }

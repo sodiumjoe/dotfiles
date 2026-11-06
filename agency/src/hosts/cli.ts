@@ -1,4 +1,5 @@
 import { hostname } from "node:os"
+import { readInputJson } from "../cli/input-json.js"
 import { randomUUID } from "node:crypto"
 import { absolutePath, hash, id, keys, object, text } from "../catalog/types.js"
 import { AgentError } from "../agent/types.js"
@@ -42,7 +43,7 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
     if (group === "host") {
       if (args.local || args.positional.length !== 2 || !["list", "enroll"].includes(action!)) throw new AgentError("USAGE")
       allow(action === "enroll" ? ["--input-json"] : [])
-      const enrollment = action === "enroll" ? parseHostEnrollment(JSON.parse(flags.get("--input-json") ?? "null")) : undefined
+      const enrollment = action === "enroll" ? parseHostEnrollment(await readInputJson(flags.get("--input-json"), deps)) : undefined
       const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
       if (enrollment) { await inventory.enroll(enrollment); emit({ ok: true, result: { state: "enrolled", enrollment } }) }
       else emit({ ok: true, result: { state: "hosts", hosts: await inventory.list() } })
@@ -60,9 +61,10 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
       commandId = id(argument); operation = { op: "agent_permission_inspect", commandId }
     } else {
       allow(["--host", "--input-json", "--command-id"]); if (args.positional.length !== 2) throw new AgentError("USAGE")
-      const raw = object(JSON.parse(flags.get("--input-json") ?? "null")); keys(raw, ["ref", "optionId", ...(raw.commandId === undefined ? [] : ["commandId"])])
-      commandId = id(raw.commandId ?? flags.get("--command-id"))
-      if (raw.commandId !== undefined && flags.has("--command-id") && commandId !== id(flags.get("--command-id"))) throw new AgentError("USAGE")
+      const selectedCommand = flags.has("--command-id") ? id(flags.get("--command-id")) : undefined
+      const raw = object(await readInputJson(flags.get("--input-json"), deps)); keys(raw, ["ref", "optionId", ...(raw.commandId === undefined ? [] : ["commandId"])])
+      commandId = id(raw.commandId ?? selectedCommand)
+      if (raw.commandId !== undefined && selectedCommand && commandId !== selectedCommand) throw new AgentError("USAGE")
       const ref = parsePermissionRef(raw.ref)
       if (selected && selected !== ref.hostId) throw new AgentError("USAGE")
       operation = { op: "agent_permission_decide", commandId, ref, optionId: text(raw.optionId) }
@@ -88,7 +90,7 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
   } catch (error) {
     const code = error instanceof RuntimeOutcomeUnknown ? error.code : error instanceof AgentError ? error.code : executing ? "UNAVAILABLE" : "USAGE"
     emit({ ok: false, error: { code, message: error instanceof Error ? error.message : String(error), ...(error instanceof RuntimeOutcomeUnknown ? { reference: error.reference } : {}) } })
-    return code === "USAGE" || code === "INVALID_PROTOCOL" ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
+    return ["USAGE", "INVALID_PROTOCOL", "INPUT_TOO_LARGE"].includes(code) ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
   } finally { close?.() }
 }
 export async function openHostAccess(deps: ControlDependencies) {

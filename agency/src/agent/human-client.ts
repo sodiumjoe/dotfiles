@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { readInputJson } from "../cli/input-json.js"
 import type { ControlDependencies } from "../cli/control.js"
 import { id, keys, object, text } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
@@ -8,7 +9,7 @@ import { AgentError } from "./types.js"
 import { AGENT_PROTOCOL, parseAgentReply, validateAgentReply, type AgentReply, type AgentRequest } from "./protocol.js"
 import type { RuntimeHumanRequest } from "./human-controls.js"
 
-function parseLocal(argv: readonly string[]): RuntimeHumanRequest {
+async function parseLocal(argv: readonly string[], deps: ControlDependencies): Promise<RuntimeHumanRequest> {
   try {
     const positional: string[] = [], flags = new Map<string, string>(), seen = new Set<string>()
     for (let i = 0; i < argv.length; i++) {
@@ -33,22 +34,22 @@ function parseLocal(argv: readonly string[]): RuntimeHumanRequest {
     if (command === "list" && positional.length === 2 && flags.size === 0) return { op: "agent_permissions" }
     if (command === "inspect" && positional.length === 3 && flags.size === 0) return { op: "agent_permission_inspect", commandId: id(positional[2]) }
     if (command === "decide" && positional.length === 2 && flags.size === 1 && flags.has("--input-json")) {
-      const value = object(JSON.parse(flags.get("--input-json")!))
+      const value = object(await readInputJson(flags.get("--input-json"), deps))
       keys(value, ["commandId", "ref", "optionId"])
       return { op: "agent_permission_decide", commandId: id(value.commandId), ref: parsePermissionRef(value.ref), optionId: text(value.optionId) }
     }
     throw new Error()
-  } catch { throw new AgentError("USAGE") }
+  } catch (error) { if (error instanceof AgentError && error.code === "INPUT_TOO_LARGE") throw error; throw new AgentError("USAGE") }
 }
 
-const exit = (code: string): number => code === "USAGE" ? 64 : code === "INVALID_PROTOCOL" ? 65 : ["UNAVAILABLE", "STALE_HANDLER", "STALE_PROVIDER"].includes(code) ? 69 : code === "INTERNAL" ? 70 : 75
+const exit = (code: string): number => code === "USAGE" || code === "INPUT_TOO_LARGE" ? 64 : code === "INVALID_PROTOCOL" ? 65 : ["UNAVAILABLE", "STALE_HANDLER", "STALE_PROVIDER"].includes(code) ? 69 : code === "INTERNAL" ? 70 : 75
 
 export async function runLocalHumanClient(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
   const requestId = randomUUID(), json = argv.includes("--json")
   let generation: string | null = null
   const emit = (value: object) => dependencies.stdout(JSON.stringify({ protocol: AGENT_PROTOCOL, requestId, handlerGeneration: generation, ...value }, null, json ? undefined : 2) + "\n")
   try {
-    const operation = parseLocal(argv), env = await dependencies.environment(), handler = await dependencies.inspect(env)
+    const operation = await parseLocal(argv, dependencies), env = await dependencies.environment(), handler = await dependencies.inspect(env)
     if (!handler) throw new AgentError("UNAVAILABLE")
     generation = handler.record.generation
     if (handler.disposition !== "live" || handler.record.phase !== "ready" || handler.record.process === null) throw new AgentError("NOT_READY")
