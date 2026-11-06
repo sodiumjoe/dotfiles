@@ -118,6 +118,37 @@ exit 0
                     os.kill(pid, 0)
             self.assertEqual(process.returncode, 0, (self.root / "shell.log").read_text())
 
+    def test_background_sync_creates_and_appends_log_with_noclobber(self):
+        for existing in (False, True):
+            with self.subTest(existing_log=existing):
+                host = self.host + ("-existing" if existing else "-missing")
+                logfile = Path(f"/tmp/unison-sync-{host}.log")
+                self.addCleanup(logfile.unlink, missing_ok=True)
+                if existing:
+                    logfile.write_text("previous sync diagnostics\n")
+                note_name = "existing.md" if existing else "missing.md"
+                self.write(self.local, note_name, "local note")
+                note = self.remote / note_name
+                script = self.setup + r'''
+setopt noclobber
+unsetopt appendcreate
+_devbox_sync_loop "$2"
+for attempt in {1..100}; do
+  [[ -f "$SYNC_TEST_REMOTE/$3" ]] && break
+  sleep 0.05
+done
+_devbox_sync_loop_stop "$2"
+[[ -f "$SYNC_TEST_REMOTE/$3" ]]
+'''
+                result = subprocess.run(["zsh", "-f", "-c", script, "test",
+                                         str(ROOT / "home/.config/zsh/work_sync.zsh"), host, note_name],
+                                        env=self.env, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(note.read_text(), "local note")
+                self.assertTrue(logfile.exists())
+                if existing:
+                    self.assertTrue(logfile.read_text().startswith("previous sync diagnostics\n"))
+
     def test_remotes_disconnect_finishes_sync_in_background(self):
         self.assert_background_disconnect("remotes")
 

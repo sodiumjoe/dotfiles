@@ -114,7 +114,7 @@ _devbox_attach_tmux() {
     -o ControlMaster=auto \
     -o ControlPersist=60 \
     -o ControlPath="$control_path" \
-    -t "$host" "/usr/bin/tmux a || /usr/bin/tmux"
+    -t "$host" '"$HOME/bin/tmux" a || "$HOME/bin/tmux"'
 }
 
 _devbox_remote_home() {
@@ -228,7 +228,7 @@ _devbox_sync_loop() {
     -ignore 'Name node_modules' \
     -ignore 'Name fsmonitor--daemon*' \
     -logfile /tmp/unison-sync-${host}.log \
-    </dev/null >>"/tmp/unison-sync-${host}.log" 2>&1 &!
+    </dev/null >>!"/tmp/unison-sync-${host}.log" 2>&1 &!
   echo $! >| "$pidfile"
 }
 
