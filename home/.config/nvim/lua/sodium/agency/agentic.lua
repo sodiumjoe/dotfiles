@@ -541,6 +541,10 @@ function M.install()
                         end
                         if manager._agency_initial_submission == admitted then manager._agency_initial_context = nil end
                     end
+                    if params.state == "idle" then
+                        Stream.flush(manager)
+                        require("sodium.agentic_folds").finish_thinking(manager.message_writer)
+                    end
                     if params.state == "unavailable" then unavailable(manager) end
                     manager._agency_running = params.state == "running"
                     manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil

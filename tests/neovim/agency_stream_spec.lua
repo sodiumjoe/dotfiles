@@ -1,4 +1,5 @@
 package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
+dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agentic.lua").config()
 
 describe("Agency live rendering", function()
     local f, hooks, writer, renders
@@ -89,6 +90,66 @@ describe("Agency live rendering", function()
         f.client:_handle_message({ id = f.request("session/prompt").id, result = { stopReason = "end_turn" } })
         f.flush()
         assert.is_true(complete)
+    end)
+
+    it("folds queued thinking on remote idle and preserves it through a new turn", function()
+        f.state("remote-turn", "running")
+        deliver(chunk("idle first\nidle second", { sessionUpdate = "agent_thought_chunk" }))
+        f.state("remote-turn", "idle")
+        local first
+        for index, text in ipairs(vim.api.nvim_buf_get_lines(writer.bufnr, 0, -1, false)) do
+            if text:find("idle first", 1, true) then first = index end
+        end
+        assert.is_not_nil(first)
+        local function check_fold()
+            vim.api.nvim_win_call(f.manager.widget.win_nrs.chat, function()
+                assert.are.equal(first, vim.fn.foldclosed(first))
+                assert.are.equal(first + 1, vim.fn.foldclosedend(first))
+            end)
+        end
+        check_fold()
+        f.state("next-turn", "running")
+        deliver(chunk("next thought", { sessionUpdate = "agent_thought_chunk" }))
+        f.flush()
+        check_fold()
+        local next_line
+        for index, text in ipairs(vim.api.nvim_buf_get_lines(writer.bufnr, 0, -1, false)) do
+            if text:find("next thought", 1, true) then next_line = index end
+        end
+        assert.is_true(next_line > first + 1)
+        vim.api.nvim_win_call(f.manager.widget.win_nrs.chat, function()
+            assert.are.equal(-1, vim.fn.foldclosed(next_line))
+        end)
+        deliver(chunk("next answer"))
+        f.flush()
+        check_fold()
+    end)
+
+    it("folds each completed thinking block after a retained replay batch", function()
+        for _, update in ipairs({
+            chunk("replay first\nreplay second", { sessionUpdate = "agent_thought_chunk" }),
+            chunk("replay answer"),
+            chunk("replay later", { sessionUpdate = "agent_thought_chunk" }),
+            chunk("replay final answer"),
+        }) do
+            f.client:_handle_message({ method = "session/update", params = {
+                sessionId = f.manager.session_id, update = update, _meta = { agency = { replay = true } },
+            } })
+        end
+        f.flush()
+        local found = {}
+        for index, text in ipairs(vim.api.nvim_buf_get_lines(writer.bufnr, 0, -1, false)) do
+            for _, value in ipairs({ "replay first", "replay later", "replay final answer" }) do
+                if text:find(value, 1, true) then found[value] = index end
+            end
+        end
+        vim.api.nvim_win_call(f.manager.widget.win_nrs.chat, function()
+            assert.are.equal(found["replay first"], vim.fn.foldclosed(found["replay first"]))
+            assert.are.equal(found["replay first"] + 1, vim.fn.foldclosedend(found["replay first"]))
+            assert.are.equal(found["replay later"], vim.fn.foldclosed(found["replay later"]))
+            assert.are.equal(found["replay later"], vim.fn.foldclosedend(found["replay later"]))
+            assert.are.equal(-1, vim.fn.foldclosed(found["replay final answer"]))
+        end)
     end)
 
     it("keeps a reader who scrolls away during the batching window", function()

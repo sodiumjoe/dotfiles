@@ -905,7 +905,7 @@ exec agy acp]] } } }
                 files = diagnostics.window_opts,
                 input = diagnostics.window_opts,
                 todos = diagnostics.window_opts,
-                chat = diagnostics.window_opts,
+                chat = vim.tbl_deep_extend("force", diagnostics.window_opts, { win_opts = { foldminlines = 0 } }),
                 diagnostics = diagnostics.window_opts,
             },
             headers = {
@@ -914,6 +914,9 @@ exec agy acp]] } } }
                 code = noop,
                 files = noop,
                 todos = noop,
+            },
+            folding = {
+                tool_calls = { enabled = true, threshold = 0, fold_on_error = false },
             },
             hooks = {
                 on_response_complete = notify_agent_response_complete,
@@ -924,6 +927,7 @@ exec agy acp]] } } }
             callback = resize_agentic_split,
         })
 
+        require("sodium.agentic_folds").install()
         require("sodium.agency.agentic").install()
         require("sodium.agency").setup()
 
