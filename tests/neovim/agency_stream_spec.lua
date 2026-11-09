@@ -125,6 +125,147 @@ describe("Agency live rendering", function()
         check_fold()
     end)
 
+    it("retries an incomplete attachment with one history copy and its draft intact", function()
+        local id, binding = f.manager.session_id, vim.deepcopy(f.manager._agency_binding)
+        local function replay()
+            f.client:_handle_message({ method = "session/update", params = {
+                sessionId = id, update = chunk("retained retry history"), _meta = { agency = { replay = true } },
+            } })
+            f.flush()
+        end
+        local function reply(frame)
+            f.client:_handle_message({ id = frame.id, result = { sessionId = id,
+                _meta = { agency = { version = 1, binding = binding, backendId = "codex-acp",
+                    configuration = { configOptions = {}, availableCommands = {} } } } } })
+            f.flush()
+        end
+        f.manager:load_acp_session(id, "codex-acp")
+        local abandoned = f.request("session/load")
+        replay()
+        writer:write_tool_call_block({ tool_call_id = "abandoned", kind = "execute", argument = "old", status = "in_progress", body = { "old tool" } })
+        vim.api.nvim_buf_set_lines(f.manager.widget.buf_nrs.input, 0, -1, false, { "unsent draft" })
+        f.manager.file_list:add(vim.env.DOTFILES_TEST_ROOT .. "/test-nvim.sh")
+        local files = vim.deepcopy(f.manager.file_list:get_files())
+        local staged = require("sodium.agency.agentic").stage_context(f.manager, { type = "text", text = "staged context" })
+        f.manager:load_acp_session(id, "codex-acp")
+        local current = f.request("session/load")
+        assert.are.equal(id, f.manager._agency_loading_session)
+        assert.is_not.equal(abandoned.id, current.id)
+        reply(abandoned)
+        assert.is_nil(f.manager.session_id)
+        assert.is_true(f.manager._is_restoring_session)
+        replay()
+        reply(current)
+        local _, occurrences = buffer_text():gsub("retained retry history", "")
+        local _, banners = buffer_text():gsub("# Agentic %- Agency", "")
+        assert.are.equal(1, occurrences)
+        assert.are.equal(1, banners)
+        assert.is_nil(writer.tool_call_blocks.abandoned)
+        assert.is_nil(buffer_text():find("old tool", 1, true))
+        assert.are.same({ "unsent draft" }, vim.api.nvim_buf_get_lines(f.manager.widget.buf_nrs.input, 0, -1, false))
+        assert.are.same(files, f.manager.file_list:get_files())
+        assert.are.equal(staged, f.manager._agency_pending_context[1])
+        assert.are.equal(id, f.manager.session_id)
+        assert.is_false(f.manager._is_restoring_session)
+        assert.is_nil(f.manager._agency_loading_session)
+        assert.are.equal(0, vim.tbl_count(f.client.callbacks))
+    end)
+
+    it("detaches the old target when switching during an incomplete attachment", function()
+        local old = f.manager.session_id
+        f.manager:load_acp_session(old, "codex-acp")
+        local binding = vim.deepcopy(require("fixtures.agency_control").target_b)
+        local id = "agency:" .. binding.agentId
+        f.manager:load_acp_session(id, "codex-acp")
+        assert.are.equal(id, f.manager._agency_loading_session)
+        assert.is_nil(f.client.subscribers[old])
+        assert.are.equal(f.manager, f.client.subscribers[id]._agency_owner)
+        local detach
+        for i, frame in ipairs(f.frames) do
+            if frame.method == "agency/detach" and frame.params.sessionId == old then detach = i end
+        end
+        local load = f.request("session/load")
+        assert.is_not_nil(detach)
+        assert.is_true(detach < #f.frames)
+        assert.are.equal(id, load.params.sessionId)
+        f.manager:load_acp_session(old, "codex-acp")
+        assert.are.equal(old, f.manager._agency_loading_session)
+        assert.is_nil(f.client.subscribers[id])
+        assert.are.equal(f.manager, f.client.subscribers[old]._agency_owner)
+        load = f.request("session/load")
+        f.client:_handle_message({ method = "session/update", params = {
+            sessionId = id, update = chunk("stale old history"), _meta = { agency = { replay = true } },
+        } })
+        f.client:_handle_message({ id = load.id, result = { sessionId = old,
+            _meta = { agency = { version = 1, binding = require("fixtures.agency_control").target_a, backendId = "codex-acp",
+                configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.is_nil(buffer_text():find("stale old history", 1, true))
+        assert.are.equal(old, f.manager.session_id)
+    end)
+
+    it("restores configuration handling when incomplete cancellation fails", function()
+        f.manager:load_acp_session(f.manager.session_id, "codex-acp")
+        local restore, clear = f.manager.config_options.restore_snapshot, f.manager.widget.clear
+        f.manager.widget.clear = function() error("injected cancellation failure") end
+        local ok = pcall(f.manager.load_acp_session, f.manager, f.manager._agency_loading_session, "codex-acp")
+        f.manager.widget.clear = clear
+        local actual = f.manager.config_options.restore_snapshot
+        f.manager.config_options.restore_snapshot = restore
+        assert.is_false(ok)
+        assert.are.equal(restore, actual)
+    end)
+
+    it("finishes attachment when fast transport callbacks reenter a retained replay", function()
+        local id, binding = f.manager.session_id, vim.deepcopy(f.manager._agency_binding)
+        f.manager:load_acp_session(id, "codex-acp")
+        local frame, handlers = f.request("session/load"), f.client.subscribers[id]
+        local write, injected, delivered, failure = writer.write_message_chunk, false, nil, nil
+        writer.write_message_chunk = function(self, update)
+            local result = write(self, update)
+            if not injected and f.client._agency_replay_handlers == handlers then
+                injected = true
+                local done, timer = false, assert(vim.uv.new_timer())
+                timer:start(0, 0, function()
+                    timer:stop(); timer:close()
+                    delivered, failure = pcall(function()
+                        assert.is_true(vim.in_fast_event())
+                        assert.are.equal(handlers, f.client._agency_replay_handlers)
+                        f.client:_handle_message({ method = "agency/session_state", params = {
+                            sessionId = id, binding = binding, state = "idle",
+                        } })
+                        f.client:_handle_message({ id = frame.id, result = { sessionId = id,
+                            _meta = { agency = { version = 1, binding = binding, backendId = "codex-acp",
+                                configuration = { configOptions = {}, availableCommands = {} } } } } })
+                    end)
+                    done = true
+                end)
+                assert.is_true(vim.wait(1000, function() return done end))
+            end
+            return result
+        end
+        f.client:_handle_message({ method = "session/update", params = {
+            sessionId = id, update = chunk("reentrant first\nreentrant second", { sessionUpdate = "agent_thought_chunk" }),
+            _meta = { agency = { replay = true } },
+        } })
+        f.flush()
+        assert.is_true(injected)
+        assert.is_true(delivered, failure)
+        assert.is_nil(f.client.callbacks[frame.id])
+        assert.are.equal(id, f.manager.session_id)
+        assert.is_false(f.manager._is_restoring_session)
+        assert.is_nil(f.manager._agency_loading_session)
+        local first
+        for index, text in ipairs(vim.api.nvim_buf_get_lines(writer.bufnr, 0, -1, false)) do
+            if text:find("reentrant first", 1, true) then first = index end
+        end
+        assert.is_not_nil(first)
+        vim.api.nvim_win_call(f.manager.widget.win_nrs.chat, function()
+            assert.are.equal(first, vim.fn.foldclosed(first))
+            assert.are.equal(first + 1, vim.fn.foldclosedend(first))
+        end)
+    end)
+
     it("folds each completed thinking block after a retained replay batch", function()
         for _, update in ipairs({
             chunk("replay first\nreplay second", { sessionUpdate = "agent_thought_chunk" }),

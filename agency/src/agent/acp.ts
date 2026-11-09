@@ -5,8 +5,8 @@ import { cloneWireJson, encodeWireJson, wireJsonBytes } from "../acp/wire-json.j
 import { object } from "../catalog/types.js"
 import type { ConfiguredLaunchContract } from "./contracts.js"
 import { configurationSnapshot, projectRestorableSettings, validateConfiguration, validateMetadata, type JsonObject, type SessionConfiguration } from "./session-config.js"
-import { normalizeAgentRecord, AgentError, ProviderRequestError, agentFailure, agentText, type AgentRecord, type AgentRecordV3, type SessionStart, type AgentFailure, type AgentLimits, type PromptResult } from "./types.js"
-import { validateTurnInput, validateStructuredContent, validateNativeUpdate, validateNativePromptResponse, LEGACY_TURN_LIMITS, type AcpObservation, type TurnOptions } from "./session-events.js"
+import { normalizeAgentRecord, AgentError, ProviderRequestError, agentFailure, agentText, type AgentRecord, type AgentRecordV3, type SessionStart, type AgentFailure, type AgentLimits } from "./types.js"
+import { validateStructuredContent, validateNativeUpdate, validateNativePromptResponse, type AcpObservation } from "./session-events.js"
 
 export type ProviderSession = { sessionId: string; protocolVersion: 1; result: JsonObject; capabilities: JsonObject; configuration: SessionConfiguration }
 export type AcpConnection = {
@@ -15,7 +15,6 @@ export type AcpConnection = {
   notify(method: string, params: JsonObject): void
   respond(id: string | number, result: JsonObject): Promise<void>
   snapshot(): SessionConfiguration
-  prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>
   cancelPrompt(): Promise<void>
   close(): void
   fault: Promise<AgentFailure>
@@ -32,13 +31,12 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
   const { readable, writable, limits } = input, now = input.now ?? (() => performance.now())
   const pending = new Map<number, Pending>(), providerRequests = new Set<string | number>(), writes = new Set<(error?: Error | null) => void>()
   let nextId = 0, closed = false, failure: AgentError | null = null
-  let sessionId: string | null = null, loading = false, ready = false, legacyActive = false, cancellation: Promise<void> | undefined
+  let sessionId: string | null = null, loading = false, ready = false, cancellation: Promise<void> | undefined
   let configuration = configurationSnapshot({}), capabilities: JsonObject = {}, initialization: Promise<ProviderSession> | undefined
   let startupDeadline = Math.min(input.deadline ?? Infinity, input.overallDeadline ?? Infinity), initializationTimer: NodeJS.Timeout | undefined
   let startupPhase: AcpStartupDiagnostic["phase"] = "initialize", startupStartedAt: number | undefined, replayUpdates = 0
   const earlyUpdates: JsonObject[] = []
   let earlyUpdateBytes = 0
-  let promptText = "", promptTextLimit = 0
   const prompts = new Set<number>(), cancelledPrompts = new Map<number, NodeJS.Timeout>()
   const finishPrompt = (id: number): void => {
     prompts.delete(id); clearTimeout(cancelledPrompts.get(id)); cancelledPrompts.delete(id)
@@ -80,7 +78,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     writes.add(finish)
     try { writable.write(bytes, finish) } catch (error) { finish(error as Error) }
   })
-  const request = (method: string, raw: JsonObject, signal?: AbortSignal, projected = false): Promise<JsonObject> => {
+  const request = (method: string, raw: JsonObject, signal?: AbortSignal): Promise<JsonObject> => {
     let params: JsonObject
     try {
       check()
@@ -89,10 +87,9 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     } catch (error) { return Promise.reject(error) }
     const id = ++nextId
     if (method === "session/prompt") {
-      if (!ready || legacyActive || projected && prompts.size > 0 || params.sessionId !== sessionId || !Array.isArray(params.prompt)) return Promise.reject(new AgentError("NOT_READY"))
+      if (!ready || params.sessionId !== sessionId || !Array.isArray(params.prompt)) return Promise.reject(new AgentError("NOT_READY"))
       try { params.prompt.forEach(validateStructuredContent) } catch { return Promise.reject(new AgentError("INVALID_PROTOCOL")) }
       prompts.add(id)
-      if (projected) { legacyActive = true; promptText = "" }
     }
     const result = new Promise<JsonObject>((resolve, reject) => {
       const abort = () => fail(new AgentError("STARTUP_FAILED"))
@@ -103,7 +100,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (signal?.aborted) abort()
       if (!failure) void write({ id, method, params }).catch(fail)
     })
-    return method === "session/prompt" ? result.finally(() => { finishPrompt(id); if (projected) legacyActive = false }) : result
+    return method === "session/prompt" ? result.finally(() => finishPrompt(id)) : result
   }
   const applyResult = (result: JsonObject, method: string) => {
     validateConfiguration(result)
@@ -152,15 +149,6 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (update.sessionUpdate === "config_option_update") applyResult({ configOptions: update.configOptions! }, "update")
       if (update.sessionUpdate === "available_commands_update") configuration.availableCommands = (update.availableCommands ?? []) as JsonObject[]
       if (update.sessionUpdate === "current_mode_update" && configuration.modes) configuration.modes.currentModeId = update.currentModeId!
-      if (update.sessionUpdate === "agent_message_chunk" && legacyActive && promptTextLimit > 0) {
-        const content = object(update.content)
-        if (content.type === "text" && typeof content.text === "string" && Buffer.byteLength(promptText) < promptTextLimit) {
-          const bytes = Buffer.from(content.text)
-          let end = Math.min(bytes.length, promptTextLimit - Buffer.byteLength(promptText))
-          while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--
-          promptText += bytes.subarray(0, end).toString("utf8")
-        }
-      }
       const extra = Object.fromEntries(Object.keys(params).filter(key => key !== "sessionId" && key !== "update").map(key => [key, params[key]])) as JsonObject
       try { input.onUpdate?.({ update: update as AcpObservation["update"], replay: loading, ...(Object.keys(extra).length ? { params: cloneWireJson(extra) } : {}), ...(frame._meta ? { meta: cloneWireJson(frame._meta) as JsonObject } : {}) }) } catch {}
       return
@@ -269,13 +257,6 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         } catch (error) { fail(error); throw failure! }
         finally { clearTimeout(initializationTimer) }
       })()
-    },
-    async prompt(text, signal, turnLimits = LEGACY_TURN_LIMITS) {
-      validateTurnInput(text, turnLimits)
-      if (prompts.size) throw new AgentError("NOT_READY")
-      promptTextLimit = turnLimits.outputBytes
-      const result = await request("session/prompt", { sessionId, prompt: [{ type: "text", text }] }, signal, true)
-      return { stopReason: result.stopReason as PromptResult["stopReason"], text: promptText }
     },
     cancelPrompt() {
       if (!prompts.size) return Promise.resolve()

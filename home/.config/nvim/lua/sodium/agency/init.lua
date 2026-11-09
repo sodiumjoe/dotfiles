@@ -40,6 +40,7 @@ function M.setup(deps)
         roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
+    api.read_remote_names = deps.remote_names or require("sodium.agency.remote_names").read
     api.read_roster = deps.roster or function(callback)
         (deps.client or require("sodium.agency.control")).command({ "roster", "list" }, { timeout_ms = 10000 }, function(err, envelope)
             callback(err, envelope and envelope.result)
@@ -137,10 +138,10 @@ function M.setup(deps)
     end
     function api.attach(id, callback, expected) selected(id, callback, "attach", expected) end
     function api.restore(id, callback) selected(id, callback, "restore") end
-    function api.detach()
+    function api.detach(tab)
         epoch = epoch + 1
         operations.detach()
-        local manager = local_manager()
+        local manager = local_manager(tab)
         if manager then Registry.destroy_session(manager.tab_page_id) end
     end
     function api.cancel()
@@ -153,7 +154,15 @@ function M.setup(deps)
         local snapshot = api.snapshot()
         local exact = row and tuple(row) or snapshot and snapshot.target
         if not exact then report(failure("NOT_READY")); return end
-        operations.stop(exact, report, { cwd = row and row.record.definition.cwd or snapshot.cwd })
+        local manager = local_manager()
+        local tab, lifecycle_epoch = manager and manager.tab_page_id, manager and manager._agency_lifecycle_epoch
+        operations.stop(exact, function(err)
+            report(err)
+            if not err and manager and local_manager(tab) == manager
+                and manager._agency_lifecycle_epoch == lifecycle_epoch and vim.deep_equal(manager._agency_binding, exact) then
+                api.detach(tab)
+            end
+        end, { cwd = row and row.record.definition.cwd or snapshot.cwd })
     end
     function api.roster() epoch = epoch + 1; return require("sodium.agency.picker").open(api) end
     function api.inspect_delivery() operations.inspect_pending(function(err, result) report(err); api.notify(vim.inspect(result)) end) end

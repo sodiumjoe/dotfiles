@@ -101,7 +101,7 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
     if ((operation === "stop" && !retained || operation === "prompt") && handler.record.generation !== generation) throw new AgentError("STALE_HANDLER")
     generation = handler.record.generation
     const base = { protocol: AGENT_PROTOCOL, requestId: randomUUID(), handlerGeneration: generation }
-    let request: AgentRequest = retained || operation === "command" ? { ...base, op: "agent_command", commandId: commandId!, commandGeneration }
+    const operationRequest: AgentRequest = operation === "command" ? { ...base, op: "agent_command", commandId: commandId!, commandGeneration }
       : operation === "choices" ? { ...base, op: "agent_choices" }
       : operation === "page" ? { ...base, op: "agent_page", input: page! }
       : operation === "import" ? { ...base, op: "agent_import", input: { commandId: commandId!, handlerGeneration: generation, backendId: providerId(flags.get("--provider")), nativeSessionId: flags.get("--session")!, cwd: flags.get("--cwd")! } }
@@ -110,6 +110,8 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
       : operation === "stop" ? { ...base, op: "agent_stop", input: { commandId: commandId!, handlerGeneration: generation, agentId: positional[2]!, providerGeneration: flags.get("--provider-generation")! } }
       : operation === "prompt" ? { ...base, op: "agent_prompt", input: { agentId: positional[2]!, handlerGeneration: generation, providerGeneration: flags.get("--provider-generation")!, text: flags.get("--text")! } }
       : operation === "current" ? { ...base, op: "agent_current", cwd: resolve(deps.cwd()) } : { ...base, op: "agent_list" }
+    let request: AgentRequest = retained ? { ...base, op: "agent_command", commandId: commandId!, commandGeneration } : operationRequest
+    let retryRetained = retained !== null && commandGeneration === generation
     if (request.op === "agent_prompt") {
       const reply = parseAgentReply(await deps.callAgent(env, request, agentExchangeTimeout(request)))
       validateAgentReply(reply, request)
@@ -137,6 +139,11 @@ export async function runAgentClient(argv: readonly string[], deps: ControlDepen
         last = reply.result
         if (operation === "command") { emit(true, last); return last.command.state === "pending" || last.durability !== "verified" ? 75 : last.command.result?.failure ? 75 : 0 }
         if (last.command.state !== "pending" && last.durability === "verified") { emit(true, last); return ["started", "restored", "stopped", "imported"].includes(String(last.command.result?.outcome)) ? 0 : 75 }
+        if (retryRetained) {
+          retryRetained = false
+          request = { ...operationRequest, requestId: randomUUID() }
+          continue
+        }
       }
       if (commandId) request = { ...base, requestId: randomUUID(), op: "agent_command", commandId, commandGeneration }
       if (deps.now() < deadline) await deps.sleep(Math.min(100, deadline - deps.now()))

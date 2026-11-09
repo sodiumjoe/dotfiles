@@ -160,8 +160,13 @@ function M.parse_title(raw_title, allow_incomplete_environment)
 end
 
 function M.normalize_session(session)
-    local title, metadata = M.parse_title(session.title)
-    if title == "" then title = "(no title)" end
+    local title, metadata = M.parse_title(session.title, true)
+    title = vim.trim(title:gsub("%c", " "):gsub("%s+", " "))
+    if title == "" or title == "New conversation" then
+        title = "Untitled session " .. (session.sessionId or session.nativeSessionId or "unknown"):gsub("^agency:", ""):sub(1, 8)
+    end
+    local display_title = vim.fn.strchars(title) > 48 and vim.fn.strcharpart(title, 0, 47) .. "…" or title
+    local directory = type(session.cwd) == "string" and vim.fn.fnamemodify(session.cwd, ":~") or ""
     local updated_at = type(session.updatedAt) == "string"
             and session.updatedAt:sub(1, 16):gsub("T", " ")
         or "unknown date"
@@ -175,6 +180,7 @@ function M.normalize_session(session)
     return {
         session_id = session.sessionId or session.nativeSessionId,
         native_session_id = session.nativeSessionId,
+        saved_native_session_id = agency.nativeSessionId,
         backend_id = backend,
         cwd = session.cwd,
         phase = agency.phase,
@@ -184,10 +190,12 @@ function M.normalize_session(session)
         labels = labels,
         original_title = session.title,
         title = title,
+        display_title = display_title,
+        directory = directory,
         updated_at = updated_at,
         sort_key = session_updated_at_sort_key(session.updatedAt),
         metadata = metadata,
-        text = updated_at .. " " .. title .. labels,
+        text = table.concat({ title, directory, updated_at, labels }, " "),
     }
 end
 
@@ -218,9 +226,11 @@ end
 function M.preview_lines(item)
     local lines = { item.title, "", string.format("%-14s%s", "Updated:", item.updated_at) }
     local context = {
+        { "Directory:", item.cwd },
         { "Backend:", item.backend_id },
         { "Availability:", item.availability },
         { "Reason:", item.unavailable_reason },
+        { "State:", item.phase },
         { "Project root:", item.metadata.project_root },
         { "Branch:", item.metadata.branch },
         { "Plan:", item.metadata.plan },
@@ -234,7 +244,7 @@ function M.preview_lines(item)
     local function append_fields(fields)
         local appended = false
         for _, field in ipairs(fields) do
-            if field[2] then
+            if type(field[2]) == "string" and field[2] ~= "" then
                 lines[#lines + 1] = string.format("%-14s%s", field[1], field[2])
                 appended = true
             end
@@ -250,6 +260,9 @@ function M.preview_lines(item)
     end
     append_fields(environment)
     lines[#lines + 1] = string.format("%-14s%s", "Session ID:", item.session_id or "unknown")
+    if type(item.saved_native_session_id) == "string" then
+        lines[#lines + 1] = string.format("%-14s%s", "Native ID:", item.saved_native_session_id)
+    end
     return lines
 end
 
@@ -283,18 +296,9 @@ local function restore(current_session, item, lifecycle, valid)
             Logger.notify(item.unavailable_reason or "Backend unavailable: " .. tostring(item.backend_id), vim.log.levels.WARN)
             return
         end
-        if not item.native_session_id and item.phase == "ready" then lifecycle.attach(item.session_id:sub(8)); return end
         vim.ui.select({ "Cancel", "Restore" }, { prompt = "Restore saved session with a new provider process?" }, vim.schedule_wrap(function(choice)
             if choice ~= "Restore" or not valid() then return end
-            if not item.native_session_id then lifecycle.restore(item.session_id:sub(8)); return end
-            item.import_command_id = item.import_command_id or lifecycle.uuid()
-            current_session.agent:_send_request("agency/import", { commandId = item.import_command_id,
-                backendId = item.backend_id, nativeSessionId = item.native_session_id, cwd = item.cwd }, vim.schedule_wrap(function(reply, err)
-                    if not valid() then return end
-                    if err or not reply then
-                        Logger.notify("Import failed: " .. (err and err.message or "unknown error"), vim.log.levels.WARN)
-                    else lifecycle.restore(reply.sessionId:sub(8)) end
-                end))
+            lifecycle.restore(item.session_id:sub(8))
         end))
         return
     end
@@ -331,7 +335,7 @@ function M.show_picker(current_session, deps)
 
             local items = M.normalize_sessions(result.sessions)
             if #items == 0 then
-                Logger.notify("No saved sessions found", vim.log.levels.INFO)
+                Logger.notify(agency and "No stopped or recoverable Agency sessions found" or "No saved sessions found", vim.log.levels.INFO)
                 return
             end
 
@@ -340,17 +344,19 @@ function M.show_picker(current_session, deps)
                 Snacks.picker({
                     title = "Select session to restore",
                     items = items,
-                    layout = { hidden = { "preview" } },
+                    layout = { hidden = {} },
                     format = function(item)
                         return {
-                            { item.updated_at, "SnacksPickerComment" },
+                            { item.display_title },
                             { "  " },
-                            { item.title },
+                            { item.directory, "SnacksPickerDir" },
                             { item.labels or "", "SnacksPickerComment" },
+                            { "  " .. item.updated_at, "SnacksPickerComment" },
                         }
                     end,
                     preview = function(ctx)
                         ctx.preview:reset()
+                        if not ctx.item then return end
                         ctx.preview:set_lines(M.preview_lines(ctx.item))
                     end,
                     confirm = function(picker, item)
@@ -372,29 +378,49 @@ function M.show_picker(current_session, deps)
                 if err or not result then show(nil, err); return end
                 vim.list_extend(known, result.sessions or {})
                 if result.nextCursor then list(result.nextCursor); return end
+                known = vim.tbl_filter(function(session)
+                    local identity = session._meta and session._meta.agency
+                    return type(session.sessionId) == "string" and session.sessionId:sub(1, 7) == "agency:"
+                        and identity and (identity.phase == "stopped" or identity.phase == "recoverable")
+                end, known)
+                if #known == 0 then show({ sessions = known }); return end
                 current_session.agent:_send_request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(backends, backend_err)
                     if not valid() then return end
                     if backend_err or not backends then show(nil, backend_err); return end
                     local enabled = {}
                     for _, backend in ipairs(backends.backends) do enabled[backend.id] = true end
-                current_session.agent:_send_request("agency/native_sessions", vim.empty_dict(), vim.schedule_wrap(function(native, native_err)
-                    if not valid() then return end
-                    if native_err and #known == 0 then show(nil, native_err); return end
-                    local seen = {}
-                    for _, session in ipairs(known) do
-                        local identity = session._meta and session._meta.agency
-                        if identity and type(identity.nativeSessionId) == "string" then seen[identity.backendId .. ":" .. identity.nativeSessionId] = true end
+                    local function enrich(native)
+                        if not valid() then return end
+                        local seen = {}
+                        for _, session in ipairs(known) do
+                            local identity = session._meta and session._meta.agency
+                            if identity and type(identity.nativeSessionId) == "string" then
+                                seen[identity.backendId .. ":" .. identity.nativeSessionId] = session
+                            end
+                        end
+                        for _, session in ipairs(native and native.sessions or {}) do
+                            local key = session.backendId .. ":" .. session.nativeSessionId
+                            local saved = seen[key]
+                            if saved then
+                                local title = M.parse_title(saved.title, true)
+                                if title == "" or title == "New conversation" then saved.title = session.title end
+                                if type(saved.updatedAt) ~= "string" then saved.updatedAt = session.updatedAt end
+                            end
+                        end
+                        for _, session in ipairs(known) do
+                            local identity = session._meta and session._meta.agency or {}
+                            session.unavailable = session.unavailable == true or identity.unavailable == true
+                                or identity.recordVersion == 1 or not enabled[session.backendId or identity.backendId]
+                        end
+                        show({ sessions = known })
                     end
-                    for _, session in ipairs(native and native.sessions or {}) do
-                        if not seen[session.backendId .. ":" .. session.nativeSessionId] then known[#known + 1] = session end
-                    end
-                    for _, session in ipairs(known) do
-                        local identity = session._meta and session._meta.agency or {}
-                        session.unavailable = session.unavailable == true or identity.unavailable == true
-                            or identity.recordVersion == 1 or not enabled[session.backendId or identity.backendId]
-                    end
-                    show({ sessions = known })
-                end))
+                    local client = deps and deps.client or require("sodium.agency.control")
+                    client.command({ "native-sessions" }, { cwd = cwd, timeout_ms = 10000 }, vim.schedule_wrap(function(err, envelope)
+                        if not valid() then return end
+                        if err or not envelope then
+                            current_session.agent:_send_request("agency/native_sessions", vim.empty_dict(), vim.schedule_wrap(enrich))
+                        else enrich(envelope.result) end
+                    end))
                 end))
             end))
         end

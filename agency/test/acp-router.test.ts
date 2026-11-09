@@ -1,11 +1,37 @@
 import assert from "node:assert/strict"
+import { readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import test from "node:test"
 import { acpFixture } from "./acp-support.js"
 import type { JsonObject } from "../src/agent/session-config.js"
+import { until } from "./control-support.js"
 
 const initialize = { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true }, terminal: true } }
 const meta = (backendId: string): JsonObject => ({ agency: { version: 1, commandId: randomUUID(), backendId } })
+
+test("two outstanding native prompts share one cancellation and leave the session reusable", async t => {
+  const f = await acpFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  const a = c.request("session/prompt", { sessionId: session.sessionId!, prompt: [{ type: "text", text: "held" }] })
+  const b = c.request("session/prompt", { sessionId: session.sessionId!, prompt: [{ type: "text", text: "held" }] })
+  await until(async () => (await f.requests("codex-acp")).filter(value => value.method === "session/prompt").length === 2 ? true : undefined)
+  c.notify("session/cancel", { sessionId: session.sessionId! })
+  assert.deepEqual(await Promise.all([a, b]), [{ stopReason: "cancelled" }, { stopReason: "cancelled" }])
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/cancel").length, 1)
+  assert.equal((await c.request("session/prompt", { sessionId: session.sessionId!, prompt: [{ type: "text", text: "next" }] })).stopReason, "end_turn")
+  await f.stopSession(String(session.sessionId)); c.close(); await f.verifyZeroSurvivors()
+})
+
+test("native provider errors preserve their data and permit a subsequent prompt", async t => {
+  const f = await acpFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  await assert.rejects(c.request("session/prompt", { sessionId: session.sessionId!, prompt: [{ type: "text", text: "provider-busy" }] }), { code: -32042, message: "Provider busy", data: { retry: true } })
+  assert.equal((await c.request("session/prompt", { sessionId: session.sessionId!, prompt: [{ type: "text", text: "next" }] })).stopReason, "end_turn")
+  await f.stopSession(String(session.sessionId)); c.close(); await f.verifyZeroSurvivors()
+})
 
 test("one connection routes two colliding native session IDs without sharing backend configuration", async t => {
   const f = await acpFixture(t), c = await f.connect()
@@ -43,4 +69,36 @@ test("replay precedes live output without gaps and retains accepted user origin 
   await f.release("codex-acp"); await pending; await b.nextState("idle")
   const live = await b.next("session/update"), sequence = ((live._meta as JsonObject).agency as JsonObject)
   assert.equal(sequence.replay, false); assert.ok(Number(sequence.seq) > Number(attachment.lastSeq))
+})
+
+test("pending native callbacks settle before discharged conversation release", async t => {
+  const f = await acpFixture(t, { failOnceAt: "stop-publication", witness: true }), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  const pending = c.request("session/prompt", { sessionId: session.sessionId!, prompt: [{ type: "text", text: "held" }] }).catch(error => error)
+  await until(async () => (await f.requests("codex-acp")).some(value => value.method === "session/prompt") ? true : undefined)
+  const stop = await f.stop(await f.tuple(String(session.sessionId)))
+  await pending
+  const events = async (): Promise<string[]> => (await readFile(join(f.root, "mutations.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line))
+  await until(async () => (await events()).includes("failed:stop-publication") ? true : undefined)
+  const observed = await events()
+  assert.ok(observed.indexOf("turn:failed") >= 0)
+  assert.ok(observed.indexOf("conversation-closed") > observed.indexOf("turn:failed"))
+  assert.equal((await f.command(stop.command.commandId, stop.command.handlerGeneration)).command.state, "pending")
+  await f.retryOperation(stop.command); await f.waitCompleted(stop)
+  c.close(); await f.verifyZeroSurvivors()
+})
+
+test("configuration publication continuation tolerates concurrent physical discharge", async t => {
+  const f = await acpFixture(t, { pauseAt: "configuration", witness: true }), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  await writeFile(join(f.root, "emit-configuration"), "emit", { mode: 0o600 })
+  await f.waitBarrier()
+  await until(async () => (await readFile(join(f.root, "mutations.jsonl"), "utf8")).includes('"conversation-closed"') ? true : undefined)
+  await f.releaseBarrier()
+  const stopped = await f.stop(await f.tuple(String(session.sessionId)))
+  await f.waitCompleted(stopped)
+  assert.deepEqual((await f.list()).issues, [])
+  c.close(); await f.verifyZeroSurvivors()
 })

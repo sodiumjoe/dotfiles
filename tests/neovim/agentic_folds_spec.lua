@@ -150,10 +150,89 @@ describe("Agentic completed block folding", function()
         assert.are.same({ -1, -1 }, closed(line("execute(echo hello)")))
     end)
 
-    it("keeps failed execution output and diffs expanded", function()
-        writer:write_tool_call_block({ tool_call_id = "failed", kind = "execute", argument = "failing command", status = "failed", body = { "failed output" } })
+    it("folds completed output at threshold zero without measuring decorated height", function()
+        local height = vim.api.nvim_win_text_height
+        vim.api.nvim_win_text_height = function() error("decorated height should not be measured") end
+        local ok, failure = xpcall(function()
+            writer:write_tool_call_block({ tool_call_id = "fast", kind = "execute", argument = "output", status = "completed", body = { "completed output" } })
+            writer:write_tool_call_block({ tool_call_id = "fast-diff", kind = "edit", argument = "fast.lua", file_path = "fast.lua", status = "completed", diff = { old = { "old fast" }, new = { "new fast" } } })
+            assert.is_true(closed(line("completed output"))[1] > 0)
+            assert.is_true(closed(line("new fast"))[1] > 0)
+        end, debug.traceback)
+        vim.api.nvim_win_text_height = height
+        assert.is_true(ok, failure)
+    end)
+
+    it("rejects invalid or hidden ranges at threshold zero", function()
+        local Fold = require("agentic.ui.tool_call_fold")
+        local buf = writer.bufnr
+        assert.is_false(Fold.should_fold({ bufnr = buf, start_row = 2, end_row = 1, status = "completed" }))
+        assert.is_false(Fold.should_fold({ bufnr = buf, start_row = -1, end_row = 0, status = "completed" }))
+        local count = vim.api.nvim_buf_line_count(buf)
+        assert.is_false(Fold.should_fold({ bufnr = buf, start_row = 0, end_row = count, status = "completed" }))
+        assert.is_false(Fold.should_fold({ bufnr = buf, start_row = 0, end_row = 0, status = "in_progress" }))
+        assert.is_false(Fold.should_fold({ bufnr = buf, start_row = 0, end_row = 0, status = "failed", is_diff = true }))
+        local hidden = vim.api.nvim_create_buf(false, true)
+        assert.is_false(Fold.should_fold({ bufnr = hidden, start_row = 0, end_row = 0, status = "completed" }))
+        vim.api.nvim_buf_delete(hidden, { force = true })
+        assert.is_false(Fold.should_fold({ bufnr = hidden, start_row = 0, end_row = 0, status = "completed" }))
+    end)
+
+    it("uses rendered height for positive thresholds and configured failed output", function()
+        local config = require("agentic.config").folding.tool_calls
+        config.threshold = 3
+        writer:write_tool_call_block({ tool_call_id = "wrapped", kind = "execute", argument = "long", status = "completed", body = { string.rep("word ", 300) } })
+        assert.is_true(closed(line("word word"))[1] > 0)
+        config.threshold, config.fold_on_error = 0, true
+        writer:write_tool_call_block({ tool_call_id = "configured-error", kind = "execute", argument = "error", status = "failed", body = { "configured failed output" } })
+        assert.is_true(closed(line("configured failed output"))[1] > 0)
+    end)
+
+    it("folds completed edit diffs while leaving their headers and status visible", function()
         writer:write_tool_call_block({ tool_call_id = "diff", kind = "edit", argument = "file.lua", file_path = "file.lua", status = "completed", diff = { old = { "old value" }, new = { "new value" } } })
+        assert.is_true(closed(line("new value"))[1] > 0)
+        assert.are.same({ -1, -1 }, closed(line("edit(file.lua)")))
+        assert.are.same({ -1, -1 }, closed(line("completed")))
+    end)
+
+    it("keeps in-progress edit diffs expanded until completion", function()
+        writer:write_tool_call_block({ tool_call_id = "diff", kind = "edit", argument = "file.lua", file_path = "file.lua", status = "in_progress", diff = { old = { "old value" }, new = { "new value" } } })
+        assert.are.same({ -1, -1 }, closed(line("new value")))
+        writer:update_tool_call_block({ tool_call_id = "diff", status = "completed" })
+        assert.is_true(closed(line("new value"))[1] > 0)
+    end)
+
+    it("keeps failed execution output and edit diffs expanded", function()
+        writer:write_tool_call_block({ tool_call_id = "failed", kind = "execute", argument = "failing command", status = "failed", body = { "failed output" } })
+        writer:write_tool_call_block({ tool_call_id = "diff", kind = "edit", argument = "file.lua", file_path = "file.lua", status = "in_progress", diff = { old = { "old value" }, new = { "new value" } } })
+        writer:update_tool_call_block({ tool_call_id = "diff", status = "failed" })
         assert.are.same({ -1, -1 }, closed(line("failed output")))
+        assert.are.same({ -1, -1 }, closed(line("new value")))
+    end)
+
+    it("respects disabled folding and the configured threshold for completed diffs", function()
+        local config = require("agentic.config").folding.tool_calls
+        config.enabled = false
+        writer:write_tool_call_block({ tool_call_id = "disabled", kind = "edit", argument = "disabled.lua", file_path = "disabled.lua", status = "completed", diff = { old = { "old disabled" }, new = { "new disabled" } } })
+        assert.are.same({ -1, -1 }, closed(line("new disabled")))
+        config.enabled = true
+        config.threshold = 1000
+        writer:write_tool_call_block({ tool_call_id = "threshold", kind = "edit", argument = "threshold.lua", file_path = "threshold.lua", status = "completed", diff = { old = { "old threshold" }, new = { "new threshold" } } })
+        assert.are.same({ -1, -1 }, closed(line("new threshold")))
+    end)
+
+    it("installs diff folding only once and preserves manually reopened diffs on update", function()
+        local folds = require("sodium.agentic_folds")
+        local should_fold = require("agentic.ui.tool_call_fold").should_fold
+        folds.install()
+        folds.install()
+        assert.are.equal(should_fold, require("agentic.ui.tool_call_fold").should_fold)
+        writer:write_tool_call_block({ tool_call_id = "diff", kind = "edit", argument = "file.lua", file_path = "file.lua", status = "completed", diff = { old = { "old value" }, new = { "new value" } } })
+        local first = line("new value")
+        assert.is_true(closed(first)[1] > 0)
+        vim.api.nvim_win_call(f.manager.widget.win_nrs.chat, function() vim.cmd(first .. "foldopen") end)
+        folds.install()
+        writer:update_tool_call_block({ tool_call_id = "diff", status = "completed" })
         assert.are.same({ -1, -1 }, closed(line("new value")))
     end)
 

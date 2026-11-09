@@ -54,10 +54,54 @@ local function row_item(row, active)
             preview[#preview + 1] = string.format("%-14s%s", field[1], field[2])
         end
     end
+    local full_title = title
+    local details = table.concat({ backend .. (model ~= "" and "/" .. model or ""),
+        vim.fn.fnamemodify(cwd, ":~"), status, location }, " · ")
     if vim.fn.strchars(title) > 72 then title = vim.fn.strcharpart(title, 0, 71) .. "…" end
-    return { id = id, view = vim.deepcopy(row), preview = preview,
-        text = table.concat({ title, backend .. (model ~= "" and "/" .. model or ""),
-            vim.fn.fnamemodify(cwd, ":~"), status, location }, " · ") }
+    return { id = id, view = vim.deepcopy(row), preview = preview, title = full_title, label = "local",
+        status = status == "Waiting for input" and "Idle" or status, search_text = full_title .. " · " .. details,
+        text = title .. " · " .. details }
+end
+
+local function clip(value, width)
+    if width <= 0 then return "" end
+    if vim.fn.strdisplaywidth(value) <= width then return value end
+    local text = vim.fn.strcharpart(value, 0, width - 1)
+    while vim.fn.strdisplaywidth(text) > width - 1 do text = vim.fn.strcharpart(text, 0, vim.fn.strchars(text) - 1) end
+    return text .. "…"
+end
+
+local function column(value, width)
+    local text = clip(value, width)
+    return text .. string.rep(" ", math.max(0, width - vim.fn.strdisplaywidth(text)))
+end
+
+local function active_format(item, picker)
+    return { { "", resolve = function(width)
+        width = math.max(1, width - 1)
+        if width < 12 then return { { clip("[" .. item.label .. "] " .. item.title, width) } } end
+        local label_width = math.min(picker._agency_label_width or 32, 32, math.floor(width / 3))
+        local status_width = math.min(9, math.floor(width / 4))
+        local title_width = width - label_width - status_width - 4
+        local label = "[" .. clip(item.label, label_width - 2) .. "]"
+        local status_hl = item.issue and "DiagnosticWarn" or item.status == "Working" and "DiagnosticInfo" or "Comment"
+        return { { column(label, label_width), "Identifier" }, { "  " },
+            { column(item.title, title_width) }, { "  " }, { column(item.status, status_width), status_hl } }
+    end } }
+end
+
+local function diagnostic_item(name, message, issue, hosts, status)
+    local preview = { "[" .. name .. "]", message, "" }
+    if hosts then
+        for _, host in ipairs(hosts) do
+            vim.list_extend(preview, { "Host: " .. host.hostname, "Host ID: " .. host.hostId })
+            if host.code then preview[#preview + 1] = "Error: " .. host.code end
+            preview[#preview + 1] = ""
+        end
+    end
+    vim.list_extend(preview, vim.split(vim.inspect(issue), "\n"))
+    return { label = name, title = message, status = status or "Issue", preview = preview, issue = vim.deepcopy(issue),
+        text = table.concat({ name, message, vim.inspect(issue) }, " ") }
 end
 
 local function after_close(picker, valid, callback, notify)
@@ -75,7 +119,7 @@ local function after_close(picker, valid, callback, notify)
         for _, win in ipairs(windows) do
             if vim.api.nvim_win_is_valid(win) then
                 if vim.uv.hrtime() < deadline then vim.defer_fn(finish, 10)
-                elseif notify then notify("Picker windows did not close; attachment cancelled") end
+                elseif notify then notify("Picker windows did not close; action cancelled") end
                 return
             end
         end
@@ -110,12 +154,17 @@ function M.current(agents, callback)
     })
 end
 
-local function owner_item(host, row, local_host, active)
+local function owner_item(host, row, local_host, active, name)
+    name = name or "unnamed remote"
     local record, launch = row.record, row.record.launch
-    if record.version ~= 3 or not launch or launch == vim.NIL then return { issue = row, text = host.hostname .. " · unavailable session" } end
+    if record.version ~= 3 or not launch or launch == vim.NIL then
+        return diagnostic_item(name, "Unavailable session", row, { host })
+    end
     local item = row_item(row, local_host and active or nil)
     item.id = host.hostId .. ":" .. record.definition.agentId
-    item.text = item.text .. " · " .. host.hostname
+    item.label = name
+    item.text = "[" .. name .. "] · " .. item.search_text .. " · " .. item.status .. " · " .. host.hostname
+    if not local_host and name ~= "unnamed remote" then item.preview[#item.preview + 1] = "Remote: " .. name end
     vim.list_extend(item.preview, { "Host: " .. host.hostname, "Host ID: " .. host.hostId })
     if not local_host then
         item.owner, item.view = vim.deepcopy(row), nil
@@ -128,65 +177,103 @@ local function owner_item(host, row, local_host, active)
 end
 
 function M.open(controller)
-    local closed, polling, owner_polling, generation = false, false, false, 0
-    local picker, timer, roster, unavailable, local_generation
-    local local_rows, local_issues = {}, {}
+    local read_names = controller.read_roster and controller.read_remote_names
+    local closed, local_pending, published = false, true, false
+    local remote_pending = (controller.read_roster and 1 or 0) + (read_names and 1 or 0)
+    local picker, roster, unavailable, local_generation, publication
+    local local_rows, local_issues, names = {}, {}, {}
     local function render()
-        if closed or not picker then return end
-        local items, active = {}, controller.snapshot()
+        if closed or local_pending or not picker or published and remote_pending > 0 then return end
+        local items, diagnostics, unlisted, active = {}, {}, {}, controller.snapshot()
         for _, row in ipairs(local_rows) do
             if row.record.version == 3
                 and (row.record.phase == "ready" and row.live or vim.tbl_contains({ "starting", "restoring", "stopping" }, row.record.phase))
                 and row.record.launch and row.record.launch ~= vim.NIL
-                and row.record.launch.handlerGeneration == local_generation then items[#items + 1] = row_item(row, active) end
+                and row.record.launch.handlerGeneration == local_generation then
+                local item = row_item(row, active)
+                item.text = "[local] · " .. item.search_text .. " · " .. item.status
+                items[#items + 1] = item
+            end
         end
-        for _, issue in ipairs(local_issues) do items[#items + 1] = { issue = issue, text = "Issue: " .. (issue.path or "") .. " · " .. (issue.message or issue.code) } end
-        if roster then
+        for _, issue in ipairs(local_issues) do
+            diagnostics[#diagnostics + 1] = diagnostic_item("local", issue.message or issue.code or "Unavailable", issue)
+        end
+        if remote_pending == 0 and roster then
             for _, host in ipairs(roster.hosts) do
-                if host.state == "unavailable" then items[#items + 1] = { issue = host, text = host.hostname .. " · " .. host.code }
-                else
-                    local is_local = host.hostId == roster.localHostId
-                    if not is_local or #local_rows == 0 then
-                        for _, row in ipairs(host.value.agents) do items[#items + 1] = owner_item(host, row, is_local, active) end
+                local is_local = host.hostId == roster.localHostId
+                local name = is_local and "local" or names[host.hostname]
+                if host.state == "unavailable" then
+                    if not name then unlisted[#unlisted + 1] = host
+                    else
+                        local message = host.code == "BRIDGE_EOF" and "Connection closed" or "Unavailable"
+                        diagnostics[#diagnostics + 1] = diagnostic_item(name, message, host, { host }, "Offline")
                     end
-                    for _, issue in ipairs(host.value.issues) do items[#items + 1] = { issue = issue, text = host.hostname .. " · " .. issue.message } end
+                else
+                    if not is_local or #local_rows == 0 then
+                        for _, row in ipairs(host.value.agents) do
+                            local item = owner_item(host, row, is_local, active, name)
+                            local destination = item.issue and diagnostics or items
+                            destination[#destination + 1] = item
+                        end
+                    end
+                    for _, issue in ipairs(host.value.issues) do
+                        diagnostics[#diagnostics + 1] = diagnostic_item(name or "unnamed remote", issue.message, issue, { host })
+                    end
                 end
             end
-        elseif unavailable then items[#items + 1] = { issue = { code = unavailable }, text = "Owner reads unavailable · " .. unavailable } end
+        elseif remote_pending == 0 and unavailable then diagnostics[#diagnostics + 1] = diagnostic_item("remotes", "Owner reads unavailable", { code = unavailable }) end
+        if #unlisted > 0 then
+            local message = #unlisted .. " saved host" .. (#unlisted == 1 and "" or "s") .. " unavailable"
+            local item = diagnostic_item("unlisted remotes", message, { hosts = unlisted }, unlisted, "Offline")
+            table.insert(item.preview, 4, "No friendly name was resolved for these saved hosts.")
+            diagnostics[#diagnostics + 1] = item
+        end
+        local first_session = picker.list.reverse and #diagnostics + 1 or 1
+        if picker.list.reverse then
+            vim.list_extend(diagnostics, items)
+            items = diagnostics
+        else vim.list_extend(items, diagnostics) end
+        picker._agency_label_width = 7
+        for _, item in ipairs(items) do
+            item.group = item.issue and (picker.list.reverse and 0 or 1) or (picker.list.reverse and 1 or 0)
+            picker._agency_label_width = math.max(picker._agency_label_width, vim.fn.strdisplaywidth(item.label) + 2)
+        end
+        local selected = picker.list.win:valid() and picker:current()
+        publication = selected and { key = selected.id or selected.text,
+            pattern = picker.input.filter.pattern, search = picker.input.filter.search } or nil
+        published = true
         picker.opts.items = items
+        if not publication and picker.list.reverse and #items >= first_session and picker.input.filter.pattern == "" then
+            picker.list:set_target(first_session)
+        end
         picker:find({ refresh = true })
     end
-    local function refresh_local()
-        if closed or polling then return end
-        polling = true
-        local token = generation
+    local function load_local()
         controller.page({ allow_issues = true, active = true }, function(err, result)
-            if closed or token ~= generation then return end
-            polling = false
+            if closed then return end
             if err then local_rows, local_issues = {}, { err }
             else local_rows, local_issues, local_generation = result.agents, result.issues, result.handlerGeneration end
+            local_pending = false
             render()
         end)
     end
-    local function refresh_owners()
-        if closed or owner_polling or not controller.read_roster then return end
-        owner_polling = true
-        local token = generation
+    local function load_owners()
+        if not controller.read_roster then return end
         controller.read_roster(function(err, result)
-            if closed or token ~= generation then return end
-            owner_polling = false
+            if closed then return end
             if err then roster, unavailable = nil, err.code
             elseif type(result) ~= "table" or result.state ~= "roster" or type(result.hosts) ~= "table" then roster, unavailable = nil, "INVALID_PROTOCOL"
             else roster, unavailable = result, nil end
+            remote_pending = remote_pending - 1
             render()
         end)
     end
-    local function refresh() refresh_local(); refresh_owners() end
     local function inspect(item) controller.notify(vim.inspect(item and (item.owner or item.view or item.issue))) end
     local function actionable(item)
         return item and (item.remote_ref ~= nil or item.view ~= nil)
     end
     local function attach(p, item)
+        if publication then return end
         local row = item and item.view
         if not actionable(item) then inspect(item); return end
         if item.remote_ref or row and row.record.version == 3 and row.record.phase == "ready" and row.live then
@@ -198,29 +285,55 @@ function M.open(controller)
         else inspect(item) end
     end
     picker = Snacks.picker({
-        title = "Agency active agents", items = {}, show_empty = true, format = "text", preview = agent_preview, confirm = attach,
+        title = "Agency active agents", items = {}, show_empty = true, format = active_format, preview = agent_preview, confirm = attach,
+        sort = { fields = { "group", "score:desc", "idx" } },
+        matcher = { on_done = function()
+            if closed or not picker or picker:is_active() then return end
+            local prior = publication
+            publication = nil
+            if prior and prior.key and prior.pattern == picker.input.filter.pattern and prior.search == picker.input.filter.search then
+                for index = 1, picker.list:count() do
+                    local item = picker.list:get(index)
+                    if (item.id or item.text) == prior.key then picker.list:view(index); return end
+                end
+            end
+            if not picker.list.reverse then return end
+            local selected = picker:current()
+            if not selected or not selected.issue then return end
+            for index = 1, picker.list:count() do
+                if not picker.list:get(index).issue then picker.list:view(index); return end
+            end
+        end },
         actions = {
             attach = function(p) attach(p, p:current()) end,
             stop = function(p)
                 local item = p:current()
                 if actionable(item) and item.view and item.view.record.version == 3 then
-                    local selected = vim.deepcopy(item.view); p:close(); controller.stop(selected)
+                    if publication then return end
+                    local selected, tab = vim.deepcopy(item.view), vim.api.nvim_get_current_tabpage()
+                    local valid = controller.selection_guard and controller.selection_guard() or function() return true end
+                    after_close(p, function() return valid() and vim.api.nvim_tabpage_is_valid(tab) and vim.api.nvim_get_current_tabpage() == tab end,
+                        function() controller.stop(selected) end, controller.notify)
                 else inspect(item) end
             end,
-            refresh = refresh,
-            help = function() controller.notify("Enter/C-a attach ready; C-s stop local selected; M-r refresh; ? help. Disconnected and transitional rows are inspectable. Saved sessions: <leader>ar. New session: <leader>an.") end,
+            help = function() controller.notify("Enter/C-a attach ready; C-s stop local selected; ? help. Reopen <leader>af for a fresh snapshot. Disconnected and transitional rows are inspectable. Saved sessions: <leader>ar. New session: <leader>an.") end,
         },
         win = { input = { keys = { ["<C-a>"] = { "attach", mode = { "n", "i" } }, ["<C-s>"] = { "stop", mode = { "n", "i" } },
-            ["<M-r>"] = { "refresh", mode = { "n", "i" } }, ["?"] = { "help", mode = "n" } } } },
+            ["?"] = { "help", mode = "n" } } }, list = { keys = { ["<C-s>"] = "stop" } } },
         on_close = function()
-            if closed then return end
-            closed, generation = true, generation + 1
-            if timer then timer:stop(); timer:close() end
+            closed = true
         end,
     })
-    timer = (controller.timer_factory or vim.uv.new_timer)()
-    timer:start(5000, 5000, vim.schedule_wrap(refresh))
-    refresh()
+    load_local()
+    load_owners()
+    if read_names then
+        read_names(function(result)
+            if closed then return end
+            names = result or {}
+            remote_pending = remote_pending - 1
+            render()
+        end)
+    end
     return picker
 end
 

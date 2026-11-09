@@ -1,4 +1,6 @@
 import { runTaskClient } from "../tasks/cli.js"
+import { homedir } from "node:os"
+import { discoverCodexSessions } from "../agent/native-sessions.js"
 import type { Readable } from "node:stream"
 import { runSessionClient } from "../hosts/session-cli.js"
 import { runEntryClient } from "../entry/cli.js"
@@ -32,6 +34,7 @@ import { LinuxObservationUnavailable } from "../platform/linux.js"
 
 export type ControlDependencies = {
   stdin?: Readable & { isTTY?: boolean }
+  nativeSessionRoot?(): string
   hostInventory?(env: HandlerEnvironment): Pick<ReturnType<typeof createHostInventory>, "list" | "enroll">
   hostRoute?(env: HandlerEnvironment, route: HostRoute, signal?: AbortSignal): Promise<unknown>
   attachment?: Omit<AttachmentDependencies, "environment" | "inspect" | "stderr">
@@ -146,10 +149,16 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     dependencies.stdout(JSON.stringify(envelope, null, json ? undefined : 2) + "\n")
   }
   try {
+    if (argv[0] === "native-sessions") {
+      if (argv.length > 2 || argv.length === 2 && argv[1] !== "--json") throw new ControlError("USAGE", "use agy native-sessions [--json]")
+      const root = dependencies.nativeSessionRoot?.() ?? join(process.env.CODEX_HOME ?? join(process.env.HOME ?? homedir(), ".codex"), "sessions")
+      emit(true, { sessions: await discoverCodexSessions(root) })
+      return 0
+    }
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "native-sessions [--json] (read-only local Codex history)", "acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent attach AGENT_UUID --handler-generation UUID --provider-generation UUID --format ndjson", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)

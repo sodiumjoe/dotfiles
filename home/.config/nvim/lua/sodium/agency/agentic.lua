@@ -104,6 +104,7 @@ local function lifecycle(manager, callback, ...)
         Stream.discard(manager)
         if manager._agency_routed_permissions then manager._agency_routed_permissions.close(); manager._agency_routed_permissions = nil end
         manager._agency_epoch = (manager._agency_epoch or 0) + 1
+        manager._agency_lifecycle_epoch = (manager._agency_lifecycle_epoch or 0) + 1
         manager._agency_binding, manager._agency_turn_id = nil, nil
         manager._agency_local_submission, manager._agency_permissions = nil, {}
         for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
@@ -271,9 +272,11 @@ function M.install()
             input = vim.api.nvim_buf_get_lines(self.widget.buf_nrs.input, 0, -1, false) }
         local restore = self.config_options.restore_snapshot
         self.config_options.restore_snapshot = function() end
-        self._agency_loading_session = select(1, ...)
         local args = { n = select("#", ...), ... }
-        local ok, result = xpcall(function() return lifecycle(self, sm.load_acp_session, unpack(args, 1, args.n)) end, debug.traceback)
+        local ok, result = xpcall(function()
+            if self.session_id == nil and self._agency_loading_session then self:_cancel_session() end
+            return lifecycle(self, sm.load_acp_session, unpack(args, 1, args.n))
+        end, debug.traceback)
         self.config_options.restore_snapshot = restore
         for _, selection in ipairs(context.selections) do self.code_selection:add(selection) end
         for _, file in ipairs(context.files) do self.file_list:add(file) end
@@ -289,6 +292,14 @@ function M.install()
             if name == "_cancel_session" and self.session_id == nil and self._agency_loading_session then
                 local handlers = self.agent.subscribers[self._agency_loading_session]
                 if handlers and handlers._agency_owner == self then self.agent:cancel_session(self._agency_loading_session) end
+                self.widget:clear()
+                self.todo_list:clear()
+                self.file_list:clear()
+                self.code_selection:clear()
+                self.diagnostics_list:clear()
+                self.config_options:clear()
+                self.session_state:clear()
+                self._agency_loading_session = nil
             end
             local result = lifecycle(self, sm[name], ...)
             if name == "destroy" then self._agency_destroyed = true end
@@ -387,6 +398,7 @@ function M.install()
         if not agency(self) then return acp.load_session(self, id, cwd, servers, handlers, callback) end
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
         manager._agency_request_cwd = manager._agency_load_cwd or cwd
+        manager._agency_loading_session = id
         self:_subscribe(id, handlers)
         self:_send_request("session/load", { sessionId = id, cwd = manager._agency_request_cwd, mcpServers = servers or {}, _meta = { agency = { version = 1, editor = vim.v.servername } } },
             M.guard_callback(manager, captured, function(result, err)
@@ -413,7 +425,7 @@ function M.install()
         local deliver = M.guard_callback(manager, { epoch = handlers._agency_epoch }, function()
             if self.subscribers[id] == handlers then callback(handlers) end
         end)
-        if self._agency_replay_handlers == handlers then deliver() else vim.schedule(deliver) end
+        if self._agency_replay_handlers == handlers and not vim.in_fast_event() then deliver() else vim.schedule(deliver) end
     end
 
     function Client:send_prompt(id, prompt, callback)

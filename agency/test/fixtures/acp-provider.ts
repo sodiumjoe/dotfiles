@@ -30,6 +30,11 @@ const snapshot = () => backend === "codex-acp" ? { configOptions: options, ...(p
   modes: { currentModeId: modeId, availableModes: [{ id: "normal", name: "Normal" }, { id: "review", name: "Review" }] },
 }
 await appendFile(log, JSON.stringify({ method: "fixture/environment", params: { AGENCY_TEST_EDITOR_MARKER: process.env.AGENCY_TEST_EDITOR_MARKER ?? null, NVIM: process.env.NVIM ?? null, NVIM_SOCKET_PATH: process.env.NVIM_SOCKET_PATH ?? null } }) + "\n", { mode: 0o600 })
+let configurationEmitted = false
+const configurationTimer = setInterval(() => { void exists("emit-configuration").then(ready => {
+  if (ready && !configurationEmitted) { configurationEmitted = true; update({ sessionUpdate: "config_option_update", configOptions: options }) }
+}) }, 10)
+configurationTimer.unref()
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
 for await (const line of lines) {
   const request = JSON.parse(line)

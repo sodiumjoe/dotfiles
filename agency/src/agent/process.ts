@@ -10,24 +10,27 @@ import { spawnOwnedChild, type OwnedChild } from "../runtime/owned-child.js"
 import { captureLiveProcess, LiveProcessError, type LiveProcessGroup, type LiveCleanupEvidence } from "../platform/live-process.js"
 import { type LaunchRecord, type ManagedLaunchRecord } from "../platform/types.js"
 import { createAcpConnection, type AcpConnection, type ProviderSession } from "./acp.js"
-import type { AcpObservation, TurnOptions } from "./session-events.js"
+import type { AcpObservation } from "./session-events.js"
 import { cleanupBudget, type ConfiguredLaunchContract } from "./contracts.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
-import { AgentError, agentFailure, splitLaunchSpec, type AgentRecordV3, type SessionStart, type AgentFailure, type LaunchSpec, type PromptResult } from "./types.js"
+import { AgentError, agentFailure, splitLaunchSpec, type AgentRecordV3, type SessionStart, type AgentFailure, type LaunchSpec } from "./types.js"
 import type { JsonObject, SessionConfiguration } from "./session-config.js"
 
-export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): Promise<void>; snapshot(): SessionConfiguration; prompt(text: string, signal: AbortSignal, limits?: TurnOptions): Promise<PromptResult>; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; fault: Promise<AgentFailure> }
+export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): Promise<void>; snapshot(): SessionConfiguration; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; discharged: Promise<void>; fault: Promise<AgentFailure> }
 export type AgentProcessSpec = Pick<LaunchSpec, "agentId" | "handlerGeneration" | "providerGeneration" | "launchAttemptId" | "cwd" | "limits">
 export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
 
 export function createAgentProcess(input: { context: LaunchContext; spec: AgentProcessSpec; agentRecord?: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; revalidate(): Promise<void> }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
-  const { context, spec, contract, session, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline } = input, { adapter, mutations } = context
+  const { context, spec, contract, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.deadlines
   let overallDeadline = deadline ?? Infinity, spawnDeadline = Infinity
   const directory = join(context.paths.persistentRoot, "launches"), path = join(directory, spec.launchAttemptId + ".json")
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
   let current: ManagedLaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "pending", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
   let published = false, spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
+  let startup: { agentRecord: typeof input.agentRecord; session: typeof input.session; onUpdate: typeof input.onUpdate; onRequest: typeof input.onRequest } | undefined = { agentRecord: input.agentRecord, session: input.session, onUpdate: input.onUpdate, onRequest: input.onRequest }
+  let spawnArgs = input.args
+  const discharged = Promise.withResolvers<void>()
   let initialization: Promise<ProviderSession> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<LaunchRecord> | undefined
   let owned: OwnedChild | undefined, liveGroup: LiveProcessGroup | undefined, cleanupEvidence: LiveCleanupEvidence | undefined
   let stopping = false, disposed = false, initialized = false, failure: AgentFailure | undefined
@@ -95,14 +98,16 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       }), cleanupDeadline, "CLEANUP_UNVERIFIED")
     }
     const stopCapturedGroup = async (): Promise<void> => {
-      if (!liveGroup || cleanupEvidence) return
-      cleanupEvidence = await liveGroup.cleanup({ deadline: cleanupDeadline, terminateMs: phases.processTerminateMs, absenceMs: phases.absenceMs, transportCloseMs: phases.transportCloseMs, retry: true })
+      if (!liveGroup) return
+      cleanupEvidence ??= await liveGroup.cleanup({ deadline: cleanupDeadline, terminateMs: phases.processTerminateMs, absenceMs: phases.absenceMs, transportCloseMs: phases.transportCloseMs, retry: true })
       checkCleanup()
+      discharged.resolve()
     }
     cleaning = bounded(async () => {
       await stopCapturedGroup()
       await bounded(() => preparation?.catch(() => undefined) ?? Promise.resolve(), cleanupDeadline, "CLEANUP_UNVERIFIED")
       checkCleanup()
+      if (!spawnInvoked) discharged.resolve()
       if (!published && !spawnInvoked) return structuredClone(current)
       if (!spawnInvoked) {
         await publishCleanup(() => finishUnspawnedCleanup(context, current, { spawnInvoked: false }, dependencies.transitionIO))
@@ -121,15 +126,11 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
     return cleaning
   }
   return {
-    record: snapshot, fault, cleanup,
+    record: snapshot, fault, cleanup, discharged: discharged.promise,
     request(method, params, signal) { if (!initialized || !connection || stopping || disposed || ended()) return Promise.reject(new AgentError("NOT_READY")); return connection.request(method, params, signal) },
     notify(method, params) { if (!initialized || !connection || stopping || disposed || ended()) throw new AgentError("NOT_READY"); connection.notify(method, params) },
     respond(id, result) { if (!initialized || !connection || stopping || disposed || ended()) throw new AgentError("NOT_READY"); return connection.respond(id, result) },
     snapshot() { if (!connection) throw new AgentError("NOT_READY"); return connection.snapshot() },
-    prompt(text, signal, limits) {
-      if (!initialized || !connection || stopping || disposed || ended()) return Promise.reject(new AgentError("NOT_READY"))
-      return connection.prompt(text, signal, limits)
-    },
     cancelPrompt() {
       if (!initialized || !connection || stopping || disposed || ended()) return Promise.reject(new AgentError("NOT_READY"))
       return connection.cancelPrompt()
@@ -137,19 +138,24 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
     dispose() {
       if (disposed) return
       disposed = true; stopping = true; controller.abort(); connection?.close()
+      connection = undefined; initialization = undefined; startup = undefined; spawnOptions = undefined; spawnArgs = undefined
+      stderrTail = Buffer.alloc(0)
       if (owned && !owned.release()) {
         owned.abandon("fatal process owner disposal")
         if (!failure) { failure = agentFailure(new AgentError("CLEANUP_UNVERIFIED")); resolveFault(failure) }
       }
     },
     initialize(signal) {
+      if (disposed || stopping || !startup && !initialization) return Promise.reject(new AgentError("NOT_READY"))
       if (initialization) return initialization
+      let start: typeof startup = startup!
+      startup = undefined
       const abort = (): void => { controller.abort(); if (!stopping) fail(new AgentError("STARTUP_FAILED")) }
       signal.addEventListener("abort", abort, { once: true })
       if (signal.aborted) controller.abort()
       overallDeadline = Math.min(overallDeadline, now() + (phases?.overallMs ?? spec.limits.startupMs))
       spawnDeadline = Math.min(overallDeadline, now() + (phases?.spawnMs ?? 5000))
-      preparation = mutations.queue.run(async () => {
+      const prepared = mutations.queue.run(async () => {
         check(); await revalidate(); check()
         current = { ...current, launchBootId: await adapter.bootId() }
         if (mutations.accepted.some(entry => entry.record.launchAttemptId === spec.launchAttemptId) || mutations.issues?.some(issue => issue.launchAttemptId === spec.launchAttemptId)) throw new AgentError("INVALID_AGENT_STATE")
@@ -170,17 +176,16 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
         await revalidate(); check()
         if (await adapter.bootId() !== current.launchBootId) throw new AgentError("CONFIG_CHANGED")
         check(); spawnInvoked = true
-        const options = spawnOptions
-        if (!options) throw new AgentError("STARTUP_FAILED")
-        spawnOptions = undefined
-        dependencies.onSpawnInputReleased?.()
-        owned = spawnOwnedChild({ launchAttemptId: spec.launchAttemptId,
-          spawn: () => (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint, ...input.args ?? []], options),
-          onEvent: event => {
-            if (event.kind === "error") processFailure("error", event.error)
-            else processFailure(event.kind, undefined, event.code, event.signal)
-          },
-        })
+        if (!spawnOptions) throw new AgentError("STARTUP_FAILED")
+        try {
+          owned = spawnOwnedChild({ launchAttemptId: spec.launchAttemptId,
+            spawn: () => (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint, ...spawnArgs ?? []], spawnOptions!),
+            onEvent: event => {
+              if (event.kind === "error") processFailure("error", event.error)
+              else processFailure(event.kind, undefined, event.code, event.signal)
+            },
+          })
+        } finally { spawnOptions = undefined; spawnArgs = undefined; dependencies.onSpawnInputReleased?.() }
         child = owned.child
         registerStreams(child)
         try { liveGroup = await captureLiveProcess({ owner: owned, adapter, launchBootId: current.launchBootId, marker, deadline: spawnDeadline, now }) }
@@ -188,19 +193,22 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
         check()
         await transition({ ...current, phase: "readiness", provider: { kind: "process-group", group: liveGroup.identity() } })
       })
+      preparation = prepared
+      const releasePreparation = (): void => { if (preparation === prepared) preparation = undefined; spawnOptions = undefined; spawnArgs = undefined }
+      void prepared.then(releasePreparation, releasePreparation)
       initialization = (async () => {
         try {
-          await bounded(() => preparation!, spawnDeadline, "STARTUP_TIMEOUT"); check()
+          await bounded(() => prepared, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
-          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), ...(input.onUpdate ? { onUpdate: input.onUpdate } : {}), ...(input.onRequest ? { onRequest: input.onRequest } : {}), now })
+          connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), ...(start!.onUpdate ? { onUpdate: start!.onUpdate } : {}), ...(start!.onRequest ? { onRequest: start!.onRequest } : {}), now })
           void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code, error.diagnostic ?? { boundary: "acp_transport", causeCode: error.code })) })
-          const evidence = await connection.initialize(input.agentRecord ?? { version: 2, ...splitLaunchSpec(spec as LaunchSpec), phase: "starting", session: null, failure: null }, contract, session ?? { kind: "new", params: {} }, controller.signal)
+          const evidence = await connection.initialize(start!.agentRecord ?? { version: 2, ...splitLaunchSpec(spec as LaunchSpec), phase: "starting", session: null, failure: null }, contract, start!.session ?? { kind: "new", params: {} }, controller.signal)
           check(); initialized = true; if (!isReady) overallDeadline = Infinity; return evidence
         } catch (error) {
           fail(new AgentError(error instanceof AgentError ? error.code : "INTERNAL", error instanceof AgentError && error.diagnostic ? error.diagnostic : { boundary: "provider_initialize", causeCode: underlyingFailureCode(error) }))
           throw new AgentError(failure!.code, failure!.diagnostic)
         }
-        finally { signal.removeEventListener("abort", abort) }
+        finally { start = undefined; signal.removeEventListener("abort", abort) }
       })()
       return initialization
     },

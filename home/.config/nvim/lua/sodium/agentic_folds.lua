@@ -46,8 +46,53 @@ function M.finish_thinking(writer)
     writer:_apply_scroll(writer.bufnr)
 end
 
+function M.fold_completed_diff(writer, tool_call_id)
+    local tracker = writer.tool_call_blocks[tool_call_id]
+    if not tracker or not tracker.diff or tracker.status ~= "completed" or tracker.has_fold then return false end
+    if not vim.api.nvim_buf_is_valid(writer.bufnr) then return false end
+    local Blocks, Fold = require("agentic.ui.tool_call_blocks"), require("agentic.ui.tool_call_fold")
+    local mark = vim.api.nvim_buf_get_extmark_by_id(writer.bufnr, Blocks.NS_TOOL_BLOCKS, tracker.extmark_id, { details = true })
+    local last = mark[3] and mark[3].end_row
+    if not last or not Fold.should_fold({ bufnr = writer.bufnr, start_row = mark[1] + Blocks.HEADER_HEIGHT,
+        end_row = last - 2, status = tracker.status, is_diff = true }) then return false end
+    writer:_capture_scroll(writer.bufnr)
+    Fold.close_range(writer.bufnr, mark[1] + Blocks.HEADER_HEIGHT, last)
+    tracker.has_fold = true
+    writer:_apply_scroll(writer.bufnr)
+    return true
+end
+
 function M.install()
+    local Fold = require("agentic.ui.tool_call_fold")
+    if not Fold._sodium_completed_diff_folds then
+        local should_fold = Fold.should_fold
+        function Fold.should_fold(opts)
+            if opts.is_diff and opts.status == "completed" then
+                opts = vim.tbl_extend("force", opts, { is_diff = false })
+            end
+            if Fold.threshold() == 0 and not opts.is_diff then
+                if not Fold.should_auto_fold(opts.status) or not vim.api.nvim_buf_is_valid(opts.bufnr)
+                    or opts.start_row < 0 or opts.start_row > opts.end_row
+                    or opts.end_row >= vim.api.nvim_buf_line_count(opts.bufnr) then return false end
+                for _, win in ipairs(vim.fn.win_findbuf(opts.bufnr)) do
+                    if vim.api.nvim_win_is_valid(win) then return true end
+                end
+                return false
+            end
+            return should_fold(opts)
+        end
+        Fold._sodium_completed_diff_folds = true
+    end
     local Writer = require("agentic.ui.message_writer")
+    if not Writer._sodium_completed_diff_folds then
+        local update = Writer.update_tool_call_block
+        function Writer:update_tool_call_block(block)
+            local result = update(self, block)
+            M.fold_completed_diff(self, block.tool_call_id)
+            return result
+        end
+        Writer._sodium_completed_diff_folds = true
+    end
     if Writer._sodium_thinking_folds then return end
     local clear, apply = Writer._clear_thinking_state, Writer._apply_scroll
     local set_mark, replay, reset = Writer._set_thinking_extmark, Writer.replay_history_messages, Writer.reset_sender_tracking

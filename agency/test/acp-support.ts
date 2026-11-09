@@ -61,7 +61,7 @@ export function createAcpPeer(readable: Readable, writable: Writable): AcpPeer {
               pending.delete(Number(frame.id))
               if (frame.error) {
                 const error = frame.error as JsonObject, agency = (error.data as JsonObject | undefined)?.agency as JsonObject | undefined
-                call.reject(Object.assign(new Error(String(error.message)), { code: agency?.code ?? error.code }))
+                call.reject(Object.assign(new Error(String(error.message)), { code: agency?.code ?? error.code, data: error.data }))
               } else call.resolve(frame.result as JsonObject)
             }
             if (delayed.has(call.method)) { const callbacks = held.get(call.method) ?? []; callbacks.push(complete); held.set(call.method, callbacks) }
