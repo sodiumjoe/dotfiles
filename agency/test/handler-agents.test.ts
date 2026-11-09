@@ -5,12 +5,114 @@ import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import { readHandlerRecord } from "../src/platform/private-state.js"
-import type { AgentRequest } from "../src/agent/protocol.js"
+import type { AgentReply, AgentRequest } from "../src/agent/protocol.js"
 import { isImplicitDisabledCodexFastMode } from "../src/agent/session-config.js"
 import { createAgentStore } from "../src/agent/store.js"
 import { acpFixture } from "./acp-support.js"
 import { agentHandlerFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
+
+async function fixtureCli(f: Awaited<ReturnType<typeof agentHandlerFixture>>, args: string[]) {
+  const production = productionControlDependencies()
+  let output = ""
+  const code = await runControl(["agent", ...args, "--json"], {
+    ...production, environment: async () => ({ paths: f.paths, adapter: f.adapter }), cwd: () => f.workspace,
+    start: async () => { throw new Error("automatic startup forbidden") },
+    stdout: value => { output += value }, stderr: () => {},
+  })
+  return { code, reply: JSON.parse(output) as AgentReply }
+}
+
+for (const [model, effort, defaults] of [["model-a", "low", false], ["model-b", "high", true]] as const) test("CLI advertised Codex choices start and restore " + model + "/" + effort, async t => {
+  const f = await acpFixture(t, { selectionCatalog: true })
+  if (defaults) {
+    const path = join(f.paths.persistentRoot, "catalog/backends.json"), backends = JSON.parse(await readFile(path, "utf8"))
+    backends.backends[0].initial = { modelId: "model-a[low]", modeId: "agent-full-access", configValues: { model: "model-a", reasoning_effort: "low", mode: "agent-full-access" } }
+    await writeFile(path, JSON.stringify(backends), { mode: 0o600 })
+  }
+  const choices = await fixtureCli(f, ["choices"])
+  assert.equal(choices.code, 0)
+  assert.ok(choices.reply.ok && choices.reply.result.state === "choices")
+  const choice = choices.reply.result.choices.find(value => value.selection.modelId === model && value.selection.reasoning.kind === "value" && value.selection.reasoning.value === effort && value.selection.mode === "read-only")
+  assert.ok(choice)
+  const selection = choice.selection
+  assert.equal(selection.providerId, "codex-acp")
+  assert.ok(selection.reasoning.kind === "value" && selection.mode)
+  const generation = (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation, commandId = randomUUID()
+  const args = ["start", "--provider", selection.providerId, "--model", selection.modelId, "--reasoning", selection.reasoning.value, "--mode", selection.mode, "--permission-profile", selection.permissionProfile, "--command-id", commandId]
+  const started = await fixtureCli(f, [...args, "--expected-handler-generation", generation])
+  assert.ok(started.reply.ok && started.reply.result.state === "command")
+  assert.equal(started.reply.result.command.result?.outcome, "started")
+  assert.equal(started.code, 0)
+  assert.equal(started.reply.result.durability, "verified")
+  const target = started.reply.result.command.target!, store = createAgentStore(f.paths.persistentRoot)
+  const record = await store.readAgent(target.agentId)
+  assert.ok(record)
+  assert.deepEqual(record.settings, { modelId: model + "[" + effort + "]", configValues: { model, reasoning_effort: effort, mode: "read-only" } })
+  const setters = (await f.requests("codex-acp")).filter(value => value.method?.startsWith("session/set_"))
+  assert.deepEqual(setters.map(value => ({ method: value.method, configId: value.params?.configId, value: value.params?.value })), [
+    ...(model === "model-b" ? [{ method: "session/set_config_option", configId: "model", value: "model-b" }] : []),
+    { method: "session/set_config_option", configId: "reasoning_effort", value: effort },
+    { method: "session/set_config_option", configId: "mode", value: "read-only" },
+  ])
+  const beforeRetry = await f.requests("codex-acp")
+  const retried = await fixtureCli(f, [...args, "--handler-generation", generation])
+  assert.equal(retried.code, 0)
+  assert.deepEqual(retried.reply, { ...started.reply, requestId: retried.reply.requestId })
+  assert.deepEqual(await f.requests("codex-acp"), beforeRetry)
+  const stopped = await f.waitCompleted(await f.stop(target))
+  assert.equal(stopped.command.result?.outcome, "stopped")
+  const restored = await f.waitCompleted(await f.restore(target.agentId))
+  assert.equal(restored.command.result?.outcome, "restored")
+  assert.equal(restored.command.target?.agentId, target.agentId)
+  assert.notEqual(restored.command.target?.providerGeneration, target.providerGeneration)
+  assert.deepEqual(restored.command.result?.session, started.reply.result.command.result?.session)
+  assert.deepEqual((await store.readAgent(target.agentId))?.settings, record.settings)
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/new").length, 1)
+  assert.equal((await f.requests("codex-acp")).filter(value => value.method === "session/load").length, 1)
+  await f.waitCompleted(await f.stop(restored.command.target!))
+  assert.ok((await f.list()).agents.every(value => value.launch?.phase === "cleanup_verified"))
+  await f.verifyZeroSurvivors()
+})
+
+for (const [model, effort, mode] of [["missing", "high", "read-only"], ["model-a", "missing", "read-only"], ["model-a", "high", "missing"], ["model-c", "high", "read-only"]] as const) test("CLI unsupported Codex settings fail with verified cleanup: " + [model, effort, mode].join("/"), async t => {
+  const f = await acpFixture(t, { selectionCatalog: true })
+  const generation = (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation
+  const failed = await fixtureCli(f, ["start", "--provider", "codex-acp", "--model", model, "--reasoning", effort, "--mode", mode, "--permission-profile", "fixture-deny-v1", "--command-id", randomUUID(), "--expected-handler-generation", generation])
+  assert.equal(failed.code, 75)
+  assert.ok(failed.reply.ok && failed.reply.result.state === "command")
+  assert.equal(failed.reply.result.command.result?.outcome, "failed")
+  assert.equal(failed.reply.result.command.result?.failure?.code, "SELECTION_UNSUPPORTED")
+  assert.equal(failed.reply.result.durability, "verified")
+  assert.equal((await f.list()).agents[0]?.launch?.phase, "cleanup_verified")
+  if (model === "model-c") assert.deepEqual((await f.requests("codex-acp")).filter(value => value.method?.startsWith("session/set_")).map(value => value.params), [{ sessionId: "native-session", configId: "model", value: "model-c" }])
+  await f.verifyZeroSurvivors()
+})
+
+test("legacy-only native selection remains available through Claude CLI Start", async t => {
+  const f = await acpFixture(t)
+  const generation = (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation
+  const started = await fixtureCli(f, ["start", "--provider", "claude-agent-acp", "--model", "legacy-b", "--reasoning", "none", "--mode", "review", "--permission-profile", "fixture-deny-v1", "--command-id", randomUUID(), "--expected-handler-generation", generation])
+  assert.equal(started.code, 0)
+  assert.ok(started.reply.ok && started.reply.result.state === "command")
+  assert.equal(started.reply.result.command.result?.outcome, "started")
+  const target = started.reply.result.command.target!
+  assert.deepEqual((await createAgentStore(f.paths.persistentRoot).readAgent(target.agentId))?.settings, { modelId: "legacy-b", modeId: "review" })
+  assert.deepEqual((await f.requests("claude-agent-acp")).filter(value => value.method?.startsWith("session/set_")).map(value => ({ method: value.method, params: value.params })), [
+    { method: "session/set_model", params: { sessionId: "native-session", modelId: "legacy-b" } },
+    { method: "session/set_mode", params: { sessionId: "native-session", modeId: "review" } },
+  ])
+  await f.waitCompleted(await f.stop(target)); await f.verifyZeroSurvivors()
+})
+
+test("legacy-only native selection preserves explicit combined Codex model IDs", async t => {
+  const f = await acpFixture(t, { selectionCatalog: true }), peer = await f.connect()
+  await peer.request("initialize", { protocolVersion: 1, clientCapabilities: {} })
+  const created = await peer.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, commandId: randomUUID(), backendId: "codex-acp", selection: { modelId: "model-a[high]", modeId: "read-only" } } } })
+  assert.deepEqual((await createAgentStore(f.paths.persistentRoot).readAgent(String(created.sessionId).slice(7)))?.settings, { modelId: "model-a[high]", configValues: { model: "model-a", reasoning_effort: "high", mode: "read-only" } })
+  assert.ok((await f.requests("codex-acp")).some(value => value.method === "session/set_model" && value.params?.modelId === "model-a[high]"))
+  await f.stopSession(String(created.sessionId)); peer.close(); await f.verifyZeroSurvivors()
+})
 
 for (const scenario of ["normal", "large-replay"] as const) test("returned text prompt uses native ACP with bounded output: " + scenario, async t => {
   const f = await agentHandlerFixture(t, { providerScenario: scenario })

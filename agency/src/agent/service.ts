@@ -522,9 +522,13 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       const contract = await configureLaunchContract(declaration, profile, configuration)
       const cwd = absolutePath(previousAgent?.definition.cwd ?? (raw as CreateSessionInput | StartInput).cwd)
       const selected = native ? parseRequestedSettings((raw as CreateSessionInput).selection ?? {}) : kind === "start" ? {
-        modelId: (raw as StartInput).selection.modelId,
-        ...((raw as StartInput).selection.mode ? { modeId: (raw as StartInput).selection.mode! } : {}),
-        ...((raw as StartInput).selection.reasoning.kind === "value" && declaration.reasoningOption ? { configValues: { [declaration.reasoningOption]: ((raw as StartInput).selection.reasoning as { kind: "value"; value: string }).value } } : {})
+        ...(backendId !== "codex-acp" ? { modelId: (raw as StartInput).selection.modelId } : {}),
+        ...((raw as StartInput).selection.mode && (backendId !== "codex-acp" || !declaration.modeOption) ? { modeId: (raw as StartInput).selection.mode! } : {}),
+        configValues: {
+          ...(backendId === "codex-acp" ? { [declaration.modelOption]: (raw as StartInput).selection.modelId } : {}),
+          ...((raw as StartInput).selection.reasoning.kind === "value" && declaration.reasoningOption ? { [declaration.reasoningOption]: ((raw as StartInput).selection.reasoning as { kind: "value"; value: string }).value } : {}),
+          ...(backendId === "codex-acp" && (raw as StartInput).selection.mode && declaration.modeOption ? { [declaration.modeOption]: (raw as StartInput).selection.mode! } : {}),
+        }
       } : {}
       const merged = parseRequestedSettings({ ...backend.initial, ...selected, ...((backend.initial.configValues || selected.configValues) ? { configValues: { ...backend.initial.configValues, ...selected.configValues } } : {}) })
       for (const [field, option] of [["modelId", declaration.modelOption], ["modeId", declaration.modeOption]] as const) {

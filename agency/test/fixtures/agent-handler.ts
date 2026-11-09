@@ -57,6 +57,10 @@ const contract: LaunchContract = {
   modes: { state: "values", values: ["plan", "review"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning", modeOption: "mode",
   permissionEvidence: "fixture-contract-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
 }
+if (config.selectionCatalog) {
+  contract.modes = { state: "values", values: ["agent-full-access", "read-only"] }
+  contract.reasoningOption = "reasoning_effort"
+}
 try {
   await runHandler({ taskFactory: input => taskInitialization = (async () => {
     try {
@@ -94,7 +98,7 @@ try {
         const evidence = await observeConfig(config.profile)
         const snapshot: CatalogSnapshot = { version: 1 as const, hostId: config.paths.hostKey, handlerGeneration: generation, snapshotId: randomUUID(), createdAt: Date.now(), providers: [{ providerId: "codex-acp" as const, fingerprint: evidence.fingerprint, verifiedAt: Date.now(), verifiedHandlerGeneration: generation, providerVersion: null, providerVersionSource: "unknown" as const, adapterVersion: "1.0.0", sdkVersion: null, error: null, models: [{ providerId: "codex-acp" as const, modelId: "model-a", resolvedModelId: null, displayName: "Fixture model", reasoning: { state: "values" as const, values: ["high", "low"] }, modes: { state: "unknown" as const }, availability: "advertised" as const }] }] }
         if (config.selectionCatalog) snapshot.providers[0]!.models[0]!.modes = { state: "values", values: ["agent-full-access", "read-only"] }
-        if (config.selectionCatalog) snapshot.providers[0]!.models.push({ ...snapshot.providers[0]!.models[0]!, modelId: "model-c", displayName: "Model C", reasoning: { state: "values", values: ["medium", "minimal"] } })
+        if (config.selectionCatalog) snapshot.providers[0]!.models.push({ ...snapshot.providers[0]!.models[0]!, modelId: "model-b", displayName: "Model B" })
         if (config.catalogState === "stale") snapshot.providers[0]!.verifiedAt = Date.now() - 600001
         if (config.catalogState === "prior-generation") snapshot.providers[0]!.verifiedHandlerGeneration = randomUUID()
         if (config.catalogState === "failed") snapshot.providers[0]!.error = { code: "PROBE_FAILED", message: "Provider discovery failed" }
