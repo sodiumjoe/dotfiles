@@ -115,8 +115,15 @@ function M.setup(deps)
         operations.detach()
         local captured, tab = epoch, vim.api.nvim_get_current_tabpage()
         if type(id) ~= "string" or not id:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then report(failure("USAGE")); return end
+        if action == "restore" then api.notify("Restoring session " .. id .. "...") end
         api.page({ allow_issues = true, ensure_handler = action == "restore" }, function(err, result)
-            if captured ~= epoch or not vim.api.nvim_tabpage_is_valid(tab) then return end
+            if captured ~= epoch or not vim.api.nvim_tabpage_is_valid(tab) then
+                if action == "restore" then
+                    api.notify("Restore of session " .. id .. " cancelled before it started.")
+                    if callback then callback(failure("CANCELLED")) end
+                end
+                return
+            end
             if err then report(err); if callback then callback(err) end; return end
             for _, row in ipairs(result.agents) do
                 if row.record.version == 3 and row.record.definition.agentId == id then

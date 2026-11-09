@@ -138,12 +138,26 @@ function M.new(deps)
             callback(error_value("INVALID_PROTOCOL"))
             return
         end
+        local description = "Session " .. outcome.target.agentId .. " " .. outcome.outcome
+        local recovery = " Use :AgencyAttach " .. outcome.target.agentId .. " to open it."
+        local function attached(error, manager)
+            if error and error.code == "CANCELLED" then
+                report(description .. ", but editor attachment was cancelled by a newer action." .. recovery)
+            elseif error and receipt.op == "restore" then
+                error = vim.tbl_extend("force", error, {
+                    message = description .. ", but editor attachment failed: " .. (error.message or error.code) .. "." .. recovery,
+                })
+            elseif not error and receipt.op == "restore" then
+                report(description .. " and attached.")
+            end
+            callback(error, manager)
+        end
         if not valid_operation(operation) then
-            report({ state = "created", target = outcome.target, commandId = receipt.commandId })
-            callback(error_value("CANCELLED"), result)
+            attached(error_value("CANCELLED"), result)
             return
         end
-        attach(outcome.target, callback, operation, receipt.origin)
+        if receipt.op == "restore" then report(description .. "; attaching editor...") end
+        attach(outcome.target, attached, operation, receipt.origin)
     end
     local function dispatch(op, cwd, generation, argv, callback, operation, agent_id, target)
         local receipt = {
@@ -388,6 +402,7 @@ function M.new(deps)
         local cwd = current_origin.cwd
         status(cwd, operation, function(error, generation)
             if error then
+                if error.code == "CANCELLED" then report("Restore of session " .. agent_id .. " cancelled before it started.") end
                 callback(error)
                 return
             end
