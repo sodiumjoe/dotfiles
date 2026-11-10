@@ -148,7 +148,11 @@ try {
           if (record.provider !== null) await pause("identity")
         } } })
         ownerForConfiguration = owner
-        return { ...owner, async cleanup() { mutation("cleanup"); failOnce("stop-cleanup"); const record = await owner.cleanup(); await pause("stop-verified"); return record } }
+        return { ...owner, async initialize(signal) {
+          const session = await owner.initialize(signal)
+          if (config.providerScenario === "restore-verification-mismatch" && options.session?.kind === "load") session.configuration.configOptions.find(option => option.id === "mode")!.currentValue = "plan"
+          return session
+        }, async cleanup() { mutation("cleanup"); failOnce("stop-cleanup"); const record = await owner.cleanup(); await pause("stop-verified"); return record } }
       } })
       const witnessed = new Set<string>()
       return { ...service, async observeSession(target, listener, configuration) {

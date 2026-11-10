@@ -102,11 +102,20 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     })
     return method === "session/prompt" ? result.finally(() => finishPrompt(id)) : result
   }
+  const synchronizeMode = (canonical: boolean): void => {
+    const modes = configuration.modes, options = configuration.configOptions.filter(option => option.category === "mode")
+    if (!modes || options.length !== 1) return
+    const option = options[0]!, values = projectRestorableSettings({ configOptions: options }).configValues
+    const value = canonical ? values?.[String(option.id)] : modes.currentModeId
+    if (typeof value !== "string" || !Array.isArray(modes.availableModes) || !modes.availableModes.some(mode => object(mode).id === value) || projectRestorableSettings({ configOptions: [{ ...option, currentValue: value }] }).configValues?.[String(option.id)] !== value) return
+    modes.currentModeId = value; option.currentValue = value
+  }
   const applyResult = (result: JsonObject, method: string) => {
     validateConfiguration(result)
     if (Object.hasOwn(result, "availableCommands")) validateNativeUpdate({ sessionUpdate: "available_commands_update", availableCommands: result.availableCommands })
     if (method === "session/new" || method === "session/load") configuration = configurationSnapshot(result, configuration.revision + 1)
     else if (Array.isArray(result.configOptions) || result.models || result.modes) configuration = configurationSnapshot({ ...configuration, ...result }, configuration.revision + 1)
+    if (Array.isArray(result.configOptions) || result.modes) synchronizeMode(Array.isArray(result.configOptions))
   }
   function receive(raw: unknown): void {
     const frame = object(raw) as JsonObject
@@ -148,7 +157,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       if (loading) replayUpdates++
       if (update.sessionUpdate === "config_option_update") applyResult({ configOptions: update.configOptions! }, "update")
       if (update.sessionUpdate === "available_commands_update") configuration.availableCommands = (update.availableCommands ?? []) as JsonObject[]
-      if (update.sessionUpdate === "current_mode_update" && configuration.modes) configuration.modes.currentModeId = update.currentModeId!
+      if (update.sessionUpdate === "current_mode_update" && configuration.modes) { configuration.modes.currentModeId = update.currentModeId!; synchronizeMode(false) }
       const extra = Object.fromEntries(Object.keys(params).filter(key => key !== "sessionId" && key !== "update").map(key => [key, params[key]])) as JsonObject
       try { input.onUpdate?.({ update: update as AcpObservation["update"], replay: loading, ...(Object.keys(extra).length ? { params: cloneWireJson(extra) } : {}), ...(frame._meta ? { meta: cloneWireJson(frame._meta) as JsonObject } : {}) }) } catch {}
       return
@@ -183,7 +192,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
       check()
     }
     if (waiter.method === "session/set_model" && configuration.models && !result.models) { configuration.models.currentModelId = waiter.params.modelId!; configuration.revision++ }
-    if (waiter.method === "session/set_mode" && configuration.modes && !result.modes) { configuration.modes.currentModeId = waiter.params.modeId!; configuration.revision++ }
+    if (waiter.method === "session/set_mode" && configuration.modes && !result.modes && !Array.isArray(result.configOptions)) { configuration.modes.currentModeId = waiter.params.modeId!; synchronizeMode(false); configuration.revision++ }
     pending.delete(frame.id); clearTimeout(waiter.timer); waiter.dispose(); waiter.resolve(structuredClone(result))
   }
   let eof = false
@@ -220,38 +229,39 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
           } else {
             startupPhase = "session/new"
             result = await request("session/new", params, signal)
-            startupPhase = "configuration"
-            const selected = { ...(!configuration.models && record.settings.modelId ? { [contract.modelOption]: record.settings.modelId } : {}), ...record.settings.configValues, ...(!configuration.modes && record.settings.modeId && contract.modeOption ? { [contract.modeOption]: record.settings.modeId } : {}) }
-            const legacySelections: { method: string; field: string; value: string }[] = []
-            for (const [field, method, choices, key] of [["modelId", "session/set_model", "availableModels", "modelId"], ["modeId", "session/set_mode", "availableModes", "id"]] as const) {
-              const value = record.settings[field], state = field === "modelId" ? configuration.models : configuration.modes
-              if (!value) continue
-              if (state) {
-                if (!Array.isArray(state[choices]) || !(state[choices] as JsonObject[]).some(choice => choice[key] === value)) throw new AgentError("SELECTION_UNSUPPORTED")
-                legacySelections.push({ method, field, value })
-              } else {
-                const optionId = field === "modelId" ? contract.modelOption : contract.modeOption
-                if (!optionId) throw new AgentError("SELECTION_UNSUPPORTED")
-                selected[optionId] = value
-              }
-            }
-            for (const { method, field, value } of legacySelections) await request(method, { sessionId, [field]: value }, signal)
-            const acknowledged: Record<string, string | boolean> = {}
-            const choices = Object.entries(selected).sort(([a], [b]) => a === contract.modelOption ? -1 : b === contract.modelOption ? 1 : 0)
-            for (const [configId, value] of choices) {
-              const option = configuration.configOptions.find(option => option.id === configId)
-              if (!option) throw new AgentError("SELECTION_UNSUPPORTED")
-              if (projectRestorableSettings({ configOptions: [{ ...option, currentValue: value }] }).configValues?.[configId] !== value) throw new AgentError("SELECTION_UNSUPPORTED")
-              if (option.currentValue !== value) {
-                const response = await request("session/set_config_option", { sessionId, configId, value }, signal)
-                const values = projectRestorableSettings(response).configValues ?? {}
-                if (Object.entries({ ...acknowledged, [configId]: value }).some(([id, requested]) => values[id] !== requested)) throw new AgentError("SELECTION_UNSUPPORTED")
-              }
-              if (configuration.configOptions.find(option => option.id === configId)?.currentValue !== value) throw new AgentError("SELECTION_UNSUPPORTED")
-              acknowledged[configId] = value
-            }
-            if (Object.entries(selected).some(([id, value]) => configuration.configOptions.find(option => option.id === id)?.currentValue !== value) || record.settings.modelId && configuration.models && configuration.models.currentModelId !== record.settings.modelId || record.settings.modeId && configuration.modes && configuration.modes.currentModeId !== record.settings.modeId) throw new AgentError("SELECTION_UNSUPPORTED")
           }
+          startupPhase = "configuration"
+          const selected = { ...(!configuration.models && record.settings.modelId ? { [contract.modelOption]: record.settings.modelId } : {}), ...(!configuration.modes && record.settings.modeId && contract.modeOption ? { [contract.modeOption]: record.settings.modeId } : {}), ...record.settings.configValues }
+          const legacySelections: { method: string; field: string; value: string }[] = []
+          for (const [field, method, choices, key] of [["modelId", "session/set_model", "availableModels", "modelId"], ["modeId", "session/set_mode", "availableModes", "id"]] as const) {
+            const value = record.settings[field], state = field === "modelId" ? configuration.models : configuration.modes
+            const optionId = field === "modelId" ? contract.modelOption : contract.modeOption
+            if (optionId && record.settings.configValues?.[optionId] !== undefined) continue
+            if (!value) continue
+            if (state) {
+              if (!Array.isArray(state[choices]) || !(state[choices] as JsonObject[]).some(choice => choice[key] === value)) throw new AgentError("SELECTION_UNSUPPORTED")
+              legacySelections.push({ method, field, value })
+            } else {
+              if (!optionId) throw new AgentError("SELECTION_UNSUPPORTED")
+              selected[optionId] = value
+            }
+          }
+          for (const { method, field, value } of legacySelections) await request(method, { sessionId, [field]: value }, signal)
+          const acknowledged: Record<string, string | boolean> = {}
+          const choices = Object.entries(selected).sort(([a], [b]) => a === contract.modelOption ? -1 : b === contract.modelOption ? 1 : 0)
+          for (const [configId, value] of choices) {
+            const option = configuration.configOptions.find(option => option.id === configId)
+            if (!option) { if (session.kind === "load") continue; throw new AgentError("SELECTION_UNSUPPORTED") }
+            if (projectRestorableSettings({ configOptions: [{ ...option, currentValue: value }] }).configValues?.[configId] !== value) throw new AgentError("SELECTION_UNSUPPORTED")
+            if (option.currentValue !== value) {
+              const response = await request("session/set_config_option", { sessionId, configId, value }, signal)
+              const values = projectRestorableSettings(response).configValues ?? {}
+              if (Object.entries({ ...acknowledged, [configId]: value }).some(([id, requested]) => values[id] !== requested)) throw new AgentError("SELECTION_UNSUPPORTED")
+            }
+            if (configuration.configOptions.find(option => option.id === configId)?.currentValue !== value) throw new AgentError("SELECTION_UNSUPPORTED")
+            acknowledged[configId] = value
+          }
+          if (Object.entries(acknowledged).some(([id, value]) => configuration.configOptions.find(option => option.id === id)?.currentValue !== value) || legacySelections.some(({ field, value }) => field === "modelId" ? configuration.models?.currentModelId !== value : configuration.modes?.currentModeId !== value)) throw new AgentError("SELECTION_UNSUPPORTED")
           check(); ready = true; startupDeadline = Infinity
           return { sessionId: sessionId!, protocolVersion: 1, result: structuredClone(result), capabilities: structuredClone(capabilities), configuration: structuredClone(configuration) }
         } catch (error) { fail(error); throw failure! }

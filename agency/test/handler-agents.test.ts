@@ -8,6 +8,7 @@ import { readHandlerRecord } from "../src/platform/private-state.js"
 import type { AgentReply, AgentRequest } from "../src/agent/protocol.js"
 import { isImplicitDisabledCodexFastMode } from "../src/agent/session-config.js"
 import { createAgentStore } from "../src/agent/store.js"
+import { parseAgentRecordV3, parseAgentCommandV3 } from "../src/agent/types.js"
 import { acpFixture } from "./acp-support.js"
 import { agentHandlerFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
@@ -22,6 +23,75 @@ async function fixtureCli(f: Awaited<ReturnType<typeof agentHandlerFixture>>, ar
   })
   return { code, reply: JSON.parse(output) as AgentReply }
 }
+
+test("Restore settings survive native defaults resetting model effort and mode", async t => {
+  const f = await acpFixture(t, { selectionCatalog: true })
+  const generation = (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation
+  const started = await fixtureCli(f, ["start", "--provider", "codex-acp", "--model", "model-b", "--reasoning", "high", "--mode", "read-only", "--permission-profile", "fixture-deny-v1", "--command-id", randomUUID(), "--expected-handler-generation", generation])
+  assert.ok(started.reply.ok && started.reply.result.state === "command")
+  assert.equal(started.reply.result.command.result?.outcome, "started")
+  const target = started.reply.result.command.target!, store = createAgentStore(f.paths.persistentRoot), saved = await store.readAgent(target.agentId)
+  assert.ok(saved)
+  await f.waitCompleted(await f.stop(target))
+  await writeFile(join(f.root, "codex-acp-native.json"), JSON.stringify({ configOptions: [{ id: "model", currentValue: "model-a" }, { id: "reasoning_effort", currentValue: "low" }, { id: "mode", currentValue: "agent-full-access" }] }), { mode: 0o600 })
+  const restored = await f.waitCompleted(await f.restore(target.agentId))
+  assert.equal(restored.command.result?.outcome, "restored")
+  assert.deepEqual((await store.readAgent(target.agentId))?.settings, saved.settings)
+  assert.deepEqual(restored.command.result?.session, started.reply.result.command.result?.session)
+  assert.notEqual(restored.command.target?.providerGeneration, target.providerGeneration)
+  await f.waitCompleted(await f.stop(restored.command.target!))
+  assert.ok((await f.list()).agents.every(value => value.launch?.phase === "cleanup_verified"))
+  await f.verifyZeroSurvivors()
+})
+
+test("Restore settings first native import discovers configuration", async t => {
+  const f = await acpFixture(t)
+  const generation = (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation
+  const imported = await fixtureCli(f, ["import", "--provider", "codex-acp", "--session", "native-imported", "--cwd", f.workspace, "--command-id", randomUUID(), "--expected-handler-generation", generation])
+  assert.equal(imported.code, 0)
+  assert.ok(imported.reply.ok && imported.reply.result.state === "command")
+  assert.ok(imported.reply.result.command.version === 3)
+  const restored = await f.waitCompleted(await f.restore(imported.reply.result.command.agentId))
+  assert.equal(restored.command.result?.outcome, "restored")
+  const record = await createAgentStore(f.paths.persistentRoot).readAgent(restored.command.target!.agentId)
+  assert.equal(record?.session?.sessionId, "native-imported")
+  assert.deepEqual(record?.settings.configValues, { model: "model-a", reasoning_effort: "high", mode: "agent-full-access" })
+  assert.equal(record?.configurationState.verification.kind, "verified")
+  await f.waitCompleted(await f.stop(restored.command.target!))
+  await f.verifyZeroSurvivors()
+})
+
+for (const kind of ["unknown", "pending"] as const) test("uncertain Restore settings refuse established " + kind + " configuration", async t => {
+  const f = await agentHandlerFixture(t), store = createAgentStore(f.paths.persistentRoot)
+  const started = await f.waitCompleted(await f.start())
+  await f.waitCompleted(await f.stop(started.command.target!))
+  const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  await f.control({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  await f.waitHandlerExit()
+  const saved = await store.readAgent(started.command.target!.agentId)
+  assert.ok(saved)
+  const commandId = randomUUID(), target = started.command.target!
+  if (kind === "pending") await store.writeCommand(parseAgentCommandV3({ version: 3, hostId: f.paths.hostKey, agentId: target.agentId, commandId, handlerGeneration: target.handlerGeneration, target, op: "configure", input: { target, method: "session/set_config_option", optionIds: ["mode"], prior: saved.settings, desired: saved.settings, priorNonRestorableOptionIds: [] }, state: "pending", result: null }), null)
+  await store.writeAgent(parseAgentRecordV3({ ...saved, configurationState: { verification: kind === "pending" ? { kind, commandId } : { kind }, nonRestorableOptionIds: [] } }), saved)
+  await f.restart()
+  const launches = (await f.inventory()).launches
+  await assert.rejects(f.restore(target.agentId), { code: "SESSION_INPUT_REQUIRED" })
+  assert.deepEqual((await f.inventory()).launches, launches)
+  await f.verifyZeroSurvivors()
+})
+
+test("Restore settings verifier rejects a returned provider value mismatch", async t => {
+  const f = await agentHandlerFixture(t, { providerScenario: "restore-verification-mismatch" })
+  const started = await f.waitCompleted(await f.start()), store = createAgentStore(f.paths.persistentRoot), saved = await store.readAgent(started.command.target!.agentId)
+  assert.ok(saved)
+  await f.waitCompleted(await f.stop(started.command.target!))
+  const restored = await f.waitCompleted(await f.restore(started.command.target!.agentId))
+  assert.equal(restored.command.result?.outcome, "failed")
+  assert.equal(restored.command.result?.failure?.code, "SESSION_INPUT_REQUIRED")
+  assert.deepEqual((await store.readAgent(saved.definition.agentId))?.settings, saved.settings)
+  assert.ok((await f.list()).agents.every(value => value.launch?.phase === "cleanup_verified"))
+  await f.verifyZeroSurvivors()
+})
 
 for (const [model, effort, defaults] of [["model-a", "low", false], ["model-b", "high", true]] as const) test("CLI advertised Codex choices start and restore " + model + "/" + effort, async t => {
   const f = await acpFixture(t, { selectionCatalog: true })
@@ -274,7 +344,7 @@ for (const [name, fast, outcome] of [
   else {
     assert.equal(restored.command.result?.session?.sessionId, ready.command.result?.session?.sessionId)
     const settings = (await f.current()).agents[0]!.record.settings
-    assert.equal(settings.configValues?.["fast-mode"], "loadedValue" in fast ? fast.loadedValue : undefined)
+    assert.equal(settings.configValues?.["fast-mode"], "loadedValue" in fast ? fast.savedValue : undefined)
     await f.waitCompleted(await f.stop(restored.command.target!))
   }
   assert.ok((await f.list()).agents.every(agent => agent.launch?.phase === "cleanup_verified"))

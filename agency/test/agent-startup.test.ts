@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import test, { type TestContext } from "node:test"
 import { PassThrough } from "node:stream"
 import { createAcpConnection } from "../src/agent/acp.js"
-import { AGENT_LIMITS, AgentError, agentFailure, splitLaunchSpec, parseAgentCommandV3 } from "../src/agent/types.js"
+import { AGENT_LIMITS, AgentError, agentFailure, splitLaunchSpec, parseAgentCommandV3, normalizeAgentRecord } from "../src/agent/types.js"
+import { projectRestorableSettings, type JsonObject, type RequestedSettings } from "../src/agent/session-config.js"
 import { parseFailureDiagnostic } from "../src/agent/failure-diagnostics.js"
 import { sampleSpec, sampleContract } from "./agent-support.js"
 
@@ -79,4 +80,94 @@ test("successful load clears startup timers and later RPC timeout carries no sta
   assert.equal((await request).code, "STARTUP_TIMEOUT")
   const failure = await connection.fault
   assert.equal((failure.diagnostic as unknown as { startup?: Startup })?.startup, undefined)
+})
+
+function settingsFixture(t: TestContext, behavior: "normal" | "ignored" | "regressed" | "dynamic" | "legacy" | "unmapped" | "config-only" = "normal") {
+  const readable = new PassThrough(), writable = new PassThrough()
+  const connection = createAcpConnection({ readable, writable, limits: AGENT_LIMITS })
+  t.after(() => { connection.close(); readable.destroy(); writable.destroy() })
+  let model = "model-a", effort = "low", mode = "agent-full-access", legacyModel = "legacy-a", legacyMode = "normal"
+  const config = (): JsonObject[] => [
+    { id: "model", type: "select", category: "model", currentValue: model, options: [{ value: "model-a" }, { value: "model-b" }] },
+    ...(behavior !== "dynamic" || model === "model-b" ? [{ id: "reasoning", type: "select", currentValue: effort, options: [{ value: "low" }, { value: "high" }] }] : []),
+    { id: "mode", type: "select", category: "mode", currentValue: mode, options: [{ value: "agent-full-access" }, { value: "read-only" }] },
+  ]
+  const modes = (): JsonObject => ({ currentModeId: behavior === "legacy" ? legacyMode : behavior === "unmapped" ? "normal" : "agent-full-access", availableModes: behavior === "legacy" || behavior === "unmapped" ? [{ id: "normal" }, { id: "review" }] : [{ id: "agent-full-access" }, { id: "read-only" }] })
+  const send = (id: number, result: JsonObject) => readable.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
+  writable.on("data", bytes => {
+    const request = JSON.parse(bytes.toString())
+    if (request.method === "initialize") send(request.id, { protocolVersion: 1, agentCapabilities: { loadSession: true } })
+    else if (request.method === "session/load" || request.method === "session/new") send(request.id, {
+      sessionId: "fixture-session", ...(behavior === "config-only" ? {} : { modes: modes(), models: { currentModelId: behavior === "legacy" ? legacyModel : "model-a[low]", availableModels: behavior === "legacy" ? [{ modelId: "legacy-a" }, { modelId: "legacy-b" }] : [{ modelId: "model-a[low]" }] } }),
+      ...(behavior === "legacy" ? {} : { configOptions: config() }),
+    })
+    else if (request.method === "session/set_config_option") {
+      if (behavior !== "ignored") {
+        if (request.params.configId === "model") model = request.params.value
+        if (request.params.configId === "reasoning") effort = request.params.value
+        if (request.params.configId === "mode") { mode = request.params.value; if (behavior === "regressed") effort = "low" }
+      }
+      send(request.id, { configOptions: config() })
+    } else if (request.method === "session/set_model" || request.method === "session/set_mode") {
+      if (request.method === "session/set_model") legacyModel = request.params.modelId
+      else legacyMode = request.params.modeId
+      send(request.id, {})
+    }
+  })
+  const start = (settings: RequestedSettings, kind: "load" | "new" = "load") => connection.initialize({ ...normalizeAgentRecord({ version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null }), settings }, sampleContract(), kind === "load" ? { kind, sessionId: "fixture-session", params: {} } : { kind, params: {} }, new AbortController().signal)
+  return { connection, start, updateMode: (currentModeId: string) => readable.write(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId } } }) + "\n") }
+}
+
+for (const kind of ["new", "load"] as const) test("canonical mode and model override stale legacy settings during " + kind, async t => {
+  const f = settingsFixture(t)
+  const session = await f.start({ modelId: "retired[low]", modeId: "agent-full-access", configValues: { model: "model-a", reasoning: "high", mode: "read-only" } }, kind)
+  assert.deepEqual(projectRestorableSettings(session.configuration).configValues, { model: "model-a", reasoning: "high", mode: "read-only" })
+  assert.equal(session.configuration.modes?.currentModeId, "read-only")
+  assert.equal(session.sessionId, "fixture-session")
+})
+
+test("loaded settings discover dependent options after restoring the model", async t => {
+  const f = settingsFixture(t, "dynamic")
+  const session = await f.start({ configValues: { model: "model-b", reasoning: "high", mode: "read-only" } })
+  assert.deepEqual(projectRestorableSettings(session.configuration).configValues, { model: "model-b", reasoning: "high", mode: "read-only" })
+})
+
+for (const behavior of ["ignored", "regressed"] as const) test("loaded settings reject " + behavior + " acknowledgments", async t => {
+  const f = settingsFixture(t, behavior)
+  await assert.rejects(f.start({ configValues: { model: "model-a", reasoning: "high", mode: "read-only" } }), { code: "SELECTION_UNSUPPORTED" })
+})
+
+test("legacy-only load reapplies saved model and mode", async t => {
+  const f = settingsFixture(t, "legacy")
+  const session = await f.start({ modelId: "legacy-b", modeId: "review" })
+  assert.deepEqual(projectRestorableSettings(session.configuration), { modelId: "legacy-b", modeId: "review" })
+})
+
+test("canonical mode does not invent an unadvertised legacy mapping", async t => {
+  const f = settingsFixture(t, "unmapped")
+  const session = await f.start({ configValues: { model: "model-a", reasoning: "high", mode: "read-only" } })
+  assert.equal(session.configuration.modes?.currentModeId, "normal")
+  assert.equal(projectRestorableSettings(session.configuration).configValues?.mode, "read-only")
+})
+
+test("canonical mode follows an acknowledged equivalent legacy mode setter", async t => {
+  const f = settingsFixture(t)
+  await f.start({ configValues: { model: "model-a", reasoning: "high", mode: "agent-full-access" } }, "new")
+  await f.connection.request("session/set_mode", { sessionId: "fixture-session", modeId: "read-only" })
+  assert.equal(projectRestorableSettings(f.connection.snapshot()).configValues?.mode, "read-only")
+  assert.equal(f.connection.snapshot().modes?.currentModeId, "read-only")
+})
+
+test("canonical mode follows an equivalent native mode update", async t => {
+  const f = settingsFixture(t)
+  await f.start({ configValues: { model: "model-a", reasoning: "high", mode: "agent-full-access" } }, "new")
+  f.updateMode("read-only")
+  assert.equal(projectRestorableSettings(f.connection.snapshot()).configValues?.mode, "read-only")
+  assert.equal(f.connection.snapshot().modes?.currentModeId, "read-only")
+})
+
+test("canonical mode survives removal of the legacy settings surface", async t => {
+  const f = settingsFixture(t, "config-only")
+  const session = await f.start({ modelId: "retired[low]", modeId: "agent-full-access", configValues: { model: "model-a", reasoning: "high", mode: "read-only" } })
+  assert.deepEqual(projectRestorableSettings(session.configuration).configValues, { model: "model-a", reasoning: "high", mode: "read-only" })
 })

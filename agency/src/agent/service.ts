@@ -505,6 +505,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const issue = issueFor((request as RestoreRequest).agentId)
         if (issue) throw targetFailure(issue)
         if (!previousAgent || !previousAgent.session || records.has(previousAgent.definition.agentId) && (!["stopped", "recoverable"].includes(previousAgent.phase) || !isDeepStrictEqual(records.get(previousAgent.definition.agentId), previousAgent))) throw new AgentError("NOT_READY")
+        const pending = (configurationPending.get(previousAgent.definition.agentId)?.length ?? 0) > 0
+        const firstImport = previousAgent.definition.origin === "import" && previousAgent.launch === null && !previousAgent.settings.modelId && !previousAgent.settings.modeId && Object.keys(previousAgent.settings.configValues ?? {}).length === 0 && previousAgent.configurationState.nonRestorableOptionIds.length === 0 && !pending
+        if (pending || previousAgent.configurationState.verification.kind !== "verified" && !firstImport) throw new AgentError("SESSION_INPUT_REQUIRED")
         if (records.has(previousAgent!.definition.agentId) && previousAgent.launch && !context.mutations.accepted.some(entry => entry.record.launchAttemptId === previousAgent.launch!.launchAttemptId && entry.record.phase === "cleanup_verified")) throw new AgentError("CLEANUP_UNVERIFIED")
       }
       const existing = await savedCommand(request.commandId)
@@ -718,7 +721,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       }
     }
     if (saved.modelId && !settings.modelId && !settings.configValues?.[op.contract.modelOption] || saved.modeId && !settings.modeId && (!op.contract.modeOption || !settings.configValues?.[op.contract.modeOption])) throw new AgentError("SESSION_INPUT_REQUIRED")
-    if (Object.keys(saved.configValues ?? {}).some(optionId => settings.configValues?.[optionId] === undefined && !isImplicitDisabledCodexFastMode(op.contract.providerId, optionId, saved.configValues?.[optionId], session.result, required, pending))) throw new AgentError("SESSION_INPUT_REQUIRED")
+    if (saved.modelId && saved.configValues?.[op.contract.modelOption] === undefined && settings.modelId !== saved.modelId || saved.modeId && (!op.contract.modeOption || saved.configValues?.[op.contract.modeOption] === undefined) && settings.modeId !== saved.modeId) throw new AgentError("SESSION_INPUT_REQUIRED")
+    if (Object.entries(saved.configValues ?? {}).some(([optionId, value]) => settings.configValues?.[optionId] !== value && !(settings.configValues?.[optionId] === undefined && isImplicitDisabledCodexFastMode(op.contract.providerId, optionId, value, session.result, required, pending)))) throw new AgentError("SESSION_INPUT_REQUIRED")
     if (required.size && (!Object.hasOwn(session.result, "configOptions") || [...required].some(optionId => session.configuration.configOptions.some(option => option.id === optionId) && settings.configValues?.[optionId] === undefined))) throw new AgentError("SESSION_INPUT_REQUIRED")
   }
   async function setSession(target: AgentTuple, method: string, raw: JsonObject): Promise<JsonObject> {

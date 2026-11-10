@@ -33,7 +33,7 @@ const emit = async (value: unknown): Promise<void> => {
 }
 const update = (value: unknown) => emit({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: value } })
 if (scenario === "ignore-term") process.on("SIGTERM", () => undefined)
-let buffer = "", serial = Promise.resolve(), cancelledOnce = false, activePrompt: number | null = null
+let buffer = "", serial = Promise.resolve(), cancelledOnce = false, activePrompt: number | null = null, loaded = false, fastValue: string | boolean | undefined
 process.stdin.on("data", (chunk: Buffer) => {
   buffer += chunk.toString("utf8")
   if (Buffer.byteLength(buffer) > 1048576) process.exit(2)
@@ -52,6 +52,7 @@ process.stdin.on("data", (chunk: Buffer) => {
       let result: unknown
       if (request.method === "initialize") result = { protocolVersion: 1, agentCapabilities: { loadSession: true } }
       else if (request.method === "session/new" || request.method === "session/load") {
+        loaded = request.method === "session/load"
         await barrier("session")
         if (request.method === "session/load" && scenario === "large-replay") {
           const limit = await exists(join(root, "replay-limit")) ? await readFile(join(root, "replay-limit"), "utf8") : ""
@@ -68,15 +69,20 @@ process.stdin.on("data", (chunk: Buffer) => {
         result = { sessionId: "fixture-session", configOptions: options }
       } else if (request.method === "session/set_config_option") {
         if (request.params.sessionId !== "fixture-session") throw new Error("wrong session")
-        const option = options.find(option => option.id === request.params.configId)
-        if (!option || !option.options.some(value => value.value === request.params.value)) throw new Error("unsupported selection")
-        option.currentValue = request.params.value
-        if (scenario === "alias" && option.id === "model") option.currentValue = "model-b"
-        if (scenario === "permission") {
-          send({ jsonrpc: "2.0", id: "permission", method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "fixture-tool" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } })
-          return
+        if (scenario === "restore-fast-mode" && request.params.configId === "fast-mode") {
+          if (fastValue === undefined) throw new Error("missing fast-mode option")
+          fastValue = request.params.value
+        } else {
+          const option = options.find(option => option.id === request.params.configId)
+          if (!option || !option.options.some(value => value.value === request.params.value)) throw new Error("unsupported selection")
+          option.currentValue = request.params.value
+          if (scenario === "alias" && option.id === "model") option.currentValue = "model-b"
+          if (scenario === "permission") {
+            send({ jsonrpc: "2.0", id: "permission", method: "session/request_permission", params: { sessionId: "fixture-session", toolCall: { toolCallId: "fixture-tool" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } })
+            return
+          }
+          if (option.id === "mode") await barrier("configured")
         }
-        if (option.id === "mode") await barrier("configured")
         result = { configOptions: options }
       } else if (request.method === "session/prompt") {
         if (request.params.sessionId !== "fixture-session" || request.params.prompt?.length !== 1 || request.params.prompt[0]?.type !== "text") throw new Error("wrong prompt")
@@ -111,12 +117,13 @@ process.stdin.on("data", (chunk: Buffer) => {
         let configOptions: unknown[] = options
         if (scenario === "restore-fast-mode") {
           const fast = JSON.parse(await readFile(join(root, "fast-mode.json"), "utf8"))
-          if (request.method !== "session/load" || Object.hasOwn(fast, "loadedValue")) {
-            const value = request.method !== "session/load" ? fast.savedValue : fast.loadedValue
+          if (request.method === "session/new" || request.method === "session/load") fastValue = loaded ? fast.loadedValue : fast.savedValue
+          if (fastValue !== undefined) {
+            const value = fastValue
             configOptions = [...options, typeof value === "boolean" ? { id: "fast-mode", name: "Fast mode", type: "boolean", currentValue: value } : { id: "fast-mode", name: "Fast mode", type: "select", currentValue: value, options: [{ value: "off", name: "Off" }, { value: "on", name: "On" }] }]
           }
-          if (request.method === "session/load" && fast.drop) configOptions = configOptions.filter(option => !(fast.drop as string[]).includes((option as { id: string }).id))
-          result = fast.omitConfiguration && request.method === "session/load" ? { sessionId: "fixture-session" } : { sessionId: "fixture-session", configOptions }
+          if (loaded && fast.drop) configOptions = configOptions.filter(option => !(fast.drop as string[]).includes((option as { id: string }).id))
+          result = fast.omitConfiguration && loaded ? { sessionId: "fixture-session" } : { sessionId: "fixture-session", configOptions }
         }
       }
       send({ jsonrpc: "2.0", id: request.id, result })
