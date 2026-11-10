@@ -6,6 +6,8 @@ Agency owns persistent local agent processes and exposes them to native Agentic 
 
 Use Node 24.13.0 and the existing pinned lockfile. Build from `agency/` with `npm ci` and `npm run build`, or reuse an existing installation and run only the build. The existing dotfiles deployment provides `~/bin/agy`, which resolves the repository through its symlink chain and uses the pinned Node runtime. It never installs dependencies or builds implicitly.
 
+The default Codex launch contract qualifies the pinned Codex ACP 2.6.0 adapter. Other adapter versions are rejected. Restore uses the current contract while preserving each recorded native session and its saved settings.
+
 Agency derives the standard enabled Codex provider configuration in memory when `catalog/providers.json` is absent. It uses this repository's `home/bin/acp-codex` wrapper, pinned ACP adapter metadata, and `~/.codex/config.toml`, resolving deployed symlink targets to canonical paths. Discovery, launches, Restore, and backend defaults use the same reader. The runtime works without a prior bootstrap configuration step or a profile file. Declared Codex configuration may be absent; Agency detects its later creation through configuration evidence.
 
 An optional private `catalog/providers.json` overrides the default completely. Its location is `${XDG_STATE_HOME:-$HOME/.local/state}/agency/hosts/<host-key>/catalog/providers.json`. Explicit empty or disabled configurations remain authoritative; `{"version":1,"providers":[]}` disables the standard provider. Malformed, symlinked, or insecure overrides produce an error and never fall back to defaults. Existing profiles from older bootstrap runs remain overrides. Agency and bootstrap do not generate or delete these files automatically.
@@ -47,7 +49,7 @@ An optional private `catalog/backends.json` overrides backend defaults. It uses 
     "args": [],
     "environmentDefaults": {},
     "initial": { "modeId": "agent-full-access" },
-    "compatibilityId": "codex-acp-1.7"
+    "compatibilityId": "codex-acp-2.6"
   }]
 }
 ```

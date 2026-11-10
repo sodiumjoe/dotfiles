@@ -3,323 +3,130 @@ import { chmod, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const originalHash = "afffcfeb6ae3a82f2b359a7d3d6a1a3ceee43898b59c34335eb1760974cc4ff8";
-const overlapHash = "c3f5b9212df7962fc7f95ccffe05841f31a9ca22d625cf5cf6c304d8bf9ffd78";
-const lateStartHash = "a792e8776fa77b4157ce5ee984b9b4027b25158da573554a7531044fa72c7ba1";
-const completedTextHash = "3f4ee4031599a2342a32f23b2e54f0b7fdb0dc09b4cb047cecbf242e37c34367";
-const patchedHash = "f52d7ed4d2bbd2e3749f48b6d9a2187df9d52d9c20ebde50e94a5f02c2b798d0";
+const originalHash = "733b7521c2a437a34ed016d45a6f46bebff2bac123a172467574ee827db98b99";
+const patchedHash = "45a79a25de7579e188fbd1c018e92bc209a0cebba1668b2e0df0224c14ace691";
 const replacements = [
   [
-    `      threadResolvers.set(turnId, resolve);`,
-    `      const resolvers = threadResolvers.get(turnId) ?? new Set();
-      resolvers.add(resolve);
-      threadResolvers.set(turnId, resolvers);`
-  ],
-  [
-    `    const resolve = threadResolvers?.get(event.turn.id);
-    if (resolve) {
-      threadResolvers.delete(event.turn.id);
-      if (threadResolvers.size === 0) {
-        this.pendingTurnCompletionResolvers.delete(event.threadId);
-      }
-      resolve(event);
-      return;
-    }`,
-    `    const resolvers = threadResolvers?.get(event.turn.id);
-    if (resolvers) {
-      threadResolvers.delete(event.turn.id);
-      if (threadResolvers.size === 0) {
-        this.pendingTurnCompletionResolvers.delete(event.threadId);
-      }
-      for (const resolve of resolvers) resolve(event);
-    }`
-  ],
-  [
-    `  async getInterruptibleTurnId(sessionState, requestName) {
-    if (sessionState.currentTurnId) {
-      return sessionState.currentTurnId;
-    }
-    const pendingTurnStart = this.pendingTurnStarts.get(sessionState.sessionId);
-    if (!pendingTurnStart) {
-      logger.log(\`\${requestName} request rejected: no current turn\`, { sessionId: sessionState.sessionId });
-      return null;
-    }
-    if (requestName === "Close") {
-      pendingTurnStart.resolve(null);
-      return null;
-    }
-    const turnId = await pendingTurnStart.promise;
-    if (!turnId) {
-      logger.log(\`\${requestName} request rejected: no current turn\`, { sessionId: sessionState.sessionId });
-    }
-    return turnId;
-  }
-`,
-    `  async getInterruptibleTurnId(sessionState, requestName) {
-    const pendingTurnStart = this.pendingTurnStarts.get(sessionState.sessionId);
-    if (requestName !== "Close" && pendingTurnStart) {
-      const turnId = await pendingTurnStart.promise;
-      if (turnId) return turnId;
-    }
-    if (sessionState.currentTurnId) {
-      return sessionState.currentTurnId;
-    }
-    if (requestName === "Close") {
-      pendingTurnStart?.resolve(null);
-    }
-    logger.log(\`\${requestName} request rejected: no current turn\`, { sessionId: sessionState.sessionId });
-    return null;
-  }
-`
-  ],
-  [
-    `    sessionState.currentTurnId = null;
-    sessionState.lastTokenUsage = null;
-    const activePrompt = this.trackActivePrompt(params.sessionId);`,
-    `    sessionState.lastTokenUsage = null;
-    const activePrompt = this.trackActivePrompt(params.sessionId);`
-  ],
-  [
-    `      sessionState.currentTurnId = null;
-      const registeredPendingTurnStart = this.pendingTurnStarts.get(params.sessionId);
-      if (registeredPendingTurnStart !== void 0) {
-        this.pendingTurnStarts.delete(params.sessionId);
-        registeredPendingTurnStart.resolve(null);
-      }`,
-    `      if (sessionState.currentTurnId === activePrompt.currentTurn?.turnId) {
-        sessionState.currentTurnId = null;
-      }
-      if (this.pendingTurnStarts.get(params.sessionId) === pendingTurnStart) {
-        this.pendingTurnStarts.delete(params.sessionId);
-      }
-      pendingTurnStart?.resolve(null);`
-  ],
-  [
-    `        this.clearPlanTurnState();
-        this.sessionState.currentTurnId = null;
-        return null;`,
-    `        this.clearPlanTurnState();
-        if (this.sessionState.currentTurnId === notification.params.turn.id) {
-          this.sessionState.currentTurnId = null;
-        }
-        return null;`
-  ]
-];
-
-const lateStartReplacements = [
-  [
-    `          activePrompt.currentTurn = turn;
-          if (this.promptShouldStop(params.sessionId, activePrompt)) {
-            this.interruptLateStartedTurn(turn);
-            return;
-          }
-          sessionState.currentTurnId = turnId;`,
-    `          activePrompt.currentTurn = turn;
-          if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {
-            this.interruptLateStartedTurn(turn);
-            return;
-          }
-          if (this.activePrompts.get(params.sessionId) === activePrompt || sessionState.currentTurnId === null) {
-            sessionState.currentTurnId = turnId;
-          }`
-  ],
-  [
-    `            activePrompt.currentTurn = turn;
-            if (this.promptShouldStop(params.sessionId, activePrompt)) {
-              this.interruptLateStartedTurn(turn);
-              return;
-            }
-            sessionState.currentTurnId = turnId;`,
-    `            activePrompt.currentTurn = turn;
-            if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {
-              this.interruptLateStartedTurn(turn);
-              return;
-            }
-            if (this.activePrompts.get(params.sessionId) === activePrompt || sessionState.currentTurnId === null) {
-              sessionState.currentTurnId = turnId;
-            }`
-  ],
-  [
-    `                activePrompt.currentTurn = turn;
-                if (this.promptShouldStop(params.sessionId, activePrompt)) {
-                  this.interruptLateStartedTurn(turn);
-                  return;
-                }
-                sessionState.currentTurnId = turnId;`,
-    `                activePrompt.currentTurn = turn;
-                if (activePrompt.signal.aborted || this.sessionIsClosing(params.sessionId) || this.sessions.get(params.sessionId) !== sessionState) {
-                  this.interruptLateStartedTurn(turn);
-                  return;
-                }
-                if (this.activePrompts.get(params.sessionId) === activePrompt || sessionState.currentTurnId === null) {
-                  sessionState.currentTurnId = turnId;
-                }`
-  ],
-  [
-    `          sessionState.currentTurnId = null;
-          const implementationPromise`,
-    `          sessionState.currentTurnId = null;
-          pendingTurnStart = null;
-          ensurePendingTurnStart();
-          const implementationPromise`
-  ],
-  [
-    `                recoverableSessionFailure = sessionState.sessionFailure;
-                promptNotificationsActive = true;`,
-    `                pendingTurnStart?.resolve(turnId);
-                recoverableSessionFailure = sessionState.sessionFailure;
-                promptNotificationsActive = true;`
-  ]
-];
-
-const completedTextReplacements = [
-  [
-    `var CodexEventHandler = class _CodexEventHandler {`,
+    `var CodexEventHandler = class {`,
     `function completeAgentMessageTurn(sessionState, threadId, turnId) {
   if (!sessionState || sessionState.agentMessageTextClosed) return;
   const key = JSON.stringify([threadId, turnId]);
   sessionState.agentMessageTextByTurn?.delete(key);
   const completed = sessionState.completedAgentMessageTurns ??= new Set();
   completed.add(key);
-  if (completed.size > 64) completed.delete(completed.values().next().value);
 }
-var CodexEventHandler = class _CodexEventHandler {`
+var CodexEventHandler = class {`
   ],
   [
     `  async handleNotification(notification) {
-    await this.flushPendingErrors();`,
+    const threadId = notification.params.threadId;`,
     `  async handleNotification(notification) {
-    if (notification.method === "turn/completed") {
+    if (notification.method === "turn/completed" && notification.params.turn.status !== "inProgress") {
       completeAgentMessageTurn(this.sessionState, notification.params.threadId, notification.params.turn.id);
     }
-    await this.flushPendingErrors();`
+    const threadId = notification.params.threadId;`
   ],
   [
     `  async createTextEvent(event) {
-    const phase = this.agentMessagePhases.get(event.itemId) ?? null;
-    return createAgentTextMessageChunk(event.delta, event.itemId, createCodexMessagePhaseMeta(phase));
+    const streams = this.streamsFor(event.threadId);
+    let citations = streams.agentMessageCitations.get(event.itemId);
+    if (citations === void 0) {
+      citations = new FileCitationStream(this.sessionState.cwd);
+      streams.agentMessageCitations.set(event.itemId, citations);
+    }
+    return this.createAgentMessageText(citations.push(event.delta), event.itemId, event.threadId);
+  }
+  /**
+   * Sends the text a file citation held back, once the message is complete. A message that
+   * arrives whole, without deltas (an async question, for one), is sent in full.
+   */
+  flushAgentMessageText(item, threadId) {
+    const streams = this.streamsFor(threadId);
+    const citations = streams.agentMessageCitations.get(item.id);
+    streams.agentMessageCitations.delete(item.id);
+    const text = citations ? citations.flush() : renderFileCitations(item.text, this.sessionState.cwd);
+    return this.createAgentMessageText(text, item.id, threadId);
   }
 `,
-    `  agentMessageItems(event) {
+    `  agentMessageItems(threadId, turnId) {
     if (this.sessionState.agentMessageTextClosed) return null;
-    const key = JSON.stringify([event.threadId, event.turnId]);
+    const key = JSON.stringify([threadId, turnId]);
     if (this.sessionState.completedAgentMessageTurns?.has(key)) return null;
     const turns = this.sessionState.agentMessageTextByTurn ??= new Map();
     let items = turns.get(key);
-    if (!items) {
-      items = new Map();
-      turns.set(key, items);
-    }
+    if (!items) { items = new Map(); turns.set(key, items); }
     return items;
   }
   async createTextEvent(event) {
-    const items = this.agentMessageItems(event);
-    if (!items || items.get(event.itemId) === null) return null;
-    items.set(event.itemId, (items.get(event.itemId) ?? "") + event.delta);
-    const phase = this.agentMessagePhases.get(event.itemId) ?? null;
-    return createAgentTextMessageChunk(event.delta, event.itemId, createCodexMessagePhaseMeta(phase));
+    const items = this.agentMessageItems(event.threadId, event.turnId);
+    if (!items) return null;
+    let state = items.get(event.itemId);
+    if (!state) {
+      state = { text: "", done: false, citations: new FileCitationStream(this.sessionState.cwd) };
+      items.set(event.itemId, state);
+    }
+    if (state.done) return null;
+    state.text += event.delta;
+    return this.createAgentMessageText(state.citations.push(event.delta), event.itemId, event.threadId);
+  }
+  flushAgentMessageText(item, threadId, turnId) {
+    const items = this.agentMessageItems(threadId, turnId);
+    if (!items) return null;
+    const state = items.get(item.id);
+    if (state?.done) return null;
+    if (!state) {
+      items.set(item.id, { text: "", done: true });
+      return this.createAgentMessageText(renderFileCitations(item.text, this.sessionState.cwd), item.id, threadId);
+    }
+    state.done = true;
+    const suffix = item.text.startsWith(state.text) ? item.text.slice(state.text.length) : "";
+    const text = state.citations.push(suffix) + state.citations.flush();
+    state.text = "";
+    state.citations = null;
+    return this.createAgentMessageText(text, item.id, threadId);
   }
 `
   ],
   [
-    `      case "agentMessage":
-        this.rememberAgentMessagePhase(event.item);
-        return null;
-      case "plan": {`,
-    `      case "agentMessage": {
-        this.rememberAgentMessagePhase(event.item);
-        const items = this.agentMessageItems(event);
-        if (!items || items.get(event.item.id) === null) return null;
-        const streamed = items.get(event.item.id) ?? "";
-        items.set(event.item.id, null);
-        if (!event.item.text.startsWith(streamed)) {
-          logger.log("Completed agent message diverged", { threadId: event.threadId, turnId: event.turnId, itemId: event.item.id, streamedLength: streamed.length, completedLength: event.item.text.length });
-          return null;
-        }
-        const suffix = event.item.text.slice(streamed.length);
-        return suffix.length > 0 ? createAgentTextMessageChunk(suffix, event.item.id, createCodexMessagePhaseMeta(event.item.phase)) : null;
-      }
-      case "plan": {`
+    `return this.flushAgentMessageText(event.item, event.threadId);`,
+    `return this.flushAgentMessageText(event.item, event.threadId, event.turnId);`
   ],
   [
-    `  async interruptPromptTurn(turn, requestName) {
-    this.codexAcpClient.markTurnStale({`,
-    `  async interruptPromptTurn(turn, requestName) {
-    completeAgentMessageTurn(this.sessions.get(turn.threadId), turn.threadId, turn.turnId);
-    this.codexAcpClient.markTurnStale({`
-  ],
-  [
-    `    if (resolveInterruptedTurn) {
-      this.codexAcpClient.markTurnStale({`,
-    `    if (resolveInterruptedTurn) {
-      completeAgentMessageTurn(sessionState, sessionState.sessionId, turnId);
-      this.codexAcpClient.markTurnStale({`
-  ],
-  [
-    `    } finally {
-      if (this.getSessionGeneration(params.sessionId) === closeGeneration) {`,
-    `    } finally {
-      if (sessionState) {
-        sessionState.agentMessageTextClosed = true;
-        sessionState.agentMessageTextByTurn?.clear();
-        sessionState.completedAgentMessageTurns?.clear();
-      }
-      if (this.getSessionGeneration(params.sessionId) === closeGeneration) {`
-  ]
-];
-
-const historyReplacements = [
-  [
-    `function mergeHistoryUpdates(responseItemFallbackUpdates, threadUpdates) {
-  const merged = [];
-  const seen = /* @__PURE__ */ new Set();
-  let fallbackIndex = 0;`,
-    `function mergeHistoryUpdates(responseItemFallbackUpdates, threadUpdates) {
-  const merged = [];
-  const seen = /* @__PURE__ */ new Set();
-  let fallbackIndex = 0;
-  const keyIndices = new Map(), contentIndices = new Map();
-  const addIndex = (map, key, index) => {
-    if (key === null) return;
-    const indices = map.get(key) ?? [];
-    indices.push(index);
-    map.set(key, indices);
-  };
-  responseItemFallbackUpdates.forEach((update, index) => {
-    addIndex(keyIndices, historyUpdateKey(update), index);
-    addIndex(contentIndices, historyUpdateContentKey(update), index);
-  });
-  const nextIndex = (map, key) => {
-    const indices = map.get(key) ?? [];
-    let low = 0, high = indices.length;
-    while (low < high) {
-      const middle = (low + high) >>> 1;
-      if (indices[middle] < fallbackIndex) low = middle + 1;
-      else high = middle;
+    `    const sessionState = this.sessions.get(params.sessionId);
+    const childSessions = [`,
+    `    const sessionState = this.sessions.get(params.sessionId);
+    if (sessionState) {
+      sessionState.agentMessageTextClosed = true;
+      sessionState.agentMessageTextByTurn?.clear();
+      sessionState.completedAgentMessageTurns?.clear();
     }
-    return indices[low] ?? Infinity;
-  };`
+    const childSessions = [`
   ],
   [
-    `    const matchIndex = responseItemFallbackUpdates.findIndex((update, index) => index >= fallbackIndex && (targetKey !== null && historyUpdateKey(update) === targetKey || targetContentKey !== null && historyUpdateContentKey(update) === targetContentKey));
-    if (matchIndex === -1) {`,
-    `    const matchIndex = Math.min(nextIndex(keyIndices, targetKey), nextIndex(contentIndices, targetContentKey));
-    if (matchIndex === Infinity) {`
+    `  replayUpdate(update, initialized) {
+    return this.v2Connection ?`,
+    `  replayUpdate(update, initialized) {
+    if (!this.v2Connection && ["user_message_chunk", "agent_message_chunk", "agent_thought_chunk"].includes(update.sessionUpdate) && update.messageId !== void 0) {
+      const key = JSON.stringify([update.sessionUpdate, update.messageId, update.content]);
+      if (initialized.has(key)) return Promise.resolve();
+      initialized.add(key);
+    }
+    return this.v2Connection ?`
   ]
 ];
 
 export async function patchCodexAcp(packageRoot = fileURLToPath(new URL("node_modules/@agentclientprotocol/codex-acp/", import.meta.url))) {
   const metadata = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-  if (metadata.name !== "@agentclientprotocol/codex-acp" || metadata.version !== "1.7.0") {
-    throw new Error("Unsupported codex-acp package: expected @agentclientprotocol/codex-acp 1.7.0");
+  if (metadata.name !== "@agentclientprotocol/codex-acp" || metadata.version !== "2.6.0") {
+    throw new Error("Unsupported codex-acp package: expected @agentclientprotocol/codex-acp 2.6.0");
   }
   const bundle = path.join(packageRoot, "dist/index.js");
   const source = await readFile(bundle, "utf8");
   const hash = createHash("sha256").update(source).digest("hex");
   if (hash === patchedHash) return;
-  if (hash !== originalHash && hash !== overlapHash && hash !== lateStartHash && hash !== completedTextHash) throw new Error("Unsupported codex-acp source: expected pristine 1.7.0 or an exact supported patch");
+  if (hash !== originalHash) throw new Error("Unsupported codex-acp source: expected pristine 2.6.0 or an exact supported patch");
   let patched = source;
-  for (const [before, after] of [...(hash === originalHash ? replacements : []), ...([originalHash, overlapHash].includes(hash) ? lateStartReplacements : []), ...(hash !== completedTextHash ? completedTextReplacements : []), ...historyReplacements]) {
+  for (const [before, after] of replacements) {
     if (patched.split(before).length !== 2) throw new Error("Unsupported codex-acp source: ambiguous patch");
     patched = patched.replace(before, after);
   }

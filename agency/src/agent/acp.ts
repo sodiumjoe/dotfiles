@@ -142,6 +142,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         if (new Set(optionIds).size !== optionIds.length) throw new AgentError("INVALID_PROTOCOL")
         providerRequests.add(id); input.onRequest?.(structuredClone(frame)); return
       }
+      if (frame.method.startsWith("_")) return
       if (frame.method === "session/update" && !sessionId && startupStartedAt !== undefined && startupPhase === "session/new" && [...pending.values()].some(waiter => waiter.method === "session/new")) {
         const bytes = wireJsonBytes(frame) + 1
         if (earlyUpdates.length >= 128 || bytes > 1048576 || earlyUpdateBytes + bytes > 8388608) throw new AgentError("INVALID_PROTOCOL")

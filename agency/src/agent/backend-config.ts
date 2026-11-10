@@ -41,7 +41,7 @@ export async function readBackendConfig(root: string): Promise<BackendConfig> {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
   }
   if (!(await readProfiles(root)).some(profile => profile.enabled && profile.id === "codex-acp")) throw new AgentError("UNAVAILABLE")
-  return { version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" }, initial: { modeId: "agent-full-access" }, compatibilityId: "codex-acp-1.7" }] }
+  return { version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" }, initial: { modeId: "agent-full-access" }, compatibilityId: "codex-acp-2.6" }] }
 }
 
 export function backendFingerprint(backend: Backend, manifest: unknown): string {

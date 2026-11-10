@@ -11,7 +11,7 @@ const option = (value: boolean): JsonObject => ({ id: "fixture", type: "boolean"
 const text = (value: string): JsonObject => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: value } })
 const frame = (update: JsonObject, sessionId = "fixture-session"): JsonObject => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } })
 function fixture(t: TestContext, deadline = performance.now() + 5000) {
-  const readable = new PassThrough(), writable = new PassThrough(), events: AcpObservation[] = []
+  const readable = new PassThrough(), writable = new PassThrough(), events: AcpObservation[] = [], outbound: JsonObject[] = []
   const connection = createAcpConnection({ readable, writable, limits: AGENT_LIMITS, deadline, onUpdate: event => events.push(event) })
   t.after(() => { connection.close(); readable.destroy(); writable.destroy() })
   const requested = Promise.withResolvers<number>()
@@ -19,6 +19,7 @@ function fixture(t: TestContext, deadline = performance.now() + 5000) {
   const send = (value: JsonObject) => readable.write(JSON.stringify(value) + "\n")
   writable.on("data", bytes => {
     const request = JSON.parse(bytes.toString())
+    outbound.push(request)
     if (request.method === "initialize") send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } })
     if (request.method === "session/new") requested.resolve(request.id)
   })
@@ -28,7 +29,7 @@ function fixture(t: TestContext, deadline = performance.now() + 5000) {
     void promise.catch(error => requested.reject(error))
     return promise
   }
-  return { connection, events, requested: requested.promise, start, send,
+  return { connection, events, outbound, requested: requested.promise, start, send,
     async release(result: JsonObject = { sessionId: "fixture-session", configOptions: [] }) { send({ jsonrpc: "2.0", id: await requested.promise, result }) },
   }
 }
@@ -52,6 +53,40 @@ test("early updates wait for identity and override the response baseline in orde
   assert.deepEqual(f.connection.snapshot().availableCommands, [{ name: "fixture", description: "fixture command" }])
   f.send(frame(text("live")))
   assert.equal(f.events.length, 5)
+})
+
+test("extension notifications do not publish session events or alter configuration", async t => {
+  const f = fixture(t)
+  const extension = { jsonrpc: "2.0", method: "_auth/status_update", params: { authStatus: { kind: "none", label: "Not logged in" } } }
+  f.send(extension)
+  const started = f.start(); await f.requested
+  f.send({ ...extension, method: "_future/status", params: { configOptions: [option(true)] } })
+  await f.release({ sessionId: "fixture-session", configOptions: [option(false)] }); await started
+  f.send(extension)
+  assert.deepEqual(f.events, [])
+  assert.deepEqual(f.connection.snapshot().configOptions, [option(false)])
+  f.send(frame(text("live")))
+  assert.equal(f.events.length, 1)
+})
+
+test("unsupported extension requests receive a method error", async t => {
+  const f = fixture(t)
+  f.send({ jsonrpc: "2.0", id: "extension-request", method: "_auth/status_update", params: {} })
+  const started = f.start(); await f.requested; await f.release(); await started
+  assert.deepEqual(f.outbound.find(frame => frame.id === "extension-request"), { jsonrpc: "2.0", id: "extension-request", error: { code: -32601, message: "Client RPC is not supported" } })
+  assert.deepEqual(f.events, [])
+})
+
+for (const [name, invalid] of [
+  ["unknown core notification", { jsonrpc: "2.0", method: "auth/status_update", params: {} }],
+  ["nonobject extension params", { jsonrpc: "2.0", method: "_auth/status_update", params: [] }],
+  ["invalid extension metadata", { jsonrpc: "2.0", method: "_auth/status_update", params: { _meta: [] } }],
+  ["extension notification with result", { jsonrpc: "2.0", method: "_auth/status_update", params: {}, result: {} }],
+] satisfies Array<[string, JsonObject]>) test("extension handling rejects " + name, async t => {
+  const f = fixture(t)
+  f.send(invalid)
+  assert.equal((await f.connection.fault).code, "INVALID_PROTOCOL")
+  assert.deepEqual(f.events, [])
 })
 
 test("all early identities must match the response before any publication", async t => {

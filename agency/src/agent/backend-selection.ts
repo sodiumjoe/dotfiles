@@ -6,7 +6,7 @@ import type { JsonObject } from "./session-config.js"
 export function backendSelection(backend: Backend, contract: LaunchContract, provider?: ProviderView): JsonObject {
   const setting = (id: string, name: string, kind: string, values: string[]): JsonObject => ({ id, name, kind, values: values.map(value => ({ value, name: value })) })
   const codex = backend.id === "codex-acp"
-  const modes = codex && contract.id === "codex-acp-1.7" && contract.adapterVersion === "1.7.0"
+  const modes = codex && contract.id === "codex-acp-2.6" && contract.adapterVersion === "2.6.0"
     ? [setting("mode", "Mode", "config", ["read-only", "agent", "agent-full-access"])] : []
   const models = (provider?.models ?? []).map(model => {
     const settings: JsonObject[] = []

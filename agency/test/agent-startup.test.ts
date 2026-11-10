@@ -6,8 +6,49 @@ import { AGENT_LIMITS, AgentError, agentFailure, splitLaunchSpec, parseAgentComm
 import { projectRestorableSettings, type JsonObject, type RequestedSettings } from "../src/agent/session-config.js"
 import { parseFailureDiagnostic } from "../src/agent/failure-diagnostics.js"
 import { sampleSpec, sampleContract } from "./agent-support.js"
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { observeConfig } from "../src/catalog/config.js"
+import { configureLaunchContract, productionLaunchContracts } from "../src/agent/contracts.js"
+import { readBackendConfig } from "../src/agent/backend-config.js"
+import { backendSelection } from "../src/agent/backend-selection.js"
+
+test("production default qualifies Codex 2.6 and exposes selectable modes", async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "agency-codex-26-")))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const profile = { id: "codex-acp" as const, enabled: true, executable: process.execPath, adapterPackageJson: fileURLToPath(new URL("../../../node-bin/node_modules/@agentclientprotocol/codex-acp/package.json", import.meta.url)), sdkPackageJson: null, configurationFiles: [] }
+  await mkdir(join(root, "catalog"), { mode: 0o700 })
+  await writeFile(join(root, "catalog/providers.json"), JSON.stringify({ version: 1, providers: [profile] }), { mode: 0o600 })
+  const backend = (await readBackendConfig(root)).backends[0]!
+  const declaration = productionLaunchContracts().find(contract => contract.id === backend.compatibilityId)!
+  const evidence = await observeConfig(profile)
+  const configured = await configureLaunchContract(declaration, profile, evidence)
+  assert.equal(configured.adapterVersion, "2.6.0")
+  assert.deepEqual((backendSelection(backend, configured).settings as JsonObject[])[0]?.values, [{ value: "read-only", name: "read-only" }, { value: "agent", name: "agent" }, { value: "agent-full-access", name: "agent-full-access" }])
+  await assert.rejects(configureLaunchContract(declaration, profile, { ...evidence, adapterVersion: "2.6.1" }), { code: "ADAPTER_UNQUALIFIED" })
+})
 
 type Phase = "initialize" | "session/new" | "session/load" | "configuration"
+test("Agency initializes the actual Codex 2.6 adapter with connection auth notifications", async t => {
+  const { peer } = await import(fileURLToPath(new URL("../../../node-bin/test/fixtures/acp-peer.mjs", import.meta.url)))
+  const p = await peer(t, { initialize: false })
+  const acp = createAcpConnection({ readable: p.readable, writable: p.writable, limits: AGENT_LIMITS })
+  t.after(() => acp.close())
+  const spec = sampleSpec({ cwd: p.root }), record = normalizeAgentRecord({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null })
+  record.settings = {}
+  const session = await acp.initialize(record, sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  assert.equal(session.sessionId, "fixture-session")
+  assert.ok(p.inbound.some((frame: { method?: string }) => frame.method === "_auth/status_update"))
+  assert.equal(p.nativeRequests.some((frame: { method: string }) => frame.method === "turn/start"), false)
+})
+
+for (const contractId of ["codex-acp-1.7", "codex-acp-2.6"]) test("legacy Codex record keeps reasoning option for " + contractId, () => {
+  const spec = sampleSpec(), launch = splitLaunchSpec(spec)
+  const record = normalizeAgentRecord({ version: 2, ...launch, launch: { ...launch.launch, contractId }, phase: "starting", session: null, failure: null })
+  assert.deepEqual(record.settings.configValues, { reasoning_effort: spec.selection.reasoning.kind === "value" ? spec.selection.reasoning.value : "high" })
+})
 type Startup = { phase: Phase; elapsedMs: number; replayUpdates: number }
 function fixture(t: TestContext, stage: Phase | "ready", replay = 0) {
   const readable = new PassThrough(), writable = new PassThrough()

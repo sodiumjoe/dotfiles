@@ -129,7 +129,7 @@ export function parseAgentRecordV3(input: unknown): AgentRecordV3 { return check
 export function normalizeAgentRecord(input: AgentRecord | AgentRecordV3): AgentRecordV3 {
   if (input.version === 3) return parseAgentRecordV3(input)
   const old = parseAgentRecord(input), { definition: d, launch: l } = old
-  const configValues = d.selection.reasoning.kind === "value" ? { [l.contractId === "codex-acp-1.7" ? "reasoning_effort" : "reasoning"]: d.selection.reasoning.value } : undefined
+  const configValues = d.selection.reasoning.kind === "value" ? { [["codex-acp-1.7", "codex-acp-2.6"].includes(l.contractId) ? "reasoning_effort" : "reasoning"]: d.selection.reasoning.value } : undefined
   return parseAgentRecordV3({ version: 3,
     definition: { hostId: d.hostId, agentId: d.agentId, createdCommandId: d.createdCommandId, cwd: d.cwd, backendId: d.selection.providerId, origin: "new" },
     launch: { handlerGeneration: l.handlerGeneration, providerGeneration: l.providerGeneration, launchAttemptId: l.launchAttemptId, commandId: l.commandId, configuration: l.configuration, backendFingerprint: digest(canonicalJson([l.configuration, l.contractFingerprint])), compatibilityId: l.contractId, containment: l.containment, authority: l.authority, limits: l.limits },

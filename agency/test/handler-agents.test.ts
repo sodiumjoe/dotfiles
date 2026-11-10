@@ -44,6 +44,30 @@ test("Restore settings survive native defaults resetting model effort and mode",
   await f.verifyZeroSurvivors()
 })
 
+test("Restore uses the current backend for pre-upgrade records and preserves native settings", async t => {
+  const f = await acpFixture(t, { selectionCatalog: true }), store = createAgentStore(f.paths.persistentRoot)
+  const started = await f.waitCompleted(await f.start({ mode: "read-only" }))
+  assert.equal(started.command.result?.outcome, "started")
+  await f.waitCompleted(await f.stop(started.command.target!))
+  const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  await f.control({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  await f.waitHandlerExit()
+  const saved = await store.readAgent(started.command.target!.agentId)
+  assert.ok(saved?.launch && saved.session)
+  const legacy = parseAgentRecordV3({ ...saved, launch: { ...saved.launch, compatibilityId: "codex-acp-1.7", configuration: { ...saved.launch.configuration, adapterVersion: "1.7.0" } } })
+  await writeFile(join(f.paths.persistentRoot, "agents/records", saved.definition.agentId + ".json"), JSON.stringify(legacy), { mode: 0o600 })
+  await f.restart({ nativeAcp: true, selectionCatalog: true })
+  const restored = await f.waitCompleted(await f.restore(saved.definition.agentId))
+  assert.equal(restored.command.result?.outcome, "restored")
+  const current = await store.readAgent(saved.definition.agentId)
+  assert.equal(current?.launch?.compatibilityId, "fixture-v1")
+  assert.equal(current?.launch?.configuration.adapterVersion, "1.0.0")
+  assert.deepEqual(current?.settings, legacy.settings)
+  assert.deepEqual(current?.session, legacy.session)
+  await f.waitCompleted(await f.stop(restored.command.target!))
+  await f.verifyZeroSurvivors()
+})
+
 test("Restore settings first native import discovers configuration", async t => {
   const f = await acpFixture(t)
   const generation = (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation

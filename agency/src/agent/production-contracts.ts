@@ -1,10 +1,10 @@
 import type { LaunchContract } from "./contracts.js"
 
 const codex: LaunchContract = Object.freeze({
-  id: "codex-acp-1.7",
+  id: "codex-acp-2.6",
   providerId: "codex-acp",
   adapterPackage: "@agentclientprotocol/codex-acp",
-  adapterVersion: "1.7.0",
+  adapterVersion: "2.6.0",
   sessionLoad: true,
   promptCapabilities: Object.freeze({ image: true, audio: false, embeddedContext: true }),
   modes: Object.freeze({ state: "values", values: Object.freeze(["read-only"]) }) as LaunchContract["modes"],
