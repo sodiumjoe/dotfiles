@@ -26,7 +26,7 @@ function fixture(t: test.TestContext) {
   }
   const capture = () => captureLiveProcess({ owner, adapter, launchBootId: "boot-a", marker, deadline: Date.now() + 5000, now: () => Date.now() })
   const limits = () => ({ deadline: Date.now() + 1000, terminateMs: 200, absenceMs: 200, transportCloseMs: 100 })
-  return { child, owner, identity, adapter, signals, exit, capture, limits, setMembers(value: ProcessIdentity[]) { members = value } }
+  return { child, owner, identity, adapter, signals, exit, capture, limits, getMembers: () => structuredClone(members), setMembers(value: ProcessIdentity[]) { members = value } }
 }
 
 
@@ -45,11 +45,13 @@ const verified = (value: Awaited<ReturnType<LiveProcessGroup["cleanup"]>>, group
 }
 
 
-test("cleanup waits for a lingering descendant within the absence budget", async t => {
-  const f = fixture(t), group = await f.capture(), member = descendant(f), original = f.adapter.readGroup
-  group.observeMember(member)
+test("cleanup waits for a lingering descendant within the termination budget", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readGroup
   let remaining = 2
-  f.adapter.readGroup = async pgid => f.owner.snapshot().terminal ? remaining-- > 0 ? [member] : [] : original(pgid)
+  f.adapter.readGroup = async pgid => {
+    if (f.owner.snapshot().terminal && remaining-- <= 0) f.setMembers([])
+    return original(pgid)
+  }
   const evidence = await group.cleanup(f.limits())
   verified(evidence, group)
   assert.deepEqual(f.signals, ["SIGTERM"])
@@ -103,7 +105,7 @@ test("a transient error resets consecutive full absence observations", async t =
 })
 
 for (const kind of ["lingering", "unavailable", "reused"] as const) {
-  test(`persistent ${kind} absence fails within the stage budget without another signal`, async t => {
+  test(`persistent unverified ${kind} group rejects cleanup without another signal`, async t => {
     const f = fixture(t), group = await f.capture(), member = descendant(f), original = f.adapter.readGroup
     f.adapter.readGroup = async pgid => {
       if (!f.owner.snapshot().terminal) return original(pgid)
@@ -111,7 +113,7 @@ for (const kind of ["lingering", "unavailable", "reused"] as const) {
       return [{ ...member, ...(kind === "reused" ? { birth: "999:foreign", uid: member.uid + 1 } : {}) }]
     }
     const started = Date.now()
-    await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 60 }), error => error instanceof LiveProcessError && error.reason === "deadline")
+    await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 60 }), error => error instanceof LiveProcessError && error.reason === (kind === "unavailable" ? "deadline" : "identity"))
     assert.ok(Date.now() - started < 500)
     assert.deepEqual(f.signals, ["SIGTERM"])
     assert.equal(f.child.stdout!.destroyed, false)
@@ -153,15 +155,302 @@ test("a hung observation cannot publish late cleanup evidence", async t => {
   assert.deepEqual(f.signals, ["SIGTERM"])
 })
 
-test("abandoning the owner during absence waiting rejects cleanup", async t => {
-  const f = fixture(t), group = await f.capture(), member = descendant(f), original = f.adapter.readGroup
+test("abandoning the owner during survivor waiting rejects cleanup", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readGroup
   let abandonment: NodeJS.Timeout | undefined
   t.after(() => clearTimeout(abandonment))
   f.adapter.readGroup = async pgid => {
-    if (!f.owner.snapshot().terminal) return original(pgid)
-    abandonment ??= setTimeout(() => f.owner.abandon("test abandonment"), 5)
-    return [member]
+    if (f.owner.snapshot().terminal) abandonment ??= setTimeout(() => f.owner.abandon("test abandonment"), 5)
+    return original(pgid)
   }
   await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "abandoned")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+function survivors(t: test.TestContext) {
+  const f = fixture(t), native = descendant(f), helper = { ...native, pid: 12347, parentPid: native.pid, birth: "102:helper" }
+  f.setMembers([f.identity, native])
+  f.adapter.readProcess = async pid => f.getMembers().find(member => member.pid === pid) ?? null
+  f.adapter.signalGroup = async (pgid, signal) => {
+    assert.equal(pgid, f.identity.processGroupId)
+    f.signals.push(signal)
+    if (signal === "SIGTERM") { f.exit(); f.setMembers([{ ...native, parentPid: 1 }]) }
+    else f.setMembers([])
+  }
+  return { ...f, native, helper }
+}
+
+test("cleanup escalates after leader exit and retains a late helper through overlapping generations", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readGroup
+  let reads = 0
+  f.adapter.readGroup = async pgid => {
+    if (f.owner.snapshot().terminal && f.signals.length === 1) {
+      if (++reads === 1) f.setMembers([f.native, f.helper])
+      else f.setMembers([{ ...f.helper, parentPid: 1 }])
+    }
+    return original(pgid)
+  }
+  const evidence = await group.cleanup(f.limits())
+  verified(evidence, group)
+  assert.deepEqual(f.signals, ["SIGTERM", "SIGKILL"])
+  assert.deepEqual(evidence.group.observed.map(member => member.pid).sort(), [12345, 12346, 12347])
+})
+
+for (const failure of ["exit", "unavailable"] as const) test(`a helper in an anchored snapshot survives its last retained anchor ${failure}`, async t => {
+  const f = survivors(t), group = await f.capture(), read = f.adapter.readProcess
+  let transferred = false
+  f.adapter.readGroup = async () => {
+    if (f.owner.snapshot().terminal && !transferred) f.setMembers([f.native, f.helper])
+    return f.getMembers()
+  }
+  f.adapter.readProcess = async pid => {
+    if (f.owner.snapshot().terminal && pid === f.native.pid && !transferred) {
+      transferred = true; f.setMembers([{ ...f.helper, parentPid: 1 }])
+      if (failure === "unavailable") throw new DarwinObservationUnavailable("anchor exited during observation")
+      return null
+    }
+    return read(pid)
+  }
+  const evidence = await group.cleanup(f.limits())
+  verified(evidence, group)
+  assert.deepEqual(f.signals, ["SIGTERM", "SIGKILL"])
+  assert.ok(evidence.group.observed.some(member => member.pid === f.helper.pid))
+})
+
+test("a retained survivor authorizes cleanup when the leader exited before cleanup began", async t => {
+  const f = survivors(t), group = await f.capture()
+  group.observeMember(f.native)
+  f.exit(); f.setMembers([f.native])
+  verified(await group.cleanup(f.limits()), group)
+  assert.deepEqual(f.signals, ["SIGTERM", "SIGKILL"])
+})
+
+test("authenticated survivors that exit during grace do not receive SIGKILL", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readGroup
+  let remaining = 2
+  f.adapter.readGroup = async pgid => {
+    if (f.owner.snapshot().terminal && remaining-- <= 0) f.setMembers([])
+    return original(pgid)
+  }
+  verified(await group.cleanup(f.limits()), group)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+for (const field of ["birth", "uid", "gid", "processGroupId", "sessionId", "bootId"] as const) {
+  test(`a known survivor ${field} mismatch prevents escalation despite another valid anchor`, async t => {
+    const f = survivors(t)
+    f.setMembers([f.identity, f.native, f.helper])
+    const group = await f.capture(), original = f.adapter.readGroup
+    f.adapter.readGroup = async pgid => {
+      if (f.owner.snapshot().terminal) {
+        const changed = { ...f.native, [field]: field === "birth" ? "999:foreign" : field === "bootId" ? "boot-b" : (f.native[field] as number) + 1 }
+        f.setMembers([changed, f.helper])
+      }
+      return original(pgid)
+    }
+    await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "identity")
+    assert.deepEqual(f.signals, ["SIGTERM"])
+    await assert.rejects(group.cleanup({ ...f.limits(), retry: true }), LiveProcessError)
+    assert.deepEqual(f.signals, ["SIGTERM"])
+  })
+}
+
+test("a changing anchor prevents retaining late members or signaling them", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readProcess
+  f.adapter.readGroup = async () => {
+    if (f.owner.snapshot().terminal) f.setMembers([f.native, f.helper])
+    return f.getMembers()
+  }
+  f.adapter.readProcess = async pid => f.owner.snapshot().terminal && pid === f.native.pid ? { ...f.native, birth: "999:foreign" } : original(pid)
+  await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "identity")
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  assert.equal(group.identity().observed.some(member => member.pid === f.helper.pid), false)
+})
+
+test("an unanchored late group permanently loses signal authority on retry", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readGroup
+  f.adapter.readGroup = async pgid => {
+    if (f.owner.snapshot().terminal) f.setMembers([f.helper])
+    return original(pgid)
+  }
+  await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "identity")
+  f.adapter.readGroup = original; f.setMembers([f.native, f.helper])
+  await assert.rejects(group.cleanup({ ...f.limits(), retry: true }), LiveProcessError)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  f.setMembers([])
+  verified(await group.cleanup({ ...f.limits(), retry: true }), group)
+})
+
+test("an empty group cannot regain signal authority after repopulation", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readGroup
+  let emptyRead = false
+  f.adapter.readGroup = async pgid => {
+    if (f.owner.snapshot().terminal) {
+      f.setMembers(emptyRead ? [f.native] : []); emptyRead = true
+    }
+    return original(pgid)
+  }
+  await assert.rejects(group.cleanup(f.limits()), LiveProcessError)
+  await assert.rejects(group.cleanup({ ...f.limits(), retry: true }), LiveProcessError)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("a helper first observed after KILL remains an absence obligation if it escapes", async t => {
+  const f = survivors(t), group = await f.capture(), original = f.adapter.readGroup, read = f.adapter.readProcess
+  let killed = false, seen = false
+  f.adapter.signalGroup = async (_, signal) => {
+    f.signals.push(signal)
+    if (signal === "SIGTERM") { f.exit(); f.setMembers([f.native]) }
+    else { killed = true; f.setMembers([f.native, f.helper]) }
+  }
+  f.adapter.readGroup = async pgid => {
+    if (killed && seen) f.setMembers([])
+    else if (killed) seen = true
+    return original(pgid)
+  }
+  f.adapter.readProcess = async pid => killed && seen && pid === f.helper.pid && f.getMembers().length === 0 ? { ...f.helper, processGroupId: 98765, sessionId: 98765 } : read(pid)
+  await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 60 }), LiveProcessError)
+  assert.deepEqual(f.signals, ["SIGTERM", "SIGKILL"])
+  assert.ok(group.identity().observed.some(member => member.pid === f.helper.pid))
+})
+
+test("a vanished anchor can yield to another already verified survivor", async t => {
+  const f = survivors(t)
+  f.setMembers([f.identity, f.native, f.helper])
+  const group = await f.capture(), read = f.adapter.readProcess
+  f.adapter.signalGroup = async (_, signal) => {
+    f.signals.push(signal)
+    if (signal === "SIGTERM") { f.exit(); f.setMembers([f.native, f.helper]) }
+    else f.setMembers([])
+  }
+  f.adapter.readProcess = async pid => f.owner.snapshot().terminal && pid === f.native.pid ? null : read(pid)
+  verified(await group.cleanup(f.limits()), group)
+  assert.deepEqual(f.signals, ["SIGTERM", "SIGKILL"])
+})
+
+test("a leader exit between observations preserves a verified surviving child", async t => {
+  const f = survivors(t), group = await f.capture(), readGroup = f.adapter.readGroup
+  f.adapter.signalGroup = async (_, signal) => { f.signals.push(signal); if (signal === "SIGKILL") f.setMembers([]) }
+  f.adapter.readGroup = async pgid => {
+    if (f.signals.length === 1 && !f.owner.snapshot().terminal) { f.exit(); f.setMembers([f.native]) }
+    return readGroup(pgid)
+  }
+  verified(await group.cleanup(f.limits()), group)
+  assert.deepEqual(f.signals, ["SIGTERM", "SIGKILL"])
+})
+
+test("a reused leader outside an empty group permits absence-only cleanup and retry", async t => {
+  const f = fixture(t), group = await f.capture(), foreign = { ...f.identity, birth: "999:foreign", processGroupId: 98765, sessionId: 98765 }
+  f.exit()
+  f.adapter.readProcess = async pid => pid === foreign.pid ? foreign : null
+  verified(await group.cleanup(f.limits()), group)
+  verified(await group.cleanup({ ...f.limits(), retry: true }), group)
+  assert.deepEqual(f.signals, [])
+})
+
+test("the last survivor disappearing during its identity read permits absence-only completion", async t => {
+  const f = survivors(t), group = await f.capture(), read = f.adapter.readProcess
+  f.adapter.readProcess = async pid => {
+    if (f.owner.snapshot().terminal && pid === f.native.pid) { f.setMembers([]); return null }
+    return read(pid)
+  }
+  verified(await group.cleanup(f.limits()), group)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("a still-live original leader omitted from its group prevents a signal", async t => {
+  const f = survivors(t), group = await f.capture(), read = f.adapter.readProcess
+  group.observeMember(f.native)
+  f.setMembers([f.native])
+  f.adapter.readProcess = async pid => pid === f.identity.pid ? f.identity : read(pid)
+  await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "identity")
+  assert.deepEqual(f.signals, [])
+})
+
+for (const failure of ["exit", "unavailable"] as const) test(`a late helper escaping during anchor ${failure} blocks evidence across retry`, async t => {
+  const f = survivors(t), group = await f.capture(), read = f.adapter.readProcess
+  let nativeGone = false, helperAlive = true
+  f.adapter.readGroup = async () => {
+    if (f.owner.snapshot().terminal && !nativeGone) f.setMembers([f.native, f.helper])
+    return f.getMembers()
+  }
+  f.adapter.readProcess = async pid => {
+    if (f.owner.snapshot().terminal && pid === f.native.pid && !nativeGone) {
+      nativeGone = true; f.setMembers([])
+      if (failure === "unavailable") throw new DarwinObservationUnavailable("anchor exited during observation")
+      return null
+    }
+    if (nativeGone && pid === f.helper.pid && helperAlive) return { ...f.helper, processGroupId: 99999, sessionId: 99999 }
+    return read(pid)
+  }
+  await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 40 }), LiveProcessError)
+  assert.equal(group.identity().observed.some(member => member.pid === f.helper.pid), false)
+  await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 40, retry: true }), LiveProcessError)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  helperAlive = false
+  const evidence = await group.cleanup({ ...f.limits(), retry: true })
+  verified(evidence, group)
+  assert.ok(evidence.group.observed.some(member => member.pid === f.helper.pid))
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("an unanchored helper remains an absence obligation after it escapes", async t => {
+  const f = survivors(t), group = await f.capture(), readGroup = f.adapter.readGroup, read = f.adapter.readProcess
+  let escaped = false, alive = true
+  f.adapter.readGroup = async pgid => {
+    if (f.owner.snapshot().terminal) f.setMembers(escaped ? [] : [f.helper])
+    return readGroup(pgid)
+  }
+  f.adapter.readProcess = async pid => escaped && alive && pid === f.helper.pid ? { ...f.helper, processGroupId: 99999, sessionId: 99999 } : read(pid)
+  await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "identity")
+  escaped = true
+  await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 40, retry: true }), LiveProcessError)
+  assert.equal(group.identity().observed.some(member => member.pid === f.helper.pid), false)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  alive = false
+  const evidence = await group.cleanup({ ...f.limits(), retry: true })
+  verified(evidence, group)
+  assert.ok(evidence.group.observed.some(member => member.pid === f.helper.pid))
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("a valid helper in a partly invalid snapshot still blocks absence-only retry", async t => {
+  const f = survivors(t), group = await f.capture(), read = f.adapter.readProcess
+  let escaped = false, alive = true
+  f.adapter.readGroup = async () => f.owner.snapshot().terminal ? escaped ? [] : [{ ...f.native, uid: f.native.uid + 1 }, f.helper] : f.getMembers()
+  f.adapter.readProcess = async pid => escaped && alive && pid === f.helper.pid ? { ...f.helper, processGroupId: 99999, sessionId: 99999 } : read(pid)
+  await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "identity")
+  escaped = true; f.setMembers([])
+  await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 40, retry: true }), LiveProcessError)
+  assert.equal(group.identity().observed.some(member => member.pid === f.helper.pid), false)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  alive = false
+  const evidence = await group.cleanup({ ...f.limits(), retry: true })
+  verified(evidence, group)
+  assert.ok(evidence.group.observed.some(member => member.pid === f.helper.pid))
+  assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("a helper first seen in the last-anchor reread blocks absence-only retry", async t => {
+  const f = survivors(t), group = await f.capture(), read = f.adapter.readProcess
+  let nativeGone = false, escaped = false, alive = true
+  f.adapter.readGroup = async () => {
+    if (!f.owner.snapshot().terminal) return f.getMembers()
+    return nativeGone ? escaped ? [] : [f.helper] : [f.native]
+  }
+  f.adapter.readProcess = async pid => {
+    if (f.owner.snapshot().terminal && pid === f.native.pid && !nativeGone) { nativeGone = true; f.setMembers([]); return null }
+    if (escaped && alive && pid === f.helper.pid) return { ...f.helper, processGroupId: 99999, sessionId: 99999 }
+    return read(pid)
+  }
+  await assert.rejects(group.cleanup(f.limits()), error => error instanceof LiveProcessError && error.reason === "identity")
+  escaped = true
+  await assert.rejects(group.cleanup({ ...f.limits(), absenceMs: 40, retry: true }), LiveProcessError)
+  assert.equal(group.identity().observed.some(member => member.pid === f.helper.pid), false)
+  assert.deepEqual(f.signals, ["SIGTERM"])
+  alive = false
+  const evidence = await group.cleanup({ ...f.limits(), retry: true })
+  verified(evidence, group)
+  assert.ok(evidence.group.observed.some(member => member.pid === f.helper.pid))
   assert.deepEqual(f.signals, ["SIGTERM"])
 })

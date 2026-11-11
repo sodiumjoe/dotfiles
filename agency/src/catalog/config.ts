@@ -72,12 +72,20 @@ async function defaultProfiles(): Promise<ProviderProfile[]> {
   const repo = fileURLToPath(new URL("../../../../", import.meta.url))
   const home = process.env.HOME ?? homedir()
   if (!isAbsolute(home)) invalid()
+  const musl = process.platform === "linux" && !object(object(process.report.getReport()).header).glibcVersionRuntime
+  const claudePackage = "@anthropic-ai/claude-agent-sdk-" + process.platform + "-" + process.arch + (musl ? "-musl" : "")
   return [parseProfile({
     id: "codex-acp", enabled: true,
     executable: await canonicalPath(join(repo, "home/bin/acp-codex")),
     adapterPackageJson: await canonicalPath(join(repo, "node-bin/node_modules/@agentclientprotocol/codex-acp/package.json")),
     sdkPackageJson: null,
     configurationFiles: [await canonicalPath(join(home, ".codex/config.toml"))],
+  }), parseProfile({
+    id: "claude-agent-acp", enabled: true,
+    executable: await canonicalPath(join(repo, "node-bin/node_modules", claudePackage, "claude")),
+    adapterPackageJson: await canonicalPath(join(repo, "node-bin/node_modules/@agentclientprotocol/claude-agent-acp/package.json")),
+    sdkPackageJson: await canonicalPath(join(repo, "node-bin/node_modules/@anthropic-ai/claude-agent-sdk/package.json")),
+    configurationFiles: [await canonicalPath(join(home, ".claude/settings.json"))],
   })]
 }
 export async function readProfiles(root: string): Promise<ProviderProfile[]> {
@@ -102,7 +110,7 @@ async function fileIdentity(path: string): Promise<[string, string[]]> {
   return [path, identity(stat)]
 }
 function adapterMain(profile: ProviderProfile, value: unknown): string {
-  const metadata = object(value), main = text(metadata.main, 4096)
+  const metadata = object(value), main = text(profile.id === "claude-agent-acp" && metadata.bin !== undefined ? object(metadata.bin)[profile.id] : metadata.main, 4096)
   if (metadata.name !== "@agentclientprotocol/" + profile.id || isAbsolute(main) || normalize(main) !== main || main.includes("\\") || main.split("/").some(part => part === "" || part === "." || part === "..")) invalid()
   return join(dirname(profile.adapterPackageJson), main)
 }
@@ -121,7 +129,7 @@ export async function sdkEntry(profile: ProviderProfile): Promise<string> {
   if (bytes === null) invalid()
   const metadata = object(decodeJson(bytes)), main = text(metadata.main)
   if (metadata.name !== "@anthropic-ai/claude-agent-sdk") invalid()
-  if (metadata.version !== "0.3.232") throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION")
+  if (!["0.3.232", "0.3.321"].includes(text(metadata.version))) throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION")
   if (!/^[a-zA-Z0-9_.-]+\.m?js$/.test(main)) invalid()
   const entry = join(dirname(profile.sdkPackageJson), main)
   await fileIdentity(entry)
@@ -153,8 +161,8 @@ export async function observeConfig(input: ProviderProfile): Promise<ConfigEvide
     if (profile.sdkPackageJson !== null) {
       const sdk = object(decodeJson((await file(profile.sdkPackageJson))!))
       if (sdk.name !== "@anthropic-ai/claude-agent-sdk") invalid()
-      if (sdk.version !== "0.3.232") throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION")
-      sdkVersion = sdk.version
+      if (!["0.3.232", "0.3.321"].includes(text(sdk.version))) throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION")
+      sdkVersion = text(sdk.version)
       evidence.push(await fileIdentity(await sdkEntry(profile)))
     }
     for (const path of profile.configurationFiles) await file(path, true, 1024 * 1024, true)

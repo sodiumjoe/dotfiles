@@ -77,7 +77,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
   }
   let spawnOptions: SpawnOptions | undefined = {
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
-    env: { ...parseLaunchEnvironment(input.environment), ...(!input.agentRecord || contract.providerId === "codex-acp" ? { CODEX_PATH: contract.executable } : {}) },
+    env: { ...parseLaunchEnvironment(input.environment), ...(contract.providerId === "codex-acp" ? { CODEX_PATH: contract.executable } : { CLAUDE_CODE_EXECUTABLE: contract.executable }) },
   }
   function cleanup(): Promise<LaunchRecord> {
     if (cleaning) return cleaning
@@ -122,7 +122,10 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       }
       checkCleanup()
       return structuredClone(current)
-    }, cleanupDeadline, "CLEANUP_UNVERIFIED").catch(() => { expired = true; cleaning = undefined; throw new AgentError("CLEANUP_UNVERIFIED") })
+    }, cleanupDeadline, "CLEANUP_UNVERIFIED").catch(error => {
+      expired = true; cleaning = undefined
+      throw new AgentError("CLEANUP_UNVERIFIED", error instanceof LiveProcessError ? { boundary: "provider_cleanup", causeCode: error.reason } : error instanceof AgentError ? error.diagnostic : undefined)
+    })
     return cleaning
   }
   return {

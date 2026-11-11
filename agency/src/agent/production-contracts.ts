@@ -17,7 +17,25 @@ const codex: LaunchContract = Object.freeze({
   permissionEvidence: "agency-deny-all-v1",
   deadlines: Object.freeze({ commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 }),
 })
-const contracts = Object.freeze([codex])
+const claude: LaunchContract = Object.freeze({
+  id: "claude-agent-acp-0.102",
+  providerId: "claude-agent-acp",
+  adapterPackage: "@agentclientprotocol/claude-agent-acp",
+  adapterVersion: "0.102.0",
+  sdkVersion: "0.3.321",
+  sessionLoad: true,
+  promptCapabilities: Object.freeze({ image: true, audio: false, embeddedContext: true }),
+  modes: Object.freeze({ state: "values", values: Object.freeze(["default", "acceptEdits", "plan", "bypassPermissions", "auto"]) }) as LaunchContract["modes"],
+  reasoning: Object.freeze({ state: "values", values: Object.freeze(["low", "medium", "high", "xhigh", "max"]) }) as LaunchContract["reasoning"],
+  effectiveMode: null,
+  permissionProfiles: Object.freeze(["deny-all"]) as unknown as string[],
+  modelOption: "model",
+  reasoningOption: "effort",
+  modeOption: "mode",
+  permissionEvidence: "agency-deny-all-v1",
+  deadlines: codex.deadlines,
+})
+const contracts = Object.freeze([codex, claude])
 export const PRODUCTION_MUTATION_TRANSPORT_MS = Math.max(...contracts.map(contract => contract.deadlines.overallMs + contract.deadlines.transportCloseMs + 4000))
 
 export function staticProductionContracts(): readonly LaunchContract[] { return contracts }

@@ -5,6 +5,7 @@ import { assertPrivateDirectory } from "../platform/private-state.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
 import { canonicalJson, parseRequestedSettings, type RequestedSettings } from "./session-config.js"
 import { AgentError } from "./types.js"
+import { staticProductionContracts } from "./production-contracts.js"
 
 export type Backend = { id: ProviderId; args: string[]; environmentDefaults: LaunchEnvironment; initial: RequestedSettings; compatibilityId: string }
 export type BackendConfig = { version: 1; defaultBackendId: ProviderId; backends: Backend[] }
@@ -40,8 +41,14 @@ export async function readBackendConfig(root: string): Promise<BackendConfig> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
   }
-  if (!(await readProfiles(root)).some(profile => profile.enabled && profile.id === "codex-acp")) throw new AgentError("UNAVAILABLE")
-  return { version: 1, defaultBackendId: "codex-acp", backends: [{ id: "codex-acp", args: [], environmentDefaults: { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" }, initial: { modeId: "agent-full-access" }, compatibilityId: "codex-acp-2.6" }] }
+  const enabled = new Set((await readProfiles(root)).filter(profile => profile.enabled).map(profile => profile.id))
+  const backends: Backend[] = staticProductionContracts().filter(contract => enabled.has(contract.providerId)).map(contract => ({
+    id: contract.providerId, args: [], compatibilityId: contract.id,
+    environmentDefaults: contract.providerId === "codex-acp" ? { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" } : {},
+    initial: contract.providerId === "codex-acp" ? { modeId: "agent-full-access" } : {},
+  }))
+  if (!backends.length) throw new AgentError("UNAVAILABLE")
+  return { version: 1, defaultBackendId: backends[0]!.id, backends }
 }
 
 export function backendFingerprint(backend: Backend, manifest: unknown): string {

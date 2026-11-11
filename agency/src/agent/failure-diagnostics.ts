@@ -6,6 +6,7 @@ const PROCESS_EVENTS = ["error", "exit", "close", "stderr_limit", "stdin_error",
 export type ProcessFailureEvent = typeof PROCESS_EVENTS[number]
 export type AcpStartupDiagnostic = { phase: "initialize" | "session/new" | "session/load" | "configuration"; elapsedMs: number; replayUpdates: number }
 export type FailureDiagnostic =
+  | { boundary: "provider_cleanup"; causeCode: "identity" | "deadline" | "signal" | "terminal" | "absence" | "abandoned" }
   | { boundary: "permission_request" | "provider_initialize"; causeCode: string | null }
   | { boundary: "acp_transport"; causeCode: string | null; startup?: AcpStartupDiagnostic }
   | { boundary: "provider_process"; event: ProcessFailureEvent; causeCode: string | null; exitCode: number | null; signal: string | null; stderrBytes: number; stderrTailBase64: string }
@@ -23,6 +24,11 @@ function identifier(value: unknown): string | null {
 }
 export function parseFailureDiagnostic(input: unknown): FailureDiagnostic {
   const v = object(input), causeCode = identifier(v.causeCode)
+  if (v.boundary === "provider_cleanup") {
+    keys(v, ["boundary", "causeCode"])
+    if (causeCode === null || !["identity", "deadline", "signal", "terminal", "absence", "abandoned"].includes(causeCode)) invalid()
+    return { boundary: v.boundary, causeCode: causeCode as Extract<FailureDiagnostic, { boundary: "provider_cleanup" }>["causeCode"] }
+  }
   if (v.boundary === "permission_request" || v.boundary === "acp_transport" || v.boundary === "provider_initialize") {
     keys(v, ["boundary", "causeCode", ...(v.boundary === "acp_transport" && Object.hasOwn(v, "startup") ? ["startup"] : [])])
     if (v.boundary === "acp_transport") {

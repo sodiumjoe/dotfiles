@@ -76,8 +76,8 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
       break
     }
   } finally { capture.invalidate() }
-  const observed = [structuredClone(leader)]
-  let cleanupStarted = false
+  const observed = [structuredClone(leader)], absenceOnly: ProcessIdentity[] = []
+  let cleanupStarted = false, authorityRevoked = false
   let pending: Promise<LiveCleanupEvidence> | undefined, rejected = false, result: LiveCleanupEvidence | undefined
   const cleanupAttempt = async (limits: CleanupLimits): Promise<void> => {
     const work = scope(owner, limits.deadline, now)
@@ -87,45 +87,85 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
       if ([limits.terminateMs, limits.absenceMs, limits.transportCloseMs].some(value => !Number.isFinite(value) || value < 0)) throw new LiveProcessError("deadline")
       const terminationDeadline = Math.min(limits.deadline, now() + limits.terminateMs)
       const retain = (members: ProcessIdentity[]) => {
-        for (const member of members) if (!observed.some(prior => sameProcessGeneration(prior, member))) observed.push(structuredClone(member))
+        for (const member of members) {
+          if (!observed.some(prior => sameProcessGeneration(prior, member))) observed.push(structuredClone(member))
+          for (let index = absenceOnly.length - 1; index >= 0; index--) if (sameProcessGeneration(absenceOnly[index]!, member)) absenceOnly.splice(index, 1)
+        }
       }
-      const authorize = async (): Promise<boolean> => {
-        if (!live()) return false
-        if (await bounded(() => adapter.bootId(), terminationDeadline) !== launchBootId) throw new LiveProcessError("identity")
-        if (!live()) return false
-        const first = await bounded(() => adapter.readProcess(leader.pid), terminationDeadline)
-        if (!live()) return false
-        if (!first || !sameAuthority(leader, first)) throw new LiveProcessError("identity")
-        const members = await bounded(() => adapter.readGroup(leader.processGroupId), terminationDeadline)
-        if (new Set(members.map(member => member.pid)).size !== members.length
-          || !members.some(member => sameAuthority(leader, member))
-          || members.some(member => !Number.isSafeInteger(member.pid) || member.pid <= 0 || processBirthStart(member.birth) === null || member.bootId !== launchBootId || member.processGroupId !== leader.processGroupId || member.sessionId !== leader.sessionId || member.uid !== leader.uid || member.gid !== leader.gid)) throw new LiveProcessError("identity")
-        retain(members)
-        if (!live()) return false
-        const last = await bounded(() => adapter.readProcess(leader.pid), terminationDeadline)
-        if (!live()) return false
-        if (!last || !sameAuthority(leader, last)) throw new LiveProcessError("identity")
-        return true
+      const rejectIdentity = (): never => { authorityRevoked = true; throw new LiveProcessError("identity") }
+      const qualified = (member: ProcessIdentity): boolean => member !== null && typeof member === "object"
+        && Number.isSafeInteger(member.pid) && member.pid > 0 && typeof member.birth === "string" && processBirthStart(member.birth) !== null
+        && member.bootId === launchBootId && member.processGroupId === leader.processGroupId && member.sessionId === leader.sessionId
+        && member.uid === leader.uid && member.gid === leader.gid
+      const observeMembers = async (until: number): Promise<ProcessIdentity[]> => {
+        const members = await bounded(() => adapter.readGroup(leader.processGroupId), until)
+        for (const member of members) if (qualified(member) && ![...observed, ...absenceOnly].some(prior => sameProcessGeneration(prior, member))) absenceOnly.push(structuredClone(member))
+        return members
       }
-      const signal = async (value: NodeJS.Signals): Promise<void> => {
-        if (!await authorize()) return
+      const authenticate = async (until: number): Promise<ProcessIdentity[]> => {
+        if (await bounded(() => adapter.bootId(), until) !== launchBootId) rejectIdentity()
+        const first = await bounded(() => adapter.readProcess(leader.pid), until)
+        const members = await observeMembers(until)
+        if (members.length === 0) { authorityRevoked = true; return members }
+        if (members.some(member => !qualified(member)) || new Set(members.map(member => member.pid)).size !== members.length) rejectIdentity()
+        if (authorityRevoked || first && !sameAuthority(leader, first)
+          || members.some(member => observed.some(prior => prior.pid === member.pid && !sameAuthority(prior, member)))) rejectIdentity()
+        const anchors = members.filter(member => observed.some(prior => sameAuthority(prior, member)))
+        if (anchors.length === 0) rejectIdentity()
+        const last = await bounded(() => adapter.readProcess(leader.pid), until)
+        if (last && (!sameAuthority(leader, last) || !members.some(member => sameAuthority(leader, member)))) rejectIdentity()
+        if (await bounded(() => adapter.bootId(), until) !== launchBootId) rejectIdentity()
+        let anchored = false
+        for (const anchor of [...anchors, ...members.filter(member => !anchors.includes(member))]) {
+          let current: ProcessIdentity | null
+          try { current = await bounded(() => adapter.readProcess(anchor.pid), until) }
+          catch (error) {
+            if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable)) throw error
+            continue
+          }
+          if (current && !sameAuthority(anchor, current)) rejectIdentity()
+          if (current) { anchored = true; break }
+        }
+        if (!anchored) {
+          authorityRevoked = true
+          if ((await observeMembers(until)).length === 0) return []
+          rejectIdentity()
+        }
         check()
-        if (!live()) return
+        retain(members)
+        return members
+      }
+      const signal = async (value: NodeJS.Signals): Promise<boolean> => {
+        while (true) {
+          try { if ((await authenticate(terminationDeadline)).length === 0) return false; break }
+          catch (error) {
+            if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable)) throw error
+            await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 25)), terminationDeadline)
+          }
+        }
+        check()
+        if (authorityRevoked) rejectIdentity()
         try { await bounded(() => {
           check()
-          if (!live()) return Promise.resolve()
+          if (authorityRevoked) rejectIdentity()
           return adapter.signalGroup(leader.processGroupId, value)
         }, terminationDeadline) }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error instanceof LiveProcessError ? error : new LiveProcessError("signal") }
+        return true
       }
       const termDeadline = Math.min(terminationDeadline, now() + Math.min(1000, Math.floor(limits.terminateMs / 2)))
-      if (!owner.snapshot().terminal) {
-        await signal("SIGTERM")
-        if (!owner.snapshot().terminal) {
-          try { await bounded(() => owner.terminal, termDeadline) }
-          catch (error) { if (!(error instanceof LiveProcessError) || error.reason !== "deadline") throw error; check() }
+      if (await signal("SIGTERM")) {
+        let empty = false
+        while (now() < termDeadline) {
+          try { if ((await authenticate(termDeadline)).length === 0) { empty = true; break } }
+          catch (error) {
+            if (error instanceof LiveProcessError && error.reason === "deadline") { check(); break }
+            if (!(error instanceof DarwinObservationUnavailable) && !(error instanceof LinuxObservationUnavailable)) throw error
+          }
+          try { await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 25)), termDeadline) }
+          catch (error) { if (!(error instanceof LiveProcessError) || error.reason !== "deadline") throw error; check(); break }
         }
-        if (!owner.snapshot().terminal) await signal("SIGKILL")
+        if (!empty) await signal("SIGKILL")
       }
       const terminal = await bounded(() => owner.terminal, terminationDeadline)
       if (terminal.kind !== "exit") throw new LiveProcessError("terminal")
@@ -147,9 +187,9 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
       while (passes < 2) {
         let absent = false
         try {
-          if (await bounded(() => adapter.bootId(), absenceDeadline) !== launchBootId) throw new LiveProcessError("absence")
-          absent = (await bounded(() => adapter.readGroup(leader.processGroupId), absenceDeadline)).length === 0
-          if (absent) for (const member of observed) {
+          if (await bounded(() => adapter.bootId(), absenceDeadline) !== launchBootId) { authorityRevoked = true; throw new LiveProcessError("absence") }
+          absent = (await authenticate(absenceDeadline)).length === 0
+          if (absent) for (const member of [...observed, ...absenceOnly]) {
             const current = await bounded(() => adapter.readProcess(member.pid), absenceDeadline)
             if (current && sameProcessGeneration(member, current)) { absent = false; break }
           }
@@ -161,7 +201,7 @@ export async function captureLiveProcess(input: { owner: OwnedChild; adapter: Pl
         if (!absent) await bounded(() => new Promise<void>(resolve => setTimeout(resolve, 25)), absenceDeadline)
       }
       check()
-      const issued = Object.freeze({ launchAttemptId: owner.launchAttemptId, group: freezeGroup(structuredClone({ leader, observed })), terminal, transport })
+      const issued = Object.freeze({ launchAttemptId: owner.launchAttemptId, group: freezeGroup(structuredClone({ leader, observed: [...observed, ...absenceOnly] })), terminal, transport })
       evidence.set(issued, { group, attribution: structuredClone(issued) })
       result = issued
       owner.release()

@@ -191,7 +191,7 @@ function argumentsFor(argv: readonly string[]): { evidenceParent: string } {
 }
 export async function codexAcceptanceMain(argv: readonly string[]): Promise<number> {
   const input = argumentsFor(argv), contracts = productionLaunchContracts()
-  if (contracts.length !== 1 || contracts[0]!.providerId !== "codex-acp" || !contracts[0]!.sessionLoad) throw new AgentError("ADAPTER_UNQUALIFIED")
+  if (!contracts.some(contract => contract.providerId === "codex-acp" && contract.sessionLoad)) throw new AgentError("ADAPTER_UNQUALIFIED")
   const result = await runCodexAcceptance(input, await productionLifecycle())
   process.stdout.write(JSON.stringify({ success: result.report.success, failure: result.report.failure, reportPath: result.reportPath }) + "\n")
   return result.report.success ? 0 : 1

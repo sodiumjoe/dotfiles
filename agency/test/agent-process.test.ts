@@ -7,17 +7,21 @@ import { mkdtemp, mkdir, rm, realpath } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ChildProcess, spawn } from "node:child_process"
+import { AgentError, agentFailure, parseAgentFailure } from "../src/agent/types.js"
+import { parseFailureDiagnostic } from "../src/agent/failure-diagnostics.js"
 import { createAgentProcess, type OwnedAgentProcess } from "../src/agent/process.js"
 import { MutationQueue } from "../src/handler/mutations.js"
 import type { LaunchContext } from "../src/handler/launch-transitions.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
 import { sampleSpec, sampleContract } from "./agent-support.js"
+import { normalizeAgentRecord, splitLaunchSpec } from "../src/agent/types.js"
 
 class NativeStartupInput { [key: string]: string; marker = "native startup input" }
 
-async function fixture(t: test.TestContext, options: { holdPreparation?: boolean; loseCapture?: boolean; expireOnRelease?: boolean; failPublication?: boolean; holdReadiness?: boolean; trackInputs?: boolean } = {}) {
+async function fixture(t: test.TestContext, options: { holdPreparation?: boolean; loseCapture?: boolean; expireOnRelease?: boolean; failPublication?: boolean; holdReadiness?: boolean; trackInputs?: boolean; claude?: "new" | "load" } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "agy-process-"))), spec = sampleSpec({ cwd: root }), contract = sampleContract()
+  if (options.claude) contract.providerId = "claude-agent-acp"
   await mkdir(join(root, "launches"), { mode: 0o700 })
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), readiness = Promise.withResolvers<void>()
   let time = 0, live = true, spawnCount = 0, failPublication = options.failPublication, expired = false
@@ -29,19 +33,30 @@ async function fixture(t: test.TestContext, options: { holdPreparation?: boolean
   } }
   child.stdin!.on("data", bytes => {
     const frame = JSON.parse(bytes.toString())
-    const result = frame.method === "initialize" ? { protocolVersion: 1, agentCapabilities: { loadSession: true } } : frame.method === "session/load" ? { configOptions: [] } : {}
+    const result = frame.method === "initialize" ? { protocolVersion: 1, agentCapabilities: { loadSession: true } } : frame.method === "session/load" ? { configOptions: [] } : frame.method === "session/new" ? { sessionId: "fixture-session", configOptions: [] } : {}
     if (frame.id !== undefined) child.stdout!.push(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result }) + "\n")
   })
   const context: LaunchContext = { paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }, mutations: { queue: new MutationQueue(), accepted: [] }, shutdownPending: () => false }
-  const owner = createAgentProcess({ context, spec, contract, environment: {}, session: { kind: "load", sessionId: "fixture-session", params: options.trackInputs ? { input: new NativeStartupInput() } : {} }, async revalidate() { entered.resolve(); if (options.holdPreparation) await release.promise } }, { now: () => time, spawn: (() => { spawnCount++; return child }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
+  const agentRecord = normalizeAgentRecord({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null })
+  agentRecord.settings = {}
+  let nativeExecutable: string | undefined
+  const session = options.claude === "new" ? { kind: "new" as const, params: {} } : { kind: "load" as const, sessionId: "fixture-session", params: options.trackInputs ? { input: new NativeStartupInput() } : {} }
+  const owner = createAgentProcess({ context, spec, contract, ...(options.claude ? { agentRecord } : {}), environment: options.claude ? { CLAUDE_CODE_EXECUTABLE: "/caller/claude" } : {}, session, async revalidate() { entered.resolve(); if (options.holdPreparation) await release.promise } }, { now: () => time, spawn: ((_file, _args, input) => { spawnCount++; nativeExecutable = input?.env?.CLAUDE_CODE_EXECUTABLE; return child }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
     if (failPublication && record.phase === "cleanup_pending") { failPublication = false; throw new Error("publication failed") }
     await writeLaunchRecord(path, record)
     if (options.holdReadiness && record.phase === "readiness") { readiness.resolve(); await release.promise }
   } } })
   t.after(async () => { release.resolve(); owner.dispose(); child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); await rm(root, { recursive: true, force: true }) })
   const discharge = () => { const promise = (owner as OwnedAgentProcess & { discharged: Promise<void> }).discharged; assert.ok(promise instanceof Promise); return promise }
-  return { owner, entered: entered.promise, readiness: readiness.promise, release: () => release.resolve(), signals, discharge, spawnCount: () => spawnCount }
+  return { owner, entered: entered.promise, readiness: readiness.promise, release: () => release.resolve(), signals, discharge, spawnCount: () => spawnCount, identity, adapter, setTime(value: number) { time = value }, nativeExecutable: () => nativeExecutable, executable: contract.executable }
 }
+
+for (const claude of ["new", "load"] as const) test("Claude " + claude + " binds its native executable to the declared profile", async t => {
+  const f = await fixture(t, { claude })
+  await f.owner.initialize(new AbortController().signal)
+  assert.equal(f.nativeExecutable(), f.executable)
+  assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
+})
 
 test("never-spawned discharge waits for preparation to settle and prevents a later spawn", async t => {
   const f = await fixture(t, { holdPreparation: true })
@@ -117,4 +132,39 @@ test("disposed process callbacks do not retain native startup inputs", async t =
   assert.equal(queryObjects(NativeStartupInput, { format: "count" }), 0)
   assert.equal((await f.owner.cleanup()).phase, "cleanup_verified")
   assert.deepEqual(f.signals, ["SIGTERM"])
+})
+
+test("cleanup preserves a captured identity rejection in its public failure", async t => {
+  const f = await fixture(t)
+  await f.owner.initialize(new AbortController().signal)
+  f.identity.birth = "999:foreign"
+  await assert.rejects(f.owner.cleanup(), error => {
+    assert.ok(error instanceof AgentError)
+    assert.equal(error.code, "CLEANUP_UNVERIFIED")
+    assert.deepEqual(error.diagnostic, { boundary: "provider_cleanup", causeCode: "identity" })
+    assert.deepEqual(parseAgentFailure(agentFailure(error)), agentFailure(error))
+    return true
+  })
+  assert.deepEqual(f.signals, [])
+})
+
+test("cleanup diagnostics accept only bounded cleanup reasons", () => {
+  for (const causeCode of ["identity", "deadline", "signal", "terminal", "absence", "abandoned"]) {
+    const diagnostic = { boundary: "provider_cleanup", causeCode }
+    assert.deepEqual(parseFailureDiagnostic(diagnostic), diagnostic)
+  }
+  for (const causeCode of [null, "unknown", "private error text"]) assert.throws(() => parseFailureDiagnostic({ boundary: "provider_cleanup", causeCode }))
+})
+
+test("cleanup preserves a process observation deadline as a deadline diagnostic", async t => {
+  const f = await fixture(t)
+  await f.owner.initialize(new AbortController().signal)
+  f.adapter.bootId = async () => { f.setTime(100000); return "boot-a" }
+  await assert.rejects(f.owner.cleanup(), error => {
+    assert.ok(error instanceof AgentError)
+    assert.equal(error.code, "CLEANUP_UNVERIFIED")
+    assert.deepEqual(error.diagnostic, { boundary: "provider_cleanup", causeCode: "deadline" })
+    return true
+  })
+  assert.deepEqual(f.signals, [])
 })
