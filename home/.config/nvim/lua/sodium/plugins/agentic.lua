@@ -736,25 +736,11 @@ local function pick_pr_for_review()
                         return
                     end
                     picker:close()
-                    local SessionRegistry = require("agentic.session_registry")
-                    SessionRegistry.get_session_for_tab_page(nil, function(session)
-                        local input_buf = session.widget.buf_nrs.input
-                        vim.api.nvim_buf_set_lines(
-                            input_buf,
-                            0,
-                            -1,
-                            false,
-                            { "/neovim-review " .. tostring(item.number) }
-                        )
+                    require("agentic.session_registry").get_session_for_tab_page(nil, function(session)
                         session.widget:show()
-                        local function try_submit()
-                            if session.session_id then
-                                session.widget:_submit_input()
-                            else
-                                vim.defer_fn(try_submit, 200)
-                            end
-                        end
-                        try_submit()
+                        session:on_session_ready(function()
+                            require("sodium.review_ui").send_agent_command("/neovim-review " .. tostring(item.number))
+                        end)
                     end)
                 end,
                 actions = {

@@ -1,9 +1,5 @@
 local M = {}
 
-local function no_preview(ctx)
-    ctx.preview:reset()
-end
-
 local function agent_preview(ctx)
     ctx.preview:reset()
     if not ctx.item then return end
@@ -334,111 +330,6 @@ function M.open(controller)
             render()
         end)
     end
-    return picker
-end
-
-function M.choices(client, initial, info, callback, controller)
-    local done, refreshing, picker = false, false, nil
-    local function items(choices, unavailable)
-        local rows = {}
-        for _, choice in ipairs(choices) do
-            local selection = choice.selection
-            rows[#rows + 1] = {
-                choice = choice,
-                text = table.concat(
-                    {
-                        selection.providerId,
-                        choice.displayName,
-                        selection.modelId,
-                        selection.reasoning.kind == "none" and "none" or selection.reasoning.value,
-                        selection.mode,
-                        selection.permissionProfile,
-                    },
-                    " · "
-                ),
-            }
-        end
-        for _, value in ipairs(unavailable or {}) do
-            rows[#rows + 1] = { text = value.providerId .. " · " .. value.reason }
-        end
-        rows[#rows + 1] = { refresh = true, text = "Refresh catalog explicitly (launches discovery processes)" }
-        return rows
-    end
-    local refresh_id
-    local function refresh()
-        if refreshing or done then
-            return
-        end
-        refreshing = true
-        refresh_id = refresh_id or controller.uuid()
-        client.command(
-            { "model", "refresh", "--command-id", refresh_id, "--handler-generation", info.handlerGeneration },
-            { cwd = info.cwd, timeout_ms = 50000 },
-            function(err, envelope)
-                if done then
-                    return
-                end
-                if err then
-                    refreshing = false
-                    controller.notify((err.message or err.code) .. " · refresh command " .. refresh_id)
-                    return
-                end
-                if
-                    envelope.handlerGeneration ~= info.handlerGeneration
-                    or envelope.result.command.commandId ~= refresh_id
-                    or envelope.result.command.state ~= "completed"
-                then
-                    refreshing = false
-                    controller.notify("Catalog refresh incomplete or generation changed · " .. refresh_id)
-                    return
-                end
-                client.command({ "agent", "choices" }, { cwd = info.cwd }, function(error, result)
-                    if done then
-                        return
-                    end
-                    refreshing = false
-                    if error or result.handlerGeneration ~= info.handlerGeneration then
-                        controller.notify(error and (error.message or error.code) or "stale Handler")
-                        return
-                    end
-                    for index = #initial, 1, -1 do
-                        initial[index] = nil
-                    end
-                    vim.list_extend(initial, vim.deepcopy(result.result.choices))
-                    refresh_id = nil
-                    picker.opts.items = items(result.result.choices, result.result.unavailable)
-                    picker:find({ refresh = true })
-                end)
-            end
-        )
-    end
-    picker = Snacks.picker({
-        title = "Agency new session",
-        items = items(initial, info.unavailable),
-        format = "text",
-        preview = no_preview,
-        layout = { hidden = { "preview" } },
-        confirm = function(p, item)
-            if not item then
-                return
-            end
-            if item.refresh then
-                refresh()
-            elseif item.choice and not refreshing then
-                done = true
-                p:close()
-                callback(item.choice)
-            end
-        end,
-        actions = { refresh = refresh },
-        win = { input = { keys = { ["<M-r>"] = { "refresh", mode = { "n", "i" } } } } },
-        on_close = function()
-            if not done then
-                done = true
-                callback(nil)
-            end
-        end,
-    })
     return picker
 end
 

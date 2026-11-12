@@ -292,10 +292,6 @@ A lost or malformed mutation reply includes the original reference and is never 
 
 New starts use the filtered destination Handler process environment plus backend defaults. Caller environment is not transmitted, and a fresh login shell is not run per start. Credentials or shell environment changed after Handler startup require an explicit Handler restart or backend configuration edit. Local runtime command persistence/recovery is transitional; this host path adds no durable routing, mutation replay or automatic supervisor wakeups.
 
-## Entry and worktrees
+## Entry
 
 `agy entry open --input-json '{"commandId":"UUID","hostId":"HASH","target":{"agentId":"UUID","handlerGeneration":"UUID","providerGeneration":"UUID"}}' --json` opens an editor for an exact live session. `agy entry inspect COMMAND_UUID --host HOST_ID --json` (or `--local`) inspects its current attachment. Commands exist only in the owner Handler process. Identical concurrent opens share one action; inspection never creates or activates an editor. A restart clears command observations, so an unknown command leaves a lost open outcome unknown. Uncertain or stale entry does not launch a terminal. Inspect the owner and command before taking another action. Neovim's owner picker uses the same live entry path.
-
-`agy git prepare --input-json '{"repository":"/absolute/repo","cwd":"/absolute/new-worktree","branch":"moon/custom","baseOid":"IMMUTABLE_COMMIT_OID","remote":"origin"}' --json` prepares an ordinary Git worktree and returns its cwd. The remote is optional. Existing destinations and branches are refused, and an interrupted Git operation leaves its state for inspection. Pass the returned cwd to ordinary session startup. No Agency record, publication grant, or integration receipt is involved.
-
-Use ordinary Git for collaboration: `git fetch origin COMMIT_OID`, `git show COMMIT_OID`, and `git merge COMMIT_OID` or `git cherry-pick COMMIT_OID` after review. The Bureau, run and assignment commands, old task tools, report-based Git commands, and durable entry prepare/consume are removed. Ordinary entry uses open/inspect, and Git preparation remains independent. Existing run/attempt IDs are not task IDs.

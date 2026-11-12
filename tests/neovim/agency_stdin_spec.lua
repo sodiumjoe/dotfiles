@@ -81,7 +81,7 @@ describe("Agency command stdin", function()
     it("actual Neovim process launch delivers long stdin to the CLI parser", function()
         local client = control.new({ executable = vim.env.DOTFILES_TEST_ROOT .. "/home/bin/agy" })
         local done, error = false, nil
-        client.command({ "git", "prepare", "--input-json", vim.json.encode({ fixture = string.rep("λ", 32768) }) }, {}, function(err)
+        client.command({ "entry", "open", "--input-json", vim.json.encode({ fixture = string.rep("λ", 32768) }) }, {}, function(err)
             error, done = err, true
         end)
         assert.is_true(vim.wait(6000, function() return done end))

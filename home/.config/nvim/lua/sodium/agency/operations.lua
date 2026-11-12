@@ -473,18 +473,9 @@ function M.new(deps)
             )
         end
     end
-    function api.attachment()
-        return active
-    end
-    function api.pending()
-        return vim.deepcopy(pending)
-    end
     function api.detach()
         begin()
         active = nil
-        if deps.on_change then
-            deps.on_change(nil, nil)
-        end
     end
     return api
 end

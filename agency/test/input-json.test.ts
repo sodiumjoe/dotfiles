@@ -32,7 +32,6 @@ test("host enrollment receives the exact JSON object from stdin", async () => {
 const clients = [
   { argv: ["session", "submit", "--host", hostId], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["entry", "open"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
-  { argv: ["git", "prepare"], malformed: "USAGE", oversized: "USAGE" },
   { argv: ["permission", "decide", "--host", hostId], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["permission", "decide", "--local"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["host", "enroll"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },

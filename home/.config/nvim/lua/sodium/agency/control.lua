@@ -47,7 +47,7 @@ end
 
 local function validate(value, argv)
     local ordinary = argv[1] == "host" or vim.tbl_contains({ "roster", "permission" }, argv[1]) and not vim.tbl_contains(argv, "--local")
-        or argv[1] == "entry" and vim.tbl_contains({ "open", "inspect" }, argv[2]) or argv[1] == "git" and argv[2] == "prepare"
+        or argv[1] == "entry" and vim.tbl_contains({ "open", "inspect" }, argv[2])
     local protocol = ordinary and "agency-host/1" or vim.tbl_contains(argv, "--local") and "agency-agent/3" or argv[1] == "agent" and "agency-agent/3"
         or argv[1] == "model" and "agency-catalog/1"
         or "agency-control/2"
@@ -65,7 +65,7 @@ local function validate(value, argv)
         local expected_state = argv[1] == "host" and (argv[2] == "enroll" and "enrolled" or "hosts")
             or argv[1] == "roster" and (flag(argv, "--host") and "page" or "roster")
             or argv[1] == "permission" and (argv[2] == "list" and "permissions" or "permission")
-            or argv[1] == "entry" and "entry" or argv[1] == "git" and "worktree"
+            or argv[1] == "entry" and "entry"
         assert(result.state == expected_state)
         assert((value.hostId == vim.NIL) == (value.handlerGeneration == vim.NIL))
         assert(value.hostId == vim.NIL or host_id(value.hostId))
@@ -116,7 +116,6 @@ local function validate(value, argv)
                         and type(receipt.editor.tmuxSocketPath) == "string" and receipt.editor.tmuxSocketPath:sub(1, 1) == "/")
                 end
             end
-        elseif result.state == "worktree" then assert(argv[1] == "git" and argv[2] == "prepare" and type(result.worktree.cwd) == "string")
         else error("Unexpected host result") end
         return
     end
