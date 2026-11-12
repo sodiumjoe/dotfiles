@@ -125,7 +125,7 @@ Run `bash test.sh` for the routine workflow suite. It builds Agency once and run
 
 Coverage concentrates on bootstrap and config regeneration, preservation of existing files and Markdown, work creation/completion/archive, review stash recovery, agent start/prompt/cancel/stop/restore, permission arbitration, remote routing, editor streaming and Hop selection/cancellation. External providers and SSH are replaced with local fixtures. Tests use temporary deployment trees and private tmux servers; they do not install packages or change live configuration.
 
-Helper/schema matrices, configuration and keymap inventories, legacy migrations, exhaustive race permutations and tests of test infrastructure have been removed. The suite deliberately trades those guarantees for a small set of everyday workflows. `bash test-env.sh`, `npm --prefix work-cli test`, `npm --prefix agency test`, `npm --prefix node-bin test` and `bash test-nvim.sh` remain available for targeted work. Agency's explicit Linux qualification command retains its operational fixtures separately.
+Helper/schema matrices, configuration and keymap inventories, legacy migrations, exhaustive race permutations and tests of test infrastructure have been removed. The suite deliberately trades those guarantees for a small set of everyday workflows. `bash test-env.sh`, `npm --prefix work-cli test`, `npm --prefix agency test`, `npm --prefix node-bin test` and `bash test-nvim.sh` remain available for targeted work.
 
 ## Agent Instruction Architecture
 

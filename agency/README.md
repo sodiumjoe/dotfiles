@@ -223,7 +223,7 @@ Run `bash test.sh` from the repository root for all retained repository workflow
 
 The Agency runner prints a private `run-*/result.json` path. Set `AGENCY_TEST_EVIDENCE_PARENT` to choose its parent. Owned process fixtures retain bounded teardown and verify physical absence; missing or unresolved worker cleanup fails the run. Roots and failure evidence remain on disk for inspection.
 
-Exhaustive protocol/schema, historical receipt, singleton contention and injected failure matrices have been removed. `npm run qualify:linux` retains its nine real Linux cases and required staging fixtures because they are operational inputs to that explicit command; they are excluded from the routine local suite. Synthetic Linux assertion matrices have been removed. Real-provider acceptance and remote qualification require separate invocation and authorization.
+Exhaustive protocol/schema, historical receipt, singleton contention and injected failure matrices have been removed. Synthetic Linux assertion matrices have been removed. Real-provider acceptance and remote qualification require separate invocation and authorization.
 
 ## Local human controls
 

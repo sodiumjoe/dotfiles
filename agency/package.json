@@ -8,7 +8,6 @@
   "scripts": {
     "accept:codex": "npm run build && node dist/scripts/accept-codex.js",
     "build": "tsc -p tsconfig.json && node dist/scripts/build-manifest.js",
-    "qualify:linux": "npm run build && node dist/scripts/qualify-linux.js",
     "test": "npm run build && node dist/scripts/test-groups.js"
   },
   "devDependencies": {
