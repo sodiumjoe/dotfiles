@@ -5,7 +5,6 @@ import { dirname, join } from "node:path"
 import { Socket, Server } from "node:net"
 import { appendFileSync, existsSync } from "node:fs"
 import { createAgentService } from "../../src/agent/service.js"
-import { createTaskService } from "../../src/tasks/service.js"
 import { runHandler } from "../../src/handler/daemon.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
@@ -72,14 +71,6 @@ try {
     } }
   } } : {}), ...(config.terminationFixture ? {
     agentFactory: (input: Parameters<typeof createAgentService>[0]) => { note("agents-created"); const service = createAgentService(input); return { ...service, close() { note("agents-close"); service.close() } } },
-    taskFactory: async (input: Parameters<typeof createTaskService>[0]) => {
-      note("tasks-created")
-      if (config.terminationFixture?.lateTask) { await waitFor("release-task"); if (config.terminationFixture.lateTask === "reject") { note("task-initialize-rejected"); throw new Error("fixture late task failed") } }
-      await input.store.initialize()
-      const service = createTaskService(input)
-      note("tasks-ready")
-      return { ...service, close() { note("tasks-close"); if (config.terminationFixture?.taskClose === "sync") throw new Error("fixture task close threw"); if (config.terminationFixture?.taskClose === "reject") return Promise.reject(new Error("fixture task close rejected")); if (config.terminationFixture?.taskClose === "hold") return waitFor("release-task-close"); return service.close() } }
-    },
   } : {}), onPhase: async phase => {
     if (config.delayMs !== undefined && phase === "ready") await new Promise(resolve => setTimeout(resolve, config.delayMs))
     if (config.pauseAt === phase) {

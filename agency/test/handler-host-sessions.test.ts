@@ -12,8 +12,8 @@ import { runControl, productionControlDependencies } from "../src/cli/control.js
 import { parseHostReply } from "../src/hosts/protocol.js"
 import { Readable } from "node:stream"
 
-test("remote session start, prompt, cancel and stop survive unavailable task initialization", { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { tasks: "reject" })
+test("remote session start, prompt, cancel and stop", { timeout: 60000 }, async t => {
+  const f = await acpFixture(t)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
   const spawnBridge = await fixtureBridgeSpawner()
   const transport = await connectBridge({ hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
@@ -48,7 +48,7 @@ test("remote session start, prompt, cancel and stop survive unavailable task ini
 })
 
 test("remote session receives one exact long Unicode prompt through stdin", { timeout: 60000 }, async t => {
-  const f = await acpFixture(t, { tasks: "reject" })
+  const f = await acpFixture(t)
   const record = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json")), hostId = f.paths.hostKey
   const spawnBridge = await fixtureBridgeSpawner()
   const transport = await connectBridge({ hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })

@@ -2,7 +2,6 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { PassThrough, Readable } from "node:stream"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
-import { runTaskClient } from "../src/tasks/cli.js"
 import { readInputJson } from "../src/cli/input-json.js"
 import { fixtureSpawner, fixtureRuntime, registerFixtureChild, cleanFixtureEnvironment } from "./fixtures/fixture-spawn.js"
 import { fileURLToPath } from "node:url"
@@ -34,7 +33,6 @@ const clients = [
   { argv: ["session", "submit", "--host", hostId], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["entry", "open"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["git", "prepare"], malformed: "USAGE", oversized: "USAGE" },
-  { argv: ["task", "wait", commandId, "--host", hostId], malformed: "INVALID_INPUT", oversized: "INPUT_TOO_LARGE" },
   { argv: ["permission", "decide", "--host", hostId], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["permission", "decide", "--local"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["host", "enroll"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
@@ -55,26 +53,12 @@ for (const argv of [
   ["session", "command", "invalid", "--host", hostId],
   ["entry", "open", "--host", "invalid"],
   ["permission", "decide", "--host", hostId, "--command-id", "invalid"],
-  ["task", "inspect", commandId, "--host", hostId],
 ]) test("invalid argv refuses without touching unfinished stdin: " + argv.join(" "), async () => {
   const stream = new PassThrough()
   try {
     const result = await refuse([...argv, "--input-json", "-"], stream)
     assert.equal(result.code, 64); assert.equal(stream.readableFlowing, null)
   } finally { stream.destroy() }
-})
-
-test("task cancellation while reading stdin exits 130 before environment access", async () => {
-  const stream = new PassThrough(), controller = new AbortController()
-  let output = "", environments = 0
-  const deps = {
-    ...productionControlDependencies(), stdin: stream, signal: controller.signal,
-    environment: async () => { environments++; throw new Error("environment forbidden") }, stdout: (value: string) => { output += value },
-  }
-  const waiting = runTaskClient(["task", "wait", commandId, "--host", hostId, "--input-json", "-", "--json"], deps)
-  controller.abort()
-  assert.equal(await waiting, 130); assert.equal(JSON.parse(output).error.code, "CANCELLED"); assert.equal(environments, 0)
-  stream.destroy()
 })
 
 test("inline JSON leaves stdin untouched", async () => {
@@ -128,22 +112,6 @@ test("missing, interactive and already aborted stdin are refused without reading
   stdin.isTTY = false
   await assert.rejects(readInputJson("-", { stdin, signal: AbortSignal.abort() }), { code: "USAGE" })
   assert.equal(stdin.readableFlowing, null); stdin.destroy()
-})
-
-test("task write cancellation preserves unknown mutation outcome and its reference", async () => {
-  const controller = new AbortController(), base = productionControlDependencies()
-  let output = "", writes = 0
-  const code = await runTaskClient(["task", "report", commandId, "--host", hostId, "--input-json", "-", "--json"], {
-    ...base, stdin: Readable.from(['{"outcome":"completed","summary":"fixture"}']), signal: controller.signal,
-    environment: async () => ({ paths: { hostKey: hostId, persistentRoot: "/unused" } }) as Awaited<ReturnType<typeof base.environment>>,
-    hostRoute: async (_env, route) => {
-      if (route.channel === "host-identity") return { hostId, handlerGeneration: commandId }
-      assert.equal(route.channel, "task-write"); writes++; controller.abort(); throw new Error("write interrupted")
-    }, stdout: value => { output += value },
-  })
-  assert.equal(writes, 1); assert.equal(code, 75)
-  assert.equal(JSON.parse(output).error.code, "OUTCOME_UNKNOWN")
-  assert.deepEqual(JSON.parse(output).error.ref, { hostId, taskId: commandId })
 })
 
 for (const launcher of ["node", "agy"]) test("actual " + launcher + " accepts long stdin and refuses own-op locally", { timeout: 10000 }, async () => {

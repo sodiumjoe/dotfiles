@@ -1,8 +1,3 @@
-import { taskToolDescriptor } from "../tasks/mcp.js"
-import { createTaskStore } from "../tasks/store.js"
-import { createTaskService, type TaskService, type TaskServiceOptions } from "../tasks/service.js"
-import { registerTaskEndpoint } from "../tasks/endpoint.js"
-import { destinationEnvironment } from "../agent/environment.js"
 import { AgentError } from "../agent/types.js"
 import { createRuntimeEntry, type RuntimeEntryDriver } from "../entry/runtime.js"
 import { createRuntimeEntryDriver } from "../entry/editor.js"
@@ -53,7 +48,6 @@ export type HandlerOptions = {
   agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
   launchContracts?: readonly LaunchContract[]
   entryDriver?: RuntimeEntryDriver
-  taskFactory?: (input: TaskServiceOptions) => Promise<TaskService>
 }
 
 export function receiveStart(gate: Duplex, status: Duplex, timeoutMs = 5000): Promise<void> {
@@ -108,11 +102,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let agents: AgentService | undefined
   let router: HostRouter | undefined
   let bridge: HandlerBridge | undefined
-  let ownerTasks: TaskService | undefined
-  let unregisterTasks: (() => void) | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }
-  const taskIssues: NonNullable<HandlerStatus["issues"]> = []
   let resolveClosed: () => void = () => undefined, rejectClosed: (error: Error) => void = () => undefined
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject })
   void closed.catch(() => undefined)
@@ -121,8 +112,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (closeOperation) return closeOperation
     closing = true
     const attempts = [
-      () => unregisterTasks?.(),
-      () => ownerTasks?.close(),
       () => router?.close(),
       () => bridge?.close(),
       () => acpServer?.close(),
@@ -197,7 +186,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const dispatch = async (request: ControlRequest): Promise<ControlReply> => {
       if (request.handlerGeneration !== options.generation) return errorReply({ ...request, handlerGeneration: options.generation }, new ControlError("STALE_HANDLER"))
       if (request.op === "shutdown") return shutdown === undefined ? errorReply(request, new ControlError("INCOMPLETE", "Handler has not completed startup")) : shutdownHandler(request, shutdown)
-      return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone({ ...state, issues: [...(state.issues ?? []), ...taskIssues] }) }
+      return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone({ ...state, issues: [...(state.issues ?? [])] }) }
     }
     const dispatchCatalog = async (request: CatalogRequest): Promise<CatalogReply> => {
       const bound = { ...request, handlerGeneration: options.generation }
@@ -249,7 +238,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     if (termination || closing) await bridge.close()
     checkStartup()
-    unregisterTasks = registerTaskEndpoint({ bridge, hostId: options.paths.hostKey, generation: options.generation, ready: () => state.phase === "ready" && !closing && !termination, service: () => ownerTasks })
     registerRuntimeEndpoint(bridge, dispatchAgent)
     const ownerAgents = agents
     const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
@@ -274,13 +262,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     state.phase = "ready"
     await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
-    if (!termination && !closing) {
-      const taskInput: TaskServiceOptions = { store: createTaskStore({ root, hostId: options.paths.hostKey }), hostId: options.paths.hostKey, generation: options.generation, runtime: agents, descriptor: taskToolDescriptor, environment: () => destinationEnvironment(process.env) }
-      const initializeTasks = options.taskFactory ?? (async (input: TaskServiceOptions) => { await input.store.initialize(); return createTaskService(input) })
-      void Promise.resolve().then(() => initializeTasks(taskInput)).then(async service => { if (closing || termination) await service.close(); else ownerTasks = service }).catch(() => {
-        if (!closing) taskIssues.push({ path: join(root, "tasks"), launchAttemptId: null, message: "Task service is unavailable" })
-      })
-    }
     await closed
   } catch (error) {
     if (current !== undefined) {

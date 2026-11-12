@@ -1,6 +1,4 @@
-import { createTaskService } from "../../src/tasks/service.js"
 import { fixtureRuntime, fixtureSpawner, finishFixtureSource } from "./fixture-spawn.js"
-import { setTimeout as delay } from "node:timers/promises"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { spawn } from "node:child_process"
@@ -30,8 +28,6 @@ const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as AgentHand
 const root = dirname(config.paths.runtimeRoot), generation = process.env.AGENCY_HANDLER_GENERATION!
 const platform = process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
 const adapter = { ...platform, async signalGroup(group: number, signal: NodeJS.Signals) { await pause("stop-cleanup"); mutation("signal:" + signal); await platform.signalGroup(group, signal) } }
-const taskLifetime = new AbortController()
-let taskInitialization: Promise<ReturnType<typeof createTaskService>> | undefined
 let paused = false
 let failedOnce = false
 function mutation(event: string): void {
@@ -62,19 +58,7 @@ if (config.selectionCatalog) {
   contract.reasoningOption = "reasoning_effort"
 }
 try {
-  await runHandler({ taskFactory: input => taskInitialization = (async () => {
-    try {
-      if (config.tasks) await writeFile(join(root, "tasks-entered"), "entered", { mode: 0o600 })
-      if (config.tasks === "reject") throw new Error("fixture task initialization failure")
-      if (config.tasks === "hold") while (true) {
-        try { await readFile(join(root, "release-tasks")); await pause("tasks-released"); break } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
-        await delay(20, undefined, { signal: taskLifetime.signal })
-      }
-      taskLifetime.signal.throwIfAborted()
-      await input.store.initialize()
-      return createTaskService(input)
-    } finally { if (config.tasks === "hold") await writeFile(join(root, "tasks-settled"), JSON.stringify({ generation }), { mode: 0o600 }) }
-  })(), ...(config.entry === "synthetic" ? { entryDriver: (() => {
+  await runHandler({ ...(config.entry === "synthetic" ? { entryDriver: (() => {
     let creations = 0, activations = 0, binding: import("../../src/entry/runtime.js").RuntimeEditor | null = null
     const editor = { editorId: randomUUID(), session: "synthetic-entry", pane: "%1", tmuxSocketPath: join(config.paths.runtimeRoot, "entry-tmux.sock") }
     return {
@@ -170,10 +154,6 @@ try {
 } catch (error) {
   await writeFile(join(root, "failure"), (error instanceof Error ? error.stack ?? error.message : String(error)).slice(0, 4096), { mode: 0o600 })
   process.exitCode = 1
-} finally {
-  taskLifetime.abort()
-  if (config.tasks === "hold") await writeFile(join(root, "handler-completed"), JSON.stringify({ generation, resources: process.getActiveResourcesInfo() }), { mode: 0o600 })
-  await taskInitialization?.catch(() => undefined)
 }
 await pause("handler-completed")
 await pause("source-completion")

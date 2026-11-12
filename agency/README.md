@@ -197,9 +197,9 @@ The singleton Handler is the sole writer of runtime records and retains initiali
 
 Publications check the addressed record, write and sync a temporary file, rename it atomically, and sync the parent directory. They do not audit unrelated retained files. Startup and shutdown use only current-generation owners and receipts. Historical agent inspection is lazy and read-only; active phases without a current owner display interrupted with unknown cleanup. Explicit restore reads the saved identity and configuration and creates a new generation without signaling the old one. Catalog tests retain their small fixture roots after physical cleanup, including successful roots, so failed test bodies cannot erase diagnostics.
 
-Runtime history is retained until explicit maintenance. Handler startup and session completion do not replay pending retirement intents or delete historical records. Task reports and provider-native state remain on disk. There is no supported archive/prune command or total-storage cap. Existing pending retirement intents are preserved; reads of affected history report incompleteness without disabling fresh sessions.
+Runtime history is retained until explicit maintenance. Handler startup and session completion do not replay pending retirement intents or delete historical records. Provider-native state remains on disk. There is no supported archive/prune command or total-storage cap. Existing pending retirement intents are preserved; reads of affected history report incompleteness without disabling fresh sessions.
 
-Old Bureau/orchestration workflow files remain available for manual inspection and cleanup. Startup and retention neither resume nor rewrite them, and task records do not pin runtime history or worktrees. Companion names `bureau.sock` and `orchestration.sock` remain only in existing private-socket validation and proven-dead-generation cleanup. Live or ambiguous owners are never unlinked.
+Old Bureau/orchestration workflow files remain available for manual inspection and cleanup. Startup and retention neither resume nor rewrite them. Companion names `bureau.sock` and `orchestration.sock` remain only in existing private-socket validation and proven-dead-generation cleanup. Live or ambiguous owners are never unlinked.
 
 Failed discovery diagnostics retain their work directory, metadata, launch record, owning receipt and snapshot for seven days after diagnostic completion, including historical automatic-discovery receipts. Successful discovery follows ordinary retirement. Unfinished, unreadable or incomplete captures remain retained; a worker killed before native stderr drain cannot establish complete capture. Historical probes without a diagnostic record follow the previous policy. Retirement hashes large private work files incrementally without a stderr size limit. Evidence required for investigation must be exported before eligible retirement.
 
@@ -238,7 +238,7 @@ agy permission inspect COMMAND_UUID --local [--json]
 
 The roster contains active local sessions, including sessions still starting. A starting row can have `live: false`. Permission refs come from the owner snapshot and identify the exact Handler and provider generation. Select the command UUID before sending a decision. A decision is submitted once. If the reply is lost or cannot be validated, the client exits 75 with `INCOMPLETE` and that command ID. Inspect the command before deciding how to recover; a null inspection does not prove that the earlier decision failed. An `applied` decision exits 0, while `claimed`, `uncertain`, `stale` and `withdrawn` exit 75. Inspection is a read and returns current-generation receipts as observations.
 
-Core readiness covers local ACP sessions and controls. Task services initialize afterward in one background attempt, so their endpoints can be unavailable after the Handler becomes ready. Failed optional startup appears in status and doctor runtime diagnostics. Global commands read each configured session owner through the host client. Local watch is not available in this increment; use explicit list and inspect.
+Core readiness covers local ACP sessions and controls. Failed optional startup appears in status and doctor runtime diagnostics. Global commands read each configured session owner through the host client. Local watch is not available in this increment; use explicit list and inspect.
 
 Permission offers, callbacks and decision receipts exist only in the owning Handler process. A valid decision claims the request before invoking its callback. Concurrent identical command IDs share one completion; conflicting reuse is rejected. Inspection can report `claimed` while the callback is pending. Success becomes `applied`, and a failed callback becomes `uncertain` without reopening the request. Other valid decisions return `withdrawn` until exact-session invalidation removes the offer metadata. Invalid options leave a pending request available.
 
@@ -246,7 +246,7 @@ Restart clears pending permissions and receipts. Old refs are stale, and inspect
 
 ## Host controls
 
-The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly, even when optional task coordination is unavailable. Configure destinations with `agy host enroll --input-json '{"hostname":"devbox","hostId":"HOST_ID"}' --json` and inspect configuration with `agy host list --json`. The host ID is the destination's 64-character lowercase hex identity from `agy status --json`. Enrollment requires only the SSH hostname and expected host ID. Both remote entry and the control bridge invoke bare `agy` using the SSH session's PATH, so `ssh HOST 'agy doctor --json'` must work without an additional login shell.
+The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly. Configure destinations with `agy host enroll --input-json '{"hostname":"devbox","hostId":"HOST_ID"}' --json` and inspect configuration with `agy host list --json`. The host ID is the destination's 64-character lowercase hex identity from `agy status --json`. Enrollment requires only the SSH hostname and expected host ID. Both remote entry and the control bridge invoke bare `agy` using the SSH session's PATH, so `ssh HOST 'agy doctor --json'` must work without an additional login shell.
 
 New enrollment records contain those two fields at `<persistentRoot>/bureau/hosts/<hostId>.json`. Existing UUID-named records remain readable and return the same two-field view without rewriting their bytes. The retained `bureau/hosts` directory does not load Bureau settings or workflow state. Repeating the same enrollment is a no-op; a changed identity or a different hostname for an enrolled identity is refused.
 
@@ -260,7 +260,7 @@ The bridge protocol is `agency-bridge/2`, with hello, request, reply and cancell
 
 ## Host sessions
 
-Ordinary session operations use the owning runtime and remain available without task coordination. Select exactly one `--host HOST_ID` or `--local`. The latter selects the local Handler. These commands require an already running Handler and never start one or poll automatically. JSON replies use `agency-host/1`.
+Ordinary session operations use the owning runtime. Select exactly one `--host HOST_ID` or `--local`. The latter selects the local Handler. These commands require an already running Handler and never start one or poll automatically. JSON replies use `agency-host/1`.
 
 ```text
 agy session start --host HOST_ID --input-json JSON --json
@@ -284,7 +284,7 @@ Start returns an admission receipt immediately. Inspect the command until its ou
 {"target":{"agentId":"AGENT_UUID","handlerGeneration":"HANDLER_UUID","providerGeneration":"PROVIDER_UUID"},"submissionId":"CALLER_SUBMISSION_UUID","text":"Inspect the current implementation."}
 ```
 
-Submission and cancellation inputs use `{target, submissionId}`. Stop takes `{commandId, agentId, handlerGeneration, providerGeneration}`. Submit returns its live receipt immediately. Identical submission ID/content can return the existing live receipt; different content conflicts, and another active turn returns `BUSY`. Submission inspection returns status, stop reason and failure. Existing attachments provide model output. A completed submission does not imply a task completion report.
+Submission and cancellation inputs use `{target, submissionId}`. Stop takes `{commandId, agentId, handlerGeneration, providerGeneration}`. Submit returns its live receipt immediately. Identical submission ID/content can return the existing live receipt; different content conflicts, and another active turn returns `BUSY`. Submission inspection returns status, stop reason and failure. Existing attachments provide model output.
 
 Admission and cancellation acknowledgements exit 0. Command inspections exit 75 while pending or failed/interrupted, and 0 for a completed successful start/stop. Submission inspection exits 75 while accepted/running or failed, and 0 when completed, including cancellation. Null session/command/submission observations and unavailable or stale owners exit 69. Usage and oversized input exit 64. `BUSY`, command conflicts and unknown mutation outcomes exit 75.
 
@@ -299,26 +299,3 @@ New starts use the filtered destination Handler process environment plus backend
 `agy git prepare --input-json '{"repository":"/absolute/repo","cwd":"/absolute/new-worktree","branch":"moon/custom","baseOid":"IMMUTABLE_COMMIT_OID","remote":"origin"}' --json` prepares an ordinary Git worktree and returns its cwd. The remote is optional. Existing destinations and branches are refused, and an interrupted Git operation leaves its state for inspection. Pass the returned cwd to ordinary session startup. No Agency record, publication grant, or integration receipt is involved.
 
 Use ordinary Git for collaboration: `git fetch origin COMMIT_OID`, `git show COMMIT_OID`, and `git merge COMMIT_OID` or `git cherry-pick COMMIT_OID` after review. The Bureau, run and assignment commands, old task tools, report-based Git commands, and durable entry prepare/consume are removed. Ordinary entry uses open/inspect, and Git preparation remains independent. Existing run/attempt IDs are not task IDs.
-
-## Worker-owned tasks
-
-Select a task UUID and a destination before dispatch. The task adapter starts one ordinary session and submits the initial text once. Admission returns before provider readiness. A lost create or report reply returns `OUTCOME_UNKNOWN` with the original task reference; reconnect and inspect that reference before taking another action. Creates never replay, and a repeated task UUID is rejected even when its input is identical.
-
-```sh
-agy task create --host HASH --input-json '{"taskId":"UUID","description":"Run checks","cwd":"/repo","backendId":"codex-acp","text":"Run checks and report the result"}' --json
-agy task inspect UUID --host HASH --json
-agy task wait UUID --host HASH --input-json '{"timeoutMs":10000}' --json
-agy task report UUID --local --input-json '{"outcome":"completed","summary":"Checks passed"}' --json
-```
-
-Each command also accepts `--local` in place of `--host HASH`. Reports explicitly declare `completed`, `blocked`, or `failed`; ordinary `end_turn` remains pending. A report replaces the entire previous report. Inspect and wait repeatedly return the same retained result without consuming it. Waits run only in the caller, last at most 60 seconds, and cancellation leaves the worker running. Timeout zero performs one inspection, bounded by the ordinary 10-second read limit. A deadline with no observation returns unavailable; a deadline after an observation returns pending. Missing tasks and incomplete storage remain typed errors. A missing or replaced runtime session establishes an unknown outcome.
-
-Records and reports remain under `<persistentRoot>/tasks/<taskId>/` until explicit maintenance. The report takes precedence if the record status update failed. Cleanup and repair are manual while the task service is inactive; tasks pin neither runtime history nor Git worktrees. There is no automatic replay, completion notification, or supervisor prompt.
-
-Inspection reads the retained record and live runtime separately. The runtime can be running while the returned record still has a null session, because startup may advance between those reads. A caller that needs a running worker and its recorded session must require both a running runtime and a non-null session in the same returned observation. Inspection does not rewrite the record or replay launch or submission.
-
-### Task MCP configuration
-
-Task workers receive one ordinary stdio MCP entry named `agency_tasks`. Its command is the Handler's absolute Node executable, its args are `["/absolute/agency/dist/src/main.js", "internal-task-tools"]`, and its environment contains `AGENCY_TASK_REF` as the JSON host/task reference. Existing caller MCP entries are preserved. A caller entry named `agency_tasks` is rejected before admission. This default reference is a convenience binding in the trusted local environment. An explicit report reference must match it.
-
-An ordinary supervisor session can use the same `agency_tasks` entry with `env: []`. `agency_task_create({hostId,input})` requires a destination and preselected task UUID; input has the same shape as the public CLI. `agency_task_inspect({ref})` and `agency_task_wait({ref,timeoutMs})` read explicit references. `agency_task_report({ref?,report})` replaces the owner report; a worker can omit ref when configured with its default. Reporting resolves locally before host inventory or relay routing, so it remains available with the laptop disconnected. A reported failed/blocked outcome is a successful tool response. Transport or storage failures set `isError` and retain the task reference when known.
