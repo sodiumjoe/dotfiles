@@ -14,6 +14,10 @@ export type PermissionBroker = {
 }
 type Request = { ref: PermissionRef | null; key: string; target: AgentTuple; providerId: string | number; params: JsonObject; options: Set<string>; offers: Map<string, string> }
 const tupleKey = (target: AgentTuple): string => JSON.stringify([target.agentId, target.handlerGeneration, target.providerGeneration])
+function declined(params: JsonObject): JsonObject {
+  const option = Array.isArray(params.options) ? (params.options as JsonObject[]).find(option => option?.kind === "reject_once" && typeof option.optionId === "string") : undefined
+  return { outcome: option ? { outcome: "selected", optionId: option.optionId! } : { outcome: "cancelled" } }
+}
 
 export function createPermissionBroker(input: { routing?: PermissionArbiter; cwd?(target: AgentTuple): string; respond(target: AgentTuple, id: string | number, result: JsonObject): unknown }): PermissionBroker {
   const requests = new Map<string, Request>(), clients = new Map<string, { client: PermissionClient; targets: Set<string>; offers: Map<string, Request> }>()
@@ -61,7 +65,11 @@ export function createPermissionBroker(input: { routing?: PermissionArbiter; cwd
         request.ref = ref
         if (requests.get(key) !== request) { void input.routing!.invalidate(target).catch(() => {}); return key }
         return publish()
-      }, error => { remove(request); throw error })
+      }, error => {
+        remove(request)
+        if (!(error instanceof AgentError) || error.code !== "INVALID_PROTOCOL") throw error
+        return Promise.resolve(input.respond(target, providerId, declined(params))).then(() => key)
+      })
     },
     attach(target, client) {
       const attached = clients.get(client.connectionId) ?? { client, targets: new Set<string>(), offers: new Map<string, Request>() }

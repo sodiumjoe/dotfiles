@@ -90,11 +90,12 @@ async function dispatch(request: { id: string | number; method?: string; params?
     if (text === "fail") { process.exit(2) }
     if (text === "provider-busy") { send({ jsonrpc: "2.0", id: request.id, error: { code: -32042, message: "Provider busy", data: { retry: true } } }); return }
     promptIds.add(request.id)
-    if (text === "permission") {
+    if (text === "permission" || text === "permission-multiline" || text === "permission-malformed") {
       const wait = new Promise<void>(resolve => { permission = resolve })
       const failure = setInterval(() => { void exists("fail-permission").then(ready => { if (ready) process.exit(2) }) }, 10)
       failure.unref()
-      send({ jsonrpc: "2.0", id: 1, method: "session/request_permission", params: { sessionId, toolCall: { toolCallId: "fixture-tool", title: "Fixture write", kind: "edit" }, options: [{ optionId: "allow-once", name: "Allow", kind: "allow_once" }, { optionId: "reject-once", name: "Reject", kind: "reject_once" }] } })
+      const toolCall = text === "permission-multiline" ? { toolCallId: "fixture-tool", title: "python3 - <<'EOF'\n\tprint(1)\nEOF", kind: "execute" } : text === "permission-malformed" ? { toolCallId: "t".repeat(300), title: "Fixture write", kind: "edit" } : { toolCallId: "fixture-tool", title: "Fixture write", kind: "edit" }
+      send({ jsonrpc: "2.0", id: 1, method: "session/request_permission", params: { sessionId, toolCall, options: [{ optionId: "allow-once", name: "Allow", kind: "allow_once" }, { optionId: "reject-once", name: "Reject", kind: "reject_once" }] } })
       try { await wait } finally { clearInterval(failure) }
     }
     if (text === "held") await new Promise<void>(resolve => {

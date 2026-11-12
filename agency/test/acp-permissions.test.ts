@@ -18,3 +18,25 @@ test("real provider receives exactly one racing shared decision", async t => {
   assert.equal(withdrawn.requestId, br.id)
   assert.equal((await f.requests("codex-acp")).filter(frame => frame.result?.outcome).length, 1)
 })
+
+test("multi-line shell titles reach clients unchanged", async t => {
+  const f = await acpFixture(t), a = await f.connect()
+  await a.request("initialize", { protocolVersion: 1 })
+  const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  const pending = a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "permission-multiline" }] })
+  const request = await a.next("session/request_permission")
+  assert.equal((request.params.toolCall as JsonObject).title, "python3 - <<'EOF'\n\tprint(1)\nEOF")
+  a.respond(request.id, selected("allow-once"))
+  assert.equal((await pending).stopReason, "end_turn")
+})
+
+test("malformed permission requests are declined without failing the session", async t => {
+  const f = await acpFixture(t), a = await f.connect()
+  await a.request("initialize", { protocolVersion: 1 })
+  const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  assert.equal((await a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "permission-malformed" }] })).stopReason, "end_turn")
+  assert.deepEqual((await f.requests("codex-acp")).filter(frame => frame.result?.outcome).map(frame => frame.result!.outcome), [{ outcome: "selected", optionId: "reject-once" }])
+  const pending = a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "permission" }] })
+  a.respond((await a.next("session/request_permission")).id, selected("allow-once"))
+  assert.equal((await pending).stopReason, "end_turn")
+})

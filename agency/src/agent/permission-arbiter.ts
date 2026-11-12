@@ -7,6 +7,7 @@ import { permissionDigest, permissionKey, parsePermissionOffer, parsePermissionR
 
 type Request = { offer: PermissionOffer; state: "pending" | "claimed"; respond?: (optionId: string) => Promise<void> }
 type Command = { receipt: PermissionReceipt; completion?: Promise<PermissionReceipt> }
+const permissionTitle = (value: unknown): string => (typeof value === "string" ? value.slice(0, 16384).toWellFormed().replace(/[\p{Cc}\s]+/gu, " ").trim() : "") || "Permission request"
 export type PermissionArbiter = ReturnType<typeof createPermissionArbiter>
 export function createPermissionArbiter(input: { hostId: string; handlerGeneration: string }) {
   const hostId = hash(input.hostId), handlerGeneration = id(input.handlerGeneration), queue = new MutationQueue()
@@ -22,7 +23,7 @@ export function createPermissionArbiter(input: { hostId: string; handlerGenerati
       const ref = parsePermissionRef({ hostId, target, permissionId: randomUUID(), revision: 1 })
       if (ref.target.handlerGeneration !== handlerGeneration) throw new AgentError("STALE_HANDLER")
       const subject = validated(() => object(params.toolCall))
-      const offer = parsePermissionOffer({ ref, title: typeof subject.title === "string" && subject.title.length ? subject.title : "Permission request", subject, options: params.options, originCwd, toolCallId: subject.toolCallId })
+      const offer = parsePermissionOffer({ ref, title: permissionTitle(subject.title), subject, options: params.options, originCwd, toolCallId: subject.toolCallId })
       return queue.run(async () => { ready(); requests.set(permissionKey(ref), { offer, respond, state: "pending" }); throughSeq++; return structuredClone(ref) })
     },
     async decide(commandId: string, rawRef: PermissionRef, optionId: string): Promise<PermissionReceipt> {
