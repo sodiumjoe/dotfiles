@@ -1,0 +1,3 @@
+#!/bin/sh
+unset CLAUDE_CODE_EXECUTABLE
+exec /deploy/claude-wrapper-hosts/current/bin/claude "$@"

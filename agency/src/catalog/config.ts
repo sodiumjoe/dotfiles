@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { constants, type BigIntStats } from "node:fs"
+import { constants, existsSync, type BigIntStats } from "node:fs"
 import { lstat, open, realpath } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, isAbsolute, join, normalize } from "node:path"
@@ -82,7 +82,7 @@ async function defaultProfiles(): Promise<ProviderProfile[]> {
     configurationFiles: [await canonicalPath(join(home, ".codex/config.toml"))],
   }), parseProfile({
     id: "claude-agent-acp", enabled: true,
-    executable: await canonicalPath(join(repo, "node-bin/node_modules", claudePackage, "claude")),
+    executable: await canonicalPath(existsSync("/deploy/claude-wrapper-hosts") ? join(repo, "home/bin/acp-claude") : join(repo, "node-bin/node_modules", claudePackage, "claude")),
     adapterPackageJson: await canonicalPath(join(repo, "node-bin/node_modules/@agentclientprotocol/claude-agent-acp/package.json")),
     sdkPackageJson: await canonicalPath(join(repo, "node-bin/node_modules/@anthropic-ai/claude-agent-sdk/package.json")),
     configurationFiles: [await canonicalPath(join(home, ".claude/settings.json"))],
