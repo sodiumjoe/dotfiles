@@ -199,7 +199,7 @@ Publications check the addressed record, write and sync a temporary file, rename
 
 Runtime history is retained until explicit maintenance. Handler startup and session completion do not replay pending retirement intents or delete historical records. Provider-native state remains on disk. There is no supported archive/prune command or total-storage cap. Existing pending retirement intents are preserved; reads of affected history report incompleteness without disabling fresh sessions.
 
-Old Bureau/orchestration workflow files remain available for manual inspection and cleanup. Startup and retention neither resume nor rewrite them. Companion names `bureau.sock` and `orchestration.sock` remain only in existing private-socket validation and proven-dead-generation cleanup. Live or ambiguous owners are never unlinked.
+Old Bureau/orchestration workflow files remain available for manual inspection and cleanup. Startup and retention neither resume nor rewrite them. Live or ambiguous owners are never unlinked.
 
 Failed discovery diagnostics retain their work directory, metadata, launch record, owning receipt and snapshot for seven days after diagnostic completion, including historical automatic-discovery receipts. Successful discovery follows ordinary retirement. Unfinished, unreadable or incomplete captures remain retained; a worker killed before native stderr drain cannot establish complete capture. Historical probes without a diagnostic record follow the previous policy. Retirement hashes large private work files incrementally without a stderr size limit. Evidence required for investigation must be exported before eligible retirement.
 
