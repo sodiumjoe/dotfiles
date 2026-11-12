@@ -53,6 +53,19 @@ test("one connection routes two colliding native session IDs without sharing bac
   }
 })
 
+test("Claude mode changes apply during an active turn while other settings stay busy", async t => {
+  const f = await acpFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: meta("claude-agent-acp") })
+  const pending = c.request("session/prompt", { sessionId: session.sessionId!, prompt: [{ type: "text", text: "held" }] })
+  await until(async () => (await f.requests("claude-agent-acp")).some(value => value.method === "session/prompt") ? true : undefined)
+  await c.request("session/set_mode", { sessionId: session.sessionId!, modeId: "review" })
+  await assert.rejects(c.request("session/set_model", { sessionId: session.sessionId!, modelId: "legacy-b" }), { code: "BUSY" })
+  await f.release("claude-agent-acp")
+  assert.equal((await pending).stopReason, "end_turn")
+  assert.ok((await f.requests("claude-agent-acp")).some(value => value.method === "session/set_mode" && value.params?.modeId === "review"))
+})
+
 test("replay precedes live output without gaps and retains accepted user origin metadata", async t => {
   const f = await acpFixture(t), a = await f.connect(), b = await f.connect()
   await a.request("initialize", initialize); await b.request("initialize", initialize)

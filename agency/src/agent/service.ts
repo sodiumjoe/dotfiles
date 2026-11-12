@@ -730,7 +730,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     const admitted = await queue.run(async () => {
       const op = await requireTarget(target)
       assertConfigurationReady(op)
-      if (op.turns!.busy()) throw new AgentError("BUSY")
+      const modeChange = method === "session/set_mode" || method === "session/set_config_option" && params.configId === op.contract.modeOption
+      if (op.turns!.busy() && !(modeChange && op.contract.providerId === "claude-agent-acp")) throw new AgentError("BUSY")
       const record = records.get(target.agentId)!, snapshot = op.owner!.snapshot(), desired = structuredClone(record.settings)
       let optionId: string, transient = false
       if (method === "session/set_model" || method === "session/set_mode") {
