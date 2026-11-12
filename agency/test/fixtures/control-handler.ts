@@ -2,7 +2,7 @@ import { fixtureSpawner, fixtureRuntime, finishFixtureSource, prepareFixtureExit
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { Socket, Server } from "node:net"
+import { Socket } from "node:net"
 import { appendFileSync, existsSync } from "node:fs"
 import { createAgentService } from "../../src/agent/service.js"
 import { runHandler } from "../../src/handler/daemon.js"
@@ -35,16 +35,6 @@ if (config.failSignalGroup !== undefined) {
 }
 const note = (event: string): void => appendFileSync(join(root, "termination-events"), event + "\n")
 const waitFor = async (file: string): Promise<void> => { while (!existsSync(join(root, file))) await new Promise(resolve => setTimeout(resolve, 20)) }
-if (config.terminationFixture?.endpointCloseReject) {
-  const close = Server.prototype.close
-  Server.prototype.close = function (...args: Parameters<typeof close>) {
-    const address = this.address()
-    const result = close.apply(this, args)
-    if (typeof address === "string") note("endpoint:" + address.split("/").pop())
-    if (typeof address === "string" && address.endsWith("attachment.sock")) throw new Error("fixture endpoint close rejected")
-    return result
-  }
-}
 try {
   await runHandler({ paths: config.paths, adapter, recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), ...(config.catalog || config.terminationFixture ? { catalogFactory: (context: Parameters<NonNullable<import("../../src/handler/daemon.js").HandlerOptions["catalogFactory"]>>[0]) => {
     const store = context.store

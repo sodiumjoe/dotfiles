@@ -12,7 +12,7 @@ import { parseRestoreRequest, projectRestoreInput, type RestoreRequest } from ".
 import { launchEnvironmentDigest } from "./environment.js"
 
 import { isRuntimeSessionRequest, parseRuntimeSessionOperation, type RuntimeSessionRequest, type RuntimeSessionResult } from "./session-controls.js"
-import { parseSubmissionReceipt } from "./attachment-protocol.js"
+import { parseSubmissionReceipt } from "./submission-receipt.js"
 import { parseTuple } from "./types.js"
 
 import type { RuntimeHumanRequest, RuntimeHumanResult } from "./human-controls.js"

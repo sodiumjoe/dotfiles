@@ -14,7 +14,6 @@ import { createAgentService, type AgentService } from "../agent/service.js"
 import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
 import { type AgentRequest, type AgentReply } from "../agent/protocol.js"
-import { serveAttachment } from "../agent/attachment-server.js"
 import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
 import type { Server, Socket } from "node:net"
@@ -95,7 +94,7 @@ async function selfIdentity(adapter: PlatformAdapter): Promise<ProcessIdentity> 
 }
 
 export async function runHandler(options: HandlerOptions): Promise<void> {
-  let server: Server | undefined, attachmentServer: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
+  let server: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
   const sockets = new Set<Socket>()
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
@@ -120,7 +119,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       () => { options.status.destroy() },
       () => { options.gate.destroy() },
       ...[...sockets].map(socket => () => { socket.destroy() }),
-      ...[server, attachmentServer].filter(listener => listener !== undefined).map(listener => () => new Promise<void>((resolve, reject) => listener.close(error => { if (error) reject(error); else resolve() }))),
+      ...[server].filter(listener => listener !== undefined).map(listener => () => new Promise<void>((resolve, reject) => listener.close(error => { if (error) reject(error); else resolve() }))),
     ]
     closeOperation = Promise.allSettled(attempts.map(attempt => Promise.resolve().then(attempt))).then(results => {
       const failures = results.filter(result => result.status === "rejected").map(result => result.reason)
@@ -205,16 +204,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     checkStartup()
     server.on("error", rejectClosed)
     server.on("close", () => { if (!closing) rejectClosed(new Error("control listener closed unexpectedly")) })
-    attachmentServer = await bindPrivateSocket(options.paths.runtimeRoot, "attachment.sock", socket => {
-      sockets.add(socket)
-      socket.once("close", () => sockets.delete(socket))
-      if (!agents || state.phase !== "ready" || closing || termination) { socket.destroy(); return }
-      void serveAttachment(socket, agents, options.generation).catch(rejectClosed)
-    })
-    if (termination || closing) await new Promise<void>(resolve => attachmentServer!.close(() => resolve()))
-    checkStartup()
-    attachmentServer.on("error", rejectClosed)
-    attachmentServer.on("close", () => { if (!closing) rejectClosed(new Error("attachment listener closed unexpectedly")) })
     current = { ...published, writer: "handler", phase: "socket_bound" }
     await writeHandlerRecord(options.recordPath, current)
     checkStartup()

@@ -149,7 +149,7 @@ agy agent stop <agent-uuid> --handler-generation <uuid> --provider-generation <u
 agy agent command <command-uuid> --handler-generation <uuid> [--json]
 ```
 
-`agy help --json` lists exact flags and compatibility commands, including model catalog operations, explicit-selection start, scalar prompt, and NDJSON attachment. The CLI compatibility attachment uses the same provider core rather than a second chat runtime. Normal ACP creation does not require catalog qualification. Model discovery runs only through explicit `agy model refresh`; initialization, list, resume and elapsed time never start probes. Cached model offers remain advisory across TTL expiry and Handler generations. Native provider initialization validates the selected model and settings.
+`agy help --json` lists exact flags and compatibility commands, including model catalog operations, explicit-selection start, and scalar prompt. Normal ACP creation does not require catalog qualification. Model discovery runs only through explicit `agy model refresh`; initialization, list, resume and elapsed time never start probes. Cached model offers remain advisory across TTL expiry and Handler generations. Native provider initialization validates the selected model and settings.
 
 The active picker requests `agency/roster` over the cached Agentic ACP connection. This active-only query projects daemon memory without rereading retained files or waiting for their verification queue. Its cursors track changes to the projected records and diagnostics. Ordinary operations use initialized Handler state and check the addressed generation, ownership and mutation inputs. They do not inventory retained history. A cached display row does not authorize an action. The picker bounds readiness, requests, and full traversal, and reports connection failures without falling back to a fresh CLI process. An older running Handler must be restarted before it supports this endpoint.
 
@@ -165,7 +165,7 @@ SIGTERM and SIGINT instead begin one bounded termination attempt, including duri
 
 Command inspection only reads retained receipts. `agy agent command` and `agy session command` do not launch providers, retry record publication, or resume a failed Stop. An incomplete operation remains incomplete until its owner progresses or an explicit mutation retry resumes it. Local agent Start, Restore, and Stop retries use the original command ID and matching input; inspection never performs that retry on the caller's behalf.
 
-Control uses `agency-control/2`, agent lifecycle uses `agency-agent/3`, and the compatibility attachment stream uses `agency-attachment/1`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
+Control uses `agency-control/2`, and agent lifecycle uses `agency-agent/3`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
 
 Codex Restore accepts a saved `fast-mode=off` (or boolean `false`) when the provider explicitly returns configuration options without fast mode. This reflects a model that no longer supports the feature. Enabled fast mode, missing model/mode/effort settings, unknown configuration, and unresolved fast-mode changes still require input. Settings the loaded provider continues to expose retain their native values.
 
