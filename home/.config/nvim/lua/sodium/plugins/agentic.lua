@@ -739,7 +739,7 @@ local function pick_pr_for_review()
                     require("agentic.session_registry").get_session_for_tab_page(nil, function(session)
                         session.widget:show()
                         session:on_session_ready(function()
-                            require("sodium.review_ui").send_agent_command("/neovim-review " .. tostring(item.number))
+                            require("sodium.review_ui").send_agent_command("/neovim-review " .. tostring(item.number), session.tab_page_id)
                         end)
                     end)
                 end,

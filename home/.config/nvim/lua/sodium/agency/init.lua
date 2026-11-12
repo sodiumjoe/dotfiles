@@ -214,8 +214,9 @@ function M.setup(deps)
             end
             return true
         end
-        local manager = local_manager()
+        local manager = local_manager(opts.tab)
         if manager and manager.session_id then return send(nil, manager) end
+        if opts.tab then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
         operations.current(vim.fn.getcwd(), function(err, result) if err then send(err) else ready(result, send) end end)
         return true
     end

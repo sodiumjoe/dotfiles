@@ -74,6 +74,17 @@ describe("Agency native commands", function()
         assert.are.equal("accepted", outcome.state)
     end)
 
+    it("submits to the requested tab after the current tab changes", function()
+        local tab, lookups = vim.api.nvim_get_current_tabpage(), 0
+        api.operations.current = function(_, callback) lookups = lookups + 1; callback({ code = "UNAVAILABLE", message = "unexpected lookup" }) end
+        vim.cmd("tabnew")
+        api.submit_text("review", { tab = tab }, function() end)
+        local texts = {}
+        for _, item in ipairs(f.request("session/prompt").params.prompt) do texts[#texts + 1] = item.text end
+        assert.is_true(vim.tbl_contains(texts, "review"))
+        assert.are.equal(0, lookups)
+    end)
+
     it("detaches native views without cancelling or stopping providers", function()
         f.state("shared-turn", "running")
         api.detach()

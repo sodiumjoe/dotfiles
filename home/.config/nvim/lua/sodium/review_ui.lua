@@ -15,9 +15,9 @@ local function notify_agent_failure(err)
     vim.notify("Agent review failed: " .. tostring(err), vim.log.levels.ERROR)
 end
 
-function M.send_agent_command(command)
+function M.send_agent_command(command, tab)
     local ok, result = pcall(function()
-        return require("sodium.agency").submit_text(command, { focus_prompt = false }, function(outcome)
+        return require("sodium.agency").submit_text(command, { focus_prompt = false, tab = tab }, function(outcome)
             if outcome.state ~= "accepted" then
                 notify_agent_failure(outcome.error and outcome.error.message or outcome.state)
             end
