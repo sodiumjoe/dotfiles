@@ -126,6 +126,10 @@ local function validate(value, argv)
     if vim.tbl_contains(argv, "--local") and argv[1] == "roster" then
         validate({ protocol = "agency-agent/3", requestId = value.requestId, handlerGeneration = value.handlerGeneration, ok = true, result = result }, { "agent", "page" }); return
     end
+    if argv[1] == "restart" then
+        assert(result.state == "restarted" and type(result.agents) == "table" and vim.islist(result.agents))
+        return
+    end
     if argv[1] ~= "agent" then return end
     if result.state == "command" then
         local command = result.command

@@ -12,6 +12,27 @@ local function tuple(row)
         providerGeneration = record.launch.providerGeneration }
 end
 
+function M.commands(api)
+    local commands = { AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
+        AgencyOpen = { "open", 0 }, AgencyAttach = { "attach", 1 }, AgencyRestore = { "restore", 1 },
+        AgencySettings = { "settings", 0 }, AgencyDetach = { "detach", 0 }, AgencyCancel = { "cancel", 0 }, AgencyStop = { "stop", 0 }, AgencyInspect = { "inspect_delivery", 0 } }
+    for name, spec in pairs(commands) do
+        vim.api.nvim_create_user_command(name, function(args)
+            if spec[2] == 1 then api[spec[1]](args.args) else api[spec[1]]() end
+        end, { nargs = spec[2], force = true, complete = spec[2] == 1 and function(prefix)
+            local ids = {}
+            for _, row in ipairs(api.inventory()) do
+                local id = row.record.version == 3 and row.record.definition.agentId
+                if id and id:sub(1, #prefix) == prefix then ids[#ids + 1] = id end
+            end
+            return ids
+        end or nil })
+    end
+    vim.api.nvim_create_user_command("AgencyReload", function(args)
+        require("sodium.agency.reload").run({ force = args.bang })
+    end, { bang = true, force = true })
+end
+
 function M.setup(deps)
     if controller then return controller end
     deps = deps or {}
@@ -20,6 +41,7 @@ function M.setup(deps)
     local api = { uuid = Control.uuid, timer_factory = deps.timer_factory,
         annotations = deps.annotations or Context.annotations, accept_annotations = deps.accept_annotations or Context.accept_annotations,
         notify = deps.notify or function(value) vim.notify("Agency: " .. tostring(value)) end }
+    api.deps = deps
     local inventory, epoch = {}, 0
     local function report(err) if err and err.code ~= "CANCELLED" then api.notify(err.message or err.code) end end
     local function local_manager(tab)
@@ -233,22 +255,18 @@ function M.setup(deps)
         manager._agency_routed_permissions = manager._agency_routed_permissions or require("sodium.agency.permissions").new({ notify = api.notify })
         manager._agency_routed_permissions.open()
     end
-    controller = api
-    local commands = { AgencyPermissions = { "permissions", 0 }, Agency = { "roster", 0 }, AgencyCurrent = { "current", 0 }, AgencyNew = { "new", 0 },
-        AgencyOpen = { "open", 0 }, AgencyAttach = { "attach", 1 }, AgencyRestore = { "restore", 1 },
-        AgencySettings = { "settings", 0 }, AgencyDetach = { "detach", 0 }, AgencyCancel = { "cancel", 0 }, AgencyStop = { "stop", 0 }, AgencyInspect = { "inspect_delivery", 0 } }
-    for name, spec in pairs(commands) do
-        vim.api.nvim_create_user_command(name, function(args)
-            if spec[2] == 1 then api[spec[1]](args.args) else api[spec[1]]() end
-        end, { nargs = spec[2], force = true, complete = spec[2] == 1 and function(prefix)
-            local ids = {}
-            for _, row in ipairs(inventory) do
-                local id = row.record.version == 3 and row.record.definition.agentId
-                if id and id:sub(1, #prefix) == prefix then ids[#ids + 1] = id end
-            end
-            return ids
-        end or nil })
+    function api.busy()
+        if operations.in_flight() > 0 then return true end
+        local agency = require("agentic.config").acp_providers.agency
+        for _, manager in pairs(Registry.sessions) do
+            if not manager._agency_destroyed and manager.agent.provider_config == agency
+                and (manager._agency_load_pending or manager._agency_intent or manager.session_id == nil and manager._agency_new_options ~= nil) then return true end
+        end
+        return false
     end
+    function api.inventory() return inventory end
+    controller = api
+    M.commands(api)
     return api
 end
 

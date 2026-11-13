@@ -399,9 +399,11 @@ function M.install()
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
         manager._agency_request_cwd = manager._agency_load_cwd or cwd
         manager._agency_loading_session = id
+        manager._agency_load_pending = true
         self:_subscribe(id, handlers)
         self:_send_request("session/load", { sessionId = id, cwd = manager._agency_request_cwd, mcpServers = servers or {}, _meta = { agency = { version = 1, editor = vim.v.servername } } },
             M.guard_callback(manager, captured, function(result, err)
+                manager._agency_load_pending = nil
                 if err then if self.subscribers[id] == handlers then self.subscribers[id] = nil end
                 else attachment(manager, result) end
                 invoke(manager, token(manager, true, false), function()

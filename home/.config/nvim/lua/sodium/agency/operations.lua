@@ -477,6 +477,13 @@ function M.new(deps)
         begin()
         active = nil
     end
+    function api.in_flight()
+        local count = 0
+        for _, receipt in pairs(pending) do
+            if not receipt.error and not receipt.view then count = count + 1 end
+        end
+        return count
+    end
     return api
 end
 
