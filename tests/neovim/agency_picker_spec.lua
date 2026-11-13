@@ -1,4 +1,5 @@
 require("snacks").setup({ picker = { enabled = true } })
+local List = require("sodium.agency.session_list")
 
 describe("Agency active-agent snapshot", function()
     local pickers
@@ -247,7 +248,7 @@ describe("Agency active-agent snapshot", function()
                 assert.is_number(position)
                 local column = vim.fn.strdisplaywidth(line:sub(1, position - 1))
                 if status_column then assert.are.equal(status_column, column) else status_column = column end
-                assert.is_falsy(line:find("gpt-6.1-sol", 1, true))
+                if width >= 80 then assert.is_truthy(line:find("Codex", 1, true)) else assert.is_falsy(line:find("gpt-6.1-sol", 1, true)) end
             end
             local item = picker.list:get(3)
             assert.is_truthy(item.text:find("uniquetitlesuffix", 1, true))
@@ -514,5 +515,56 @@ describe("Agency active-agent snapshot", function()
         local reopened = open(controller)
         settle(reopened, 1)
         assert.are.equal("agent-d", reopened:current().id)
+    end)
+
+    it("opens before any data with a loading title and orders sessions by recent activity", function()
+        local pending
+        local controller = local_controller({ page = function(_, callback) pending = callback end })
+        local picker = open(controller)
+        assert.is_true(vim.wait(1000, function() return picker.title == "Agency active agents (loading…)" end))
+        local a, b, c = row("agent-a"), row("agent-b"), row("agent-c")
+        a.record.lastActivityAt, b.record.lastActivityAt = "2026-11-12T00:00:00Z", "2026-11-13T00:00:00Z"
+        pending(nil, { agents = { a, b, c }, issues = {}, handlerGeneration = "handler" })
+        settle(picker, 3)
+        assert.are.equal("Agency active agents", picker.title)
+        assert.are.same({ "agent-b", "agent-a", "agent-c" }, { picker.list:get(1).id, picker.list:get(2).id, picker.list:get(3).id })
+    end)
+
+    it("previews the conversation through the controller and ignores replies after close", function()
+        local requests = {}
+        local picker = open(local_controller({ excerpt = function(excerpt, callback) requests[#requests + 1] = { excerpt = excerpt, callback = callback } end }))
+        settle(picker, 2)
+        assert.is_true(vim.wait(1000, function() return #requests >= 1 end))
+        assert.is_nil(requests[1].excerpt.hostId)
+        requests[1].callback(nil, { state = "excerpt", source = "live", turns = { { role = "agent", text = "hi there" } }, reason = vim.NIL })
+        assert.is_true(vim.wait(1000, function()
+            return table.concat(vim.api.nvim_buf_get_lines(picker.preview.win.buf, 0, -1, false), "\n"):find("‹ agent: hi there", 1, true) ~= nil
+        end))
+        picker:close()
+        local late_callback
+        local late = open(local_controller({ page = function(_, callback) late_callback = callback end }))
+        local title = late.title
+        late:close()
+        late_callback(nil, { agents = { row("agent-z") }, issues = {}, handlerGeneration = "handler" })
+        vim.wait(50, function() return false end)
+        assert.are.equal(title, late.title)
+        assert.are.equal(0, late.list:count())
+    end)
+
+    it("redraws an excerpt that arrives after the roster refreshed the rows", function()
+        local requests, roster = {}, nil
+        local picker = open(local_controller({
+            excerpt = function(excerpt, callback) requests[#requests + 1] = { excerpt = excerpt, callback = callback } end,
+            read_roster = function(callback) roster = callback end,
+        }))
+        settle(picker, 2)
+        assert.is_true(vim.wait(1000, function() return #requests == 1 end))
+        roster(nil, { state = "roster", localHostId = "local", hosts = {} })
+        settle(picker, 2)
+        requests[1].callback(nil, { state = "excerpt", source = "live", turns = { { role = "agent", text = "after refresh" } }, reason = vim.NIL })
+        assert.is_true(vim.wait(1000, function()
+            return table.concat(vim.api.nvim_buf_get_lines(picker.preview.win.buf, 0, -1, false), "\n"):find("‹ agent: after refresh", 1, true) ~= nil
+        end))
+        assert.are.equal(1, #requests)
     end)
 end)

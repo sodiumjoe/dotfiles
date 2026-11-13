@@ -1,4 +1,5 @@
 local M = {}
+local List = require("sodium.agency.session_list")
 
 local function agent_preview(ctx)
     ctx.preview:reset()
@@ -19,9 +20,6 @@ end
 local function row_item(row, active)
     local id, provider, model, cwd, phase = fields(row)
     local display = type(row.display) == "table" and row.display or {}
-    local title, metadata = require("sodium.agentic_sessions").parse_title(display.title, true)
-    title = vim.trim(title:gsub("%c", " "):gsub("%s+", " "))
-    if title == "" then title = "New conversation" end
     local same = active and active.target.agentId == id
         and active.target.handlerGeneration == row.record.launch.handlerGeneration
         and active.target.providerGeneration == row.record.launch.providerGeneration
@@ -31,59 +29,12 @@ local function row_item(row, active)
         or (activity == "working" and "Working" or activity == "idle" and "Waiting for input" or "Running")
     local location = same and (active.connected and "Open in this tab" or "Editor disconnected") or "Available to open"
     local backend = ({ ["codex-acp"] = "Codex", ["claude-agent-acp"] = "Claude" })[provider] or provider
-    local preview = { title, "" }
-    for _, field in ipairs({
-        { "Agent ID:", id },
-        { "Backend:", backend },
-        { "Model:", model },
-        { "Directory:", cwd },
-        { "Status:", status },
-        { "Connection:", location },
-        { "Project root:", metadata.project_root },
-        { "Branch:", metadata.branch },
-        { "Plan:", metadata.plan },
-        { "Platform:", metadata.platform },
-        { "Editor:", metadata.editor },
-        { "Shell:", metadata.shell },
-    }) do
-        if field[2] and field[2] ~= "" then
-            preview[#preview + 1] = string.format("%-14s%s", field[1], field[2])
-        end
-    end
-    local full_title = title
-    local details = table.concat({ backend .. (model ~= "" and "/" .. model or ""),
-        vim.fn.fnamemodify(cwd, ":~"), status, location }, " · ")
-    if vim.fn.strchars(title) > 72 then title = vim.fn.strcharpart(title, 0, 71) .. "…" end
-    return { id = id, view = vim.deepcopy(row), preview = preview, title = full_title, label = "local",
-        status = status == "Waiting for input" and "Idle" or status, search_text = full_title .. " · " .. details,
-        text = title .. " · " .. details }
-end
-
-local function clip(value, width)
-    if width <= 0 then return "" end
-    if vim.fn.strdisplaywidth(value) <= width then return value end
-    local text = vim.fn.strcharpart(value, 0, width - 1)
-    while vim.fn.strdisplaywidth(text) > width - 1 do text = vim.fn.strcharpart(text, 0, vim.fn.strchars(text) - 1) end
-    return text .. "…"
-end
-
-local function column(value, width)
-    local text = clip(value, width)
-    return text .. string.rep(" ", math.max(0, width - vim.fn.strdisplaywidth(text)))
-end
-
-local function active_format(item, picker)
-    return { { "", resolve = function(width)
-        width = math.max(1, width - 1)
-        if width < 12 then return { { clip("[" .. item.label .. "] " .. item.title, width) } } end
-        local label_width = math.min(picker._agency_label_width or 32, 32, math.floor(width / 3))
-        local status_width = math.min(9, math.floor(width / 4))
-        local title_width = width - label_width - status_width - 4
-        local label = "[" .. clip(item.label, label_width - 2) .. "]"
-        local status_hl = item.issue and "DiagnosticWarn" or item.status == "Working" and "DiagnosticInfo" or "Comment"
-        return { { column(label, label_width), "Identifier" }, { "  " },
-            { column(item.title, title_width) }, { "  " }, { column(item.status, status_width), status_hl } }
-    end } }
+    local item = List.item(row, { status = status == "Waiting for input" and "Idle" or status, status_detail = status })
+    item.preview[#item.preview + 1] = string.format("%-14s%s", "Connection:", location)
+    local details = table.concat({ backend .. (model ~= "" and "/" .. model or ""), vim.fn.fnamemodify(cwd, ":~"), status, location }, " · ")
+    local short = vim.fn.strchars(item.title) > 72 and vim.fn.strcharpart(item.title, 0, 71) .. "…" or item.title
+    item.search_text, item.text = item.title .. " · " .. details, short .. " · " .. details
+    return item
 end
 
 local function diagnostic_item(name, message, issue, hosts, status)
@@ -157,6 +108,7 @@ local function owner_item(host, row, local_host, active, name)
         return diagnostic_item(name, "Unavailable session", row, { host })
     end
     local item = row_item(row, local_host and active or nil)
+    if not local_host then item.excerpt.hostId = host.hostId end
     item.id = host.hostId .. ":" .. record.definition.agentId
     item.label = name
     item.text = "[" .. name .. "] · " .. item.search_text .. " · " .. item.status .. " · " .. host.hostname
@@ -173,12 +125,15 @@ local function owner_item(host, row, local_host, active, name)
 end
 
 function M.open(controller)
+    local base = "Agency active agents"
     local read_names = controller.read_roster and controller.read_remote_names
     local closed, local_pending, published = false, true, false
     local remote_pending = (controller.read_roster and 1 or 0) + (read_names and 1 or 0)
     local picker, roster, unavailable, local_generation, publication
     local local_rows, local_issues, names = {}, {}, {}
+    local function progress() List.loading(picker, base, local_pending or remote_pending > 0) end
     local function render()
+        progress()
         if closed or local_pending or not picker or published and remote_pending > 0 then return end
         local items, diagnostics, unlisted, active = {}, {}, {}, controller.snapshot()
         for _, row in ipairs(local_rows) do
@@ -224,6 +179,7 @@ function M.open(controller)
             table.insert(item.preview, 4, "No friendly name was resolved for these saved hosts.")
             diagnostics[#diagnostics + 1] = item
         end
+        List.order(items)
         local first_session = picker.list.reverse and #diagnostics + 1 or 1
         if picker.list.reverse then
             vim.list_extend(diagnostics, items)
@@ -281,8 +237,8 @@ function M.open(controller)
         else inspect(item) end
     end
     picker = Snacks.picker({
-        title = "Agency active agents", items = {}, show_empty = true, format = active_format, preview = agent_preview, confirm = attach,
-        sort = { fields = { "group", "score:desc", "idx" } },
+        title = base, items = {}, show_empty = true, format = List.format, preview = List.preview(controller.excerpt), confirm = attach,
+        sort = { fields = { "group", "score:desc", "epoch:desc", "idx" } },
         matcher = { on_done = function()
             if closed or not picker or picker:is_active() then return end
             local prior = publication
@@ -320,6 +276,7 @@ function M.open(controller)
             closed = true
         end,
     })
+    progress()
     load_local()
     load_owners()
     if read_names then
