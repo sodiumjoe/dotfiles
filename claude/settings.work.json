@@ -19,6 +19,7 @@
   "enabledPlugins": {
     "js-infra-internal@stripe-internal-marketplace": true,
     "orbit@stripe-internal-marketplace": true,
-    "run@stripe-internal-marketplace": true
+    "run@stripe-internal-marketplace": true,
+    "agents-with-eyes@stripe-internal-marketplace": true
   }
 }

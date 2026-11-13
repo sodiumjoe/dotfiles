@@ -1,4 +1,5 @@
 {
+  "editorMode": "vim",
   "permissions": {
     "allow": [
       "Bash(ls*)",
