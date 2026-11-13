@@ -81,18 +81,11 @@ function M.run(opts)
             end
         end
     end
-    local function rebind(restarted)
-        local ok, err, rollback_err = M.reload_modules(deps)
-        if not ok and rollback_err then
-            finish("Lua reload failed: " .. tostring(err) .. "; restoring the previous Lua also failed: " .. tostring(rollback_err) .. "; restart Neovim")
-            return
-        end
-        if not ok then finish("Lua reload failed and was rolled back: " .. tostring(err)); return end
-        parts[#parts + 1] = "reloaded Lua"
+    local function rebind(defer_busy)
         local api = require("sodium.agency").setup()
         api.page({ allow_issues = true }, guard(function(page_err, page)
             if page_err then finish("could not list agents: " .. (page_err.message or page_err.code)); return end
-            require("sodium.agency.rebind").run(page.agents, { defer_busy = not restarted, reconnect = deps.reconnect }, guard(function(summary)
+            require("sodium.agency.rebind").run(page.agents, { defer_busy = defer_busy, reconnect = deps.reconnect }, guard(function(summary)
                 if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen tabs with <leader>af"); return end
                 local text = summary.rebound .. " tab" .. (summary.rebound == 1 and "" or "s") .. " rebound"
                 if summary.deferred > 0 then text = text .. ", " .. summary.deferred .. " after their turns" end
@@ -106,6 +99,25 @@ function M.run(opts)
             end))
         end))
     end
+    local function reload(restarted)
+        local ok, err, rollback_err = M.reload_modules(deps)
+        if not ok and rollback_err then
+            finish("Lua reload failed: " .. tostring(err) .. "; restoring the previous Lua also failed: " .. tostring(rollback_err) .. "; restart Neovim")
+            return
+        end
+        if not ok then finish("Lua reload failed and was rolled back: " .. tostring(err)); return end
+        parts[#parts + 1] = "reloaded Lua"
+        rebind(not restarted)
+    end
+    local function expected_digest() return manifest_digest(root .. "/agency/dist/build-manifest.json") end
+    local function recover()
+        client.command({ "status" }, {}, guard(function(err, envelope)
+            local running = not err and envelope and envelope.result and envelope.result.distDigest
+            if err or type(running) == "string" and running == expected_digest() then reload(false); return end
+            parts[#parts + 1] = "Lua was not reloaded because the old Handler is still running"
+            rebind(true)
+        end))
+    end
     local function restart()
         notify("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
         client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
@@ -116,22 +128,21 @@ function M.run(opts)
             end
             if err then
                 parts[#parts + 1] = "Handler restart failed: " .. (err.message or err.code)
-                retry = "run :AgencyReload again to finish the restart"
-                rebind(false)
+                if not (err.message or ""):find("predates agy restart", 1, true) then retry = "run :AgencyReload again to finish the restart" end
+                recover()
                 return
             end
             parts[#parts + 1] = "Handler restarted"
             collect(envelope.result)
-            rebind(true)
+            reload(true)
         end))
     end
     local function check()
         client.command({ "status" }, {}, guard(function(err, envelope)
             if err then finish("status failed: " .. (err.message or err.code)); return end
             local running = envelope.result.distDigest
-            local expected = manifest_digest(root .. "/agency/dist/build-manifest.json")
-            if opts.force or type(running) ~= "string" or running ~= expected then restart()
-            else parts[#parts + 1] = "Handler unchanged"; rebind(false) end
+            if opts.force or type(running) ~= "string" or running ~= expected_digest() then restart()
+            else parts[#parts + 1] = "Handler unchanged"; reload(false) end
         end))
     end
     local function build()
