@@ -161,6 +161,42 @@ describe("Agency reload", function()
         assert.is_nil(vim.g.agency_reload_running)
     end)
 
+    local function resumes()
+        local count = 0
+        for _, call in ipairs(calls) do if call.argv[1] == "restart" and call.argv[2] == "--resume" then count = count + 1 end end
+        return count
+    end
+
+    it("does not refuse a reload after the client drops an outstanding load", function()
+        require("sodium.agency.reload").run({})
+        respond("restart", nothing)
+        f.flush()
+        respond("status", { phase = "ready", distDigest = digest })
+        respond_page({ f.row })
+        f.request("session/load")
+        f.client:_set_state("disconnected")
+        f.flush()
+        notifications = {}
+        require("sodium.agency.reload").run({})
+        assert.is_falsy(table.concat(notifications, "\n"):find("still running", 1, true))
+        assert.are.equal(2, resumes())
+    end)
+
+    it("counts a new session as busy only while its request is outstanding", function()
+        f.manager:new_session()
+        f.flush()
+        local frame = f.request("session/new")
+        require("sodium.agency.reload").run({})
+        assert.is_truthy(table.concat(notifications, "\n"):find("still running", 1, true))
+        assert.are.equal(0, resumes())
+        f.client:_handle_message({ id = frame.id, error = { code = -32000, message = "backend failed" } })
+        f.flush()
+        notifications = {}
+        require("sodium.agency.reload").run({})
+        assert.is_falsy(table.concat(notifications, "\n"):find("still running", 1, true))
+        assert.are.equal(1, resumes())
+    end)
+
     it("refuses a second reload while one is running", function()
         require("sodium.agency.reload").run({})
         require("sodium.agency.reload").run({})

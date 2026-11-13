@@ -40,6 +40,7 @@ local function unavailable(manager)
     local pending
     if vim.in_fast_event() then pending = Stream.discard(manager) else Stream.flush(manager) end
     manager._agency_admissions, manager._agency_initial_submission = {}, nil
+    manager._agency_load_pending, manager._agency_new_pending = nil, nil
     for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
     manager._agency_epoch = manager._agency_epoch + 1
     manager._agency_running, manager.is_generating = false, false
@@ -354,8 +355,11 @@ function M.install()
         environment.NVIM = vim.v.servername
         local meta = { version = 1, editor = vim.v.servername, commandId = require("sodium.agency.control").uuid(), environment = environment,
             backendId = opts.backend_id, selection = opts.selection, inheritSessionId = opts.inherit_session_id }
+        local pending = {}
+        manager._agency_new_pending = pending
         self:_send_request("session/new", { cwd = manager._agency_request_cwd, mcpServers = opts.mcp_servers or {}, _meta = { agency = meta } },
             function(result, err)
+                if manager._agency_new_pending == pending then manager._agency_new_pending = nil end
                 if manager._agency_destroyed or manager._agency_epoch ~= captured.epoch then
                     if result and not err and not self.subscribers[result.sessionId] then
                         self:_send_notification("agency/detach", { sessionId = result.sessionId })
@@ -399,24 +403,28 @@ function M.install()
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
         manager._agency_request_cwd = manager._agency_load_cwd or cwd
         manager._agency_loading_session = id
-        manager._agency_load_pending = true
+        local pending = {}
+        manager._agency_load_pending = pending
         self:_subscribe(id, handlers)
-        self:_send_request("session/load", { sessionId = id, cwd = manager._agency_request_cwd, mcpServers = servers or {}, _meta = { agency = { version = 1, editor = vim.v.servername } } },
-            M.guard_callback(manager, captured, function(result, err)
-                manager._agency_load_pending = nil
-                if err then if self.subscribers[id] == handlers then self.subscribers[id] = nil end
-                else attachment(manager, result) end
-                invoke(manager, token(manager, true, false), function()
-                    callback(err)
-                    vim.schedule(function()
-                        if not err then
-                            manager._agency_loading_session = nil
-                            for _, ready in ipairs(manager._session_ready_callbacks) do ready() end
-                            manager._session_ready_callbacks = {}
-                        end
-                    end)
+        local reply = M.guard_callback(manager, captured, function(result, err)
+            if err then if self.subscribers[id] == handlers then self.subscribers[id] = nil end
+            else attachment(manager, result) end
+            invoke(manager, token(manager, true, false), function()
+                callback(err)
+                vim.schedule(function()
+                    if not err then
+                        manager._agency_loading_session = nil
+                        for _, ready in ipairs(manager._session_ready_callbacks) do ready() end
+                        manager._session_ready_callbacks = {}
+                    end
                 end)
-            end))
+            end)
+        end)
+        self:_send_request("session/load", { sessionId = id, cwd = manager._agency_request_cwd, mcpServers = servers or {}, _meta = { agency = { version = 1, editor = vim.v.servername } } },
+            function(result, err)
+                if manager._agency_load_pending == pending then manager._agency_load_pending = nil end
+                return reply(result, err)
+            end)
     end
 
     function Client:__with_subscriber(id, callback)

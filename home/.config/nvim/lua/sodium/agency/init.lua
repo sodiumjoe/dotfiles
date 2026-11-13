@@ -260,7 +260,7 @@ function M.setup(deps)
         local agency = require("agentic.config").acp_providers.agency
         for _, manager in pairs(Registry.sessions) do
             if not manager._agency_destroyed and manager.agent.provider_config == agency
-                and (manager._agency_load_pending or manager._agency_intent or manager.session_id == nil and manager._agency_new_options ~= nil) then return true end
+                and (manager._agency_load_pending or manager._agency_new_pending or manager._agency_intent) then return true end
         end
         return false
     end
