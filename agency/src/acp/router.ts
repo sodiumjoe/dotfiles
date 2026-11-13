@@ -155,7 +155,7 @@ export function createAcpRouter(input: { service: AgentService; connectionId: st
           cwd: view.record.spec.checkout.root.path, title: "Legacy Agency session", _meta: { agency: {
             version: 1, recordVersion: 1, phase: view.record.phase, unavailable: true, unavailableReason: "Legacy record (version 1)" } } }
         const issue = "unavailable" in view ? view.unavailable : null
-        return { sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, title: ("display" in view ? view.display?.title : null) ?? "New conversation", _meta: { agency: { version: 1, recordVersion: 3, backendId: view.record.definition.backendId, phase: view.record.phase, nativeSessionId: view.record.session?.sessionId ?? null,
+        return { sessionId: "agency:" + view.record.definition.agentId, cwd: view.record.definition.cwd, ...(view.record.lastActivityAt ? { updatedAt: view.record.lastActivityAt } : {}), title: ("display" in view ? view.display?.title : null) ?? view.record.title ?? "New conversation", _meta: { agency: { version: 1, recordVersion: 3, backendId: view.record.definition.backendId, model: (view.record.settings.configValues?.model as string | undefined) ?? view.record.settings.modelId ?? null, phase: view.record.phase, nativeSessionId: view.record.session?.sessionId ?? null,
           unavailable: !!issue, ...(issue ? { unavailableReason: issue.message } : {}) } } }
       }), ...(inventory.nextCursor ? { nextCursor: inventory.nextCursor } : {}) }
     }

@@ -225,9 +225,9 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     if (op) retire(op)
     if (next.op === "stop" && next.state === "completed") stopFailures.delete(next.commandId)
   }
-  async function publishAgent(next: AgentRecord, expected: AgentRecord | null): Promise<void> {
+  async function publishAgent(next: AgentRecord, expected: AgentRecord | null, options: { quiet?: boolean } = {}): Promise<void> {
     dirtyAgents.add(next.definition.agentId)
-    try { await store.writeAgent(next, expected); dirtyAgents.delete(next.definition.agentId); if (!isDeepStrictEqual(next, expected)) changed() }
+    try { await store.writeAgent(next, expected); dirtyAgents.delete(next.definition.agentId); if (!options.quiet && !isDeepStrictEqual(next, expected)) changed() }
     finally {
       try {
         const visible = await store.readAgent(next.definition.agentId)
@@ -238,6 +238,16 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         else if (!isDeepStrictEqual(visible, expected)) note(next.definition.agentId, "agent", next.definition.agentId, join(root, "agents", "records", next.definition.agentId + ".json"), new AgentError("INVALID_AGENT_STATE"))
       } catch (error) { note(next.definition.agentId, "agent", next.definition.agentId, join(root, "agents", "records", next.definition.agentId + ".json"), error) }
     }
+  }
+  function touch(op: Live): void {
+    const agentId = op.initial.definition.agentId
+    void queue.run(async () => {
+      if (closed || frozen) return
+      const prior = records.get(agentId)
+      if (!prior || prior.phase !== "ready" || !isDeepStrictEqual(prior.launch, op.initial.launch)) return
+      const title = op.conversation.display().title
+      await publishAgent({ ...prior, lastActivityAt: new Date().toISOString(), ...(title ? { title } : {}) }, prior, { quiet: true })
+    }).catch(() => { dirtyAgents.add(agentId) })
   }
   async function publishTerminalAgent(op: Live, next: AgentRecord, expected: AgentRecord): Promise<void> {
     if (!op.terminalAgent) op.terminalAgent = { next: structuredClone(next), expected: structuredClone(expected) }
@@ -569,7 +579,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
           version: 3, definition: previousAgent?.definition ?? { hostId: context.paths.hostKey, agentId, createdCommandId: request.commandId, cwd, backendId, origin: "new" },
           launch: { handlerGeneration: generation, providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: request.commandId, configuration, backendFingerprint: backendFingerprint(backend, contract), compatibilityId: declaration.id, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS },
           phase: kind === "restore" ? "restoring" : "starting", session: previousAgent?.session ?? null, failure: null,
-          settings, inputRequirements: { mcpServerNames: names }, configurationState: previousAgent?.configurationState ?? { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }
+          settings, inputRequirements: { mcpServerNames: names }, configurationState: previousAgent?.configurationState ?? { verification: { kind: "unknown" }, nonRestorableOptionIds: [] },
+          ...(previousAgent?.lastActivityAt ? { lastActivityAt: previousAgent.lastActivityAt } : {}), ...(previousAgent?.title ? { title: previousAgent.title } : {})
         }))
         if (previousAgent && (configurationPending.get(agentId)?.length ?? 0) > 0 && record.configurationState.verification.kind === "verified") record.configurationState.verification = { kind: "unknown" }
         const accepted = parseAgentCommandV3({ version: 3, hostId: context.paths.hostKey, commandId: request.commandId, handlerGeneration: generation, op: kind, input: durableInput, agentId, target: agentTuple(record), state: "pending", result: null })
@@ -579,7 +590,8 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invokeAcp: params => invokeAcp(op, params), onAccepted: request => {
           if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
           op.editor!.begin(request.submissionId, request.originConnectionId ? { connectionId: request.originConnectionId, attachment: request.originAttachment!, ...(request.editorAddress === undefined ? {} : { address: request.editorAddress }) } : undefined)
-        }, cancel: _submissionId => { op.editor?.revoke(); permissionBroker.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: submissionId => { op.editor?.end(submissionId); if (!op.turns!.busy()) permissionBroker.invalidate(agentTuple(op.initial)); retire(op) } })
+          touch(op)
+        }, cancel: _submissionId => { op.editor?.revoke(); permissionBroker.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: submissionId => { op.editor?.end(submissionId); if (!op.turns!.busy()) permissionBroker.invalidate(agentTuple(op.initial)); retire(op); touch(op) } })
         checkCommandDeadline(); acceptingOperation = op
         operations.set(agentId, op); intents.set(request.commandId, op)
         const durableRecord = previousAgent ? record : parseAgentRecordV3({ ...record, settings: {} })

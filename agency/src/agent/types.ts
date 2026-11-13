@@ -26,7 +26,7 @@ export type AgentDefinitionV3 = { hostId: string; agentId: string; createdComman
 export type AgentLaunchV3 = { handlerGeneration: string; providerGeneration: string; launchAttemptId: string; commandId: string; configuration: ConfigEvidence; backendFingerprint: string; compatibilityId: string; containment: "direct-process-group-v1"; authority: "normal-user"; limits: AgentLimits }
 export type ConfigurationState = { verification: { kind: "verified" } | { kind: "pending"; commandId: string } | { kind: "unknown" }; nonRestorableOptionIds: string[] }
 export type NativeSessionIdentity = { sessionId: string; protocolVersion: 1 }
-export type AgentRecordV3 = { version: 3; definition: AgentDefinitionV3; launch: AgentLaunchV3 | null; phase: AgentPhase; session: NativeSessionIdentity | null; inputRequirements: { mcpServerNames: string[] }; settings: RestorableSettings; configurationState: ConfigurationState; failure: AgentFailure | null }
+export type AgentRecordV3 = { version: 3; definition: AgentDefinitionV3; launch: AgentLaunchV3 | null; phase: AgentPhase; session: NativeSessionIdentity | null; inputRequirements: { mcpServerNames: string[] }; settings: RestorableSettings; configurationState: ConfigurationState; failure: AgentFailure | null; lastActivityAt?: string; title?: string }
 export type NativeCommandResult = { outcome: "started" | "restored" | "stopped" | "imported" | "configured" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type AgentCommandV3 = { version: 3; hostId: string; commandId: string; handlerGeneration: string; op: "start" | "restore" | "stop" | "import" | "configure"; input: JsonObject; agentId: string; target: AgentTuple | null; state: "pending" | "completed" | "interrupted"; result: NativeCommandResult | null }
 export type RuntimeLaunchSpec = AgentDefinitionV3 & AgentLaunchV3 & { settings: RestorableSettings }
@@ -97,7 +97,7 @@ export function parseNativeIdentity(input: unknown): NativeSessionIdentity { ret
 function uniqueStrings(input: unknown): string[] { if (!Array.isArray(input) || input.length > 128) invalidAgent(); const values = input.map(value => agentText(value, 1024)); if (new Set(values).size !== values.length) invalidAgent(); return values }
 export function parseAgentRecordV3(input: unknown): AgentRecordV3 { return checked(() => {
   const v = object(input)
-  keys(v, ["version", "definition", "launch", "phase", "session", "inputRequirements", "settings", "configurationState", "failure"])
+  keys(v, ["version", "definition", "launch", "phase", "session", "inputRequirements", "settings", "configurationState", "failure", ...(Object.hasOwn(v, "lastActivityAt") ? ["lastActivityAt"] : []), ...(Object.hasOwn(v, "title") ? ["title"] : [])])
   if (v.version !== 3 || !["starting", "ready", "recoverable", "restoring", "stopping", "stopped", "failed", "interrupted"].includes(String(v.phase))) invalidAgent()
   const d = object(v.definition)
   keys(d, ["hostId", "agentId", "createdCommandId", "cwd", "backendId", "origin"])
@@ -124,7 +124,10 @@ export function parseAgentRecordV3(input: unknown): AgentRecordV3 { return check
   let verified: ConfigurationState["verification"]
   if (verification.kind === "pending") { keys(verification, ["kind", "commandId"]); verified = { kind: "pending", commandId: id(verification.commandId) } }
   else { keys(verification, ["kind"]); if (verification.kind !== "verified" && verification.kind !== "unknown") invalidAgent(); verified = { kind: verification.kind } }
-  return { version: 3, definition, launch, phase: v.phase as AgentPhase, session, failure, inputRequirements: { mcpServerNames: uniqueStrings(inputs.mcpServerNames) }, settings: parseRequestedSettings(v.settings), configurationState: { verification: verified, nonRestorableOptionIds: uniqueStrings(state.nonRestorableOptionIds) } }
+  const lastActivityAt = Object.hasOwn(v, "lastActivityAt") ? text(v.lastActivityAt, 64) : undefined
+  if (lastActivityAt !== undefined && !Number.isFinite(Date.parse(lastActivityAt))) invalidAgent()
+  const title = Object.hasOwn(v, "title") ? text(v.title, 1024) : undefined
+  return { version: 3, definition, launch, phase: v.phase as AgentPhase, session, failure, inputRequirements: { mcpServerNames: uniqueStrings(inputs.mcpServerNames) }, settings: parseRequestedSettings(v.settings), configurationState: { verification: verified, nonRestorableOptionIds: uniqueStrings(state.nonRestorableOptionIds) }, ...(lastActivityAt === undefined ? {} : { lastActivityAt }), ...(title === undefined ? {} : { title }) }
 }) }
 export function normalizeAgentRecord(input: AgentRecord | AgentRecordV3): AgentRecordV3 {
   if (input.version === 3) return parseAgentRecordV3(input)
