@@ -308,6 +308,49 @@ local function restore(current_session, item, lifecycle, valid)
     end)
 end
 
+local function agency_picker(current_session, lifecycle, valid)
+    local List = require("sodium.agency.session_list")
+    local base, picker, closed = "Select session to restore", nil, false
+    picker = Snacks.picker({
+        title = base, items = {}, show_empty = true, layout = { hidden = {} },
+        format = List.format, preview = List.preview(lifecycle.excerpt),
+        sort = { fields = { "score:desc", "epoch:desc", "idx" } },
+        confirm = function(p, item)
+            if not item or item.issue then return end
+            p:close()
+            restore(current_session, item, lifecycle, valid)
+        end,
+        on_close = function() closed = true end,
+    })
+    List.loading(picker, base, true)
+    lifecycle.page({ allow_issues = true, ensure_handler = true }, function(err, result)
+        if closed or not valid() then return end
+        local items = {}
+        if err then
+            items[1] = { label = "local", title = "Could not list sessions: " .. tostring(err.message or err.code), status = "Issue", issue = err }
+        else
+            for _, view in ipairs(result.agents or {}) do
+                local record = view.record
+                if record.version == 3 and (record.phase == "stopped" or record.phase == "recoverable") then
+                    local item = List.item(view, { status = record.phase == "stopped" and "Stopped" or "Needs recovery" })
+                    local issue = view.unavailable ~= nil and view.unavailable ~= vim.NIL and view.unavailable or nil
+                    item.session_id, item.backend_id = "agency:" .. record.definition.agentId, record.definition.backendId
+                    item.unavailable, item.unavailable_reason = issue ~= nil, issue and issue.message or nil
+                    if issue then item.preview[#item.preview + 1] = string.format("%-14s%s", "Unavailable:", tostring(issue.message)) end
+                    items[#items + 1] = item
+                end
+            end
+            for _, issue in ipairs(result.issues or {}) do
+                items[#items + 1] = { label = "local", title = tostring(issue.message or issue.code or "Unavailable"), status = "Issue", issue = issue }
+            end
+        end
+        picker.opts.items = List.order(items)
+        List.loading(picker, base, false)
+        picker:find({ refresh = true })
+    end)
+    return picker
+end
+
 function M.show_picker(current_session, deps)
     local cwd = vim.fn.getcwd()
     local config = require("agentic.config")
@@ -319,8 +362,8 @@ function M.show_picker(current_session, deps)
         local guard, tab = lifecycle.selection_guard(current_session)
         valid = function() return guard() and vim.api.nvim_get_current_tabpage() == tab end
     end
-    local schedule = agency and vim.schedule_wrap or function(callback) return callback end
-    current_session.agent:when_ready(schedule(function()
+    if agency then return agency_picker(current_session, lifecycle, valid) end
+    current_session.agent:when_ready(function()
         if not valid() then return end
         local function show(result, err)
             if not valid() then return end
@@ -335,7 +378,7 @@ function M.show_picker(current_session, deps)
 
             local items = M.normalize_sessions(result.sessions)
             if #items == 0 then
-                Logger.notify(agency and "No stopped or recoverable Agency sessions found" or "No saved sessions found", vim.log.levels.INFO)
+                Logger.notify("No saved sessions found", vim.log.levels.INFO)
                 return
             end
 
@@ -369,63 +412,8 @@ function M.show_picker(current_session, deps)
                 })
             end)
         end
-        if not agency then current_session.agent:list_sessions(cwd, show); return end
-        local known = {}
-        local function list(cursor)
-            if not valid() then return end
-            current_session.agent:_send_request("session/list", cursor and { cursor = cursor } or vim.empty_dict(), vim.schedule_wrap(function(result, err)
-                if not valid() then return end
-                if err or not result then show(nil, err); return end
-                vim.list_extend(known, result.sessions or {})
-                if result.nextCursor then list(result.nextCursor); return end
-                known = vim.tbl_filter(function(session)
-                    local identity = session._meta and session._meta.agency
-                    return type(session.sessionId) == "string" and session.sessionId:sub(1, 7) == "agency:"
-                        and identity and (identity.phase == "stopped" or identity.phase == "recoverable")
-                end, known)
-                if #known == 0 then show({ sessions = known }); return end
-                current_session.agent:_send_request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(backends, backend_err)
-                    if not valid() then return end
-                    if backend_err or not backends then show(nil, backend_err); return end
-                    local enabled = {}
-                    for _, backend in ipairs(backends.backends) do enabled[backend.id] = true end
-                    local function enrich(native)
-                        if not valid() then return end
-                        local seen = {}
-                        for _, session in ipairs(known) do
-                            local identity = session._meta and session._meta.agency
-                            if identity and type(identity.nativeSessionId) == "string" then
-                                seen[identity.backendId .. ":" .. identity.nativeSessionId] = session
-                            end
-                        end
-                        for _, session in ipairs(native and native.sessions or {}) do
-                            local key = session.backendId .. ":" .. session.nativeSessionId
-                            local saved = seen[key]
-                            if saved then
-                                local title = M.parse_title(saved.title, true)
-                                if title == "" or title == "New conversation" then saved.title = session.title end
-                                if type(saved.updatedAt) ~= "string" then saved.updatedAt = session.updatedAt end
-                            end
-                        end
-                        for _, session in ipairs(known) do
-                            local identity = session._meta and session._meta.agency or {}
-                            session.unavailable = session.unavailable == true or identity.unavailable == true
-                                or identity.recordVersion == 1 or not enabled[session.backendId or identity.backendId]
-                        end
-                        show({ sessions = known })
-                    end
-                    local client = deps and deps.client or require("sodium.agency.control")
-                    client.command({ "native-sessions" }, { cwd = cwd, timeout_ms = 10000 }, vim.schedule_wrap(function(err, envelope)
-                        if not valid() then return end
-                        if err or not envelope then
-                            current_session.agent:_send_request("agency/native_sessions", vim.empty_dict(), vim.schedule_wrap(enrich))
-                        else enrich(envelope.result) end
-                    end))
-                end))
-            end))
-        end
-        list()
-    end))
+        current_session.agent:list_sessions(cwd, show)
+    end)
 end
 
 return M
