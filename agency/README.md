@@ -99,6 +99,24 @@ Closing a tab, destroying a view, switching sessions, exiting Neovim, losing the
 
 `AgencyStop` confirms and stops the exact logical agent, Handler generation, and provider generation, then verifies owned-process cleanup. After the owned leader exits, cleanup waits within its existing absence budget for lingering members and transient platform observations to settle, then requires two consecutive complete group and captured-generation absence checks. This waiting stage sends no further signals. Confirmed process absence and settled prompt callbacks release live conversation, turn, editor, and native-session resources even if record publication remains incomplete. Stop and Handler shutdown still require durable launch, session, and command records. A publication failure requires explicit retry; receipt inspection does not retry it, and publication retry reuses physical cleanup evidence without signaling again. Stopped or recoverable sessions require explicit restore. Restore uses recorded cwd and native session identity with fresh caller environment. Logical identity remains stable; provider generation rotates. Old attachment mutations are rejected until an explicit live load binds the new generation. A failed restore never starts a replacement conversation.
 
+## Reloading after code changes
+
+`:AgencyReload` applies Agency changes from the main checkout without restoring conversations by hand. It runs these steps:
+
+1. Finish any restore saved by an interrupted restart.
+2. Build Agency.
+3. Compare the running Handler's `distDigest` in `agy status` with `agency/dist/build-manifest.json`. When they differ, or when the Handler reports no `distDigest`, run `agy restart`.
+4. Reload the editor's Agency Lua, rolling back to the previous modules if the new ones fail to load.
+5. Rebind each Agency tab to its agent in place.
+
+`:AgencyReload!` always restarts the Handler. A second `:AgencyReload` while one is running is refused with a notification.
+
+`agy restart [--resume] [--timeout SECONDS]` waits until no agent is running a turn or changing state, for up to 300 seconds by default. It records the live agents in `restart-pending.json` under the persistent state directory, then stops them with `agy shutdown --stop-agents --require-idle`. The Handler refuses that shutdown with `BUSY` if a turn started in the meantime, and `agy restart` goes back to waiting. After the new Handler starts, it restores each recorded agent and deletes the file. The file keeps only agents whose restore can still succeed, meaning their record exists and its phase is not the terminal `failed` or `interrupted`. If the restart is interrupted, `agy restart --resume` restores whatever the file still lists. A plain `agy restart` that finds the file restores those agents first and carries any that are still retryable into its new snapshot. A corrupt file fails with `INVALID_PROTOCOL` naming the file and changes nothing.
+
+A Handler whose status has no `distDigest` key predates `agy restart`. The command then records the live agents in the pending file and stops with instructions, without sending any shutdown. Run `agy shutdown --stop-agents` once while agents are idle, then `agy restart --resume` or `:AgencyReload`.
+
+A rebind redraws the conversation from the Handler's retained history, so the chat loses its scroll position and manual folds. A tab whose agent is missing after the restart keeps its view and is counted in the summary. The digest covers all of `dist`, including compiled tests and scripts, so an edit to Agency tests also triggers a Handler restart. Agency tabs in other Neovim instances reconnect the usual way. Changes in worktrees take effect only after they are merged into `~/.dotfiles`, because `agy` runs from there.
+
 ## Editor RPC routing
 
 Agency editors advertise their current `vim.v.servername` in `_meta.agency.editor` on new, load, and prompt requests. The first outstanding submission captures its submitting attachment and current socket until every outstanding request settles. Provider commands using `NVIM` or `NVIM_SOCKET_PATH` reach that editor through a transparent Unix stream proxy. Another editor attaching, retrying a duplicate submission, or submitting during work cannot redirect those callbacks. The proxy forwards RPC traffic in both directions without decoding it. A listener failure disables editor RPC while leaving conversation turns available. New connections use the pinned editor at connection time; background commands that outlive all outstanding requests require an explicit editor target.
