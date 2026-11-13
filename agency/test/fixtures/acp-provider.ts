@@ -122,6 +122,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
     update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${text}` } })
     promptIds.delete(request.id)
     reply(request.id, { stopReason: "end_turn" })
+    if (text === "permission-after-turn") setTimeout(() => send({ jsonrpc: "2.0", id: "after-turn", method: "session/request_permission", params: { sessionId, toolCall: { toolCallId: "after-turn-tool", title: "Background follow-up", kind: "execute" }, options: [{ optionId: "allow-once", name: "Allow", kind: "allow_once" }, { optionId: "reject-once", name: "Reject", kind: "reject_once" }] } }), 50)
   } else if (request.method === "authenticate") throw new Error("interactive fixture auth forbidden")
   else send({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: "Unsupported fixture method" } })
 }

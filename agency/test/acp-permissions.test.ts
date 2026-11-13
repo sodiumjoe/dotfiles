@@ -30,6 +30,20 @@ test("multi-line shell titles reach clients unchanged", async t => {
   assert.equal((await pending).stopReason, "end_turn")
 })
 
+test("permission requested after the turn ends reaches clients without failing the session", async t => {
+  const f = await acpFixture(t), a = await f.connect()
+  await a.request("initialize", { protocolVersion: 1 })
+  const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [] })
+  assert.equal((await a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "permission-after-turn" }] })).stopReason, "end_turn")
+  const request = await a.next("session/request_permission")
+  assert.equal((request.params.toolCall as JsonObject).toolCallId, "after-turn-tool")
+  a.respond(request.id, selected("allow-once"))
+  const decided = async () => (await f.requests("codex-acp")).filter(frame => frame.id === "after-turn").map(frame => frame.result)
+  for (let attempt = 0; attempt < 200 && !(await decided()).length; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(await decided(), [selected("allow-once")])
+  assert.equal((await a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "plain" }] })).stopReason, "end_turn")
+})
+
 test("malformed permission requests are declined without failing the session", async t => {
   const f = await acpFixture(t), a = await f.connect()
   await a.request("initialize", { protocolVersion: 1 })

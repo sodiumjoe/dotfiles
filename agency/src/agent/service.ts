@@ -448,7 +448,6 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const environment = { ...callerEnvironment, NVIM: editor.path, NVIM_SOCKET_PATH: editor.path }
         try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
           await requireTarget(agentTuple(op.initial))
-          if (!op.turns?.busy()) throw new AgentError("INVALID_PROTOCOL")
           await permissionBroker.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)
         }).catch(error => { void failOperation(op, new AgentError(errorFor(error).code, error instanceof AgentError && error.diagnostic ? error.diagnostic : { boundary: "permission_request", causeCode: underlyingFailureCode(error) })).catch(error => noteOperation(op, error)) }) }, revalidate: () => revalidate(op) }) }
         finally { op.environment = null }
