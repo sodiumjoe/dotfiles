@@ -95,6 +95,8 @@ The workflow for promoting runtime changes back to source:
 2. Edit the appropriate source file (base or overlay)
 3. Run `dotfiles-generate --reset`
 
+Claude Code, Codex and Karabiner-Elements save their configs by replacing the file, which turns the deployed symlink into an ordinary file. `dotfiles-reconcile` adopts those three paths instead of refusing: when `~/.claude/settings.json`, `~/.codex/config.toml` or `~/.config/karabiner/karabiner.json` is an ordinary file, it copies any changed contents into the repository copy, reports the adoption, and relinks the path. Review adopted changes with `git diff` or `dotfiles-diff` and promote them as above. Every other ordinary file at a managed path is still a conflict that stops reconciliation. Links are replaced with a single rename, so a tool watching its config never sees the file disappear.
+
 ### Post-merge Hook
 
 `hooks/post-merge` regenerates static files after `git pull` when sources changed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Git does not run `post-merge` for rebases at all, so `git pull --rebase` skips it; run `dotfiles-generate` by hand after one.

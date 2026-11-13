@@ -28,6 +28,12 @@ optional_environments = {
     pathlib.Path("bin/work"): {"work", "devbox"},
 }
 
+tool_owned = {
+    pathlib.Path(".claude/settings.json"),
+    pathlib.Path(".codex/config.toml"),
+    pathlib.Path(".config/karabiner/karabiner.json"),
+}
+
 if not source_root.is_dir():
     print(f"dotfiles-reconcile: home tree is missing: {source_root}", file=sys.stderr)
     raise SystemExit(1)
@@ -132,12 +138,20 @@ for parent in sorted(required_parents, key=lambda path: len(path.parts)):
     if not parent.is_symlink() and parent.exists() and not parent.is_dir():
         errors.append(f"directory conflict: {parent}")
 
-for _, _, destination in entries:
+adoptions = []
+for _, target_source, destination in entries:
     if has_symlink_ancestor(destination):
         continue
     if destination.is_symlink() or not destination.exists():
         continue
+    if destination.relative_to(home) in tool_owned and destination.is_file():
+        adoptions.append((destination, target_source))
+        continue
     errors.append(f"destination conflict: {destination}")
+
+
+def differs(destination, target_source):
+    return not target_source.is_file() or target_source.read_bytes() != destination.read_bytes()
 
 if errors:
     for error in errors:
@@ -145,10 +159,22 @@ if errors:
     raise SystemExit(1)
 
 if arguments.preflight:
+    for destination, target_source in adoptions:
+        if differs(destination, target_source):
+            print(f"dotfiles-reconcile: would adopt changes from {destination} into {target_source}")
     print("dotfiles-reconcile: preflight passed")
     raise SystemExit(0)
 
 changed = 0
+for destination, target_source in adoptions:
+    if not differs(destination, target_source):
+        continue
+    temporary = target_source.with_name(f".{target_source.name}.dotfiles-adopt.{os.getpid()}")
+    temporary.write_bytes(destination.read_bytes())
+    os.chmod(temporary, (target_source if target_source.exists() else destination).stat().st_mode & 0o7777)
+    os.replace(temporary, target_source)
+    print(f"dotfiles-reconcile: adopted changes from {destination} into {target_source}; review them with git diff or dotfiles-diff")
+
 for parent in sorted(required_parents, key=lambda path: len(path.parts)):
     if parent.is_symlink():
         parent.unlink()
@@ -164,9 +190,11 @@ for _, target_source, destination in entries:
     desired = relative_target(target_source, destination)
     if destination.is_symlink() and os.readlink(destination) == desired:
         continue
-    if destination.is_symlink():
-        destination.unlink()
-    destination.symlink_to(desired)
+    temporary = destination.with_name(f".{destination.name}.dotfiles-link.{os.getpid()}")
+    if os.path.lexists(temporary):
+        temporary.unlink()
+    temporary.symlink_to(desired)
+    os.replace(temporary, destination)
     changed += 1
 
 print(f"dotfiles-reconcile: changed={changed}")

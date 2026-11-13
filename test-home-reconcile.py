@@ -88,5 +88,32 @@ class ReconcileTest(unittest.TestCase):
         self.assertFalse((self.owner / ".gitconfig").exists())
 
 
+    def test_tool_rewritten_config_is_adopted_and_relinked(self):
+        self.write(".claude/settings.json", "generated")
+        self.write(".zshenv", "managed")
+        live = self.owner / ".claude" / "settings.json"
+        live.parent.mkdir(parents=True)
+        live.write_text("changed by the tool")
+        preflight = self.run_reconcile(arguments=["--preflight"])
+        self.assertIn("would adopt", preflight.stdout)
+        self.assertFalse(live.is_symlink())
+        result = self.run_reconcile()
+        self.assertIn("adopted", result.stdout)
+        self.assertTrue(live.is_symlink())
+        self.assertEqual(live.resolve(), (self.home_tree / ".claude/settings.json").resolve())
+        self.assertEqual((self.home_tree / ".claude/settings.json").read_text(), "changed by the tool")
+        self.assertTrue((self.owner / ".zshenv").is_symlink())
+        self.assertEqual(list(live.parent.glob(".*dotfiles-link*")), [])
+
+    def test_unchanged_tool_config_is_relinked_without_adoption(self):
+        self.write(".config/karabiner/karabiner.json", "same")
+        live = self.owner / ".config/karabiner/karabiner.json"
+        live.parent.mkdir(parents=True)
+        live.write_text("same")
+        result = self.run_reconcile()
+        self.assertNotIn("adopted", result.stdout)
+        self.assertTrue(live.is_symlink())
+        self.assertEqual(live.read_text(), "same")
+
 if __name__ == "__main__":
     unittest.main()
