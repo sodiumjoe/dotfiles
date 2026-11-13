@@ -1,32 +1,33 @@
 local M = {}
 
+local labels = { ["codex-acp"] = "Codex", ["claude-agent-acp"] = "Claude" }
+
 function M.select(result, valid, callback)
-    local function choose(items, prompt, format, next_choice)
-        if not valid() then return end
-        vim.ui.select(items, { prompt = prompt, format_item = format }, vim.schedule_wrap(function(item)
-            if item and valid() then next_choice(item) end
-        end))
+    if not valid() then return end
+    local backends = {}
+    for _, backend in ipairs(result.backends) do
+        if backend.id == result.defaultBackendId then table.insert(backends, 1, backend) else backends[#backends + 1] = backend end
     end
-    local function backend_chosen(backend)
-        if not valid() then return end
-        local defaults = vim.deepcopy(backend.defaults or {})
-        local models = { { name = backend.discovery == "unavailable" and "Configured default (model discovery unavailable)" or "Configured default" } }
-        vim.list_extend(models, backend.models or {})
-        local prompt = backend.discovery == "cached"
-            and "Agency model (cached; " .. (backend.discoveryError or "discovery is stale") .. ")" or "Agency model"
-        choose(models, prompt, function(item)
-            return (item.name or item.id) .. (backend.discovery == "cached" and item.id and " (cached)" or "")
-        end, function(model)
-            local selection = vim.tbl_deep_extend("force", defaults, model.selection or {})
-            if model.selection and model.selection.configValues and model.selection.configValues.model then selection.modelId = nil end
-            if model.selection and model.selection.modelId and selection.configValues then selection.configValues.model = nil end
-            callback({ backend_id = backend.id, selection = selection })
-        end)
+    local items = {}
+    for _, backend in ipairs(backends) do
+        local default = backend.discovery == "unavailable" and "Configured default (model discovery unavailable)"
+            or backend.discovery == "cached" and "Configured default (cached; " .. (backend.discoveryError or "discovery is stale") .. ")"
+            or "Configured default"
+        items[#items + 1] = { backend = backend, model = { name = default } }
+        for _, model in ipairs(backend.models or {}) do items[#items + 1] = { backend = backend, model = model } end
     end
-    if #result.backends == 1 and (not result.defaultBackendId or result.backends[1].id == result.defaultBackendId) then backend_chosen(result.backends[1])
-    else choose(result.backends, "Agency backend", function(item)
-        return item.id .. (item.id == result.defaultBackendId and " (default)" or "")
-    end, backend_chosen) end
+    vim.ui.select(items, { prompt = "Agency model", format_item = function(item)
+        local model = item.model
+        return (labels[item.backend.id] or item.backend.id) .. " · " .. (model.name or model.id)
+            .. (item.backend.discovery == "cached" and model.id and " (cached)" or "")
+    end }, vim.schedule_wrap(function(item)
+        if not item or not valid() then return end
+        local model = item.model
+        local selection = vim.tbl_deep_extend("force", vim.deepcopy(item.backend.defaults or {}), model.selection or {})
+        if model.selection and model.selection.configValues and model.selection.configValues.model then selection.modelId = nil end
+        if model.selection and model.selection.modelId and selection.configValues then selection.configValues.model = nil end
+        callback({ backend_id = item.backend.id, selection = selection })
+    end))
 end
 
 function M.settings(config, valid, report)

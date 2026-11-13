@@ -59,6 +59,26 @@ describe("Agency native commands", function()
         assert.are.same({ modeId = "agent-full-access", configValues = { model = "model-c", reasoning_effort = "medium" } }, f.request("session/new").params._meta.agency.selection)
     end)
 
+    it("lists every backend's models in one picker", function()
+        local prompts, labels = {}, {}
+        vim.ui.select = function(items, opts, callback)
+            prompts[#prompts + 1] = opts.prompt
+            for _, item in ipairs(items) do labels[#labels + 1] = opts.format_item(item) end
+            callback(items[#items])
+        end
+        api.new()
+        f.flush()
+        local result = choices()
+        result.backends[2] = { id = "claude-agent-acp", discovery = "fresh", defaults = { modeId = "default" },
+            models = { { id = "opus", name = "Opus", selection = { configValues = { model = "opus" } } } } }
+        respond_fast(f.request("agency/backends"), result)
+        assert.are.same({ "Agency model" }, prompts)
+        assert.are.same({ "Codex · Configured default", "Codex · C", "Claude · Configured default", "Claude · Opus" }, labels)
+        local meta = f.request("session/new").params._meta.agency
+        assert.are.equal("claude-agent-acp", meta.backendId)
+        assert.are.same({ modeId = "default", configValues = { model = "opus" } }, meta.selection)
+    end)
+
 
 
     it("submits through native ACP and accepts annotations only on Handler admission", function()
