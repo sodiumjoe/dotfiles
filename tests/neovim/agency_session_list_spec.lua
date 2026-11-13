@@ -84,6 +84,15 @@ describe("Agency session list presentation", function()
         end))
     end)
 
+    it("explains a missing excerpt from an outdated local Handler", function()
+        local picker = Snacks.picker({ title = "test", items = { List.item(view("l", "2026-11-13T00:00:00Z"), { status = "Idle" }) }, format = List.format,
+            preview = List.preview(function(_, callback) callback({ code = "INVALID_PROTOCOL", message = "unknown command" }) end) })
+        pickers[#pickers + 1] = picker
+        assert.is_true(vim.wait(1000, function()
+            return table.concat(vim.api.nvim_buf_get_lines(picker.preview.win.buf, 0, -1, false), "\n"):find("Excerpt unavailable: restart the Agency Handler", 1, true) ~= nil
+        end))
+    end)
+
     it("shows and clears the loading suffix", function()
         local picker = Snacks.picker({ title = "Base", items = {}, show_empty = true, format = List.format })
         pickers[#pickers + 1] = picker

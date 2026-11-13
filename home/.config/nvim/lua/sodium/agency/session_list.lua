@@ -91,6 +91,7 @@ end
 
 local function reason(err, excerpt)
     if excerpt.hostId and vim.tbl_contains({ "STALE_HANDLER", "INVALID_PROTOCOL", "UNSUPPORTED_CAPABILITY" }, err.code) then return "Excerpt unavailable: update this devbox" end
+    if not excerpt.hostId and err.code == "INVALID_PROTOCOL" then return "Excerpt unavailable: restart the Agency Handler" end
     return "Excerpt unavailable: " .. tostring(err.message or err.code)
 end
 
