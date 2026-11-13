@@ -16,6 +16,7 @@ export type RestartResult = { state: "restarted"; restarted: boolean; resumed: b
 
 const known = new Set<string>(["USAGE", "INVALID_PROTOCOL", "STALE_HANDLER", "UNAVAILABLE", "INTERNAL", "INCOMPLETE", "ACTIVE_AGENTS", "COMMAND_CONFLICT", "BUSY"])
 const transitional = ["starting", "restoring", "stopping"]
+const terminal = ["failed", "interrupted"]
 
 function code(failure?: Failure): ControlErrorCode { return failure && known.has(failure.code) ? failure.code as ControlErrorCode : "INCOMPLETE" }
 function plural(count: number, noun: string): string { return count + " " + noun + (count === 1 ? "" : "s") }
@@ -90,13 +91,18 @@ export async function runRestart(argv: readonly string[], deps: ControlDependenc
       generation = current.generation
       if (!pending) return { state: "restarted", restarted: false, resumed: false, fromGeneration: current.generation, toGeneration: current.generation, agents: [] }
       const agents = await restore(pending.agentIds, current.generation)
-      if (agents.every(agent => agent.outcome !== "failed")) await rm(pendingPath, { force: true })
+      const failed = agents.filter(agent => agent.outcome === "failed")
+      const views = failed.length ? await list() : []
+      const retryable = failed.filter(agent => views.some(view => view.record.definition.agentId === agent.agentId && !terminal.includes(view.record.phase))).map(agent => agent.agentId)
+      if (retryable.length) await writePending(pendingPath, { version: 1, fromGeneration: pending.fromGeneration, agentIds: retryable })
+      else await rm(pendingPath, { force: true })
       return { state: "restarted", restarted: pending.fromGeneration !== current.generation, resumed: true, fromGeneration: pending.fromGeneration, toGeneration: current.generation, agents }
     }
     if (options.resume) { emit(true, await resume()); return 0 }
+    let carried: PendingRestore | null = null
     if (await readPending(pendingPath)) {
-      const prior = await resume()
-      if (prior.agents.some(agent => agent.outcome === "failed")) throw new ControlError("INCOMPLETE", "a previous restart left agents that could not be restored; fix them and run agy restart --resume")
+      await resume()
+      carried = await readPending(pendingPath)
     }
     const before = await status()
     generation = before.generation
@@ -110,14 +116,15 @@ export async function runRestart(argv: readonly string[], deps: ControlDependenc
         await deps.sleep(1000)
         continue
       }
-      const agentIds = views.filter(view => view.live && ["ready", "recoverable"].includes(view.record.phase)).map(view => view.record.definition.agentId)
+      const agentIds = [...new Set([...views.filter(view => view.live && ["ready", "recoverable"].includes(view.record.phase)).map(view => view.record.definition.agentId), ...carried?.agentIds ?? []])]
       await writePending(pendingPath, { version: 1, fromGeneration: before.generation, agentIds })
-      if (!before.reportsDigest) throw new ControlError("INCOMPLETE", "the running Handler predates agy restart; run agy shutdown --stop-agents once while agents are idle, then agy restart --resume")
+      if (!before.reportsDigest) throw new ControlError("INCOMPLETE", "the running Handler predates agy restart; run agy shutdown --stop-agents once while agents are idle, then agy restart --resume; the agents to restore are saved in " + pendingPath)
       progress("stopping " + plural(agentIds.length, "agent") + " and the Handler")
       const reply = await call(["shutdown", "--stop-agents", "--require-idle", "--command-id", randomUUID(), "--handler-generation", before.generation])
       if (reply.ok) break
       if (reply.error?.code === "BUSY") {
-        await rm(pendingPath, { force: true })
+        if (carried) await writePending(pendingPath, carried)
+        else await rm(pendingPath, { force: true })
         if (deps.now() >= deadline) throw new ControlError("BUSY", reply.error.message)
         await deps.sleep(1000)
         continue
@@ -130,7 +137,7 @@ export async function runRestart(argv: readonly string[], deps: ControlDependenc
     }
     progress("starting the new Handler")
     let after: { generation: string; distDigest: string | null; reportsDigest: boolean }
-    try { after = await status() } catch (error) { throw new ControlError("UNAVAILABLE", "the new Handler failed to start: " + controlError(error).message + "; fix it and run agy restart --resume") }
+    try { after = await status() } catch (error) { throw new ControlError("UNAVAILABLE", "the new Handler failed to start: " + controlError(error).message + "; fix it and run agy restart --resume to restore the agents saved in " + pendingPath) }
     generation = after.generation
     const result = await resume()
     const expected = readDistDigest(fileURLToPath(new URL("../../build-manifest.json", import.meta.url)))
