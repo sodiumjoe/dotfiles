@@ -45,6 +45,11 @@ local function human_receipt(value, argv)
     elseif argv[2] == "decide" then error("Missing permission receipt") end
 end
 
+local function excerpt_result(result)
+    assert(result.state == "excerpt" and vim.tbl_contains({ "live", "history", "none" }, result.source) and type(result.turns) == "table" and vim.islist(result.turns))
+    for _, turn in ipairs(result.turns) do assert((turn.role == "user" or turn.role == "agent") and type(turn.text) == "string") end
+end
+
 local function validate(value, argv)
     local ordinary = argv[1] == "host" or vim.tbl_contains({ "roster", "permission" }, argv[1]) and not vim.tbl_contains(argv, "--local")
         or argv[1] == "entry" and vim.tbl_contains({ "open", "inspect" }, argv[2])
@@ -63,7 +68,7 @@ local function validate(value, argv)
     assert(type(result) == "table")
     if ordinary then
         local expected_state = argv[1] == "host" and (argv[2] == "enroll" and "enrolled" or "hosts")
-            or argv[1] == "roster" and (flag(argv, "--host") and "page" or "roster")
+            or argv[1] == "roster" and (flag(argv, "--host") and (argv[2] == "excerpt" and "excerpt" or "page") or "roster")
             or argv[1] == "permission" and (argv[2] == "list" and "permissions" or "permission")
             or argv[1] == "entry" and "entry"
         assert(result.state == expected_state)
@@ -116,6 +121,7 @@ local function validate(value, argv)
                         and type(receipt.editor.tmuxSocketPath) == "string" and receipt.editor.tmuxSocketPath:sub(1, 1) == "/")
                 end
             end
+        elseif result.state == "excerpt" then excerpt_result(result)
         else error("Unexpected host result") end
         return
     end
@@ -124,6 +130,7 @@ local function validate(value, argv)
         return
     end
     if vim.tbl_contains(argv, "--local") and argv[1] == "roster" then
+        if argv[2] == "excerpt" then excerpt_result(result); return end
         validate({ protocol = "agency-agent/3", requestId = value.requestId, handlerGeneration = value.handlerGeneration, ok = true, result = result }, { "agent", "page" }); return
     end
     if argv[1] == "restart" then

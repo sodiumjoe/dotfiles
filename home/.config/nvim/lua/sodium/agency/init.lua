@@ -68,6 +68,11 @@ function M.setup(deps)
             callback(err, envelope and envelope.result)
         end)
     end
+    function api.excerpt(excerpt, callback)
+        local argv = { "roster", "excerpt", excerpt.agentId }
+        if excerpt.hostId then vim.list_extend(argv, { "--host", excerpt.hostId }) else argv[#argv + 1] = "--local" end
+        (deps.client or Control).command(argv, { timeout_ms = 10000 }, function(err, envelope) callback(err, envelope and envelope.result) end)
+    end
     function api.snapshot()
         local manager = local_manager()
         if not manager or not manager._agency_binding then return end
