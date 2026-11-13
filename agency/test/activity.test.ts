@@ -1,9 +1,12 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { tmpdir } from "node:os"
 import { acpFixture } from "./acp-support.js"
+import { agentHandlerFixture } from "./agent-support.js"
+import { readHandlerRecord } from "../src/platform/private-state.js"
 import { until } from "./control-support.js"
 import { createAgentStore } from "../src/agent/store.js"
 
@@ -64,5 +67,31 @@ test("an activity write does not break a configure that overlaps the end of a tu
   assert.equal((await c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "hello" }] })).stopReason, "end_turn")
   c.close()
   await f.stopSession(sessionId)
+  await f.verifyZeroSurvivors()
+})
+
+test("the Handler backfills the title and activity time of older stopped sessions from their history", async t => {
+  const homes = await mkdtemp(join(tmpdir(), "agency-backfill-")), codexHome = join(homes, "codex")
+  t.after(() => rm(homes, { recursive: true, force: true }))
+  const f = await agentHandlerFixture(t, { selectionCatalog: true, nativeAcp: true }, { CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: join(homes, "claude") })
+  const store = createAgentStore(f.paths.persistentRoot)
+  const started = await f.waitCompleted(await f.start({ mode: "read-only" }))
+  const target = started.command.target!
+  await f.waitCompleted(await f.stop(target))
+  const before = await store.readAgent(target.agentId)
+  assert.equal(before?.phase, "stopped")
+  assert.equal(before?.title, undefined)
+  const sessionId = before!.session!.sessionId
+  await mkdir(join(codexHome, "sessions", "2026", "11", "13"), { recursive: true })
+  const path = join(codexHome, "sessions", "2026", "11", "13", "rollout-2026-11-13T10-00-00-" + sessionId + ".jsonl")
+  await writeFile(path, JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "backfilled title" }] } }))
+  const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  await f.control({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  await f.waitHandlerExit()
+  await f.restart({ selectionCatalog: true, nativeAcp: true })
+  const after = await until(async () => { const value = await store.readAgent(target.agentId); return value?.title ? value : undefined })
+  assert.equal(after.title, "backfilled title")
+  assert.equal(after.lastActivityAt, (await stat(path)).mtime.toISOString())
+  assert.equal(after.phase, "stopped")
   await f.verifyZeroSurvivors()
 })

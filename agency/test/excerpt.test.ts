@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { acpFixture } from "./acp-support.js"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
-import { claudeTurns, codexTurns, historyExcerpt, liveExcerpt } from "../src/agent/excerpt.js"
+import { claudeTurns, codexTurns, historyExcerpt, historySummary, liveExcerpt } from "../src/agent/excerpt.js"
 import type { AgentRecordV3 } from "../src/agent/types.js"
 
 const initialize = { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true }, terminal: true } }
@@ -82,4 +82,28 @@ test("live excerpts include replayed history and ignore echoed prompt chunks", (
     event({ kind: "update", replay: false, update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "now" } } }, 4),
     event({ kind: "update", replay: false, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ok" } } }, 5),
   ], 4), [{ role: "user", text: "earlier" }, { role: "agent", text: "reply" }, { role: "user", text: "now" }, { role: "agent", text: "ok" }])
+})
+
+test("history excerpts read further back when the last 1 MiB has no user turn", async t => {
+  const root = await mkdtemp(join(tmpdir(), "agency-excerpt-")), codexHome = join(root, "codex"), claudeHome = join(root, "claude")
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(join(codexHome, "sessions", "2026", "11", "13"), { recursive: true })
+  const tool = JSON.stringify({ type: "response_item", payload: { type: "function_call_output", output: "x".repeat(200000) } })
+  await writeFile(join(codexHome, "sessions", "2026", "11", "13", "rollout-2026-11-13T10-00-00-long-1.jsonl"),
+    [codexLine("user", "input_text", "earlier"), codexLine("assistant", "output_text", "ok"), codexLine("user", "input_text", "the real question"), ...Array(8).fill(tool), codexLine("assistant", "output_text", "done")].join("\n"))
+  const excerpt = await historyExcerpt({ record: record("codex-acp", "long-1", "/work/x"), turns: 2, codexHome, claudeHome })
+  assert.deepEqual(excerpt.turns, [{ role: "user", text: "the real question" }, { role: "agent", text: "done" }])
+})
+
+test("history summaries take the first real prompt as the title and the file time as activity", async t => {
+  const root = await mkdtemp(join(tmpdir(), "agency-excerpt-")), codexHome = join(root, "codex"), claudeHome = join(root, "claude")
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(join(claudeHome, "projects", "-work-x"), { recursive: true })
+  const path = join(claudeHome, "projects", "-work-x", "claude-2.jsonl")
+  await writeFile(path, [claudeLine("user", "<system-reminder>ignore</system-reminder>"), claudeLine("user", "rename the picker " + "y".repeat(400)), claudeLine("assistant", [{ type: "text", text: "ok" }])].join("\n"))
+  const summary = await historySummary({ record: record("claude-agent-acp", "claude-2", "/work/x"), codexHome, claudeHome })
+  assert.equal(summary.modifiedAt, (await stat(path)).mtime.toISOString())
+  assert.ok(summary.title?.startsWith("rename the picker y"))
+  assert.equal([...summary.title!].length, 200)
+  assert.deepEqual(await historySummary({ record: record("claude-agent-acp", "absent", "/work/x"), codexHome, claudeHome }), { title: null, modifiedAt: null })
 })

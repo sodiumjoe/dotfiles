@@ -1,4 +1,4 @@
-import { lstat, open, readdir } from "node:fs/promises"
+import { lstat, open, readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 import type { RetainedEvent } from "./conversation.js"
 import type { AgentRecordV3 } from "./types.js"
@@ -7,7 +7,7 @@ export type ExcerptInput = { agentId: string; turns: number }
 export type ExcerptTurn = { role: "user" | "agent"; text: string }
 export type ConversationExcerpt = { state: "excerpt"; source: "live" | "history" | "none"; turns: ExcerptTurn[]; reason: string | null }
 
-const TAIL_BYTES = 1024 * 1024, TURN_CHARS = 600
+const TAIL_WINDOWS = [1024 * 1024, 4 * 1024 * 1024, 16 * 1024 * 1024], HEAD_BYTES = 1024 * 1024, TURN_CHARS = 600, TITLE_CHARS = 200
 const injected = /<(INSTRUCTIONS|user_instructions|environment_context|environment_info|system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>[\s\S]*?<\/\1>/g
 type Json = Record<string, unknown>
 
@@ -80,14 +80,26 @@ export function liveExcerpt(events: readonly RetainedEvent[], count: number): Ex
   return turns.slice(-count)
 }
 
-async function readTail(path: string): Promise<string[]> {
+async function readTail(path: string, bytes: number): Promise<{ lines: string[]; complete: boolean }> {
   const handle = await open(path, "r")
   try {
     const { size } = await handle.stat()
-    const length = Math.min(size, TAIL_BYTES), buffer = Buffer.alloc(length)
+    const length = Math.min(size, bytes), buffer = Buffer.alloc(length)
     await handle.read(buffer, 0, length, size - length)
     const lines = buffer.toString("utf8").split("\n")
     if (length < size) lines.shift()
+    return { lines, complete: length === size }
+  } finally { await handle.close() }
+}
+
+async function readHead(path: string, bytes: number): Promise<string[]> {
+  const handle = await open(path, "r")
+  try {
+    const { size } = await handle.stat()
+    const length = Math.min(size, bytes), buffer = Buffer.alloc(length)
+    await handle.read(buffer, 0, length, 0)
+    const lines = buffer.toString("utf8").split("\n")
+    if (length < size) lines.pop()
     return lines
   } finally { await handle.close() }
 }
@@ -112,16 +124,48 @@ async function findCodexFile(root: string, sessionId: string): Promise<string | 
   return visit(root, 0)
 }
 
-export async function historyExcerpt(input: { record: AgentRecordV3; turns: number; codexHome: string; claudeHome: string }): Promise<ConversationExcerpt> {
-  const none = (reason: string): ConversationExcerpt => ({ state: "excerpt", source: "none", turns: [], reason })
-  const sessionId = input.record.session?.sessionId
-  if (!sessionId || !/^[A-Za-z0-9._-]+$/.test(sessionId)) return none("This session has no provider history yet")
-  const codex = input.record.definition.backendId === "codex-acp"
-  const path = codex ? await findCodexFile(join(input.codexHome, "sessions"), sessionId)
+type HistoryInput = { record: AgentRecordV3; codexHome: string; claudeHome: string }
+
+function historySession(record: AgentRecordV3): string | null {
+  const sessionId = record.session?.sessionId
+  return sessionId && /^[A-Za-z0-9._-]+$/.test(sessionId) ? sessionId : null
+}
+
+async function historyFile(input: HistoryInput, sessionId: string): Promise<string | null> {
+  return input.record.definition.backendId === "codex-acp" ? findCodexFile(join(input.codexHome, "sessions"), sessionId)
     : join(input.claudeHome, "projects", input.record.definition.cwd.replace(/[^A-Za-z0-9]/g, "-"), sessionId + ".jsonl")
+}
+
+function historyTurns(record: AgentRecordV3, lines: readonly string[]): ExcerptTurn[] {
+  return record.definition.backendId === "codex-acp" ? codexTurns(lines) : claudeTurns(lines)
+}
+
+const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
+
+export async function historyExcerpt(input: HistoryInput & { turns: number }): Promise<ConversationExcerpt> {
+  const none = (reason: string): ConversationExcerpt => ({ state: "excerpt", source: "none", turns: [], reason })
+  const sessionId = historySession(input.record)
+  if (!sessionId) return none("This session has no provider history yet")
+  const path = await historyFile(input, sessionId)
   if (!path) return none("No conversation history file")
-  let lines: string[]
-  try { lines = await readTail(path) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return none("No conversation history file"); throw error }
-  const turns = (codex ? codexTurns(lines) : claudeTurns(lines)).slice(-input.turns)
+  let turns: ExcerptTurn[] = []
+  try {
+    for (const window of TAIL_WINDOWS) {
+      const tail = await readTail(path, window)
+      turns = historyTurns(input.record, tail.lines)
+      if (tail.complete || turns.some(turn => turn.role === "user")) break
+    }
+  } catch (error) { if (missing(error)) return none("No conversation history file"); throw error }
+  turns = turns.slice(-input.turns)
   return { state: "excerpt", source: "history", turns, reason: turns.length ? null : "The history file has no conversation turns yet" }
+}
+
+export async function historySummary(input: HistoryInput): Promise<{ title: string | null; modifiedAt: string | null }> {
+  const sessionId = historySession(input.record), path = sessionId ? await historyFile(input, sessionId) : null
+  if (!path) return { title: null, modifiedAt: null }
+  try {
+    const info = await stat(path), first = historyTurns(input.record, await readHead(path, HEAD_BYTES)).find(turn => turn.role === "user")
+    const chars = first ? [...first.text] : []
+    return { title: chars.length ? chars.slice(0, TITLE_CHARS).join("") : null, modifiedAt: info.mtime.toISOString() }
+  } catch (error) { if (missing(error)) return { title: null, modifiedAt: null }; throw error }
 }

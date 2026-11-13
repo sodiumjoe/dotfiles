@@ -36,7 +36,7 @@ import { launchEnvironmentDigest, parseLaunchEnvironment } from "./environment.j
 import { createPermissionBroker, type PermissionClient } from "../acp/permissions.js"
 import { parseImportInput, type ImportInput } from "./types.js"
 import { backendSelection } from "./backend-selection.js"
-import { historyExcerpt, liveExcerpt, type ConversationExcerpt, type ExcerptInput, type ExcerptTurn } from "./excerpt.js"
+import { historyExcerpt, historySummary, liveExcerpt, type ConversationExcerpt, type ExcerptInput, type ExcerptTurn } from "./excerpt.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
@@ -291,6 +291,27 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       if (!command || command.version !== 3 || command.op !== "configure" || command.agentId !== agentId) throw new AgentError("INVALID_AGENT_STATE")
     }
     return record
+  }
+  function historyHomes(): { codexHome: string; claudeHome: string } {
+    return { codexHome: process.env.CODEX_HOME ?? join(homedir(), ".codex"), claudeHome: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude") }
+  }
+  async function backfillHistory(): Promise<void> {
+    await queue.run(() => inspectHistory())
+    for (const record of [...historical?.agents ?? []]) {
+      if (closed) return
+      if (!["stopped", "recoverable"].includes(record.phase) || record.lastActivityAt !== undefined && record.title !== undefined) continue
+      let summary: Awaited<ReturnType<typeof historySummary>>
+      try { summary = await historySummary({ record, ...historyHomes() }) } catch { continue }
+      if (!summary.title && !summary.modifiedAt) continue
+      await queue.run(async () => {
+        if (closed || frozen || !historical) return
+        const agentId = record.definition.agentId, index = historical.agents.findIndex(value => value.definition.agentId === agentId), current = historical.agents[index]
+        if (!current || records.has(agentId) || historical.issues.some(issue => issue.id === agentId) || !isDeepStrictEqual(current, record)) return
+        const next: AgentRecord = { ...current, ...(current.lastActivityAt === undefined && summary.modifiedAt ? { lastActivityAt: summary.modifiedAt } : {}), ...(current.title === undefined && summary.title ? { title: summary.title } : {}) }
+        if (isDeepStrictEqual(next, current)) return
+        try { await store.writeAgent(next, current); historical.agents[index] = next } catch {}
+      })
+    }
   }
   async function inspectHistory(): Promise<void> {
     if (historical) return
@@ -1025,7 +1046,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       })
       if (found.kind === "live") return { state: "excerpt", source: "live", turns: found.turns, reason: null }
       return historyExcerpt({ record: found.record, turns: input.turns,
-        codexHome: process.env.CODEX_HOME ?? join(homedir(), ".codex"), claudeHome: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude") })
+        ...historyHomes() })
     },
     async roster(raw) {
       const options = parsePageInput(raw)
@@ -1049,7 +1070,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
     async submit(target, request) { const op = await queue.run(() => requireTarget(target)); return op.turns!.submit(request) },
     submission(target, submissionId) { id(submissionId); return queue.run(async () => (await requireTarget(target)).turns!.inspect(submissionId)) },
     async cancel(target, submissionId) { const op = await queue.run(() => requireTarget(target)); return op.turns!.cancel(submissionId) },
-    async initialize() { initialized = true },
+    async initialize() { initialized = true; void backfillHistory().catch(() => undefined) },
     async list() {
       return queue.run(async () => {
         await inspectHistory()
