@@ -557,6 +557,13 @@ function M.install()
                         Stream.flush(manager)
                         require("sodium.agentic_folds").finish_thinking(manager.message_writer)
                     end
+                    if params.state == "idle" and manager._agency_rebind then
+                        local view = manager._agency_rebind
+                        manager._agency_rebind = nil
+                        vim.schedule(function()
+                            if not manager._agency_destroyed then M.open(view, { force = true, quiet = true }) end
+                        end)
+                    end
                     if params.state == "unavailable" then unavailable(manager) end
                     manager._agency_running = params.state == "running"
                     manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil
@@ -576,7 +583,8 @@ function M.install()
     end
 end
 
-function M.open(view)
+function M.open(view, opts)
+    opts = opts or {}
     M.install()
     local record = assert(view.record)
     assert(record.version == 3, "Unavailable legacy Agency session")
@@ -591,11 +599,12 @@ function M.open(view)
             or manager._agency_intent and manager._agency_intent.session_id == id) and vim.api.nvim_tabpage_is_valid(tab) then
             vim.api.nvim_set_current_tabpage(tab)
             require("sodium.agency.layout").cleanup(tab)
-            if manager.session_id == id and target and not vim.deep_equal(manager._agency_binding, target) then
+            if manager.session_id == id and target and (opts.force or not vim.deep_equal(manager._agency_binding, target)) then
                 manager._agency_load_cwd = record.definition.cwd
                 manager:load_acp_session(id, record.definition.backendId)
+                require("sodium.agency.animation").attach(manager.status_animation)
             end
-            manager.widget:show()
+            if not opts.quiet then manager.widget:show() end
             return manager
         end
     end
