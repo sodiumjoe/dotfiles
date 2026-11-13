@@ -1,5 +1,5 @@
 local M = {}
-local installed = false
+local Patch = require("sodium.patch")
 local Stream = require("sodium.agency.stream")
 
 local function agency(client)
@@ -165,9 +165,9 @@ end
 function M.install()
     local provider = require("agentic.config").acp_providers.agency
     if provider and not provider.name then provider.name = "Agency" end
-    if installed then return end
-    require("sodium.agency.layout").setup()
     local Manager = require("agentic.session_manager")
+    if not Patch.claim(Manager, "agency", M) then return end
+    require("sodium.agency.layout").setup()
     local Client = require("agentic.acp.acp_client")
     local Instances = require("agentic.acp.agent_instance")
     local methods = { { Manager, { "new", "new_session", "load_acp_session", "_cancel_session", "destroy", "_build_handlers", "_on_session_update", "_handle_input_submit" } },
@@ -176,7 +176,7 @@ function M.install()
         for _, name in ipairs(entry[2]) do assert(type(entry[1][name]) == "function", "Unsupported Agentic API: " .. name) end
     end
     local native = {}
-    for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = entry[1][name] end end
+    for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = Patch.original(entry[1], name) end end
     local sm, acp = native[Manager], native[Client]
     function Client:_set_state(state)
         if agency(self) and (state == "error" or state == "disconnected") then
@@ -187,7 +187,7 @@ function M.install()
         end
         return acp._set_state(self, state)
     end
-    local get_instance = Instances.get_instance
+    local get_instance = Patch.original(Instances, "get_instance")
     Instances.get_instance = function(name, on_ready)
         local client = Instances._instances[name]
         if name == "agency" and not client then return get_instance(name, on_ready or function() end) end
@@ -214,7 +214,7 @@ function M.install()
     end
     local Agentic = require("agentic")
     for _, name in ipairs({ "switch_provider", "new_session_with_provider" }) do
-        local original = Agentic[name]
+        local original = Patch.original(Agentic, name)
         Agentic[name] = function(opts)
             if require("agentic.config").provider ~= "agency" then return original(opts) end
             if opts and opts.provider and opts.provider ~= "agency" then
@@ -574,7 +574,6 @@ function M.install()
         end
         return acp._handle_notification(self, request_id, method, params)
     end
-    installed = true
 end
 
 function M.open(view)

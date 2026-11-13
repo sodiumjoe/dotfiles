@@ -3,7 +3,7 @@ local namespace = vim.api.nvim_create_namespace("agentic_animation")
 local timing = { generating = 200, thinking = 600, searching = 600, busy = 100 }
 
 function M.attach(animation)
-    local stop = animation.stop
+    local stop = require("agentic.ui.status_animation").stop
     function animation:stop()
         self._agency_frame_generation = (self._agency_frame_generation or 0) + 1
         return stop(self)

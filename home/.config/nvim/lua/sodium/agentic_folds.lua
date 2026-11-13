@@ -1,3 +1,4 @@
+local Patch = require("sodium.patch")
 local M = {}
 local pending_ns = vim.api.nvim_create_namespace("sodium_agentic_pending_thought_folds")
 local thinking_ns = vim.api.nvim_create_namespace("agentic_thinking")
@@ -64,8 +65,8 @@ end
 
 function M.install()
     local Fold = require("agentic.ui.tool_call_fold")
-    if not Fold._sodium_completed_diff_folds then
-        local should_fold = Fold.should_fold
+    if Patch.claim(Fold, "folds", M) then
+        local should_fold = Patch.original(Fold, "should_fold")
         function Fold.should_fold(opts)
             if opts.is_diff and opts.status == "completed" then
                 opts = vim.tbl_extend("force", opts, { is_diff = false })
@@ -81,21 +82,17 @@ function M.install()
             end
             return should_fold(opts)
         end
-        Fold._sodium_completed_diff_folds = true
     end
     local Writer = require("agentic.ui.message_writer")
-    if not Writer._sodium_completed_diff_folds then
-        local update = Writer.update_tool_call_block
-        function Writer:update_tool_call_block(block)
-            local result = update(self, block)
-            M.fold_completed_diff(self, block.tool_call_id)
-            return result
-        end
-        Writer._sodium_completed_diff_folds = true
+    if not Patch.claim(Writer, "folds", M) then return end
+    local update = Patch.original(Writer, "update_tool_call_block")
+    function Writer:update_tool_call_block(block)
+        local result = update(self, block)
+        M.fold_completed_diff(self, block.tool_call_id)
+        return result
     end
-    if Writer._sodium_thinking_folds then return end
-    local clear, apply = Writer._clear_thinking_state, Writer._apply_scroll
-    local set_mark, replay, reset = Writer._set_thinking_extmark, Writer.replay_history_messages, Writer.reset_sender_tracking
+    local clear, apply = Patch.original(Writer, "_clear_thinking_state"), Patch.original(Writer, "_apply_scroll")
+    local set_mark, replay, reset = Patch.original(Writer, "_set_thinking_extmark"), Patch.original(Writer, "replay_history_messages"), Patch.original(Writer, "reset_sender_tracking")
 
     function Writer:_clear_thinking_state()
         if self._thinking_extmark_id and not self._sodium_resetting_folds and vim.api.nvim_buf_is_valid(self.bufnr) then
@@ -142,7 +139,6 @@ function M.install()
         if vim.api.nvim_buf_is_valid(self.bufnr) then vim.api.nvim_buf_clear_namespace(self.bufnr, pending_ns, 0, -1) end
     end
 
-    Writer._sodium_thinking_folds = true
 end
 
 return M
