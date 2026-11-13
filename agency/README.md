@@ -106,7 +106,7 @@ Closing a tab, destroying a view, switching sessions, exiting Neovim, losing the
 1. Finish any restore saved by an interrupted restart.
 2. Build Agency.
 3. Compare the running Handler's `distDigest` in `agy status` with `agency/dist/build-manifest.json`. When they differ, or when the Handler reports no `distDigest`, run `agy restart`.
-4. Reload the editor's Agency Lua, rolling back to the previous modules if the new ones fail to load.
+4. Reload the editor's Agency Lua, rolling back to the previous modules if the new ones fail to load. If the rollback also fails, the summary says so and Neovim must be restarted.
 5. Rebind each Agency tab to its agent in place.
 
 `:AgencyReload!` always restarts the Handler. A second `:AgencyReload` while one is running is refused with a notification.
@@ -114,6 +114,16 @@ Closing a tab, destroying a view, switching sessions, exiting Neovim, losing the
 `agy restart [--resume] [--timeout SECONDS]` waits until no agent is running a turn or changing state, for up to 300 seconds by default. It records the live agents in `restart-pending.json` under the persistent state directory, then stops them with `agy shutdown --stop-agents --require-idle`. The Handler refuses that shutdown with `BUSY` if a turn started in the meantime, and `agy restart` goes back to waiting. After the new Handler starts, it restores each recorded agent and deletes the file. The file keeps only agents whose restore can still succeed, meaning their record exists and its phase is not the terminal `failed` or `interrupted`. If the restart is interrupted, `agy restart --resume` restores whatever the file still lists. A plain `agy restart` that finds the file restores those agents first and carries any that are still retryable into its new snapshot. A corrupt file fails with `INVALID_PROTOCOL` naming the file and changes nothing.
 
 A Handler whose status has no `distDigest` key predates `agy restart`. The command then records the live agents in the pending file and stops with instructions, without sending any shutdown. Run `agy shutdown --stop-agents` once while agents are idle, then `agy restart --resume` or `:AgencyReload`.
+
+The first rollout needs two manual steps. A Neovim that was started before this change has the old Agency patches loaded and no `:AgencyReload` command, so restart Neovim once after the change lands. The Handler that is running at that point also predates `agy restart`, so the first Handler restart is `agy shutdown --stop-agents` while agents are idle, followed by `:AgencyReload`, which restores the agents and rebinds the tabs.
+
+When `agy restart` fails, the `:AgencyReload` summary names the error. The failures are:
+
+- `BUSY`: an agent was still running a turn when the timeout expired. Nothing was stopped and the editor reloads nothing. Run `:AgencyReload` again after the turn ends.
+- `UNAVAILABLE`: the old Handler stopped but the new one failed to start. The agents remain listed in `restart-pending.json`. Fix the cause, then run `agy restart --resume` or `:AgencyReload` again.
+- `INCOMPLETE`: the shutdown did not complete, so the old Handler is still running and the agents it had already stopped are restored under it. The same code reports a new Handler that runs a different build than `dist`, and an old Handler that predates `agy restart`, as described above.
+
+Except for a plain `BUSY`, these failures can leave the Handler or its agents changed, so the editor still reloads its Lua and rebinds each tab to the agents that are running, deferring tabs that are mid-turn. The summary ends with the next step, which is to run `:AgencyReload` again once the cause is fixed. A `BUSY` restart after the first step already restarted the Handler to finish a saved restore is treated the same way.
 
 A rebind redraws the conversation from the Handler's retained history, so the chat loses its scroll position and manual folds. A tab whose agent is missing after the restart keeps its view and is counted in the summary. The digest covers all of `dist`, including compiled tests and scripts, so an edit to Agency tests also triggers a Handler restart. Agency tabs in other Neovim instances reconnect the usual way. Changes in worktrees take effect only after they are merged into `~/.dotfiles`, because `agy` runs from there.
 
