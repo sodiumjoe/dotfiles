@@ -11,12 +11,16 @@ describe("Agency reload", function()
         root = vim.fn.tempname()
         vim.fn.mkdir(root .. "/agency/dist", "p")
         vim.fn.writefile({ vim.json.encode({ version = 1, distDigest = digest }) }, root .. "/agency/dist/build-manifest.json")
+        vim.fn.mkdir(root .. "/node", "p")
+        vim.fn.writefile({ "#!/bin/sh" }, root .. "/node/npm")
+        vim.fn.setfperm(root .. "/node/npm", "rwxr-xr-x")
         package.loaded["sodium.agency"] = nil
         require("sodium.agency").setup({
             client = { command = function(argv, options, callback) calls[#calls + 1] = { argv = argv, options = options, callback = callback } end },
             notify = function(value) notifications[#notifications + 1] = value end,
-            system = function(argv, _, on_exit) systems[#systems + 1] = argv; on_exit({ code = systems.fail and 1 or 0, stdout = "", stderr = systems.fail and "type error" or "" }); return {} end,
+            system = function(argv, _, on_exit) if systems.raise then error(systems.raise) end; systems[#systems + 1] = argv; on_exit({ code = systems.fail and 1 or 0, stdout = "", stderr = systems.fail and "type error" or "" }); return {} end,
             repository = root,
+            node = root .. "/node",
             reconnect = function(done) f.client:_set_state("ready"); done() end,
         })
     end)
@@ -110,6 +114,7 @@ describe("Agency reload", function()
         assert.are.equal(before, package.loaded["sodium.agency"])
         for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "agent") end
         assert.is_truthy(table.concat(notifications, "\n"):find("nothing was reloaded", 1, true))
+        assert.is_nil(vim.g.agency_reload_running)
     end)
 
     it("stops before reloading when the build fails", function()
@@ -119,6 +124,27 @@ describe("Agency reload", function()
         f.flush()
         for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "status") end
         assert.is_truthy(table.concat(notifications, "\n"):find("type error", 1, true))
+        assert.is_nil(vim.g.agency_reload_running)
+    end)
+
+    it("clears the running flag when npm is missing", function()
+        vim.fn.delete(root .. "/node/npm")
+        require("sodium.agency.reload").run({})
+        respond("restart", nothing)
+        f.flush()
+        assert.are.equal(0, #systems)
+        assert.is_nil(vim.g.agency_reload_running)
+        assert.is_truthy(table.concat(notifications, "\n"):find(root .. "/node/npm is not executable", 1, true))
+    end)
+
+    it("clears the running flag when a step raises an error", function()
+        systems.raise = "ENOENT: no such file or directory"
+        require("sodium.agency.reload").run({})
+        respond("restart", nothing)
+        f.flush()
+        for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "status") end
+        assert.is_nil(vim.g.agency_reload_running)
+        assert.is_truthy(table.concat(notifications, "\n"):find("internal error: .*ENOENT"))
     end)
 
     it("puts the previous modules and commands back when a new module fails to load", function()
@@ -132,6 +158,7 @@ describe("Agency reload", function()
         assert.are.equal(before, package.loaded["sodium.agency"])
         assert.is_not_nil(vim.api.nvim_get_commands({})["AgencyReload"])
         assert.is_truthy(table.concat(notifications, "\n"):find("broken stream", 1, true))
+        assert.is_nil(vim.g.agency_reload_running)
     end)
 
     it("refuses a second reload while one is running", function()

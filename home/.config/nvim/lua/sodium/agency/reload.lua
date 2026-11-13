@@ -65,6 +65,13 @@ function M.run(opts)
         if #failed > 0 then parts[#parts + 1] = #failed .. " restore" .. (#failed == 1 and "" or "s") .. " failed (" .. table.concat(failed, ", ") .. ")" end
         notify("Agency reload: " .. table.concat(parts, " · "))
     end
+    local function guard(fn)
+        return function(...)
+            local args = { n = select("#", ...), ... }
+            local ok, err = xpcall(function() return fn(unpack(args, 1, args.n)) end, debug.traceback)
+            if not ok then finish("internal error: " .. tostring(err)) end
+        end
+    end
     local function collect(result)
         for _, agent in ipairs(result and result.agents or {}) do
             if agent.outcome == "failed" then
@@ -78,9 +85,9 @@ function M.run(opts)
         if not ok then finish("Lua reload failed and was rolled back: " .. tostring(err)); return end
         parts[#parts + 1] = "reloaded Lua"
         local api = require("sodium.agency").setup()
-        api.page({ allow_issues = true }, function(page_err, page)
+        api.page({ allow_issues = true }, guard(function(page_err, page)
             if page_err then finish("could not list agents: " .. (page_err.message or page_err.code)); return end
-            require("sodium.agency.rebind").run(page.agents, { defer_busy = not restarted, reconnect = deps.reconnect }, function(summary)
+            require("sodium.agency.rebind").run(page.agents, { defer_busy = not restarted, reconnect = deps.reconnect }, guard(function(summary)
                 if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen tabs with <leader>af"); return end
                 local text = summary.rebound .. " tab" .. (summary.rebound == 1 and "" or "s") .. " rebound"
                 if summary.deferred > 0 then text = text .. ", " .. summary.deferred .. " after their turns" end
@@ -91,12 +98,12 @@ function M.run(opts)
                     text = text .. ", " .. #summary.failed .. " failed to rebind (" .. table.concat(reasons, ", ") .. ")"
                 end
                 finish(text)
-            end)
-        end)
+            end))
+        end))
     end
     local function restart()
         notify("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
-        client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, function(err, envelope)
+        client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
             if err and err.code == "BUSY" then
                 vim.g.agency_reload_running = nil
                 notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded")
@@ -106,32 +113,36 @@ function M.run(opts)
             parts[#parts + 1] = "Handler restarted"
             collect(envelope.result)
             rebind(true)
-        end)
+        end))
     end
     local function check()
-        client.command({ "status" }, {}, function(err, envelope)
+        client.command({ "status" }, {}, guard(function(err, envelope)
             if err then finish("status failed: " .. (err.message or err.code)); return end
             local running = envelope.result.distDigest
             local expected = manifest_digest(root .. "/agency/dist/build-manifest.json")
             if opts.force or type(running) ~= "string" or running ~= expected then restart()
             else parts[#parts + 1] = "Handler unchanged"; rebind(false) end
-        end)
+        end))
     end
     local function build()
-        local node = (vim.env.NODENV_ROOT or (vim.env.HOME .. "/.nodenv")) .. "/versions/24.13.0/bin"
+        local node = deps.node or (vim.env.NODENV_ROOT or (vim.env.HOME .. "/.nodenv")) .. "/versions/24.13.0/bin"
+        local npm = node .. "/npm"
+        if vim.fn.executable(npm) ~= 1 then finish("build failed: " .. npm .. " is not executable; install Node 24.13.0 with nodenv"); return end
         notify("Building Agency")
         local system = deps.system or vim.system
-        system({ node .. "/npm", "--prefix", root .. "/agency", "run", "build" }, { text = true, env = { PATH = node .. ":" .. (vim.env.PATH or "") } }, vim.schedule_wrap(function(result)
+        system({ npm, "--prefix", root .. "/agency", "run", "build" }, { text = true, timeout = 600000, env = { PATH = node .. ":" .. (vim.env.PATH or "") } }, vim.schedule_wrap(guard(function(result)
             if result.code ~= 0 then finish("build failed:\n" .. tail((result.stdout or "") .. "\n" .. (result.stderr or ""))); return end
             parts[#parts + 1] = "built"
             check()
-        end))
+        end)))
     end
-    client.command({ "restart", "--resume" }, { timeout_ms = 1800000 }, function(err, envelope)
-        if err then finish("resuming a saved restore failed: " .. (err.message or err.code)); return end
-        if envelope.result.resumed then parts[#parts + 1] = "resumed a saved restore"; collect(envelope.result) end
-        build()
-    end)
+    guard(function()
+        client.command({ "restart", "--resume" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
+            if err then finish("resuming a saved restore failed: " .. (err.message or err.code)); return end
+            if envelope.result.resumed then parts[#parts + 1] = "resumed a saved restore"; collect(envelope.result) end
+            build()
+        end))
+    end)()
 end
 
 return M

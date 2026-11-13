@@ -100,7 +100,8 @@ function M.new(deps)
             or result.command.commandId ~= receipt.commandId
             or result.command.handlerGeneration ~= receipt.handlerGeneration
         then
-            callback(error_value("INVALID_PROTOCOL"))
+            receipt.error = error_value("INVALID_PROTOCOL")
+            callback(receipt.error)
             return
         end
         receipt.view = result
