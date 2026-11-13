@@ -40,11 +40,11 @@ function M.reload_modules(deps)
         if owned(name) then package.loaded[name] = nil end
     end
     for name, value in pairs(previous) do package.loaded[name] = value end
-    pcall(function()
+    local restored, rollback_err = xpcall(function()
         local api = install(deps)
         require("sodium.agency").commands(api)
-    end)
-    return false, err
+    end, debug.traceback)
+    return false, err, not restored and rollback_err or nil
 end
 
 function M.run(opts)
@@ -58,10 +58,11 @@ function M.run(opts)
     local root = deps.repository or repository()
     if not root then notify("Cannot locate the Agency checkout from agy"); return end
     vim.g.agency_reload_running = true
-    local parts, failed = {}, {}
+    local parts, failed, changed, retry = {}, {}, false, nil
     local function finish(message)
         vim.g.agency_reload_running = nil
         if message then parts[#parts + 1] = message end
+        if retry then parts[#parts + 1] = retry end
         if #failed > 0 then parts[#parts + 1] = #failed .. " restore" .. (#failed == 1 and "" or "s") .. " failed (" .. table.concat(failed, ", ") .. ")" end
         notify("Agency reload: " .. table.concat(parts, " · "))
     end
@@ -81,7 +82,11 @@ function M.run(opts)
         end
     end
     local function rebind(restarted)
-        local ok, err = M.reload_modules(deps)
+        local ok, err, rollback_err = M.reload_modules(deps)
+        if not ok and rollback_err then
+            finish("Lua reload failed: " .. tostring(err) .. "; restoring the previous Lua also failed: " .. tostring(rollback_err) .. "; restart Neovim")
+            return
+        end
         if not ok then finish("Lua reload failed and was rolled back: " .. tostring(err)); return end
         parts[#parts + 1] = "reloaded Lua"
         local api = require("sodium.agency").setup()
@@ -104,12 +109,17 @@ function M.run(opts)
     local function restart()
         notify("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
         client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
-            if err and err.code == "BUSY" then
+            if err and err.code == "BUSY" and not changed then
                 vim.g.agency_reload_running = nil
                 notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded")
                 return
             end
-            if err then finish("Handler restart failed: " .. (err.message or err.code) .. "; Lua was not reloaded"); return end
+            if err then
+                parts[#parts + 1] = "Handler restart failed: " .. (err.message or err.code)
+                retry = "run :AgencyReload again to finish the restart"
+                rebind(false)
+                return
+            end
             parts[#parts + 1] = "Handler restarted"
             collect(envelope.result)
             rebind(true)
@@ -140,6 +150,7 @@ function M.run(opts)
         client.command({ "restart", "--resume" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
             if err then finish("resuming a saved restore failed: " .. (err.message or err.code)); return end
             if envelope.result.resumed then parts[#parts + 1] = "resumed a saved restore"; collect(envelope.result) end
+            changed = envelope.result.resumed == true and envelope.result.restarted == true
             build()
         end))
     end)()

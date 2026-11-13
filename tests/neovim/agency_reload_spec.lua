@@ -117,6 +117,40 @@ describe("Agency reload", function()
         assert.is_nil(vim.g.agency_reload_running)
     end)
 
+    it("still reloads and rebinds when the restart fails after the Handler changed", function()
+        local before, tab, manager = package.loaded["sodium.agency"], f.manager.tab_page_id, f.manager
+        require("sodium.agency.reload").run({ force = true })
+        respond("restart", nothing)
+        f.flush()
+        respond("status", { phase = "ready", distDigest = digest })
+        respond("restart", nil, { code = "INCOMPLETE", message = "the Handler did not finish shutting down" })
+        respond_page({ f.row })
+        answer_load(control.target_a)
+        local text = table.concat(notifications, "\n")
+        assert.are_not.equal(before, package.loaded["sodium.agency"])
+        assert.are.equal(manager, Registry.sessions[tab])
+        assert.is_truthy(text:find("the Handler did not finish shutting down", 1, true))
+        assert.is_truthy(text:find("1 tab rebound", 1, true))
+        assert.is_truthy(text:find("run :AgencyReload again", 1, true))
+        assert.is_nil(vim.g.agency_reload_running)
+    end)
+
+    it("still reloads when a resume restarted the Handler and the next restart is busy", function()
+        local before = package.loaded["sodium.agency"]
+        require("sodium.agency.reload").run({ force = true })
+        respond("restart", { state = "restarted", restarted = true, resumed = true, agents = {} })
+        f.flush()
+        respond("status", { phase = "ready", distDigest = digest })
+        respond("restart", nil, { code = "BUSY", message = "agents still working: x" })
+        respond_page({ f.row })
+        answer_load(control.target_a)
+        local text = table.concat(notifications, "\n")
+        assert.are_not.equal(before, package.loaded["sodium.agency"])
+        assert.is_truthy(text:find("agents still working: x", 1, true))
+        assert.is_truthy(text:find("run :AgencyReload again", 1, true))
+        assert.is_falsy(text:find("nothing was reloaded", 1, true))
+    end)
+
     it("stops before reloading when the build fails", function()
         systems.fail = true
         require("sodium.agency.reload").run({})
@@ -158,6 +192,25 @@ describe("Agency reload", function()
         assert.are.equal(before, package.loaded["sodium.agency"])
         assert.is_not_nil(vim.api.nvim_get_commands({})["AgencyReload"])
         assert.is_truthy(table.concat(notifications, "\n"):find("broken stream", 1, true))
+        assert.is_nil(vim.g.agency_reload_running)
+    end)
+
+    it("says so when restoring the previous modules also fails", function()
+        local folds = package.loaded["sodium.agentic_folds"]
+        package.loaded["sodium.agentic_folds"] = { install = function() error("old folds broken") end }
+        package.preload["sodium.agency.stream"] = function() error("broken stream") end
+        require("sodium.agency.reload").run({})
+        respond("restart", nothing)
+        f.flush()
+        local ok, err = pcall(respond, "status", { phase = "ready", distDigest = digest })
+        package.preload["sodium.agency.stream"] = nil
+        package.loaded["sodium.agentic_folds"] = folds
+        assert.is_true(ok, err)
+        local text = table.concat(notifications, "\n")
+        assert.is_truthy(text:find("broken stream", 1, true))
+        assert.is_truthy(text:find("old folds broken", 1, true))
+        assert.is_falsy(text:find("rolled back", 1, true))
+        assert.is_truthy(text:find("restart Neovim", 1, true))
         assert.is_nil(vim.g.agency_reload_running)
     end)
 
