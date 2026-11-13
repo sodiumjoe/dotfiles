@@ -76,4 +76,56 @@ describe("Agency rebind", function()
         assert.are.equal(before, loads())
         assert.are.equal(manager, Registry.sessions[tab])
     end)
+
+    it("rebinds a deferred tab without leaving the current tab", function()
+        local before = loads()
+        f.state("turn-1", "running")
+        run({ f.row }, { defer_busy = true, reconnect = function(done) done() end })
+        vim.cmd("tabnew")
+        local current = vim.api.nvim_get_current_tabpage()
+        f.state("turn-1", "idle")
+        assert.is_true(vim.wait(300, function() return loads() == before + 1 end, 5))
+        f.flush()
+        assert.are.equal(current, vim.api.nvim_get_current_tabpage())
+        assert.are.equal(2, #vim.api.nvim_list_tabpages())
+    end)
+
+    it("drops a deferred view when the tab no longer shows that agent", function()
+        local before = loads()
+        f.state("turn-1", "running")
+        run({ f.row }, { defer_busy = true, reconnect = function(done) done() end })
+        local other = vim.deepcopy(f.row)
+        other.record.definition.agentId = control.id(99)
+        f.manager._agency_rebind = other
+        f.state("turn-1", "idle")
+        f.flush()
+        assert.are.equal(before, loads())
+        assert.is_nil(f.manager._agency_rebind)
+        assert.are.equal(1, #vim.api.nvim_list_tabpages())
+    end)
+
+    it("reports a failing open and still calls back once", function()
+        local Adapter = require("sodium.agency.agentic")
+        local original, calls = Adapter.open, 0
+        Adapter.open = function() error("boom") end
+        local current = vim.api.nvim_get_current_tabpage()
+        local ok, summary = pcall(function()
+            local value
+            require("sodium.agency.rebind").run({ f.row }, { reconnect = function(done) done() end }, function(v)
+                calls = calls + 1
+                value = v
+            end)
+            assert.is_true(vim.wait(300, function() return value ~= nil end, 5))
+            return value
+        end)
+        Adapter.open = original
+        assert.is_true(ok, summary)
+        f.flush()
+        assert.are.equal(1, calls)
+        assert.are.equal(0, summary.rebound)
+        assert.are.equal(1, #summary.failed)
+        assert.are.equal(control.target_a.agentId, summary.failed[1].agentId)
+        assert.is_truthy(summary.failed[1].error:find("boom", 1, true))
+        assert.are.equal(current, vim.api.nvim_get_current_tabpage())
+    end)
 end)

@@ -25,7 +25,7 @@ function M.run(views, opts, callback)
     for _, view in ipairs(views or {}) do
         if view.record.version == 3 and view.live and view.record.phase == "ready" then ready[view.record.definition.agentId] = view end
     end
-    local summary, settled = { rebound = 0, deferred = 0, missing = {}, timed_out = false }, false
+    local summary, settled = { rebound = 0, deferred = 0, missing = {}, failed = {}, timed_out = false }, false
     local timer = assert(vim.uv.new_timer())
     timer:start(opts.timeout_ms or 30000, 0, vim.schedule_wrap(function()
         if settled then return end
@@ -40,7 +40,8 @@ function M.run(views, opts, callback)
         timer:stop()
         timer:close()
         local Adapter, current = require("sodium.agency.agentic"), vim.api.nvim_get_current_tabpage()
-        for _, manager in ipairs(agency_managers()) do
+        local listed, managers = pcall(agency_managers)
+        for _, manager in ipairs(listed and managers or {}) do
             local agent_id = manager.session_id:sub(8)
             local view = ready[agent_id]
             if not view then
@@ -49,8 +50,12 @@ function M.run(views, opts, callback)
                 manager._agency_rebind = vim.deepcopy(view)
                 summary.deferred = summary.deferred + 1
             else
-                Adapter.open(view, { force = true, quiet = true })
-                summary.rebound = summary.rebound + 1
+                local ok, err = pcall(Adapter.open, view, { force = true, quiet = true })
+                if ok then
+                    summary.rebound = summary.rebound + 1
+                else
+                    summary.failed[#summary.failed + 1] = { agentId = agent_id, error = tostring(err) }
+                end
             end
         end
         if vim.api.nvim_tabpage_is_valid(current) then vim.api.nvim_set_current_tabpage(current) end

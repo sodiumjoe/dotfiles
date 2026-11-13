@@ -561,7 +561,9 @@ function M.install()
                         local view = manager._agency_rebind
                         manager._agency_rebind = nil
                         vim.schedule(function()
-                            if not manager._agency_destroyed then M.open(view, { force = true, quiet = true }) end
+                            if not manager._agency_destroyed and manager.session_id == "agency:" .. view.record.definition.agentId then
+                                M.open(view, { force = true, quiet = true })
+                            end
                         end)
                     end
                     if params.state == "unavailable" then unavailable(manager) end
@@ -597,11 +599,18 @@ function M.open(view, opts)
     for tab, manager in pairs(Registry.sessions) do
         if agency(manager.agent) and (manager.session_id == id or manager._agency_loading_session == id
             or manager._agency_intent and manager._agency_intent.session_id == id) and vim.api.nvim_tabpage_is_valid(tab) then
-            vim.api.nvim_set_current_tabpage(tab)
+            if not opts.quiet then vim.api.nvim_set_current_tabpage(tab) end
             require("sodium.agency.layout").cleanup(tab)
             if manager.session_id == id and target and (opts.force or not vim.deep_equal(manager._agency_binding, target)) then
+                local origin = vim.api.nvim_get_current_win()
                 manager._agency_load_cwd = record.definition.cwd
-                manager:load_acp_session(id, record.definition.backendId)
+                local ok, err = pcall(manager.load_acp_session, manager, id, record.definition.backendId)
+                if opts.quiet then
+                    vim.schedule(function()
+                        if vim.api.nvim_win_is_valid(origin) then vim.api.nvim_set_current_win(origin) end
+                    end)
+                end
+                if not ok then error(err, 0) end
                 require("sodium.agency.animation").attach(manager.status_animation)
             end
             if not opts.quiet then manager.widget:show() end
