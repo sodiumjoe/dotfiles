@@ -66,11 +66,11 @@ export function productionControlDependencies(): ControlDependencies {
   }
 }
 
-type Arguments = { command: "status" | "doctor" | "shutdown" | "help"; json: boolean; stopAgents: boolean; commandId?: string; generation?: string }
+type Arguments = { command: "status" | "doctor" | "shutdown" | "help"; json: boolean; stopAgents: boolean; requireIdle: boolean; commandId?: string; generation?: string }
 
 function parseArguments(argv: readonly string[]): Arguments {
   const positional: string[] = [], seen = new Set<string>()
-  const args: Arguments = { command: "help", json: false, stopAgents: false }
+  const args: Arguments = { command: "help", json: false, stopAgents: false, requireIdle: false }
   for (let i = 0; i < argv.length; i++) {
     const value = argv[i]!
     if (!value.startsWith("-")) { positional.push(value); continue }
@@ -78,6 +78,7 @@ function parseArguments(argv: readonly string[]): Arguments {
     seen.add(value)
     if (value === "--json") args.json = true
     else if (value === "--stop-agents") args.stopAgents = true
+    else if (value === "--require-idle") args.requireIdle = true
     else if (value === "--help" || value === "-h") positional.push("help")
     else if (value === "--command-id" || value === "--handler-generation") {
       const id = argv[++i]
@@ -89,7 +90,8 @@ function parseArguments(argv: readonly string[]): Arguments {
   if (command === "status" || command === "handler status") args.command = "status"
   else if (command === "doctor" || command === "shutdown" || command === "help") args.command = command
   else if (command !== "") throw new ControlError("USAGE", "unsupported command; use agy --help")
-  if (args.command !== "shutdown" && (args.stopAgents || args.commandId !== undefined || args.generation !== undefined)) throw new ControlError("USAGE", "shutdown flags require shutdown")
+  if (args.command !== "shutdown" && (args.stopAgents || args.requireIdle || args.commandId !== undefined || args.generation !== undefined)) throw new ControlError("USAGE", "shutdown flags require shutdown")
+  if (args.requireIdle && !args.stopAgents) throw new ControlError("USAGE", "--require-idle requires --stop-agents")
   if ((args.commandId === undefined) !== (args.generation === undefined)) throw new ControlError("USAGE", "--command-id and --handler-generation must be supplied together")
   return args
 }
@@ -150,7 +152,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "native-sessions [--json] (read-only local Codex history)", "acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "native-sessions [--json] (read-only local Codex history)", "acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents [--require-idle]] [--command-id UUID --handler-generation UUID]", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
@@ -214,7 +216,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     }
     if (shouldSend) {
       try {
-        const reply = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId, handlerGeneration: generation, op: "shutdown", commandId, stopAgents: args.stopAgents })
+        const reply = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId, handlerGeneration: generation, op: "shutdown", commandId, stopAgents: args.stopAgents, ...(args.requireIdle ? { requireIdle: true as const } : {}) })
         if (!reply.ok) throw new ControlError(reply.error.code, reply.error.message)
       } catch (error) {
         const classified = controlError(error, "INCOMPLETE")

@@ -7,9 +7,9 @@ export const MAX_FRAME_BYTES = 8 * 1024 * 1024
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export type ControlRequest = { protocol: typeof PROTOCOL; requestId: string; handlerGeneration: string } & (
   | { op: "status" }
-  | { op: "shutdown"; commandId: string; stopAgents: boolean }
+  | { op: "shutdown"; commandId: string; stopAgents: boolean; requireIdle?: true }
 )
-export type ControlErrorCode = "USAGE" | "INVALID_PROTOCOL" | "STALE_HANDLER" | "UNAVAILABLE" | "INTERNAL" | "INCOMPLETE" | "ACTIVE_AGENTS" | "COMMAND_CONFLICT"
+export type ControlErrorCode = "USAGE" | "INVALID_PROTOCOL" | "STALE_HANDLER" | "UNAVAILABLE" | "INTERNAL" | "INCOMPLETE" | "ACTIVE_AGENTS" | "COMMAND_CONFLICT" | "BUSY"
 export type LaunchSummary = { launchAttemptId: string; owner: { kind: "agent"; id: string; generation: string } | { kind: "legacy-agent"; id: string; handlerGeneration: string } | { kind: "catalog-probe"; id: string; providerId: "claude-agent-acp" | "codex-acp" }; phase: LaunchRecord["phase"]; reason: string | null }
 export type StatusIssue = { path: string; launchAttemptId: string | null; message: string }
 export type HandlerStatus = {
@@ -40,7 +40,7 @@ export type ControlReply = { protocol: typeof PROTOCOL; requestId: string; handl
   | { ok: false; error: { code: ControlErrorCode; message: string } }
 )
 
-const codes: Record<ControlErrorCode, number> = { USAGE: 64, INVALID_PROTOCOL: 65, STALE_HANDLER: 69, UNAVAILABLE: 69, INTERNAL: 70, INCOMPLETE: 75, ACTIVE_AGENTS: 75, COMMAND_CONFLICT: 75 }
+const codes: Record<ControlErrorCode, number> = { USAGE: 64, INVALID_PROTOCOL: 65, STALE_HANDLER: 69, UNAVAILABLE: 69, INTERNAL: 70, INCOMPLETE: 75, ACTIVE_AGENTS: 75, COMMAND_CONFLICT: 75, BUSY: 75 }
 const phases = new Set(["launch_pending", "readiness", "active", "exited_unverified", "cleanup_pending", "cleanup_verified", "quarantined"])
 
 export class ControlError extends Error {
@@ -95,8 +95,10 @@ export function parseRequest(value: unknown): ControlRequest {
   const v = object(value), common = header(v)
   if (v.op === "status") { exactKeys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: "status" } }
   if (v.op !== "shutdown" || typeof v.stopAgents !== "boolean") return invalid()
-  exactKeys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "stopAgents"])
-  return { ...common, op: "shutdown", commandId: uuid(v.commandId), stopAgents: v.stopAgents }
+  const requireIdle = Object.hasOwn(v, "requireIdle")
+  if (requireIdle && (v.requireIdle !== true || v.stopAgents !== true)) return invalid()
+  exactKeys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "stopAgents", ...(requireIdle ? ["requireIdle"] : [])])
+  return { ...common, op: "shutdown", commandId: uuid(v.commandId), stopAgents: v.stopAgents, ...(requireIdle ? { requireIdle: true as const } : {}) }
 }
 
 function summary(value: unknown): LaunchSummary {

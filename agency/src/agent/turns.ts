@@ -10,7 +10,7 @@ import { withoutAgencyMetadata } from "./acp.js"
 export type SubmissionRequest = { submissionId: string; text: string; limits: TurnOptions }
 export type AcpSubmissionRequest = { submissionId: string; prompt: JsonObject[]; meta?: JsonObject; originConnectionId?: string; originAttachment?: string; editorAddress?: string | null }
 export type SubmissionReceipt = { submissionId: string; digest: string; state: TurnState; stopReason: StopReason | null; failure: AgentFailure | null; acceptedSeq: number; completedSeq: number | null }
-export type TurnCoordinator = { submit(request: SubmissionRequest): Promise<SubmissionReceipt>; submitAcp(request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; inspect(submissionId: string): SubmissionReceipt | null; cancel(submissionId: string): Promise<SubmissionReceipt>; settled(submissionId: string): Promise<TurnResult>; settledAcp(submissionId: string): Promise<JsonObject>; busy(): boolean; close(failure: AgentFailure | null): void }
+export type TurnCoordinator = { submit(request: SubmissionRequest): Promise<SubmissionReceipt>; submitAcp(request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; inspect(submissionId: string): SubmissionReceipt | null; cancel(submissionId: string): Promise<SubmissionReceipt>; settled(submissionId: string): Promise<TurnResult>; settledAcp(submissionId: string): Promise<JsonObject>; busy(): boolean; idle(): Promise<boolean>; close(failure: AgentFailure | null): void }
 
 function appendText(text: string, chunk: string, limit: number): string {
   const remaining = limit - Buffer.byteLength(text)
@@ -111,6 +111,7 @@ export function createTurnCoordinator(input: { target: AgentTuple; conversation:
       await pendingCancel
       return inspect(submissionId)!
     },
+    idle() { return queue.run(async () => active.size === 0) },
     settled(submissionId) {
       if (active.has(submissionId)) return active.get(submissionId)!.deferred.promise
       const receipt = receipts.get(submissionId)

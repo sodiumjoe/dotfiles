@@ -17,7 +17,7 @@ export type ShutdownContext = {
   closeAfterReply(): Promise<void>
   publishReceipt?: typeof writeShutdownReceipt
   catalog?: Pick<CatalogService, "freezeAndDrain" | "resume" | "verifyDischarged">
-  agents?: Pick<AgentService, "assertOrdinaryShutdownSafe" | "freezeAndDrain" | "resume" | "verifyDischarged">
+  agents?: Pick<AgentService, "assertOrdinaryShutdownSafe" | "freezeIfIdle" | "freezeAndDrain" | "resume" | "verifyDischarged">
   accepted?: ShutdownReceipt
   pending?: { request: ShutdownRequest; operation: Promise<ShutdownReceipt>; deadline: number }
 }
@@ -83,6 +83,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
       }
       const operation = Promise.resolve().then(async () => {
         check()
+        if (request.requireIdle) await context.agents?.freezeIfIdle()
         await drainHandlerServices(context, request.stopAgents)
         check()
         await context.catalog?.verifyDischarged()
