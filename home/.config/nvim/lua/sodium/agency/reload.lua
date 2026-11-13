@@ -47,6 +47,27 @@ function M.reload_modules(deps)
     return false, err, not restored and rollback_err or nil
 end
 
+local function quiet_disconnect()
+    local Logger = require("agentic.utils.logger")
+    local notify = Logger.notify
+    local function filtered(message, ...)
+        if type(message) == "string" and message:find("Agency Handler connection ended", 1, true) then return end
+        return notify(message, ...)
+    end
+    Logger.notify = filtered
+    return function() if Logger.notify == filtered then Logger.notify = notify end end
+end
+
+local function unlinked(root, config)
+    local base, missing = root .. "/home/.config/nvim", {}
+    if not vim.uv.fs_stat(base) then return missing end
+    for name, kind in vim.fs.dir(base, { depth = 12 }) do
+        if kind == "file" and name:match("%.lua$") and not vim.uv.fs_stat(config .. "/" .. name) then missing[#missing + 1] = name end
+    end
+    table.sort(missing)
+    return missing
+end
+
 function M.run(opts)
     opts = opts or {}
     local old = require("sodium.agency").setup()
@@ -58,9 +79,10 @@ function M.run(opts)
     local root = deps.repository or repository()
     if not root then notify("Cannot locate the Agency checkout from agy"); return end
     vim.g.agency_reload_running = true
-    local parts, failed, changed, retry = {}, {}, false, nil
+    local parts, failed, changed, retry, restore_notify = {}, {}, false, nil, nil
     local function finish(message)
         vim.g.agency_reload_running = nil
+        if restore_notify then restore_notify(); restore_notify = nil end
         if message then parts[#parts + 1] = message end
         if retry then parts[#parts + 1] = retry end
         if #failed > 0 then parts[#parts + 1] = #failed .. " restore" .. (#failed == 1 and "" or "s") .. " failed (" .. table.concat(failed, ", ") .. ")" end
@@ -100,6 +122,13 @@ function M.run(opts)
         end))
     end
     local function reload(restarted)
+        local config = deps.config or vim.fn.stdpath("config")
+        local missing = unlinked(root, config)
+        if #missing > 0 then
+            local shown = table.concat(vim.list_slice(missing, 1, 5), ", ") .. (#missing > 5 and ", …" or "")
+            parts[#parts + 1] = #missing == 1 and ("1 config file is not linked into " .. config .. ": " .. shown .. "; run bootstrap.sh to link it")
+                or (#missing .. " config files are not linked into " .. config .. ": " .. shown .. "; run bootstrap.sh to link them")
+        end
         local ok, err, rollback_err = M.reload_modules(deps)
         if not ok and rollback_err then
             finish("Lua reload failed: " .. tostring(err) .. "; restoring the previous Lua also failed: " .. tostring(rollback_err) .. "; restart Neovim")
@@ -120,9 +149,11 @@ function M.run(opts)
     end
     local function restart()
         notify("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
+        restore_notify = quiet_disconnect()
         client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
             if err and err.code == "BUSY" and not changed then
                 vim.g.agency_reload_running = nil
+                if restore_notify then restore_notify(); restore_notify = nil end
                 notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded")
                 return
             end
