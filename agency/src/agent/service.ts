@@ -5,6 +5,7 @@ import { createPermissionArbiter, type PermissionArbiter } from "./permission-ar
 import { startEditorRouting, type EditorRouting } from "./editor-routing.js"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
+import { homedir } from "node:os"
 import { lstat } from "node:fs/promises"
 import { isDeepStrictEqual } from "node:util"
 import { observeConfig, readProfiles } from "../catalog/config.js"
@@ -35,6 +36,7 @@ import { launchEnvironmentDigest, parseLaunchEnvironment } from "./environment.j
 import { createPermissionBroker, type PermissionClient } from "../acp/permissions.js"
 import { parseImportInput, type ImportInput } from "./types.js"
 import { backendSelection } from "./backend-selection.js"
+import { historyExcerpt, liveExcerpt, type ConversationExcerpt, type ExcerptInput, type ExcerptTurn } from "./excerpt.js"
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
@@ -71,7 +73,7 @@ export type AgentService = {
   detachPermissions(connectionId: string, target?: AgentTuple): void
   observeSession(target: AgentTuple, listener: ConversationListener, configuration: (snapshot: SessionConfiguration) => void): Promise<AcpSessionObservation>
   beginSession(input: CreateSessionInput): Promise<CommandView>
-  createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeIfIdle(): Promise<void>; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
+  createSession(input: CreateSessionInput): Promise<AgentRecord>; sessionSnapshot(target: AgentTuple): Promise<SessionConfiguration>; nativeSession(target: AgentTuple): Promise<ProviderSession>; setSession(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>; submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>; settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>; initialize(): Promise<void>; start(input: StartInput): Promise<CommandView>; restore(input: RestoreRequest): Promise<CommandView>; stop(input: StopInput): Promise<CommandView>; prompt(input: PromptInput): Promise<PromptView>; observe(target: AgentTuple, listener: ConversationListener): Promise<ConversationObservation>; submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>; submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>; cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>; command(commandId: string, generation: string): Promise<CommandView>; choices(): Promise<AgentChoices>; page(input: PageInput): Promise<AgentPage>; roster(input: PageInput): Promise<AgentPage>; excerpt(input: ExcerptInput): Promise<ConversationExcerpt>; current(cwd: string): Promise<CurrentAgents>; list(): Promise<AgentList>; assertOrdinaryShutdownSafe(): void; freezeIfIdle(): Promise<void>; freezeAndDrain(stopAgents: boolean): Promise<void>; resume(): void; verifyDischarged(): Promise<void>; close(): void
 }
 type LivePrompt = { controller: AbortController; promise: Promise<JsonObject> }
 type Live = { initial: OwnedAgentRecord; accepted: AgentCommandV3; environment: LaunchEnvironment | null; nativeParams: JsonObject; providerSession?: ProviderSession; editor?: EditorRouting; contract: ConfiguredLaunchContract; backend: Backend; controller: AbortController; deadline: number; watchdog?: NodeJS.Timeout; expired?: boolean; owner?: OwnedAgentProcess; work?: Promise<void>; cleanup?: Promise<void>; prompts: Set<LivePrompt>; conversation: Conversation; turns?: TurnCoordinator; cleanupDischarged: boolean; liveReleased: boolean; cleanupVerified: boolean; started: boolean; ready: boolean; uncertain: AgentRecord | null; terminalAgent: { next: AgentRecord; expected: AgentRecord } | null; terminalAgentDurable: boolean; retired: boolean; result: CommandResult | null; fault: AgentFailure | null }
@@ -1007,6 +1009,23 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       }
       if (Buffer.byteLength(JSON.stringify(result)) > QUERY_BYTES) throw new AgentError("INCOMPLETE")
       return result
+    },
+    async excerpt(input) {
+      const found = await queue.run(async (): Promise<{ kind: "live"; turns: ExcerptTurn[] } | { kind: "history"; record: AgentRecord }> => {
+        const op = operations.get(input.agentId)
+        if (op?.ready && !op.liveReleased) {
+          const observation = op.conversation.observe(() => {}), events = observation.snapshot.events
+          observation.close()
+          return { kind: "live", turns: liveExcerpt(events, input.turns) }
+        }
+        let record = records.get(input.agentId)
+        if (!record) { await inspectHistory(); record = historical?.agents.find(value => value.definition.agentId === input.agentId) }
+        if (!record) throw new AgentError("UNAVAILABLE")
+        return { kind: "history", record: structuredClone(record) }
+      })
+      if (found.kind === "live") return { state: "excerpt", source: "live", turns: found.turns, reason: null }
+      return historyExcerpt({ record: found.record, turns: input.turns,
+        codexHome: process.env.CODEX_HOME ?? join(homedir(), ".codex"), claudeHome: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude") })
     },
     async roster(raw) {
       const options = parsePageInput(raw)

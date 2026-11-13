@@ -87,7 +87,7 @@ export function parseHostReply(raw: unknown): HostReply {
   else {
     if (common.hostId === null) throw new Error("INVALID_PROTOCOL")
     result = ownerReply(r) as RuntimeHumanResult | RuntimeSessionResult
-    if (!["page", "permissions", "permission", "command", "session", "session_command", "submission"].includes(result.state)) throw new Error("INVALID_PROTOCOL")
+    if (!["page", "permissions", "permission", "excerpt", "command", "session", "session_command", "submission"].includes(result.state)) throw new Error("INVALID_PROTOCOL")
     if (["command", "session", "session_command", "submission"].includes(result.state)) {
       if (common.handlerGeneration === null) throw new Error("INVALID_PROTOCOL")
       validateSessionOwner(result as RuntimeSessionResult, common.hostId)

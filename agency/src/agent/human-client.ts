@@ -30,6 +30,7 @@ async function parseLocal(argv: readonly string[], deps: ControlDependencies): P
       return { op: "agent_roster", input: parsePageInput({ limit: flags.has("--limit") ? Number(flags.get("--limit")) : 100,
         ...(flags.has("--cursor") ? { cursor: flags.get("--cursor") } : {}), ...(flags.has("--cwd") ? { cwd: flags.get("--cwd") } : {}) }) }
     }
+    if (group === "roster" && command === "excerpt" && positional.length === 3 && flags.size === 0) return { op: "agent_excerpt", input: { agentId: id(positional[2]), turns: 4 } }
     if (group !== "permission") throw new Error()
     if (command === "list" && positional.length === 2 && flags.size === 0) return { op: "agent_permissions" }
     if (command === "inspect" && positional.length === 3 && flags.size === 0) return { op: "agent_permission_inspect", commandId: id(positional[2]) }

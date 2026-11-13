@@ -106,6 +106,12 @@ export function parseAgentRequest(input: unknown): AgentRequest {
     if (v.op === "agent_choices") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: "agent_choices" } }
     if (v.op === "agent_page" || v.op === "agent_roster") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"]); return { ...common, op: v.op, input: parsePageInput(v.input) } }
     if (v.op === "agent_permissions") { keys(v, ["protocol", "requestId", "handlerGeneration", "op"]); return { ...common, op: v.op } }
+    if (v.op === "agent_excerpt") {
+      keys(v, ["protocol", "requestId", "handlerGeneration", "op", "input"])
+      const input = object(v.input); keys(input, ["agentId", "turns"])
+      if (typeof input.turns !== "number" || !Number.isInteger(input.turns) || input.turns < 1 || input.turns > 8) invalid()
+      return { ...common, op: "agent_excerpt", input: { agentId: id(input.agentId), turns: input.turns } }
+    }
     if (v.op === "agent_permission_inspect") { keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId"]); return { ...common, op: v.op, commandId: id(v.commandId) } }
     if (v.op === "agent_permission_decide") {
       keys(v, ["protocol", "requestId", "handlerGeneration", "op", "commandId", "ref", "optionId"])
@@ -170,6 +176,16 @@ export function parseAgentReply(input: unknown): AgentReply {
       if (snapshot.handlerGeneration !== common.handlerGeneration) invalid()
       return { ...common, ok: true, result: { state: "permissions", snapshot } }
     }
+    if (r.state === "excerpt") {
+      keys(r, ["state", "source", "turns", "reason"])
+      if (!["live", "history", "none"].includes(String(r.source)) || !Array.isArray(r.turns) || r.turns.length > 8 || !(r.reason === null || typeof r.reason === "string")) invalid()
+      const turns = (r.turns as unknown[]).map(value => {
+        const turn = object(value); keys(turn, ["role", "text"])
+        if (turn.role !== "user" && turn.role !== "agent" || typeof turn.text !== "string" || turn.text.length > 4096) invalid()
+        return { role: turn.role as "user" | "agent", text: turn.text as string }
+      })
+      return { ...common, ok: true, result: { state: "excerpt", source: r.source as "live" | "history" | "none", turns, reason: r.reason as string | null } }
+    }
     if (r.state === "permission") {
       keys(r, ["state", "receipt"])
       return { ...common, ok: true, result: { state: "permission", receipt: r.receipt === null ? null : parsePermissionReceipt(r.receipt) } }
@@ -229,6 +245,7 @@ export function validateAgentReply(reply: AgentReply, request: AgentRequest): vo
     return
   }
   if (request.op === "agent_permissions") { if (result.state !== "permissions") invalid(); return }
+  if (request.op === "agent_excerpt") { if (result.state !== "excerpt") invalid(); return }
   if (request.op === "agent_permission_decide") {
     if (result.state !== "permission" || !result.receipt || result.receipt.commandId !== request.commandId || result.receipt.optionId !== request.optionId || !isDeepStrictEqual(result.receipt.ref, request.ref)) invalid()
     return

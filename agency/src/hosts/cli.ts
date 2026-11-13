@@ -49,9 +49,12 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
       else emit({ ok: true, result: { state: "hosts", hosts: await inventory.list() } })
       return 0
     }
-    if (args.local || !["roster", "permission"].includes(group!) || !["list", "decide", "inspect"].includes(action!)) throw new AgentError("USAGE")
-    if (group === "roster") {
-      if (action !== "list" || args.positional.length !== 2) throw new AgentError("USAGE")
+    if (args.local || !["roster", "permission"].includes(group!) || !(group === "roster" ? ["list", "excerpt"] : ["list", "decide", "inspect"]).includes(action!)) throw new AgentError("USAGE")
+    if (group === "roster" && action === "excerpt") {
+      allow(["--host"]); if (args.positional.length !== 3 || !selected) throw new AgentError("USAGE")
+      operation = { op: "agent_excerpt", input: { agentId: id(argument), turns: 4 } }
+    } else if (group === "roster") {
+      if (args.positional.length !== 2) throw new AgentError("USAGE")
       allow(["--host", "--limit", "--cursor", "--cwd"])
       if (!selected && (flags.has("--limit") || flags.has("--cursor"))) throw new AgentError("USAGE")
       if (selected) operation = { op: "agent_roster", input: parsePageInput({ limit: flags.has("--limit") ? Number(flags.get("--limit")) : 100, ...(flags.has("--cursor") ? { cursor: flags.get("--cursor") } : {}), ...(flags.has("--cwd") ? { cwd: flags.get("--cwd") } : {}) }) }
