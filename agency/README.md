@@ -115,7 +115,7 @@ Closing a tab, destroying a view, switching sessions, exiting Neovim, losing the
 
 A Handler whose status has no `distDigest` key predates `agy restart`. The command then records the live agents in the pending file and stops with instructions, without sending any shutdown. Run `agy shutdown --stop-agents` once while agents are idle, then `agy restart --resume` or `:AgencyReload`.
 
-The first rollout needs two manual steps. A Neovim that was started before this change has the old Agency patches loaded and no `:AgencyReload` command, so restart Neovim once after the change lands. The Handler that is running at that point also predates `agy restart`, so the first Handler restart is `agy shutdown --stop-agents` while agents are idle, followed by `:AgencyReload`, which restores the agents and rebinds the tabs.
+The first rollout needs two manual steps. A Neovim that was started before this change has the old Agency patches loaded and no `:AgencyReload` command, so restart Neovim once after the change lands. The Handler that is running at that point also predates `agy restart`, so the first Handler restart takes three steps. Run `:AgencyReload`, which records the live agents in `restart-pending.json` and reports `INCOMPLETE` with instructions. Then run `agy shutdown --stop-agents` while agents are idle. Then run `:AgencyReload` again, which starts the new Handler, restores the recorded agents, and rebinds the tabs. Running `agy shutdown --stop-agents` before any agents are recorded stops them without saving the list, and they must be reopened by hand.
 
 When `agy restart` fails, the `:AgencyReload` summary names the error. The failures are:
 
