@@ -166,8 +166,6 @@ function M.install()
     local provider = require("agentic.config").acp_providers.agency
     if provider and not provider.name then provider.name = "Agency" end
     local Manager = require("agentic.session_manager")
-    if not Patch.claim(Manager, "agency", M) then return end
-    require("sodium.agency.layout").setup()
     local Client = require("agentic.acp.acp_client")
     local Instances = require("agentic.acp.agent_instance")
     local methods = { { Manager, { "new", "new_session", "load_acp_session", "_cancel_session", "destroy", "_build_handlers", "_on_session_update", "_handle_input_submit" } },
@@ -175,6 +173,8 @@ function M.install()
     for _, entry in ipairs(methods) do
         for _, name in ipairs(entry[2]) do assert(type(entry[1][name]) == "function", "Unsupported Agentic API: " .. name) end
     end
+    if not Patch.claim(Manager, "agency", M) then return end
+    require("sodium.agency.layout").setup()
     local native = {}
     for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = Patch.original(entry[1], name) end end
     local sm, acp = native[Manager], native[Client]

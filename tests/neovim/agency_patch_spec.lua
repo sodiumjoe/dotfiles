@@ -38,6 +38,9 @@ describe("Agency patch reinstall", function()
         local first = Writer.update_tool_call_block
         reinstall()
         assert.are_not.equal(first, Writer.update_tool_call_block)
-        assert.are.equal(rawget(Writer, "__sodium_originals").update_tool_call_block, require("sodium.patch").original(Writer, "update_tool_call_block"))
+        local stored = rawget(Writer, "__sodium_originals").update_tool_call_block
+        assert.are_not.equal(first, stored)
+        reinstall()
+        assert.are.equal(stored, rawget(Writer, "__sodium_originals").update_tool_call_block)
     end)
 end)
