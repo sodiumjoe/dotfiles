@@ -1,3 +1,4 @@
+package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
 require("snacks").setup({ picker = { enabled = true } })
 local sessions = require("sodium.agentic_sessions")
 
@@ -133,5 +134,23 @@ describe("Saved conversation picker", function()
         assert.is_not.equal(items[1].text, items[2].text)
         assert.is_truthy(items[1].text:find("first", 1, true))
         assert.is_truthy(items[2].text:find("second", 1, true))
+    end)
+    it("starts an absent Handler without cancelling a pending attach", function()
+        local control = require("fixtures.agency_control")
+        local transport = control.operations()
+        local attached
+        transport.operations.attach(control.target_a, function(err, manager) attached = { err = err, manager = manager } end)
+        assert.are.same({ "agent", "page" }, vim.list_slice(transport.calls[1].argv, 1, 2))
+        local agent = { provider_config = require("agentic.config").acp_providers.agency }
+        local picker = sessions.show_picker({ agent = agent }, { lifecycle = { page = transport.operations.page, excerpt = function() end } })
+        assert.are.same({ "agent", "page" }, vim.list_slice(transport.calls[2].argv, 1, 2))
+        transport.respond(2, nil, { code = "UNAVAILABLE", message = "Handler down" })
+        assert.are.same({ "status" }, transport.calls[3].argv)
+        transport.respond(3, { phase = "ready" })
+        transport.respond(4, control.page({ control.agent(control.target_b, "stopped") }))
+        assert.is_true(vim.wait(1000, function() return picker.list:count() == 1 and not picker:is_active() end))
+        transport.respond(1, control.page({ control.agent(control.target_a) }))
+        assert.is_nil(attached.err)
+        assert.are.equal(1, #transport.opened)
     end)
 end)

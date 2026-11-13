@@ -323,7 +323,7 @@ local function agency_picker(current_session, lifecycle, valid)
         on_close = function() closed = true end,
     })
     List.loading(picker, base, true)
-    lifecycle.page({ allow_issues = true, ensure_handler = true }, function(err, result)
+    lifecycle.page({ allow_issues = true, ensure_handler = true, alive = function() return not closed end }, function(err, result)
         if closed then return end
         if not valid() then List.loading(picker, base, false); return end
         local items = {}

@@ -192,7 +192,7 @@ function M.new(deps)
     end
     local function status(cwd, operation, callback)
         command({ "status" }, cwd, function(error, envelope)
-            if not valid_operation(operation) then
+            if operation and not valid_operation(operation) then
                 callback(error_value("CANCELLED"))
                 return
             end
@@ -228,10 +228,11 @@ function M.new(deps)
                 callback(error_value("UNAVAILABLE"))
             end))
         end
-        if options.ensure_handler and not operation then
-            operation = begin(nil, options.origin)
+        local ensure = operation or options.ensure_handler
+        local origin = operation and vim.deepcopy(current_origin) or (ensure and { cwd = options.cwd or vim.fn.getcwd() })
+        local function live()
+            return not (operation and not valid_operation(operation)) and not (options.alive and not options.alive())
         end
-        local origin = operation and vim.deepcopy(current_origin)
         local ensured, ensured_generation = false, nil
         local attempts = 0
         local function traversal()
@@ -257,14 +258,18 @@ function M.new(deps)
                 cancel_request = request(function(error, envelope)
                     if finished then return end
                     cancel_request = nil
-                    if operation and not valid_operation(operation) then
+                    if not live() then
                         callback(error_value("CANCELLED"))
                         return
                     end
                     if error then
-                        if operation and error.code == "UNAVAILABLE" and not cursor and attempts == 0 and not ensured then
+                        if ensure and error.code == "UNAVAILABLE" and not cursor and attempts == 0 and not ensured then
                             ensured = true
                             status(origin.cwd, operation, function(ensure_error, handler_generation)
+                                if not live() then
+                                    callback(error_value("CANCELLED"))
+                                    return
+                                end
                                 if ensure_error then
                                     callback(ensure_error)
                                     return
