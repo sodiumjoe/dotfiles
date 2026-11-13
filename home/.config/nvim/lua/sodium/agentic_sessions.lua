@@ -324,10 +324,12 @@ local function agency_picker(current_session, lifecycle, valid)
     })
     List.loading(picker, base, true)
     lifecycle.page({ allow_issues = true, ensure_handler = true }, function(err, result)
-        if closed or not valid() then return end
+        if closed then return end
+        if not valid() then List.loading(picker, base, false); return end
         local items = {}
         if err then
-            items[1] = { label = "local", title = "Could not list sessions: " .. tostring(err.message or err.code), status = "Issue", issue = err }
+            local title = "Could not list sessions: " .. tostring(err.message or err.code)
+            items[1] = { label = "local", title = title, text = "local · " .. title, status = "Issue", issue = err }
         else
             for _, view in ipairs(result.agents or {}) do
                 local record = view.record
@@ -341,7 +343,8 @@ local function agency_picker(current_session, lifecycle, valid)
                 end
             end
             for _, issue in ipairs(result.issues or {}) do
-                items[#items + 1] = { label = "local", title = tostring(issue.message or issue.code or "Unavailable"), status = "Issue", issue = issue }
+                local title = tostring(issue.message or issue.code or "Unavailable")
+                items[#items + 1] = { label = "local", title = title, text = "local · " .. title, status = "Issue", issue = issue }
             end
         end
         picker.opts.items = List.order(items)
