@@ -93,6 +93,16 @@ describe("Agency session list presentation", function()
         end))
     end)
 
+    it("never renders a row wider than a narrow list", function()
+        local item = List.item(view("n", "2026-11-13T00:00:00Z", { display = { title = string.rep("界面 long title ", 4) } }), { status = "Needs recovery" })
+        item.label = "stripelet-loading"
+        for width = 12, 30 do
+            local text = ""
+            for _, chunk in ipairs(List.format(item, { _agency_label_width = 19 })[1].resolve(width)) do text = text .. chunk[1] end
+            assert.is_true(vim.fn.strdisplaywidth(text) <= width - 1, width .. ": " .. text)
+        end
+    end)
+
     it("shows and clears the loading suffix", function()
         local picker = Snacks.picker({ title = "Base", items = {}, show_empty = true, format = List.format })
         pickers[#pickers + 1] = picker

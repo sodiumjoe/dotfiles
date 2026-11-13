@@ -76,7 +76,7 @@ end
 function M.format(item, picker)
     return { { "", resolve = function(width)
         width = math.max(1, width - 1)
-        if width < 12 then return { { M.clip("[" .. (item.label or "") .. "] " .. (item.title or ""), width) } } end
+        if width < 20 then return { { M.clip("[" .. (item.label or "") .. "] " .. (item.title or ""), width) } } end
         local label_width = math.min(picker and picker._agency_label_width or 9, 32, math.floor(width / 4))
         local status_width = math.min(14, math.floor(width / 5))
         local model_width = width >= 70 and math.min(22, math.floor(width / 4)) or 0
