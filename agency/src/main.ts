@@ -11,10 +11,13 @@ if (process.argv[2] === "internal-runtime-bridge") {
     const { fstatSync } = await import("node:fs")
     const { Socket } = await import("node:net")
     if (process.argv.length !== 3 || !process.env.AGENCY_HANDLER_RECORD || !process.env.AGENCY_HANDLER_GENERATION || !fstatSync(3).isSocket() || !fstatSync(4).isSocket()) throw new Error("Handler requires launcher descriptors and identity")
+    const { fileURLToPath } = await import("node:url")
+    const { readDistDigest } = await import("./handler/build-digest.js")
+    const distDigest = readDistDigest(fileURLToPath(new URL("../build-manifest.json", import.meta.url)))
     const { productionEnvironment } = await import("./handler/environment.js")
     const { runHandler } = await import("./handler/daemon.js")
     const env = await productionEnvironment()
-    await runHandler({ ...env, recordPath: process.env.AGENCY_HANDLER_RECORD, generation: process.env.AGENCY_HANDLER_GENERATION, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }) })
+    await runHandler({ ...env, distDigest, recordPath: process.env.AGENCY_HANDLER_RECORD, generation: process.env.AGENCY_HANDLER_GENERATION, status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }) })
   } catch (error) { process.stderr.write(String(error).slice(0, 2048) + "\n"); process.exitCode = 70 }
 } else if (process.argv[2] === "acp") {
   const { runAcpEndpoint } = await import("./acp/endpoint.js")

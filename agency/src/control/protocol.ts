@@ -19,6 +19,7 @@ export type HandlerStatus = {
   reconciliation: { classified: number; total: number; uncertain: number }
   launches: LaunchSummary[]
   issues?: StatusIssue[]
+  distDigest?: string | null
   capabilities: ["status", "doctor", "shutdown"]
 }
 export type DoctorDiagnostic = {
@@ -123,7 +124,7 @@ function result(value: unknown): ControlResult {
     exactKeys(v, ["state", "commandId", "handlerGeneration"])
     return { state: "shutdown_accepted", commandId: uuid(v.commandId), handlerGeneration: generation }
   }
-  exactKeys(v, ["hostId", "handlerGeneration", "phase", "reconciliation", "launches", "capabilities", ...(Object.hasOwn(v, "issues") ? ["issues"] : [])])
+  exactKeys(v, ["hostId", "handlerGeneration", "phase", "reconciliation", "launches", "capabilities", ...(Object.hasOwn(v, "issues") ? ["issues"] : []), ...(Object.hasOwn(v, "distDigest") ? ["distDigest"] : [])])
   if (!(v.phase === "starting" || v.phase === "reconciling" || v.phase === "ready" || v.phase === "draining")) return invalid()
   const r = object(v.reconciliation)
   exactKeys(r, ["classified", "total", "uncertain"])
@@ -132,7 +133,8 @@ function result(value: unknown): ControlResult {
   if (v.phase === "ready" && reconciliation.classified !== reconciliation.total) invalid()
   if (!Array.isArray(v.launches) || !Array.isArray(v.capabilities) || v.capabilities.length !== 3 || v.capabilities.join(",") !== "status,doctor,shutdown") return invalid()
   const issues = Object.hasOwn(v, "issues") ? (Array.isArray(v.issues) && v.issues.length <= 4096 ? v.issues.map(value => { const issue = object(value); exactKeys(issue, ["path", "launchAttemptId", "message"]); if (typeof issue.path !== "string" || !issue.path.startsWith("/") || issue.launchAttemptId !== null && !UUID.test(String(issue.launchAttemptId)) || typeof issue.message !== "string") invalid(); return { path: issue.path, launchAttemptId: issue.launchAttemptId as string | null, message: issue.message } }) : invalid()) : undefined
-  return { hostId: hostId(v.hostId), handlerGeneration: generation, phase: v.phase, reconciliation, launches: v.launches.map(summary), ...(issues === undefined ? {} : { issues }), capabilities: ["status", "doctor", "shutdown"] }
+  const distDigest = !Object.hasOwn(v, "distDigest") ? undefined : v.distDigest === null ? null : typeof v.distDigest === "string" && /^[0-9a-f]{64}$/.test(v.distDigest) ? v.distDigest : invalid()
+  return { hostId: hostId(v.hostId), handlerGeneration: generation, phase: v.phase, reconciliation, launches: v.launches.map(summary), ...(issues === undefined ? {} : { issues }), ...(distDigest === undefined ? {} : { distDigest }), capabilities: ["status", "doctor", "shutdown"] }
 }
 
 export function parseReply(value: unknown): ControlReply {
