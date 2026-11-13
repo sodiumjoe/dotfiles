@@ -65,6 +65,35 @@ test("restart waits for a running turn, then restores the agent under a new Hand
   await f.verifyZeroSurvivors()
 })
 
+test("a turn admitted between the idle check and the shutdown is not aborted, and the restart completes afterward", async t => {
+  const f = await acpFixture(t), { c, sessionId } = await session(f), before = await f.tuple(sessionId)
+  const pending = join(f.paths.persistentRoot, "restart-pending.json")
+  let shutdowns = 0
+  const between: { pending: boolean; tuple: typeof before; live: boolean | undefined }[] = []
+  const done = await restart(f, ["--timeout", "30"], async (argv, deps) => {
+    if (argv[0] === "shutdown" && ++shutdowns === 1) {
+      deps.stdout(JSON.stringify({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: before.handlerGeneration, ok: false, error: { code: "BUSY", message: "agent " + before.agentId + " is running a turn" } }) + "\n")
+      return 75
+    }
+    if (argv[0] === "agent" && argv[1] === "list" && shutdowns === 1 && !between.length) {
+      const view = (await f.list()).agents.find(value => value.record.version === 3 && value.record.definition.agentId === before.agentId)
+      between.push({ pending: await fileExists(pending), tuple: await f.tuple(sessionId), live: view?.live })
+    }
+    return runControl(argv, deps)
+  })
+  assert.equal(done.code, 0, done.progress)
+  assert.equal(shutdowns, 2)
+  assert.equal(between.length, 1)
+  assert.deepEqual(between[0], { pending: false, tuple: before, live: true })
+  assert.equal(done.reply.result.restarted, true)
+  assert.deepEqual(done.reply.result.agents, [{ agentId: before.agentId, outcome: "restored", failure: null }])
+  assert.notEqual((await f.tuple(sessionId)).handlerGeneration, before.handlerGeneration)
+  assert.equal(await fileExists(pending), false)
+  c.close()
+  await f.stopSession(sessionId)
+  await f.verifyZeroSurvivors()
+})
+
 test("restart with no live agents still replaces the Handler", async t => {
   const f = await acpFixture(t)
   const before = (await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))).generation
