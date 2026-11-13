@@ -242,7 +242,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
   function touch(op: Live): void {
     const agentId = op.initial.definition.agentId
     void queue.run(async () => {
-      if (closed || frozen) return
+      if (closed || frozen || configuring.has(agentId)) return
       const prior = records.get(agentId)
       if (!prior || prior.phase !== "ready" || !isDeepStrictEqual(prior.launch, op.initial.launch)) return
       const title = op.conversation.display().title

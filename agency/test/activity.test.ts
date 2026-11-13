@@ -1,5 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { randomUUID } from "node:crypto"
+import { readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { acpFixture } from "./acp-support.js"
 import { until } from "./control-support.js"
 import { createAgentStore } from "../src/agent/store.js"
@@ -37,6 +40,29 @@ test("the Handler records activity and the title, keeps them across stop and res
   const restored = await store.readAgent(agentId)
   assert.equal(restored?.title, "hello")
   assert.equal(restored?.lastActivityAt, stopped?.lastActivityAt)
+  await f.stopSession(sessionId)
+  await f.verifyZeroSurvivors()
+})
+
+test("an activity write does not break a configure that overlaps the end of a turn", async t => {
+  const f = await acpFixture(t), c = await f.connect(), store = createAgentStore(f.paths.persistentRoot)
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, commandId: randomUUID(), backendId: "claude-agent-acp" } } })
+  const sessionId = String(session.sessionId), agentId = sessionId.slice(7)
+  await writeFile(join(f.root, "pause-set-mode"), "pause", { mode: 0o600 })
+  const turn = c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "held" }] })
+  await until(async () => (await f.requests("claude-agent-acp")).some(value => value.method === "session/prompt") ? true : undefined)
+  const submitted = await until(async () => (await store.readAgent(agentId))?.lastActivityAt)
+  const mode = c.request("session/set_mode", { sessionId, modeId: "review" })
+  await until(async () => await readFile(join(f.root, "at-set-mode"), "utf8").catch(() => undefined))
+  await f.release("claude-agent-acp")
+  assert.equal((await turn).stopReason, "end_turn")
+  await new Promise(resolve => setTimeout(resolve, 300))
+  assert.equal((await store.readAgent(agentId))?.lastActivityAt, submitted)
+  await writeFile(join(f.root, "release-set-mode"), "released", { mode: 0o600 })
+  await mode
+  assert.equal((await c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "hello" }] })).stopReason, "end_turn")
+  c.close()
   await f.stopSession(sessionId)
   await f.verifyZeroSurvivors()
 })

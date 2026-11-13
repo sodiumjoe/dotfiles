@@ -75,7 +75,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
     reply(request.id, snapshot())
   } else if (request.method === "session/set_model" || request.method === "session/set_mode") {
     if (request.method === "session/set_model") modelId = params.modelId
-    else modeId = params.modeId
+    else { modeId = params.modeId; await barrier("set-mode") }
     await writeFile(statePath, JSON.stringify(snapshot()), { mode: 0o600 })
     reply(request.id, snapshot())
   } else if (request.method === "session/cancel") {
