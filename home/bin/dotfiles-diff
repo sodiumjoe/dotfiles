@@ -61,20 +61,38 @@ report() {
 }
 
 # --- Claude settings ---
+#
+# The live file is an ordinary file that the Claude wrapper and Claude Code
+# rewrite. dotfiles-reconcile applies the generated settings to it with jq's
+# `*` rule: objects merge key by key, and source values and lists win. Only
+# differences the next apply would correct count as drift. Keys that only the
+# live file has are listed for promotion but do not count, because the wrapper
+# writes its own keys on every run.
 
-if [ -f home/.claude/settings.json ]; then
-  jq --sort-keys . "$tmpdir/.claude/settings.json" > "$tmpdir/expected-settings.json"
-  if ! jq --sort-keys . home/.claude/settings.json > "$tmpdir/live-settings.json" 2>/dev/null; then
-    echo "dotfiles-diff: home/.claude/settings.json is not valid JSON" >&2
+live_settings="$HOME/.claude/settings.json"
+if [ -f "$live_settings" ] && [ -f "$tmpdir/.claude/settings.json" ]; then
+  if ! jq --sort-keys . "$live_settings" > "$tmpdir/live-settings.json" 2>/dev/null; then
+    echo "dotfiles-diff: $live_settings is not valid JSON" >&2
     exit 2
   fi
-  if ! diff -q "$tmpdir/expected-settings.json" "$tmpdir/live-settings.json" &>/dev/null; then
-    report "home/.claude/settings.json" "$tmpdir/expected-settings.json" "$tmpdir/live-settings.json"
+  jq --sort-keys . "$tmpdir/.claude/settings.json" > "$tmpdir/desired-settings.json"
+  jq -s --sort-keys '.[0] * .[1]' "$tmpdir/live-settings.json" "$tmpdir/desired-settings.json" > "$tmpdir/applied-settings.json"
+  if ! diff -q "$tmpdir/live-settings.json" "$tmpdir/applied-settings.json" &>/dev/null; then
+    drifted=true
     if [ "$quiet" = false ]; then
-      echo "Promote changes to claude/settings.base.json or claude/settings.${DOTFILES_ENV}.json"
-      echo "Then run: dotfiles-generate --reset"
+      echo "=== $live_settings differs from sources ==="
+      diff --color=auto -u --label "live" --label "after dotfiles-reconcile" \
+        "$tmpdir/live-settings.json" "$tmpdir/applied-settings.json" | head -50 || true
+      echo ""
+      echo "Run dotfiles-reconcile to apply the sources, or promote the live values to claude/settings.base.json or claude/settings.${DOTFILES_ENV}.json"
       echo ""
     fi
+  fi
+  if [ "$quiet" = false ] && ! diff -q "$tmpdir/desired-settings.json" "$tmpdir/applied-settings.json" &>/dev/null; then
+    echo "=== Settings only in $live_settings (not drift; promote any you want everywhere) ==="
+    diff --color=auto -u --label "sources" --label "live" \
+      "$tmpdir/desired-settings.json" "$tmpdir/applied-settings.json" | head -50 || true
+    echo ""
   fi
 fi
 

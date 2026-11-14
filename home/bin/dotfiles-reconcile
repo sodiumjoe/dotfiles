@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 import pathlib
 import sys
@@ -22,16 +23,18 @@ if environment not in valid_environments:
     print(f"dotfiles-reconcile: invalid DOTFILES_ENV: {environment}", file=sys.stderr)
     raise SystemExit(2)
 optional_environments = {
-    pathlib.Path(".claude/settings.json"): {"work", "home"},
     pathlib.Path(".codex/AGENTS.md"): {"work", "devbox"},
     pathlib.Path(".codex/config.toml"): {"work", "devbox"},
     pathlib.Path("bin/work"): {"work", "devbox"},
 }
 
 tool_owned = {
-    pathlib.Path(".claude/settings.json"),
     pathlib.Path(".codex/config.toml"),
     pathlib.Path(".config/karabiner/karabiner.json"),
+}
+
+applied = {
+    pathlib.Path(".claude/settings.json"),
 }
 
 if not source_root.is_dir():
@@ -61,6 +64,7 @@ def relative_target(source, destination):
 
 
 entries = []
+applies = []
 optional_destinations = [
     home / relative
     for relative, enabled in optional_environments.items()
@@ -114,10 +118,13 @@ for relative, source in sorted(sources.items()):
     enabled = optional_environments.get(relative)
     if enabled is not None and environment not in enabled:
         continue
+    if relative in applied:
+        applies.append((relative, source, destination))
+        continue
     entries.append((source, target_source, destination))
 
 required_parents = set()
-for _, _, destination in entries:
+for _, _, destination in entries + [(None, None, destination) for _, _, destination in applies]:
     parent = destination.parent
     while parent != home:
         required_parents.add(parent)
@@ -150,6 +157,46 @@ for _, target_source, destination in entries:
     errors.append(f"destination conflict: {destination}")
 
 
+def merge(live, desired):
+    if isinstance(live, dict) and isinstance(desired, dict):
+        merged = dict(live)
+        for key, value in desired.items():
+            merged[key] = merge(live[key], value) if key in live else value
+        return merged
+    return desired
+
+
+def load_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        errors.append(f"invalid JSON: {path}")
+        return None
+
+
+applications = []
+for relative, source, destination in applies:
+    desired = load_json(source)
+    if has_symlink_ancestor(destination) or not os.path.lexists(destination):
+        live = {}
+    elif destination.is_symlink():
+        resolved = destination.resolve(strict=False)
+        if not inside_repo(resolved) or not resolved.is_file():
+            errors.append(f"destination conflict: {destination}")
+            continue
+        live = load_json(resolved)
+    elif destination.is_file():
+        live = load_json(destination)
+    else:
+        errors.append(f"destination conflict: {destination}")
+        continue
+    if desired is None or live is None:
+        continue
+    merged = merge(live, desired)
+    if destination.is_symlink() or not destination.exists() or merged != live:
+        applications.append((relative, destination, merged))
+
+
 def differs(destination, target_source):
     return not target_source.is_file() or target_source.read_bytes() != destination.read_bytes()
 
@@ -162,6 +209,8 @@ if arguments.preflight:
     for destination, target_source in adoptions:
         if differs(destination, target_source):
             print(f"dotfiles-reconcile: would adopt changes from {destination} into {target_source}")
+    for relative, destination, _ in applications:
+        print(f"dotfiles-reconcile: would apply {relative} to {destination}")
     print("dotfiles-reconcile: preflight passed")
     raise SystemExit(0)
 
@@ -185,6 +234,15 @@ for destination in optional_destinations:
     if destination.is_symlink() and inside_repo(destination):
         destination.unlink()
         changed += 1
+
+for relative, destination, merged in applications:
+    mode = destination.stat().st_mode & 0o7777 if destination.is_file() and not destination.is_symlink() else 0o644
+    temporary = destination.with_name(f".{destination.name}.dotfiles-apply.{os.getpid()}")
+    temporary.write_text(json.dumps(merged, indent=2) + "\n")
+    os.chmod(temporary, mode)
+    os.replace(temporary, destination)
+    print(f"dotfiles-reconcile: applied {relative} to {destination}")
+    changed += 1
 
 for _, target_source, destination in entries:
     desired = relative_target(target_source, destination)

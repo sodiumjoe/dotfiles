@@ -10,9 +10,9 @@ printf '{"runtime": true}\n' > "$output_root/.claude/settings.json"
 printf 'model = "runtime-model"\n' > "$output_root/.codex/config.toml"
 DOTFILES_ENV=work home/bin/dotfiles-generate --out "$output_root" >/dev/null
 python3 - "$output_root" <<'CHECK'
-import pathlib, sys
+import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
-assert (root / '.claude/settings.json').read_text() == '{"runtime": true}\n'
+assert 'runtime' not in json.loads((root / '.claude/settings.json').read_text())
 assert (root / '.codex/config.toml').read_text() == 'model = "runtime-model"\n'
 CHECK
 DOTFILES_ENV=home home/bin/dotfiles-generate --out "$output_root" >/dev/null

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import pathlib
 import shutil
@@ -89,9 +90,9 @@ class ReconcileTest(unittest.TestCase):
 
 
     def test_tool_rewritten_config_is_adopted_and_relinked(self):
-        self.write(".claude/settings.json", "generated")
+        self.write(".codex/config.toml", "generated")
         self.write(".zshenv", "managed")
-        live = self.owner / ".claude" / "settings.json"
+        live = self.owner / ".codex" / "config.toml"
         live.parent.mkdir(parents=True)
         live.write_text("changed by the tool")
         preflight = self.run_reconcile(arguments=["--preflight"])
@@ -100,8 +101,8 @@ class ReconcileTest(unittest.TestCase):
         result = self.run_reconcile()
         self.assertIn("adopted", result.stdout)
         self.assertTrue(live.is_symlink())
-        self.assertEqual(live.resolve(), (self.home_tree / ".claude/settings.json").resolve())
-        self.assertEqual((self.home_tree / ".claude/settings.json").read_text(), "changed by the tool")
+        self.assertEqual(live.resolve(), (self.home_tree / ".codex/config.toml").resolve())
+        self.assertEqual((self.home_tree / ".codex/config.toml").read_text(), "changed by the tool")
         self.assertTrue((self.owner / ".zshenv").is_symlink())
         self.assertEqual(list(live.parent.glob(".*dotfiles-link*")), [])
 
@@ -114,6 +115,62 @@ class ReconcileTest(unittest.TestCase):
         self.assertNotIn("adopted", result.stdout)
         self.assertTrue(live.is_symlink())
         self.assertEqual(live.read_text(), "same")
+
+    def claude_settings(self, desired, live=None, link=False):
+        self.write(".claude/settings.json", json.dumps(desired))
+        path = self.owner / ".claude" / "settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if link:
+            path.symlink_to(os.path.relpath(self.home_tree / ".claude/settings.json", path.parent))
+        elif live is not None:
+            path.write_text(json.dumps(live))
+        return path
+
+    def test_claude_settings_symlink_becomes_an_ordinary_file(self):
+        live = self.claude_settings({"editorMode": "vim"}, link=True)
+        self.assertIn("applied", self.run_reconcile().stdout)
+        self.assertFalse(live.is_symlink())
+        self.assertEqual(json.loads(live.read_text()), {"editorMode": "vim"})
+
+    def test_claude_settings_source_keys_win_and_live_only_keys_stay(self):
+        live = self.claude_settings(
+            {"editorMode": "vim", "permissions": {"allow": ["Read(*)"]}, "enabledPlugins": {"mine@market": True}},
+            {"editorMode": "normal", "model": "sonnet", "permissions": {"allow": ["Read(*)", "Bash(rm*)"], "ask": ["Bash(ssh*)"]},
+             "enabledPlugins": {"theirs@market": True}},
+        )
+        self.run_reconcile()
+        self.assertEqual(json.loads(live.read_text()), {
+            "editorMode": "vim",
+            "model": "sonnet",
+            "permissions": {"allow": ["Read(*)"], "ask": ["Bash(ssh*)"]},
+            "enabledPlugins": {"theirs@market": True, "mine@market": True},
+        })
+
+    def test_claude_settings_already_applied_are_not_rewritten(self):
+        live = self.claude_settings({"editorMode": "vim"}, {"model": "sonnet", "editorMode": "vim"})
+        before = live.stat()
+        result = self.run_reconcile()
+        self.assertNotIn("applied", result.stdout)
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (live.stat().st_ino, live.stat().st_mtime_ns))
+
+    def test_claude_settings_are_applied_on_a_devbox(self):
+        live = self.claude_settings({"editorMode": "vim"}, {"model": "sonnet"})
+        self.run_reconcile(environment="devbox")
+        self.assertEqual(json.loads(live.read_text()), {"model": "sonnet", "editorMode": "vim"})
+
+    def test_invalid_live_claude_settings_stop_reconciliation(self):
+        live = self.claude_settings({"editorMode": "vim"})
+        live.write_text("{not json")
+        self.write(".zshenv", "managed")
+        result = self.run_reconcile(check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(live.read_text(), "{not json")
+        self.assertFalse((self.owner / ".zshenv").exists())
+
+    def test_preflight_reports_claude_settings_without_writing(self):
+        live = self.claude_settings({"editorMode": "vim"}, {"model": "sonnet"})
+        self.assertIn("would apply", self.run_reconcile(arguments=["--preflight"]).stdout)
+        self.assertEqual(json.loads(live.read_text()), {"model": "sonnet"})
 
 if __name__ == "__main__":
     unittest.main()

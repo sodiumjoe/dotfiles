@@ -510,15 +510,16 @@ class BootstrapTest(DeploymentFixture):
         self.assert_failed_transition_is_unchanged("Darwin")
 
 
-    def test_devbox_preserves_platform_claude_settings(self):
+    def test_devbox_applies_claude_settings_and_keeps_platform_keys(self):
         runtime = self.owner / ".claude/settings.json"
         runtime.parent.mkdir()
-        content = '{"platform": true}\n'
-        runtime.write_text(content)
+        runtime.write_text('{"platform": true}\n')
 
         self.run_bootstrap("devbox")
 
-        self.assertEqual(runtime.read_text(), content)
+        applied = json.loads(runtime.read_text())
+        self.assertTrue(applied["platform"])
+        self.assertEqual(applied["editorMode"], json.loads((self.home_tree / ".claude/settings.json").read_text())["editorMode"])
         self.assertFalse(runtime.is_symlink())
         self.assertTrue(runtime.parent.is_dir())
         self.assertFalse(runtime.parent.is_symlink())
@@ -528,15 +529,17 @@ class BootstrapTest(DeploymentFixture):
     def assert_successful_transition(self, platform):
         self.environment["DOTFILES_TEST_PLATFORM"] = platform
         self.run_bootstrap("work")
-        runtime = '{"runtime": true}\n'
-        (self.home_tree / ".claude/settings.json").write_text(runtime)
+        live = json.loads((self.owner / ".claude/settings.json").read_text())
+        (self.owner / ".claude/settings.json").write_text(json.dumps({**live, "runtime": True}))
         (self.repo / "claude-overlay.md").write_text("new static instructions\n")
         (self.owner / "Brewfile").write_text("unmanaged home Brewfile\n")
 
         self.run_bootstrap("home")
 
         self.assertEqual((self.owner / ".dotfiles-env").read_text(), "DOTFILES_ENV=home\n")
-        self.assertEqual((self.owner / ".claude/settings.json").read_text(), runtime)
+        settings = self.owner / ".claude/settings.json"
+        self.assertFalse(settings.is_symlink())
+        self.assertTrue(json.loads(settings.read_text())["runtime"])
         self.assertIn("new static instructions", (self.owner / ".claude/CLAUDE.md").read_text())
         for relative in [".codex/AGENTS.md", ".codex/config.toml", "bin/work"]:
             destination = self.owner / relative

@@ -71,7 +71,7 @@ trap 'rm -rf "$staging_dir"' EXIT
 generated_root="$staging_dir/generated"
 mkdir -p "$generated_root/.claude" "$generated_root/.codex"
 
-for relative in .claude/settings.json .codex/config.toml; do
+for relative in .codex/config.toml; do
   if [ -f "home/$relative" ]; then
     cp "home/$relative" "$generated_root/$relative"
   fi
@@ -83,7 +83,7 @@ home/bin/dotfiles-reconcile --preflight --generated-root "$generated_root"
 for relative in .claude/CLAUDE.md .claude/settings.json .codex/AGENTS.md .codex/config.toml; do
   if [ -f "$generated_root/$relative" ]; then
     case "$relative" in
-      .claude/settings.json|.codex/config.toml)
+      .codex/config.toml)
         [ ! -f "home/$relative" ] || continue
         ;;
     esac

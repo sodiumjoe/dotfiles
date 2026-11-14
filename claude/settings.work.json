@@ -8,14 +8,6 @@
       "mcp__toolshed_extras__*"
     ]
   },
-  "model": "opus[1m]",
-  "enabledMcpjsonServers": [
-    "toolshed",
-    "toolshed_non_eng",
-    "toolshed_hubble",
-    "toolshed_data_catalog",
-    "nexus"
-  ],
   "enabledPlugins": {
     "js-infra-internal@stripe-internal-marketplace": true,
     "orbit@stripe-internal-marketplace": true,

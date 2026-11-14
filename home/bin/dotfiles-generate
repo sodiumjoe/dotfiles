@@ -105,7 +105,7 @@ if [ -n "$brew_overlay" ] && [ "$(uname -s)" = "Darwin" ]; then
   fi
 fi
 
-# --- Mutable: Claude settings (generate once, skip if exists) ---
+# --- Claude settings (always regenerated; dotfiles-reconcile applies them to the live file) ---
 
 generate_claude_settings() {
   local overlay="claude/settings.${settings_overlay}.json"
@@ -126,11 +126,7 @@ generate_claude_settings() {
   jq -s -f claude/settings-merge.jq claude/settings.base.json "$overlay" > "$out/.claude/settings.json"
 }
 
-if [ "$reset" = true ] || [ ! -f "$out/.claude/settings.json" ]; then
-  generate_claude_settings
-else
-  echo "Skipping .claude/settings.json (exists, use --reset to regenerate)"
-fi
+generate_claude_settings
 
 # --- Mutable: Codex config (generate once, skip if exists) ---
 

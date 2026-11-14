@@ -44,7 +44,7 @@ The repo serves three environments via `DOTFILES_ENV`:
 
 Bootstrap deliberately ignores the ambient `$DOTFILES_ENV`, since `zshenv` always exports it. Trusting the variable would make the prompt unreachable and would silently re-commit a stale value whenever you delete `~/.dotfiles-env` in order to re-select.
 
-**To switch environments:** `./bootstrap.sh --env=<name>` followed by `dotfiles-generate --reset`, then restart your shell. The `--reset` is what rewrites the mutable configs; bootstrap alone leaves an existing `settings.json` in place.
+**To switch environments:** `./bootstrap.sh --env=<name>` followed by `dotfiles-generate --reset`, then restart your shell. Bootstrap regenerates and applies the Claude settings for the new environment; the `--reset` is what rewrites the mutable Codex config.
 
 ### Migrating an existing machine
 
@@ -71,21 +71,25 @@ Static files (always regenerated -- tools never modify them):
 - `Brewfile.base` + `Brewfile.$DOTFILES_ENV` -> `Brewfile` (skipped on devbox, which declares no Brewfile, and on Linux, which has no Homebrew -- separate conditions)
 - `shared/*.md` + overlay -> `home/.claude/CLAUDE.md`, `home/.codex/AGENTS.md`
 
+Applied files (always regenerated, then merged into a live ordinary file):
+- `claude/settings.base.json` + `claude/settings.work|home.json` -> `home/.claude/settings.json` (merged via `claude/settings-merge.jq`), applied to `~/.claude/settings.json` in every environment
+
 Mutable files (generated once on first bootstrap, then hands-off -- tools modify them at runtime):
-- `claude/settings.base.json` + `claude/settings.work|home.json` -> `home/.claude/settings.json` (merged via `claude/settings-merge.jq`)
 - `codex/config.base.toml` -> `home/.codex/config.toml`
 
-The repository deploys `~/.claude/settings.json` only for `work` and `home`. Devbox provisioning owns the live regular file at that path, so reconciliation preserves it while continuing to manage the other children of the real `~/.claude` directory. Switching to `devbox` removes a prior repository-owned settings symlink but does not remove or replace a platform-owned regular file.
+`~/.claude/settings.json` is not a symlink. The Stripe `claude` wrapper rewrites it on every run: it sorts the keys, sets its own keys (`model`, `effortLevel`, `enabledMcpjsonServers`, its plugins and marketplaces), and replaces the file, which would break a symlink. Agency also refuses to fingerprint a symlinked provider configuration file, so a symlink there stops new Claude sessions from starting. Instead, `dotfiles-reconcile` applies `home/.claude/settings.json` to the live file with jq's `*` rule: objects merge key by key, values and lists from source replace the live ones, and keys only the live file has are kept. Source therefore wins for every key it declares, and keys it does not declare belong to the wrapper, the model picker and `/config`. Leave a setting out of source if you do not care about its value. The apply writes the file with a single rename, and only when the merged result differs from the live file, so an unchanged file keeps its identity. A live symlink into the repository is replaced by an ordinary file, and live JSON that does not parse stops reconciliation.
 
 `settings-merge.jq` is a generic recursive merge: objects merge key-by-key, arrays concatenate (base first), scalars take the overlay's value. Adding a new array-valued key to the settings needs no change to the filter. Note that arrays concatenating means an overlay can only add hooks and permissions, never remove one the base declares.
 
-Use `dotfiles-generate --reset` to force-regenerate mutable files, and `--out DIR` to generate into a scratch directory without touching the working tree. Scratch output includes `Brewfile` on macOS; bootstrap publishes it at the repository root, never into the deployed home tree.
+Use `dotfiles-generate --reset` to force-regenerate the mutable Codex config, and `--out DIR` to generate into a scratch directory without touching the working tree. Scratch output includes `Brewfile` on macOS; bootstrap publishes it at the repository root, never into the deployed home tree.
 
 Generation fails loudly rather than degrading: a missing `jq` or a missing overlay aborts, because writing base-only settings would silently drop every work permission, MCP server, and plugin.
 
 ### Config Drift
 
-`home/bin/dotfiles-diff` shows what tools have changed in mutable configs (settings.json, config.toml) vs. what the source files would generate. It works by running `dotfiles-generate --out` into a temp directory and diffing against the canonical files under `home/`, so drift detection stays consistent with generation by construction. Exit codes are `0` no drift, `1` drift, `2` could not check.
+`home/bin/dotfiles-diff` shows what tools have changed in live configs vs. what the source files would generate. It works by running `dotfiles-generate --out` into a temp directory, so drift detection stays consistent with generation by construction. Exit codes are `0` no drift, `1` drift, `2` could not check.
+
+For Claude settings it compares `~/.claude/settings.json` with the result of applying the sources to it. Differences the next `dotfiles-reconcile` would correct count as drift. Keys that only the live file has are listed separately for promotion and do not count, because the wrapper writes its own keys on every run.
 
 Codex rewrites `last_updated` and `last_revision` in its marketplace block on every refresh; those keys are stripped from both sides before diffing, and should never be committed to `config.base.toml`.
 
@@ -95,7 +99,7 @@ The workflow for promoting runtime changes back to source:
 2. Edit the appropriate source file (base or overlay)
 3. Run `dotfiles-generate --reset`
 
-Claude Code, Codex and Karabiner-Elements save their configs by replacing the file, which turns the deployed symlink into an ordinary file. `dotfiles-reconcile` adopts those three paths instead of refusing: when `~/.claude/settings.json`, `~/.codex/config.toml` or `~/.config/karabiner/karabiner.json` is an ordinary file, it copies any changed contents into the repository copy, reports the adoption, and relinks the path. Review adopted changes with `git diff` or `dotfiles-diff` and promote them as above. Every other ordinary file at a managed path is still a conflict that stops reconciliation. Links are replaced with a single rename, so a tool watching its config never sees the file disappear.
+Codex and Karabiner-Elements save their configs by replacing the file, which turns the deployed symlink into an ordinary file. `dotfiles-reconcile` adopts those two paths instead of refusing: when `~/.codex/config.toml` or `~/.config/karabiner/karabiner.json` is an ordinary file, it copies any changed contents into the repository copy, reports the adoption, and relinks the path. Review adopted changes with `git diff` or `dotfiles-diff` and promote them as above. Every other ordinary file at a managed path is still a conflict that stops reconciliation. Links are replaced with a single rename, so a tool watching its config never sees the file disappear.
 
 ### Post-merge Hook
 
@@ -170,7 +174,7 @@ PR review recovery state lives in `.review/session.json`, which is written befor
 ### Claude and Codex
 
 - `home/.claude/CLAUDE.md` -- generated (do not edit directly)
-- `home/.claude/settings.json` -> `~/.claude/settings.json` on work and home (permissions, hooks, MCP servers); devbox preserves the platform-owned live file
+- `home/.claude/settings.json` -- generated desired settings (permissions, hooks, MCP servers), applied to the ordinary file `~/.claude/settings.json` in every environment
 - `claude/settings-merge.jq` -- jq filter for merging base + overlay settings
 - `home/.claude/agents/` -- plan-reviewer, code-reviewer (Claude-only)
 - `home/.claude/commands/` -- note, name, archive-plans, etc. (Claude-only)

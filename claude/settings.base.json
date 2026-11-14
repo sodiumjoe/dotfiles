@@ -102,7 +102,6 @@
       "Bash(git switch*)"
     ]
   },
-  "model": "opus",
   "tui": "fullscreen",
   "enableAllProjectMcpServers": true,
   "hooks": {
@@ -148,7 +147,6 @@
       "Working"
     ]
   },
-  "effortLevel": "high",
   "enabledPlugins": {
     "obsidian@obsidian-skills": true
   }
