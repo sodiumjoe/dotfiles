@@ -297,4 +297,17 @@ describe("Agentic completed block folding", function()
         answer("after the clear")
         assert.is_nil(Blocks.block_range_at_row(writer.bufnr, line("after the clear") - 1))
     end)
+
+    it("highlights the chat without the whole-line conceal rules that force a full parse on every edit", function()
+        dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/treesitter.lua")[1].config()
+        vim.treesitter.stop(writer.bufnr)
+        vim.bo[writer.bufnr].filetype = "AgenticChat"
+        local chat = vim.treesitter.highlighter.active[writer.bufnr]
+        assert.is_not_nil(chat)
+        assert.is_not_true(chat:get_query("markdown"):query().has_conceal_line)
+        local file = vim.api.nvim_create_buf(true, false)
+        vim.bo[file].filetype = "markdown"
+        assert.is_true(vim.treesitter.highlighter.active[file]:get_query("markdown"):query().has_conceal_line)
+        vim.api.nvim_buf_delete(file, { force = true })
+    end)
 end)

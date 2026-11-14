@@ -12,9 +12,19 @@ return {
                         return
                     end
                     local lang = vim.treesitter.language.get_lang(ft)
-                    if lang and pcall(vim.treesitter.language.inspect, lang) then
-                        vim.treesitter.start(args.buf)
+                    if not lang or not pcall(vim.treesitter.language.inspect, lang) then
+                        return
                     end
+                    if ft ~= "AgenticChat" then
+                        vim.treesitter.start(args.buf)
+                        return
+                    end
+                    local sources = {}
+                    for _, path in ipairs(vim.treesitter.query.get_files(lang, "highlights")) do
+                        sources[#sources + 1] = table.concat(vim.fn.readfile(path), "\n")
+                    end
+                    local query = table.concat(sources, "\n"):gsub("%(#set! conceal_lines \"\"%)", "")
+                    vim.treesitter.highlighter.new(vim.treesitter.get_parser(args.buf, lang), { queries = { [lang] = query } })
                 end,
             })
         end,
