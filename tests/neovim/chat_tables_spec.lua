@@ -155,4 +155,30 @@ describe("Chat tables", function()
         assert.are.equal(1, #found)
         assert.are.equal(row_of("| U |") - 1, found[1].row)
     end)
+    it("re-lays out the grid with wrapped cells when the window narrows", function()
+        say("Notes:\n\n| Key | Notes |\n|---|---|\n| wrap | breaks long rows across screen lines in narrow windows |\n\n")
+        settle()
+        local win = f.manager.widget.win_nrs.chat
+        local textoff = vim.fn.getwininfo(win)[1].textoff
+        vim.api.nvim_win_set_width(win, textoff + 30)
+        require("sodium.chat_tables").relayout(buf)
+        local found = grids()
+        assert.are.equal(1, #found)
+        assert.is_true(#found[1].lines > 5)
+        for _, line in ipairs(found[1].lines) do assert.are.equal(30, vim.fn.strdisplaywidth(line)) end
+    end)
+
+    it("leaves a table raw while the window is too narrow and draws it once the window is wide enough", function()
+        local win = f.manager.widget.win_nrs.chat
+        local textoff = vim.fn.getwininfo(win)[1].textoff
+        vim.api.nvim_win_set_width(win, textoff + 40)
+        say("Wide:\n\n| one | two | three | four | five |\n|---|---|---|---|---|\n| aaaaaaaaaa | bbbbbbbbbb | cccccccccc | dddddddddd | eeeeeeeeee |\n\n")
+        settle()
+        assert.are.same({}, concealed())
+        assert.are.equal(0, #grids())
+        vim.api.nvim_win_set_width(win, textoff + 60)
+        require("sodium.chat_tables").relayout(buf)
+        assert.are.equal(1, #grids())
+        assert.are.equal(3, #concealed())
+    end)
 end)

@@ -107,6 +107,23 @@ local function render_node(buf, state, node, width)
     end
 end
 
+function M.relayout(buf)
+    local state = states[buf]
+    if not state or not vim.api.nvim_buf_is_valid(buf) then return end
+    prune(buf, state)
+    local width, entries = width_for(buf), {}
+    for anchor, entry in pairs(state.tables) do entries[#entries + 1] = { anchor, entry } end
+    for _, item in ipairs(entries) do
+        local position = vim.api.nvim_buf_get_extmark_by_id(buf, ns, item[1], {})
+        if position[1] then
+            local first = position[1] + 1
+            local ok, err = pcall(draw, buf, state, first, first + item[2].count - 1, item[2].tbl, width)
+            if not ok then require("agentic.utils.logger").debug("chat table", err) end
+        end
+    end
+    prune(buf, state)
+end
+
 function M.update(buf)
     local state = states[buf]
     if not state then return end
@@ -169,6 +186,30 @@ function M.setup()
     vim.api.nvim_create_autocmd("BufWipeout", {
         group = group,
         callback = function(event) states[event.buf] = nil end,
+    })
+    vim.api.nvim_create_autocmd("WinResized", {
+        group = group,
+        callback = function()
+            for _, win in ipairs(vim.v.event.windows or {}) do
+                if vim.api.nvim_win_is_valid(win) then
+                    local buf = vim.api.nvim_win_get_buf(win)
+                    local state = states[buf]
+                    if state and not state.resizing then
+                        state.resizing = true
+                        vim.schedule(function()
+                            state.resizing = false
+                            require("sodium.chat_tables").relayout(buf)
+                        end)
+                    end
+                end
+            end
+        end,
+    })
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+        group = group,
+        callback = function(event)
+            if states[event.buf] then require("sodium.chat_tables").relayout(event.buf) end
+        end,
     })
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].filetype == "AgenticChat" then M.attach(buf) end

@@ -1,6 +1,6 @@
 local M = {}
 
-local extra = { "sodium.agentic_folds", "sodium.agentic_sessions" }
+local extra = { "sodium.agentic_folds", "sodium.agentic_sessions", "sodium.chat_tables", "sodium.table_layout" }
 
 local function owned(name)
     return name == "sodium.agency" or name:match("^sodium%.agency%.") ~= nil or vim.tbl_contains(extra, name)
@@ -24,6 +24,7 @@ end
 
 local function install(deps)
     require("sodium.agentic_folds").install()
+    require("sodium.chat_tables").setup()
     require("sodium.agency.agentic").install()
     return require("sodium.agency").setup(deps)
 end

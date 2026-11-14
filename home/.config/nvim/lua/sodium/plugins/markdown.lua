@@ -101,6 +101,11 @@ return {
                 end
                 return true
             end,
+            overrides = {
+                filetype = {
+                    AgenticChat = { pipe_table = { enabled = false } },
+                },
+            },
             on = {
                 render = function(ctx)
                     if vim.bo[ctx.buf].filetype ~= "AgenticChat" then
