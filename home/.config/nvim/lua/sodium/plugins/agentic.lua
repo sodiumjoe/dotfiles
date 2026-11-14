@@ -848,7 +848,7 @@ return {
             return ""
         end
 
-        local function notify_agent_response_complete()
+        local function notify_agent(reason)
             local notify = vim.fn.expand("$HOME/.claude/hooks/notify-on-idle.sh")
             if vim.fn.executable(notify) ~= 1 then
                 return
@@ -858,8 +858,17 @@ return {
                 detach = true,
                 env = {
                     NOTIFY_AGENT_NAME = "Agent",
+                    NOTIFY_REASON = reason,
                 },
             })
+        end
+
+        local function notify_agent_response_complete()
+            notify_agent("is waiting for input")
+        end
+
+        local function notify_agent_permission_request()
+            notify_agent("needs permission")
         end
 
         patch_agentic_acp_client()
@@ -906,6 +915,7 @@ exec agy acp]] } } }
             },
             hooks = {
                 on_response_complete = notify_agent_response_complete,
+                on_request_permission = notify_agent_permission_request,
             },
         })
 

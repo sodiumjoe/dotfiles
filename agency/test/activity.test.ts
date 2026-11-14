@@ -125,3 +125,15 @@ test("a restore issued while the history backfill is reading completes instead o
   await f.waitCompleted(await f.stop(restored.command.result!.target!))
   await f.verifyZeroSurvivors()
 })
+
+test("a provider learns the Agency agent it runs as from its environment", async t => {
+  const f = await acpFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, commandId: randomUUID(), backendId: "claude-agent-acp" } } })
+  const sessionId = String(session.sessionId)
+  const environment = await until(async () => (await f.requests("claude-agent-acp")).find(value => value.method === "fixture/environment"))
+  assert.equal(environment.params?.AGENCY_AGENT_ID, sessionId.slice(7))
+  c.close()
+  await f.stopSession(sessionId)
+  await f.verifyZeroSurvivors()
+})

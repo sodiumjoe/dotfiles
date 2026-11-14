@@ -29,7 +29,7 @@ const snapshot = () => backend === "codex-acp" ? { configOptions: options, ...(p
   models: { currentModelId: modelId, availableModels: [{ modelId: "legacy-a", name: "A" }, { modelId: "legacy-b", name: "B" }] },
   modes: { currentModeId: modeId, availableModes: [{ id: "normal", name: "Normal" }, { id: "review", name: "Review" }] },
 }
-await appendFile(log, JSON.stringify({ method: "fixture/environment", params: { AGENCY_TEST_EDITOR_MARKER: process.env.AGENCY_TEST_EDITOR_MARKER ?? null, NVIM: process.env.NVIM ?? null, NVIM_SOCKET_PATH: process.env.NVIM_SOCKET_PATH ?? null } }) + "\n", { mode: 0o600 })
+await appendFile(log, JSON.stringify({ method: "fixture/environment", params: { AGENCY_AGENT_ID: process.env.AGENCY_AGENT_ID ?? null, AGENCY_TEST_EDITOR_MARKER: process.env.AGENCY_TEST_EDITOR_MARKER ?? null, NVIM: process.env.NVIM ?? null, NVIM_SOCKET_PATH: process.env.NVIM_SOCKET_PATH ?? null } }) + "\n", { mode: 0o600 })
 let configurationEmitted = false
 const configurationTimer = setInterval(() => { void exists("emit-configuration").then(ready => {
   if (ready && !configurationEmitted) { configurationEmitted = true; update({ sessionUpdate: "config_option_update", configOptions: options }) }

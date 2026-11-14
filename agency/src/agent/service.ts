@@ -445,7 +445,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         const editor = await startEditorRouting(context.paths.runtimeRoot)
         if (closed || op.controller.signal.aborted || op.expired) { editor.close(); throw new AgentError("STARTUP_FAILED") }
         op.editor = editor
-        const environment = { ...callerEnvironment, NVIM: editor.path, NVIM_SOCKET_PATH: editor.path }
+        const environment = { ...callerEnvironment, NVIM: editor.path, NVIM_SOCKET_PATH: editor.path, AGENCY_AGENT_ID: op.initial.definition.agentId }
         try { op.owner = dependencies.processFactory({ context, spec, agentRecord: op.initial, args: op.backend.args, session: op.accepted.op === "restore" ? { kind: "load", sessionId: op.initial.session!.sessionId, params: op.nativeParams } : { kind: "new", params: op.nativeParams }, environment, contract: op.contract, deadline: op.deadline, isReady: () => op.ready, onUpdate: event => { for (const value of displayUpdates(op, event)) retainUpdate(op, value) }, onRequest: message => { void queue.run(async () => {
           await requireTarget(agentTuple(op.initial))
           await permissionBroker.open(agentTuple(op.initial), message.id as string | number, message.params as JsonObject)

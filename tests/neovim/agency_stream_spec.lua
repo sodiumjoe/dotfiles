@@ -75,6 +75,28 @@ describe("Agency live rendering", function()
         assert.is_true(text:find("before tool", 1, true) < text:find("Tool", 1, true))
     end)
 
+    it("notifies when an Agency session asks for permission", function()
+        local home, saved = vim.fn.tempname(), vim.env.HOME
+        local record = home .. "/record"
+        vim.fn.mkdir(home .. "/.claude/hooks", "p")
+        vim.fn.writefile({ "#!/bin/sh", "printf '%s|%s' \"$NOTIFY_AGENT_NAME\" \"$NOTIFY_REASON\" > " .. vim.fn.shellescape(record) }, home .. "/.claude/hooks/notify-on-idle.sh")
+        vim.fn.setfperm(home .. "/.claude/hooks/notify-on-idle.sh", "rwx------")
+        vim.env.HOME = home
+        local ok, err = pcall(function()
+            f.client:_handle_message({ id = "notify-permission", method = "session/request_permission", params = {
+                sessionId = f.manager.session_id, toolCall = { toolCallId = "notify-tool", title = "Tool", kind = "other", status = "pending" },
+                options = { { optionId = "allow", name = "Allow", kind = "allow_once" } },
+                _meta = { agency = { version = 1, binding = vim.deepcopy(f.manager._agency_binding) } },
+            } })
+            f.flush()
+            assert.is_true(vim.wait(3000, function() return vim.fn.filereadable(record) == 1 and #vim.fn.readfile(record) > 0 end, 20))
+            assert.are.equal("Agent|needs permission", vim.fn.readfile(record)[1])
+        end)
+        vim.env.HOME = saved
+        vim.fn.delete(home, "rf")
+        if not ok then error(err, 0) end
+    end)
+
     it("flushes before completion and its hook", function()
         f.manager:_handle_input_submit("question")
         local complete

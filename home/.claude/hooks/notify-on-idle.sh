@@ -1,7 +1,12 @@
 #!/bin/bash
 
+if [ -n "${AGENCY_AGENT_ID:-}" ]; then
+  exit 0
+fi
+
 PANE="$TMUX_PANE"
 APP_NAME="${NOTIFY_AGENT_NAME:-Claude}"
+REASON="${NOTIFY_REASON:-is waiting for input}"
 BOX_TYPE_FILE="${BOX_TYPE_FILE:-/pay/conf/box-type}"
 
 if [ -n "$PANE" ]; then
@@ -27,9 +32,9 @@ else
 fi
 
 if [ -n "$LABEL" ]; then
-  MSG="$APP_NAME is waiting for input on $ORIGIN ($LABEL)"
+  MSG="$APP_NAME $REASON on $ORIGIN ($LABEL)"
 else
-  MSG="$APP_NAME is waiting for input on $ORIGIN"
+  MSG="$APP_NAME $REASON on $ORIGIN"
 fi
 
 if [ -n "$PANE" ] && [ ! -f "$BOX_TYPE_FILE" ]; then
