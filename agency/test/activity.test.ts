@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { acpFixture } from "./acp-support.js"
@@ -93,5 +94,34 @@ test("the Handler backfills the title and activity time of older stopped session
   assert.equal(after.title, "backfilled title")
   assert.equal(after.lastActivityAt, (await stat(path)).mtime.toISOString())
   assert.equal(after.phase, "stopped")
+  await f.verifyZeroSurvivors()
+})
+
+test("a restore issued while the history backfill is reading completes instead of leaving its command pending", async t => {
+  const homes = await mkdtemp(join(tmpdir(), "agency-backfill-race-")), codexHome = join(homes, "codex")
+  t.after(() => rm(homes, { recursive: true, force: true }))
+  const f = await agentHandlerFixture(t, { selectionCatalog: true, nativeAcp: true }, { CODEX_HOME: codexHome, CLAUDE_CONFIG_DIR: join(homes, "claude") })
+  const store = createAgentStore(f.paths.persistentRoot)
+  const started = await f.waitCompleted(await f.start({ mode: "read-only" }))
+  const target = started.command.target!
+  await f.waitCompleted(await f.stop(target))
+  const sessionId = (await store.readAgent(target.agentId))!.session!.sessionId
+  await mkdir(join(codexHome, "sessions", "2026", "11", "13"), { recursive: true })
+  const path = join(codexHome, "sessions", "2026", "11", "13", "rollout-2026-11-13T10-00-00-" + sessionId + ".jsonl")
+  execFileSync("mkfifo", [path])
+  const handler = await readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
+  await f.control({ protocol: "agency-control/2", requestId: randomUUID(), handlerGeneration: handler.generation, op: "shutdown", commandId: randomUUID(), stopAgents: false })
+  await f.waitHandlerExit()
+  await f.restart({ selectionCatalog: true, nativeAcp: true, pauseAt: "observe-config" })
+  await rm(join(f.root, "release-barrier"), { force: true })
+  const restoring = f.restore(target.agentId)
+  await f.waitBarrier()
+  await (await open(path, "w")).close()
+  await new Promise(resolve => setTimeout(resolve, 300))
+  await writeFile(join(f.root, "release-barrier"), "released", { mode: 0o600 })
+  const restored = await f.waitCompleted(await restoring)
+  assert.equal(restored.command.result?.outcome, "restored")
+  assert.equal((await store.readAgent(target.agentId))?.phase, "ready")
+  await f.waitCompleted(await f.stop(restored.command.result!.target!))
   await f.verifyZeroSurvivors()
 })

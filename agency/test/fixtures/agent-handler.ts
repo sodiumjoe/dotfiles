@@ -119,7 +119,7 @@ try {
         if (next.op === "start" && next.state === "completed") await pause("receipt")
         if (next.op === "stop" && next.state === "pending") await pause("stop-intent")
         if (next.op === "stop" && next.state === "completed") await pause("stop-receipt-after")
-      } } }, { processFactory(options) {
+      } } }, { async observeConfig(profile) { await pause("observe-config"); return observeConfig(profile) }, processFactory(options) {
         mutation("process")
         const owner = createAgentProcess(options, { spawn: ((...args: Parameters<typeof spawn>) => {
           const [file, argv, settings] = args

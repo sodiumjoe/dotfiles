@@ -304,7 +304,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
       try { summary = await historySummary({ record, ...historyHomes() }) } catch { continue }
       if (!summary.title && !summary.modifiedAt) continue
       await queue.run(async () => {
-        if (closed || frozen || !historical) return
+        if (closed || frozen || accepting > 0 || !historical) return
         const agentId = record.definition.agentId, index = historical.agents.findIndex(value => value.definition.agentId === agentId), current = historical.agents[index]
         if (!current || records.has(agentId) || historical.issues.some(issue => issue.id === agentId) || !isDeepStrictEqual(current, record)) return
         const next: AgentRecord = { ...current, ...(current.lastActivityAt === undefined && summary.modifiedAt ? { lastActivityAt: summary.modifiedAt } : {}), ...(current.title === undefined && summary.title ? { title: summary.title } : {}) }
