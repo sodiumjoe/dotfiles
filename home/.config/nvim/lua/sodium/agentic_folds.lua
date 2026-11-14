@@ -64,6 +64,16 @@ function M.fold_completed_diff(writer, tool_call_id)
 end
 
 function M.install()
+    local Widget = require("agentic.ui.chat_widget")
+    if Patch.claim(Widget, "folds", M) then
+        local clear_widget = Patch.original(Widget, "clear")
+        function Widget:clear()
+            local result = clear_widget(self)
+            local chat = self.buf_nrs and self.buf_nrs.chat
+            if chat and vim.api.nvim_buf_is_valid(chat) then vim.api.nvim_buf_clear_namespace(chat, -1, 0, -1) end
+            return result
+        end
+    end
     local Fold = require("agentic.ui.tool_call_fold")
     if Patch.claim(Fold, "folds", M) then
         local should_fold = Patch.original(Fold, "should_fold")
