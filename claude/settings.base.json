@@ -61,6 +61,8 @@
       "Edit(/tmp/*)",
       "Glob(*)",
       "Bash(nvim-edit:*)",
+      "Bash(ssh *qa-mydev--*)",
+      "Bash(scp *qa-mydev--*)",
       "Bash(find * | head *)",
       "Bash(find * | tail *)",
       "Bash(find * | sort *)",
@@ -87,8 +89,6 @@
     "ask": [
       "Bash(curl*)",
       "Bash(wget*)",
-      "Bash(ssh*)",
-      "Bash(scp*)",
       "Bash(chmod*)",
       "Bash(chown*)",
       "Bash(docker*)",
