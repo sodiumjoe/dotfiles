@@ -103,6 +103,19 @@ describe("Agency session list presentation", function()
         end
     end)
 
+    it("pads the highlighted status inside its own badge", function()
+        local item = List.item(view("w", "2026-11-13T00:00:00Z"), { status = "Working" })
+        local chunks = List.format(item, { _agency_label_width = 9 })[1].resolve(100)
+        for index, chunk in ipairs(chunks) do
+            if chunk[2] == "DiagnosticInfo" then
+                assert.are.equal(" Working ", chunk[1])
+                assert.is_nil(chunks[index + 1] and chunks[index + 1][2])
+                return
+            end
+        end
+        error("no highlighted status chunk")
+    end)
+
     it("shows and clears the loading suffix", function()
         local picker = Snacks.picker({ title = "Base", items = {}, show_empty = true, format = List.format })
         pickers[#pickers + 1] = picker

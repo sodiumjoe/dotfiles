@@ -84,7 +84,9 @@ function M.format(item, picker)
         local chunks = { { M.column("[" .. M.clip(item.label or "", label_width - 2) .. "]", label_width), "Identifier" }, { "  " }, { M.column(item.title or "", title_width) } }
         if model_width > 0 then vim.list_extend(chunks, { { "  " }, { M.column(item.model or "", model_width), "SnacksPickerComment" } }) end
         local status_hl = item.issue and "DiagnosticWarn" or item.status == "Working" and "DiagnosticInfo" or "Comment"
-        vim.list_extend(chunks, { { "  " }, { M.column(item.age or "", 4), "SnacksPickerComment" }, { " " }, { M.column(item.status or "", status_width), status_hl } })
+        local status = M.clip(item.status or "", status_width)
+        local badge = status ~= "" and " " .. status .. (vim.fn.strdisplaywidth(status) < status_width and " " or "") or " "
+        vim.list_extend(chunks, { { "  " }, { M.column(item.age or "", 4), "SnacksPickerComment" }, { badge, status ~= "" and status_hl or nil }, { string.rep(" ", math.max(0, status_width + 1 - vim.fn.strdisplaywidth(badge))) } })
         return chunks
     end } }
 end
