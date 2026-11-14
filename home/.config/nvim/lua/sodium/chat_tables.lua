@@ -47,11 +47,13 @@ end
 local function parse_table(buf, node)
     local tbl, last = { header = {}, align = {}, rows = {} }, (node:range())
     for child in node:iter_children() do
-        local kind, row = child:type(), (child:range())
+        local kind = child:type()
+        local row, col = child:range()
+        local line = (vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""):sub(col + 1)
         if kind == "pipe_table_header" then
-            tbl.header = split_row(vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1])
+            tbl.header = split_row(line)
         elseif kind == "pipe_table_row" then
-            tbl.rows[#tbl.rows + 1] = split_row(vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1])
+            tbl.rows[#tbl.rows + 1] = split_row(line)
         elseif kind == "pipe_table_delimiter_row" then
             for cell in child:iter_children() do
                 if cell:type() == "pipe_table_delimiter_cell" then tbl.align[#tbl.align + 1] = alignment(cell) end
@@ -112,6 +114,8 @@ function M.relayout(buf)
     if not state or not vim.api.nvim_buf_is_valid(buf) then return end
     prune(buf, state)
     local width, entries = width_for(buf), {}
+    if width == state.width then return end
+    state.width = width
     for anchor, entry in pairs(state.tables) do entries[#entries + 1] = { anchor, entry } end
     for _, item in ipairs(entries) do
         local position = vim.api.nvim_buf_get_extmark_by_id(buf, ns, item[1], {})
@@ -135,7 +139,7 @@ function M.update(buf)
     local tree = state.parser:trees()[1]
     if not tree then return end
     local count, width, dirty = vim.api.nvim_buf_line_count(buf), width_for(buf), state.dirty
-    state.dirty = {}
+    state.dirty, state.width = {}, width
     for _, range in ipairs(dirty) do
         local first, last = range[1], math.min(range[2], count - 1)
         if first <= last then

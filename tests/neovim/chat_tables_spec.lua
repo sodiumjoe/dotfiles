@@ -181,4 +181,27 @@ describe("Chat tables", function()
         assert.are.equal(1, #grids())
         assert.are.equal(3, #concealed())
     end)
+
+    it("keeps the drawn grids when a resize leaves the width unchanged", function()
+        say("Same:\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n")
+        settle()
+        local function ids()
+            return vim.tbl_map(function(mark) return mark[1] end, marks())
+        end
+        local before = ids()
+        require("sodium.chat_tables").relayout(buf)
+        assert.are.same(before, ids())
+    end)
+
+    it("draws a table inside a block quote from the quoted text", function()
+        say("Quote:\n\n> | A | B |\n> |---|---|\n> | 1 | 2 |\n\n")
+        settle()
+        assert.are.same({
+            "┌───┬───┐",
+            "│ A │ B │",
+            "├───┼───┤",
+            "│ 1 │ 2 │",
+            "└───┴───┘",
+        }, grids()[1].lines)
+    end)
 end)
