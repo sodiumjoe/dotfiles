@@ -150,6 +150,17 @@ describe("Agentic completed block folding", function()
         assert.are.same({ -1, -1 }, closed(line("execute(echo hello)")))
     end)
 
+    it("labels a folded thinking block differently from folded tool output", function()
+        thought("label first\nlabel second")
+        answer()
+        writer:write_tool_call_block({ tool_call_id = "labelled", kind = "execute", argument = "echo", status = "completed", body = { "tool output" } })
+        local function text(lnum)
+            return vim.api.nvim_win_call(f.manager.widget.win_nrs.chat, function() return vim.fn.foldtextresult(lnum) end)
+        end
+        assert.are.equal("  Thinking · 2 lines", text(line("label first")))
+        assert.is_nil(text(line("tool output")):find("Thinking", 1, true))
+    end)
+
     it("folds completed output at threshold zero without measuring decorated height", function()
         local height = vim.api.nvim_win_text_height
         vim.api.nvim_win_text_height = function() error("decorated height should not be measured") end
@@ -202,11 +213,13 @@ describe("Agentic completed block folding", function()
         assert.is_true(closed(line("new value"))[1] > 0)
     end)
 
-    it("keeps failed execution output and edit diffs expanded", function()
-        writer:write_tool_call_block({ tool_call_id = "failed", kind = "execute", argument = "failing command", status = "failed", body = { "failed output" } })
+    it("folds failed execution output under its header and keeps failed edit diffs expanded", function()
+        writer:write_tool_call_block({ tool_call_id = "failed", kind = "execute", argument = "failing command", status = "in_progress", body = { "failed output" } })
+        writer:update_tool_call_block({ tool_call_id = "failed", status = "failed" })
         writer:write_tool_call_block({ tool_call_id = "diff", kind = "edit", argument = "file.lua", file_path = "file.lua", status = "in_progress", diff = { old = { "old value" }, new = { "new value" } } })
         writer:update_tool_call_block({ tool_call_id = "diff", status = "failed" })
-        assert.are.same({ -1, -1 }, closed(line("failed output")))
+        assert.is_true(closed(line("failed output"))[1] > 0)
+        assert.are.same({ -1, -1 }, closed(line("execute(failing command)")))
         assert.are.same({ -1, -1 }, closed(line("new value")))
     end)
 

@@ -902,7 +902,7 @@ exec agy acp]] } } }
                 todos = noop,
             },
             folding = {
-                tool_calls = { enabled = true, threshold = 0, fold_on_error = false },
+                tool_calls = { enabled = true, threshold = 0, fold_on_error = true },
             },
             hooks = {
                 on_response_complete = notify_agent_response_complete,

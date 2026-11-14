@@ -76,7 +76,13 @@ function M.install()
     end
     local Fold = require("agentic.ui.tool_call_fold")
     if Patch.claim(Fold, "folds", M) then
-        local should_fold = Patch.original(Fold, "should_fold")
+        local should_fold, foldtext = Patch.original(Fold, "should_fold"), Patch.original(Fold, "foldtext")
+        function Fold.foldtext()
+            local row = vim.v.foldstart - 1
+            local marks = vim.api.nvim_buf_get_extmarks(0, thinking_ns, { row, 0 }, { row, -1 }, { overlap = true, limit = 1 })
+            if not marks[1] then return foldtext() end
+            return { { string.format("  Thinking · %d lines", vim.v.foldend - vim.v.foldstart + 1), "AgenticThinking" } }
+        end
         function Fold.should_fold(opts)
             if opts.is_diff and opts.status == "completed" then
                 opts = vim.tbl_extend("force", opts, { is_diff = false })
