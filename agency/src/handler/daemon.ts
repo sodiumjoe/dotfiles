@@ -36,6 +36,8 @@ import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "./s
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
 import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLog } from "./event-log.js"
 import { createAgentIndex } from "../agent/agent-index.js"
+import { migrateIndex } from "../agent/index-migration.js"
+import { defaultHomes } from "../agent/excerpt.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -234,6 +236,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const agentIndex = createAgentIndex(root)
     agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, index: agentIndex, events })
     await agents.initialize()
+    void migrateIndex({ store: agentStore, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
     checkStartup()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     if (termination || closing) await bridge.close()

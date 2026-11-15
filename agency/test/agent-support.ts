@@ -1,6 +1,7 @@
 import { launchContractFingerprint, type ConfiguredLaunchContract } from "../src/agent/contracts.js"
 import type { LaunchContract } from "../src/agent/contracts.js"
-import { mkdir, writeFile, readFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import assert from "node:assert/strict"
 import { createConnection } from "node:net"
 import { randomUUID } from "node:crypto"
@@ -38,6 +39,11 @@ export async function verifyFixtureProviderGroup(identity: ProcessIdentity, io: 
 export { shutdownFixtureHandler } from "./control-support.js"
 
 export async function agentHandlerFixture(t: TestContext, options: AgentHandlerOptions = {}, handlerEnv?: NodeJS.ProcessEnv) {
+  if (!handlerEnv) {
+    const homes = await mkdtemp(join(tmpdir(), "agency-homes-"))
+    t.after(() => rm(homes, { recursive: true, force: true }))
+    handlerEnv = { CODEX_HOME: join(homes, "codex"), CLAUDE_CONFIG_DIR: join(homes, "claude") }
+  }
   const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/agent-handler.js", import.meta.url)), handlerEnv)
   const workspace = join(f.root, "workspace"), otherWorkspace = join(f.root, "other-workspace")
   await mkdir(workspace, { mode: 0o700 }); await mkdir(otherWorkspace, { mode: 0o700 })
