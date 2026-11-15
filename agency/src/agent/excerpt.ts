@@ -1,4 +1,5 @@
 import { lstat, open, readdir, stat } from "node:fs/promises"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import type { RetainedEvent } from "./conversation.js"
 import type { AgentRecordV3 } from "./types.js"
@@ -124,6 +125,49 @@ async function findCodexFile(root: string, sessionId: string): Promise<string | 
   return visit(root, 0)
 }
 
+export type SessionRef = { backendId: string; cwd: string; sessionId: string }
+export type SessionHomes = { codexHome: string; claudeHome: string }
+
+export function defaultHomes(): SessionHomes {
+  return { codexHome: process.env.CODEX_HOME ?? join(homedir(), ".codex"), claudeHome: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude") }
+}
+
+export async function codexSessionFiles(codexHome: string): Promise<Map<string, string>> {
+  const files = new Map<string, string>(), rollout = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([A-Za-z0-9._-]+)\.jsonl$/
+  async function visit(path: string, depth: number): Promise<void> {
+    let entries: string[]
+    try { entries = await readdir(path) } catch { return }
+    for (const entry of entries) {
+      const child = join(path, entry), match = rollout.exec(entry)
+      if (depth === 3 && match) { files.set(match[1]!, child); continue }
+      if (depth < 3 && (await lstat(child).catch(() => null))?.isDirectory()) await visit(child, depth + 1)
+    }
+  }
+  await visit(join(codexHome, "sessions"), 0)
+  return files
+}
+
+export async function sessionFile(ref: SessionRef, homes: SessionHomes, codexFiles?: Map<string, string>): Promise<string | null> {
+  if (!/^[A-Za-z0-9._-]+$/.test(ref.sessionId)) return null
+  const path = ref.backendId === "codex-acp"
+    ? (codexFiles ? codexFiles.get(ref.sessionId) ?? null : await findCodexFile(join(homes.codexHome, "sessions"), ref.sessionId))
+    : join(homes.claudeHome, "projects", ref.cwd.replace(/[^A-Za-z0-9]/g, "-"), ref.sessionId + ".jsonl")
+  if (!path) return null
+  const info = await stat(path).catch(() => null)
+  return info && !info.isDirectory() ? path : null
+}
+
+export async function sessionSummary(ref: SessionRef, homes: SessionHomes, codexFiles?: Map<string, string>): Promise<{ title: string | null; modifiedAt: string | null }> {
+  const path = await sessionFile(ref, homes, codexFiles)
+  if (!path) return { title: null, modifiedAt: null }
+  try {
+    const info = await stat(path), lines = await readHead(path, HEAD_BYTES)
+    const first = (ref.backendId === "codex-acp" ? codexTurns(lines) : claudeTurns(lines)).find(turn => turn.role === "user")
+    const chars = first ? [...first.text] : []
+    return { title: chars.length ? chars.slice(0, TITLE_CHARS).join("") : null, modifiedAt: info.mtime.toISOString() }
+  } catch (error) { if (missing(error)) return { title: null, modifiedAt: null }; throw error }
+}
+
 type HistoryInput = { record: AgentRecordV3; codexHome: string; claudeHome: string }
 
 function historySession(record: AgentRecordV3): string | null {
@@ -161,11 +205,7 @@ export async function historyExcerpt(input: HistoryInput & { turns: number }): P
 }
 
 export async function historySummary(input: HistoryInput): Promise<{ title: string | null; modifiedAt: string | null }> {
-  const sessionId = historySession(input.record), path = sessionId ? await historyFile(input, sessionId) : null
-  if (!path) return { title: null, modifiedAt: null }
-  try {
-    const info = await stat(path), first = historyTurns(input.record, await readHead(path, HEAD_BYTES)).find(turn => turn.role === "user")
-    const chars = first ? [...first.text] : []
-    return { title: chars.length ? chars.slice(0, TITLE_CHARS).join("") : null, modifiedAt: info.mtime.toISOString() }
-  } catch (error) { if (missing(error)) return { title: null, modifiedAt: null }; throw error }
+  const sessionId = historySession(input.record)
+  if (!sessionId) return { title: null, modifiedAt: null }
+  return sessionSummary({ backendId: input.record.definition.backendId, cwd: input.record.definition.cwd, sessionId }, { codexHome: input.codexHome, claudeHome: input.claudeHome })
 }
