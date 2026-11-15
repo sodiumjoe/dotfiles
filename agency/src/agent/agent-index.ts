@@ -1,8 +1,9 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { link, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
 export type IndexEntry = { version: 1; agentId: string; backendId: "claude-agent-acp" | "codex-acp"; nativeSessionId: string; cwd: string; createdAt: string; origin: "new" | "import" }
-export type AgentIndex = { ensure(entry: IndexEntry): Promise<boolean>; list(): Promise<IndexEntry[]>; remove(agentId: string): Promise<void>; exists(): Promise<boolean>; markMigrated(): Promise<void> }
+export type AgentIndex = { ensure(entry: IndexEntry): Promise<boolean>; list(): Promise<IndexEntry[]>; remove(agentId: string): Promise<void>; migrated(): Promise<boolean>; markMigrated(): Promise<void> }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -20,10 +21,11 @@ export function createAgentIndex(root: string): AgentIndex {
       if (!UUID.test(entry.agentId)) throw new Error("invalid agent ID")
       await mkdir(dir, { recursive: true, mode: 0o700 })
       if (await stat(file(entry.agentId)).then(() => true, () => false)) return false
-      const temporary = join(dir, `.${entry.agentId}.${process.pid}.tmp`)
+      const temporary = join(dir, `.${entry.agentId}.${randomUUID()}.tmp`)
       await writeFile(temporary, JSON.stringify(entry), { mode: 0o600 })
-      await rename(temporary, file(entry.agentId))
-      return true
+      try { await link(temporary, file(entry.agentId)); return true }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error }
+      finally { await rm(temporary, { force: true }) }
     },
     async list() {
       let names: string[]
@@ -35,7 +37,7 @@ export function createAgentIndex(root: string): AgentIndex {
       return entries
     },
     async remove(agentId) { if (UUID.test(agentId)) await rm(file(agentId), { force: true }) },
-    exists: () => stat(dir).then(info => info.isDirectory(), () => false),
-    async markMigrated() { await mkdir(dir, { recursive: true, mode: 0o700 }) },
+    migrated: () => stat(join(dir, ".migrated")).then(() => true, () => false),
+    async markMigrated() { await mkdir(dir, { recursive: true, mode: 0o700 }); await writeFile(join(dir, ".migrated"), new Date().toISOString(), { mode: 0o600 }) },
   }
 }
