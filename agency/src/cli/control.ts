@@ -29,6 +29,9 @@ import { assertPrivateSocket } from "../platform/private-socket.js"
 import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerInspection, type ProcessIdentity } from "../platform/types.js"
 import { DarwinObservationUnavailable } from "../platform/darwin.js"
 import { LinuxObservationUnavailable } from "../platform/linux.js"
+import { createAgentIndex } from "../agent/agent-index.js"
+import { readIndexRoster } from "../agent/index-roster.js"
+import { defaultHomes } from "../agent/excerpt.js"
 
 export type ControlDependencies = {
   stdin?: Readable & { isTTY?: boolean }
@@ -130,6 +133,13 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
   if (argv[0] === "restart") return runRestart(argv, dependencies, runControl)
+  if (argv[0] === "agents") {
+    if (argv.length > 2 || argv.length === 2 && argv[1] !== "--json") { dependencies.stderr("use agy agents [--json]\n"); return 64 }
+    const env = await dependencies.environment()
+    const agents = await readIndexRoster({ index: createAgentIndex(env.paths.persistentRoot), homes: defaultHomes() })
+    dependencies.stdout(JSON.stringify({ state: "agents", agents }, null, argv[1] === "--json" ? undefined : 2) + "\n")
+    return 0
+  }
   if (argv[0] === "session") return runSessionClient(argv, dependencies)
   if (argv[0] === "entry") return runEntryClient(argv, dependencies)
   if (argv.includes("--local")) return runLocalHumanClient(argv, dependencies)
@@ -154,7 +164,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "roster excerpt AGENT_UUID (--local | --host HOST_ID) (last conversation turns)", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "native-sessions [--json] (read-only local Codex history)", "acp (stdio connection to a ready Handler)", "status", "handler status", "doctor", "shutdown [--stop-agents [--require-idle]] [--command-id UUID --handler-generation UUID]", "restart [--resume] [--timeout SECONDS] (wait for idle agents, restart the Handler, restore them)", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "roster excerpt AGENT_UUID (--local | --host HOST_ID) (last conversation turns)", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "native-sessions [--json] (read-only local Codex history)", "acp (stdio connection to a ready Handler)", "agents [--json] (agents in the index, with title and last activity)", "status", "handler status", "doctor", "shutdown [--stop-agents [--require-idle]] [--command-id UUID --handler-generation UUID]", "restart [--resume] [--timeout SECONDS] (wait for idle agents, restart the Handler, restore them)", "model list", "model refresh [--command-id UUID --handler-generation UUID]", "agent start --provider ID --model ID --reasoning VALUE [--mode ID] --permission-profile ID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent import --provider ID --session NATIVE_ID --cwd PATH [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID]", "agent restore AGENT_UUID [--command-id UUID] [--handler-generation UUID | --expected-handler-generation UUID] [--mcp-servers-json JSON]", "agent current (list of agents in the current directory)", "agent list", "agent choices", "agent page --limit 100 [--cursor CURSOR] [--cwd PATH] [--active]", "agent command COMMAND_UUID --handler-generation UUID", "agent prompt AGENT_UUID --text TEXT --handler-generation UUID --provider-generation UUID [--json]", "agent stop AGENT_UUID --handler-generation UUID --provider-generation UUID [--command-id UUID]"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
