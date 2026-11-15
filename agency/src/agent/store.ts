@@ -72,7 +72,7 @@ export function createAgentStore(root: string, filesystem: CatalogFileSystem = {
     const result: AgentInventory = { agents: [], legacyAgents: [], commands: [], issues: [] }, seen = new Set<string>()
     try {
         for (const name of await names(directory)) {
-        if (name === "records" || name === "commands") continue
+        if (name === "records" || name === "commands" || name === "index") continue
         if (name !== "provider-state") result.issues.push({ kind: "unknown", id: null, path: join(directory, name), message: "unknown agent state entry" })
       }
       for (const kind of ["records", "commands"] as const) {

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { readHandlerRecord } from "../src/platform/private-state.js"
+import { createAgentIndex } from "../src/agent/agent-index.js"
 import { agentHandlerFixture } from "./agent-support.js"
 import { until } from "./control-support.js"
 
@@ -48,5 +49,21 @@ test("a Handler stopped with SIGTERM is not logged as an unclean exit", async t 
   await f.terminateHandler()
   await f.restart({ selectionCatalog: true, nativeAcp: true })
   assert.deepEqual(await events(), ["handler_started", "handler_stopped", "handler_started"])
+  await f.verifyZeroSurvivors()
+})
+
+test("an agent is indexed on its first prompt and an unprompted agent is not", async t => {
+  const f = await agentHandlerFixture(t, { selectionCatalog: true, nativeAcp: true })
+  const used = (await f.waitCompleted(await f.start({ mode: "read-only" }))).command.target!
+  const unused = (await f.waitCompleted(await f.start({ mode: "read-only" }))).command.target!
+  await f.prompt(used, "hello")
+  const index = createAgentIndex(f.paths.persistentRoot)
+  const listed = await until(async () => { const values = await index.list(); return values.length ? values : undefined })
+  assert.deepEqual(listed.map(value => value.agentId), [used.agentId])
+  assert.equal(listed[0]!.nativeSessionId.length > 0, true)
+  await f.crashHandler()
+  await f.restart({ selectionCatalog: true, nativeAcp: true })
+  assert.deepEqual((await index.list()).map(value => value.agentId), [used.agentId])
+  assert.equal((await index.list()).some(value => value.agentId === unused.agentId), false)
   await f.verifyZeroSurvivors()
 })

@@ -28,6 +28,8 @@ import { parseRestoreRequest, type RestoreRequest } from "./types.js"
 import { createConversation, type Conversation, type ConversationListener, type ConversationObservation } from "./conversation.js"
 import { createTurnCoordinator, type AcpSubmissionRequest, type SubmissionReceipt, type SubmissionRequest, type TurnCoordinator } from "./turns.js"
 import { LEGACY_TURN_LIMITS, type AcpObservation } from "./session-events.js"
+import type { AgentIndex } from "./agent-index.js"
+import type { EventLog } from "../handler/event-log.js"
 import type { AgentTuple } from "./types.js"
 import { backendFingerprint, readBackendConfig, mergeBackendEnvironment, type Backend } from "./backend-config.js"
 import { canonicalJson, parseRequestedSettings, projectRestorableSettings, nonRestorableOptionIds, type RequestedSettings, type JsonObject, type SessionConfiguration } from "./session-config.js"
@@ -84,7 +86,7 @@ export type AgentServiceDependencies = {
   onOperationRetired?(agentId: string, commandId: string): void
 }
 
-export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore }, dependencies: AgentServiceDependencies = { processFactory: createAgentProcess }): AgentService {
+export function createAgentService(input: { context: LaunchContext; catalog: CatalogService; contracts: readonly LaunchContract[]; store: AgentStore; index?: AgentIndex; events?: EventLog }, dependencies: AgentServiceDependencies = { processFactory: createAgentProcess }): AgentService {
   const { context, store, catalog } = input, { queue } = context.mutations, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const commands = new Map<string, AgentCommand>(), records = new Map<string, AgentRecord>(), operations = new Map<string, Live>(), intents = new Map<string, Live>()
   const importIntents = new Map<string, AgentCommandV3>()
@@ -240,6 +242,15 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         else if (!isDeepStrictEqual(visible, expected)) note(next.definition.agentId, "agent", next.definition.agentId, join(root, "agents", "records", next.definition.agentId + ".json"), new AgentError("INVALID_AGENT_STATE"))
       } catch (error) { note(next.definition.agentId, "agent", next.definition.agentId, join(root, "agents", "records", next.definition.agentId + ".json"), error) }
     }
+  }
+  const indexed = new Set<string>()
+  function indexAgent(op: Live): void {
+    const agentId = op.initial.definition.agentId, sessionId = op.providerSession?.sessionId
+    if (!input.index || indexed.has(agentId) || !sessionId) return
+    indexed.add(agentId)
+    void input.index.ensure({ version: 1, agentId, backendId: op.initial.definition.backendId, nativeSessionId: sessionId, cwd: op.initial.definition.cwd, createdAt: new Date().toISOString(), origin: op.initial.definition.origin })
+      .then(written => { if (written) input.events?.append({ type: "agent_indexed", agentId, backendId: op.initial.definition.backendId }) })
+      .catch(error => { indexed.delete(agentId); input.events?.append({ type: "agent_index_failed", agentId, message: String(error).slice(0, 512) }) })
   }
   function touch(op: Live): void {
     const agentId = op.initial.definition.agentId
@@ -612,6 +623,7 @@ export function createAgentService(input: { context: LaunchContext; catalog: Cat
         op.turns = createTurnCoordinator({ target: agentTuple(record), conversation, queue, validate: async () => { await requireTarget(agentTuple(record)); assertConfigurationReady(op) }, invokeAcp: params => invokeAcp(op, params), onAccepted: request => {
           if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
           op.editor!.begin(request.submissionId, request.originConnectionId ? { connectionId: request.originConnectionId, attachment: request.originAttachment!, ...(request.editorAddress === undefined ? {} : { address: request.editorAddress }) } : undefined)
+          indexAgent(op)
           touch(op)
         }, cancel: _submissionId => { op.editor?.revoke(); permissionBroker.invalidate(agentTuple(op.initial)); return op.owner!.cancelPrompt() }, onSettled: submissionId => { op.editor?.end(submissionId); if (!op.turns!.busy()) permissionBroker.invalidate(agentTuple(op.initial)); retire(op); touch(op) } })
         checkCommandDeadline(); acceptingOperation = op

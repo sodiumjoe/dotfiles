@@ -35,6 +35,7 @@ import { ensurePrivateChild } from "./environment.js"
 import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
 import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLog } from "./event-log.js"
+import { createAgentIndex } from "../agent/agent-index.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -230,7 +231,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await catalog.initialize()
     checkStartup()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
-    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore })
+    const agentIndex = createAgentIndex(root)
+    agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, index: agentIndex, events })
     await agents.initialize()
     checkStartup()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
