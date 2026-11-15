@@ -167,6 +167,7 @@ export async function agentHandlerFixture(t: TestContext, options: AgentHandlerO
     async waitBarrier() { await until(async () => await fileExists(join(f.root, options.pauseAt === "session" ? "at-session" : "barrier.json")) ? true : undefined, 35000); await trackProviders() },
     async waitPrompt() { await until(async () => await fileExists(join(f.root, "at-prompt")) ? true : undefined, 35000); await trackProviders() },
     async crashHandler() { await trackProviders(); const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process) },
+    async terminateHandler() { await trackProviders(); const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGTERM"); await proveAbsent(current.process) },
     async waitHandlerExit(timeout?: number) { const current = await handler(); assert.ok(current.process); await proveAbsent(current.process, timeout); await trackProviders() },
     async restart(settings: AgentHandlerOptions = {}) { await configure(settings); await releaseBarrier(); await f.start(15000) },
     waitCleanupBarrier: () => until(async () => await fileExists(join(f.root, "cleanup-barrier.json")) ? true : undefined, 35000),

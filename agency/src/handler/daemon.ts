@@ -34,6 +34,7 @@ import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
 import { ensurePrivateChild } from "./environment.js"
 import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
+import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLog } from "./event-log.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -144,6 +145,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     },
     close,
   })
+  let recordStop: (() => void) | undefined, recordFailure: ((error: unknown) => void) | undefined
   const onSignal = (): void => {
     if (termination) return
     interruptedStartup = shutdown === undefined
@@ -151,7 +153,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     void terminate().then(error => {
       if (error) {
         try { write(2, formatTerminationFailure(error), () => undefined) } catch {}
-      }
+      } else recordStop?.()
       process.exit(error ? 70 : 0)
     })
   }
@@ -210,6 +212,12 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     checkStartup()
     await options.onPhase?.("ready")
     checkStartup()
+    const events = await openEventLog({ root, hostId: options.paths.hostKey })
+    if (!(await consumeCleanShutdown(root)) && events.lastSequence() > 0) events.append({ type: "handler_unclean_exit" })
+    events.append({ type: "handler_started", generation: options.generation })
+    let stopped = false
+    recordStop = () => { if (stopped) return; stopped = true; events.appendSync({ type: "handler_stopped", generation: options.generation }); markCleanShutdownSync(root) }
+    recordFailure = error => events.appendSync({ type: "handler_failed", generation: options.generation, message: String(error).slice(0, 512) })
     const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [], root }
     const catalogStore = createCatalogStore(root), agentStore = createAgentStore(root)
     const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, store: catalogStore, isReady: () => state.phase === "ready" && !closing && !termination, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
@@ -253,7 +261,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
     await closed
+    await events.flush()
+    recordStop()
   } catch (error) {
+    recordFailure?.(error)
     if (current !== undefined) {
       await writeHandlerRecord(options.recordPath, { ...current, phase: "exited_unverified", reason: String(error).slice(0, 512) }).catch(() => undefined)
     }
