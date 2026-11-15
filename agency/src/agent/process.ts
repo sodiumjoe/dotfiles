@@ -15,6 +15,7 @@ import { cleanupBudget, type ConfiguredLaunchContract } from "./contracts.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
 import { AgentError, agentFailure, splitLaunchSpec, type AgentRecordV3, type SessionStart, type AgentFailure, type LaunchSpec } from "./types.js"
 import type { JsonObject, SessionConfiguration } from "./session-config.js"
+const PARENT_WATCH = new URL("./parent-watch.js", import.meta.url).href
 
 export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): Promise<void>; snapshot(): SessionConfiguration; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; discharged: Promise<void>; fault: Promise<AgentFailure> }
 export type AgentProcessSpec = Pick<LaunchSpec, "agentId" | "handlerGeneration" | "providerGeneration" | "launchAttemptId" | "cwd" | "limits">
@@ -77,7 +78,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
   }
   let spawnOptions: SpawnOptions | undefined = {
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
-    env: { ...parseLaunchEnvironment(input.environment), ...(contract.providerId === "codex-acp" ? { CODEX_PATH: contract.executable } : { CLAUDE_CODE_EXECUTABLE: contract.executable }) },
+    env: { ...parseLaunchEnvironment(input.environment), ...(contract.providerId === "codex-acp" ? { CODEX_PATH: contract.executable } : { CLAUDE_CODE_EXECUTABLE: contract.executable }), AGENCY_PARENT_PID: String(process.pid) },
   }
   function cleanup(): Promise<LaunchRecord> {
     if (cleaning) return cleaning
@@ -182,7 +183,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
         if (!spawnOptions) throw new AgentError("STARTUP_FAILED")
         try {
           owned = spawnOwnedChild({ launchAttemptId: spec.launchAttemptId,
-            spawn: () => (dependencies.spawn ?? spawn)(process.execPath, [contract.entrypoint, ...spawnArgs ?? []], spawnOptions!),
+            spawn: () => (dependencies.spawn ?? spawn)(process.execPath, ["--import", PARENT_WATCH, contract.entrypoint, ...spawnArgs ?? []], spawnOptions!),
             onEvent: event => {
               if (event.kind === "error") processFailure("error", event.error)
               else processFailure(event.kind, undefined, event.code, event.signal)
