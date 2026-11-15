@@ -1,4 +1,4 @@
-import { lstat, open, readdir, stat } from "node:fs/promises"
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { RetainedEvent } from "./conversation.js"
@@ -147,14 +147,20 @@ export async function codexSessionFiles(codexHome: string): Promise<Map<string, 
   return files
 }
 
-export async function sessionFile(ref: SessionRef, homes: SessionHomes, codexFiles?: Map<string, string>): Promise<string | null> {
-  if (!/^[A-Za-z0-9._-]+$/.test(ref.sessionId)) return null
-  const path = ref.backendId === "codex-acp"
-    ? (codexFiles ? codexFiles.get(ref.sessionId) ?? null : await findCodexFile(join(homes.codexHome, "sessions"), ref.sessionId))
-    : join(homes.claudeHome, "projects", ref.cwd.replace(/[^A-Za-z0-9]/g, "-"), ref.sessionId + ".jsonl")
-  if (!path) return null
+async function existing(path: string): Promise<string | null> {
   const info = await stat(path).catch(() => null)
   return info && !info.isDirectory() ? path : null
+}
+
+export async function sessionFile(ref: SessionRef, homes: SessionHomes, codexFiles?: Map<string, string>): Promise<string | null> {
+  if (!/^[A-Za-z0-9._-]+$/.test(ref.sessionId)) return null
+  if (ref.backendId === "codex-acp") {
+    const path = codexFiles ? codexFiles.get(ref.sessionId) ?? null : await findCodexFile(join(homes.codexHome, "sessions"), ref.sessionId)
+    return path ? existing(path) : null
+  }
+  const claude = (cwd: string) => join(homes.claudeHome, "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"), ref.sessionId + ".jsonl")
+  const resolved = await realpath(ref.cwd).catch(() => ref.cwd)
+  return await existing(claude(ref.cwd)) ?? (resolved === ref.cwd ? null : existing(claude(resolved)))
 }
 
 export async function sessionSummary(ref: SessionRef, homes: SessionHomes, codexFiles?: Map<string, string>): Promise<{ title: string | null; modifiedAt: string | null }> {

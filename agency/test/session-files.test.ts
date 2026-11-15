@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { codexSessionFiles, sessionFile, sessionSummary } from "../src/agent/excerpt.js"
@@ -21,4 +21,16 @@ test("sessions are found and summarized from backend, directory and session ID",
   assert.equal(await sessionFile({ backendId: "codex-acp", cwd, sessionId: "missing" }, homes, files), null)
   assert.equal(await sessionFile({ backendId: "claude-agent-acp", cwd, sessionId: "missing" }, homes), null)
   assert.deepEqual(await sessionSummary({ backendId: "codex-acp", cwd, sessionId: "missing" }, homes, files), { title: null, modifiedAt: null })
+})
+
+test("a Claude session in a symlinked directory is found under its resolved path", async t => {
+  const root = await mkdtemp(join(tmpdir(), "agency-sessions-")), homes = { codexHome: join(root, "codex"), claudeHome: join(root, "claude") }
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const real = await realpath(root), linked = join(root, "linked")
+  await mkdir(join(root, "target"))
+  await symlink(join(real, "target"), linked)
+  const dir = join(homes.claudeHome, "projects", join(real, "target").replace(/[^A-Za-z0-9]/g, "-"))
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, "linked-1.jsonl"), JSON.stringify({ type: "user", message: { role: "user", content: "resolved title" } }))
+  assert.equal((await sessionSummary({ backendId: "claude-agent-acp", cwd: linked, sessionId: "linked-1" }, homes)).title, "resolved title")
 })
