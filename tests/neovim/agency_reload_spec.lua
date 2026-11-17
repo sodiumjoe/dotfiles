@@ -2,12 +2,12 @@ package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.p
 dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agentic.lua").config()
 
 describe("Agency reload", function()
-    local f, control, Registry, calls, systems, notifications, root, digest
+    local f, control, Registry, calls, systems, notifications, notified, root, digest
     before_each(function()
         f = require("fixtures.agency_native").new()
         control = require("fixtures.agency_control")
         Registry = require("agentic.session_registry")
-        calls, systems, notifications, digest = {}, {}, {}, string.rep("d", 64)
+        calls, systems, notifications, notified, digest = {}, {}, {}, {}, string.rep("d", 64)
         root = vim.fn.tempname()
         vim.fn.mkdir(root .. "/agency/dist", "p")
         vim.fn.writefile({ vim.json.encode({ version = 1, distDigest = digest }) }, root .. "/agency/dist/build-manifest.json")
@@ -17,7 +17,7 @@ describe("Agency reload", function()
         package.loaded["sodium.agency"] = nil
         require("sodium.agency").setup({
             client = { command = function(argv, options, callback) calls[#calls + 1] = { argv = argv, options = options, callback = callback } end },
-            notify = function(value) notifications[#notifications + 1] = value end,
+            notify = function(value, _, opts) notifications[#notifications + 1] = value; notified[#notified + 1] = opts or {} end,
             system = function(argv, _, on_exit) if systems.raise then error(systems.raise) end; systems[#systems + 1] = argv; on_exit({ code = systems.fail and 1 or 0, stdout = "", stderr = systems.fail and "type error" or "" }); return {} end,
             repository = root,
             node = root .. "/node",
@@ -98,6 +98,9 @@ describe("Agency reload", function()
         assert.are.same(moved, manager._agency_binding)
         assert.are.equal(1, #vim.api.nvim_list_tabpages())
         assert.is_truthy(table.concat(notifications, "\n"):find("Handler restarted", 1, true))
+        assert.are.same({ "agency_reload" }, vim.tbl_keys(vim.iter(notified):fold({}, function(ids, opts) ids[opts.id or "none"] = true; return ids end)))
+        assert.is_false(notified[#notified - 1].timeout)
+        assert.is_nil(notified[#notified].timeout)
     end)
 
     it("names the agents the new Handler could not restore", function()

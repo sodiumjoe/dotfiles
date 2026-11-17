@@ -81,13 +81,15 @@ function M.run(opts)
     if not root then notify("Cannot locate the Agency checkout from agy"); return end
     vim.g.agency_reload_running = true
     local parts, failed, retry, restore_notify = {}, {}, nil, nil
+    local progress = { id = "agency_reload", title = "Agency reload" }
+    local function stage(text) notify(text .. "…", vim.log.levels.INFO, vim.tbl_extend("force", progress, { timeout = false })) end
     local function finish(message)
         vim.g.agency_reload_running = nil
         if restore_notify then restore_notify(); restore_notify = nil end
         if message then parts[#parts + 1] = message end
         if retry then parts[#parts + 1] = retry end
         if #failed > 0 then parts[#parts + 1] = #failed .. " agent" .. (#failed == 1 and "" or "s") .. " not restored (" .. table.concat(failed, ", ") .. ")" end
-        notify("Agency reload: " .. table.concat(parts, " · "))
+        notify("Agency reload: " .. table.concat(parts, " · "), vim.log.levels.INFO, progress)
     end
     local function guard(fn)
         return function(...)
@@ -106,6 +108,7 @@ function M.run(opts)
     end
     local function rebind(defer_busy)
         local api = require("sodium.agency").setup()
+        stage("Rebinding tabs")
         api.page({ allow_issues = true }, guard(function(page_err, page)
             if page_err then finish("could not list agents: " .. (page_err.message or page_err.code)); return end
             require("sodium.agency.rebind").run(page.agents, { defer_busy = defer_busy, reconnect = deps.reconnect }, guard(function(summary)
@@ -150,13 +153,13 @@ function M.run(opts)
         end))
     end
     local function restart()
-        notify("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
+        stage("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
         restore_notify = quiet_disconnect()
         client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
             if err and (err.code == "BUSY" or err.code == "INVALID_PROTOCOL") then
                 vim.g.agency_reload_running = nil
                 if restore_notify then restore_notify(); restore_notify = nil end
-                notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded")
+                notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded", vim.log.levels.INFO, progress)
                 return
             end
             if err then
@@ -182,7 +185,7 @@ function M.run(opts)
         local node = deps.node or (vim.env.NODENV_ROOT or (vim.env.HOME .. "/.nodenv")) .. "/versions/24.13.0/bin"
         local npm = node .. "/npm"
         if vim.fn.executable(npm) ~= 1 then finish("build failed: " .. npm .. " is not executable; install Node 24.13.0 with nodenv"); return end
-        notify("Building Agency")
+        stage("Building Agency")
         local system = deps.system or vim.system
         system({ npm, "--prefix", root .. "/agency", "run", "build" }, { text = true, timeout = 600000, env = { PATH = node .. ":" .. (vim.env.PATH or "") } }, vim.schedule_wrap(guard(function(result)
             if result.code ~= 0 then finish("build failed:\n" .. tail((result.stdout or "") .. "\n" .. (result.stderr or ""))); return end

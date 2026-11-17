@@ -40,7 +40,7 @@ function M.setup(deps)
     local Registry = require("agentic.session_registry")
     local api = { uuid = Control.uuid, timer_factory = deps.timer_factory,
         annotations = deps.annotations or Context.annotations, accept_annotations = deps.accept_annotations or Context.accept_annotations,
-        notify = deps.notify or function(value) vim.notify("Agency: " .. tostring(value)) end }
+        notify = deps.notify or function(value, level, opts) vim.notify("Agency: " .. tostring(value), level, opts) end }
     api.deps = deps
     local inventory, epoch = {}, 0
     local function report(err) if err and err.code ~= "CANCELLED" then api.notify(err.message or err.code) end end
