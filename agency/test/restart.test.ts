@@ -160,3 +160,13 @@ test("the status parser accepts an older Handler's reply with reconciliation and
   assert.equal(reply({ ...status, reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [{ launchAttemptId: randomUUID(), owner: { kind: "catalog-probe", id: randomUUID(), providerId: "codex-acp" }, phase: "active", reason: null }] }).ok, true)
   assert.equal(reply(status).ok, true)
 })
+test("a shutdown for a generation that has already exited succeeds without contacting the new Handler", async t => {
+  const f = await liveHandlerFixture(t), before = await f.handler()
+  await f.stopHandler()
+  await f.restart()
+  const after = await f.handler(), sink = { output: "", progress: "" }
+  const code = await runControl(["shutdown", "--stop-agents", "--command-id", randomUUID(), "--handler-generation", before.generation, "--json"], dependencies(f, sink))
+  assert.deepEqual([code, JSON.parse(sink.output).ok], [0, true])
+  assert.deepEqual([(await f.handler()).generation, (await f.handler()).phase], [after.generation, "ready"])
+  await f.verifyZeroSurvivors()
+})

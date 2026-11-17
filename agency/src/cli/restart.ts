@@ -87,7 +87,7 @@ export async function runRestart(argv: readonly string[], deps: ControlDependenc
     }
     const failures = new Map((handed?.failed ?? []).map(item => [item.agentId, { code: item.code, message: item.message }]))
     const agents: RestartAgent[] = (handed?.agents ?? []).map(agentId => ({ agentId, outcome: failures.has(agentId) ? "failed" as const : handed!.pending.includes(agentId) ? "restoring" as const : "restored" as const, failure: failures.get(agentId) ?? null }))
-    for (const agentId of live) if (!agents.some(agent => agent.agentId === agentId)) agents.push({ agentId, outcome: "failed", failure: { code: "UNAVAILABLE", message: "not handed off: it was never prompted, or the new Handler dropped its handoff entry; see agy log" } })
+    for (const agentId of live) if (!agents.some(agent => agent.agentId === agentId)) agents.push({ agentId, outcome: "failed", failure: { code: "UNAVAILABLE", message: "not handed off: it was never prompted, the new Handler dropped its handoff entry, or a failed shutdown stopped it; it restores when next used; see agy log" } })
     const expected = readDistDigest(fileURLToPath(new URL("../../build-manifest.json", import.meta.url)))
     if (after.distDigest !== null && expected !== null && after.distDigest !== expected) throw new ControlError("INCOMPLETE", "the new Handler runs a different build than dist; reload again")
     emit(true, { state: "restarted", restarted: true, resumed: false, fromGeneration: before.generation, toGeneration: after.generation, agents } satisfies RestartResult)

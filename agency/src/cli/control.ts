@@ -12,7 +12,6 @@ import { fileURLToPath } from "node:url"
 import { ControlError, PROTOCOL, UUID, controlError, exitCode, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply, type DoctorDiagnostic } from "../control/protocol.js"
 import { exchange } from "../control/wire.js"
 import { productionEnvironment, type HandlerEnvironment } from "../handler/environment.js"
-import { readShutdownReceipt, assertSameShutdown, type ShutdownReceipt } from "../handler/receipt.js"
 import { inspectHandlerGeneration, startOrConnect } from "../platform/singleton.js"
 import { assertPrivateSocket } from "../platform/private-socket.js"
 import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerInspection, type ProcessIdentity } from "../platform/types.js"
@@ -32,7 +31,6 @@ export type ControlDependencies = {
   call(env: HandlerEnvironment, request: ControlRequest): Promise<ControlReply>
   callLive?(env: HandlerEnvironment, request: LiveRequest, timeoutMs?: number): Promise<LiveReply>
   homes?(): SessionHomes
-  receipt: typeof readShutdownReceipt
   cwd(): string
   now(): number
   sleep(ms: number): Promise<void>
@@ -48,7 +46,7 @@ export function productionControlDependencies(): ControlDependencies {
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
     call: async (env, request) => exchange(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request),
     callLive: async (env, request, timeoutMs) => exchangeLive(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
-    receipt: readShutdownReceipt, cwd: process.cwd, now: () => performance.now(),
+    cwd: process.cwd, now: () => performance.now(),
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     stdout: text => { process.stdout.write(text) }, stderr: text => { process.stderr.write(text) },
   }
@@ -160,53 +158,30 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       return 0
     }
     commandId ??= randomUUID()
-    let retained = await dependencies.receipt(env.paths.persistentRoot, commandId)
-    const validateReceipt = (receipt: ShutdownReceipt): void => {
-      if (generation === null || receipt.hostId !== env.paths.hostKey) throw new ControlError("COMMAND_CONFLICT", "receipt target mismatch")
-      assertSameShutdown(receipt, { commandId: commandId!, handlerGeneration: generation, stopAgents: args.stopAgents })
-    }
     const success = (): number => { emit(true, { state: "shutdown_complete", commandId, handlerGeneration: generation }); return 0 }
-    if (retained !== null) {
-      validateReceipt(retained)
-      if (await identityState(env, retained.handlerIdentity) === "absent") return success()
-    }
     const inspection = await dependencies.inspect(env)
-    if (inspection === null) throw new ControlError(generation === null ? "UNAVAILABLE" : "INCOMPLETE", "no matching Handler")
-    if (generation !== null && generation !== inspection.record.generation) throw new ControlError("STALE_HANDLER", "refusing a replacement generation")
+    if (inspection === null || inspection.disposition === "stale" || generation !== null && inspection.record.generation !== generation) {
+      if (generation === null) throw new ControlError("UNAVAILABLE", "no Handler is running")
+      return success()
+    }
     generation ??= inspection.record.generation
-    if (inspection.disposition !== "live" || inspection.record.process === null || inspection.record.phase !== "ready") throw new ControlError("INCOMPLETE", "Handler is not ready or identity is ambiguous")
-    if (retained !== null && !sameProcess(retained.handlerIdentity, inspection.record.process)) throw new ControlError("INCOMPLETE", "receipt and Handler identity differ")
-    let shouldSend = true
-    if (retained !== null) {
-      shouldSend = false
-      try {
-        const status = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, op: "status" })
-        shouldSend = status.ok && "phase" in status.result && status.result.phase === "ready"
-      } catch (error) {
-        const classified = controlError(error)
-        if (classified.code !== "INCOMPLETE" && classified.code !== "UNAVAILABLE") throw classified
-      }
+    if (inspection.disposition !== "live" || inspection.record.process === null) throw new ControlError("INCOMPLETE", "Handler identity is ambiguous")
+    const identity = inspection.record.process
+    let refusal: ControlError | undefined
+    try {
+      const reply = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId, handlerGeneration: generation, op: "shutdown", commandId, stopAgents: args.stopAgents, ...(args.requireIdle ? { requireIdle: true as const } : {}) })
+      if (!reply.ok) refusal = new ControlError(reply.error.code, reply.error.message)
+    } catch (error) {
+      const classified = controlError(error, "INCOMPLETE")
+      if (classified.code !== "INCOMPLETE" && classified.code !== "UNAVAILABLE" && classified.code !== "STALE_HANDLER") throw classified
     }
-    if (shouldSend) {
-      try {
-        const reply = await checkedCall(dependencies, env, { protocol: PROTOCOL, requestId, handlerGeneration: generation, op: "shutdown", commandId, stopAgents: args.stopAgents, ...(args.requireIdle ? { requireIdle: true as const } : {}) })
-        if (!reply.ok) throw new ControlError(reply.error.code, reply.error.message)
-      } catch (error) {
-        const classified = controlError(error, "INCOMPLETE")
-        if (classified.code !== "INCOMPLETE" && classified.code !== "UNAVAILABLE") throw classified
-      }
-    }
+    if (refusal && !(refusal.code === "INCOMPLETE" && refusal.message.includes("outcome remains unverified"))) throw refusal
     const deadline = dependencies.now() + 5000
-    do {
-      retained = await dependencies.receipt(env.paths.persistentRoot, commandId)
-      if (retained !== null) {
-        validateReceipt(retained)
-        if (await identityState(env, retained.handlerIdentity) === "absent") return success()
-      }
-      if (dependencies.now() >= deadline) break
+    while (await identityState(env, identity) !== "absent") {
+      if (dependencies.now() >= deadline) throw refusal ?? new ControlError("INCOMPLETE", "shutdown unverified; retry with the same command ID and Handler generation")
       await dependencies.sleep(50)
-    } while (true)
-    throw new ControlError("INCOMPLETE", "shutdown unverified; retry with the returned command ID and Handler generation")
+    }
+    return success()
   } catch (error) {
     const value = controlError(error)
     emit(false, { code: value.code, message: value.message.slice(0, 2048) })

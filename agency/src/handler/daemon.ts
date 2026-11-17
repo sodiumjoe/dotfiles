@@ -26,7 +26,6 @@ import { readHandlerRecord, writeHandlerRecord } from "../platform/private-state
 import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
 import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "./shutdown.js"
-import { MutationQueue } from "./mutations.js"
 import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLog } from "./event-log.js"
 import { createAgentIndex } from "../agent/agent-index.js"
 import { migrateIndex } from "../agent/index-migration.js"
@@ -211,7 +210,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     let stopped = false
     recordStop = () => { if (stopped) return; stopped = true; events.appendSync({ type: "handler_stopped", generation: options.generation }); markCleanShutdownSync(root) }
     recordFailure = error => events.appendSync({ type: "handler_failed", generation: options.generation, message: String(error).slice(0, 512) })
-    const queue = new MutationQueue()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     const agentIndex = createAgentIndex(root)
     const migrate = () => migrateIndex({ root, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
@@ -247,10 +245,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     checkStartup()
-    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, queue, closeAfterReply: close, agents: core }
+    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, closeAfterReply: close, agents: core }
     state.phase = "ready"
-    await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     void core?.resumeHandoff(destinationEnvironment(process.env)).catch(() => undefined)
+    await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
     await closed
     await events.flush()
