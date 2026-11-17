@@ -57,7 +57,7 @@ export function createInventoryStore(root: string, filesystem: { link: typeof li
     return bytes
   }
   return {
-    async read(key: string): Promise<unknown | null> { const bytes = await readBytes(pathFor(key)); return bytes === null ? null : decodeJson(bytes) },
+    async read(key: string): Promise<unknown | null> { const bytes = await readBytes(pathFor(key)); return bytes === null ? null : decodeJson(bytes, pathFor(key)) },
     async names(): Promise<string[]> {
       const path = base
       if (!await directory(path, false)) return []

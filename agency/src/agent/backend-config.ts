@@ -4,6 +4,7 @@ import { keys, object, providerId, text, type ProviderId } from "../config/valid
 import { assertPrivateDirectory } from "../platform/private-state.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
 import { canonicalJson, parseRequestedSettings, type RequestedSettings } from "./session-config.js"
+import { CatalogError } from "../config/validate.js"
 import { AgentError } from "./types.js"
 import { staticProductionContracts } from "./production-contracts.js"
 
@@ -36,8 +37,11 @@ export async function readBackendConfig(root: string): Promise<BackendConfig> {
   const catalog = join(root, "catalog")
   try {
     await assertPrivateDirectory(catalog)
-    const bytes = await readBoundedFile(join(catalog, "backends.json"), 65536, true)
-    if (bytes !== null) return parseBackendConfig(decodeJson(bytes))
+    const path = join(catalog, "backends.json"), bytes = await readBoundedFile(path, 65536, true)
+    if (bytes !== null) {
+      const value = decodeJson(bytes, path)
+      try { return parseBackendConfig(value) } catch (error) { throw new CatalogError("INVALID_CATALOG", path + ": " + (error instanceof CatalogError ? "a field has the wrong type or value" : error instanceof Error ? error.message : String(error))) }
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
   }
@@ -47,7 +51,7 @@ export async function readBackendConfig(root: string): Promise<BackendConfig> {
     environmentDefaults: contract.providerId === "codex-acp" ? { INITIAL_AGENT_MODE: "agent-full-access", MODEL_PROVIDER: "litellm" } : {},
     initial: contract.providerId === "codex-acp" ? { modeId: "agent-full-access" } : {},
   }))
-  if (!backends.length) throw new AgentError("UNAVAILABLE")
+  if (!backends.length) throw new AgentError("UNAVAILABLE", undefined, "no enabled provider in " + join(catalog, "providers.json") + " has a backend this Agency build supports")
   return { version: 1, defaultBackendId: backends[0]!.id, backends }
 }
 

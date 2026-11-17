@@ -61,10 +61,15 @@ export function parseConfiguredLaunchContract(input: unknown): ConfiguredLaunchC
 }
 
 export async function configureLaunchContract(input: LaunchContract, profile: ProviderProfile, configuration: ConfigEvidence): Promise<ConfiguredLaunchContract> {
-  try {
-    const contract = parseLaunchContract(input)
-    if (!profile.enabled || profile.id !== contract.providerId || configuration.providerId !== contract.providerId || configuration.adapterVersion !== contract.adapterVersion || configuration.sdkVersion !== (contract.sdkVersion ?? null) || contract.adapterPackage !== `@agentclientprotocol/${profile.id}`) throw new Error()
-    const configured = { ...contract, entrypoint: await adapterEntry(profile), executable: absolutePath(profile.executable) }
-    return { ...configured, fingerprint: launchContractFingerprint(configured, configuration.fingerprint) }
-  } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
+  const contract = parseLaunchContract(input)
+  const refuse = (reason: string): never => { throw new AgentError("ADAPTER_UNQUALIFIED", undefined, "backend " + contract.providerId + " is not usable: " + reason) }
+  if (!profile.enabled) refuse("its provider profile is disabled")
+  if (profile.id !== contract.providerId || configuration.providerId !== contract.providerId) refuse("its provider profile is for " + profile.id)
+  if (contract.adapterPackage !== `@agentclientprotocol/${profile.id}`) refuse("its launch contract names adapter " + contract.adapterPackage)
+  if (configuration.adapterVersion !== contract.adapterVersion) refuse(contract.adapterPackage + " " + configuration.adapterVersion + " is installed; this Agency build expects " + contract.adapterVersion)
+  if (configuration.sdkVersion !== (contract.sdkVersion ?? null)) refuse("@anthropic-ai/claude-agent-sdk " + configuration.sdkVersion + " is installed; this Agency build expects " + (contract.sdkVersion ?? "none"))
+  let entrypoint: string
+  try { entrypoint = await adapterEntry(profile) } catch (error) { return refuse(error instanceof Error ? error.message : String(error)) }
+  const configured = { ...contract, entrypoint, executable: absolutePath(profile.executable) }
+  return { ...configured, fingerprint: launchContractFingerprint(configured, configuration.fingerprint) }
 }

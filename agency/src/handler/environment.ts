@@ -12,7 +12,7 @@ import { ControlError } from "../control/protocol.js"
 export type HandlerEnvironment = { paths: PlatformPaths; adapter: PlatformAdapter }
 
 export function assertRuntime(version: string, platform: string): asserts platform is "darwin" | "linux" {
-  if (version !== "24.13.0") throw new ControlError("UNAVAILABLE", "Agency requires Node 24.13.0")
+  if (version !== "24.13.0") throw new ControlError("UNAVAILABLE", "Agency requires Node 24.13.0; this is Node " + version)
   if (platform !== "darwin" && platform !== "linux") throw new ControlError("UNAVAILABLE", "unsupported platform")
 }
 

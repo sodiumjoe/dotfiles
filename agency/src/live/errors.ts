@@ -1,6 +1,7 @@
 import { AgentError, ProviderRequestError, type AgentErrorCode } from "../agent/types.js"
 import type { FailureDiagnostic } from "../agent/failure-diagnostics.js"
 import { ControlError } from "../control/protocol.js"
+import { CatalogError } from "../config/validate.js"
 
 export const REQUEST_CODES = ["NOT_FOUND", "BUSY", "INVALID", "UNAVAILABLE", "FAILED"] as const
 export const PRE_LIVE_HANDLER = "the running Agency Handler predates this agy and does not answer its requests; upgrade it once by running :AgencyReload in one Neovim, then restart any other Neovim windows"
@@ -43,6 +44,7 @@ export function requestFailure(error: unknown): RequestFailure {
     const code = (Object.keys(groups) as Array<keyof typeof groups>).find(key => groups[key].includes(error.code)) ?? "FAILED"
     return { code, message: clipMessage(error.message + detail(error.diagnostic)) }
   }
+  if (error instanceof CatalogError) return { code: "UNAVAILABLE", message: clipMessage(error.message) }
   if (error instanceof ControlError) return { code: error.code === "BUSY" || error.code === "ACTIVE_AGENTS" ? "BUSY" : error.code === "USAGE" || error.code === "INVALID_PROTOCOL" ? "INVALID" : error.code === "UNAVAILABLE" || error.code === "STALE_HANDLER" ? "UNAVAILABLE" : "FAILED", message: clipMessage(error.message) }
   return { code: "FAILED", message: clipMessage(error instanceof Error ? error.message : String(error)) }
 }

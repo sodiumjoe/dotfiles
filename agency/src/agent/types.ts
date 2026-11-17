@@ -51,8 +51,8 @@ export type AgentStateIssue = { kind: "agent" | "command" | "unknown"; id: strin
 export type AgentFailure = { code: AgentErrorCode; message: string; diagnostic?: FailureDiagnostic }
 export class AgentError extends Error {
   readonly diagnostic?: FailureDiagnostic
-  constructor(readonly code: AgentErrorCode, diagnostic?: FailureDiagnostic) {
-    super(code.replaceAll("_", " ").toLowerCase())
+  constructor(readonly code: AgentErrorCode, diagnostic?: FailureDiagnostic, message?: string) {
+    super(message ?? code.replaceAll("_", " ").toLowerCase())
     if (diagnostic !== undefined) this.diagnostic = parseFailureDiagnostic(diagnostic)
   }
 }

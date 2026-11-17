@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { randomUUID } from "node:crypto"
+import { writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { liveHandlerFixture } from "./live-support.js"
 import { until } from "./control-support.js"
 import { PROTOCOL } from "../src/control/protocol.js"
@@ -105,4 +107,20 @@ test("an idle-required shutdown refuses while an agent is starting and does not 
   await f.releaseSessions()
   assert.equal((await starting).live?.activity, "idle")
   await f.verifyZeroSurvivors()
+})
+test("a malformed backends.json fails a start with a message naming the file", async t => {
+  const f = await liveHandlerFixture(t)
+  await writeFile(join(f.paths.persistentRoot, "catalog/backends.json"), "{not json", { mode: 0o600 })
+  const failure = await f.failure(f.start())
+  assert.equal(failure.code, "UNAVAILABLE")
+  assert.match(failure.message, /backends\.json/)
+  assert.match(failure.message, /JSON/)
+})
+
+test("an adapter at the wrong version fails a start naming both versions", async t => {
+  const f = await liveHandlerFixture(t)
+  await writeFile(join(f.root, "profiles/codex-acp/adapter.json"), JSON.stringify({ name: "@agentclientprotocol/codex-acp", version: "9.9.9", main: "agent-provider.js" }), { mode: 0o600 })
+  const failure = await f.failure(f.start())
+  assert.match(failure.message, /9\.9\.9/)
+  assert.match(failure.message, /1\.0\.0/)
 })

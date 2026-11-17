@@ -20,7 +20,11 @@ export async function readBoundedFile(path: string, max: number, privateFile = f
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
     const before = await handle.stat({ bigint: true })
-    if (!before.isFile() || before.size > BigInt(max) || (privateFile && (before.uid !== BigInt(process.getuid!()) || before.nlink !== 1n || (before.mode & 0o077n) !== 0n))) invalid()
+    if (!before.isFile()) invalid(path + " is not a regular file")
+    if (before.size > BigInt(max)) invalid(path + " is larger than " + max + " bytes")
+    if (privateFile && before.uid !== BigInt(process.getuid!())) invalid(path + " is owned by uid " + before.uid + ", not " + process.getuid!())
+    if (privateFile && before.nlink !== 1n) invalid(path + " has " + before.nlink + " hard links; it must have one")
+    if (privateFile && (before.mode & 0o077n) !== 0n) invalid(path + " has mode " + (before.mode & 0o777n).toString(8) + "; it must not be readable by group or others")
     const bytes = Buffer.alloc(max + 1)
     let length = 0
     while (length < bytes.length) {
@@ -28,13 +32,19 @@ export async function readBoundedFile(path: string, max: number, privateFile = f
       if (result.bytesRead === 0) break
       length += result.bytesRead
     }
-    if (length > max || !isDeepStrictEqual(identity(before), identity(await handle.stat({ bigint: true }))) || !isDeepStrictEqual(identity(before), identity(await lstat(path, { bigint: true })))) invalid()
+    if (length > max) invalid(path + " is larger than " + max + " bytes")
+    if (!isDeepStrictEqual(identity(before), identity(await handle.stat({ bigint: true }))) || !isDeepStrictEqual(identity(before), identity(await lstat(path, { bigint: true })))) invalid(path + " changed while it was read")
     return bytes.subarray(0, length)
-  } catch (error) { if (missing(error)) return null; if (error instanceof CatalogError) throw error; return invalid() }
+  } catch (error) {
+    if (missing(error)) return null
+    if (error instanceof CatalogError) throw error
+    const code = (error as NodeJS.ErrnoException).code
+    return invalid(path + (code === "ELOOP" ? " is a symlink" : ": " + (code ?? (error instanceof Error ? error.message : String(error)))))
+  }
   finally { await handle?.close() }
 }
-export function decodeJson(bytes: Buffer): unknown {
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) } catch { return invalid() }
+export function decodeJson(bytes: Buffer, path: string): unknown {
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) } catch (error) { return invalid(path + ": invalid JSON: " + (error instanceof Error ? error.message : String(error))) }
 }
 export function parseProfile(input: unknown): ProviderProfile {
   const v = object(input)
@@ -78,15 +88,18 @@ export async function readProfiles(root: string): Promise<ProviderProfile[]> {
     await assertPrivateDirectory(root)
     const catalog = join(root, "catalog")
     try { await assertPrivateDirectory(catalog) } catch (error) { if (missing(error)) return await defaultProfiles(); throw error }
-    const bytes = await readBoundedFile(join(catalog, "providers.json"), 65536, true)
+    const path = join(catalog, "providers.json"), bytes = await readBoundedFile(path, 65536, true)
     if (bytes === null) return await defaultProfiles()
-    const v = object(decodeJson(bytes))
-    keys(v, ["version", "providers"])
-    if (v.version !== 1 || !Array.isArray(v.providers) || v.providers.length > 2) invalid()
-    const profiles = v.providers.map(parseProfile)
-    if (new Set(profiles.map(value => value.id)).size !== profiles.length) invalid()
-    return profiles.sort((a, b) => a.id < b.id ? -1 : 1)
-  } catch (error) { if (error instanceof CatalogError) throw error; return invalid() }
+    const v = decodeJson(bytes, path)
+    try {
+      const value = object(v)
+      keys(value, ["version", "providers"])
+      if (value.version !== 1 || !Array.isArray(value.providers) || value.providers.length > 2) invalid()
+      const profiles = value.providers.map(parseProfile)
+      if (new Set(profiles.map(profile => profile.id)).size !== profiles.length) invalid()
+      return profiles.sort((a, b) => a.id < b.id ? -1 : 1)
+    } catch (error) { return invalid(path + ": not a valid provider list (version 1, at most one profile per provider)") }
+  } catch (error) { if (error instanceof CatalogError) throw error; return invalid(error instanceof Error ? error.message : String(error)) }
 }
 async function fileIdentity(path: string): Promise<[string, string[]]> {
   if (await realpath(path) !== path) invalid()
@@ -102,17 +115,17 @@ function adapterMain(profile: ProviderProfile, value: unknown): string {
 export async function adapterEntry(input: ProviderProfile): Promise<string> {
   try {
     const profile = parseProfile(input), bytes = await readBoundedFile(profile.adapterPackageJson, 1024 * 1024)
-    if (bytes === null) invalid()
-    const entry = adapterMain(profile, decodeJson(bytes)), before = await fileIdentity(entry), after = await fileIdentity(entry)
+    if (bytes === null) invalid(profile.adapterPackageJson + " does not exist")
+    const entry = adapterMain(profile, decodeJson(bytes, profile.adapterPackageJson)), before = await fileIdentity(entry), after = await fileIdentity(entry)
     if (!isDeepStrictEqual(before, after)) throw new CatalogError("CONFIG_CHANGED")
     return entry
-  } catch (error) { if (error instanceof CatalogError) throw error; return invalid() }
+  } catch (error) { if (error instanceof CatalogError) throw error; return invalid(error instanceof Error ? error.message : String(error)) }
 }
 export async function sdkEntry(profile: ProviderProfile): Promise<string> {
   if (profile.sdkPackageJson === null) invalid()
   const bytes = await readBoundedFile(profile.sdkPackageJson, 1024 * 1024)
   if (bytes === null) invalid()
-  const metadata = object(decodeJson(bytes)), main = text(metadata.main)
+  const metadata = object(decodeJson(bytes, profile.sdkPackageJson)), main = text(metadata.main)
   if (metadata.name !== "@anthropic-ai/claude-agent-sdk") invalid()
   if (!["0.3.232", "0.3.321"].includes(text(metadata.version))) throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION")
   if (!/^[a-zA-Z0-9_.-]+\.m?js$/.test(main)) invalid()

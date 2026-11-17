@@ -10,9 +10,9 @@ export const catalogMessages = {
 } as const
 export type CatalogErrorCode = keyof typeof catalogMessages
 export class CatalogError extends Error {
-  constructor(readonly code: CatalogErrorCode) { super(catalogMessages[code]) }
+  constructor(readonly code: CatalogErrorCode, message: string = catalogMessages[code]) { super(message) }
 }
-export function invalid(): never { throw new CatalogError("INVALID_CATALOG") }
+export function invalid(detail?: string): never { throw new CatalogError("INVALID_CATALOG", detail) }
 export function object(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) invalid()
   return value as Record<string, unknown>

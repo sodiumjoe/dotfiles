@@ -36,7 +36,7 @@ async function assertTrustedFile(path: string, dependencies: HostIdDependencies)
   const stats = await dependencies.lstat(path)
   if (stats.isSymbolicLink()) throw new Error(`${path} must not be a symlink`)
   if (!stats.isFile()) throw new Error(`${path} must be a regular file`)
-  if (stats.uid !== 0) throw new Error(`${path} must be root-owned`)
+  if (stats.uid !== 0) throw new Error(`${path} must be root-owned; it is owned by uid ${stats.uid}`)
   if ((stats.mode & 0o022) !== 0) throw new Error(`${path} must not be group/world writable`)
   if (await dependencies.realpath(path) !== path) throw new Error(`${path} must resolve canonically`)
 }
