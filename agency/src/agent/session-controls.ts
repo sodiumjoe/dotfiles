@@ -2,7 +2,8 @@ import { absolutePath, id, keys, object, providerId, type ProviderId } from "../
 import { AgentError, parseStopInput, parseTuple, type AgentTuple, type AgentView, type CommandView, type StopInput } from "./types.js"
 import { canonicalJson, parseRequestedSettings, type JsonObject, type RequestedSettings } from "./session-config.js"
 import { EDITOR_TURN_LIMITS, validateTurnInput } from "./session-events.js"
-import { sessionInputs, type AgentService } from "./service.js"
+import { sessionInputs } from "./session-inputs.js"
+import type { RemoteShapes } from "../live/remote-shapes.js"
 import type { LaunchEnvironment } from "./environment.js"
 import type { SubmissionReceipt } from "./turns.js"
 
@@ -49,7 +50,7 @@ export function parseRuntimeSessionOperation(raw: unknown): RuntimeSessionReques
     throw new AgentError("INVALID_PROTOCOL")
   } catch (error) { if (error instanceof AgentError && error.code === "INPUT_TOO_LARGE") throw error; throw new AgentError("INVALID_PROTOCOL") }
 }
-export async function dispatchRuntimeSession(agents: Pick<AgentService, "beginSession" | "sessionRecord" | "commandReceipt" | "submit" | "submission" | "cancel" | "stop">, request: RuntimeSessionRequest, environment: () => LaunchEnvironment): Promise<RuntimeSessionResult> {
+export async function dispatchRuntimeSession(agents: Pick<RemoteShapes, "beginSession" | "sessionRecord" | "commandReceipt" | "submit" | "submission" | "cancel" | "stop">, request: RuntimeSessionRequest, environment: () => LaunchEnvironment): Promise<RuntimeSessionResult> {
   switch (request.op) {
     case "agent_session_start": { const v = request.input; return agents.beginSession({ commandId: v.commandId, cwd: v.cwd, backendId: v.backendId, selection: v.settings ?? {}, nativeParams: v.nativeParams ?? {}, environment: environment() }) }
     case "agent_session_inspect": return { state: "session", agentId: request.agentId, agent: await agents.sessionRecord(request.agentId) }

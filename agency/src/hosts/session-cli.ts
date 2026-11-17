@@ -27,7 +27,7 @@ export async function runSessionClient(argv: readonly string[], deps: ControlDep
   const emit = (value: { ok: true; result: RuntimeSessionResult } | { ok: false; error: Extract<HostReply, { ok: false }>["error"] }) => deps.stdout(JSON.stringify({ protocol: HOST_PROTOCOL, requestId, hostId, handlerGeneration: generation, ...(commandId ? { commandId } : {}), ...value }) + "\n")
   try {
     const args = hostArguments(argv), [group, action, argument] = args.positional, flags = args.flags
-    if (group !== "session" || !args.local && !flags.has("--host") || [...flags.keys()].some(flag => !["--host", "--input-json"].includes(flag))) throw new AgentError("USAGE")
+    if (group !== "session" || !flags.has("--host") || [...flags.keys()].some(flag => !["--host", "--input-json"].includes(flag))) throw new AgentError("USAGE")
     const selected = flags.has("--host") ? hash(flags.get("--host")) : undefined
     let raw: object
     if (action === "inspect") {

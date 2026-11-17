@@ -6,7 +6,6 @@
     "node": "24.13.0"
   },
   "scripts": {
-    "accept:codex": "npm run build && node dist/scripts/accept-codex.js",
     "build": "tsc -p tsconfig.json && node dist/scripts/build-manifest.js",
     "test": "npm run build && node dist/scripts/test-groups.js"
   },

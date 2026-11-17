@@ -21,14 +21,13 @@ export function hostArguments(argv: readonly string[]) {
     if (!arg.startsWith("-")) { positional.push(arg); continue }
     if (seen.has(arg)) throw new AgentError("USAGE")
     seen.add(arg)
-    if (arg === "--json" || arg === "--local") continue
+    if (arg === "--json") continue
     if (!["--host", "--limit", "--cursor", "--cwd", "--command-id", "--input-json"].includes(arg)) throw new AgentError("USAGE")
     const value = argv[++index]
     if (value === undefined || value.startsWith("--")) throw new AgentError("USAGE")
     flags.set(arg, value)
   }
-  if (seen.has("--local") && flags.has("--host")) throw new AgentError("USAGE")
-  return { positional, flags, local: seen.has("--local"), json: seen.has("--json") }
+  return { positional, flags, json: seen.has("--json") }
 }
 export async function runHostClient(argv: readonly string[], deps: ControlDependencies): Promise<number> {
   const requestId = randomUUID()
@@ -41,7 +40,7 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
     let operation: import("../agent/human-controls.js").RuntimeHumanRequest | undefined
     const selected = flags.has("--host") ? hash(flags.get("--host")) : undefined
     if (group === "host") {
-      if (args.local || args.positional.length !== 2 || !["list", "enroll"].includes(action!)) throw new AgentError("USAGE")
+      if (args.positional.length !== 2 || !["list", "enroll"].includes(action!)) throw new AgentError("USAGE")
       allow(action === "enroll" ? ["--input-json"] : [])
       const enrollment = action === "enroll" ? parseHostEnrollment(await readInputJson(flags.get("--input-json"), deps)) : undefined
       const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
@@ -49,7 +48,7 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
       else emit({ ok: true, result: { state: "hosts", hosts: await inventory.list() } })
       return 0
     }
-    if (args.local || !["roster", "permission"].includes(group!) || !(group === "roster" ? ["list", "excerpt"] : ["list", "decide", "inspect"]).includes(action!)) throw new AgentError("USAGE")
+    if (!["roster", "permission"].includes(group!) || !(group === "roster" ? ["list", "excerpt"] : ["list", "decide"]).includes(action!)) throw new AgentError("USAGE")
     if (group === "roster" && action === "excerpt") {
       allow(["--host"]); if (args.positional.length !== 3 || !selected) throw new AgentError("USAGE")
       operation = { op: "agent_excerpt", input: { agentId: id(argument), turns: 4 } }
@@ -59,10 +58,7 @@ export async function runHostClient(argv: readonly string[], deps: ControlDepend
       if (!selected && (flags.has("--limit") || flags.has("--cursor"))) throw new AgentError("USAGE")
       if (selected) operation = { op: "agent_roster", input: parsePageInput({ limit: flags.has("--limit") ? Number(flags.get("--limit")) : 100, ...(flags.has("--cursor") ? { cursor: flags.get("--cursor") } : {}), ...(flags.has("--cwd") ? { cwd: flags.get("--cwd") } : {}) }) }
     } else if (action === "list") { allow(["--host"]); if (args.positional.length !== 2) throw new AgentError("USAGE"); if (selected) operation = { op: "agent_permissions" } }
-    else if (action === "inspect") {
-      allow(["--host"]); if (args.positional.length !== 3 || !selected) throw new AgentError("USAGE")
-      commandId = id(argument); operation = { op: "agent_permission_inspect", commandId }
-    } else {
+    else {
       allow(["--host", "--input-json", "--command-id"]); if (args.positional.length !== 2) throw new AgentError("USAGE")
       const selectedCommand = flags.has("--command-id") ? id(flags.get("--command-id")) : undefined
       const raw = object(await readInputJson(flags.get("--input-json"), deps)); keys(raw, ["ref", "optionId", ...(raw.commandId === undefined ? [] : ["commandId"])])

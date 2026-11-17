@@ -3,7 +3,12 @@ import { destinationEnvironment, launchEnvironmentDigest, type LaunchEnvironment
 import { isRuntimeHumanRequest, dispatchRuntimeHuman } from "../agent/human-controls.js"
 import { AGENT_PROTOCOL, agentErrorReply, commandIdFor, type AgentReply, type AgentRequest } from "../agent/protocol.js"
 import { inventoryPage, type PageInput } from "../agent/queries.js"
-import type { AgentService, CreateSessionInput } from "../agent/service.js"
+import type { ConversationExcerpt, ExcerptInput } from "../agent/excerpt.js"
+import type { PermissionArbiter } from "../agent/permission-arbiter.js"
+import type { AgentPage } from "../agent/queries.js"
+import type { JsonObject, RequestedSettings } from "../agent/session-config.js"
+import type { SubmissionReceipt, SubmissionRequest } from "../agent/turns.js"
+import type { ProviderId } from "../catalog/types.js"
 import { nonRestorableOptionIds, projectRestorableSettings } from "../agent/session-config.js"
 import { dispatchRuntimeSession, isRuntimeSessionRequest } from "../agent/session-controls.js"
 import { EDITOR_TURN_LIMITS } from "../agent/session-events.js"
@@ -14,7 +19,19 @@ import type { LiveCore } from "./core.js"
 import { RequestError } from "./errors.js"
 import type { LiveAgent } from "./state.js"
 
-export type RemoteShapes = Pick<AgentService, "roster" | "permissions" | "excerpt" | "beginSession" | "sessionRecord" | "commandReceipt" | "submit" | "submission" | "cancel" | "stop">
+export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
+export type RemoteShapes = {
+  readonly permissions: PermissionArbiter
+  commandReceipt(commandId: string, expectedGeneration: string): Promise<CommandView | null>
+  sessionRecord(agentId: string): Promise<AgentView | null>
+  beginSession(input: CreateSessionInput): Promise<CommandView>
+  stop(input: StopInput): Promise<CommandView>
+  submit(target: AgentTuple, request: SubmissionRequest): Promise<SubmissionReceipt>
+  submission(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt | null>
+  cancel(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>
+  roster(input: PageInput): Promise<AgentPage>
+  excerpt(input: ExcerptInput): Promise<ConversationExcerpt>
+}
 
 const legacyCodes: Record<RequestError["code"], AgentErrorCode> = { NOT_FOUND: "UNAVAILABLE", BUSY: "BUSY", INVALID: "INVALID_PROTOCOL", UNAVAILABLE: "UNAVAILABLE", FAILED: "STARTUP_FAILED" }
 export const legacyError = (error: unknown): unknown => error instanceof RequestError ? new AgentError(legacyCodes[error.code]) : error

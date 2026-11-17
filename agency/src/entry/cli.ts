@@ -24,11 +24,10 @@ export async function runEntryClient(argv: readonly string[], deps: ControlDepen
       const value = object(await readInputJson(args.flags.get("--input-json"), deps)); keys(value, ["commandId", "hostId", "target"])
       commandId = id(value.commandId); ref = parseEntryTarget({ hostId: value.hostId, target: value.target })
       if (selected && selected !== ref.hostId) throw new AgentError("USAGE")
-    } else { if (args.positional.length !== 3 || !args.local && !args.flags.has("--host")) throw new AgentError("USAGE"); commandId = id(args.positional[2]) }
+    } else { if (args.positional.length !== 3 || !args.flags.has("--host")) throw new AgentError("USAGE"); commandId = id(args.positional[2]) }
     executing = true
     const access = await openHostAccess(deps); close = access.close
-    hostId = ref?.hostId ?? (args.local ? access.env.paths.hostKey : hash(args.flags.get("--host")))
-    if (args.local && hostId !== access.env.paths.hostKey) throw new AgentError("USAGE")
+    hostId = ref?.hostId ?? hash(args.flags.get("--host"))
     const enrollment = hostId === access.env.paths.hostKey ? null : (await access.inventory.list()).find(host => host.hostId === hostId)
     if (enrollment === undefined) throw new AgentError("UNAVAILABLE")
     const client = createHostRuntimeClient({ localHostId: access.env.paths.hostKey, route: access.route })
@@ -44,7 +43,7 @@ export async function runEntryClient(argv: readonly string[], deps: ControlDepen
     emit({ ok: true, result }); return receipt && receipt.state !== "opened" ? 75 : 0
   } catch (error) {
     const code = error instanceof RuntimeOutcomeUnknown ? "OUTCOME_UNKNOWN" : error instanceof AgentError ? error.code : executing ? "UNAVAILABLE" : "USAGE"
-    emit({ ok: false, error: { code, message: code === "USAGE" ? "Use entry open --input-json JSON or entry inspect COMMAND (--host HOST | --local)" : error instanceof Error ? error.message : String(error), ...(error instanceof RuntimeOutcomeUnknown ? { reference: error.reference } : {}) } })
+    emit({ ok: false, error: { code, message: code === "USAGE" ? "Use entry open --input-json JSON or entry inspect COMMAND --host HOST" : error instanceof Error ? error.message : String(error), ...(error instanceof RuntimeOutcomeUnknown ? { reference: error.reference } : {}) } })
     return code === "USAGE" || code === "INPUT_TOO_LARGE" ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
   } finally { close?.() }
 }
@@ -56,7 +55,7 @@ export async function runRuntimeEntryHelper(argv: readonly string[], deps: Contr
     const commandId = id(argv[0]), ref = parseEntryTarget(JSON.parse(argv[2]!)), env = await deps.environment()
     if (env.paths.hostKey !== ref.hostId) return 69
     let output = ""
-    const code = await runEntryClient(["entry", "inspect", commandId, "--local", "--json"], { ...deps, stdout: value => { output += value } })
+    const code = await runEntryClient(["entry", "inspect", commandId, "--host", env.paths.hostKey, "--json"], { ...deps, stdout: value => { output += value } })
     if (code !== 0) return code
     const reply = parseHostReply(JSON.parse(output))
     if (!reply.ok || reply.result.state !== "entry") return 75

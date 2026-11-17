@@ -9,7 +9,7 @@ import { absolutePath, id, object, providerId } from "../catalog/types.js"
 import { PROTOCOL } from "../control/protocol.js"
 import type { HandlerEnvironment } from "../handler/environment.js"
 import { readEventLog } from "../handler/event-log.js"
-import { LEGACY_HANDLER, PRE_LIVE_HANDLER, RequestError, requestFailure, type RequestCode } from "../live/errors.js"
+import { PRE_LIVE_HANDLER, RequestError, requestFailure, type RequestCode } from "../live/errors.js"
 import { REQUEST_PROTOCOL, type LiveOperation, type LiveResult } from "../live/protocol.js"
 import { createRoster } from "../live/roster.js"
 import { createLiveTable } from "../live/state.js"
@@ -126,7 +126,7 @@ async function perform(argv: readonly string[], deps: ControlDependencies): Prom
     }
     case "agents": {
       parse(argv, [], 0, "agents")
-      if (await live(false)) try { return await call({ op: "agents" }) } catch (error) { if (!(error instanceof RequestError && error.message === LEGACY_HANDLER)) throw error }
+      if (await live(false)) return call({ op: "agents" })
       const { roster, table } = local()
       return { state: "agents", handlerGeneration: null, agents: await roster.rows(table) }
     }

@@ -1,5 +1,5 @@
 import type { CatalogService } from "../catalog/service.js"
-import type { AgentService } from "../agent/service.js"
+import type { LiveCore } from "../live/core.js"
 import { isDeepStrictEqual } from "node:util"
 import { ControlError, PROTOCOL, controlError, errorReply, type ControlRequest, type ControlReply, type HandlerStatus } from "../control/protocol.js"
 import type { PlatformPaths } from "../platform/paths.js"
@@ -17,7 +17,7 @@ export type ShutdownContext = {
   closeAfterReply(): Promise<void>
   publishReceipt?: typeof writeShutdownReceipt
   catalog?: Pick<CatalogService, "freezeAndDrain" | "resume" | "verifyDischarged">
-  agents?: Pick<AgentService, "assertOrdinaryShutdownSafe" | "freezeIfIdle" | "freezeAndDrain" | "resume" | "verifyDischarged"> & { prepareHandoff?(): Promise<void> }
+  agents?: Pick<LiveCore, "assertOrdinaryShutdownSafe" | "freezeIfIdle" | "freezeAndDrain" | "resume" | "verifyDischarged" | "prepareHandoff">
   accepted?: ShutdownReceipt
   pending?: { request: ShutdownRequest; operation: Promise<ShutdownReceipt>; deadline: number }
 }
@@ -84,7 +84,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
       const operation = Promise.resolve().then(async () => {
         check()
         if (request.requireIdle) await context.agents?.freezeIfIdle()
-        if (request.requireIdle && request.stopAgents && context.agents?.prepareHandoff) await context.agents.prepareHandoff()
+        if (request.requireIdle && request.stopAgents) await context.agents?.prepareHandoff()
         await drainHandlerServices(context, request.stopAgents)
         check()
         await context.catalog?.verifyDischarged()

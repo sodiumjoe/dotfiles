@@ -91,13 +91,32 @@ local function validate_request(value, argv)
     elseif result.state == "excerpt" then excerpt_result(result) end
 end
 
+local function validate_page(result, generation)
+    assert(result.state == "page" and valid_id(result.revision) and type(result.issues) == "table" and vim.islist(result.issues))
+    assert(result.nextCursor == vim.NIL or type(result.nextCursor) == "string" and #result.nextCursor <= 4096 and result.nextCursor:match("^[%w_-]+$"))
+    assert(type(result.agents) == "table" and vim.islist(result.agents) and #result.agents + #result.issues <= 100)
+    for _, view in ipairs(result.agents) do
+        assert(type(view.record) == "table")
+        if view.record.version == 3 then
+            local record = view.record
+            assert(type(view.live) == "boolean" and vim.tbl_contains({ "not_launched", "verified", "unverified", "unknown" }, view.cleanup))
+            assert(valid_id(record.definition.agentId) and type(record.definition.cwd) == "string" and record.definition.cwd:sub(1, 1) == "/")
+            assert(vim.tbl_contains({ "codex-acp", "claude-agent-acp" }, record.definition.backendId) and type(record.settings) == "table")
+            assert(vim.tbl_contains({ "starting", "ready", "recoverable", "restoring", "stopping", "stopped", "failed", "interrupted" }, record.phase))
+            if record.launch == vim.NIL then assert(not view.live)
+            else
+                assert(type(record.launch) == "table" and valid_id(record.launch.handlerGeneration) and valid_id(record.launch.providerGeneration))
+                if view.live then assert(record.launch.handlerGeneration == generation) end
+            end
+        else assert(view.record.version == 1) end
+    end
+end
+
 local function validate(value, argv)
     if requests[argv[1]] then return validate_request(value, argv) end
-    local ordinary = argv[1] == "host" or vim.tbl_contains({ "roster", "permission" }, argv[1]) and not vim.tbl_contains(argv, "--local")
+    local ordinary = argv[1] == "host" or vim.tbl_contains({ "roster", "permission" }, argv[1])
         or argv[1] == "entry" and vim.tbl_contains({ "open", "inspect" }, argv[2])
-    local protocol = ordinary and "agency-host/1" or vim.tbl_contains(argv, "--local") and "agency-agent/3" or argv[1] == "agent" and "agency-agent/3"
-        or argv[1] == "model" and "agency-catalog/1"
-        or "agency-control/2"
+    local protocol = ordinary and "agency-host/1" or "agency-control/2"
     assert(type(value) == "table" and value.protocol == protocol and valid_id(value.requestId))
     assert(value.handlerGeneration == vim.NIL or valid_id(value.handlerGeneration))
     assert(type(value.ok) == "boolean")
@@ -142,7 +161,7 @@ local function validate(value, argv)
             else assert(result.snapshot.hostId == value.hostId and result.snapshot.handlerGeneration == value.handlerGeneration) end
         elseif result.state == "permission" then human_receipt(value, argv)
         elseif result.state == "page" then
-            validate({ protocol = "agency-agent/3", requestId = value.requestId, handlerGeneration = value.handlerGeneration, ok = true, result = result }, { "agent", "page" })
+            validate_page(result, value.handlerGeneration)
             for _, row in ipairs(result.agents) do assert(row.record.version == 3 and row.record.definition.hostId == value.hostId) end
         elseif result.state == "hosts" then assert(argv[1] == "host" and type(result.hosts) == "table")
         elseif result.state == "enrolled" then assert(argv[1] == "host" and host_id(result.enrollment.hostId))
@@ -167,14 +186,6 @@ local function validate(value, argv)
         else error("Unexpected host result") end
         return
     end
-    if vim.tbl_contains(argv, "--local") and argv[1] == "permission" then
-        if result.state == "permission" then human_receipt(value, argv) else assert(result.state == "permissions") end
-        return
-    end
-    if vim.tbl_contains(argv, "--local") and argv[1] == "roster" then
-        if argv[2] == "excerpt" then excerpt_result(result); return end
-        validate({ protocol = "agency-agent/3", requestId = value.requestId, handlerGeneration = value.handlerGeneration, ok = true, result = result }, { "agent", "page" }); return
-    end
     if argv[1] == "restart" then
         assert(result.state == "restarted" and type(result.agents) == "table" and vim.islist(result.agents))
         for _, agent in ipairs(result.agents) do
@@ -182,56 +193,6 @@ local function validate(value, argv)
             assert(agent.failure == vim.NIL or type(agent.failure) == "table" and type(agent.failure.code) == "string" and type(agent.failure.message) == "string")
         end
         return
-    end
-    if argv[1] ~= "agent" then return end
-    if result.state == "command" then
-        local command = result.command
-        assert(type(command) == "table" and command.version == 3 and valid_id(command.commandId)
-            and command.commandId == value.commandId and valid_id(command.handlerGeneration)
-            and valid_id(command.agentId) and (result.durability == "verified" or result.durability == "unverified"))
-        assert(command.state == "pending" or command.state == "completed" or command.state == "interrupted")
-        if argv[2] == "command" then assert(command.commandId == argv[3]) end
-        if command.result ~= vim.NIL and command.result ~= nil then
-            local outcome = command.result
-            assert(type(outcome) == "table" and vim.tbl_contains({ "started", "restored", "stopped", "imported", "failed", "interrupted" }, outcome.outcome))
-            if outcome.target ~= vim.NIL and outcome.target ~= nil then
-                target(outcome.target)
-                assert(outcome.target.agentId == command.agentId and outcome.target.handlerGeneration == command.handlerGeneration)
-            end
-            if vim.tbl_contains({ "started", "restored", "stopped" }, outcome.outcome) then assert(type(outcome.target) == "table") end
-        end
-        if argv[2] ~= "command" then assert(command.op == argv[2]) end
-        if argv[2] == "restore" or argv[2] == "stop" then assert(command.agentId == argv[3]) end
-        for index, flag in ipairs(argv) do
-            if flag == "--command-id" then assert(command.commandId == argv[index + 1]) end
-            if flag == "--handler-generation" or flag == "--expected-handler-generation" then assert(command.handlerGeneration == argv[index + 1]) end
-        end
-    else
-        local states = { list = "agents", page = "page", choices = "choices", current = "current" }
-        assert(states[argv[2]] == result.state)
-        if result.state == "page" then
-            assert(valid_id(result.revision) and type(result.issues) == "table" and vim.islist(result.issues))
-            assert(result.nextCursor == vim.NIL or type(result.nextCursor) == "string" and #result.nextCursor <= 4096 and result.nextCursor:match("^[%w_-]+$"))
-            assert(#result.agents + #result.issues <= 100)
-        end
-        if result.agents then
-            assert(type(result.agents) == "table" and vim.islist(result.agents))
-            for _, view in ipairs(result.agents) do
-                assert(type(view.record) == "table")
-                if view.record.version == 3 then
-                    local record = view.record
-                    assert(type(view.live) == "boolean" and vim.tbl_contains({ "not_launched", "verified", "unverified", "unknown" }, view.cleanup))
-                    assert(valid_id(record.definition.agentId) and type(record.definition.cwd) == "string" and record.definition.cwd:sub(1, 1) == "/")
-                    assert(vim.tbl_contains({ "codex-acp", "claude-agent-acp" }, record.definition.backendId) and type(record.settings) == "table")
-                    assert(vim.tbl_contains({ "starting", "ready", "recoverable", "restoring", "stopping", "stopped", "failed", "interrupted" }, record.phase))
-                    if record.launch == vim.NIL then assert(not view.live)
-                    else
-                        assert(type(record.launch) == "table" and valid_id(record.launch.handlerGeneration) and valid_id(record.launch.providerGeneration))
-                        if view.live then assert(record.launch.handlerGeneration == value.handlerGeneration) end
-                    end
-                else assert(view.record.version == 1) end
-            end
-        end
     end
 end
 
@@ -244,8 +205,8 @@ function M.new(deps)
     function api.command(argv, options, callback)
         options = options or {}
         local snapshot_read = argv[1] == "host" and argv[2] == "list"
-            or argv[1] == "roster" and argv[2] == "list" and not vim.tbl_contains(argv, "--local")
-            or argv[1] == "permission" and argv[2] == "list" and not vim.tbl_contains(argv, "--local")
+            or argv[1] == "roster" and argv[2] == "list"
+            or argv[1] == "permission" and argv[2] == "list"
         local args = { deps.executable or "agy" }
         vim.list_extend(args, argv)
         args[#args + 1] = "--json"

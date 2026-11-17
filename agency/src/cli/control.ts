@@ -1,5 +1,3 @@
-import { homedir } from "node:os"
-import { discoverCodexSessions } from "../agent/native-sessions.js"
 import type { Readable } from "node:stream"
 import { runSessionClient } from "../hosts/session-cli.js"
 import { runEntryClient } from "../entry/cli.js"
@@ -7,15 +5,9 @@ import { runHostClient } from "../hosts/cli.js"
 import type { HostRoute } from "../hosts/router.js"
 import type { createHostInventory } from "../hosts/inventory.js"
 import { randomUUID } from "node:crypto"
-import { runLocalHumanClient } from "../agent/human-client.js"
-import { runAgentClient } from "../agent/client.js"
 import { runRestart } from "./restart.js"
-import { exchangeAgent, type AgentRequest, type AgentReply } from "../agent/protocol.js"
-import { createAgentStore, type AgentStore } from "../agent/store.js"
+import { createAgentStore } from "../agent/store.js"
 import { createCatalogStore } from "../catalog/store.js"
-import { runCatalogClient } from "../catalog/client.js"
-import { runProbeRecovery } from "../catalog/recovery-client.js"
-import { exchangeCatalog, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -35,18 +27,14 @@ import type { SessionHomes } from "../agent/excerpt.js"
 
 export type ControlDependencies = {
   stdin?: Readable & { isTTY?: boolean }
-  nativeSessionRoot?(): string
   hostInventory?(env: HandlerEnvironment): Pick<ReturnType<typeof createHostInventory>, "list" | "enroll">
   hostRoute?(env: HandlerEnvironment, route: HostRoute, signal?: AbortSignal): Promise<unknown>
   environment(): Promise<HandlerEnvironment>
   start(env: HandlerEnvironment): Promise<HandlerInspection>
   inspect(env: HandlerEnvironment): Promise<HandlerInspection | null>
   call(env: HandlerEnvironment, request: ControlRequest): Promise<ControlReply>
-  callCatalog?(env: HandlerEnvironment, request: CatalogRequest, timeoutMs?: number): Promise<CatalogReply>
-  callAgent?(env: HandlerEnvironment, request: AgentRequest, timeoutMs?: number): Promise<AgentReply>
   callLive?(env: HandlerEnvironment, request: LiveRequest, timeoutMs?: number): Promise<LiveReply>
   homes?(): SessionHomes
-  agentStore?(env: HandlerEnvironment): AgentStore
   receipt: typeof readShutdownReceipt
   inventory: typeof inventoryLaunchState
   cwd(): string
@@ -63,10 +51,7 @@ export function productionControlDependencies(): ControlDependencies {
     start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
     call: async (env, request) => exchange(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request),
-    callCatalog: async (env, request, timeoutMs) => exchangeCatalog(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
-    callAgent: async (env, request, timeoutMs) => exchangeAgent(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
     callLive: async (env, request, timeoutMs) => exchangeLive(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
-    agentStore: env => createAgentStore(env.paths.persistentRoot),
     receipt: readShutdownReceipt, inventory: inventoryLaunchState, cwd: process.cwd, now: () => performance.now(),
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     stdout: text => { process.stdout.write(text) }, stderr: text => { process.stderr.write(text) },
@@ -94,7 +79,7 @@ function parseArguments(argv: readonly string[]): Arguments {
     } else throw new ControlError("USAGE", `unknown flag: ${value}`)
   }
   const command = positional.join(" ")
-  if (command === "status" || command === "handler status") args.command = "status"
+  if (command === "status") args.command = "status"
   else if (command === "doctor" || command === "shutdown" || command === "help") args.command = command
   else if (command !== "") throw new ControlError("USAGE", "unsupported command; use agy --help")
   if (args.command !== "shutdown" && (args.stopAgents || args.requireIdle || args.commandId !== undefined || args.generation !== undefined)) throw new ControlError("USAGE", "shutdown flags require shutdown")
@@ -139,11 +124,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
   if (REQUEST_COMMANDS.includes(argv[0] ?? "")) return runRequests(argv, dependencies)
   if (argv[0] === "session") return runSessionClient(argv, dependencies)
   if (argv[0] === "entry") return runEntryClient(argv, dependencies)
-  if (argv.includes("--local")) return runLocalHumanClient(argv, dependencies)
   if (["host", "roster", "permission"].includes(argv[0] ?? "")) return runHostClient(argv, dependencies)
-  if (argv[0] === "model" && argv[1] === "recover-probe") return runProbeRecovery(argv, dependencies)
-  if (argv[0] === "agent") return runAgentClient(argv, { ...dependencies, callAgent: dependencies.callAgent ?? (async () => { throw new ControlError("UNAVAILABLE") }), agentStore: dependencies.agentStore ?? (env => createAgentStore(env.paths.persistentRoot)) })
-  if (argv.find(value => !value.startsWith("-")) === "model") return runCatalogClient(argv, { ...dependencies, callCatalog: dependencies.callCatalog ?? (async () => { throw new ControlError("UNAVAILABLE", "catalog support unavailable") }) })
   const requestId = randomUUID()
   let generation: string | null = null, commandId: string | undefined
   const json = argv.includes("--json")
@@ -152,16 +133,10 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     dependencies.stdout(JSON.stringify(envelope, null, json ? undefined : 2) + "\n")
   }
   try {
-    if (argv[0] === "native-sessions") {
-      if (argv.length > 2 || argv.length === 2 && argv[1] !== "--json") throw new ControlError("USAGE", "use agy native-sessions [--json]")
-      const root = dependencies.nativeSessionRoot?.() ?? join(process.env.CODEX_HOME ?? join(process.env.HOME ?? homedir(), ".codex"), "sessions")
-      emit(true, { sessions: await discoverCodexSessions(root) })
-      return 0
-    }
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: ["roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]", "roster excerpt AGENT_UUID (--local | --host HOST_ID) (last conversation turns)", "permission list --local [--json]", "permission decide --local --input-json JSON (commandId, ref, optionId) [--json]", "permission inspect COMMAND_UUID --local [--json]", "native-sessions [--json] (read-only local Codex history)", "acp (stdio connection to a ready Handler)", ...REQUEST_HELP, "status", "handler status", "doctor", "shutdown [--stop-agents [--require-idle]] [--command-id UUID --handler-generation UUID] (with both flags, the next Handler restores the live agents)", "restart [--timeout SECONDS] (wait for running turns, hand the live agents to a new Handler with their model and mode)", "model list", "model refresh [--command-id UUID --handler-generation UUID]"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: [...REQUEST_HELP, "roster list [--host HOST_ID] [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] (agents on enrolled hosts)", "roster excerpt AGENT_UUID --host HOST_ID (last conversation turns)", "permission list [--host HOST_ID]", "permission decide [--host HOST_ID] --input-json JSON (commandId, ref, optionId)", "session start|stop|submit|cancel|inspect|command|submission --host HOST_ID --input-json JSON", "entry open", "host list", "host enroll --input-json JSON", "acp (stdio connection to a ready Handler)", "status", "doctor", "shutdown [--stop-agents [--require-idle]] [--command-id UUID --handler-generation UUID] (with both flags, the next Handler restores the live agents)", "restart [--timeout SECONDS] (wait for running turns, hand the live agents to a new Handler with their model and mode)"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)

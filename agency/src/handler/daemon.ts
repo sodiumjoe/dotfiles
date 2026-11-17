@@ -5,17 +5,14 @@ import { id, keys, object } from "../catalog/types.js"
 import { createHostInventory } from "../hosts/inventory.js"
 import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
 import { connectBridge } from "../bridge/ssh.js"
-import { dispatchAgentRequest } from "../agent/dispatch.js"
 import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
 import { registerRuntimeEndpoint } from "../hosts/runtime.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
-import { createAcpRouter } from "../acp/router.js"
 import { createLiveRouter } from "../acp/live-router.js"
-import { createAgentService, type AgentService } from "../agent/service.js"
 import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
-import { type AgentRequest, type AgentReply } from "../agent/protocol.js"
+import { agentErrorReply, type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
 import type { Server, Socket } from "node:net"
@@ -44,7 +41,7 @@ import { destinationEnvironment } from "../agent/environment.js"
 import { createLiveCore, type LiveCore, type LiveCoreDependencies } from "../live/core.js"
 import { dispatchLive } from "../live/dispatch.js"
 import { liveErrorReply, type LiveReply } from "../live/protocol.js"
-import { LEGACY_HANDLER, RequestError } from "../live/errors.js"
+import { RequestError } from "../live/errors.js"
 import { createRemoteShapes, dispatchRemoteRequest, type RemoteShapes } from "../live/remote-shapes.js"
 
 export type HandlerOptions = {
@@ -56,8 +53,6 @@ export type HandlerOptions = {
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
   catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; store: CatalogStore; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
-  agentFactory?: (input: Parameters<typeof createAgentService>[0]) => AgentService
-  agentLayer?: "legacy" | "live"
   liveDependencies?: LiveCoreDependencies
   launchContracts?: readonly LaunchContract[]
   entryDriver?: RuntimeEntryDriver
@@ -113,7 +108,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const sockets = new Set<Socket>()
   let shutdown: ShutdownContext | undefined
   let catalog: CatalogService | undefined
-  let agents: AgentService | undefined
   let core: LiveCore | undefined
   let shapes: RemoteShapes | undefined
   let router: HostRouter | undefined
@@ -131,7 +125,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       () => router?.close(),
       () => bridge?.close(),
       () => acpServer?.close(),
-      () => agents?.close(),
       () => core?.close(),
       () => catalog?.close(),
       () => { options.status.destroy() },
@@ -149,10 +142,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let interruptedStartup = false
   const terminate = createHandlerTermination({
     async drain() {
-      const failures: unknown[] = [], owner = core ?? agents
-      try { await drainHandlerServices({ ...(owner ? { agents: owner } : {}), ...(catalog ? { catalog } : {}) }, true) } catch (error) { failures.push(error) }
+      const failures: unknown[] = []
+      try { await drainHandlerServices({ ...(core ? { agents: core } : {}), ...(catalog ? { catalog } : {}) }, true) } catch (error) { failures.push(error) }
       const verified = await Promise.allSettled([
-        Promise.resolve().then(() => owner?.verifyDischarged()),
+        Promise.resolve().then(() => core?.verifyDischarged()),
         Promise.resolve().then(() => catalog?.verifyDischarged()),
       ])
       failures.push(...verified.filter(result => result.status === "rejected").map(result => result.reason))
@@ -214,8 +207,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       catch (error) { return catalogErrorReply(bound, error) }
     }
     const ready = () => state.phase === "ready" && !closing && !termination
-    const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => shapes && core ? dispatchRemoteRequest({ shapes, generation: options.generation, ready, failed: core.failed }, request) : dispatchAgentRequest({ agents, generation: options.generation, ready }, request)
-    const dispatchRequest = async (raw: unknown): Promise<LiveReply> => core && state.phase === "ready" && !closing && !termination ? dispatchLive(core, raw) : liveErrorReply({ requestId: typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : randomUUID() }, new RequestError("UNAVAILABLE", core ? "the Handler is not ready" : LEGACY_HANDLER))
+    const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => shapes && core ? dispatchRemoteRequest({ shapes, generation: options.generation, ready, failed: core.failed }, request) : Promise.resolve(agentErrorReply({ ...request, handlerGeneration: options.generation }, new AgentError("NOT_READY")))
+    const dispatchRequest = async (raw: unknown): Promise<LiveReply> => core && state.phase === "ready" && !closing && !termination ? dispatchLive(core, raw) : liveErrorReply({ requestId: typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : randomUUID() }, new RequestError("UNAVAILABLE", "the Handler is not ready"))
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
@@ -250,30 +243,21 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     const agentIndex = createAgentIndex(root)
     const migrate = () => migrateIndex({ store: agentStore, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
-    if ((options.agentLayer ?? (options.agentFactory ? "legacy" : "live")) === "live") {
-      if (await agentIndex.migrated()) void migrate()
-      else await migrate()
-      checkStartup()
-      core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, options.liveDependencies)
-      await core.initialize()
-      await core.loadHandoff()
-      shapes = createRemoteShapes(core, options.paths.hostKey)
-    } else {
-      agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, index: agentIndex, events })
-      await agents.initialize()
-      void migrate()
-    }
+    if (await agentIndex.migrated()) void migrate()
+    else await migrate()
+    checkStartup()
+    core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, options.liveDependencies)
+    await core.initialize()
+    await core.loadHandoff()
+    shapes = createRemoteShapes(core, options.paths.hostKey)
     checkStartup()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     if (termination || closing) await bridge.close()
     checkStartup()
     registerRuntimeEndpoint(bridge, dispatchAgent)
-    const ownerAgents = agents, ownerCore = core
+    const ownerCore = core
     const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
-      if (ownerCore) return ownerCore.isLive(target)
-      if (!ownerAgents) return false
-      try { await ownerAgents.sessionSnapshot(target); return true }
-      catch (error) { if (error instanceof AgentError && ["STALE_HANDLER", "STALE_PROVIDER", "SESSION_UNAVAILABLE", "NOT_READY", "UNAVAILABLE"].includes(error.code)) return false; throw error }
+      return ownerCore.isLive(target)
     } })
     bridge.register(["entry-open", "runtime-entry-inspect"], async ({ channel, payload }) => {
       const value = object(payload); keys(value, channel === "entry-open" ? ["commandId", "ref"] : ["commandId"])
@@ -282,17 +266,16 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const coreBridge = bridge
     router = createHostRouter({ hostId: options.paths.hostKey, inventory: createHostInventory(root), local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
     registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
-    const service = agents, liveCore = core
+    const liveCore = core
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), handlerGeneration: options.generation, onError: rejectClosed,
-      router: connection => liveCore ? createLiveRouter({ core: liveCore, ...connection }) : createAcpRouter({ service: service!, ...connection }) })
+      router: connection => createLiveRouter({ core: liveCore, ...connection }) })
     if (termination || closing) await acpServer.close()
     checkStartup()
     current = { ...current, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 } }
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     checkStartup()
-    const owner = core ?? agents
-    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, ...(owner ? { agents: owner } : {}) }
+    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, agents: core }
     state.phase = "ready"
     await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     void core?.resumeHandoff(destinationEnvironment(process.env)).catch(() => undefined)

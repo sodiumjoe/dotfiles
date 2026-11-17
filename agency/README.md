@@ -91,7 +91,7 @@ Native code selections, file references, and diagnostics own context capture. St
 
 Both pickers open at once and show "(loading…)" in the title until their data arrives. `<leader>af` lists running agents on this machine and on enrolled devboxes. `<leader>ar` lists stopped and recoverable local sessions, reading them through `agent page` and omitting legacy version 1 records, which cannot be restored. When there are no sessions, the restore picker shows an empty list. Each row shows the host, the title, the backend and model, the time since the last activity, and the status, with the most recently active session first. The Handler records that activity time, and the conversation title, on each agent record when a turn is submitted and when it finishes. It does not record them when an editor attaches, so reloading or restarting the editor does not reorder sessions, and it skips the write while a mode or configuration change is in progress. When the Handler starts, it fills in a missing title and activity time for stopped and recoverable sessions from their history files: the title is the first real prompt and the time is the file's last modification. Records it can't fill in sort after those that have a time. Selecting a stopped session still restores its logical Agency identity.
 
-The preview ends with the last few turns of the conversation, at most 8 turns of about 600 characters each, and the editor requests 4. `agy roster excerpt AGENT_UUID --local` or `--host HOST_ID` returns them. A running agent's turns come from the Handler's retained conversation, and a stopped agent's turns come from the provider's history file on the Handler's machine, reading its last 1 MiB, and further back up to 16 MiB when that tail contains no prompt. Codex files are under `CODEX_HOME/sessions` (default `~/.codex/sessions`). Claude files are under `CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`). Injected instruction blocks such as `<system-reminder>` and `<environment_info>` are dropped from the turns. A devbox serves excerpts and activity times only after it is redeployed with this build. Until then, its rows have no age and the preview says "Excerpt unavailable: update this devbox". Update the laptop before any devbox: records that carry the new fields can't be read by older Agency code, and downgrading after records have them makes those records unreadable.
+The preview ends with the last few turns of the conversation, at most 8 turns of about 600 characters each, and the editor requests 4. `agy excerpt AGENT_UUID` or `agy roster excerpt AGENT_UUID --host HOST_ID` returns them. A running agent's turns come from the Handler's retained conversation, and a stopped agent's turns come from the provider's history file on the Handler's machine, reading its last 1 MiB, and further back up to 16 MiB when that tail contains no prompt. Codex files are under `CODEX_HOME/sessions` (default `~/.codex/sessions`). Claude files are under `CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`). Injected instruction blocks such as `<system-reminder>` and `<environment_info>` are dropped from the turns. A devbox serves excerpts and activity times only after it is redeployed with this build. Until then, its rows have no age and the preview says "Excerpt unavailable: update this devbox". Update the laptop before any devbox: records that carry the new fields can't be read by older Agency code, and downgrading after records have them makes those records unreadable.
 
 Every attached editor may submit ordinary ACP prompts during ongoing work. The Handler forwards each distinct submission once, without automatic cancellation, steering conversion, or a scheduling queue. The provider determines how additional input affects its work and can return a request error without terminating the session. Responses remain associated with their requests; the session stays working until all outstanding prompt requests settle. The legacy bounded text API remains exclusive because the shared output stream does not identify which request produced each chunk. The submitting editor displays its local input once, while other attachments and replay receive the same input. Retained transcript events are never prepended to another prompt. A lost response is not proof of rejection and never causes automatic redispatch.
 
@@ -223,7 +223,7 @@ SIGTERM and SIGINT instead begin one bounded termination attempt, including duri
 
 `agy acp` connects to the ready Handler's mode-0600 ACP socket inside its mode-0700 runtime directory. The endpoint owns no provider and emits only JSON-RPC on stdout. Initialization selects and starts no backend. Session load is live attachment, not implicit restoration. Authentication methods are not advertised. Client filesystem and terminal RPCs are not forwarded to an arbitrary editor; provider-owned tool execution is unaffected.
 
-Command inspection only reads retained receipts. `agy agent command` and `agy session command` do not launch providers, retry record publication, or resume a failed Stop. An incomplete operation remains incomplete until its owner progresses or an explicit mutation retry resumes it. Local agent Start, Restore, and Stop retries use the original command ID and matching input; inspection never performs that retry on the caller's behalf.
+Command inspection only reads retained receipts. `agy session command` does not launch providers, retry record publication, or resume a failed Stop. An incomplete operation remains incomplete until its owner progresses or an explicit mutation retry resumes it. Local agent Start, Restore, and Stop retries use the original command ID and matching input; inspection never performs that retry on the caller's behalf.
 
 Control uses `agency-control/2`, and agent lifecycle uses `agency-agent/3`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
 
@@ -285,18 +285,10 @@ The Agency runner prints a private `run-*/result.json` path. Set `AGENCY_TEST_EV
 
 Exhaustive protocol/schema, historical receipt, singleton contention and injected failure matrices have been removed. Synthetic Linux assertion matrices have been removed. Real-provider acceptance and remote qualification require separate invocation and authorization.
 
-## Local human controls
+## Local controls
 
-Local controls require the updated Handler and a live, unambiguous, ready generation. They use the existing runtime socket. They do not start a Handler or read the caller's working directory.
+Local agents are read and controlled with the request commands (`agy agents`, `agy excerpt`, `agy permissions`, `agy permissions decide`, `agy start`, `agy stop`, `agy restore`, `agy prompt`). Permission refs come from the owner snapshot and identify the exact Handler and provider generation.
 
-```bash
-agy roster list --local [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] [--json]
-agy permission list --local [--json]
-agy permission decide --local --input-json '{"commandId":"UUID","ref":<permission-ref>,"optionId":"OPTION"}' [--json]
-agy permission inspect COMMAND_UUID --local [--json]
-```
-
-The roster contains active local sessions, including sessions still starting. A starting row can have `live: false`. Permission refs come from the owner snapshot and identify the exact Handler and provider generation. Select the command UUID before sending a decision. A decision is submitted once. If the reply is lost or cannot be validated, the client exits 75 with `INCOMPLETE` and that command ID. Inspect the command before deciding how to recover; a null inspection does not prove that the earlier decision failed. An `applied` decision exits 0, while `claimed`, `uncertain`, `stale` and `withdrawn` exit 75. Inspection is a read and returns current-generation receipts as observations.
 
 Core readiness covers local ACP sessions and controls. Failed optional startup appears in status and doctor runtime diagnostics. Global commands read each configured session owner through the host client. Local watch is not available in this increment; use explicit list and inspect.
 
@@ -320,7 +312,7 @@ The bridge protocol is `agency-bridge/2`, with hello, request, reply and cancell
 
 ## Host sessions
 
-Ordinary session operations use the owning runtime. Select exactly one `--host HOST_ID` or `--local`. The latter selects the local Handler. These commands require an already running Handler and never start one or poll automatically. JSON replies use `agency-host/1`.
+Ordinary session operations use the owning runtime. Select the host with `--host HOST_ID`; the local Handler's own host ID selects it. These commands require an already running Handler and never start one or poll automatically. JSON replies use `agency-host/1`.
 
 ```text
 agy session start --host HOST_ID --input-json JSON --json
@@ -354,4 +346,4 @@ New starts use the filtered destination Handler process environment plus backend
 
 ## Entry
 
-`agy entry open --input-json '{"commandId":"UUID","hostId":"HASH","target":{"agentId":"UUID","handlerGeneration":"UUID","providerGeneration":"UUID"}}' --json` opens an editor for an exact live session. `agy entry inspect COMMAND_UUID --host HOST_ID --json` (or `--local`) inspects its current attachment. Commands exist only in the owner Handler process. Identical concurrent opens share one action; inspection never creates or activates an editor. A restart clears command observations, so an unknown command leaves a lost open outcome unknown. Uncertain or stale entry does not launch a terminal. Inspect the owner and command before taking another action. Neovim's owner picker uses the same live entry path.
+`agy entry open --input-json '{"commandId":"UUID","hostId":"HASH","target":{"agentId":"UUID","handlerGeneration":"UUID","providerGeneration":"UUID"}}' --json` opens an editor for an exact live session. `agy entry inspect COMMAND_UUID --host HOST_ID --json` inspects its current attachment. Commands exist only in the owner Handler process. Identical concurrent opens share one action; inspection never creates or activates an editor. A restart clears command observations, so an unknown command leaves a lost open outcome unknown. Uncertain or stale entry does not launch a terminal. Inspect the owner and command before taking another action. Neovim's owner picker uses the same live entry path.

@@ -3,7 +3,6 @@ import type { FailureDiagnostic } from "../agent/failure-diagnostics.js"
 import { ControlError } from "../control/protocol.js"
 
 export const REQUEST_CODES = ["NOT_FOUND", "BUSY", "INVALID", "UNAVAILABLE", "FAILED"] as const
-export const LEGACY_HANDLER = "this Handler does not serve live requests"
 export const PRE_LIVE_HANDLER = "the running Agency Handler predates this agy and does not answer its requests; upgrade it once by running :AgencyReload in one Neovim, then restart any other Neovim windows"
 export type RequestCode = typeof REQUEST_CODES[number]
 export type RequestFailure = { code: RequestCode; message: string }
