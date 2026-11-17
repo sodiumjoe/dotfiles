@@ -47,3 +47,15 @@ test("a restored agent gets back the model and mode recorded in its session file
   assert.deepEqual(skipped.map(event => [event.agentId, event.setting, event.value, event.code]), [[claude.agentId, "mode", "plan", "INVALID"]])
   await f.verifyZeroSurvivors()
 })
+
+test("a restored Claude agent whose session file records a full model ID gets back the alias that resolves to it", async t => {
+  const f = await liveHandlerFixture(t), claude = await f.start({ backendId: "claude-agent-acp" })
+  await f.set(claude.agentId, "model", "legacy-a")
+  await f.prompt(claude.agentId, "hello")
+  await f.stop(claude.agentId)
+  const [entry] = (await createAgentIndex(f.paths.persistentRoot).list()).filter(value => value.agentId === claude.agentId)
+  await appendFile(join(f.homes, "claude/projects", f.workspace.replace(/[^A-Za-z0-9]/g, "-"), entry!.nativeSessionId + ".jsonl"), JSON.stringify({ type: "assistant", message: { role: "assistant", model: "claude-fixture-legacy-b", content: [{ type: "text", text: "later" }] } }) + "\n")
+  assert.equal((await f.restore(claude.agentId)).live?.model, "legacy-b")
+  assert.deepEqual((await f.events()).filter(event => event.type === "setting_not_restored" && event.setting === "model"), [])
+  await f.verifyZeroSurvivors()
+})

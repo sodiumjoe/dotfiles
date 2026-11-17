@@ -203,13 +203,25 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   const launcher = { context, contracts: input.contracts, processFactory: dependencies.processFactory ?? createAgentProcess, hooks }
 
   const recorded = (entry: IndexEntry): Promise<RecordedSettings> => roster.recorded(entry).catch(() => ({ model: null, mode: null }))
+  async function resolvedAlias(agent: LiveAgent, recorded: string): Promise<string | null> {
+    const matches = (await models.list(agent.backendId)).models.filter(model => model.resolvedModelId === recorded && model.modelId !== recorded)
+    return (matches.find(model => model.modelId !== "default") ?? matches[0])?.modelId ?? null
+  }
   async function reapply(agent: LiveAgent, wanted: RecordedSettings): Promise<void> {
+    const apply = async (setting: "model" | "mode", value: string): Promise<void> => {
+      const request = settingRequest(agent, setting, value)
+      if (!unchanged(agent, request)) await configure(agent, request, { publish, ...(events ? { events } : {}) })
+    }
     for (const setting of ["model", "mode"] as const) {
       const value = wanted[setting]
       if (value === null) continue
       try {
-        const request = settingRequest(agent, setting, value)
-        if (!unchanged(agent, request)) await configure(agent, request, { publish, ...(events ? { events } : {}) })
+        try { await apply(setting, value) }
+        catch (error) {
+          const alias = setting === "model" && error instanceof RequestError && error.code === "INVALID" ? await resolvedAlias(agent, value) : null
+          if (alias === null) throw error
+          await apply(setting, alias)
+        }
       } catch (error) { events?.append({ type: "setting_not_restored", agentId: agent.agentId, setting, value, ...requestFailure(error) }) }
     }
   }

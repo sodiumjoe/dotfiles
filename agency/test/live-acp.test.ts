@@ -54,7 +54,7 @@ test("the editor reads the roster and the model choices over its connection", as
   assert.deepEqual((roster.agents as JsonObject[]).map(row => [row.agentId, row.title, (row.live as JsonObject | null)?.activity ?? null]), [[stopped.agentId, "hello", null], [running.agentId, null, "idle"]])
   const backends = await c.request("agency/backends", {})
   assert.equal(backends.defaultBackendId, "codex-acp")
-  assert.deepEqual((backends.backends as JsonObject[]).map(backend => [backend.id, backend.discovery, (backend.models as JsonObject[]).map(model => model.id)]), [["codex-acp", "fresh", ["model-a"]], ["claude-agent-acp", "fresh", ["model-a"]]])
+  assert.deepEqual((backends.backends as JsonObject[]).map(backend => [backend.id, backend.discovery, (backend.models as JsonObject[]).map(model => model.id)]), [["codex-acp", "fresh", ["model-a"]], ["claude-agent-acp", "fresh", ["model-a", "legacy-b"]]])
   await f.verifyZeroSurvivors()
 })
 
