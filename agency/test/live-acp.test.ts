@@ -182,3 +182,16 @@ test("the editor reads an excerpt over its connection", async t => {
   assert.deepEqual((await c.request("agency/excerpt", { agentId })).turns, turns)
   await f.verifyZeroSurvivors()
 })
+
+test("the editor stops an agent over its connection", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const { agentId } = await f.start()
+  await f.prompt(agentId, "hello")
+  const stopped = await c.request("agency/stop", { agentId })
+  assert.equal(stopped.state, "agent")
+  assert.equal((stopped.agent as JsonObject).live, null)
+  assert.equal(((await c.request("agency/stop", { agentId })).agent as JsonObject).live, null)
+  await assert.rejects(c.request("agency/stop", { agentId: "00000000-0000-4000-8000-000000000999" }), (error: { data?: { agency?: { code?: string } } }) => error.data?.agency?.code === "NOT_FOUND")
+  await f.verifyZeroSurvivors()
+})

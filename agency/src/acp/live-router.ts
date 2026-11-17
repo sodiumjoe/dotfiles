@@ -129,6 +129,7 @@ export function createLiveRouter(input: { core: LiveCore; connectionId: string; 
       if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 1 || turns > 8) throw new RequestError("INVALID", "turns must be an integer from 1 to 8")
       return json(await core.excerpt(agentId, turns))
     }
+    if (method === "agency/stop") return json({ state: "agent", agent: await core.stop(checked(() => id(params.agentId))) })
     if (method === "agency/detach") {
       const sessionId = "agency:" + parseLogicalSessionId(params.sessionId), binding = bindings.get(sessionId)
       loads.delete(sessionId)
