@@ -73,6 +73,7 @@ function statusMessage(line: string): StatusMessage {
   if (source.type === "identity") return { type: "identity", identity: claimedIdentity(source.identity) }
   if (source.type === "gate_released") return { type: "gate_released", generation: text(source.generation, "generation") }
   if (source.type === "ready") return { type: "ready", generation: text(source.generation, "generation") }
+  if (source.type === "failed") throw new Error("Handler startup failed: " + text(source.reason, "reason"))
   throw new Error("Handler status message type is invalid")
 }
 

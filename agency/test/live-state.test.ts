@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { readFile } from "node:fs/promises"
+import { readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { liveHandlerFixture } from "./live-support.js"
 import { until } from "./control-support.js"
@@ -39,5 +39,16 @@ test("a Handler stopped with SIGTERM is not logged as an unclean exit", async t 
   await until(async () => await f.observe(current.process!.pid) === null ? true : undefined, 15000)
   await f.restart()
   assert.deepEqual(await handlerEvents(f), ["handler_started", "handler_stopped", "handler_started"])
+  await f.verifyZeroSurvivors()
+})
+
+test("a Handler that fails during startup reports why", async t => {
+  const f = await liveHandlerFixture(t)
+  await f.stopHandler()
+  await writeFile(join(f.root, "fail-startup"), "")
+  const error = await f.restart().then(() => null, (failure: Error) => failure.cause as Error)
+  assert.equal(error?.message, "Handler startup failed: Error: fixture startup failure")
+  await rm(join(f.root, "fail-startup"))
+  await f.restart()
   await f.verifyZeroSurvivors()
 })

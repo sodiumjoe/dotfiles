@@ -101,7 +101,7 @@ function startupError(error: unknown): ControlError {
   if (error instanceof DarwinObservationUnavailable || error instanceof LinuxObservationUnavailable) return new ControlError("INCOMPLETE", error.message)
   if (error instanceof Error) {
     if (["Handler status timed out", "Handler gate delivery timed out", "Handler socket readiness timed out", "Handler generation is unavailable before readiness", "startup lock is unavailable"].includes(error.message) || /^Handler identity (is|became) ambiguous; startup is unavailable: /.test(error.message)) return new ControlError("INCOMPLETE", error.message)
-    if (["Handler generation disappeared", "Handler status peer closed"].includes(error.message) || error.message.startsWith("Handler exited before acknowledgement: ") || ["ECONNREFUSED", "ECONNRESET", "EPIPE", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) return new ControlError("UNAVAILABLE", error.message)
+    if (["Handler generation disappeared", "Handler status peer closed"].includes(error.message) || error.message.startsWith("Handler exited before acknowledgement: ") || error.message.startsWith("Handler startup failed: ") || ["ECONNREFUSED", "ECONNRESET", "EPIPE", "ENOENT"].includes((error as NodeJS.ErrnoException).code ?? "")) return new ControlError("UNAVAILABLE", error.message)
   }
   return controlError(error)
 }

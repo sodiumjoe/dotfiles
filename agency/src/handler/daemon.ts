@@ -255,9 +255,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     recordStop()
   } catch (error) {
     recordFailure?.(error)
-    if (current !== undefined) {
-      await writeHandlerRecord(options.recordPath, { ...current, phase: "exited_unverified", reason: String(error).slice(0, 512) }).catch(() => undefined)
-    }
+    await sendStatus(options.status, { type: "failed", reason: String(error).slice(0, 512) }).catch(() => undefined)
     throw error
   } finally {
     try { await close() } finally {
