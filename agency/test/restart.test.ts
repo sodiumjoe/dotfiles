@@ -98,3 +98,39 @@ test("restart reports the handoff even when another client started the new Handl
   assert.equal((await f.agents())[0]?.live?.activity, "idle")
   await f.verifyZeroSurvivors()
 })
+
+test("restart keeps waiting through a failed roster read and reports a live agent that was not handed off", async t => {
+  const f = await liveHandlerFixture(t), { agentId } = await f.start(), unprompted = await f.start()
+  await f.prompt(agentId, "hello")
+  await f.pauseSessions()
+  const sink = { output: "", progress: "" }
+  let shutdown = false, failed = false
+  const run: typeof runControl = async (argv, deps) => {
+    if (argv[0] === "agents" && shutdown && !failed) { failed = true; deps.stdout(JSON.stringify({ protocol: "agency-request/1", ok: false, error: { code: "UNAVAILABLE", message: "fixture read failure" } }) + "\n"); return 69 }
+    const code = await runControl(argv, deps)
+    if (argv[0] === "shutdown" && code === 0) shutdown = true
+    return code
+  }
+  const restarting = runRestart(["restart", "--json"], dependencies(f, sink), run)
+  await f.waitSession()
+  await f.releaseSessions()
+  assert.equal(await restarting, 0, sink.progress)
+  const outcomes = new Map((JSON.parse(sink.output).result.agents as Array<{ agentId: string; outcome: string }>).map(agent => [agent.agentId, agent.outcome]))
+  assert.equal(failed, true)
+  assert.deepEqual([outcomes.get(agentId), outcomes.get(unprompted.agentId)], ["restored", "failed"])
+  await f.verifyZeroSurvivors()
+})
+
+test("restart against a Handler that rejects the handoff shutdown names the manual step", async t => {
+  const f = await liveHandlerFixture(t), sink = { output: "", progress: "" }
+  const run: typeof runControl = async (argv, deps) => {
+    if (argv[0] === "shutdown") { deps.stdout(JSON.stringify({ protocol: "agency-control/2", ok: false, error: { code: "INVALID_PROTOCOL", message: "unknown field requireIdle" } }) + "\n"); return 65 }
+    return runControl(argv, deps)
+  }
+  const code = await runRestart(["restart", "--json"], dependencies(f, sink), run)
+  const reply = JSON.parse(sink.output)
+  assert.notEqual(code, 0)
+  assert.equal(reply.error.code, "INVALID_PROTOCOL")
+  assert.match(reply.error.message, /agy shutdown --stop-agents/)
+  await f.verifyZeroSurvivors()
+})

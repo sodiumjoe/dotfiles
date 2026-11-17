@@ -125,6 +125,19 @@ describe("Agency reload", function()
         assert.is_nil(vim.g.agency_reload_running)
     end)
 
+    it("names the manual step when the old Handler cannot hand off", function()
+        local before = package.loaded["sodium.agency"]
+        require("sodium.agency.reload").run({ force = true })
+        f.flush()
+        respond("status", { phase = "ready", distDigest = digest })
+        respond("restart", nil, { code = "INVALID_PROTOCOL", message = "this Handler cannot hand off its agents; run agy shutdown --stop-agents once while agents are idle, then :AgencyReload" })
+        assert.are.equal(before, package.loaded["sodium.agency"])
+        local text = table.concat(notifications, "\n")
+        assert.is_truthy(text:find("agy shutdown --stop-agents", 1, true))
+        assert.is_falsy(text:find("run :AgencyReload again to finish", 1, true))
+        assert.is_nil(vim.g.agency_reload_running)
+    end)
+
     local function failed_restart(failure, status, status_err)
         local before, tab, manager = package.loaded["sodium.agency"], f.manager.tab_page_id, f.manager
         require("sodium.agency.reload").run({ force = true })

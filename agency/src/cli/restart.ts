@@ -51,6 +51,8 @@ export async function runRestart(argv: readonly string[], deps: ControlDependenc
     generation = before.generation
     if (options.resume) { emit(true, { state: "restarted", restarted: false, resumed: false, fromGeneration: before.generation, toGeneration: before.generation, agents: [] } satisfies RestartResult); return 0 }
     await rm(join(root, "restart-pending.json"), { force: true })
+    const listed = await call(["agents"])
+    const live: string[] = listed.ok && Array.isArray(listed.result?.agents) ? listed.result.agents.filter((row: any) => row?.live).map((row: any) => String(row.agentId)) : []
     const deadline = deps.now() + options.timeoutSeconds * 1000
     progress("handing off live agents and stopping the Handler")
     const commandId = randomUUID()
@@ -58,6 +60,7 @@ export async function runRestart(argv: readonly string[], deps: ControlDependenc
       const reply = await call(["shutdown", "--stop-agents", "--require-idle", "--command-id", commandId, "--handler-generation", before.generation])
       if (reply.ok) break
       if (reply.error?.code === "INCOMPLETE" && unverified++ < 3) { await deps.sleep(200); continue }
+      if (reply.error?.code === "INVALID_PROTOCOL") throw new ControlError("INVALID_PROTOCOL", "this Handler cannot hand off its agents (" + reply.error.message + "); run agy shutdown --stop-agents once while agents are idle, then :AgencyReload or agy restart")
       if (reply.error?.code !== "BUSY") throw new ControlError(code(reply.error), reply.error?.code === "INCOMPLETE" ? "shutdown did not complete and the Handler is still running: " + reply.error.message : reply.error?.message ?? "shutdown failed")
       if (deps.now() >= deadline) throw new ControlError("BUSY", reply.error.message)
       progress("waiting: " + reply.error.message)
@@ -67,17 +70,24 @@ export async function runRestart(argv: readonly string[], deps: ControlDependenc
     let after: { generation: string; distDigest: string | null }
     try { after = await status() } catch (error) { throw new ControlError("UNAVAILABLE", "the new Handler failed to start: " + controlError(error).message + "; fix it and run agy status") }
     generation = after.generation
-    const handoff = async (): Promise<Handoff | null> => {
-      const reply = await call(["agents"])
-      const value = reply.ok ? reply.result?.handoff as Handoff | undefined : undefined
+    const handoff = async (): Promise<Handoff | null | undefined> => {
+      const reply = await call(["agents"]).catch(() => null)
+      if (!reply?.ok) return undefined
+      const value = reply.result?.handoff as Handoff | undefined
       return value && value.fromGeneration === before.generation ? value : null
     }
     const waitUntil = deps.now() + options.timeoutSeconds * 1000
-    let handed = await handoff()
-    if (handed?.pending.length) progress("restoring " + plural(handed.agents.length, "agent"))
-    while (handed?.pending.length && deps.now() < waitUntil) { await deps.sleep(250); handed = await handoff() }
+    let handed: Handoff | null | undefined, announced = false
+    for (;;) {
+      const current = await handoff()
+      if (current !== undefined) handed = current
+      if (handed?.pending.length && !announced) { announced = true; progress("restoring " + plural(handed.agents.length, "agent")) }
+      if (handed !== undefined && !handed?.pending.length || deps.now() >= waitUntil) break
+      await deps.sleep(250)
+    }
     const failures = new Map((handed?.failed ?? []).map(item => [item.agentId, { code: item.code, message: item.message }]))
-    const agents = (handed?.agents ?? []).map(agentId => ({ agentId, outcome: failures.has(agentId) ? "failed" as const : handed!.pending.includes(agentId) ? "restoring" as const : "restored" as const, failure: failures.get(agentId) ?? null }))
+    const agents: RestartAgent[] = (handed?.agents ?? []).map(agentId => ({ agentId, outcome: failures.has(agentId) ? "failed" as const : handed!.pending.includes(agentId) ? "restoring" as const : "restored" as const, failure: failures.get(agentId) ?? null }))
+    for (const agentId of live) if (!agents.some(agent => agent.agentId === agentId)) agents.push({ agentId, outcome: "failed", failure: { code: "UNAVAILABLE", message: "not handed off: it was never prompted, or the new Handler dropped its handoff entry; see agy log" } })
     const expected = readDistDigest(fileURLToPath(new URL("../../build-manifest.json", import.meta.url)))
     if (after.distDigest !== null && expected !== null && after.distDigest !== expected) throw new ControlError("INCOMPLETE", "the new Handler runs a different build than dist; reload again")
     emit(true, { state: "restarted", restarted: true, resumed: false, fromGeneration: before.generation, toGeneration: after.generation, agents } satisfies RestartResult)

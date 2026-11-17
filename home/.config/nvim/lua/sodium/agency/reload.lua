@@ -152,7 +152,7 @@ function M.run(opts)
         notify("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
         restore_notify = quiet_disconnect()
         client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
-            if err and err.code == "BUSY" then
+            if err and (err.code == "BUSY" or err.code == "INVALID_PROTOCOL") then
                 vim.g.agency_reload_running = nil
                 if restore_notify then restore_notify(); restore_notify = nil end
                 notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded")
