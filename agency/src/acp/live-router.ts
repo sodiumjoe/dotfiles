@@ -124,6 +124,11 @@ export function createLiveRouter(input: { core: LiveCore; connectionId: string; 
       return json({ state: "agents", handlerGeneration: core.handlerGeneration, agents: (await core.agents()).filter(row => !cwd || row.cwd === cwd) })
     }
     if (method === "agency/backends") return core.backendChoices()
+    if (method === "agency/excerpt") {
+      const agentId = checked(() => id(params.agentId)), turns = params.turns ?? 4
+      if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 1 || turns > 8) throw new RequestError("INVALID", "turns must be an integer from 1 to 8")
+      return json(await core.excerpt(agentId, turns))
+    }
     if (method === "agency/detach") {
       const sessionId = "agency:" + parseLogicalSessionId(params.sessionId), binding = bindings.get(sessionId)
       loads.delete(sessionId)

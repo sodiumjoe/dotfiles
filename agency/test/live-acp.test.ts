@@ -169,3 +169,16 @@ test("an editor's combined Codex model ID reaches the provider unchanged", async
   assert.ok((await f.providerRequests()).some(value => value.method === "session/set_model" && value.params?.modelId === "model-a[high]"))
   await f.verifyZeroSurvivors()
 })
+test("the editor reads an excerpt over its connection", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const { agentId } = await f.start()
+  await f.prompt(agentId, "hello")
+  const turns = [{ role: "user", text: "hello" }, { role: "agent", text: "answer:hello" }]
+  assert.deepEqual((await c.request("agency/excerpt", { agentId })).turns, turns)
+  await assert.rejects(c.request("agency/excerpt", { agentId, turns: 9 }), (error: { data?: { agency?: { code?: string } } }) => error.data?.agency?.code === "INVALID")
+  await assert.rejects(c.request("agency/excerpt", { agentId: "00000000-0000-4000-8000-000000000999" }), (error: { data?: { agency?: { code?: string } } }) => error.data?.agency?.code === "NOT_FOUND")
+  await f.stop(agentId)
+  assert.deepEqual((await c.request("agency/excerpt", { agentId })).turns, turns)
+  await f.verifyZeroSurvivors()
+})
