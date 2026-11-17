@@ -7,6 +7,7 @@ import { startEditorRouting } from "../agent/editor-routing.js"
 import type { LaunchEnvironment } from "../agent/environment.js"
 import type { createAgentProcess } from "../agent/process.js"
 import { parseRequestedSettings, type JsonObject, type RequestedSettings } from "../agent/session-config.js"
+import type { DroppedUpdate } from "../agent/acp.js"
 import type { AcpObservation } from "../agent/session-events.js"
 import { sessionInputs } from "../agent/session-inputs.js"
 import { createTurnCoordinator, type AcpSubmissionRequest } from "../agent/turns.js"
@@ -21,6 +22,7 @@ export type LaunchRequest = { backendId?: ProviderId; cwd: string; settings?: Re
 export type LaunchHooks = {
   update(agent: LiveAgent, event: AcpObservation): void
   request(agent: LiveAgent, message: JsonObject): void
+  dropped(agent: LiveAgent, value: DroppedUpdate): void
   validate(agent: LiveAgent): Promise<void>
   invoke(agent: LiveAgent, params: JsonObject): Promise<JsonObject>
   accepted(agent: LiveAgent, request: AcpSubmissionRequest): void
@@ -85,7 +87,7 @@ export async function launchAgent(agent: LiveAgent, request: LaunchRequest, laun
   const environment = { ...mergeBackendEnvironment(request.environment, backend.environmentDefaults), NVIM: editor.path, NVIM_SOCKET_PATH: editor.path, AGENCY_AGENT_ID: agent.agentId }
   const owner = launcher.processFactory({ context, spec: { agentId: agent.agentId, handlerGeneration: agent.tuple.handlerGeneration, providerGeneration: agent.tuple.providerGeneration, launchAttemptId: agent.record.launch.launchAttemptId, cwd: request.cwd, limits: AGENT_LIMITS },
     agentRecord: agent.record, args: backend.args, session: request.restore ? { kind: "load", sessionId: request.restore.nativeSessionId, params } : { kind: "new", params }, environment, contract,
-    deadline: performance.now() + AGENT_LIMITS.startupMs, isReady: () => agent.phase === "ready", onUpdate: event => hooks.update(agent, event), onRequest: message => hooks.request(agent, message),
+    deadline: performance.now() + AGENT_LIMITS.startupMs, isReady: () => agent.phase === "ready", onUpdate: event => hooks.update(agent, event), onRequest: message => hooks.request(agent, message), onDropped: value => hooks.dropped(agent, value),
     revalidate: async () => abandoned(), awaitExitOnStartupFault: true })
   agent.owner = owner
   void owner.fault.then(failure => hooks.fault(agent, new AgentError(failure.code, failure.diagnostic)))

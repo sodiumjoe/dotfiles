@@ -27,7 +27,10 @@ export function withoutAgencyMetadata(params: JsonObject): JsonObject {
 }
 export function withNativeSession(params: JsonObject, nativeSessionId: string): JsonObject { return { ...withoutAgencyMetadata(params), sessionId: nativeSessionId } }
 
-export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number; overallDeadline?: number; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void }): AcpConnection {
+export type DroppedUpdate = { method: string; sessionUpdate: string | null; reason: "unexpected notification" | "update for another session" | "invalid update"; excerpt: string }
+const EXCERPT_CHARACTERS = 512
+
+export function createAcpConnection(input: { readable: Readable; writable: Writable; limits: AgentLimits; now?: () => number; deadline?: number; overallDeadline?: number; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; onDropped?(value: DroppedUpdate): void }): AcpConnection {
   const { readable, writable, limits } = input, now = input.now ?? (() => performance.now())
   const pending = new Map<number, Pending>(), providerRequests = new Set<string | number>(), writes = new Set<(error?: Error | null) => void>()
   let nextId = 0, closed = false, failure: AgentError | null = null
@@ -152,9 +155,16 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
         earlyUpdates.push(frame); earlyUpdateBytes += bytes
         return
       }
-      if (frame.method !== "session/update" || params.sessionId !== sessionId || !sessionId) throw new AgentError("INVALID_PROTOCOL")
-      validateMetadata(params)
-      const update = validateNativeUpdate(params.update, false) as JsonObject
+      const drop = (reason: DroppedUpdate["reason"]): void => {
+        const kind = params.update && typeof params.update === "object" ? (params.update as JsonObject).sessionUpdate : undefined
+        try { input.onDropped?.({ method: frame.method as string, sessionUpdate: typeof kind === "string" ? kind.slice(0, 64) : null, reason, excerpt: JSON.stringify(params.update ?? params).slice(0, EXCERPT_CHARACTERS) }) } catch {}
+      }
+      if (!sessionId) throw new AgentError("INVALID_PROTOCOL")
+      if (frame.method !== "session/update") { drop("unexpected notification"); return }
+      if (params.sessionId !== sessionId) { drop("update for another session"); return }
+      let update: JsonObject
+      try { validateMetadata(params); update = validateNativeUpdate(params.update, false) as JsonObject }
+      catch { drop("invalid update"); return }
       if (loading) replayUpdates++
       if (update.sessionUpdate === "config_option_update") applyResult({ configOptions: update.configOptions! }, "update")
       if (update.sessionUpdate === "available_commands_update") configuration.availableCommands = (update.availableCommands ?? []) as JsonObject[]

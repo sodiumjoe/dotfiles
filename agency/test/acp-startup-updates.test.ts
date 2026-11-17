@@ -176,3 +176,32 @@ test("confirmed session updates retain their unbounded transport behavior", asyn
   f.send(frame(text("next")))
   assert.equal(f.events.length, 2)
 })
+test("a live update that fails validation is dropped and reported without failing the connection", async t => {
+  const dropped: JsonObject[] = []
+  const readable = new PassThrough(), writable = new PassThrough(), events: AcpObservation[] = []
+  const connection = createAcpConnection({ readable, writable, limits: AGENT_LIMITS, deadline: performance.now() + 5000, onUpdate: event => events.push(event), onDropped: value => dropped.push(value as unknown as JsonObject) })
+  t.after(() => { connection.close(); readable.destroy(); writable.destroy() })
+  const send = (value: JsonObject) => readable.write(JSON.stringify(value) + "\n")
+  writable.on("data", bytes => {
+    const request = JSON.parse(bytes.toString())
+    if (request.method === "initialize") send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } })
+    if (request.method === "session/new") send({ jsonrpc: "2.0", id: request.id, result: { sessionId: "fixture-session", configOptions: [] } })
+  })
+  const record = { ...normalizeAgentRecord({ version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null }), settings: { configValues: {} } }
+  await connection.initialize(record, sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
+  let faulted = false
+  void connection.fault.then(() => { faulted = true })
+  send(frame({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "stalled" }))
+  send(frame(text("other session"), "other-session"))
+  send({ jsonrpc: "2.0", method: "session/unknown", params: {} })
+  send(frame(text("after")))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(faulted, false)
+  assert.deepEqual(events.map(event => event.update.sessionUpdate), ["agent_message_chunk"])
+  assert.deepEqual(dropped.map(value => [value.method, value.sessionUpdate, value.reason]), [
+    ["session/update", "tool_call_update", "invalid update"],
+    ["session/update", "agent_message_chunk", "update for another session"],
+    ["session/unknown", null, "unexpected notification"],
+  ])
+  assert.ok(String(dropped[0]!.excerpt).includes("stalled"))
+})

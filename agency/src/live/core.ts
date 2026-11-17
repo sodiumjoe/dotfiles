@@ -80,7 +80,10 @@ export type LiveCore = {
   close(): void
 }
 
+const DROPPED_UPDATES_LOGGED = 20
+
 export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDependencies = {}): LiveCore {
+  const droppedUpdates = new WeakMap<LiveAgent, number>()
   const { context, events } = input, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const table = createLiveTable(), admissions = new Map<string, Promise<void>>(), unverified = new Set<string>(), roster = createRoster({ index: input.index, homes: input.homes })
   const models = createModelCache({ root, ...(dependencies.modelSource ? { source: dependencies.modelSource } : {}) })
@@ -185,6 +188,11 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       events?.append({ type: "turn_finished", agentId: agent.agentId, submissionId, stopReason: receipt?.stopReason ?? null, ...(receipt?.failure ? { failure: receipt.failure.code } : {}) })
     },
     cancel(agent) { agent.editor?.revoke(); broker.invalidate(agent.tuple); return agent.owner!.cancelPrompt() },
+    dropped(agent, value) {
+      const count = (droppedUpdates.get(agent) ?? 0) + 1
+      droppedUpdates.set(agent, count)
+      if (count <= DROPPED_UPDATES_LOGGED) events?.append({ type: "provider_update_dropped", agentId: agent.agentId, ...value, ...(count === DROPPED_UPDATES_LOGGED ? { further: "suppressed" } : {}) })
+    },
     fault(agent, error) {
       if (agent.phase !== "ready") return
       events?.append({ type: "agent_failed", agentId: agent.agentId, ...requestFailure(error) })

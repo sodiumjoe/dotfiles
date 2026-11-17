@@ -46,6 +46,18 @@ test("a provider that dies during a turn fails the prompt with its exit status, 
   await f.verifyZeroSurvivors()
 })
 
+test("a malformed provider update is dropped and logged while the agent and its turn carry on", async t => {
+  const f = await liveHandlerFixture(t), { agentId } = await f.start()
+  const answer = await f.prompt(agentId, "malformed-update")
+  assert.equal(answer.text, "answer:malformed-update")
+  assert.equal((await f.agents()).find(row => row.agentId === agentId)?.live?.activity, "idle")
+  const dropped = await until(async () => (await f.events()).find(event => event.agentId === agentId && event.type === "provider_update_dropped"))
+  assert.deepEqual([dropped.method, dropped.sessionUpdate, dropped.reason], ["session/update", "tool_call_update", "invalid update"])
+  assert.match(String(dropped.excerpt), /stalled/)
+  assert.ok(!(await f.events()).some(event => event.agentId === agentId && event.type === "agent_failed"))
+  assert.equal((await f.prompt(agentId, "hello")).text, "answer:hello")
+})
+
 test("an idle-required shutdown refuses while a turn runs and leaves the agent usable", async t => {
   const f = await liveHandlerFixture(t), { agentId } = await f.start()
   const held = f.prompt(agentId, "held")

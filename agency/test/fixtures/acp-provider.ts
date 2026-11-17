@@ -130,6 +130,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
       const output = "fixture-large-tool:" + "λ".repeat(1048577)
       update({ sessionUpdate: "tool_call_update", toolCallId: "large-tool", status: "completed", rawOutput: { stdout: output }, content: [{ type: "content", content: { type: "text", text: output } }] })
     }
+    if (text === "malformed-update") update({ sessionUpdate: "tool_call_update", toolCallId: "fixture-tool", status: "stalled" })
     if (text === "history") for (let index = 0; index < 8300; index++) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: String(index) } })
     update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${text}` } })
     await history(text, `answer:${text}`)
