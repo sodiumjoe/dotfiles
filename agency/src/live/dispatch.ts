@@ -22,7 +22,7 @@ export async function dispatchLive(core: LiveCore, raw: unknown): Promise<LiveRe
       case "prompt": result = await core.prompt(request.agentId, request.text, request.environment, request.submissionId); break
       case "set": result = { state: "agent", agent: await core.set(request.agentId, request.setting, request.value) }; break
       case "excerpt": result = await core.excerpt(request.agentId, request.turns); break
-      case "agents": result = { state: "agents", handlerGeneration: core.handlerGeneration, agents: await core.agents() }; break
+      case "agents": { const handoff = core.handoffStatus(); result = { state: "agents", handlerGeneration: core.handlerGeneration, agents: await core.agents(), ...(handoff ? { handoff } : {}) }; break }
       case "models": result = await core.models(); break
       case "permissions": result = { state: "permissions", snapshot: await core.permissions.snapshot() }; break
       case "decide": result = { state: "permission", receipt: await core.permissions.decide(randomUUID(), request.ref, request.optionId) }; break

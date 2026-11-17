@@ -22,10 +22,11 @@ import type { EventLog } from "../handler/event-log.js"
 import type { LaunchContext } from "../handler/launch-transitions.js"
 import { configure, settingRequest, unchanged, type SettingRequest } from "./configure.js"
 import { createEchoFilter } from "./echo.js"
-import { RequestError, requestFailure } from "./errors.js"
+import { RequestError, requestFailure, type RequestFailure } from "./errors.js"
+import { parseHandoffAgent, readHandoff, removeHandoff, staleness, writeHandoff, type HandoffAgent } from "./handoff.js"
 import { launchAgent, type LaunchHooks, type LaunchRequest } from "./launch.js"
 import { createModelCache, type ModelListing, type ModelSource } from "./models.js"
-import { createRoster, liveRow, type RosterRow, type Transcript } from "./roster.js"
+import { createRoster, currentSettings, liveRow, type RosterRow, type Transcript } from "./roster.js"
 import { createLiveTable, type LiveAgent } from "./state.js"
 import { stopAgent } from "./stop.js"
 
@@ -33,6 +34,7 @@ export type StartRequest = { agentId: string; backendId?: ProviderId; cwd: strin
 export type PromptResult = { state: "prompt"; agentId: string; submissionId: string; stopReason: StopReason; text: string }
 export type LiveObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
 export type LiveCoreInput = { context: LaunchContext; contracts: readonly LaunchContract[]; index: AgentIndex; homes: SessionHomes; events?: EventLog }
+export type HandoffStatus = { fromGeneration: string; agents: string[]; pending: string[]; failed: Array<{ agentId: string } & RequestFailure> }
 export type LiveCoreDependencies = { processFactory?: typeof createAgentProcess; modelSource?: ModelSource }
 export type LiveCore = {
   readonly handlerGeneration: string
@@ -69,6 +71,10 @@ export type LiveCore = {
   assertOrdinaryShutdownSafe(): void
   freezeIfIdle(): Promise<void>
   freezeAndDrain(stopAgents: boolean): Promise<void>
+  prepareHandoff(): Promise<void>
+  loadHandoff(): Promise<void>
+  resumeHandoff(environment: LaunchEnvironment): Promise<void>
+  handoffStatus(): HandoffStatus | null
   resume(): void
   verifyDischarged(): Promise<void>
   close(): void
@@ -85,7 +91,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     return agent.owner.respond(requestId, result)
   } })
   permissions.subscribe(event => { if (event.kind === "receipt" && event.receipt.state === "applied") events?.append({ type: "permission_decided", agentId: event.receipt.ref.target.agentId, optionId: event.receipt.optionId }) })
-  let frozen = false, closed = false
+  let frozen = false, closed = false, handingOff = false, handoffStopped = false, handoff: { fromGeneration: string; agents: HandoffAgent[]; pending: Set<string>; failed: Map<string, RequestFailure> } | undefined
 
   const missing = (agentId: string): RequestError => new RequestError("NOT_FOUND", "agent " + agentId + " is not known on this host")
   const available = (): void => {
@@ -215,7 +221,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     table.add(agent)
     return agent
   }
-  async function revive(agentId: string, environment: LaunchEnvironment, nativeParams?: JsonObject): Promise<LiveAgent> {
+  async function revive(agentId: string, environment: LaunchEnvironment, nativeParams?: JsonObject, wanted?: RecordedSettings): Promise<LiveAgent> {
     const agent = await exclusive(id(agentId), async () => {
       available()
       const current = table.get(agentId)
@@ -224,7 +230,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       const entry = await roster.entry(agentId)
       if (!entry) throw missing(agentId)
       if (!await roster.sessionPath(entry)) throw new RequestError("NOT_FOUND", "agent " + agentId + " cannot be restored: its " + entry.backendId + " session file is missing")
-      return admit(agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true, ...await roster.history(entry) }, { backendId: entry.backendId, cwd: entry.cwd, environment, ...(nativeParams ? { nativeParams } : {}), restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
+      return admit(agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true, ...await roster.history(entry) }, { backendId: entry.backendId, cwd: entry.cwd, environment, ...(nativeParams ? { nativeParams } : {}), restore: { nativeSessionId: entry.nativeSessionId } }, "restored", wanted ? Promise.resolve(wanted) : recorded(entry))
     })
     return agent.ready
   }
@@ -346,10 +352,64 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       if (!stopAgents) { ordinary(); frozen = true; return }
       frozen = true
       await Promise.all([...admissions.values()])
+      if (table.all().length) handoffStopped = handingOff
       await Promise.allSettled(table.all().map(agent => stopping(agent, "shutdown")))
       if (table.all().length) throw new AgentError("INCOMPLETE")
     },
-    resume() { if (!closed) frozen = false },
+    async prepareHandoff() {
+      const bootId = await context.adapter.bootId(), agents: HandoffAgent[] = []
+      for (const agent of table.all().filter(value => value.phase === "ready" && value.indexed)) {
+        try { agents.push(parseHandoffAgent({ agentId: agent.agentId, backendId: agent.backendId, nativeSessionId: agent.session?.sessionId, cwd: agent.cwd, createdAt: agent.createdAt, origin: agent.origin, ...currentSettings(agent) })) }
+        catch (error) { events?.append({ type: "handoff_entry_skipped", agentId: agent.agentId, reason: error instanceof Error ? error.message : String(error) }) }
+      }
+      await writeHandoff(root, { version: 1, handlerGeneration: generation, bootId, writtenAt: new Date().toISOString(), agents })
+      handingOff = true
+      handoffStopped = false
+      events?.append({ type: "handoff_written", agents: agents.map(agent => agent.agentId) })
+    },
+    async loadHandoff() {
+      let read
+      try { read = await readHandoff(root) } catch (error) {
+        events?.append({ type: "handoff_unreadable", message: String(error).slice(0, 512) })
+        await removeHandoff(root)
+        return
+      }
+      if (!read) return
+      await removeHandoff(root)
+      const stale = staleness(read.handoff, await context.adapter.bootId(), Date.now())
+      if (stale) { events?.append({ type: "handoff_ignored", fromGeneration: read.handoff.handlerGeneration, reason: stale }); return }
+      for (const item of read.dropped) events?.append({ type: "handoff_entry_dropped", index: item.index, reason: item.reason })
+      for (const agent of read.handoff.agents) {
+        try { await input.index.ensure({ version: 1, agentId: agent.agentId, backendId: agent.backendId, nativeSessionId: agent.nativeSessionId, cwd: agent.cwd, createdAt: agent.createdAt, origin: agent.origin }) }
+        catch (error) { events?.append({ type: "handoff_index_failed", agentId: agent.agentId, message: String(error).slice(0, 512) }) }
+      }
+      handoff = { fromGeneration: read.handoff.handlerGeneration, agents: read.handoff.agents, pending: new Set(read.handoff.agents.map(agent => agent.agentId)), failed: new Map() }
+    },
+    async resumeHandoff(environment) {
+      const current = handoff
+      if (!current) return
+      await Promise.all(current.agents.map(async item => {
+        try {
+          await revive(item.agentId, environment, undefined, { model: item.model, mode: item.mode })
+          events?.append({ type: "handoff_restored", agentId: item.agentId, fromGeneration: current.fromGeneration })
+        } catch (error) {
+          current.failed.set(item.agentId, requestFailure(error))
+          events?.append({ type: "handoff_restore_failed", agentId: item.agentId, ...requestFailure(error) })
+        } finally { current.pending.delete(item.agentId) }
+      }))
+    },
+    handoffStatus() {
+      if (!handoff) return null
+      return { fromGeneration: handoff.fromGeneration, agents: handoff.agents.map(agent => agent.agentId), pending: [...handoff.pending], failed: [...handoff.failed].map(([agentId, failure]) => ({ agentId, ...failure })) }
+    },
+    resume() {
+      if (closed) return
+      frozen = false
+      if (!handingOff) return
+      handingOff = false
+      if (handoffStopped) events?.append({ type: "handoff_kept", reason: "the shutdown failed after agents were stopped" })
+      else void removeHandoff(root).catch(() => undefined)
+    },
     async verifyDischarged() { if (table.all().length || admissions.size) throw new AgentError("INCOMPLETE") },
     close() {
       closed = frozen = true

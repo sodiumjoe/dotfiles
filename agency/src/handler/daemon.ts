@@ -40,6 +40,7 @@ import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLo
 import { createAgentIndex } from "../agent/agent-index.js"
 import { migrateIndex } from "../agent/index-migration.js"
 import { defaultHomes } from "../agent/excerpt.js"
+import { destinationEnvironment } from "../agent/environment.js"
 import { createLiveCore, type LiveCore, type LiveCoreDependencies } from "../live/core.js"
 import { dispatchLive } from "../live/dispatch.js"
 import { liveErrorReply, type LiveReply } from "../live/protocol.js"
@@ -255,6 +256,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       checkStartup()
       core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, options.liveDependencies)
       await core.initialize()
+      await core.loadHandoff()
       shapes = createRemoteShapes(core, options.paths.hostKey)
     } else {
       agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, index: agentIndex, events })
@@ -293,6 +295,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, ...(owner ? { agents: owner } : {}) }
     state.phase = "ready"
     await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
+    void core?.resumeHandoff(destinationEnvironment(process.env)).catch(() => undefined)
     options.status.destroy()
     await closed
     await events.flush()

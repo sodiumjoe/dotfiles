@@ -12,7 +12,7 @@ import { PROTOCOL } from "../src/control/protocol.js"
 import { exchangeLive, REQUEST_PROTOCOL, type LiveOperation, type LiveResult } from "../src/live/protocol.js"
 import { RequestError } from "../src/live/errors.js"
 import type { RosterRow } from "../src/live/roster.js"
-import type { PromptResult } from "../src/live/core.js"
+import type { HandoffStatus, PromptResult } from "../src/live/core.js"
 import type { ProviderProfile } from "../src/catalog/types.js"
 import { createAcpPeer, type AcpPeer } from "./acp-support.js"
 
@@ -59,6 +59,12 @@ export async function liveHandlerFixture(t: TestContext) {
       track: async () => {}, signal: () => f.signal(current.process!, "SIGKILL"), absent: async () => { await proveAbsent(current.process!.pid) },
     })
   }
+  async function handoff() {
+    const current = await handler()
+    const reply = await f.call({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: current.generation, op: "shutdown", commandId: randomUUID(), stopAgents: true, requireIdle: true })
+    if (reply.ok) await stopHandler()
+    return reply
+  }
   const providers = () => f.registrations().filter(item => item.role.startsWith("agent-provider/"))
   async function verifyZeroSurvivors(): Promise<void> {
     await writeFile(join(f.root, "release-prompt"), "released", { mode: 0o600 })
@@ -77,6 +83,11 @@ export async function liveHandlerFixture(t: TestContext) {
     forget: (agentId: string) => request({ op: "forget", agentId }),
     excerpt: (agentId: string, turns = 4) => request({ op: "excerpt", agentId, turns }),
     transcript: (agentId: string) => request({ op: "transcript", agentId }),
+    async handoffStatus(): Promise<HandoffStatus | undefined> { const result = await request({ op: "agents" }); assert.equal(result.state, "agents"); return (result as { handoff?: HandoffStatus }).handoff },
+    async settledHandoff(): Promise<HandoffStatus> { return until(async () => { const result = await request({ op: "agents" }) as { handoff?: HandoffStatus }; return result.handoff && !result.handoff.pending.length ? result.handoff : undefined }, 15000) },
+    async pauseSessions() { await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 }) },
+    async waitSession() { await until(async () => await readFile(join(f.root, "at-session")).then(() => true, () => undefined), 15000) },
+    async releaseSessions() { await rm(join(f.root, "pause-session"), { force: true }); await writeFile(join(f.root, "release-session"), "released", { mode: 0o600 }) },
     async agents(): Promise<RosterRow[]> { const result = await request({ op: "agents" }); assert.equal(result.state, "agents"); return (result as { agents: RosterRow[] }).agents },
     async failure(operation: Promise<unknown>): Promise<{ code: string; message: string }> { try { await operation } catch (error) { if (error instanceof RequestError) return { code: error.code, message: error.message }; throw error } throw new Error("expected the request to fail") },
     async events(): Promise<Array<Record<string, unknown>>> {
@@ -90,7 +101,7 @@ export async function liveHandlerFixture(t: TestContext) {
     async waitPrompt() { await until(async () => await readFile(join(f.root, "at-prompt")).then(() => true, () => undefined), 15000) },
     async releasePrompts() { await rm(join(f.root, "pause-prompt"), { force: true }); await writeFile(join(f.root, "release-prompt"), "released", { mode: 0o600 }) },
     async crashHandler() { const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process.pid) },
-    stopHandler, restart: startHandler, verifyZeroSurvivors, handler,
+    stopHandler, handoff, restart: startHandler, verifyZeroSurvivors, handler,
     async connect(extra: Record<string, string> = {}): Promise<AcpPeer> {
       const socket = createConnection(join(f.paths.runtimeRoot, "acp.sock"))
       socket.write(JSON.stringify({ jsonrpc: "2.0", method: "agency/connect", params: { handlerGeneration: (await handler()).generation, environment: { ...environment(), ...extra } } }) + "\n")

@@ -7,7 +7,7 @@ export type AgentIndex = { ensure(entry: IndexEntry): Promise<boolean>; list(): 
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-function parseEntry(value: unknown): IndexEntry | null {
+export function parseEntry(value: unknown): IndexEntry | null {
   const v = value as Partial<IndexEntry> | null
   if (!v || v.version !== 1 || typeof v.agentId !== "string" || !UUID.test(v.agentId) || (v.backendId !== "claude-agent-acp" && v.backendId !== "codex-acp")
     || typeof v.nativeSessionId !== "string" || !v.nativeSessionId || typeof v.cwd !== "string" || !v.cwd.startsWith("/") || typeof v.createdAt !== "string" || (v.origin !== "new" && v.origin !== "import")) return null

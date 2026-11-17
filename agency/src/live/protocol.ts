@@ -6,7 +6,7 @@ import { parseRequestedSettings, type RequestedSettings } from "../agent/session
 import { absolutePath, id, keys, object, providerId, type ProviderId } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
-import type { PromptResult } from "./core.js"
+import type { HandoffStatus, PromptResult } from "./core.js"
 import { parseRequestFailure, RequestError, requestFailure, type RequestFailure } from "./errors.js"
 import type { ModelListing } from "./models.js"
 import type { RosterRow, Transcript } from "./roster.js"
@@ -22,7 +22,7 @@ export type LiveOperation =
   | { op: "agents" | "models" | "permissions" }
   | { op: "decide"; ref: PermissionRef; optionId: string }
 export type LiveRequest = { protocol: typeof REQUEST_PROTOCOL; requestId: string } & LiveOperation
-export type LiveResult = { state: "agent"; agent: RosterRow } | PromptResult | { state: "agents"; handlerGeneration: string; agents: RosterRow[] }
+export type LiveResult = { state: "agent"; agent: RosterRow } | PromptResult | { state: "agents"; handlerGeneration: string; agents: RosterRow[]; handoff?: HandoffStatus }
   | { state: "forgotten"; agentId: string } | ConversationExcerpt | Transcript
   | { state: "models"; defaultBackendId: ProviderId; backends: ModelListing[] } | { state: "permissions"; snapshot: PermissionSnapshot } | { state: "permission"; receipt: PermissionReceipt }
 export type LiveReply = { protocol: typeof REQUEST_PROTOCOL; requestId: string } & ({ ok: true; result: LiveResult } | { ok: false; error: RequestFailure })
