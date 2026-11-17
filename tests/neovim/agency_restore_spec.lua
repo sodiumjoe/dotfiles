@@ -130,3 +130,65 @@ describe("Agency restore editor handoff", function()
         assert.is_nil(Registry.sessions[vim.api.nvim_get_current_tabpage()])
     end)
 end)
+
+describe("Agency restore on a rejected prompt", function()
+    local f, control, transport, api, Registry, notifications, restored
+    before_each(function()
+        f = require("fixtures.agency_native").new()
+        control = require("fixtures.agency_control")
+        transport = control.operations()
+        Registry = require("agentic.session_registry")
+        package.loaded["sodium.agency"] = nil
+        notifications = {}
+        api = require("sodium.agency").setup({
+            client = { command = function(argv, options, callback)
+                transport.calls[#transport.calls + 1] = { argv = argv, options = options, callback = callback }
+            end },
+            notify = function(value) notifications[#notifications + 1] = value end,
+        })
+        restored = vim.deepcopy(control.target_a)
+        restored.providerGeneration = control.id(9)
+    end)
+    after_each(function() f.close() end)
+
+    local function notice(fragment)
+        for _, value in ipairs(notifications) do
+            if type(value) == "string" and value:find(fragment, 1, true) then return value end
+        end
+    end
+    local function reject_prompt()
+        f.manager:_handle_input_submit("hello")
+        local prompt = f.request("session/prompt")
+        f.client:_handle_message({ id = prompt.id, error = { code = -32000, message = "stale attachment",
+            data = { agency = { code = "INVALID", message = "stale attachment" } } } })
+        f.flush()
+    end
+
+    it("restores the tab's stopped agent into the same tab", function()
+        local tab = vim.api.nvim_get_current_tabpage()
+        reject_prompt()
+        transport.answer("agents", control.roster({ control.row(control.target_a, false) }))
+        assert.is_truthy(notice("agent is stopped; restoring it"))
+        transport.answer("agents", control.roster({ control.row(control.target_a, false) }))
+        assert.is_true(vim.tbl_contains(transport.pending("restore").argv, control.target_a.agentId))
+        transport.answer("restore", { state = "agent", agent = control.row(restored) })
+        transport.answer("agents", control.roster({ control.row(restored) }))
+        f.flush()
+        local frame = f.request("session/load")
+        f.client:_handle_message({ id = frame.id, result = { sessionId = "agency:" .. restored.agentId,
+            _meta = { agency = { version = 1, binding = restored, backendId = "codex-acp",
+                configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.are.equal(f.manager, Registry.sessions[tab])
+        assert.are.same(restored, f.manager._agency_binding)
+        assert.are.same({ "hello" }, vim.api.nvim_buf_get_lines(f.manager.widget.buf_nrs.input, 0, -1, false))
+    end)
+
+    it("leaves the tab alone when its agent still runs under the same binding", function()
+        reject_prompt()
+        transport.answer("agents", control.roster({ control.row(control.target_a) }))
+        assert.is_nil(transport.pending("agents"))
+        assert.is_nil(transport.pending("restore"))
+        assert.is_nil(notice("restoring"))
+    end)
+end)

@@ -171,6 +171,28 @@ function M.setup(deps)
     end
     function api.attach(id, callback, expected) selected(id, callback, "attach", expected) end
     function api.restore(id, callback) selected(id, callback, "restore") end
+    function api.recover(manager)
+        local binding, tab = vim.deepcopy(manager._agency_binding), manager.tab_page_id
+        if not binding then return end
+        api.page({ allow_issues = true }, function(err, result)
+            if err or not vim.api.nvim_tabpage_is_valid(tab) or not vim.deep_equal(manager._agency_binding, binding) then return end
+            for _, row in ipairs(result.agents) do
+                if row.record.version == 3 and row.record.definition.agentId == binding.agentId then
+                    local live = row.live and row.record.phase == "ready" and tuple(row)
+                    if live and vim.deep_equal(live, binding) then return end
+                    vim.api.nvim_set_current_tabpage(tab)
+                    if live then
+                        api.notify("This tab was bound to an earlier run of its agent; reattaching. Send the prompt again once it loads")
+                        api.attach(binding.agentId)
+                    else
+                        api.notify("This tab's agent is stopped; restoring it. Send the prompt again once it is attached")
+                        api.restore(binding.agentId)
+                    end
+                    return
+                end
+            end
+        end)
+    end
     function api.detach(tab)
         epoch = epoch + 1
         operations.detach()

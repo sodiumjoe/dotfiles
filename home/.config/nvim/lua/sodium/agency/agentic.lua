@@ -503,6 +503,7 @@ function M.install()
                             manager.diagnostics_list:add_many(context.diagnostics)
                             if manager._agency_local_submission == submission then manager._is_first_message = context.first end
                         end
+                        require("sodium.agency").setup().recover(manager)
                     end)()
                 end
                 M.guard_callback(manager, captured, function() invoke(manager, captured, callback, result, err) end)()
