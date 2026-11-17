@@ -20,7 +20,7 @@ end
 function M.new(deps)
     deps = deps or {}
     local Control = require("sodium.agency.control")
-    local client = deps.client or Control.new()
+    local request = deps.request or require("sodium.agency.roster").request
     local select_agent = deps.select_agent
         or function(agents, callback)
             return require("sodium.agency.picker").current(agents, callback)
@@ -65,18 +65,6 @@ function M.new(deps)
     local function valid_operation(operation)
         return operation == epoch and vim.api.nvim_tabpage_is_valid(current_origin.tab)
     end
-    local function command(argv, cwd, callback, timeout_ms)
-        client.command(argv, { cwd = cwd, timeout_ms = timeout_ms or 5000 }, callback)
-    end
-    local function request(op, agent_id, argv, cwd, callback)
-        sequence = sequence + 1
-        local key = sequence
-        pending[key] = { op = op, agentId = agent_id, cwd = cwd, startedAt = os.date("!%Y-%m-%dT%H:%M:%SZ") }
-        command(argv, cwd, function(error, envelope)
-            pending[key] = nil
-            callback(error, envelope)
-        end, 310000)
-    end
     local inventory
     local function attach(target, callback, operation, origin)
         inventory({}, function(err, result)
@@ -98,27 +86,9 @@ function M.new(deps)
             callback(error_value("UNAVAILABLE"))
         end, operation)
     end
-    inventory = function(options, callback, operation, use_roster)
+    inventory = function(options, callback, operation)
         options = options or {}
-        local finished, timer, cancel_request = false, nil, nil
-        local complete = callback
-        callback = function(err, result)
-            if finished then return end
-            finished = true
-            if timer then timer:stop(); timer:close() end
-            if cancel_request then cancel_request() end
-            complete(err, result)
-        end
-        if use_roster then
-            timer = assert(vim.uv.new_timer())
-            timer:start(deps.roster_timeout_ms or 10000, 0, vim.schedule_wrap(function()
-                callback(error_value("UNAVAILABLE"))
-            end))
-        end
-        local origin = operation and vim.deepcopy(current_origin) or { cwd = options.cwd or vim.fn.getcwd() }
-        local function received(error, envelope)
-            if finished then return end
-            cancel_request = nil
+        request("agency/roster", options.cwd and { cwd = options.cwd } or vim.empty_dict(), function(error, envelope)
             if operation and not valid_operation(operation) or options.alive and not options.alive() then
                 callback(error_value("CANCELLED"))
                 return
@@ -133,15 +103,10 @@ function M.new(deps)
             end
             table.sort(agents, function(a, b) return a.record.definition.agentId < b.record.definition.agentId end)
             callback(nil, { agents = agents, handlerGeneration = generation, issues = {} })
-        end
-        if use_roster then
-            cancel_request = deps.roster_request(options.cwd and { cwd = options.cwd } or vim.empty_dict(), received)
-        else
-            command({ "agents" }, options.cwd or origin.cwd, received, 10000)
-        end
+        end, { timeout_ms = 10000 })
     end
     function api.page(options, callback)
-        inventory(options, callback, nil, options and options.active and deps.roster_request)
+        inventory(options, callback)
     end
     function api.current(cwd, callback, captured)
         cwd = cwd or vim.fn.getcwd()
@@ -208,10 +173,14 @@ function M.new(deps)
                 callback(error_value("CANCELLED"))
                 return
             end
-            request("stop", exact.agentId, { "stop", exact.agentId }, cwd, function(error, envelope)
+            sequence = sequence + 1
+            local key = sequence
+            pending[key] = { op = "stop", agentId = exact.agentId, cwd = cwd, startedAt = os.date("!%Y-%m-%dT%H:%M:%SZ") }
+            request("agency/stop", { agentId = exact.agentId }, function(error, envelope)
+                pending[key] = nil
                 if error then callback(error, envelope); return end
                 callback(nil, envelope.result)
-            end)
+            end, { timeout_ms = 310000 })
         end)
     end
     function api.inspect_pending(callback)

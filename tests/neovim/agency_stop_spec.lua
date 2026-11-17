@@ -12,6 +12,7 @@ describe("Agency stop view cleanup", function()
             client = { command = function(argv, options, callback)
                 transport.calls[#transport.calls + 1] = { argv = argv, options = options, callback = callback }
             end },
+            request = require("fixtures.agency_control").requests(transport.calls),
             confirm_stop = function(_, callback) callback(confirmed) end,
             notify = function(value) notifications[#notifications + 1] = value end,
         })
@@ -27,6 +28,7 @@ describe("Agency stop view cleanup", function()
 
     local function stopped(target)
         local agentId = (target or require("fixtures.agency_control").target_a).agentId
+        assert.are.equal("agency/stop", transport.pending("stop").method)
         assert.is_true(vim.tbl_contains(transport.pending("stop").argv, agentId))
         transport.answer("stop", transport.reply(target or require("fixtures.agency_control").target_a, false))
         f.flush()

@@ -14,10 +14,16 @@ end
 function M.roster(rows, generation)
     return { state = "agents", handlerGeneration = generation or M.id(2), agents = rows or {} }
 end
+local short = { ["agency/roster"] = "agents", ["agency/stop"] = "stop" }
+function M.requests(calls)
+    return function(method, params, callback, opts)
+        calls[#calls + 1] = { method = method, argv = { short[method] or method, params.agentId }, params = params, options = opts or {}, callback = callback }
+        return function() end
+    end
+end
 function M.operations()
     local calls, opened = {}, {}
-    local client = { command = function(argv, options, callback) calls[#calls + 1] = { argv = argv, options = options, callback = callback } end }
-    local api = require("sodium.agency.operations").new({ client = client,
+    local api = require("sodium.agency.operations").new({ request = M.requests(calls),
         open = function(row) opened[#opened + 1] = row; return { session_id = "agency:" .. row.record.definition.agentId, on_session_ready = function(_, fn) fn() end } end,
         new_session = function(_, cb) cb(nil, "new") end,
         confirm_stop = function() end })

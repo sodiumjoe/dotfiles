@@ -19,6 +19,7 @@ describe("Agency reload", function()
             client = { command = function(argv, options, callback) calls[#calls + 1] = { argv = argv, options = options, callback = callback } end },
             notify = function(value, _, opts) notifications[#notifications + 1] = value; notified[#notified + 1] = opts or {} end,
             system = function(argv, _, on_exit) if systems.raise then error(systems.raise) end; systems[#systems + 1] = argv; on_exit({ code = systems.fail and 1 or 0, stdout = "", stderr = systems.fail and "type error" or "" }); return {} end,
+            request = control.requests(calls),
             repository = root,
             node = root .. "/node",
             reconnect = function(done) f.client:_set_state("ready"); done() end,

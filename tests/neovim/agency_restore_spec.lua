@@ -14,6 +14,7 @@ describe("Agency restore editor handoff", function()
                 transport.calls[#transport.calls + 1] = { argv = argv, options = options, callback = callback }
             end },
             notify = function(value) notifications[#notifications + 1] = value end,
+            request = control.requests(transport.calls),
         })
         restored = vim.deepcopy(control.target_a)
         restored.providerGeneration = control.id(9)
@@ -30,6 +31,7 @@ describe("Agency restore editor handoff", function()
     end
     local function begin_restore()
         vim.cmd("AgencyRestore " .. restored.agentId)
+        assert.are.equal("agency/roster", transport.pending("agents").method)
         transport.answer("agents", control.roster({ control.row(control.target_a, false) }))
         f.flush()
         assert.is_nil(transport.pending("restore"))
@@ -102,6 +104,7 @@ describe("Agency restore on a rejected prompt", function()
                 transport.calls[#transport.calls + 1] = { argv = argv, options = options, callback = callback }
             end },
             notify = function(value) notifications[#notifications + 1] = value end,
+            request = control.requests(transport.calls),
         })
         restored = vim.deepcopy(control.target_a)
         restored.providerGeneration = control.id(9)

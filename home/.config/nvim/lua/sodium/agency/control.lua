@@ -45,7 +45,6 @@ local function human_receipt(value, argv)
     elseif argv[2] == "decide" then error("Missing permission receipt") end
 end
 
-local requests = { stop = "agent", agents = "agents" }
 local activities = { starting = true, idle = true, working = true, stopping = true }
 
 local function present(value) return value ~= nil and value ~= vim.NIL end
@@ -75,23 +74,7 @@ function M.excerpt(result)
     for _, turn in ipairs(result.turns) do assert((turn.role == "user" or turn.role == "agent") and type(turn.text) == "string") end
 end
 
-local function validate_request(value, argv)
-    assert(type(value) == "table" and value.protocol == "agency-request/1" and type(value.ok) == "boolean")
-    if not value.ok then
-        assert(type(value.error) == "table" and type(value.error.code) == "string" and type(value.error.message) == "string")
-        return
-    end
-    local result = value.result
-    assert(type(result) == "table" and result.state == requests[argv[1]])
-    if result.state == "agent" then M.row(result.agent)
-    elseif result.state == "agents" then
-        assert(type(result.agents) == "table" and vim.islist(result.agents))
-        for _, row in ipairs(result.agents) do M.row(row) end
-    elseif result.state == "excerpt" then M.excerpt(result) end
-end
-
 local function validate(value, argv)
-    if requests[argv[1]] then return validate_request(value, argv) end
     local ordinary = vim.tbl_contains({ "roster", "permission" }, argv[1]) or argv[1] == "entry" and argv[2] == "open"
     local protocol = ordinary and "agency-host/1" or "agency-control/2"
     assert(type(value) == "table" and value.protocol == protocol and valid_id(value.requestId))

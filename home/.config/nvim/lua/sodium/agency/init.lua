@@ -57,9 +57,8 @@ function M.setup(deps)
         ready(manager, callback or function() end)
         return manager
     end
-    local operations = require("sodium.agency.operations").new({ client = deps.client,
-        new_session = create, confirm_stop = deps.confirm_stop,
-        roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
+    local operations = require("sodium.agency.operations").new({ request = deps.request,
+        new_session = create, confirm_stop = deps.confirm_stop })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
     api.read_remote_names = deps.remote_names or require("sodium.agency.remote_names").read

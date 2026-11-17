@@ -14,7 +14,13 @@ end
 local validators = {
     ["agency/roster"] = M.validate,
     ["agency/excerpt"] = function(result) Control.excerpt(result); return result end,
+    ["agency/stop"] = function(result)
+        assert(type(result) == "table" and result.state == "agent")
+        Control.row(result.agent)
+        return result
+    end,
 }
+M.validators = validators
 
 function M.request(method, params, callback, opts)
     opts = opts or {}
@@ -62,10 +68,6 @@ function M.request(method, params, callback, opts)
     return function()
         if not settled then settled = true; cleanup() end
     end
-end
-
-function M.new(deps)
-    return function(options, callback) return M.request("agency/roster", options, callback, deps) end
 end
 
 return M
