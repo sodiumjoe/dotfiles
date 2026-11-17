@@ -8,7 +8,7 @@ export type LiveRow = { activity: Activity; handlerGeneration: string; providerG
 export type RosterRow = { agentId: string; backendId: ProviderId; cwd: string; createdAt: string; title: string | null; lastActivityAt: string | null; live: LiveRow | null }
 export type History = { title: string | null; lastActivityAt: string | null }
 export type Transcript = { state: "transcript"; agentId: string; turns: ExcerptTurn[]; truncated: boolean; reason: string | null }
-export type Roster = { entry(agentId: string): Promise<IndexEntry | null>; sessionPath(entry: IndexEntry): Promise<string | null>; recorded(entry: IndexEntry): Promise<RecordedSettings>; changed(sessionId: string): void; rows(table: LiveTable): Promise<RosterRow[]>; row(table: LiveTable, agentId: string): Promise<RosterRow | null>; excerpt(table: LiveTable, agentId: string, turns: number): Promise<ConversationExcerpt | null>; transcript(agentId: string): Promise<Transcript | null> }
+export type Roster = { entry(agentId: string): Promise<IndexEntry | null>; sessionPath(entry: IndexEntry): Promise<string | null>; recorded(entry: IndexEntry): Promise<RecordedSettings>; history(entry: IndexEntry): Promise<History>; changed(sessionId: string): void; rows(table: LiveTable): Promise<RosterRow[]>; row(table: LiveTable, agentId: string): Promise<RosterRow | null>; excerpt(table: LiveTable, agentId: string, turns: number): Promise<ConversationExcerpt | null>; transcript(agentId: string): Promise<Transcript | null> }
 
 export function currentSettings(agent: LiveAgent): { model: string | null; mode: string | null } {
   let snapshot
@@ -20,8 +20,8 @@ export function currentSettings(agent: LiveAgent): { model: string | null; mode:
     mode: typeof mode === "string" ? mode : typeof snapshot.modes?.currentModeId === "string" ? snapshot.modes.currentModeId : null }
 }
 
-export function liveRow(table: LiveTable, agent: LiveAgent, history?: History): RosterRow {
-  return { agentId: agent.agentId, backendId: agent.backendId, cwd: agent.cwd, createdAt: agent.createdAt, title: agent.conversation.display().title ?? history?.title ?? null, lastActivityAt: agent.lastActivityAt ?? history?.lastActivityAt ?? null,
+export function liveRow(table: LiveTable, agent: LiveAgent): RosterRow {
+  return { agentId: agent.agentId, backendId: agent.backendId, cwd: agent.cwd, createdAt: agent.createdAt, title: agent.conversation.display().title ?? agent.title, lastActivityAt: agent.lastActivityAt,
     live: { activity: table.activity(agent), handlerGeneration: agent.tuple.handlerGeneration, providerGeneration: agent.tuple.providerGeneration, ...currentSettings(agent) } }
 }
 
@@ -62,8 +62,10 @@ export function createRoster(input: { index: AgentIndex; homes: SessionHomes }):
     const entries = await input.index.list(), codex = entries.some(entry => entry.backendId === "codex-acp") ? await files(entries) : new Map<string, string>()
     const indexed = new Set(entries.map(entry => entry.agentId))
     const result = await Promise.all(entries.map(async entry => {
-      const agent = table.get(entry.agentId), past = (await summary(entry, codex)).history
-      return agent ? liveRow(table, agent, past) : { agentId: entry.agentId, backendId: entry.backendId, cwd: entry.cwd, createdAt: entry.createdAt, title: past.title, lastActivityAt: past.lastActivityAt, live: null }
+      const agent = table.get(entry.agentId)
+      if (agent) return liveRow(table, agent)
+      const past = (await summary(entry, codex)).history
+      return { agentId: entry.agentId, backendId: entry.backendId, cwd: entry.cwd, createdAt: entry.createdAt, title: past.title, lastActivityAt: past.lastActivityAt, live: null }
     }))
     return [...result, ...table.all().filter(agent => !indexed.has(agent.agentId)).map(agent => liveRow(table, agent))].sort(order)
   }
@@ -71,6 +73,7 @@ export function createRoster(input: { index: AgentIndex; homes: SessionHomes }):
   return {
     entry, sessionPath: locate, rows,
     async recorded(found) { return (await summary(found)).settings },
+    async history(found) { return (await summary(found)).history },
     changed(sessionId) { missed.delete(sessionId) },
     async row(table, agentId) { return (await rows(table)).find(row => row.agentId === agentId) ?? null },
     async excerpt(table, agentId, turns) {

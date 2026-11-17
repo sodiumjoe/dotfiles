@@ -101,3 +101,17 @@ test("a Handler whose index has not been migrated lists every migrated agent as 
   assert.ok(rows.every(row => row.title === "imported" && row.live === null))
   await f.verifyZeroSurvivors()
 })
+
+test("a live agent's title and last activity come from memory, so its session file is not read while it is live", async t => {
+  const f = await liveHandlerFixture(t), { agentId } = await f.start()
+  await f.prompt(agentId, "hello")
+  await f.stop(agentId)
+  const stopped = (await f.agents()).find(row => row.agentId === agentId)!
+  const restored = await f.restore(agentId)
+  assert.deepEqual([restored.title, restored.lastActivityAt], ["hello", stopped.lastActivityAt])
+  const [entry] = await createAgentIndex(f.paths.persistentRoot).list()
+  await rm(join(f.homes, "codex/sessions/2026/11/14", "rollout-2026-11-14T10-00-00-" + entry!.nativeSessionId + ".jsonl"))
+  const live = (await f.agents()).find(row => row.agentId === agentId)!
+  assert.deepEqual([live.title, live.lastActivityAt, live.live?.activity], ["hello", stopped.lastActivityAt, "idle"])
+  await f.verifyZeroSurvivors()
+})

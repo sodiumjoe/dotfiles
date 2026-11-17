@@ -196,9 +196,9 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       } catch (error) { events?.append({ type: "setting_not_restored", agentId: agent.agentId, setting, value, ...requestFailure(error) }) }
     }
   }
-  function admit(agentId: string, identity: { backendId: ProviderId; cwd: string; origin: "new" | "import"; createdAt: string; indexed: boolean }, request: LaunchRequest, kind: "started" | "restored", wanted?: Promise<RecordedSettings>): LiveAgent {
+  function admit(agentId: string, identity: { backendId: ProviderId; cwd: string; origin: "new" | "import"; createdAt: string; indexed: boolean; title: string | null; lastActivityAt: string | null }, request: LaunchRequest, kind: "started" | "restored", wanted?: Promise<RecordedSettings>): LiveAgent {
     const tuple = { agentId, handlerGeneration: generation, providerGeneration: randomUUID() }
-    const agent: LiveAgent = { agentId, ...identity, tuple, phase: "starting", launched: Promise.resolve(), ready: Promise.resolve(undefined as never), controller: new AbortController(), conversation: createConversation(tuple), echo: createEchoFilter(), running: new Set(), prompts: new Set(), configuring: 0, listeners: new Set(), lastActivityAt: null }
+    const agent: LiveAgent = { agentId, ...identity, tuple, phase: "starting", launched: Promise.resolve(), ready: Promise.resolve(undefined as never), controller: new AbortController(), conversation: createConversation(tuple), echo: createEchoFilter(), running: new Set(), prompts: new Set(), configuring: 0, listeners: new Set() }
     agent.launched = launchAgent(agent, request, launcher)
     agent.ready = agent.launched.then(async () => {
       if (wanted) await reapply(agent, await wanted)
@@ -224,7 +224,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       const entry = await roster.entry(agentId)
       if (!entry) throw missing(agentId)
       if (!await roster.sessionPath(entry)) throw new RequestError("NOT_FOUND", "agent " + agentId + " cannot be restored: its " + entry.backendId + " session file is missing")
-      return admit(agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment, ...(nativeParams ? { nativeParams } : {}), restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
+      return admit(agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true, ...await roster.history(entry) }, { backendId: entry.backendId, cwd: entry.cwd, environment, ...(nativeParams ? { nativeParams } : {}), restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
     })
     return agent.ready
   }
@@ -237,9 +237,9 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       await current?.stopped?.catch(() => undefined)
       const entry = await roster.entry(request.agentId)
       if (entry && (request.backendId && entry.backendId !== request.backendId || entry.cwd !== request.cwd)) throw new RequestError("INVALID", "agent " + entry.agentId + " already exists with backend " + entry.backendId + " in " + entry.cwd)
-      if (entry) return admit(entry.agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment: request.environment, restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
+      if (entry) return admit(entry.agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true, ...await roster.history(entry) }, { backendId: entry.backendId, cwd: entry.cwd, environment: request.environment, restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
       const backendId = request.backendId ?? (await readBackendConfig(root)).defaultBackendId
-      return admit(request.agentId, { backendId, cwd: request.cwd, origin: "new", createdAt: new Date().toISOString(), indexed: false }, { ...request, backendId }, "started")
+      return admit(request.agentId, { backendId, cwd: request.cwd, origin: "new", createdAt: new Date().toISOString(), indexed: false, title: null, lastActivityAt: null }, { ...request, backendId }, "started")
     })
   }
   async function start(request: StartRequest): Promise<RosterRow> {

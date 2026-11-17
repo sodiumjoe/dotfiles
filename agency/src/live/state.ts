@@ -15,7 +15,7 @@ export type LiveAgent = {
   agentId: string; backendId: ProviderId; cwd: string; origin: "new" | "import"; createdAt: string; tuple: AgentTuple
   phase: "starting" | "ready" | "stopping"; launched: Promise<void>; ready: Promise<LiveAgent>; stopped?: Promise<void>; controller: AbortController; conversation: Conversation; echo: EchoFilter
   record?: OwnedAgentRecord; backend?: Backend; contract?: ConfiguredLaunchContract; owner?: OwnedAgentProcess; session?: ProviderSession; turns?: TurnCoordinator; editor?: EditorRouting
-  running: Set<string>; prompts: Set<Promise<JsonObject>>; configuring: number; listeners: Set<(snapshot: SessionConfiguration) => void>; indexed: boolean; lastActivityAt: string | null
+  running: Set<string>; prompts: Set<Promise<JsonObject>>; configuring: number; listeners: Set<(snapshot: SessionConfiguration) => void>; indexed: boolean; title: string | null; lastActivityAt: string | null
 }
 export type LiveTable = { get(agentId: string): LiveAgent | undefined; add(agent: LiveAgent): void; remove(agent: LiveAgent): void; all(): LiveAgent[]; activity(agent: LiveAgent): Activity; busy(): string[] }
 
