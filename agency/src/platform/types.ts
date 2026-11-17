@@ -65,21 +65,7 @@ export type LegacyLaunchRecord = LaunchFields & {
 
 export type LaunchRecord = ManagedLaunchRecord | LegacyLaunchRecord
 
-export function launchOwner(record: LaunchRecord):
-  | { kind: "agent"; id: string; generation: string }
-  | { kind: "catalog-probe"; id: string; providerId: ProviderId }
-  | { kind: "legacy-agent"; id: string; handlerGeneration: string } {
-  if (record.version === 1) return { kind: "legacy-agent", id: record.agentId, handlerGeneration: record.handlerGeneration }
-  return record.owner.kind === "agent"
-    ? { kind: "agent", id: record.owner.agentId, generation: record.owner.providerGeneration }
-    : { kind: "catalog-probe", id: record.owner.commandId, providerId: record.owner.providerId }
-}
 
-export type ReconcileResult = {
-  record: LaunchRecord
-  disposition: "released" | "cleaned" | "quarantined"
-  diagnostics?: Array<{ kind: "detached-helper"; identity: ProcessIdentity }>
-}
 
 export type HandlerPhase =
   | "launch_pending"

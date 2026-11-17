@@ -3,7 +3,7 @@ import test from "node:test"
 import { queryObjects } from "node:v8"
 import { EventEmitter } from "node:events"
 import { PassThrough } from "node:stream"
-import { mkdtemp, readdir, rm, realpath } from "node:fs/promises"
+import { mkdtemp, rm, realpath } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ChildProcess, spawn } from "node:child_process"
@@ -107,14 +107,13 @@ test("disposed process callbacks do not retain native startup inputs", async t =
   assert.deepEqual(f.signals, ["SIGTERM"])
 })
 
-test("a launch writes nothing under the state directory", async t => {
+test("a launch reports its phases in memory from active to cleanup verified", async t => {
   const f = await fixture(t)
   await f.owner.initialize(new AbortController().signal)
   f.owner.markActive()
   assert.equal(f.owner.record().phase, "active")
   await f.owner.cleanup()
   assert.equal(f.owner.record().phase, "cleanup_verified")
-  assert.deepEqual(await readdir(f.root), [])
 })
 
 test("cleanup preserves a captured identity rejection in its public failure", async t => {

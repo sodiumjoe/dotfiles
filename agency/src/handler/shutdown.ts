@@ -1,15 +1,12 @@
 import type { LiveCore } from "../live/core.js"
 import { ControlError, PROTOCOL, controlError, errorReply, type ControlRequest, type ControlReply, type HandlerStatus } from "../control/protocol.js"
-import type { PlatformPaths } from "../platform/paths.js"
-import type { HandlerGenerationRecord, PlatformAdapter } from "../platform/types.js"
+import type { HandlerGenerationRecord } from "../platform/types.js"
 
 type ShutdownRequest = ControlRequest & { op: "shutdown" }
 type AcceptedShutdown = { commandId: string; handlerGeneration: string; stopAgents: boolean }
 export type ShutdownContext = {
   record: HandlerGenerationRecord
   state: HandlerStatus
-  paths: PlatformPaths
-  adapter: PlatformAdapter
   closeAfterReply(): Promise<void>
   agents?: Pick<LiveCore, "assertOrdinaryShutdownSafe" | "freezeIfIdle" | "freezeAndDrain" | "resume" | "verifyDischarged" | "prepareHandoff">
   accepted?: AcceptedShutdown
@@ -30,10 +27,6 @@ async function bounded(operation: Promise<AcceptedShutdown>, deadline: number): 
 function joined(existing: { commandId: string; stopAgents: boolean }, request: ShutdownRequest, busy: string): void {
   if (existing.commandId !== request.commandId) throw new ControlError("INCOMPLETE", busy)
   if (existing.stopAgents !== request.stopAgents) throw new ControlError("COMMAND_CONFLICT")
-}
-
-export async function drainHandlerServices(context: Pick<ShutdownContext, "agents">, stopAgents: boolean): Promise<void> {
-  await context.agents?.freezeAndDrain(stopAgents)
 }
 
 export async function shutdownHandler(request: ShutdownRequest, context: ShutdownContext): Promise<ControlReply> {
@@ -59,7 +52,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
         check()
         if (request.requireIdle) await context.agents?.freezeIfIdle()
         if (request.requireIdle && request.stopAgents) await context.agents?.prepareHandoff()
-        await drainHandlerServices(context, request.stopAgents)
+        await context.agents?.freezeAndDrain(request.stopAgents)
         check()
         try { await context.agents?.verifyDischarged() } catch { throw new ControlError("INCOMPLETE", "agent cleanup remains unverified") }
         check()

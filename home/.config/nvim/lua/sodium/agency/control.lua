@@ -33,7 +33,7 @@ local function human_receipt(value, argv)
     local expected = flag(argv, "--command-id")
     local raw = flag(argv, "--input-json")
     local input = raw and vim.json.decode(raw) or nil
-    expected = expected or input and input.commandId or argv[2] == "inspect" and argv[3] or nil
+    expected = expected or input and input.commandId or nil
     if expected and value.protocol == "agency-host/1" then assert(value.commandId == expected) end
     local receipt = value.result.receipt
     if receipt and receipt ~= vim.NIL then

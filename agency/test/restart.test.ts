@@ -160,7 +160,7 @@ test("the status parser accepts an older Handler's reply with reconciliation and
   assert.equal(reply({ ...status, reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [{ launchAttemptId: randomUUID(), owner: { kind: "catalog-probe", id: randomUUID(), providerId: "codex-acp" }, phase: "active", reason: null }] }).ok, true)
   assert.equal(reply(status).ok, true)
 })
-test("a shutdown for a generation that has already exited succeeds without contacting the new Handler", async t => {
+test("a shutdown for a generation that has already exited succeeds and leaves the new Handler running", async t => {
   const f = await liveHandlerFixture(t), before = await f.handler()
   await f.stopHandler()
   await f.restart()

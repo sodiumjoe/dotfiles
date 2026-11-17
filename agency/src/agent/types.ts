@@ -1,7 +1,7 @@
 import { parseFailureDiagnostic, type FailureDiagnostic } from "./failure-diagnostics.js"
 import { isDeepStrictEqual } from "node:util"
 import { absolutePath, hash, id, keys, object, providerId, text, type ProviderId } from "../config/validate.js"
-import { parseProviderSnapshot, type ProviderSnapshot } from "../config/models.js"
+import { type ProviderSnapshot } from "../config/models.js"
 import { type ConfigEvidence } from "../config/providers.js"
 import type { LaunchRecord } from "../platform/types.js"
 import type { LaunchEnvironment } from "./environment.js"
@@ -13,7 +13,6 @@ export type Reasoning = { kind: "none" } | { kind: "value"; value: string }
 export type PermissionEvidence = "fixture-contract-v1" | "agency-deny-all-v1"
 export type StartSelection = { providerId: ProviderId; modelId: string; reasoning: Reasoning; mode: string | null; permissionProfile: string }
 export type AgentTuple = { agentId: string; handlerGeneration: string; providerGeneration: string }
-export type AgentIds = AgentTuple & { hostId: string; launchAttemptId: string; commandId: string }
 export type AgentLimits = { startupMs: 30000; rpcMs: 5000; frameBytes: 1048576; startupBytes: 8388608; writeQueueBytes: 1048576; stderrBytes: 8192 }
 export const AGENT_LIMITS: Readonly<AgentLimits> = Object.freeze({ startupMs: 30000, rpcMs: 5000, frameBytes: 1048576, startupBytes: 8388608, writeQueueBytes: 1048576, stderrBytes: 8192 })
 export type AgentDefinition = { hostId: string; agentId: string; createdCommandId: string; cwd: string; selection: StartSelection & { mode: string } }
@@ -22,7 +21,6 @@ export type LaunchSpec = AgentDefinition & AgentLaunch
 export type SessionEvidence = { sessionId: string; sessionGeneration: string; protocolVersion: 1; modelId: string; reasoning: Reasoning; mode: string; permissionProfile: string; permissionEvidence: PermissionEvidence }
 export type PromptResult = import("./session-events.js").TurnResult
 export type AgentPhase = "starting" | "ready" | "recoverable" | "restoring" | "stopping" | "stopped" | "failed" | "interrupted"
-export type AgentRecord = { version: 2; definition: AgentDefinition; launch: AgentLaunch; phase: AgentPhase; session: SessionEvidence | null; failure: AgentFailure | null }
 export type AgentDefinitionV3 = { hostId: string; agentId: string; createdCommandId: string; cwd: string; backendId: ProviderId; origin: "new" | "import" }
 export type AgentLaunchV3 = { handlerGeneration: string; providerGeneration: string; launchAttemptId: string; commandId: string; configuration: ConfigEvidence; backendFingerprint: string; compatibilityId: string; containment: "direct-process-group-v1"; authority: "normal-user"; limits: AgentLimits }
 export type ConfigurationState = { verification: { kind: "verified" } | { kind: "pending"; commandId: string } | { kind: "unknown" }; nonRestorableOptionIds: string[] }
@@ -144,21 +142,6 @@ export function parseAgentCommandV3(input: unknown): AgentCommandV3 { return che
     if (["started", "restored", "imported"].includes(String(result.outcome)) && result.session === null) invalidAgent()
   }
   return { version: 3, hostId: hash(v.hostId), commandId, handlerGeneration, op: v.op as AgentCommandV3["op"], input: structuredClone(request) as JsonObject, agentId, target, state: v.state as AgentCommandV3["state"], result: result === null ? null : structuredClone(result) as NativeCommandResult }
-}) }
-export function parseLaunchSpec(input: unknown): LaunchSpec { return checked(() => {
-  const v = object(input); keys(v, ["hostId", "agentId", "createdCommandId", "cwd", "selection", "handlerGeneration", "providerGeneration", "launchAttemptId", "commandId", "catalogSnapshotId", "catalogEvidence", "configuration", "contractId", "contractFingerprint", "containment", "authority", "limits"])
-  if (v.containment !== "direct-process-group-v1" || v.authority !== "normal-user" || !isDeepStrictEqual(v.limits, AGENT_LIMITS)) invalidAgent()
-  const ids = { hostId: hash(v.hostId), agentId: id(v.agentId), createdCommandId: id(v.createdCommandId), handlerGeneration: id(v.handlerGeneration), providerGeneration: id(v.providerGeneration), launchAttemptId: id(v.launchAttemptId), commandId: id(v.commandId) }
-  if (new Set([ids.agentId, ids.handlerGeneration, ids.providerGeneration, ids.launchAttemptId, ids.commandId]).size !== 5 || [ids.agentId, ids.handlerGeneration, ids.providerGeneration, ids.launchAttemptId].includes(ids.createdCommandId)) invalidAgent()
-  const selection = parseSelection(v.selection); if (selection.mode === null) invalidAgent()
-  const c = object(v.configuration); keys(c, ["fingerprint", "scope", "providerId", "adapterVersion", "sdkVersion"]); if (c.scope !== "declared-config-v1") invalidAgent()
-  const configuration: ConfigEvidence = { fingerprint: hash(c.fingerprint), scope: "declared-config-v1", providerId: providerId(c.providerId), adapterVersion: agentText(c.adapterVersion), sdkVersion: c.sdkVersion === null ? null : agentText(c.sdkVersion) }
-  const catalogEvidence = parseProviderSnapshot(v.catalogEvidence)
-  if (catalogEvidence.error !== null || catalogEvidence.verifiedAt === null || catalogEvidence.verifiedHandlerGeneration !== ids.handlerGeneration || catalogEvidence.providerId !== selection.providerId || configuration.providerId !== selection.providerId || configuration.fingerprint !== catalogEvidence.fingerprint || configuration.adapterVersion !== catalogEvidence.adapterVersion || configuration.sdkVersion !== catalogEvidence.sdkVersion) invalidAgent()
-  const model = catalogEvidence.models.find(model => model.modelId === selection.modelId)
-  if (!model || (selection.reasoning.kind === "none" ? model.reasoning.state !== "none" : model.reasoning.state !== "values" || !model.reasoning.values.includes(selection.reasoning.value))) invalidAgent()
-  if (model.modes.state === "values" && !model.modes.values.includes(selection.mode)) invalidAgent()
-  return { ...ids, cwd: absolutePath(v.cwd), selection: { ...selection, mode: selection.mode }, catalogSnapshotId: id(v.catalogSnapshotId), catalogEvidence, configuration, contractId: agentText(v.contractId), contractFingerprint: hash(v.contractFingerprint), containment: "direct-process-group-v1", authority: "normal-user", limits: { ...AGENT_LIMITS } }
 }) }
 export function parseLegacyAgentRecord(input: unknown): LegacyAgentRecord { return checked(() => { const v = object(input), spec = object(v.spec), checkout = object(spec.checkout), root = object(checkout.root); if (v.version !== 1 || !["starting", "ready", "stopping", "stopped", "failed", "interrupted"].includes(String(v.phase))) invalidAgent(); return { version: 1, spec: { ...spec, agentId: id(spec.agentId), handlerGeneration: id(spec.handlerGeneration), providerGeneration: id(spec.providerGeneration), launchAttemptId: id(spec.launchAttemptId), checkout: { ...checkout, root: { ...root, path: absolutePath(root.path) } } }, phase: v.phase as string, session: v.session, failure: v.failure } }) }
 export function parseAgentCommand(input: unknown): AgentCommand { return checked(() => {

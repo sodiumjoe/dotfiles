@@ -127,6 +127,3 @@ export function configurationSnapshot(result: JsonObject, revision = 0): Session
   }
 }
 
-export function isImplicitDisabledCodexFastMode(providerId: string, optionId: string, value: string | boolean | undefined, result: JsonObject, required: ReadonlySet<string>, pending: ReadonlySet<string>): boolean {
-  return !required.has(optionId) && !pending.has(optionId) && providerId === "codex-acp" && optionId === "fast-mode" && (value === "off" || value === false) && Array.isArray(result.configOptions) && !result.configOptions.some(option => object(option).id === optionId)
-}

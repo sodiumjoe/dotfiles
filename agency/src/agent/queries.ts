@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto"
 import { digest } from "../config/providers.js"
-import { absolutePath, id, keys, object, type ProviderId } from "../config/validate.js"
-import { AgentError, type AgentView, type LegacyAgentView, type StartSelection } from "./types.js"
+import { absolutePath, id, keys, object } from "../config/validate.js"
+import { AgentError, type AgentView, type LegacyAgentView } from "./types.js"
 import type { AgentStateIssue } from "./types.js"
 
-export type LaunchChoice = { displayName: string; selection: StartSelection; snapshotId: string; contractFingerprint: string }
-export type AgentChoices = { state: "choices"; choices: LaunchChoice[]; unavailable: Array<{ providerId: ProviderId; reason: string }> }
 export type AgentPage = { state: "page"; revision: string; agents: Array<AgentView | LegacyAgentView>; issues: AgentStateIssue[]; nextCursor: string | null }
 export type PageInput = { limit: number; cursor?: string; cwd?: string; activeOnly?: boolean }
 export const QUERY_BYTES = 7 * 1024 * 1024

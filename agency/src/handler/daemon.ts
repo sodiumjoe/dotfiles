@@ -25,7 +25,7 @@ import { bindPrivateSocket } from "../platform/private-socket.js"
 import { readHandlerRecord, writeHandlerRecord } from "../platform/private-state.js"
 import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
-import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "./shutdown.js"
+import { shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLog } from "./event-log.js"
 import { createAgentIndex } from "../agent/agent-index.js"
 import { migrateIndex } from "../agent/index-migration.js"
@@ -133,7 +133,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const terminate = createHandlerTermination({
     async drain() {
       const failures: unknown[] = []
-      try { await drainHandlerServices({ ...(core ? { agents: core } : {}) }, true) } catch (error) { failures.push(error) }
+      try { await core?.freezeAndDrain(true) } catch (error) { failures.push(error) }
       const verified = await Promise.allSettled([
         Promise.resolve().then(() => core?.verifyDischarged()),
       ])
@@ -245,7 +245,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     checkStartup()
-    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, closeAfterReply: close, agents: core }
+    shutdown = { record: current, state, closeAfterReply: close, agents: core }
     state.phase = "ready"
     void core?.resumeHandoff(destinationEnvironment(process.env)).catch(() => undefined)
     await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)

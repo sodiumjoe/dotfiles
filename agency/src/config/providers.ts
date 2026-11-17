@@ -98,18 +98,18 @@ export async function readProfiles(root: string): Promise<ProviderProfile[]> {
       const profiles = value.providers.map(parseProfile)
       if (new Set(profiles.map(profile => profile.id)).size !== profiles.length) invalid()
       return profiles.sort((a, b) => a.id < b.id ? -1 : 1)
-    } catch (error) { return invalid(path + ": not a valid provider list (version 1, at most one profile per provider)") }
+    } catch { return invalid(path + " is not a valid provider list") }
   } catch (error) { if (error instanceof CatalogError) throw error; return invalid(error instanceof Error ? error.message : String(error)) }
 }
 async function fileIdentity(path: string): Promise<[string, string[]]> {
-  if (await realpath(path) !== path) invalid()
+  if (await realpath(path) !== path) invalid(path + " is a symlink or is under a symlinked directory")
   const stat = await lstat(path, { bigint: true })
-  if (!stat.isFile()) invalid()
+  if (!stat.isFile()) invalid(path + " is not a regular file")
   return [path, identity(stat)]
 }
 function adapterMain(profile: ProviderProfile, value: unknown): string {
   const metadata = object(value), main = text(profile.id === "claude-agent-acp" && metadata.bin !== undefined ? object(metadata.bin)[profile.id] : metadata.main, 4096)
-  if (metadata.name !== "@agentclientprotocol/" + profile.id || isAbsolute(main) || normalize(main) !== main || main.includes("\\") || main.split("/").some(part => part === "" || part === "." || part === "..")) invalid()
+  if (metadata.name !== "@agentclientprotocol/" + profile.id || isAbsolute(main) || normalize(main) !== main || main.includes("\\") || main.split("/").some(part => part === "" || part === "." || part === "..")) invalid(profile.adapterPackageJson + " does not name a usable @agentclientprotocol/" + profile.id + " entry point")
   return join(dirname(profile.adapterPackageJson), main)
 }
 export async function adapterEntry(input: ProviderProfile): Promise<string> {
@@ -122,11 +122,11 @@ export async function adapterEntry(input: ProviderProfile): Promise<string> {
   } catch (error) { if (error instanceof CatalogError) throw error; return invalid(error instanceof Error ? error.message : String(error)) }
 }
 export async function sdkEntry(profile: ProviderProfile): Promise<string> {
-  if (profile.sdkPackageJson === null) invalid()
+  if (profile.sdkPackageJson === null) invalid(profile.id + " has no SDK package")
   const bytes = await readBoundedFile(profile.sdkPackageJson, 1024 * 1024)
-  if (bytes === null) invalid()
+  if (bytes === null) invalid(profile.sdkPackageJson + " does not exist")
   const metadata = object(decodeJson(bytes, profile.sdkPackageJson)), main = text(metadata.main)
-  if (metadata.name !== "@anthropic-ai/claude-agent-sdk") invalid()
+  if (metadata.name !== "@anthropic-ai/claude-agent-sdk") invalid(profile.sdkPackageJson + " is not @anthropic-ai/claude-agent-sdk")
   if (!["0.3.232", "0.3.321"].includes(text(metadata.version))) throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION")
   if (!/^[a-zA-Z0-9_.-]+\.m?js$/.test(main)) invalid()
   const entry = join(dirname(profile.sdkPackageJson), main)

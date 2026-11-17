@@ -1,9 +1,7 @@
-import type { Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
 import { id, keys, object, text } from "../config/validate.js"
 import { CURSOR_BYTES, parsePageInput, QUERY_BYTES, type AgentPage } from "./queries.js"
 import { ControlError, UUID } from "../control/protocol.js"
-import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
 import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentCommandV3, parseAgentFailure, parseAgentRecordV3, parseLegacyAgentRecord, type AgentFailure, type AgentView, type LegacyAgentView, type CommandView } from "./types.js"
 import type { AgentStateIssue } from "./types.js"
@@ -226,15 +224,4 @@ export function agentErrorReply(request: AgentRequest | Pick<AgentReply, "reques
   const commandId = "op" in request ? commandIdFor(request) : request.commandId
   if (error instanceof ControlError) error = new AgentError(error.code === "ACTIVE_AGENTS" ? "INCOMPLETE" : error.code)
   return { protocol: AGENT_PROTOCOL, requestId: request.requestId, handlerGeneration: request.handlerGeneration, ...(commandId ? { commandId } : {}), ok: false, error: agentFailure(error) }
-}
-export async function exchangeAgent(socket: Socket, request: AgentRequest, timeoutMs = 5000): Promise<AgentReply> {
-  try {
-    const frame = encodeFrame(parseAgentRequest(request)), incoming = receiveFrame(socket, timeoutMs)
-    socket.end(frame)
-    const reply = parseAgentReply(await incoming)
-    validateAgentReply(reply, request); return reply
-  } catch (error) {
-    if (error instanceof ControlError) throw new AgentError(error.code === "INVALID_PROTOCOL" ? "INVALID_PROTOCOL" : error.code === "INCOMPLETE" ? "INCOMPLETE" : "UNAVAILABLE")
-    throw error
-  } finally { socket.destroy() }
 }

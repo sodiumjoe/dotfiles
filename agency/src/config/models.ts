@@ -1,4 +1,4 @@
-import { hash, id, invalid, keys, object, providerId, text, timestamp, catalogMessages, type CatalogErrorCode, type ProviderId } from "./validate.js"
+import { invalid, keys, object, providerId, text, type ProviderId, type CatalogErrorCode } from "./validate.js"
 
 export type Capability = { state: "unknown" } | { state: "none" } | { state: "values"; values: string[] }
 export type Model = { providerId: ProviderId; modelId: string; resolvedModelId: string | null; displayName: string; reasoning: Capability; modes: Capability; availability: "advertised" }
@@ -25,24 +25,6 @@ export function parseModels(input: unknown, provider: ProviderId): Model[] {
   const models = input.map(parseModel), ids = new Set<string>()
   for (const model of models) { if (model.providerId !== provider || ids.has(model.modelId)) invalid(); ids.add(model.modelId) }
   return models.sort((a, b) => a.modelId < b.modelId ? -1 : a.modelId > b.modelId ? 1 : 0)
-}
-export function parseFailure(input: unknown): CatalogFailure {
-  const v = object(input)
-  keys(v, ["code", "message"])
-  if (typeof v.code !== "string" || !Object.hasOwn(catalogMessages, v.code)) invalid()
-  const code = v.code as CatalogErrorCode
-  if (v.message !== catalogMessages[code]) invalid()
-  return { code, message: catalogMessages[code] }
-}
-export function parseProviderSnapshot(input: unknown): ProviderSnapshot {
-  const v = object(input)
-  keys(v, ["providerId", "fingerprint", "verifiedAt", "verifiedHandlerGeneration", "providerVersion", "providerVersionSource", "adapterVersion", "sdkVersion", "models", "error"])
-  const provider = providerId(v.providerId)
-  if (v.providerVersionSource !== "unknown" && v.providerVersionSource !== "reported") invalid()
-  if (v.providerVersionSource !== (v.providerVersion === null ? "unknown" : "reported")) invalid()
-  const result: ProviderSnapshot = { providerId: provider, fingerprint: v.fingerprint === null ? null : hash(v.fingerprint), verifiedAt: v.verifiedAt === null ? null : timestamp(v.verifiedAt), verifiedHandlerGeneration: v.verifiedHandlerGeneration === null ? null : id(v.verifiedHandlerGeneration), providerVersion: v.providerVersion === null ? null : text(v.providerVersion), providerVersionSource: v.providerVersionSource, adapterVersion: v.adapterVersion === null ? null : text(v.adapterVersion), sdkVersion: v.sdkVersion === null ? null : text(v.sdkVersion), models: parseModels(v.models, provider), error: v.error === null ? null : parseFailure(v.error) }
-  if (result.verifiedAt === null ? result.fingerprint !== null || result.verifiedHandlerGeneration !== null || result.models.length > 0 || result.providerVersion !== null : result.fingerprint === null || result.verifiedHandlerGeneration === null || result.adapterVersion === null) invalid()
-  return result
 }
 function normalize(input: unknown, provider: ProviderId): Model[] {
   if (!Array.isArray(input) || input.length > 512) invalid()
