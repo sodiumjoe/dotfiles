@@ -8,13 +8,12 @@ import { mergeBackendEnvironment, readBackendConfig } from "../src/agent/backend
 import { snapshotLaunchEnvironment } from "../src/agent/environment.js"
 import { defaultHomes } from "../src/agent/excerpt.js"
 import { migrateIndex } from "../src/agent/index-migration.js"
-import { createAgentStore } from "../src/agent/store.js"
 import { adapterEntry, readProfiles } from "../src/catalog/config.js"
 import { productionEnvironment } from "../src/handler/environment.js"
 
 const env = await productionEnvironment(), root = env.paths.persistentRoot
 const copy = await mkdtemp(join(tmpdir(), "agency-index-check-")), index = createAgentIndex(copy)
-console.log(JSON.stringify({ migration: await migrateIndex({ store: createAgentStore(root), index, homes: defaultHomes() }), index: copy }))
+console.log(JSON.stringify({ migration: await migrateIndex({ root, index, homes: defaultHomes() }), index: copy }))
 const entries = await index.list(), profiles = await readProfiles(root), backends = (await readBackendConfig(root)).backends
 const watch = new URL("../src/agent/parent-watch.js", import.meta.url).href
 async function check(agentId: string): Promise<Record<string, unknown>> {

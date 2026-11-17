@@ -13,7 +13,7 @@ import { createAcpConnection, type AcpConnection, type DroppedUpdate, type Provi
 import type { AcpObservation } from "./session-events.js"
 import { cleanupBudget, type ConfiguredLaunchContract } from "./contracts.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
-import { AgentError, agentFailure, splitLaunchSpec, type AgentRecordV3, type SessionStart, type AgentFailure, type LaunchSpec } from "./types.js"
+import { AgentError, agentFailure, type AgentRecordV3, type SessionStart, type AgentFailure, type LaunchSpec } from "./types.js"
 import type { JsonObject, SessionConfiguration } from "./session-config.js"
 const PARENT_WATCH = new URL("./parent-watch.js", import.meta.url).href
 
@@ -21,7 +21,7 @@ export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<Provi
 export type AgentProcessSpec = Pick<LaunchSpec, "agentId" | "handlerGeneration" | "providerGeneration" | "launchAttemptId" | "cwd" | "limits">
 export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
 
-export function createAgentProcess(input: { context: LaunchContext; spec: AgentProcessSpec; agentRecord?: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; onDropped?(value: DroppedUpdate): void; revalidate(): Promise<void>; awaitExitOnStartupFault?: boolean }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
+export function createAgentProcess(input: { context: LaunchContext; spec: AgentProcessSpec; agentRecord: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; onDropped?(value: DroppedUpdate): void; revalidate(): Promise<void>; awaitExitOnStartupFault?: boolean }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
   const { context, spec, contract, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline, awaitExitOnStartupFault } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.deadlines
   let overallDeadline = deadline ?? Infinity, spawnDeadline = Infinity
@@ -209,7 +209,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
             if (awaitExitOnStartupFault && error.code === "STARTUP_FAILED" && owned) await Promise.race([owned.terminal, new Promise(resolve => setTimeout(resolve, 500))])
             if (!stopping) fail(new AgentError(error.code, error.diagnostic ?? { boundary: "acp_transport", causeCode: error.code }))
           })
-          const evidence = await connection.initialize(start!.agentRecord ?? { version: 2, ...splitLaunchSpec(spec as LaunchSpec), phase: "starting", session: null, failure: null }, contract, start!.session ?? { kind: "new", params: {} }, controller.signal)
+          const evidence = await connection.initialize(start!.agentRecord!, contract, start!.session ?? { kind: "new", params: {} }, controller.signal)
           check(); initialized = true; if (!isReady) overallDeadline = Infinity; return evidence
         } catch (error) {
           fail(new AgentError(error instanceof AgentError ? error.code : "INTERNAL", error instanceof AgentError && error.diagnostic ? error.diagnostic : { boundary: "provider_initialize", causeCode: underlyingFailureCode(error) }))

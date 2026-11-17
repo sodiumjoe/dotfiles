@@ -5,12 +5,12 @@ import { cloneWireJson, encodeWireJson, wireJsonBytes } from "../acp/wire-json.j
 import { object } from "../catalog/types.js"
 import type { ConfiguredLaunchContract } from "./contracts.js"
 import { configurationSnapshot, projectRestorableSettings, validateConfiguration, validateMetadata, type JsonObject, type SessionConfiguration } from "./session-config.js"
-import { normalizeAgentRecord, AgentError, ProviderRequestError, agentFailure, agentText, type AgentRecord, type AgentRecordV3, type SessionStart, type AgentFailure, type AgentLimits } from "./types.js"
+import { AgentError, ProviderRequestError, agentFailure, agentText, parseAgentRecordV3, type AgentRecordV3, type SessionStart, type AgentFailure, type AgentLimits } from "./types.js"
 import { validateStructuredContent, validateNativeUpdate, validateNativePromptResponse, type AcpObservation } from "./session-events.js"
 
 export type ProviderSession = { sessionId: string; protocolVersion: 1; result: JsonObject; capabilities: JsonObject; configuration: SessionConfiguration }
 export type AcpConnection = {
-  initialize(record: AgentRecord | AgentRecordV3, contract: ConfiguredLaunchContract, session: SessionStart, signal: AbortSignal): Promise<ProviderSession>
+  initialize(record: AgentRecordV3, contract: ConfiguredLaunchContract, session: SessionStart, signal: AbortSignal): Promise<ProviderSession>
   request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>
   notify(method: string, params: JsonObject): void
   respond(id: string | number, result: JsonObject): Promise<void>
@@ -224,7 +224,7 @@ export function createAcpConnection(input: { readable: Readable; writable: Writa
     snapshot: () => structuredClone(configuration),
     initialize(raw, contract, session, signal) {
       return initialization ??= (async () => {
-        const record = normalizeAgentRecord(raw)
+        const record = parseAgentRecordV3(raw)
         startupStartedAt = now()
         startupDeadline = Math.min(startupDeadline, now() + limits.startupMs)
         initializationTimer = setTimeout(() => fail(new AgentError("STARTUP_TIMEOUT")), Math.max(1, startupDeadline - now()))

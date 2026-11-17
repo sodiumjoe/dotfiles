@@ -2,10 +2,10 @@ import assert from "node:assert/strict"
 import test, { type TestContext } from "node:test"
 import { PassThrough } from "node:stream"
 import { createAcpConnection } from "../src/agent/acp.js"
-import { AGENT_LIMITS, AgentError, agentFailure, splitLaunchSpec, parseAgentCommandV3, normalizeAgentRecord } from "../src/agent/types.js"
+import { AGENT_LIMITS, AgentError, agentFailure, parseAgentCommandV3 } from "../src/agent/types.js"
 import { projectRestorableSettings, type JsonObject, type RequestedSettings } from "../src/agent/session-config.js"
 import { parseFailureDiagnostic } from "../src/agent/failure-diagnostics.js"
-import { sampleSpec, sampleContract } from "./process-support.js"
+import { sampleSpec, sampleContract, sampleRecord } from "./process-support.js"
 import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -36,7 +36,7 @@ test("Agency initializes the actual Codex 2.6 adapter with connection auth notif
   const p = await peer(t, { initialize: false })
   const acp = createAcpConnection({ readable: p.readable, writable: p.writable, limits: AGENT_LIMITS })
   t.after(() => acp.close())
-  const spec = sampleSpec({ cwd: p.root }), record = normalizeAgentRecord({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null })
+  const spec = sampleSpec({ cwd: p.root }), record = sampleRecord(spec)
   record.settings = {}
   const session = await acp.initialize(record, sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
   assert.equal(session.sessionId, "fixture-session")
@@ -44,11 +44,6 @@ test("Agency initializes the actual Codex 2.6 adapter with connection auth notif
   assert.equal(p.nativeRequests.some((frame: { method: string }) => frame.method === "turn/start"), false)
 })
 
-for (const contractId of ["codex-acp-1.7", "codex-acp-2.6"]) test("legacy Codex record keeps reasoning option for " + contractId, () => {
-  const spec = sampleSpec(), launch = splitLaunchSpec(spec)
-  const record = normalizeAgentRecord({ version: 2, ...launch, launch: { ...launch.launch, contractId }, phase: "starting", session: null, failure: null })
-  assert.deepEqual(record.settings.configValues, { reasoning_effort: spec.selection.reasoning.kind === "value" ? spec.selection.reasoning.value : "high" })
-})
 type Startup = { phase: Phase; elapsedMs: number; replayUpdates: number }
 function fixture(t: TestContext, stage: Phase | "ready", replay = 0) {
   const readable = new PassThrough(), writable = new PassThrough()
@@ -74,7 +69,7 @@ for (const [phase, replay] of [["initialize", 0], ["session/new", 0], ["configur
   test("startup timeout identifies " + phase + " with " + replay + " replay updates", { timeout: 2000 }, async t => {
     const { connection } = fixture(t, phase, replay)
     const loading = phase === "session/load"
-    const started = connection.initialize({ version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null }, sampleContract(), loading ? { kind: "load", sessionId: "fixture-session", params: {} } : { kind: "new", params: {} }, new AbortController().signal)
+    const started = connection.initialize(sampleRecord(), sampleContract(), loading ? { kind: "load", sessionId: "fixture-session", params: {} } : { kind: "new", params: {} }, new AbortController().signal)
     const rejected = started.catch(error => error)
     const failure = await connection.fault
     assert.equal((await rejected).code, "STARTUP_TIMEOUT")
@@ -113,7 +108,7 @@ test("startup diagnostics preserve old receipts and reject malformed progress", 
 test("successful load clears startup timers and later RPC timeout carries no startup progress", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] })
   const { connection, send } = fixture(t, "ready", 2)
-  await connection.initialize({ version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null }, sampleContract(), { kind: "load", sessionId: "fixture-session", params: {} }, new AbortController().signal)
+  await connection.initialize(sampleRecord(), sampleContract(), { kind: "load", sessionId: "fixture-session", params: {} }, new AbortController().signal)
   t.mock.timers.tick(30001)
   send({ method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "late live output" } } } })
   const request = connection.request("session/set_config_option", { sessionId: "fixture-session", configId: "mode", value: "review" }).catch(error => error)
@@ -155,7 +150,7 @@ function settingsFixture(t: TestContext, behavior: "normal" | "ignored" | "regre
       send(request.id, {})
     }
   })
-  const start = (settings: RequestedSettings, kind: "load" | "new" = "load") => connection.initialize({ ...normalizeAgentRecord({ version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null }), settings }, sampleContract(), kind === "load" ? { kind, sessionId: "fixture-session", params: {} } : { kind, params: {} }, new AbortController().signal)
+  const start = (settings: RequestedSettings, kind: "load" | "new" = "load") => connection.initialize({ ...sampleRecord(), settings }, sampleContract(), kind === "load" ? { kind, sessionId: "fixture-session", params: {} } : { kind, params: {} }, new AbortController().signal)
   return { connection, start, updateMode: (currentModeId: string) => readable.write(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fixture-session", update: { sessionUpdate: "current_mode_update", currentModeId } } }) + "\n") }
 }
 

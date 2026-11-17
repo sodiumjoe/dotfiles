@@ -2,10 +2,10 @@ import assert from "node:assert/strict"
 import test, { type TestContext } from "node:test"
 import { PassThrough } from "node:stream"
 import { createAcpConnection } from "../src/agent/acp.js"
-import { AGENT_LIMITS, normalizeAgentRecord, splitLaunchSpec } from "../src/agent/types.js"
+import { AGENT_LIMITS } from "../src/agent/types.js"
 import type { JsonObject } from "../src/agent/session-config.js"
 import type { AcpObservation } from "../src/agent/session-events.js"
-import { sampleContract, sampleSpec } from "./process-support.js"
+import { sampleContract, sampleSpec, sampleRecord } from "./process-support.js"
 
 const option = (value: boolean): JsonObject => ({ id: "fixture", type: "boolean", currentValue: value })
 const text = (value: string): JsonObject => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: value } })
@@ -23,7 +23,7 @@ function fixture(t: TestContext, deadline = performance.now() + 5000) {
     if (request.method === "initialize") send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } })
     if (request.method === "session/new") requested.resolve(request.id)
   })
-  const record = { ...normalizeAgentRecord({ version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null }), settings: { configValues: {} } }
+  const record = { ...sampleRecord(), settings: { configValues: {} } }
   const start = () => {
     const promise = connection.initialize(record, sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
     void promise.catch(error => requested.reject(error))
@@ -187,7 +187,7 @@ test("a live update that fails validation is dropped and reported without failin
     if (request.method === "initialize") send({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } })
     if (request.method === "session/new") send({ jsonrpc: "2.0", id: request.id, result: { sessionId: "fixture-session", configOptions: [] } })
   })
-  const record = { ...normalizeAgentRecord({ version: 2, ...splitLaunchSpec(sampleSpec()), phase: "starting", session: null, failure: null }), settings: { configValues: {} } }
+  const record = { ...sampleRecord(), settings: { configValues: {} } }
   await connection.initialize(record, sampleContract(), { kind: "new", params: {} }, new AbortController().signal)
   let faulted = false
   void connection.fault.then(() => { faulted = true })

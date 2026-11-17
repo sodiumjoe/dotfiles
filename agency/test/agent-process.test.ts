@@ -14,8 +14,7 @@ import { MutationQueue } from "../src/handler/mutations.js"
 import type { LaunchContext } from "../src/handler/launch-transitions.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
-import { sampleSpec, sampleContract } from "./process-support.js"
-import { normalizeAgentRecord, splitLaunchSpec } from "../src/agent/types.js"
+import { sampleSpec, sampleContract, sampleRecord } from "./process-support.js"
 
 class NativeStartupInput { [key: string]: string; marker = "native startup input" }
 
@@ -37,11 +36,11 @@ async function fixture(t: test.TestContext, options: { holdPreparation?: boolean
     if (frame.id !== undefined) child.stdout!.push(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result }) + "\n")
   })
   const context: LaunchContext = { paths: { hostKey: spec.hostId, persistentRoot: root, runtimeRoot: root, handlerSocketPath: join(root, "handler.sock") }, adapter, state: { hostId: spec.hostId, handlerGeneration: spec.handlerGeneration, phase: "ready", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"] }, mutations: { queue: new MutationQueue(), accepted: [] }, shutdownPending: () => false }
-  const agentRecord = normalizeAgentRecord({ version: 2, ...splitLaunchSpec(spec), phase: "starting", session: null, failure: null })
+  const agentRecord = sampleRecord(spec)
   agentRecord.settings = {}
   let nativeExecutable: string | undefined
   const session = options.claude === "new" ? { kind: "new" as const, params: {} } : { kind: "load" as const, sessionId: "fixture-session", params: options.trackInputs ? { input: new NativeStartupInput() } : {} }
-  const owner = createAgentProcess({ context, spec, contract, ...(options.claude ? { agentRecord } : {}), environment: options.claude ? { CLAUDE_CODE_EXECUTABLE: "/caller/claude" } : {}, session, async revalidate() { entered.resolve(); if (options.holdPreparation) await release.promise } }, { now: () => time, spawn: ((_file, _args, input) => { spawnCount++; nativeExecutable = input?.env?.CLAUDE_CODE_EXECUTABLE; return child }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
+  const owner = createAgentProcess({ context, spec, contract, agentRecord: options.claude ? agentRecord : sampleRecord(spec), environment: options.claude ? { CLAUDE_CODE_EXECUTABLE: "/caller/claude" } : {}, session, async revalidate() { entered.resolve(); if (options.holdPreparation) await release.promise } }, { now: () => time, spawn: ((_file, _args, input) => { spawnCount++; nativeExecutable = input?.env?.CLAUDE_CODE_EXECUTABLE; return child }) as typeof spawn, transitionIO: { read: readLaunchRecordForReconciliation, async publish(path, record) {
     if (failPublication && record.phase === "cleanup_pending") { failPublication = false; throw new Error("publication failed") }
     await writeLaunchRecord(path, record)
     if (options.holdReadiness && record.phase === "readiness") { readiness.resolve(); await release.promise }

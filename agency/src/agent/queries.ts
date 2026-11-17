@@ -4,7 +4,7 @@ import { absolutePath, id, keys, object, type ProviderId } from "../catalog/type
 import type { LaunchEvidence } from "../catalog/service.js"
 import { resolveLaunchSpec, type ConfiguredLaunchContract } from "./contracts.js"
 import { AgentError, type AgentView, type LegacyAgentView, type StartSelection } from "./types.js"
-import type { AgentStateIssue } from "./store.js"
+import type { AgentStateIssue } from "./types.js"
 
 export type LaunchChoice = { displayName: string; selection: StartSelection; snapshotId: string; contractFingerprint: string }
 export type AgentChoices = { state: "choices"; choices: LaunchChoice[]; unavailable: Array<{ providerId: ProviderId; reason: string }> }

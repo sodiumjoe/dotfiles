@@ -10,7 +10,6 @@ import { registerRuntimeEndpoint } from "../hosts/runtime.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
 import { createLiveRouter } from "../acp/live-router.js"
-import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
 import { agentErrorReply, type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { randomUUID } from "node:crypto"
@@ -230,7 +229,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     recordStop = () => { if (stopped) return; stopped = true; events.appendSync({ type: "handler_stopped", generation: options.generation }); markCleanShutdownSync(root) }
     recordFailure = error => events.appendSync({ type: "handler_failed", generation: options.generation, message: String(error).slice(0, 512) })
     const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [], root }
-    const catalogStore = createCatalogStore(root), agentStore = createAgentStore(root)
+    const catalogStore = createCatalogStore(root)
     const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, store: catalogStore, isReady: () => state.phase === "ready" && !closing && !termination, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
     else {
@@ -242,7 +241,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     checkStartup()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     const agentIndex = createAgentIndex(root)
-    const migrate = () => migrateIndex({ store: agentStore, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
+    const migrate = () => migrateIndex({ root, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
     if (await agentIndex.migrated()) void migrate()
     else await migrate()
     checkStartup()

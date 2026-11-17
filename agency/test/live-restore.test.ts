@@ -6,7 +6,6 @@ import { join } from "node:path"
 import { liveHandlerFixture } from "./live-support.js"
 import { until } from "./control-support.js"
 import { createAgentIndex } from "../src/agent/agent-index.js"
-import { createAgentStore } from "../src/agent/store.js"
 import { parseAgentRecordV3 } from "../src/agent/types.js"
 
 test("an agent restored after the Handler is killed continues its session, and an unprompted agent is gone", async t => {
@@ -85,13 +84,13 @@ test("forget removes a stopped agent and refuses a live one, and an agent whose 
 })
 
 test("a Handler whose index has not been migrated lists every migrated agent as soon as it is ready", async t => {
-  const f = await liveHandlerFixture(t), store = createAgentStore(f.paths.persistentRoot), day = join(f.homes, "codex/sessions/2026/11/14"), ids: string[] = []
+  const f = await liveHandlerFixture(t), records = join(f.paths.persistentRoot, "agents/records"), day = join(f.homes, "codex/sessions/2026/11/14"), ids: string[] = []
   await f.stopHandler()
-  await mkdir(day, { recursive: true })
+  await mkdir(day, { recursive: true }); await mkdir(records, { recursive: true, mode: 0o700 })
   for (let count = 0; count < 200; count++) {
     const agentId = randomUUID(), sessionId = "native-" + randomUUID()
     ids.push(agentId)
-    await store.writeAgent(parseAgentRecordV3({ version: 3, definition: { hostId: f.paths.hostKey, agentId, createdCommandId: randomUUID(), cwd: f.workspace, backendId: "codex-acp", origin: "import" }, launch: null, phase: "stopped", session: { sessionId, protocolVersion: 1 }, inputRequirements: { mcpServerNames: [] }, settings: {}, configurationState: { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }, failure: null }), null)
+    await writeFile(join(records, agentId + ".json"), JSON.stringify(parseAgentRecordV3({ version: 3, definition: { hostId: f.paths.hostKey, agentId, createdCommandId: randomUUID(), cwd: f.workspace, backendId: "codex-acp", origin: "import" }, launch: null, phase: "stopped", session: { sessionId, protocolVersion: 1 }, inputRequirements: { mcpServerNames: [] }, settings: {}, configurationState: { verification: { kind: "unknown" }, nonRestorableOptionIds: [] }, failure: null })), { mode: 0o600 })
     await writeFile(join(day, "rollout-2026-11-14T10-00-00-" + sessionId + ".jsonl"), JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "imported" }] } }) + "\n")
   }
   await rm(join(f.paths.persistentRoot, "agents/index"), { recursive: true, force: true })

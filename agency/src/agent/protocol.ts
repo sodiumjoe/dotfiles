@@ -6,7 +6,7 @@ import { ControlError, UUID } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { LaunchRecord, ProcessIdentity } from "../platform/types.js"
 import { AgentError, agentFailure, agentText, parseAgentCommand, parseAgentCommandV3, parseAgentFailure, parseAgentRecordV3, parseLegacyAgentRecord, type AgentFailure, type AgentView, type LegacyAgentView, type CommandView } from "./types.js"
-import type { AgentStateIssue } from "./store.js"
+import type { AgentStateIssue } from "./types.js"
 
 import { isRuntimeSessionRequest, parseRuntimeSessionOperation, type RuntimeSessionRequest, type RuntimeSessionResult } from "./session-controls.js"
 import { parseSubmissionReceipt } from "./submission-receipt.js"

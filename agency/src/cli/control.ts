@@ -6,7 +6,6 @@ import type { HostRoute } from "../hosts/router.js"
 import type { createHostInventory } from "../hosts/inventory.js"
 import { randomUUID } from "node:crypto"
 import { runRestart } from "./restart.js"
-import { createAgentStore } from "../agent/store.js"
 import { createCatalogStore } from "../catalog/store.js"
 import { createConnection } from "node:net"
 import { join } from "node:path"
@@ -142,7 +141,6 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       const handler = await dependencies.inspect(env)
       generation = handler?.record.generation ?? null
       const launches = await dependencies.inventory(join(env.paths.persistentRoot, "launches"))
-      const agents = await createAgentStore(env.paths.persistentRoot).inventory()
       const catalog = await createCatalogStore(env.paths.persistentRoot).inventory()
       let runtimeIssues: DoctorDiagnostic["runtimeIssues"]
       if (handler?.disposition === "live" && handler.record.phase === "ready") {
@@ -155,9 +153,8 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
         ...(runtimeIssues ? { runtimeIssues } : {}),
         node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler,
         launches: summarizeLaunches(launches.records.map(entry => entry.record)),
-        agents: { records: [...agents.agents.map(record => ({ id: record.definition.agentId, phase: record.phase })), ...agents.legacyAgents.map(record => ({ id: record.spec.agentId, phase: record.phase }))], commands: agents.commands.map(command => ({ id: command.commandId, op: command.op, state: command.state })), issues: agents.issues.map(issue => ({ path: issue.path, message: issue.message })) },
         catalog: { probes: summarizeLaunches(catalog.launches.map(entry => entry.record)), commands: catalog.commands.map(command => ({ id: command.commandId, state: command.state })), issues: catalog.issues },
-        issues: [...launches.issues.map(issue => ({ source: "launch" as const, path: issue.path, message: "invalid launch record" })), ...agents.issues.map(issue => ({ source: "agent" as const, path: issue.path, message: issue.message })), ...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
+        issues: [...launches.issues.map(issue => ({ source: "launch" as const, path: issue.path, message: "invalid launch record" })), ...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
       }
       emit(true, result)
       return 0

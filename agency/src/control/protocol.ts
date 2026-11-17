@@ -30,7 +30,6 @@ export type DoctorDiagnostic = {
   paths: PlatformPaths
   handler: HandlerInspection | null
   launches: LaunchSummary[]
-  agents: { records: Array<{ id: string; phase: string }>; commands: Array<{ id: string; op: string; state: string }>; issues: Array<{ path: string; message: string }> }
   catalog: { probes: LaunchSummary[]; commands: Array<{ id: string; state: string }>; issues: string[] }
   issues: Array<{ source: "launch" | "agent" | "catalog"; path: string; message: string }>
 }
