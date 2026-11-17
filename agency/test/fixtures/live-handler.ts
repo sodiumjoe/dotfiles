@@ -5,6 +5,7 @@ import { dirname, join } from "node:path"
 import { Socket } from "node:net"
 import { runHandler } from "../../src/handler/daemon.js"
 import { createAgentProcess } from "../../src/agent/process.js"
+import { AgentError } from "../../src/agent/types.js"
 import type { LaunchContract } from "../../src/agent/contracts.js"
 import { createCatalogService } from "../../src/catalog/service.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
@@ -20,6 +21,7 @@ const contract: LaunchContract = {
   modes: { state: "values", values: ["agent-full-access", "read-only"] }, reasoning: { state: "values", values: ["high", "low"] }, effectiveMode: null, permissionProfiles: ["fixture-deny-v1"], modelOption: "model", reasoningOption: "reasoning_effort", modeOption: "mode",
   permissionEvidence: "fixture-contract-v1", deadlines: { commandMs: 5000, spawnMs: 5000, initializeMs: 15000, sessionMs: 15000, optionMs: 5000, promptMs: 90000, transportCloseMs: 1000, processTerminateMs: 5000, absenceMs: 2000, overallMs: 150000 },
 }
+const unverifiedCleanup = (owner: ReturnType<typeof createAgentProcess>): ReturnType<typeof createAgentProcess> => new Proxy(owner, { get: (target, key) => key === "cleanup" ? async () => { await target.cleanup(); if (await readFile(join(root, "unverified-cleanup")).then(() => true, () => false)) throw new AgentError("CLEANUP_UNVERIFIED") } : Reflect.get(target, key) })
 try {
   await runHandler({ paths: config.paths, adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(), recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }),
@@ -28,7 +30,7 @@ try {
       const service = createCatalogService({ ...context, queue: context.mutations.queue, probes: { verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
       return { ...service, async freezeAndDrain() { if (await readFile(join(root, "fail-catalog-drain")).then(() => true, () => false)) throw new Error("fixture catalog drain failure"); await service.freezeAndDrain() } }
     },
-    liveDependencies: { processFactory: options => createAgentProcess(options, { spawn: ((file, argv, settings) => spawnFixture("agent-provider/" + options.spec.launchAttemptId, file, argv ?? [], settings ?? {})) as typeof spawn }),
+    liveDependencies: { processFactory: options => unverifiedCleanup(createAgentProcess(options, { spawn: ((file, argv, settings) => spawnFixture("agent-provider/" + options.spec.launchAttemptId, file, argv ?? [], settings ?? {})) as typeof spawn })),
       modelSource: async profile => [{ providerId: profile.id, modelId: "model-a", resolvedModelId: null, displayName: "Model A", reasoning: { state: "values", values: ["high", "low"] }, modes: { state: "unknown" }, availability: "advertised" }] } })
 } catch (error) {
   await writeFile(join(root, "failure"), (error instanceof Error ? error.stack ?? error.message : String(error)).slice(0, 4096), { mode: 0o600 })

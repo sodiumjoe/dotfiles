@@ -160,7 +160,7 @@ export function createLiveRouter(input: { core: LiveCore; connectionId: string; 
       const row = (await core.agents()).find(value => value.agentId === agentId)
       if (!row) throw new RequestError("NOT_FOUND", "agent " + agentId + " is not known on this host")
       if (row.cwd !== cwd) throw new AcpError(-32602, "Session directory mismatch")
-      const restored = row.live ? row : await core.restore(agentId, input.environment ?? {}, params)
+      const restored = await core.restore(agentId, input.environment ?? {}, params)
       if (closed || loads.get(logical) !== intent) throw new AgentError("STALE_ATTACHMENT")
       return attach(logical, { agentId, handlerGeneration: restored.live!.handlerGeneration, providerGeneration: restored.live!.providerGeneration }, address)
     }

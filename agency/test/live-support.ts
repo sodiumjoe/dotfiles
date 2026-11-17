@@ -85,6 +85,7 @@ export async function liveHandlerFixture(t: TestContext) {
     transcript: (agentId: string) => request({ op: "transcript", agentId }),
     async handoffStatus(): Promise<HandoffStatus | undefined> { const result = await request({ op: "agents" }); assert.equal(result.state, "agents"); return (result as { handoff?: HandoffStatus }).handoff },
     async settledHandoff(): Promise<HandoffStatus> { return until(async () => { const result = await request({ op: "agents" }) as { handoff?: HandoffStatus }; return result.handoff && !result.handoff.pending.length ? result.handoff : undefined }, 15000) },
+    async failCleanup() { await writeFile(join(f.root, "unverified-cleanup"), "fail", { mode: 0o600 }) },
     async pauseSessions() { await writeFile(join(f.root, "pause-session"), "pause", { mode: 0o600 }) },
     async waitSession() { await until(async () => await readFile(join(f.root, "at-session")).then(() => true, () => undefined), 15000) },
     async releaseSessions() { await rm(join(f.root, "pause-session"), { force: true }); await writeFile(join(f.root, "release-session"), "released", { mode: 0o600 }) },

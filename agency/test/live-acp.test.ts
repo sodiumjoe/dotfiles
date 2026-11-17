@@ -71,3 +71,20 @@ test("a permission request reaches every attached editor and exactly one decisio
   assert.ok(logged.includes("permission_requested") && logged.includes("permission_decided"))
   await f.verifyZeroSurvivors()
 })
+
+test("an editor that loads an agent while it is being restored shares that restore", async t => {
+  const f = await liveHandlerFixture(t), { agentId } = await f.start()
+  await f.prompt(agentId, "hello")
+  await f.stop(agentId)
+  await f.pauseSessions()
+  const restoring = f.restore(agentId)
+  await f.waitSession()
+  const c = await f.connect()
+  await c.request("initialize", initialize)
+  const loading = c.request("session/load", { sessionId: "agency:" + agentId, cwd: f.workspace, mcpServers: [] })
+  await f.releaseSessions()
+  assert.equal((agency(await loading).binding as JsonObject).agentId, agentId)
+  await restoring
+  assert.equal((await f.providerRequests()).filter(frame => frame.method === "session/load").length, 1)
+  await f.verifyZeroSurvivors()
+})

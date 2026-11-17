@@ -14,7 +14,7 @@ import { createAgentProcess } from "../agent/process.js"
 import type { JsonObject, RequestedSettings, SessionConfiguration } from "../agent/session-config.js"
 import { EDITOR_TURN_LIMITS, type AcpObservation, type StopReason } from "../agent/session-events.js"
 import type { AcpSubmissionRequest, SubmissionReceipt } from "../agent/turns.js"
-import { AgentError, agentFailure, type AgentTuple } from "../agent/types.js"
+import { AgentError, agentFailure, ProviderRequestError, type AgentTuple } from "../agent/types.js"
 import { readProfiles } from "../catalog/config.js"
 import { id, type ProviderId } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
@@ -82,7 +82,7 @@ export type LiveCore = {
 
 export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDependencies = {}): LiveCore {
   const { context, events } = input, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
-  const table = createLiveTable(), admissions = new Map<string, Promise<void>>(), roster = createRoster({ index: input.index, homes: input.homes })
+  const table = createLiveTable(), admissions = new Map<string, Promise<void>>(), unverified = new Set<string>(), roster = createRoster({ index: input.index, homes: input.homes })
   const models = createModelCache({ root, ...(dependencies.modelSource ? { source: dependencies.modelSource } : {}) })
   const permissions = createPermissionArbiter({ hostId: context.paths.hostKey, handlerGeneration: generation })
   const broker = createPermissionBroker({ routing: permissions, cwd: target => table.get(target.agentId)?.cwd ?? "/", respond(target, requestId, result) {
@@ -115,8 +115,11 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   }
   const stopping = (agent: LiveAgent, reason: "request" | "failure" | "shutdown"): Promise<void> => {
     if (agent.session) roster.changed(agent.session.sessionId)
-    return stopAgent(agent, { table, permissions: broker, reason, ...(events ? { events } : {}) })
+    const stopped = stopAgent(agent, { table, permissions: broker, reason, ...(events ? { events } : {}) })
+    stopped.catch(() => unverified.add(agent.agentId))
+    return stopped
   }
+  const verifiedStopped = (agentId: string): void => { if (unverified.has(agentId)) throw new RequestError("UNAVAILABLE", "agent " + agentId + " did not stop cleanly and its provider may still be running; restart the Handler to use it again") }
   async function exclusive<T>(agentId: string, run: () => Promise<T>): Promise<T> {
     const current = (admissions.get(agentId) ?? Promise.resolve()).then(run), tail = current.then(() => undefined, () => undefined)
     admissions.set(agentId, tail)
@@ -227,6 +230,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       const current = table.get(agentId)
       if (current && current.phase !== "stopping") return current
       await current?.stopped?.catch(() => undefined)
+      verifiedStopped(agentId)
       const entry = await roster.entry(agentId)
       if (!entry) throw missing(agentId)
       if (!await roster.sessionPath(entry)) throw new RequestError("NOT_FOUND", "agent " + agentId + " cannot be restored: its " + entry.backendId + " session file is missing")
@@ -241,6 +245,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       const current = table.get(request.agentId)
       if (current && current.phase !== "stopping") return current
       await current?.stopped?.catch(() => undefined)
+      verifiedStopped(request.agentId)
       const entry = await roster.entry(request.agentId)
       if (entry && (request.backendId && entry.backendId !== request.backendId || entry.cwd !== request.cwd)) throw new RequestError("INVALID", "agent " + entry.agentId + " already exists with backend " + entry.backendId + " in " + entry.cwd)
       if (entry) return admit(entry.agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true, ...await roster.history(entry) }, { backendId: entry.backendId, cwd: entry.cwd, environment: request.environment, restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
@@ -282,7 +287,10 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       try {
         const result = await agent.turns!.settled(submissionId)
         return { state: "prompt", agentId, submissionId, stopReason: result.stopReason, text: result.text }
-      } catch (error) { throw await faultOf(agent) ?? error }
+      } catch (error) {
+        const refusal = await agent.turns!.settledAcp(submissionId).then(() => null, native => native instanceof ProviderRequestError ? native : null)
+        throw refusal ?? await faultOf(agent) ?? error
+      }
     },
     async cancel(agentId) {
       const agent = await ready(agentId)

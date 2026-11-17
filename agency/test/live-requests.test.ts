@@ -59,3 +59,20 @@ test("an idle-required shutdown refuses while a turn runs and leaves the agent u
   assert.equal((await f.prompt(agentId, "again")).text, "answer:again")
   await f.verifyZeroSurvivors()
 })
+
+test("a prompt the provider refuses fails FAILED with the provider's own message", async t => {
+  const f = await liveHandlerFixture(t), { agentId } = await f.start()
+  assert.deepEqual(await f.failure(f.prompt(agentId, "provider-busy")), { code: "FAILED", message: "Provider busy" })
+  assert.equal((await f.prompt(agentId, "again")).text, "answer:again")
+  await f.verifyZeroSurvivors()
+})
+
+test("an agent whose stop could not be verified is not started again by a later prompt", async t => {
+  const f = await liveHandlerFixture(t), { agentId } = await f.start()
+  await f.prompt(agentId, "hello")
+  await f.failCleanup()
+  assert.equal((await f.failure(f.stop(agentId))).code, "FAILED")
+  assert.equal((await f.failure(f.prompt(agentId, "again"))).code, "UNAVAILABLE")
+  assert.equal(f.providers().length, 1)
+  await f.verifyZeroSurvivors()
+})
