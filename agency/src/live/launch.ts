@@ -14,7 +14,7 @@ import { createTurnCoordinator, type AcpSubmissionRequest } from "../agent/turns
 import { AGENT_LIMITS, AgentError, ownedRecord, parseAgentRecordV3 } from "../agent/types.js"
 import { digest, readProfiles } from "../catalog/config.js"
 import type { ConfigEvidence, ProviderId, ProviderProfile } from "../catalog/types.js"
-import { commitLaunchTransition, type LaunchContext } from "../handler/launch-transitions.js"
+import type { LiveContext } from "./context.js"
 import { RequestError } from "./errors.js"
 import type { LiveAgent } from "./state.js"
 
@@ -30,7 +30,7 @@ export type LaunchHooks = {
   cancel(agent: LiveAgent): Promise<void>
   fault(agent: LiveAgent, error: AgentError): void
 }
-export type Launcher = { context: LaunchContext; contracts: readonly LaunchContract[]; processFactory: typeof createAgentProcess; hooks: LaunchHooks }
+export type Launcher = { context: LiveContext; contracts: readonly LaunchContract[]; processFactory: typeof createAgentProcess; hooks: LaunchHooks }
 
 async function packageVersion(path: string): Promise<string> {
   const value: unknown = JSON.parse(await readFile(path, "utf8"))
@@ -94,7 +94,7 @@ export async function launchAgent(agent: LiveAgent, request: LaunchRequest, laun
   const session = await owner.initialize(agent.controller.signal)
   abandoned()
   agent.session = session
-  await context.mutations.queue.run(() => commitLaunchTransition(context, owner.record(), { ...owner.record(), phase: "active" }))
+  owner.markActive()
   agent.turns = createTurnCoordinator({ target: agent.tuple, conversation: agent.conversation, validate: () => hooks.validate(agent), invokeAcp: params => hooks.invoke(agent, params), onAccepted: request => hooks.accepted(agent, request), cancel: () => hooks.cancel(agent), onSettled: submissionId => hooks.settled(agent, submissionId) })
   abandoned()
   agent.phase = "ready"

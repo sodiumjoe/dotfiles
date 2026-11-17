@@ -18,7 +18,7 @@ export function assertRuntime(version: string, platform: string): asserts platfo
 
 export async function ensurePrivateChild(parent: string, name: string): Promise<string> {
   await assertPrivateDirectory(parent)
-  if (name !== "launches" && name !== "shutdown" && name !== "agents" && name !== "bureau") throw new Error("unsupported state directory")
+  if (name !== "shutdown" && name !== "agents" && name !== "bureau") throw new Error("unsupported state directory")
   const path = join(parent, name)
   try { await mkdir(path, { mode: 0o700 }) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error }
   await assertPrivateDirectory(path)
@@ -31,6 +31,5 @@ export async function productionEnvironment(): Promise<HandlerEnvironment> {
   const adapter = platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter()
   const hostKey = await readHostId(platform)
   const paths = await resolvePlatformPaths({ platform, uid: process.getuid!(), hostKey, home: process.env.HOME ?? homedir(), ...(process.env.XDG_STATE_HOME === undefined ? {} : { xdgStateHome: process.env.XDG_STATE_HOME }) })
-  await ensurePrivateChild(paths.persistentRoot, "launches")
   return { paths, adapter }
 }

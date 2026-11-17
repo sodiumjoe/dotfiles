@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { rm, writeFile } from "node:fs/promises"
 import { spawn } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { liveHandlerFixture } from "./live-support.js"
 import { fileExists, until } from "./control-support.js"
@@ -11,6 +12,7 @@ import { inspectHandlerGeneration } from "../src/platform/singleton.js"
 import { createAgentIndex } from "../src/agent/agent-index.js"
 import { writeHandlerRecord } from "../src/platform/private-state.js"
 import type { JsonObject } from "../src/agent/session-config.js"
+import { PROTOCOL, parseReply } from "../src/control/protocol.js"
 
 type Fixture = Awaited<ReturnType<typeof liveHandlerFixture>>
 const initialize = { protocolVersion: 1, clientCapabilities: {} }
@@ -150,4 +152,11 @@ test("a Handler record left by a crash whose PID now belongs to another process 
   assert.notEqual(after.generation, before.generation)
   assert.equal(after.phase, "ready")
   await f.verifyZeroSurvivors()
+})
+
+test("the status parser accepts an older Handler's reply with reconciliation and launches, and a reply without them", () => {
+  const generation = randomUUID(), status = { hostId: "a".repeat(64), handlerGeneration: generation, phase: "ready", capabilities: ["status", "doctor", "shutdown"] }
+  const reply = (result: JsonObject) => parseReply({ protocol: PROTOCOL, requestId: randomUUID(), handlerGeneration: generation, ok: true, result })
+  assert.equal(reply({ ...status, reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [{ launchAttemptId: randomUUID(), owner: { kind: "catalog-probe", id: randomUUID(), providerId: "codex-acp" }, phase: "active", reason: null }] }).ok, true)
+  assert.equal(reply(status).ok, true)
 })

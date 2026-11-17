@@ -13,7 +13,6 @@ import { fileURLToPath } from "node:url"
 import { ControlError, PROTOCOL, UUID, controlError, exitCode, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply, type DoctorDiagnostic } from "../control/protocol.js"
 import { exchange } from "../control/wire.js"
 import { productionEnvironment, type HandlerEnvironment } from "../handler/environment.js"
-import { inventoryLaunchState, summarizeLaunches } from "../handler/inventory.js"
 import { readShutdownReceipt, assertSameShutdown, type ShutdownReceipt } from "../handler/receipt.js"
 import { inspectHandlerGeneration, startOrConnect } from "../platform/singleton.js"
 import { assertPrivateSocket } from "../platform/private-socket.js"
@@ -35,7 +34,6 @@ export type ControlDependencies = {
   callLive?(env: HandlerEnvironment, request: LiveRequest, timeoutMs?: number): Promise<LiveReply>
   homes?(): SessionHomes
   receipt: typeof readShutdownReceipt
-  inventory: typeof inventoryLaunchState
   cwd(): string
   now(): number
   sleep(ms: number): Promise<void>
@@ -51,7 +49,7 @@ export function productionControlDependencies(): ControlDependencies {
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
     call: async (env, request) => exchange(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request),
     callLive: async (env, request, timeoutMs) => exchangeLive(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),
-    receipt: readShutdownReceipt, inventory: inventoryLaunchState, cwd: process.cwd, now: () => performance.now(),
+    receipt: readShutdownReceipt, cwd: process.cwd, now: () => performance.now(),
     sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
     stdout: text => { process.stdout.write(text) }, stderr: text => { process.stderr.write(text) },
   }
@@ -140,7 +138,6 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
       generation = handler?.record.generation ?? null
-      const launches = await dependencies.inventory(join(env.paths.persistentRoot, "launches"))
       const catalog = await createCatalogStore(env.paths.persistentRoot).inventory()
       let runtimeIssues: DoctorDiagnostic["runtimeIssues"]
       if (handler?.disposition === "live" && handler.record.phase === "ready") {
@@ -152,9 +149,8 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       const result: DoctorDiagnostic = {
         ...(runtimeIssues ? { runtimeIssues } : {}),
         node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler,
-        launches: summarizeLaunches(launches.records.map(entry => entry.record)),
-        catalog: { probes: summarizeLaunches(catalog.launches.map(entry => entry.record)), commands: catalog.commands.map(command => ({ id: command.commandId, state: command.state })), issues: catalog.issues },
-        issues: [...launches.issues.map(issue => ({ source: "launch" as const, path: issue.path, message: "invalid launch record" })), ...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
+        catalog: { commands: catalog.commands.map(command => ({ id: command.commandId, state: command.state })), issues: catalog.issues },
+        issues: [...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
       }
       emit(true, result)
       return 0

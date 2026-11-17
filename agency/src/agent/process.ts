@@ -1,14 +1,10 @@
 import { STDERR_TAIL_BYTES, failureIdentifier, underlyingFailureCode, type ProcessFailureEvent } from "./failure-diagnostics.js"
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
-import { join } from "node:path"
-import { isDeepStrictEqual } from "node:util"
-import { beginOwnedCleanup, finishOwnedCleanup, finishUnspawnedCleanup, commitLaunchTransition, type LaunchContext, type LaunchTransitionIO } from "../handler/launch-transitions.js"
-import { summarizeLaunches } from "../handler/launch-summary.js"
+import type { ProcessContext } from "../live/context.js"
 import { agencyLaunchMarker } from "../platform/launch-marker.js"
-import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../platform/private-state.js"
 import { spawnOwnedChild, type OwnedChild } from "../runtime/owned-child.js"
 import { captureLiveProcess, LiveProcessError, type LiveProcessGroup, type LiveCleanupEvidence } from "../platform/live-process.js"
-import { type LaunchRecord, type ManagedLaunchRecord } from "../platform/types.js"
+import type { ManagedLaunchRecord } from "../platform/types.js"
 import { createAcpConnection, type AcpConnection, type DroppedUpdate, type ProviderSession } from "./acp.js"
 import type { AcpObservation } from "./session-events.js"
 import { cleanupBudget, type ConfiguredLaunchContract } from "./contracts.js"
@@ -17,22 +13,21 @@ import { AgentError, agentFailure, type AgentRecordV3, type SessionStart, type A
 import type { JsonObject, SessionConfiguration } from "./session-config.js"
 const PARENT_WATCH = new URL("./parent-watch.js", import.meta.url).href
 
-export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): Promise<void>; snapshot(): SessionConfiguration; cancelPrompt(): Promise<void>; record(): LaunchRecord; cleanup(): Promise<LaunchRecord>; dispose(): void; discharged: Promise<void>; fault: Promise<AgentFailure> }
+export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<ProviderSession>; request(method: string, params: JsonObject, signal?: AbortSignal): Promise<JsonObject>; notify(method: string, params: JsonObject): void; respond(id: string | number, result: JsonObject): Promise<void>; snapshot(): SessionConfiguration; cancelPrompt(): Promise<void>; record(): ManagedLaunchRecord; markActive(): void; cleanup(): Promise<void>; dispose(): void; discharged: Promise<void>; fault: Promise<AgentFailure> }
 export type AgentProcessSpec = Pick<LaunchSpec, "agentId" | "handlerGeneration" | "providerGeneration" | "launchAttemptId" | "cwd" | "limits">
-export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
+export type AgentProcessDependencies = { spawn?: typeof spawn; now?: () => number; onSpawnInputReleased?(): void }
 
-export function createAgentProcess(input: { context: LaunchContext; spec: AgentProcessSpec; agentRecord: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; onDropped?(value: DroppedUpdate): void; revalidate(): Promise<void>; awaitExitOnStartupFault?: boolean }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
-  const { context, spec, contract, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline, awaitExitOnStartupFault } = input, { adapter, mutations } = context
+export function createAgentProcess(input: { context: ProcessContext; spec: AgentProcessSpec; agentRecord: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; onDropped?(value: DroppedUpdate): void; revalidate(): Promise<void>; awaitExitOnStartupFault?: boolean }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
+  const { context, spec, contract, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline, awaitExitOnStartupFault } = input, { adapter } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.deadlines
   let overallDeadline = deadline ?? Infinity, spawnDeadline = Infinity
-  const directory = join(context.paths.persistentRoot, "launches"), path = join(directory, spec.launchAttemptId + ".json")
   const controller = new AbortController(), marker = agencyLaunchMarker("provider", spec.launchAttemptId)
   let current: ManagedLaunchRecord = { version: 2, owner: { kind: "agent", agentId: spec.agentId, providerGeneration: spec.providerGeneration }, handlerGeneration: spec.handlerGeneration, launchAttemptId: spec.launchAttemptId, launchBootId: "pending", launchAttempted: false, phase: "launch_pending", provider: null, reason: null }
-  let published = false, spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
+  let spawnInvoked = false, child: ChildProcess | undefined, connection: AcpConnection | undefined
   let startup: { agentRecord: typeof input.agentRecord; session: typeof input.session; onUpdate: typeof input.onUpdate; onRequest: typeof input.onRequest; onDropped: typeof input.onDropped } | undefined = { agentRecord: input.agentRecord, session: input.session, onUpdate: input.onUpdate, onRequest: input.onRequest, onDropped: input.onDropped }
   let spawnArgs = input.args
   const discharged = Promise.withResolvers<void>()
-  let initialization: Promise<ProviderSession> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<LaunchRecord> | undefined
+  let initialization: Promise<ProviderSession> | undefined, preparation: Promise<void> | undefined, cleaning: Promise<void> | undefined
   let owned: OwnedChild | undefined, liveGroup: LiveProcessGroup | undefined, cleanupEvidence: LiveCleanupEvidence | undefined
   let stopping = false, disposed = false, initialized = false, failure: AgentFailure | undefined
   let resolveFault!: (value: AgentFailure) => void
@@ -59,11 +54,6 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       return value
     } finally { clearTimeout(timer) }
   }
-  const snapshot = (): ManagedLaunchRecord => structuredClone(mutations.accepted.find(entry => entry.record.launchAttemptId === spec.launchAttemptId)?.record as ManagedLaunchRecord ?? current)
-  const transition = async (next: ManagedLaunchRecord): Promise<void> => {
-    try { await commitLaunchTransition(context, current, next, dependencies.transitionIO) }
-    finally { current = snapshot() }
-  }
   let stderrBytes = 0, stderrTail: Buffer = Buffer.alloc(0)
   const processFailure = (event: ProcessFailureEvent, error?: unknown, exitCode: number | null = null, signal: string | null = null): void => {
     if (!stopping) fail(new AgentError("STARTUP_FAILED", { boundary: "provider_process", event, causeCode: underlyingFailureCode(error), exitCode, signal: failureIdentifier(signal), stderrBytes, stderrTailBase64: stderrTail.toString("base64") }))
@@ -80,7 +70,7 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
     argv0: marker, detached: true, shell: false, cwd: spec.cwd, stdio: ["pipe", "pipe", "pipe"],
     env: { ...parseLaunchEnvironment(input.environment), ...(contract.providerId === "codex-acp" ? { CODEX_PATH: contract.executable } : { CLAUDE_CODE_EXECUTABLE: contract.executable }), AGENCY_PARENT_PID: String(process.pid) },
   }
-  function cleanup(): Promise<LaunchRecord> {
+  function cleanup(): Promise<void> {
     if (cleaning) return cleaning
     const cleanupDeadline = now() + cleanupBudget(contract)
     stopping = true; controller.abort(); connection?.close()
@@ -89,17 +79,9 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
     const checkCleanup = (): void => {
       if (expired || now() >= cleanupDeadline) throw new AgentError("CLEANUP_UNVERIFIED")
     }
-    const publishCleanup = async (operation: () => Promise<ManagedLaunchRecord>): Promise<void> => {
-      await bounded(() => mutations.queue.run(async () => {
-        checkCleanup()
-        current = snapshot()
-        try { current = await operation() }
-        finally { current = snapshot() }
-        checkCleanup()
-      }), cleanupDeadline, "CLEANUP_UNVERIFIED")
-    }
     const stopCapturedGroup = async (): Promise<void> => {
       if (!liveGroup) return
+      if (current.phase !== "cleanup_verified") current = { ...current, phase: "cleanup_pending", provider: { kind: "process-group", group: liveGroup.identity() } }
       cleanupEvidence ??= await liveGroup.cleanup({ deadline: cleanupDeadline, terminateMs: phases.processTerminateMs, absenceMs: phases.absenceMs, transportCloseMs: phases.transportCloseMs, retry: true })
       checkCleanup()
       discharged.resolve()
@@ -108,21 +90,11 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       await stopCapturedGroup()
       await bounded(() => preparation?.catch(() => undefined) ?? Promise.resolve(), cleanupDeadline, "CLEANUP_UNVERIFIED")
       checkCleanup()
-      if (!spawnInvoked) discharged.resolve()
-      if (!published && !spawnInvoked) return structuredClone(current)
-      if (!spawnInvoked) {
-        await publishCleanup(() => finishUnspawnedCleanup(context, current, { spawnInvoked: false }, dependencies.transitionIO))
-      } else {
-        if (!owned || !liveGroup) throw new AgentError("CLEANUP_UNVERIFIED")
-        const group = liveGroup
-        await stopCapturedGroup()
-        if (snapshot().phase !== "cleanup_verified" && snapshot().phase !== "cleanup_pending") {
-          await publishCleanup(() => beginOwnedCleanup(context, current, group, dependencies.transitionIO))
-        }
-        await publishCleanup(() => finishOwnedCleanup(context, current, group, cleanupEvidence!, dependencies.transitionIO))
-      }
+      if (!spawnInvoked) { discharged.resolve(); current = { ...current, launchAttempted: false, phase: "cleanup_verified" }; return }
+      if (!owned || !liveGroup) throw new AgentError("CLEANUP_UNVERIFIED")
+      await stopCapturedGroup()
       checkCleanup()
-      return structuredClone(current)
+      current = { ...current, phase: "cleanup_verified", provider: { kind: "process-group", group: cleanupEvidence!.group } }
     }, cleanupDeadline, "CLEANUP_UNVERIFIED").catch(error => {
       expired = true; cleaning = undefined
       throw new AgentError("CLEANUP_UNVERIFIED", error instanceof LiveProcessError ? { boundary: "provider_cleanup", causeCode: error.reason } : error instanceof AgentError ? error.diagnostic : undefined)
@@ -130,7 +102,8 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
     return cleaning
   }
   return {
-    record: snapshot, fault, cleanup, discharged: discharged.promise,
+    record: () => structuredClone(current), fault, cleanup, discharged: discharged.promise,
+    markActive() { if (current.phase === "readiness") current = { ...current, phase: "active" } },
     request(method, params, signal) { if (!initialized || !connection || stopping || disposed || ended()) return Promise.reject(new AgentError("NOT_READY")); return connection.request(method, params, signal) },
     notify(method, params) { if (!initialized || !connection || stopping || disposed || ended()) throw new AgentError("NOT_READY"); connection.notify(method, params) },
     respond(id, result) { if (!initialized || !connection || stopping || disposed || ended()) throw new AgentError("NOT_READY"); return connection.respond(id, result) },
@@ -159,24 +132,11 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
       if (signal.aborted) controller.abort()
       overallDeadline = Math.min(overallDeadline, now() + (phases?.overallMs ?? spec.limits.startupMs))
       spawnDeadline = Math.min(overallDeadline, now() + (phases?.spawnMs ?? 5000))
-      const prepared = mutations.queue.run(async () => {
+      const prepared = (async () => {
         check(); await revalidate(); check()
         current = { ...current, launchBootId: await adapter.bootId() }
-        if (mutations.accepted.some(entry => entry.record.launchAttemptId === spec.launchAttemptId) || mutations.issues?.some(issue => issue.launchAttemptId === spec.launchAttemptId)) throw new AgentError("INVALID_AGENT_STATE")
-        try { await writeLaunchRecord(path, current) }
-        finally {
-          try {
-            const visible = await readLaunchRecordForReconciliation(path)
-            if (isDeepStrictEqual(visible, current)) {
-              mutations.accepted.push({ path, record: structuredClone(current) })
-              published = true
-            }
-          } catch { }
-          context.state.launches = summarizeLaunches(mutations.accepted.map(entry => entry.record))
-        }
-        if (!published || mutations.issues?.some(issue => issue.path === path)) throw new AgentError("UNAVAILABLE")
         check()
-        await transition({ ...current, launchAttempted: true })
+        current = { ...current, launchAttempted: true }
         await revalidate(); check()
         if (await adapter.bootId() !== current.launchBootId) throw new AgentError("CONFIG_CHANGED")
         check(); spawnInvoked = true
@@ -195,8 +155,8 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
         try { liveGroup = await captureLiveProcess({ owner: owned, adapter, launchBootId: current.launchBootId, marker, deadline: spawnDeadline, now }) }
         catch (error) { throw error instanceof LiveProcessError ? new AgentError(error.reason === "deadline" ? "STARTUP_TIMEOUT" : "STARTUP_FAILED") : error }
         check()
-        await transition({ ...current, phase: "readiness", provider: { kind: "process-group", group: liveGroup.identity() } })
-      })
+        current = { ...current, phase: "readiness", provider: { kind: "process-group", group: liveGroup.identity() } }
+      })()
       preparation = prepared
       const releasePreparation = (): void => { if (preparation === prepared) preparation = undefined; spawnOptions = undefined; spawnArgs = undefined }
       void prepared.then(releasePreparation, releasePreparation)

@@ -29,7 +29,6 @@ import { bindPrivateSocket } from "../platform/private-socket.js"
 import { readHandlerRecord, writeHandlerRecord } from "../platform/private-state.js"
 import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
-import { ensurePrivateChild } from "./environment.js"
 import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "./shutdown.js"
 import { MutationQueue, type HandlerMutations } from "./mutations.js"
 import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLog } from "./event-log.js"
@@ -170,7 +169,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   options.status.on("error", channelError); options.gate.on("error", channelError)
   process.on("SIGTERM", onSignal); process.on("SIGINT", onSignal)
   try {
-    await ensurePrivateChild(options.paths.persistentRoot, "launches")
     checkStartup()
     if (options.recordPath !== join(options.paths.runtimeRoot, "handler.json")) throw new Error("Handler record path mismatch")
     const pending = await readHandlerRecord(options.recordPath)
@@ -239,7 +237,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     }
     await catalog.initialize()
     checkStartup()
-    const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
+    const launchContext = { paths: options.paths, adapter: options.adapter, state, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     const agentIndex = createAgentIndex(root)
     const migrate = () => migrateIndex({ root, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
     if (await agentIndex.migrated()) void migrate()

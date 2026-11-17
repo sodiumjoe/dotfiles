@@ -19,7 +19,7 @@ import { readProfiles } from "../catalog/config.js"
 import { id, type ProviderId } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
 import type { EventLog } from "../handler/event-log.js"
-import type { LaunchContext } from "../handler/launch-transitions.js"
+import type { LiveContext } from "./context.js"
 import { configure, settingRequest, unchanged, type SettingRequest } from "./configure.js"
 import { createEchoFilter } from "./echo.js"
 import { RequestError, requestFailure, type RequestFailure } from "./errors.js"
@@ -33,7 +33,7 @@ import { stopAgent } from "./stop.js"
 export type StartRequest = { agentId: string; backendId?: ProviderId; cwd: string; settings?: RequestedSettings; model?: string; mode?: string; environment: LaunchEnvironment; nativeParams?: JsonObject }
 export type PromptResult = { state: "prompt"; agentId: string; submissionId: string; stopReason: StopReason; text: string }
 export type LiveObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
-export type LiveCoreInput = { context: LaunchContext; contracts: readonly LaunchContract[]; index: AgentIndex; homes: SessionHomes; events?: EventLog }
+export type LiveCoreInput = { context: LiveContext; contracts: readonly LaunchContract[]; index: AgentIndex; homes: SessionHomes; events?: EventLog }
 export type HandoffStatus = { fromGeneration: string; agents: string[]; pending: string[]; failed: Array<{ agentId: string } & RequestFailure> }
 export type LiveCoreDependencies = { processFactory?: typeof createAgentProcess; modelSource?: ModelSource }
 export type LiveCore = {

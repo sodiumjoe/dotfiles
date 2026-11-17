@@ -29,9 +29,8 @@ export type DoctorDiagnostic = {
   hostId: string
   paths: PlatformPaths
   handler: HandlerInspection | null
-  launches: LaunchSummary[]
-  catalog: { probes: LaunchSummary[]; commands: Array<{ id: string; state: string }>; issues: string[] }
-  issues: Array<{ source: "launch" | "agent" | "catalog"; path: string; message: string }>
+  catalog: { commands: Array<{ id: string; state: string }>; issues: string[] }
+  issues: Array<{ source: "catalog"; path: string; message: string }>
 }
 export type ControlResult = HandlerStatus | { state: "shutdown_accepted"; commandId: string; handlerGeneration: string }
 export type ControlReply = { protocol: typeof PROTOCOL; requestId: string; handlerGeneration: string } & (
@@ -40,7 +39,6 @@ export type ControlReply = { protocol: typeof PROTOCOL; requestId: string; handl
 )
 
 const codes: Record<ControlErrorCode, number> = { USAGE: 64, INVALID_PROTOCOL: 65, STALE_HANDLER: 69, UNAVAILABLE: 69, INTERNAL: 70, INCOMPLETE: 75, ACTIVE_AGENTS: 75, COMMAND_CONFLICT: 75, BUSY: 75 }
-const phases = new Set(["launch_pending", "readiness", "active", "exited_unverified", "cleanup_pending", "cleanup_verified", "quarantined"])
 
 export class ControlError extends Error {
   constructor(readonly code: ControlErrorCode, message: string = code) { super(`${code}: ${message}`) }
@@ -100,42 +98,23 @@ export function parseRequest(value: unknown): ControlRequest {
   return { ...common, op: "shutdown", commandId: uuid(v.commandId), stopAgents: v.stopAgents, ...(requireIdle ? { requireIdle: true as const } : {}) }
 }
 
-function summary(value: unknown): LaunchSummary {
-  const v = object(value)
-  exactKeys(v, ["launchAttemptId", "owner", "phase", "reason"])
-  if (typeof v.phase !== "string" || !phases.has(v.phase) || !(v.reason === null || typeof v.reason === "string")) return invalid()
-  const owner = object(v.owner)
-  if (owner.kind === "catalog-probe") {
-    exactKeys(owner, ["kind", "id", "providerId"])
-    if (owner.providerId !== "claude-agent-acp" && owner.providerId !== "codex-acp") invalid()
-    return { launchAttemptId: string(v.launchAttemptId), owner: { kind: "catalog-probe", id: string(owner.id), providerId: owner.providerId }, phase: v.phase as LaunchRecord["phase"], reason: v.reason }
-  }
-  if (owner.kind === "legacy-agent") {
-    exactKeys(owner, ["kind", "id", "handlerGeneration"])
-    return { launchAttemptId: string(v.launchAttemptId), owner: { kind: "legacy-agent", id: string(owner.id), handlerGeneration: string(owner.handlerGeneration) }, phase: v.phase as LaunchRecord["phase"], reason: v.reason }
-  }
-  exactKeys(owner, ["kind", "id", "generation"])
-  if (owner.kind !== "agent") invalid()
-  return { launchAttemptId: string(v.launchAttemptId), owner: { kind: "agent", id: string(owner.id), generation: string(owner.generation) }, phase: v.phase as LaunchRecord["phase"], reason: v.reason }
-}
-
 function result(value: unknown): ControlResult {
   const v = object(value), generation = uuid(v.handlerGeneration)
   if (v.state === "shutdown_accepted") {
     exactKeys(v, ["state", "commandId", "handlerGeneration"])
     return { state: "shutdown_accepted", commandId: uuid(v.commandId), handlerGeneration: generation }
   }
-  exactKeys(v, ["hostId", "handlerGeneration", "phase", "reconciliation", "launches", "capabilities", ...(Object.hasOwn(v, "issues") ? ["issues"] : []), ...(Object.hasOwn(v, "distDigest") ? ["distDigest"] : [])])
+  exactKeys(v, ["hostId", "handlerGeneration", "phase", "capabilities", ...(Object.hasOwn(v, "reconciliation") ? ["reconciliation"] : []), ...(Object.hasOwn(v, "launches") ? ["launches"] : []), ...(Object.hasOwn(v, "issues") ? ["issues"] : []), ...(Object.hasOwn(v, "distDigest") ? ["distDigest"] : [])])
   if (!(v.phase === "starting" || v.phase === "reconciling" || v.phase === "ready" || v.phase === "draining")) return invalid()
-  const r = object(v.reconciliation)
+  const r = Object.hasOwn(v, "reconciliation") ? object(v.reconciliation) : { classified: 0, total: 0, uncertain: 0 }
   exactKeys(r, ["classified", "total", "uncertain"])
   const reconciliation = { classified: integer(r.classified), total: integer(r.total), uncertain: integer(r.uncertain) }
   if (reconciliation.classified > reconciliation.total || reconciliation.uncertain > reconciliation.classified) invalid()
   if (v.phase === "ready" && reconciliation.classified !== reconciliation.total) invalid()
-  if (!Array.isArray(v.launches) || !Array.isArray(v.capabilities) || v.capabilities.length !== 3 || v.capabilities.join(",") !== "status,doctor,shutdown") return invalid()
+  if (Object.hasOwn(v, "launches") && !Array.isArray(v.launches) || !Array.isArray(v.capabilities) || v.capabilities.length !== 3 || v.capabilities.join(",") !== "status,doctor,shutdown") return invalid()
   const issues = Object.hasOwn(v, "issues") ? (Array.isArray(v.issues) && v.issues.length <= 4096 ? v.issues.map(value => { const issue = object(value); exactKeys(issue, ["path", "launchAttemptId", "message"]); if (typeof issue.path !== "string" || !issue.path.startsWith("/") || issue.launchAttemptId !== null && !UUID.test(String(issue.launchAttemptId)) || typeof issue.message !== "string") invalid(); return { path: issue.path, launchAttemptId: issue.launchAttemptId as string | null, message: issue.message } }) : invalid()) : undefined
   const distDigest = !Object.hasOwn(v, "distDigest") ? undefined : v.distDigest === null ? null : typeof v.distDigest === "string" && /^[0-9a-f]{64}$/.test(v.distDigest) ? v.distDigest : invalid()
-  return { hostId: hostId(v.hostId), handlerGeneration: generation, phase: v.phase, reconciliation, launches: v.launches.map(summary), ...(issues === undefined ? {} : { issues }), ...(distDigest === undefined ? {} : { distDigest }), capabilities: ["status", "doctor", "shutdown"] }
+  return { hostId: hostId(v.hostId), handlerGeneration: generation, phase: v.phase, reconciliation, launches: [], ...(issues === undefined ? {} : { issues }), ...(distDigest === undefined ? {} : { distDigest }), capabilities: ["status", "doctor", "shutdown"] }
 }
 
 export function parseReply(value: unknown): ControlReply {

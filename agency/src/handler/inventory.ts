@@ -41,4 +41,3 @@ export async function verifyInventory(directory: string, expected: InventoryEntr
   if (!isDeepStrictEqual(current, expected)) throw new Error("RETAINED_INVENTORY_CHANGED")
 }
 
-export { summarizeLaunches } from "./launch-summary.js"
