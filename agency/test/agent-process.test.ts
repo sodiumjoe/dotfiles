@@ -14,7 +14,7 @@ import { MutationQueue } from "../src/handler/mutations.js"
 import type { LaunchContext } from "../src/handler/launch-transitions.js"
 import { readLaunchRecordForReconciliation, writeLaunchRecord } from "../src/platform/private-state.js"
 import type { PlatformAdapter, ProcessIdentity } from "../src/platform/types.js"
-import { sampleSpec, sampleContract } from "./agent-support.js"
+import { sampleSpec, sampleContract } from "./process-support.js"
 import { normalizeAgentRecord, splitLaunchSpec } from "../src/agent/types.js"
 
 class NativeStartupInput { [key: string]: string; marker = "native startup input" }

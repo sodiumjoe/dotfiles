@@ -3,12 +3,9 @@ import test from "node:test"
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { acpFixture } from "./acp-support.js"
-import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import { claudeTurns, codexTurns, historyExcerpt, historySummary, liveExcerpt } from "../src/agent/excerpt.js"
 import type { AgentRecordV3 } from "../src/agent/types.js"
 
-const initialize = { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true }, terminal: true } }
 const codexLine = (role: string, type: string, text: string) => JSON.stringify({ type: "response_item", payload: { type: "message", role, content: [{ type, text }] } })
 const claudeLine = (type: string, content: unknown, extra: Record<string, unknown> = {}) => JSON.stringify({ type, message: { role: type, content }, ...extra })
 function record(backendId: string, sessionId: string | null, cwd: string): AgentRecordV3 {
@@ -49,28 +46,6 @@ test("history excerpts read the last turns of Codex and Claude files, including 
   assert.equal(missing.source, "none")
   assert.equal(missing.reason, "No conversation history file")
   assert.equal((await historyExcerpt({ record: record("codex-acp", null, cwd), turns: 4, codexHome, claudeHome })).source, "none")
-})
-
-test("live excerpts come from retained events, and the CLI serves them locally", async t => {
-  const f = await acpFixture(t), c = await f.connect()
-  await c.request("initialize", initialize)
-  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [] })
-  const sessionId = String(session.sessionId), agentId = sessionId.slice(7)
-  await c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "hello" }] })
-  const live = await f.human({ op: "agent_excerpt", input: { agentId, turns: 4 } })
-  assert.deepEqual(live, { state: "excerpt", source: "live", turns: [{ role: "user", text: "hello" }, { role: "agent", text: "answer:hello" }], reason: null })
-  const production = productionControlDependencies()
-  let output = ""
-  const code = await runControl(["roster", "excerpt", agentId, "--local", "--json"], { ...production, environment: async () => ({ paths: f.paths, adapter: f.adapter }),
-    cwd: () => f.workspace, start: async () => { throw new Error("automatic startup forbidden") }, stdout: value => { output += value }, stderr: () => {} })
-  assert.equal(code, 0)
-  assert.deepEqual(JSON.parse(output).result, live)
-  c.close()
-  await f.stopSession(sessionId)
-  const stopped = await f.human({ op: "agent_excerpt", input: { agentId, turns: 4 } })
-  assert.equal(stopped.state, "excerpt")
-  assert.equal((stopped as { source: string }).source, "none")
-  await f.verifyZeroSurvivors()
 })
 
 test("live excerpts include replayed history and ignore echoed prompt chunks", () => {

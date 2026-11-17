@@ -5,7 +5,7 @@ import { createAcpConnection } from "../src/agent/acp.js"
 import { AGENT_LIMITS, normalizeAgentRecord, splitLaunchSpec } from "../src/agent/types.js"
 import type { JsonObject } from "../src/agent/session-config.js"
 import type { AcpObservation } from "../src/agent/session-events.js"
-import { sampleContract, sampleSpec } from "./agent-support.js"
+import { sampleContract, sampleSpec } from "./process-support.js"
 
 const option = (value: boolean): JsonObject => ({ id: "fixture", type: "boolean", currentValue: value })
 const text = (value: string): JsonObject => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: value } })

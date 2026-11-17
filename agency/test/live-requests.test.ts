@@ -88,3 +88,21 @@ test("an agent whose stop could not be verified is not started again by a later 
   assert.equal(f.providers().length, 1)
   await f.verifyZeroSurvivors()
 })
+test("a provider learns the Agency agent it runs as from its environment", async t => {
+  const f = await liveHandlerFixture(t), { agentId } = await f.start({ backendId: "claude-agent-acp" })
+  const environment = await until(async () => (await f.providerRequests("claude-agent-acp")).find(value => value.method === "fixture/environment"))
+  assert.equal(environment.params?.AGENCY_AGENT_ID, agentId)
+  await f.verifyZeroSurvivors()
+})
+
+test("an idle-required shutdown refuses while an agent is starting and does not abort it", async t => {
+  const f = await liveHandlerFixture(t)
+  await f.pauseSessions()
+  const starting = f.start()
+  await f.waitSession()
+  const refused = await f.handoff()
+  assert.equal(refused.ok ? null : refused.error.code, "BUSY")
+  await f.releaseSessions()
+  assert.equal((await starting).live?.activity, "idle")
+  await f.verifyZeroSurvivors()
+})

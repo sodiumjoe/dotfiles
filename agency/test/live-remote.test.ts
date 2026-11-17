@@ -2,6 +2,7 @@ import { fixtureBridgeSpawner } from "./fixtures/fixture-bridge.js"
 import assert from "node:assert/strict"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
+import { Readable } from "node:stream"
 import { randomUUID } from "node:crypto"
 import { liveHandlerFixture } from "./live-support.js"
 import { until } from "./control-support.js"
@@ -13,9 +14,9 @@ async function remote(t: import("node:test").TestContext) {
   const f = await liveHandlerFixture(t), record = await f.handler(), hostId = f.paths.hostKey, spawnBridge = await fixtureBridgeSpawner()
   const transport = await connectBridge({ hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
-  const call = async (args: string[]) => {
+  const call = async (args: string[], stdin?: string) => {
     let output = ""
-    const code = await runControl([...args, "--host", hostId, "--json"], { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env, route) => transport.request(route.channel, route.payload), start: async () => { throw new Error("automatic startup forbidden") }, stdout: value => { output += value } })
+    const code = await runControl([...args, "--host", hostId, "--json"], { ...productionControlDependencies(), ...(stdin === undefined ? {} : { stdin: Readable.from([Buffer.from(stdin)]) }), environment: async () => ({ paths: f.paths, adapter: f.adapter }), hostRoute: (_env, route) => transport.request(route.channel, route.payload), start: async () => { throw new Error("automatic startup forbidden") }, stdout: value => { output += value } })
     return { code, reply: parseHostReply(JSON.parse(output)) }
   }
   return { f, record, transport, call }
@@ -56,5 +57,18 @@ test("a remote excerpt and permission list are served by the live core", { timeo
   const stale = { agentId, handlerGeneration: (await f.handler()).generation, providerGeneration: randomUUID() }
   assert.equal((await call(["session", "stop", "--input-json", JSON.stringify({ ...stale, commandId: randomUUID() })])).reply.ok, false)
   assert.ok((await f.events()).some(event => event.type === "request_failed" && String(event.op).includes("stop") && event.agentId === agentId))
+  transport.close(); await transport.closed; await f.verifyZeroSurvivors()
+})
+
+test("a remote session receives one exact long Unicode prompt through stdin", { timeout: 60000 }, async t => {
+  const { f, record, transport, call } = await remote(t), commandId = randomUUID()
+  assert.equal((await call(["session", "start", "--input-json", JSON.stringify({ commandId, handlerGeneration: record.generation, cwd: f.workspace, backendId: "codex-acp" })])).code, 0)
+  const command = await until(async () => { const r = await call(["session", "command", commandId, "--input-json", JSON.stringify({ commandGeneration: record.generation })]); return r.reply.ok && r.reply.result.state === "session_command" && r.reply.result.receipt?.command.state === "completed" ? r.reply.result.receipt.command : undefined })
+  const target = command.target!, submissionId = randomUUID(), text = "stdin fixture λ🙂\n".repeat(100)
+  assert.equal((await call(["session", "submit", "--input-json", "-"], JSON.stringify({ target, submissionId, text }))).code, 0)
+  await until(async () => { const r = await call(["session", "submission", "--input-json", JSON.stringify({ target, submissionId })]); return r.code === 0 ? true : undefined })
+  const prompts = (await f.providerRequests()).filter(frame => frame.method === "session/prompt")
+  assert.equal(prompts.length, 1)
+  assert.deepEqual((prompts[0]!.params as { prompt: unknown }).prompt, [{ type: "text", text }])
   transport.close(); await transport.closed; await f.verifyZeroSurvivors()
 })

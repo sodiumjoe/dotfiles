@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { randomUUID } from "node:crypto"
 import { liveHandlerFixture } from "./live-support.js"
+import { until } from "./control-support.js"
 import type { JsonObject } from "../src/agent/session-config.js"
 
 const initialize = { protocolVersion: 1, clientCapabilities: {} }
@@ -86,5 +88,84 @@ test("an editor that loads an agent while it is being restored shares that resto
   assert.equal((agency(await loading).binding as JsonObject).agentId, agentId)
   await restoring
   assert.equal((await f.providerRequests()).filter(frame => frame.method === "session/load").length, 1)
+  await f.verifyZeroSurvivors()
+})
+test("two outstanding prompts share one cancellation and leave the session reusable", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [] }), sessionId = String(session.sessionId)
+  const a = c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "held" }] })
+  const b = c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "held" }] })
+  await until(async () => (await f.providerRequests()).filter(value => value.method === "session/prompt").length === 2 ? true : undefined)
+  c.notify("session/cancel", { sessionId })
+  assert.deepEqual(await Promise.all([a, b]), [{ stopReason: "cancelled" }, { stopReason: "cancelled" }])
+  assert.equal((await f.providerRequests()).filter(value => value.method === "session/cancel").length, 1)
+  assert.equal((await c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "next" }] })).stopReason, "end_turn")
+  await f.verifyZeroSurvivors()
+})
+
+test("provider errors keep their data and permit a later prompt", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [] }), sessionId = String(session.sessionId)
+  await assert.rejects(c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "provider-busy" }] }), { code: -32042, message: "Provider busy", data: { retry: true } })
+  assert.equal((await c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "next" }] })).stopReason, "end_turn")
+  await f.verifyZeroSurvivors()
+})
+
+test("one connection routes two agents of different backends without sharing their configuration", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: true }, terminal: true } })
+  const a = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, backendId: "codex-acp" } } })
+  const b = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, backendId: "claude-agent-acp" } } })
+  assert.notEqual(a.sessionId, b.sessionId)
+  await c.request("session/prompt", { sessionId: b.sessionId!, prompt: [{ type: "text", text: "second" }] })
+  await c.request("session/prompt", { sessionId: a.sessionId!, prompt: [{ type: "image", data: "eA==", mimeType: "image/png" }] })
+  await assert.rejects(c.request("session/prompt", { sessionId: b.sessionId!, prompt: [{ type: "image", data: "eA==", mimeType: "image/png" }] }))
+  for (const backend of ["codex-acp", "claude-agent-acp"] as const) {
+    const requests = await f.providerRequests(backend)
+    assert.equal(requests.filter(x => x.method === "session/prompt").length, 1)
+    const client = requests.find(x => x.method === "initialize")?.params?.clientCapabilities as JsonObject
+    assert.deepEqual(client.fs, { readTextFile: false, writeTextFile: false }); assert.equal(client.terminal, false)
+  }
+  await f.verifyZeroSurvivors()
+})
+
+test("a Claude mode change applies during a running turn", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  const session = await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, backendId: "claude-agent-acp" } } }), sessionId = String(session.sessionId)
+  const pending = c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "held" }] })
+  await until(async () => (await f.providerRequests("claude-agent-acp")).some(value => value.method === "session/prompt") ? true : undefined)
+  await c.request("session/set_mode", { sessionId, modeId: "review" })
+  await f.releasePrompts()
+  assert.equal((await pending).stopReason, "end_turn")
+  assert.ok((await f.providerRequests("claude-agent-acp")).some(value => value.method === "session/set_mode" && value.params?.modeId === "review"))
+  await f.verifyZeroSurvivors()
+})
+
+test("replay precedes live output without gaps and keeps the accepted prompt's metadata", async t => {
+  const f = await liveHandlerFixture(t), a = await f.connect(), b = await f.connect()
+  await a.request("initialize", initialize); await b.request("initialize", initialize)
+  const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [] }), submissionId = randomUUID()
+  const pending = a.request("session/prompt", { sessionId: s.sessionId!, prompt: [{ type: "text", text: "held" }], _meta: { agency: { version: 1, submissionId }, other: "preserved" } })
+  await a.nextState("running")
+  const loaded = await b.request("session/load", { sessionId: s.sessionId!, cwd: f.workspace, mcpServers: [] })
+  const replay = b.drain("session/update"), attachment = agency(loaded)
+  assert.equal(replay.length, 1)
+  assert.equal((replay[0]?._meta as JsonObject).other, "preserved")
+  const echo = agency(replay[0]!)
+  assert.equal(echo.submissionId, submissionId); assert.equal(echo.replay, true); assert.equal(typeof echo.originConnectionId, "string")
+  assert.equal(attachment.turnId, submissionId)
+  await f.releasePrompts(); await pending; await b.nextState("idle")
+  const sequence = agency(await b.next("session/update"))
+  assert.equal(sequence.replay, false); assert.ok(Number(sequence.seq) > Number(attachment.lastSeq))
+  await f.verifyZeroSurvivors()
+})
+test("an editor's combined Codex model ID reaches the provider unchanged", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  await c.request("session/new", { cwd: f.workspace, mcpServers: [], _meta: { agency: { version: 1, backendId: "codex-acp", selection: { modelId: "model-a[high]", modeId: "read-only" } } } })
+  assert.ok((await f.providerRequests()).some(value => value.method === "session/set_model" && value.params?.modelId === "model-a[high]"))
   await f.verifyZeroSurvivors()
 })
