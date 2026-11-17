@@ -1,22 +1,23 @@
 import { randomUUID } from "node:crypto"
 import { createPermissionBroker } from "../acp/permissions.js"
 import { withNativeSession } from "../agent/acp.js"
-import type { AgentIndex } from "../agent/agent-index.js"
+import type { AgentIndex, IndexEntry } from "../agent/agent-index.js"
 import { readBackendConfig } from "../agent/backend-config.js"
 import type { LaunchContract } from "../agent/contracts.js"
 import { createConversation } from "../agent/conversation.js"
 import type { LaunchEnvironment } from "../agent/environment.js"
-import type { ConversationExcerpt, SessionHomes } from "../agent/excerpt.js"
+import type { ConversationExcerpt, RecordedSettings, SessionHomes } from "../agent/excerpt.js"
 import { underlyingFailureCode } from "../agent/failure-diagnostics.js"
 import { createPermissionArbiter, type PermissionArbiter } from "../agent/permission-arbiter.js"
 import { createAgentProcess } from "../agent/process.js"
 import type { JsonObject, RequestedSettings } from "../agent/session-config.js"
-import { EDITOR_TURN_LIMITS, type StopReason } from "../agent/session-events.js"
+import { EDITOR_TURN_LIMITS, type AcpObservation, type StopReason } from "../agent/session-events.js"
 import { AgentError, agentFailure } from "../agent/types.js"
 import { id, type ProviderId } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
 import type { EventLog } from "../handler/event-log.js"
 import type { LaunchContext } from "../handler/launch-transitions.js"
+import { configure, settingRequest, unchanged } from "./configure.js"
 import { RequestError, requestFailure } from "./errors.js"
 import { launchAgent, type LaunchHooks, type LaunchRequest } from "./launch.js"
 import { createRoster, liveRow, type RosterRow, type Transcript } from "./roster.js"
@@ -36,6 +37,7 @@ export type LiveCore = {
   stop(agentId: string): Promise<RosterRow>
   prompt(agentId: string, text: string, environment: LaunchEnvironment, submissionId?: string): Promise<PromptResult>
   cancel(agentId: string): Promise<RosterRow>
+  set(agentId: string, setting: string, value: string | boolean): Promise<RosterRow>
   forget(agentId: string): Promise<{ state: "forgotten"; agentId: string }>
   agents(): Promise<RosterRow[]>
   excerpt(agentId: string, turns: number): Promise<ConversationExcerpt>
@@ -85,6 +87,14 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     void tail.then(() => { if (admissions.get(agentId) === tail) admissions.delete(agentId) })
     return current
   }
+  function publish(agent: LiveAgent): void {
+    if (agent.phase !== "ready" || !agent.owner) return
+    for (const listener of agent.listeners) { try { listener(agent.owner.snapshot()) } catch {} }
+  }
+  function retain(agent: LiveAgent, event: AcpObservation): void {
+    agent.conversation.append({ kind: "update", ...event })
+    if (["config_option_update", "current_mode_update"].includes(event.update.sessionUpdate)) publish(agent)
+  }
   function indexAgent(agent: LiveAgent): void {
     const sessionId = agent.session?.sessionId
     if (agent.indexed || !sessionId) return
@@ -99,7 +109,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   }
 
   const hooks: LaunchHooks = {
-    update(agent, event) { agent.conversation.append({ kind: "update", ...event }) },
+    update(agent, event) { retain(agent, event) },
     request(agent, message) {
       const params = message.params as JsonObject, toolCall = params.toolCall as JsonObject | undefined
       void Promise.resolve().then(async () => {
@@ -144,14 +154,27 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   }
   const launcher = { context, contracts: input.contracts, processFactory: dependencies.processFactory ?? createAgentProcess, hooks }
 
-  function admit(agentId: string, identity: { backendId: ProviderId; cwd: string; origin: "new" | "import"; createdAt: string; indexed: boolean }, request: LaunchRequest, kind: "started" | "restored"): LiveAgent {
+  const recorded = (entry: IndexEntry): Promise<RecordedSettings> => roster.recorded(entry).catch(() => ({ model: null, mode: null }))
+  async function reapply(agent: LiveAgent, wanted: RecordedSettings): Promise<void> {
+    for (const setting of ["model", "mode"] as const) {
+      const value = wanted[setting]
+      if (value === null) continue
+      try {
+        const request = settingRequest(agent, setting, value)
+        if (!unchanged(agent, request)) await configure(agent, request, { publish, ...(events ? { events } : {}) })
+      } catch (error) { events?.append({ type: "setting_not_restored", agentId: agent.agentId, setting, value, ...requestFailure(error) }) }
+    }
+  }
+  function admit(agentId: string, identity: { backendId: ProviderId; cwd: string; origin: "new" | "import"; createdAt: string; indexed: boolean }, request: LaunchRequest, kind: "started" | "restored", wanted?: Promise<RecordedSettings>): LiveAgent {
     const tuple = { agentId, handlerGeneration: generation, providerGeneration: randomUUID() }
     const agent: LiveAgent = { agentId, ...identity, tuple, phase: "starting", launched: Promise.resolve(), ready: Promise.resolve(undefined as never), controller: new AbortController(), conversation: createConversation(tuple), running: new Set(), prompts: new Set(), configuring: 0, listeners: new Set(), lastActivityAt: null }
     agent.launched = launchAgent(agent, request, launcher)
-    agent.ready = agent.launched.then(() => {
+    agent.ready = agent.launched.then(async () => {
+      if (wanted) await reapply(agent, await wanted)
+      if (agent.controller.signal.aborted) throw new RequestError("FAILED", "agent " + agentId + " was stopped before it was ready")
       events?.append({ type: "agent_" + kind, agentId, backendId: agent.backendId, cwd: agent.cwd })
       return agent
-    }, async error => {
+    }).catch(async error => {
       const failure = agent.controller.signal.aborted && !(error instanceof RequestError) ? new RequestError("FAILED", "agent " + agentId + " was stopped before it was ready") : error
       await stopping(agent, "failure").catch(() => undefined)
       throw failure
@@ -169,7 +192,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       const entry = await roster.entry(agentId)
       if (!entry) throw missing(agentId)
       if (!await roster.sessionPath(entry)) throw new RequestError("NOT_FOUND", "agent " + agentId + " cannot be restored: its " + entry.backendId + " session file is missing")
-      return admit(agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment, ...(nativeParams ? { nativeParams } : {}), restore: { nativeSessionId: entry.nativeSessionId } }, "restored")
+      return admit(agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment, ...(nativeParams ? { nativeParams } : {}), restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
     })
     return agent.ready
   }
@@ -182,7 +205,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       await current?.stopped?.catch(() => undefined)
       const entry = await roster.entry(request.agentId)
       if (entry && (request.backendId && entry.backendId !== request.backendId || entry.cwd !== request.cwd)) throw new RequestError("INVALID", "agent " + entry.agentId + " already exists with backend " + entry.backendId + " in " + entry.cwd)
-      if (entry) return admit(entry.agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment: request.environment, restore: { nativeSessionId: entry.nativeSessionId } }, "restored")
+      if (entry) return admit(entry.agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment: request.environment, restore: { nativeSessionId: entry.nativeSessionId } }, "restored", recorded(entry))
       const backendId = request.backendId ?? (await readBackendConfig(root)).defaultBackendId
       return admit(request.agentId, { backendId, cwd: request.cwd, origin: "new", createdAt: new Date().toISOString(), indexed: false }, { ...request, backendId }, "started")
     })
@@ -218,6 +241,11 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     async cancel(agentId) {
       const agent = await ready(agentId)
       for (const submissionId of agent.running) await agent.turns!.cancel(submissionId)
+      return row(agent)
+    },
+    async set(agentId, setting, value) {
+      const agent = await ready(agentId), request = settingRequest(agent, setting, value)
+      if (!unchanged(agent, request)) await configure(agent, request, { publish, ...(events ? { events } : {}) })
       return row(agent)
     },
     forget(agentId) {

@@ -69,6 +69,7 @@ export async function liveHandlerFixture(t: TestContext) {
     start: (input: StartInput = {}) => agent({ op: "start", agentId: randomUUID(), cwd: workspace, backendId: "codex-acp", environment: environment(), ...input }),
     stop: (agentId: string) => agent({ op: "stop", agentId }),
     cancel: (agentId: string) => agent({ op: "cancel", agentId }),
+    set: (agentId: string, setting: string, value: string | boolean) => agent({ op: "set", agentId, setting, value }),
     restore: (agentId: string) => agent({ op: "restore", agentId, environment: environment() }),
     async prompt(agentId: string, text: string, submissionId?: string): Promise<PromptResult> { const result = await request({ op: "prompt", agentId, text, environment: environment(), ...(submissionId ? { submissionId } : {}) }); assert.equal(result.state, "prompt"); return result as PromptResult },
     forget: (agentId: string) => request({ op: "forget", agentId }),

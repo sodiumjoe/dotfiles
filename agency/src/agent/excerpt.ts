@@ -61,6 +61,30 @@ export function claudeTurns(lines: readonly string[], limit = TURN_CHARS): Excer
   return turns
 }
 
+export type RecordedSettings = { model: string | null; mode: string | null }
+const CODEX_MODES: ReadonlyArray<readonly [string, string, string | null, string]> = [["never", "danger-full-access", null, "agent-full-access"], ["on-request", "read-only", null, "read-only"], ["on-request", "workspace-write", "auto_review", "agent"], ["on-request", "workspace-write", "user", "workspace-write"]]
+
+export function codexSettings(lines: readonly string[]): RecordedSettings {
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const record = parse(lines[index]!), payload = record?.payload as Json | undefined
+    if (record?.type !== "turn_context" || !payload) continue
+    const sandbox = (payload.sandbox_policy as Json | undefined)?.type, reviewer = payload.approvals_reviewer ?? "user"
+    const mode = CODEX_MODES.find(([approval, policy, review]) => approval === payload.approval_policy && policy === sandbox && (review === null || review === reviewer))?.[3] ?? null
+    return { model: typeof payload.model === "string" ? payload.model : null, mode }
+  }
+  return { model: null, mode: null }
+}
+
+export function claudeSettings(lines: readonly string[]): RecordedSettings {
+  let model: string | null = null, mode: string | null = null
+  for (let index = lines.length - 1; index >= 0 && (model === null || mode === null); index--) {
+    const record = parse(lines[index]!), recorded = (record?.message as Json | undefined)?.model
+    if (mode === null && record?.type === "user" && typeof record.permissionMode === "string") mode = record.permissionMode
+    if (model === null && record?.type === "assistant" && typeof recorded === "string" && recorded !== "<synthetic>") model = recorded
+  }
+  return { model, mode }
+}
+
 export function liveExcerpt(events: readonly RetainedEvent[], count: number): ExcerptTurn[] {
   const turns: ExcerptTurn[] = []
   let user = "", agent = ""
@@ -197,6 +221,18 @@ export async function sessionExcerpt(ref: SessionRef, homes: SessionHomes, count
   } catch (error) { if (missing(error)) return none("No conversation history file"); throw error }
   turns = turns.slice(-count)
   return { state: "excerpt", source: "history", turns, reason: turns.length ? null : "The history file has no conversation turns yet" }
+}
+
+export async function sessionSettings(path: string, backendId: string): Promise<RecordedSettings> {
+  let settings: RecordedSettings = { model: null, mode: null }
+  try {
+    for (const window of TAIL_WINDOWS) {
+      const tail = await readTail(path, window)
+      settings = backendId === "codex-acp" ? codexSettings(tail.lines) : claudeSettings(tail.lines)
+      if (tail.complete || settings.model !== null && settings.mode !== null) break
+    }
+  } catch (error) { if (missing(error)) return { model: null, mode: null }; throw error }
+  return settings
 }
 
 export async function sessionTranscript(ref: SessionRef, homes: SessionHomes, codexFiles?: Map<string, string>): Promise<{ turns: ExcerptTurn[]; truncated: boolean } | null> {

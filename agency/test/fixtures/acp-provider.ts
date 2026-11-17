@@ -23,8 +23,10 @@ async function history(user: string, agent: string) {
   const home = process.env.FIXTURE_HISTORY_ROOT
   if (!home) return
   const path = backend === "codex-acp" ? join(home, "codex/sessions/2026/11/14", "rollout-2026-11-14T10-00-00-" + sessionId + ".jsonl") : join(home, "claude/projects", process.cwd().replace(/[^A-Za-z0-9]/g, "-"), sessionId + ".jsonl")
-  const lines = backend === "codex-acp" ? [{ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: user }] } }, { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: agent }] } }]
-    : [{ type: "user", message: { role: "user", content: user } }, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: agent }] } }]
+  const full = options[2]!.currentValue === "agent-full-access"
+  const context = { type: "turn_context", payload: { model: options[0]!.currentValue, approval_policy: full ? "never" : "on-request", approvals_reviewer: "user", sandbox_policy: { type: full ? "danger-full-access" : "read-only" } } }
+  const lines = backend === "codex-acp" ? [context, { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: user }] } }, { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: agent }] } }]
+    : [{ type: "user", permissionMode: modeId, message: { role: "user", content: user } }, { type: "assistant", message: { role: "assistant", model: modelId, content: [{ type: "text", text: agent }] } }]
   await mkdir(dirname(path), { recursive: true })
   await appendFile(path, lines.map(line => JSON.stringify(line)).join("\n") + "\n", { mode: 0o600 })
 }
@@ -62,7 +64,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
     if (params.cwd !== process.cwd() || !Array.isArray(params.mcpServers)) throw new Error("wrong transient session input")
     if (request.method === "session/load") {
       sessionId = params.sessionId
-      try {
+      if (!process.env.FIXTURE_HISTORY_ROOT) try {
         const state = JSON.parse(await readFile(statePath, "utf8"))
         if (state.configOptions) for (const option of options) option.currentValue = state.configOptions.find((value: { id: string }) => value.id === option.id)?.currentValue ?? option.currentValue
         if (state.models) modelId = state.models.currentModelId

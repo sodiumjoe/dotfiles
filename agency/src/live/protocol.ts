@@ -15,6 +15,7 @@ export type LiveOperation =
   | { op: "restore"; agentId: string; environment: LaunchEnvironment }
   | { op: "stop" | "cancel" | "forget" | "transcript"; agentId: string }
   | { op: "prompt"; agentId: string; text: string; environment: LaunchEnvironment; submissionId?: string }
+  | { op: "set"; agentId: string; setting: string; value: string | boolean }
   | { op: "excerpt"; agentId: string; turns: number }
   | { op: "agents" }
 export type LiveRequest = { protocol: typeof REQUEST_PROTOCOL; requestId: string } & LiveOperation
@@ -45,6 +46,11 @@ export function parseLiveRequest(raw: unknown): LiveRequest {
       fields(["agentId", "text", "environment"], ["submissionId"])
       if (typeof v.text !== "string" || !v.text.length || Buffer.byteLength(v.text) > PROMPT_BYTES || !v.text.isWellFormed()) invalid("prompt text must be 1 to " + PROMPT_BYTES + " bytes of well-formed text")
       return { ...base, op: "prompt", agentId: agent(), text: v.text, environment: parseLaunchEnvironment(v.environment), ...optional(v, "submissionId", id) }
+    }
+    if (v.op === "set") {
+      fields(["agentId", "setting", "value"])
+      if (typeof v.value !== "boolean" && (typeof v.value !== "string" || !v.value.length || v.value.length > 1024)) invalid("value must be a string or a boolean")
+      return { ...base, op: "set", agentId: agent(), setting: name(v.setting, "setting"), value: v.value }
     }
     if (v.op === "excerpt") {
       fields(["agentId", "turns"])

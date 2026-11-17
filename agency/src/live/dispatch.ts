@@ -19,6 +19,7 @@ export async function dispatchLive(core: LiveCore, raw: unknown): Promise<LiveRe
       case "forget": result = await core.forget(request.agentId); break
       case "transcript": result = await core.transcript(request.agentId); break
       case "prompt": result = await core.prompt(request.agentId, request.text, request.environment, request.submissionId); break
+      case "set": result = { state: "agent", agent: await core.set(request.agentId, request.setting, request.value) }; break
       case "excerpt": result = await core.excerpt(request.agentId, request.turns); break
       case "agents": result = { state: "agents", handlerGeneration: core.handlerGeneration, agents: await core.agents() }; break
     }

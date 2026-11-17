@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises"
 import type { AgentIndex, IndexEntry } from "../agent/agent-index.js"
-import { codexSessionFiles, liveExcerpt, sessionExcerpt, sessionFile, sessionSummary, sessionTranscript, type ConversationExcerpt, type ExcerptTurn, type SessionHomes, type SessionRef } from "../agent/excerpt.js"
+import { codexSessionFiles, liveExcerpt, sessionExcerpt, sessionFile, sessionSettings, sessionSummary, sessionTranscript, type ConversationExcerpt, type RecordedSettings, type ExcerptTurn, type SessionHomes, type SessionRef } from "../agent/excerpt.js"
 import type { ProviderId } from "../catalog/types.js"
 import type { Activity, LiveAgent, LiveTable } from "./state.js"
 
@@ -8,7 +8,7 @@ export type LiveRow = { activity: Activity; handlerGeneration: string; providerG
 export type RosterRow = { agentId: string; backendId: ProviderId; cwd: string; createdAt: string; title: string | null; lastActivityAt: string | null; live: LiveRow | null }
 export type History = { title: string | null; lastActivityAt: string | null }
 export type Transcript = { state: "transcript"; agentId: string; turns: ExcerptTurn[]; truncated: boolean; reason: string | null }
-export type Roster = { entry(agentId: string): Promise<IndexEntry | null>; sessionPath(entry: IndexEntry): Promise<string | null>; changed(sessionId: string): void; rows(table: LiveTable): Promise<RosterRow[]>; row(table: LiveTable, agentId: string): Promise<RosterRow | null>; excerpt(table: LiveTable, agentId: string, turns: number): Promise<ConversationExcerpt | null>; transcript(agentId: string): Promise<Transcript | null> }
+export type Roster = { entry(agentId: string): Promise<IndexEntry | null>; sessionPath(entry: IndexEntry): Promise<string | null>; recorded(entry: IndexEntry): Promise<RecordedSettings>; changed(sessionId: string): void; rows(table: LiveTable): Promise<RosterRow[]>; row(table: LiveTable, agentId: string): Promise<RosterRow | null>; excerpt(table: LiveTable, agentId: string, turns: number): Promise<ConversationExcerpt | null>; transcript(agentId: string): Promise<Transcript | null> }
 
 export function currentSettings(agent: LiveAgent): { model: string | null; mode: string | null } {
   let snapshot
@@ -28,8 +28,8 @@ export function liveRow(table: LiveTable, agent: LiveAgent, history?: History): 
 const order = (a: RosterRow, b: RosterRow): number => (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "") || b.createdAt.localeCompare(a.createdAt) || a.agentId.localeCompare(b.agentId)
 
 export function createRoster(input: { index: AgentIndex; homes: SessionHomes }): Roster {
-  type Summary = { key: string; history: History }
-  const summaries = new Map<string, Summary>(), missed = new Set<string>(), empty = { history: { title: null, lastActivityAt: null } }
+  type Summary = { key: string; history: History; settings: RecordedSettings }
+  const summaries = new Map<string, Summary>(), missed = new Set<string>(), empty = { history: { title: null, lastActivityAt: null }, settings: { model: null, mode: null } }
   let codexFiles: Map<string, string> | undefined
   const ref = (entry: IndexEntry): SessionRef => ({ backendId: entry.backendId, cwd: entry.cwd, sessionId: entry.nativeSessionId })
   async function files(entries: IndexEntry[]): Promise<Map<string, string>> {
@@ -53,8 +53,8 @@ export function createRoster(input: { index: AgentIndex; homes: SessionHomes }):
     if (!path || !info) { summaries.delete(entry.agentId); return empty }
     const key = path + ":" + info.mtimeMs + ":" + info.size, cached = summaries.get(entry.agentId)
     if (cached?.key === key) return cached
-    const read = await sessionSummary(ref(entry), input.homes, codex ?? new Map([[entry.nativeSessionId, path]])).catch(() => ({ title: null, modifiedAt: null }))
-    const value = { key, history: { title: read.title, lastActivityAt: read.modifiedAt } }
+    const [read, settings] = await Promise.all([sessionSummary(ref(entry), input.homes, codex ?? new Map([[entry.nativeSessionId, path]])).catch(() => ({ title: null, modifiedAt: null })), sessionSettings(path, entry.backendId).catch(() => empty.settings)])
+    const value = { key, history: { title: read.title, lastActivityAt: read.modifiedAt }, settings }
     summaries.set(entry.agentId, value)
     return value
   }
@@ -70,6 +70,7 @@ export function createRoster(input: { index: AgentIndex; homes: SessionHomes }):
   const entry = async (agentId: string): Promise<IndexEntry | null> => (await input.index.list()).find(value => value.agentId === agentId) ?? null
   return {
     entry, sessionPath: locate, rows,
+    async recorded(found) { return (await summary(found)).settings },
     changed(sessionId) { missed.delete(sessionId) },
     async row(table, agentId) { return (await rows(table)).find(row => row.agentId === agentId) ?? null },
     async excerpt(table, agentId, turns) {
