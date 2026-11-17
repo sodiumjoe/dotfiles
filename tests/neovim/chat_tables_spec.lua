@@ -52,6 +52,21 @@ describe("Chat tables", function()
         error("missing chat line: " .. text)
     end
 
+    it("keeps drawing tables after a scheduled update is dropped", function()
+        settle()
+        local schedule = vim.schedule
+        vim.schedule = function() end
+        local ok, err = pcall(function()
+            say("First:\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n")
+            vim.treesitter.get_parser(buf, "markdown"):parse()
+        end)
+        vim.schedule = schedule
+        assert(ok, err)
+        say("Second:\n\n| C | D |\n|---|---|\n| 3 | 4 |\n\nDone.")
+        settle()
+        assert.are.equal(2, #grids())
+    end)
+
     it("draws a table in an agent message as a grid hanging from the line above", function()
         say("Results:\n\n| Name | Value |\n|---|---|\n| alpha | 1 |\n\nDone.")
         settle()

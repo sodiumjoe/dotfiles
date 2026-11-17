@@ -1,5 +1,6 @@
 local Layout = require("sodium.table_layout")
 local M = {}
+local schedule = vim.schedule
 
 local ns = vim.api.nvim_create_namespace("sodium_chat_tables")
 local tool_ns = vim.api.nvim_create_namespace("agentic_tool_blocks")
@@ -159,7 +160,7 @@ function M.changed(buf, parser, changes)
     for _, change in ipairs(changes) do state.dirty[#state.dirty + 1] = { change[1], change[4] } end
     if state.scheduled then return end
     state.scheduled = true
-    vim.schedule(function() require("sodium.chat_tables").update(buf) end)
+    schedule(function() require("sodium.chat_tables").update(buf) end)
 end
 
 function M.attach(buf)
@@ -200,7 +201,7 @@ function M.setup()
                     local state = states[buf]
                     if state and not state.resizing then
                         state.resizing = true
-                        vim.schedule(function()
+                        schedule(function()
                             state.resizing = false
                             require("sodium.chat_tables").relayout(buf)
                         end)
