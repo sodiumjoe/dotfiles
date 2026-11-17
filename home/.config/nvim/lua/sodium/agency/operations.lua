@@ -48,7 +48,7 @@ function M.new(deps)
                 end
             )
         end
-    local epoch, active, pending, sequence, api = 0, nil, {}, 0, {}
+    local epoch, pending, sequence, api = 0, {}, 0, {}
     local current_origin
     local function begin(cwd, origin)
         epoch = epoch + 1
@@ -88,7 +88,6 @@ function M.new(deps)
                     if not vim.deep_equal(tuple_of(row), target) then callback(error_value("STALE_PROVIDER")); return end
                     vim.api.nvim_set_current_tabpage(origin.tab)
                     local manager = (deps.open or require("sodium.agency.agentic").open)(row)
-                    active = manager
                     manager:on_session_ready(function()
                         if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
                         callback(nil, manager)
@@ -179,7 +178,6 @@ function M.new(deps)
                 end
                 vim.api.nvim_set_current_tabpage(origin.tab)
                 local manager = (deps.open or require("sodium.agency.agentic").open)(view)
-                active = manager
                 manager:on_session_ready(function()
                     if valid_operation(operation) then callback(nil, manager) else callback(error_value("CANCELLED")) end
                 end)
@@ -194,17 +192,6 @@ function M.new(deps)
     function api.attach(target, callback, origin)
         local operation = begin(nil, origin)
         attach(vim.deepcopy(target), callback, operation, vim.deepcopy(current_origin))
-    end
-    function api.load(row, callback, origin)
-        begin(nil, origin)
-        vim.api.nvim_set_current_tabpage(current_origin.tab)
-        local ok, manager = pcall(deps.open or require("sodium.agency.agentic").open, row, { force = true })
-        if not ok then
-            callback({ code = "FAILED", message = "Session " .. row.record.definition.agentId .. " was not restored: " .. tostring(manager) })
-            return
-        end
-        active = manager
-        callback(nil, manager)
     end
     function api.stop(target, callback, detail)
         local operation, cwd, exact = begin(), vim.fn.getcwd(), vim.deepcopy(target)
@@ -239,7 +226,6 @@ function M.new(deps)
     end
     function api.detach()
         begin()
-        active = nil
     end
     function api.in_flight()
         return vim.tbl_count(pending)
