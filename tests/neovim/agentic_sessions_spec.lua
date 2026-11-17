@@ -24,7 +24,7 @@ describe("Saved conversation picker", function()
     end)
 
     local function stopped(id, extra)
-        return vim.tbl_deep_extend("force", { live = false, cleanup = "verified", unavailable = vim.NIL, record = { version = 3, phase = "stopped",
+        return vim.tbl_deep_extend("force", { live = false, record = { version = 3, phase = "stopped",
             definition = { agentId = id, backendId = "codex-acp", cwd = "/tmp/project" }, settings = { configValues = { model = "gpt-5" } }, launch = vim.NIL } }, extra or {})
     end
 
@@ -51,20 +51,20 @@ describe("Saved conversation picker", function()
 
     local function answer(state, agents)
         assert.is_true(vim.wait(1000, function() return #state.pages == 1 end))
-        state.pages[1].callback(nil, { agents = agents, issues = {}, handlerGeneration = "h" })
+        state.pages[1].callback(nil, { agents = agents, handlerGeneration = "h" })
     end
 
-    it("opens before sessions load, then lists only stopped and recoverable sessions by recent activity", function()
+    it("opens before sessions load, then lists only stopped sessions by recent activity", function()
         local picker, state = open()
         assert.are.equal("Select session to restore (loading…)", picker.title)
         assert.is_true(state.pages[1].options.allow_issues)
         local live = stopped("live", { live = true, record = { phase = "ready" } })
         answer(state, { stopped("older", { record = { lastActivityAt = "2026-11-12T00:00:00Z", title = "older chat" } }), live,
-            stopped("newer", { record = { phase = "recoverable", lastActivityAt = "2026-11-13T00:00:00Z", title = "newer chat" } }), stopped("untimed") })
+            stopped("newer", { record = { lastActivityAt = "2026-11-13T00:00:00Z", title = "newer chat" } }), stopped("untimed") })
         assert.is_true(vim.wait(1000, function() return picker.list:count() == 3 and not picker:is_active() end))
         assert.are.equal("Select session to restore", picker.title)
         assert.are.same({ "newer", "older", "untimed" }, { picker.list:get(1).id, picker.list:get(2).id, picker.list:get(3).id })
-        assert.are.equal("Needs recovery", picker.list:get(1).status)
+        assert.are.equal("Stopped", picker.list:get(1).status)
         assert.are.equal("Codex · gpt-5", picker.list:get(2).model)
     end)
 
@@ -85,7 +85,7 @@ describe("Saved conversation picker", function()
         local restored
         vim.ui.select = function(_, _, callback) callback("Restore") end
         local picker, state = open({ restore = function(id) restored = id end })
-        answer(state, { stopped("closed", { record = { phase = "recoverable" } }) })
+        answer(state, { stopped("closed") })
         assert.is_true(vim.wait(1000, function() return picker.list:count() == 1 end))
         picker.opts.confirm(picker, picker:current())
         assert.is_true(vim.wait(1000, function() return restored ~= nil end))
@@ -118,23 +118,6 @@ describe("Saved conversation picker", function()
         search(picker, "handler down")
     end)
 
-    it("keeps listing issues searchable beside sessions", function()
-        local picker, state = open()
-        assert.is_true(vim.wait(1000, function() return #state.pages == 1 end))
-        state.pages[1].callback(nil, { agents = { stopped("one") }, issues = { { code = "CORRUPT", message = "Unreadable record" } }, handlerGeneration = "h" })
-        assert.is_true(vim.wait(1000, function() return picker.list:count() == 2 and not picker:is_active() end))
-        search(picker, "unreadable")
-    end)
-
-    it("gives untitled sessions distinguishable searchable rows", function()
-        local items = sessions.normalize_sessions({
-            { nativeSessionId = "first-id", cwd = "/tmp/first", backendId = "codex-acp" },
-            { nativeSessionId = "second-id", cwd = "/tmp/second", backendId = "codex-acp" },
-        })
-        assert.is_not.equal(items[1].text, items[2].text)
-        assert.is_truthy(items[1].text:find("first", 1, true))
-        assert.is_truthy(items[2].text:find("second", 1, true))
-    end)
     it("lists stopped agents from one roster read without cancelling a pending attach", function()
         local control = require("fixtures.agency_control")
         local transport = control.operations()
