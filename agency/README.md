@@ -54,7 +54,7 @@ An optional private `catalog/backends.json` overrides backend defaults. It uses 
 }
 ```
 
-Each native start samples the caller environment, and explicit restore captures it again. Environment values are transient and are not persisted. After merging backend defaults, the Handler overrides both `NVIM` and `NVIM_SOCKET_PATH` with a private editor RPC socket for that provider generation. Its path remains stable when editors attach or disconnect.
+Each native start samples the caller environment. A restore from the editor uses the environment its connection reported when it connected; `agy restore` samples its own. Environment values are transient and are not persisted. After merging backend defaults, the Handler overrides both `NVIM` and `NVIM_SOCKET_PATH` with a private editor RPC socket for that provider generation. Its path remains stable when editors attach or disconnect.
 
 Only configured, enabled, technically compatible backends are available. Codex and Claude are production backends. A Claude entry requires its enabled profile, backend, and exact compatible dependencies; saved history alone does not enable it. An existing explicit Codex-only `backends.json` must also include Claude with compatibility ID `claude-agent-acp-0.102`. Source builds do not restart a running Handler; stop its live sessions normally before restarting to load a newly added contract.
 
@@ -211,7 +211,7 @@ agy restart [--timeout SECONDS] [--json]
 
 `agy help --json` lists the exact commands and flags. `agy models` lists each backend's models, read once per Handler through the provider's own listing call and kept in memory. Native provider initialization validates the selected model and settings.
 
-The active picker requests `agency/roster` over the cached Agentic ACP connection. This query reads the Handler's memory. A cached display row does not authorize an action. The picker bounds readiness, requests, and full traversal, and reports connection failures without falling back to a fresh CLI process. An older running Handler must be restarted before it supports this endpoint.
+The pickers read the local agent list (`agency/roster`), a local agent's preview (`agency/excerpt`) and the model choices (`agency/backends`) over the cached Agentic ACP connection to the Handler, so they start no `agy` process for local rows. Restoring a stopped agent from the editor loads its session, which restores it in the Handler; a failed restore shows in the chat. A cached display row does not authorize an action. Remote rows, their previews and routed approvals still use `agy` until phase C. A Handler older than the editor answers the new request with an error that names it and asks for `:AgencyReload`.
 
 Status lazily starts or connects to one Handler. Doctor reads state without starting or cleaning up a Handler. Shutdown never starts one and ordinarily refuses active work; `--stop-agents` explicitly stops owned agents. A shutdown carries a command ID and the target Handler generation, so a retry joins the same shutdown and never stops a newer Handler.
 
