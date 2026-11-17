@@ -29,8 +29,6 @@ export type DoctorDiagnostic = {
   hostId: string
   paths: PlatformPaths
   handler: HandlerInspection | null
-  catalog: { commands: Array<{ id: string; state: string }>; issues: string[] }
-  issues: Array<{ source: "catalog"; path: string; message: string }>
 }
 export type ControlResult = HandlerStatus | { state: "shutdown_accepted"; commandId: string; handlerGeneration: string }
 export type ControlReply = { protocol: typeof PROTOCOL; requestId: string; handlerGeneration: string } & (

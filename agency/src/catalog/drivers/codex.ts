@@ -1,7 +1,6 @@
 import { normalizeCodex } from "../normalize.js"
-import type { ProbeResult } from "../probes.js"
 import { CatalogError, invalid, object, text } from "../types.js"
-import { jsonRpc, type DriverContext } from "./transport.js"
+import { jsonRpc, type DriverContext, type ProbeResult } from "./transport.js"
 import { DiscoveryError } from "../diagnostics.js"
 
 export async function discoverCodex(context: DriverContext): Promise<ProbeResult> {

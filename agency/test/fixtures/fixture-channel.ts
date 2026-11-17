@@ -14,7 +14,7 @@ type Report = { launch: FixtureLaunchResult; ownGroup: boolean; pipesClosed: boo
 type Snapshot = { failures: string[]; children: FixtureConnection[]; launches: Report[] }
 type Declaration = { connection: FixtureConnection; parent: string | null }
 type Source = { ref: LaunchRef; socket: Socket; pid: number; role: string; sequence: number; complete: boolean; sealed: boolean; launches: Set<string>; failures: Set<string>; ended: Promise<void>; sealWait?: ReturnType<typeof deferred<void>> }
-const sealRoles = new Set(["channel-prepared", "singleton-contender", "darwin-handler", "provider-tree", "darwin-identity-tree", "darwin-exec-tree", "agent-handler", "control-handler", "catalog-handler", "catalog-worker"])
+const sealRoles = new Set(["channel-prepared", "singleton-contender", "darwin-handler", "provider-tree", "darwin-identity-tree", "darwin-exec-tree", "agent-handler", "control-handler"])
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (reason: unknown) => void

@@ -1,11 +1,10 @@
-import type { CatalogService } from "../catalog/service.js"
 import type { LiveCore } from "../live/core.js"
 import { isDeepStrictEqual } from "node:util"
 import { ControlError, PROTOCOL, controlError, errorReply, type ControlRequest, type ControlReply, type HandlerStatus } from "../control/protocol.js"
 import type { PlatformPaths } from "../platform/paths.js"
 import type { HandlerGenerationRecord, PlatformAdapter } from "../platform/types.js"
 import { assertSameShutdown, readShutdownReceipt, writeShutdownReceipt, type ShutdownReceipt } from "./receipt.js"
-import { type HandlerMutations } from "./mutations.js"
+import type { MutationQueue } from "./mutations.js"
 
 type ShutdownRequest = ControlRequest & { op: "shutdown" }
 export type ShutdownContext = {
@@ -13,10 +12,9 @@ export type ShutdownContext = {
   state: HandlerStatus
   paths: PlatformPaths
   adapter: PlatformAdapter
-  mutations: HandlerMutations
+  queue: MutationQueue
   closeAfterReply(): Promise<void>
   publishReceipt?: typeof writeShutdownReceipt
-  catalog?: Pick<CatalogService, "freezeAndDrain" | "resume" | "verifyDischarged">
   agents?: Pick<LiveCore, "assertOrdinaryShutdownSafe" | "freezeIfIdle" | "freezeAndDrain" | "resume" | "verifyDischarged" | "prepareHandoff">
   accepted?: ShutdownReceipt
   pending?: { request: ShutdownRequest; operation: Promise<ShutdownReceipt>; deadline: number }
@@ -51,13 +49,8 @@ async function admit(request: ShutdownRequest, context: ShutdownContext, check: 
   return receipt
 }
 
-export async function drainHandlerServices(context: Pick<ShutdownContext, "agents" | "catalog">, stopAgents: boolean): Promise<void> {
-  const results = await Promise.allSettled([
-    Promise.resolve().then(() => context.agents?.freezeAndDrain(stopAgents)),
-    Promise.resolve().then(() => context.catalog?.freezeAndDrain()),
-  ])
-  const failures = results.filter(result => result.status === "rejected").map(result => result.reason)
-  if (failures.length) throw new AggregateError(failures, "Handler service drain failed")
+export async function drainHandlerServices(context: Pick<ShutdownContext, "agents">, stopAgents: boolean): Promise<void> {
+  await context.agents?.freezeAndDrain(stopAgents)
 }
 
 export async function shutdownHandler(request: ShutdownRequest, context: ShutdownContext): Promise<ControlReply> {
@@ -87,9 +80,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
         if (request.requireIdle && request.stopAgents) await context.agents?.prepareHandoff()
         await drainHandlerServices(context, request.stopAgents)
         check()
-        await context.catalog?.verifyDischarged()
-        check()
-        return context.mutations.queue.run(async () => {
+        return context.queue.run(async () => {
           check()
           try { await context.agents?.verifyDischarged() } catch { throw new ControlError("INCOMPLETE", "agent cleanup or command durability remains unverified") }
           check()
@@ -98,7 +89,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
       }).finally(() => {
         if (context.pending?.operation !== operation) return
         delete context.pending
-        if (context.accepted === undefined && context.state.phase === "ready") { context.catalog?.resume(); context.agents?.resume() }
+        if (context.accepted === undefined && context.state.phase === "ready") context.agents?.resume()
       })
       context.pending = { request, operation, deadline }
       receipt = await bounded(operation, deadline)

@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url"
 import { observeConfig } from "../src/catalog/config.js"
 import { configureLaunchContract, productionLaunchContracts } from "../src/agent/contracts.js"
 import { readBackendConfig } from "../src/agent/backend-config.js"
-import { backendSelection } from "../src/agent/backend-selection.js"
+import { backendChoice } from "../src/agent/backend-selection.js"
 
 test("production default qualifies Codex 2.6 and exposes selectable modes", async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "agency-codex-26-")))
@@ -26,7 +26,7 @@ test("production default qualifies Codex 2.6 and exposes selectable modes", asyn
   const evidence = await observeConfig(profile)
   const configured = await configureLaunchContract(declaration, profile, evidence)
   assert.equal(configured.adapterVersion, "2.6.0")
-  assert.deepEqual((backendSelection(backend, configured).settings as JsonObject[])[0]?.values, [{ value: "read-only", name: "read-only" }, { value: "agent", name: "agent" }, { value: "agent-full-access", name: "agent-full-access" }])
+  assert.deepEqual((backendChoice(backend, configured, { models: [], error: null }).settings as JsonObject[])[0]?.values, [{ value: "read-only", name: "read-only" }, { value: "agent", name: "agent" }, { value: "agent-full-access", name: "agent-full-access" }])
   await assert.rejects(configureLaunchContract(declaration, profile, { ...evidence, adapterVersion: "2.6.1" }), { code: "ADAPTER_UNQUALIFIED" })
 })
 

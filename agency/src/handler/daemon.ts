@@ -20,17 +20,13 @@ import { write } from "node:fs"
 import { createHandlerTermination, formatTerminationFailure } from "./termination.js"
 import { ControlError, PROTOCOL, errorReply, type HandlerStatus, type ControlRequest, type ControlReply } from "../control/protocol.js"
 import { serveProtocols } from "../control/wire.js"
-import { CATALOG_PROTOCOL, catalogErrorReply, type CatalogRequest, type CatalogReply } from "../catalog/protocol.js"
-import { createCatalogService, type CatalogService } from "../catalog/service.js"
-import { createCatalogStore, type CatalogStore } from "../catalog/store.js"
-import { createProbeRuntime } from "../catalog/probes.js"
 import { agencyLaunchMarker, exactAgencyBirth } from "../platform/launch-marker.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
 import { readHandlerRecord, writeHandlerRecord } from "../platform/private-state.js"
 import { sameProcess, type HandlerGenerationRecord, type PlatformAdapter, type ProcessIdentity } from "../platform/types.js"
 import { acpSocketPath, type PlatformPaths } from "../platform/paths.js"
 import { drainHandlerServices, shutdownHandler, type ShutdownContext } from "./shutdown.js"
-import { MutationQueue, type HandlerMutations } from "./mutations.js"
+import { MutationQueue } from "./mutations.js"
 import { consumeCleanShutdown, markCleanShutdownSync, openEventLog, type EventLog } from "./event-log.js"
 import { createAgentIndex } from "../agent/agent-index.js"
 import { migrateIndex } from "../agent/index-migration.js"
@@ -50,7 +46,6 @@ export type HandlerOptions = {
   status: Duplex
   gate: Duplex
   onPhase?: (phase: HandlerStatus["phase"]) => Promise<void>
-  catalogFactory?: (context: { paths: PlatformPaths; adapter: PlatformAdapter; mutations: HandlerMutations; generation: string; store: CatalogStore; isReady(): boolean; shutdownPending(): boolean }) => CatalogService
   liveDependencies?: LiveCoreDependencies
   launchContracts?: readonly LaunchContract[]
   entryDriver?: RuntimeEntryDriver
@@ -105,7 +100,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let server: Server | undefined, current: HandlerGenerationRecord | undefined, termination = false, closing = false
   const sockets = new Set<Socket>()
   let shutdown: ShutdownContext | undefined
-  let catalog: CatalogService | undefined
   let core: LiveCore | undefined
   let shapes: RemoteShapes | undefined
   let router: HostRouter | undefined
@@ -124,7 +118,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       () => bridge?.close(),
       () => acpServer?.close(),
       () => core?.close(),
-      () => catalog?.close(),
       () => { options.status.destroy() },
       () => { options.gate.destroy() },
       ...[...sockets].map(socket => () => { socket.destroy() }),
@@ -141,10 +134,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const terminate = createHandlerTermination({
     async drain() {
       const failures: unknown[] = []
-      try { await drainHandlerServices({ ...(core ? { agents: core } : {}), ...(catalog ? { catalog } : {}) }, true) } catch (error) { failures.push(error) }
+      try { await drainHandlerServices({ ...(core ? { agents: core } : {}) }, true) } catch (error) { failures.push(error) }
       const verified = await Promise.allSettled([
         Promise.resolve().then(() => core?.verifyDischarged()),
-        Promise.resolve().then(() => catalog?.verifyDischarged()),
       ])
       failures.push(...verified.filter(result => result.status === "rejected").map(result => result.reason))
       if (interruptedStartup) failures.push(new Error("Handler startup interrupted by signal"))
@@ -196,20 +188,13 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       if (request.op === "shutdown") return shutdown === undefined ? errorReply(request, new ControlError("INCOMPLETE", "Handler has not completed startup")) : shutdownHandler(request, shutdown)
       return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone({ ...state, issues: [...(state.issues ?? [])] }) }
     }
-    const dispatchCatalog = async (request: CatalogRequest): Promise<CatalogReply> => {
-      const bound = { ...request, handlerGeneration: options.generation }
-      if (request.handlerGeneration !== options.generation) return catalogErrorReply(bound, new ControlError("STALE_HANDLER"))
-      if (!catalog || state.phase !== "ready" || termination || closing) return catalogErrorReply(bound, new ControlError("INCOMPLETE", "Handler has not completed startup"))
-      try { return { protocol: CATALOG_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: request.op === "model_list" ? await catalog.list() : await catalog.refresh(request.commandId, request.handlerGeneration) } }
-      catch (error) { return catalogErrorReply(bound, error) }
-    }
     const ready = () => state.phase === "ready" && !closing && !termination
     const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => shapes && core ? dispatchRemoteRequest({ shapes, generation: options.generation, ready, failed: core.failed }, request) : Promise.resolve(agentErrorReply({ ...request, handlerGeneration: options.generation }, new AgentError("NOT_READY")))
     const dispatchRequest = async (raw: unknown): Promise<LiveReply> => core && state.phase === "ready" && !closing && !termination ? dispatchLive(core, raw) : liveErrorReply({ requestId: typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : randomUUID() }, new RequestError("UNAVAILABLE", "the Handler is not ready"))
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
-      void serveProtocols(socket, dispatch, dispatchCatalog, 5000, dispatchAgent, dispatchRequest).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
+      void serveProtocols(socket, dispatch, 5000, dispatchAgent, dispatchRequest).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
     })
     if (termination || closing) await new Promise<void>(resolve => server!.close(() => resolve()))
     checkStartup()
@@ -226,17 +211,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     let stopped = false
     recordStop = () => { if (stopped) return; stopped = true; events.appendSync({ type: "handler_stopped", generation: options.generation }); markCleanShutdownSync(root) }
     recordFailure = error => events.appendSync({ type: "handler_failed", generation: options.generation, message: String(error).slice(0, 512) })
-    const mutations: HandlerMutations = { queue: new MutationQueue(), accepted: [], root }
-    const catalogStore = createCatalogStore(root)
-    const catalogContext = { paths: options.paths, adapter: options.adapter, mutations, generation: options.generation, store: catalogStore, isReady: () => state.phase === "ready" && !closing && !termination, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
-    if (options.catalogFactory) catalog = options.catalogFactory(catalogContext)
-    else {
-      const store = catalogStore
-      const probes = createProbeRuntime({ ...catalogContext, queue: mutations.queue, store, canStart: () => catalogContext.isReady() && !catalogContext.shutdownPending() })
-      catalog = createCatalogService({ ...catalogContext, queue: mutations.queue, store, probes })
-    }
-    await catalog.initialize()
-    checkStartup()
+    const queue = new MutationQueue()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     const agentIndex = createAgentIndex(root)
     const migrate = () => migrateIndex({ root, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
@@ -272,7 +247,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     checkStartup()
-    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, mutations, closeAfterReply: close, catalog, agents: core }
+    shutdown = { record: current, state, paths: options.paths, adapter: options.adapter, queue, closeAfterReply: close, agents: core }
     state.phase = "ready"
     await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     void core?.resumeHandoff(destinationEnvironment(process.env)).catch(() => undefined)

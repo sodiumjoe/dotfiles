@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events"
 import type { OwnedChild } from "../../runtime/owned-child.js"
 import { Writable, type Readable } from "node:stream"
-import type { ProbeRequest } from "../probes.js"
-import { CatalogError, invalid, object } from "../types.js"
+import { CatalogError, invalid, object, type Model, type ProviderProfile } from "../types.js"
 import { DiscoveryError, type ProbeStage } from "../diagnostics.js"
 
+export type ProbeRequest = { profile: ProviderProfile; workPath: string }
+export type ProbeResult = { models: Model[]; providerVersion: string | null; providerVersionSource: "reported" | "unknown" }
 export type RegisteredChild = { stdin: Writable; stdout: Readable; terminal: Promise<void>; requestCleanup(): void }
 export type DriverContext = { request: ProbeRequest; signal: AbortSignal; spawnNative(file: string, args: readonly string[]): RegisteredChild }
 export class NativeFacade extends EventEmitter implements RegisteredChild {

@@ -6,7 +6,6 @@ import type { HostRoute } from "../hosts/router.js"
 import type { createHostInventory } from "../hosts/inventory.js"
 import { randomUUID } from "node:crypto"
 import { runRestart } from "./restart.js"
-import { createCatalogStore } from "../catalog/store.js"
 import { createConnection } from "node:net"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -138,7 +137,6 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
       generation = handler?.record.generation ?? null
-      const catalog = await createCatalogStore(env.paths.persistentRoot).inventory()
       let runtimeIssues: DoctorDiagnostic["runtimeIssues"]
       if (handler?.disposition === "live" && handler.record.phase === "ready") {
         try {
@@ -149,8 +147,6 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
       const result: DoctorDiagnostic = {
         ...(runtimeIssues ? { runtimeIssues } : {}),
         node: process.versions.node, platform: env.adapter.platform, hostId: env.paths.hostKey, paths: env.paths, handler,
-        catalog: { commands: catalog.commands.map(command => ({ id: command.commandId, state: command.state })), issues: catalog.issues },
-        issues: [...catalog.issues.map(issue => ({ source: "catalog" as const, path: join(env.paths.persistentRoot, issue === "catalog" ? issue : join("catalog", issue)), message: issue }))],
       }
       emit(true, result)
       return 0

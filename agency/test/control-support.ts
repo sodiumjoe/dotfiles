@@ -119,18 +119,9 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
       },
     })
   }
-  const verifyCatalogCleanup = async (): Promise<void> => {
-    try {
-      const evidence = JSON.parse(await readFile(join(root, "catalog-cleanup-failure.json"), "utf8"))
-      throw failFixtureBatch(Object.assign(new Error(`unverified Handler catalog cleanup; retained ${root}`), { evidence }))
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw failFixtureBatch(error)
-    }
-  }
   let cleanupOperation: Promise<void> | undefined
   const cleanup = (): Promise<void> => cleanupOperation ??= (async () => {
     await Promise.allSettled(starts)
-    await verifyCatalogCleanup()
     assertFixtureBatchHealthy()
     for (const barrier of cleanupBarriers) await barrier()
     for (const launch of registrations()) {
@@ -140,7 +131,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
         await shutdownOwnedHandler(accepted.current)
         continue
       }
-      const owning = ["agent-handler", "control-handler", "catalog-worker"].includes(launch.role)
+      const owning = ["agent-handler", "control-handler"].includes(launch.role)
       await signalFixturePid(launch.pid, "SIGTERM", owning)
       const deadline = Date.now() + 1000
       while (await observe(launch.pid) !== null && Date.now() < deadline) await delay(25)
@@ -191,10 +182,7 @@ export async function controlFixture(t: TestContext, overrides: Omit<ControlFixt
         if (identity) owned.push(identity)
       }
       await hook?.(transition)
-    } }, dependencies)).then(async result => { await verifyCatalogCleanup(); return result }, async error => {
-      await verifyCatalogCleanup()
-      throw error
-    })
+    } }, dependencies))
     starts.push(operation)
     void operation.catch(error => failedStarts.push(error))
     return operation

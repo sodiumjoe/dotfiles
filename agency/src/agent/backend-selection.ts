@@ -1,12 +1,8 @@
-import type { ProviderView } from "../catalog/service.js"
 import type { Model } from "../catalog/types.js"
 import type { Backend } from "./backend-config.js"
 import type { LaunchContract } from "./contracts.js"
 import type { JsonObject, RequestedSettings } from "./session-config.js"
 
-export function backendSelection(backend: Backend, contract: LaunchContract, provider?: ProviderView): JsonObject {
-  return choice(backend, contract, provider?.models ?? [], !provider ? "unavailable" : provider.freshness === "fresh" && !provider.refreshIssue ? "fresh" : "cached", provider?.error?.message ?? provider?.refreshIssue?.message ?? null)
-}
 
 export function backendChoice(backend: Backend, contract: LaunchContract, listing: { models: Model[]; error: string | null }): JsonObject {
   return choice(backend, contract, listing.models, listing.error ? "unavailable" : "fresh", listing.error)

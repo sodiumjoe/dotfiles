@@ -94,7 +94,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     return agent.owner.respond(requestId, result)
   } })
   permissions.subscribe(event => { if (event.kind === "receipt" && event.receipt.state === "applied") events?.append({ type: "permission_decided", agentId: event.receipt.ref.target.agentId, optionId: event.receipt.optionId }) })
-  let frozen = false, closed = false, handingOff = false, handoffStopped = false, handoff: { fromGeneration: string; agents: HandoffAgent[]; pending: Set<string>; failed: Map<string, RequestFailure> } | undefined
+  let frozen = false, closed = false, handingOff = false, handoff: { fromGeneration: string; agents: HandoffAgent[]; pending: Set<string>; failed: Map<string, RequestFailure> } | undefined
 
   const missing = (agentId: string): RequestError => new RequestError("NOT_FOUND", "agent " + agentId + " is not known on this host")
   const available = (): void => {
@@ -368,7 +368,6 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       if (!stopAgents) { ordinary(); frozen = true; return }
       frozen = true
       await Promise.all([...admissions.values()])
-      if (table.all().length) handoffStopped = handingOff
       await Promise.allSettled(table.all().map(agent => stopping(agent, "shutdown")))
       if (table.all().length) throw new AgentError("INCOMPLETE")
     },
@@ -380,7 +379,6 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       }
       await writeHandoff(root, { version: 1, handlerGeneration: generation, bootId, writtenAt: new Date().toISOString(), agents })
       handingOff = true
-      handoffStopped = false
       events?.append({ type: "handoff_written", agents: agents.map(agent => agent.agentId) })
     },
     async loadHandoff() {
@@ -423,8 +421,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       frozen = false
       if (!handingOff) return
       handingOff = false
-      if (handoffStopped) events?.append({ type: "handoff_kept", reason: "the shutdown failed after agents were stopped" })
-      else void removeHandoff(root).catch(() => undefined)
+      void removeHandoff(root).catch(() => undefined)
     },
     async verifyDischarged() { if (table.all().length || admissions.size) throw new AgentError("INCOMPLETE") },
     close() {

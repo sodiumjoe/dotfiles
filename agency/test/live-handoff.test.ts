@@ -98,19 +98,9 @@ test("a handoff from another boot or older than ten minutes is ignored, and a ba
   await f.verifyZeroSurvivors()
 })
 
-test("an unreadable handoff file restores nothing, and a handoff whose drain fails after stopping agents is kept for the next start", async t => {
+test("an unreadable handoff file restores nothing", async t => {
   const f = await liveHandlerFixture(t), first = await f.start(), second = await f.start()
   await f.prompt(first.agentId, "hello"); await f.prompt(second.agentId, "hello")
-  await writeFile(join(f.root, "fail-catalog-drain"), "fail", { mode: 0o600 })
-  assert.equal((await f.handoff()).ok, false)
-  assert.equal(await exists(join(f.paths.persistentRoot, "handoff.json")), true)
-  assert.deepEqual([...(await live(f)).values()].map(row => row.live), [null, null])
-  assert.ok((await f.events()).some(event => event.type === "handoff_kept"))
-  await rm(join(f.root, "fail-catalog-drain"))
-  await f.stopHandler()
-  await f.restart()
-  assert.deepEqual((await f.settledHandoff()).agents.sort(), [first.agentId, second.agentId].sort())
-  assert.deepEqual([...(await live(f)).values()].map(row => row.live?.activity), ["idle", "idle"])
   await f.stopHandler()
   await writeFile(join(f.paths.persistentRoot, "handoff.json"), "{not json", { mode: 0o600 })
   await f.restart()

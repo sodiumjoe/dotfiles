@@ -7,7 +7,6 @@ import { runHandler } from "../../src/handler/daemon.js"
 import { createAgentProcess } from "../../src/agent/process.js"
 import { AgentError } from "../../src/agent/types.js"
 import type { LaunchContract } from "../../src/agent/contracts.js"
-import { createCatalogService } from "../../src/catalog/service.js"
 import { createDarwinAdapter } from "../../src/platform/darwin.js"
 import { createLinuxAdapter } from "../../src/platform/linux.js"
 import type { PlatformPaths } from "../../src/platform/paths.js"
@@ -26,10 +25,6 @@ try {
   await runHandler({ paths: config.paths, adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(), recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }),
     launchContracts: [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }],
-    catalogFactory: context => {
-      const service = createCatalogService({ ...context, queue: context.mutations.queue, probes: { verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })
-      return { ...service, async freezeAndDrain() { if (await readFile(join(root, "fail-catalog-drain")).then(() => true, () => false)) throw new Error("fixture catalog drain failure"); await service.freezeAndDrain() } }
-    },
     liveDependencies: { processFactory: options => unverifiedCleanup(createAgentProcess(options, { spawn: ((file, argv, settings) => spawnFixture("agent-provider/" + options.spec.launchAttemptId, file, argv ?? [], settings ?? {})) as typeof spawn })),
       modelSource: async profile => [{ providerId: profile.id, modelId: "model-a", resolvedModelId: null, displayName: "Model A", reasoning: { state: "values", values: ["high", "low"] }, modes: { state: "unknown" }, availability: "advertised" }] } })
 } catch (error) {

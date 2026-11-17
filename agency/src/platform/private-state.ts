@@ -6,14 +6,7 @@ import { isDeepStrictEqual } from "node:util"
 import {
   RUNTIME_RECORD_VERSION,
   type HandlerGenerationRecord,
-  type LaunchPhase,
-  type LaunchRecord,
-  type LaunchOwner,
-  type ManagedLaunchRecord,
-  type LegacyLaunchRecord,
-  type ProcessGroupProviderIdentity,
   type ProcessIdentity,
-  type ProviderIdentity,
 } from "./types.js"
 
 const MAX_RECORD_BYTES = 1024 * 1024
@@ -78,76 +71,6 @@ function processIdentity(value: unknown, name: string): ProcessIdentity {
     uid: integer(source.uid, `${name}.uid`),
     gid: integer(source.gid, `${name}.gid`),
   }
-}
-
-function identities(value: unknown, name: string): ProcessIdentity[] {
-  if (!Array.isArray(value)) throw new Error(`${name} must be an array`)
-  return value.map((entry, index) => processIdentity(entry, `${name}[${index}]`))
-}
-
-function providerIdentity(value: unknown): ProviderIdentity | null {
-  if (value === null) return null
-  const source = object(value, "provider")
-  if (source.kind === "process-group") {
-    exactKeys(source, ["kind", "group"], "provider")
-    const group = object(source.group, "provider.group")
-    exactKeys(group, ["leader", "observed"], "provider.group")
-    return {
-      kind: "process-group",
-      group: {
-        leader: processIdentity(group.leader, "provider.group.leader"),
-        observed: identities(group.observed, "provider.group.observed"),
-      },
-    } satisfies ProcessGroupProviderIdentity
-  }
-  throw new Error("provider.kind is invalid")
-}
-
-function launchPhase(value: unknown): LaunchPhase {
-  if (value === "launch_pending" || value === "readiness" || value === "active" || value === "exited_unverified" || value === "cleanup_pending" || value === "cleanup_verified" || value === "quarantined") return value
-  throw new Error("launch phase is invalid")
-}
-
-export function parseLaunchRecord(value: unknown, strict: boolean): LaunchRecord {
-  const source = object(value, "LaunchRecord")
-  const fields = {
-    handlerGeneration: nonempty(source.handlerGeneration, "handlerGeneration"),
-    launchAttemptId: nonempty(source.launchAttemptId, "launchAttemptId"),
-    launchBootId: nonempty(source.launchBootId, "launchBootId"),
-    launchAttempted: boolean(source.launchAttempted, "launchAttempted"),
-    phase: launchPhase(source.phase),
-    provider: providerIdentity(source.provider),
-    reason: nullableString(source.reason, "reason"),
-  }
-  let record: LaunchRecord
-  if (source.version === 1) {
-    exactKeys(source, ["version", "checkoutId", "leaseId", "agentId", "handlerGeneration", "launchAttemptId", "launchBootId", "launchAttempted", "phase", "provider", "reason"], "LaunchRecord")
-    record = { version: 1, checkoutId: nonempty(source.checkoutId, "checkoutId"), leaseId: nonempty(source.leaseId, "leaseId"), agentId: nonempty(source.agentId, "agentId"), ...fields } satisfies LegacyLaunchRecord
-  } else if (source.version === 2) {
-    exactKeys(source, ["version", "owner", "handlerGeneration", "launchAttemptId", "launchBootId", "launchAttempted", "phase", "provider", "reason"], "LaunchRecord")
-    const owner = object(source.owner, "owner")
-    let parsed: LaunchOwner
-    if (owner.kind === "agent") {
-      exactKeys(owner, ["kind", "agentId", "providerGeneration"], "owner")
-      parsed = { kind: "agent", agentId: nonempty(owner.agentId, "owner.agentId"), providerGeneration: nonempty(owner.providerGeneration, "owner.providerGeneration") }
-    } else if (owner.kind === "catalog-probe") {
-      exactKeys(owner, ["kind", "providerId", "commandId"], "owner")
-      if (owner.providerId !== "claude-agent-acp" && owner.providerId !== "codex-acp") throw new Error("owner.providerId is invalid")
-      parsed = { kind: "catalog-probe", providerId: owner.providerId, commandId: nonempty(owner.commandId, "owner.commandId") }
-    } else throw new Error("owner.kind is invalid")
-    record = { version: 2, owner: parsed, ...fields } satisfies ManagedLaunchRecord
-  } else throw new Error("record version must be 1 or 2")
-  if (strict) assertLaunchSemantics(record)
-  return record
-}
-
-function assertLaunchSemantics(record: LaunchRecord): void {
-  if (!record.launchAttempted && record.provider !== null && record.phase !== "quarantined") throw new Error("an unattempted launch record cannot have a provider")
-  if ((record.phase === "readiness" || record.phase === "active") && record.provider === null) throw new Error(`${record.phase} requires a provider`)
-  if (record.phase === "exited_unverified" && !record.launchAttempted) throw new Error("exited_unverified requires an attempted launch")
-  if (record.phase === "cleanup_pending" && (!record.launchAttempted || record.provider === null)) throw new Error("cleanup_pending requires an attempted launch and provider identity")
-  if ((record.phase === "exited_unverified" || record.phase === "quarantined") && record.reason === null) throw new Error(`${record.phase} requires a nonempty reason`)
-  if (record.phase !== "exited_unverified" && record.phase !== "quarantined" && record.reason !== null) throw new Error(`${record.phase} cannot have a reason`)
 }
 
 function parseReconciliation(value: unknown): HandlerGenerationRecord["reconciliation"] {
@@ -286,22 +209,6 @@ async function publish(path: string, value: unknown, expected?: Buffer, filesyst
     try { await filesystem.rm(temporary, { force: true }) } catch {}
     throw new PrivateStatePublicationError(error)
   }
-}
-
-export async function readLaunchRecord(path: string): Promise<LaunchRecord> {
-  return parseLaunchRecord(await readJson(path), true)
-}
-
-export async function readLaunchRecordForReconciliation(path: string): Promise<LaunchRecord> {
-  return parseLaunchRecord(await readJson(path), false)
-}
-
-export async function writeLaunchRecord(path: string, record: LaunchRecord): Promise<void> {
-  await publish(path, parseLaunchRecord(record, true))
-}
-
-export async function writeLaunchRecordExpected(path: string, record: LaunchRecord, expected: Buffer, filesystem?: PrivateStateFileSystem, guard?: PublicationGuard): Promise<void> {
-  await publish(path, parseLaunchRecord(record, true), expected, filesystem, guard)
 }
 
 export async function readHandlerRecord(path: string): Promise<HandlerGenerationRecord> {

@@ -8,10 +8,9 @@ import { spawn } from "node:child_process"
 import { once } from "node:events"
 import { adapterEntry, observeConfig, readProfiles, sdkEntry } from "../src/catalog/config.js"
 import { readBackendConfig } from "../src/agent/backend-config.js"
-import { backendSelection } from "../src/agent/backend-selection.js"
+import { backendChoice } from "../src/agent/backend-selection.js"
 import { configureLaunchContract, productionLaunchContracts } from "../src/agent/contracts.js"
-import type { ProviderProfile } from "../src/catalog/types.js"
-import type { ProviderView } from "../src/catalog/service.js"
+import type { Model, ProviderProfile } from "../src/catalog/types.js"
 import type { JsonObject } from "../src/agent/session-config.js"
 import { createAcpConnection } from "../src/agent/acp.js"
 import { AGENT_LIMITS } from "../src/agent/types.js"
@@ -81,8 +80,8 @@ test("Claude model choices use native model and effort configuration", async t =
   await profiles([profile])
   const backend = (await readBackendConfig(root)).backends[0]!
   const contract = productionLaunchContracts().find(contract => contract.id === backend.compatibilityId)!
-  const provider: ProviderView = { providerId: profile.id, fingerprint: null, verifiedAt: 1, verifiedHandlerGeneration: null, providerVersion: null, providerVersionSource: "unknown", adapterVersion: "0.102.0", sdkVersion: "0.3.321", error: null, state: "ready", freshness: "fresh", models: [{ providerId: profile.id, modelId: "opus", resolvedModelId: null, displayName: "Opus", reasoning: { state: "values", values: ["low", "high"] }, modes: { state: "unknown" }, availability: "advertised" }] }
-  const model = (backendSelection(backend, contract, provider).models as JsonObject[])[0]!
+  const models: Model[] = [{ providerId: profile.id, modelId: "opus", resolvedModelId: null, displayName: "Opus", reasoning: { state: "values", values: ["low", "high"] }, modes: { state: "unknown" }, availability: "advertised" }]
+  const model = (backendChoice(backend, contract, { models, error: null }).models as JsonObject[])[0]!
   assert.deepEqual(model.selection, { configValues: { model: "opus" } })
   assert.deepEqual(model.settings, [{ id: "effort", name: "Reasoning effort", kind: "config", values: [{ value: "low", name: "low" }, { value: "high", name: "high" }] }])
 })

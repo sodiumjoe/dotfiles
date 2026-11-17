@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { digest } from "../catalog/config.js"
 import { absolutePath, id, keys, object, type ProviderId } from "../catalog/types.js"
-import type { LaunchEvidence } from "../catalog/service.js"
-import { resolveLaunchSpec, type ConfiguredLaunchContract } from "./contracts.js"
 import { AgentError, type AgentView, type LegacyAgentView, type StartSelection } from "./types.js"
 import type { AgentStateIssue } from "./types.js"
 
@@ -21,20 +19,6 @@ export function parsePageInput(input: unknown): PageInput {
     if (Object.hasOwn(v, "cursor") && (typeof v.cursor !== "string" || !/^[A-Za-z0-9_-]+$/.test(v.cursor) || v.cursor.length > CURSOR_BYTES)) throw new Error()
     return { limit: v.limit as number, ...(Object.hasOwn(v, "cursor") ? { cursor: v.cursor as string } : {}), ...(Object.hasOwn(v, "cwd") ? { cwd: absolutePath(v.cwd) } : {}), ...(Object.hasOwn(v, "activeOnly") ? { activeOnly: v.activeOnly as boolean } : {}) }
   } catch { throw new AgentError("INVALID_PROTOCOL") }
-}
-export function launchChoices(evidence: LaunchEvidence, contract: ConfiguredLaunchContract, hostId: string, generation: string): LaunchChoice[] {
-  const choices: LaunchChoice[] = []
-  const modes = contract.modes.state === "values" ? contract.modes.values : contract.effectiveMode ? [contract.effectiveMode] : []
-  const reasonings = contract.reasoning.state === "values" ? contract.reasoning.values.map(value => ({ kind: "value" as const, value })) : contract.reasoning.state === "none" ? [{ kind: "none" as const }] : []
-  for (const model of evidence.provider.models) for (const reasoning of reasonings) for (const mode of modes) for (const permissionProfile of contract.permissionProfiles) {
-    const selection: StartSelection = { providerId: contract.providerId, modelId: model.modelId, reasoning, mode, permissionProfile }
-    try {
-      const spec = resolveLaunchSpec({ ids: { hostId, handlerGeneration: evidence.provider.verifiedHandlerGeneration!, agentId: randomUUID(), providerGeneration: randomUUID(), launchAttemptId: randomUUID(), commandId: randomUUID() }, cwd: "/", selection, snapshotId: evidence.snapshotId, provider: evidence.provider, configuration: evidence.configuration, contract })
-      choices.push({ displayName: model.displayName, selection: structuredClone(spec.selection), snapshotId: evidence.snapshotId, contractFingerprint: contract.fingerprint })
-    } catch (error) { if (!(error instanceof AgentError) || !["MODEL_UNAVAILABLE", "INVALID_AGENT_STATE", "SELECTION_UNSUPPORTED"].includes(error.code)) throw error }
-    if (choices.length > 4096 || Buffer.byteLength(JSON.stringify(choices)) > QUERY_BYTES) throw new AgentError("INCOMPLETE")
-  }
-  return choices
 }
 export function inventoryPage(state: { revision: string; agents: Array<AgentView | LegacyAgentView>; issues: AgentStateIssue[] }, raw: PageInput): AgentPage {
   const input = parsePageInput(raw), filters = digest(JSON.stringify([input.cwd ?? null, input.activeOnly ?? false]))

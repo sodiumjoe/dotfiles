@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { observeConfig, parseProfile } from "../catalog/config.js"
+import { parseProfile } from "../catalog/config.js"
 import { DiscoveryError } from "../catalog/diagnostics.js"
 import { NativeFacade, type DriverContext, type RegisteredChild } from "../catalog/drivers/transport.js"
 import type { Model, ProviderProfile } from "../catalog/types.js"
@@ -15,7 +15,6 @@ const environment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fro
 export async function listProviderModels(profile: ProviderProfile, signal: AbortSignal): Promise<Model[]> {
   const workPath = await mkdtemp(join(tmpdir(), "agency-models-")), children: RegisteredChild[] = []
   try {
-    const evidence = await observeConfig(profile)
     const spawnNative = (file: string, args: readonly string[]): RegisteredChild => {
       const owner = spawnOwnedChild({ launchAttemptId: randomUUID(), spawn: () => spawn(file, [...args], { cwd: workPath, env: environment(process.env), stdio: ["pipe", "pipe", "pipe"], detached: false, shell: false }) })
       owner.child.stderr?.resume()
@@ -23,7 +22,7 @@ export async function listProviderModels(profile: ProviderProfile, signal: Abort
       children.push(child)
       return child
     }
-    const context: DriverContext = { signal, spawnNative, request: { profile, evidence, meta: { version: 2, hostId: "0".repeat(64), handlerGeneration: randomUUID(), commandId: randomUUID(), providerId: profile.id, attemptId: randomUUID(), fingerprint: evidence.fingerprint, workPath } } }
+    const context: DriverContext = { signal, spawnNative, request: { profile, workPath } }
     const result = profile.id === "claude-agent-acp" ? await (await import("../catalog/drivers/claude.js")).discoverClaude(context) : await (await import("../catalog/drivers/codex.js")).discoverCodex(context)
     return result.models
   } finally {

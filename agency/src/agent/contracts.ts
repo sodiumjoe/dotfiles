@@ -66,22 +66,3 @@ export async function configureLaunchContract(input: LaunchContract, profile: Pr
     return { ...configured, fingerprint: launchContractFingerprint(configured, configuration.fingerprint) }
   } catch { throw new AgentError("ADAPTER_UNQUALIFIED") }
 }
-
-export function resolveLaunchSpec(input: { ids: AgentIds; selection: StartSelection; cwd: string; snapshotId: string; provider: ProviderSnapshot; configuration: ConfigEvidence; contract: ConfiguredLaunchContract }): LaunchSpec {
-  const contract = parseConfiguredLaunchContract(input.contract), selection = parseSelection(input.selection)
-  if (input.provider.error || input.provider.fingerprint !== input.configuration.fingerprint || input.provider.verifiedHandlerGeneration !== input.ids.handlerGeneration) throw new AgentError("MODEL_UNAVAILABLE")
-  if (contract.providerId !== selection.providerId || contract.adapterVersion !== input.configuration.adapterVersion || contract.fingerprint !== launchContractFingerprint(contract, input.configuration.fingerprint)) throw new AgentError("ADAPTER_UNQUALIFIED")
-  if (!contract.permissionProfiles.includes(selection.permissionProfile)) throw new AgentError("SELECTION_UNSUPPORTED")
-  if (selection.reasoning.kind === "none" ? contract.reasoning.state !== "none" : contract.reasoning.state !== "values" || !contract.reasoning.values.includes(selection.reasoning.value)) throw new AgentError("SELECTION_UNSUPPORTED")
-  const modes = contract.modes
-  const mode = selection.mode ?? (modes.state === "values" && modes.values.length === 1 ? modes.values[0]! : modes.state === "none" ? contract.effectiveMode : null)
-  if (mode === null || (modes.state === "values" ? !modes.values.includes(mode) : mode !== contract.effectiveMode)) throw new AgentError("SELECTION_UNSUPPORTED")
-  const model = input.provider.models.find(model => model.modelId === selection.modelId)
-  if (!model || model.modes.state !== "unknown" && !isDeepStrictEqual(model.modes, modes)) throw new AgentError("MODEL_UNAVAILABLE")
-  return parseLaunchSpec({ ...input.ids, createdCommandId: input.ids.commandId, cwd: input.cwd, selection: { ...selection, mode }, catalogSnapshotId: input.snapshotId, catalogEvidence: input.provider, configuration: input.configuration, contractId: contract.id, contractFingerprint: contract.fingerprint, containment: "direct-process-group-v1", authority: "normal-user", limits: AGENT_LIMITS })
-}
-
-export async function observeLaunchContract(input: ConfiguredLaunchContract, configurationFingerprint: string): Promise<string> {
-  try { return launchContractFingerprint(parseConfiguredLaunchContract(input), configurationFingerprint) }
-  catch { throw new AgentError("CONFIG_CHANGED") }
-}
