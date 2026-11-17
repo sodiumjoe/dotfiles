@@ -48,9 +48,6 @@ function M.new(deps)
                 end
             )
         end
-    local report = deps.report or function(value)
-        vim.notify("Agency " .. vim.inspect(value))
-    end
     local epoch, active, pending, sequence, api = 0, nil, {}, 0, {}
     local current_origin
     local function begin(cwd, origin)
@@ -144,28 +141,6 @@ function M.new(deps)
             command({ "agents" }, options.cwd or origin.cwd, received, 10000)
         end
     end
-    local function attached_after(agent_id, target, callback, operation, origin)
-        local description = "Session " .. agent_id .. " restored"
-        local recovery = " Use :AgencyAttach " .. agent_id .. " to open it."
-        local function attached(error, manager)
-            if error and error.code == "CANCELLED" then
-                report(description .. ", but editor attachment was cancelled by a newer action." .. recovery)
-            elseif error then
-                error = vim.tbl_extend("force", error, {
-                    message = description .. ", but editor attachment failed: " .. (error.message or error.code) .. "." .. recovery,
-                })
-            else
-                report(description .. " and attached.")
-            end
-            callback(error, manager)
-        end
-        if not valid_operation(operation) then
-            attached(error_value("CANCELLED"))
-            return
-        end
-        report(description .. "; attaching editor...")
-        attach(target, attached, operation, origin)
-    end
     function api.page(options, callback)
         inventory(options, callback, nil, options and options.active and deps.roster_request)
     end
@@ -220,14 +195,16 @@ function M.new(deps)
         local operation = begin(nil, origin)
         attach(vim.deepcopy(target), callback, operation, vim.deepcopy(current_origin))
     end
-    function api.restore(agent_id, callback, origin)
-        local operation = begin(nil, origin)
-        local captured = vim.deepcopy(current_origin)
-        request("restore", agent_id, { "restore", agent_id }, captured.cwd, function(error, envelope)
-            if error then callback(error); return end
-            local live = envelope.result.agent.live
-            attached_after(agent_id, { agentId = agent_id, handlerGeneration = live.handlerGeneration, providerGeneration = live.providerGeneration }, callback, operation, captured)
-        end)
+    function api.load(row, callback, origin)
+        begin(nil, origin)
+        vim.api.nvim_set_current_tabpage(current_origin.tab)
+        local ok, manager = pcall(deps.open or require("sodium.agency.agentic").open, row, { force = true })
+        if not ok then
+            callback({ code = "FAILED", message = "Session " .. row.record.definition.agentId .. " was not restored: " .. tostring(manager) })
+            return
+        end
+        active = manager
+        callback(nil, manager)
     end
     function api.stop(target, callback, detail)
         local operation, cwd, exact = begin(), vim.fn.getcwd(), vim.deepcopy(target)

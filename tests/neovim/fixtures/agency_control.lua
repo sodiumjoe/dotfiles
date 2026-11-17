@@ -19,12 +19,11 @@ function M.page(agents, cursor, revision)
     return { state = "page", agents = agents or {}, nextCursor = cursor or vim.NIL, revision = revision or M.id(500), issues = {} }
 end
 function M.operations()
-    local calls, opened, reports, confirms = {}, {}, {}, {}
+    local calls, opened, confirms = {}, {}, {}
     local client = { command = function(argv, options, callback) calls[#calls + 1] = { argv = argv, options = options, callback = callback } end }
     local api = require("sodium.agency.operations").new({ client = client,
         open = function(row) opened[#opened + 1] = row; return { session_id = "agency:" .. row.record.definition.agentId, on_session_ready = function(_, fn) fn() end } end,
         new_session = function(_, cb) cb(nil, "new") end,
-        report = function(value) reports[#reports + 1] = value end,
         confirm_stop = function(target, cb) confirms[#confirms + 1] = { target = target, callback = cb } end })
     local function pending(name)
         for _, call in ipairs(calls) do
@@ -32,7 +31,7 @@ function M.operations()
         end
         return nil
     end
-    return { operations = api, calls = calls, opened = opened, reports = reports, confirms = confirms, pending = pending,
+    return { operations = api, calls = calls, opened = opened, confirms = confirms, pending = pending,
         answer = function(name, result, err, generation)
             local call = pending(name)
             if not call then error("no pending " .. name .. " call") end

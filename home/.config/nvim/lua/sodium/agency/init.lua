@@ -58,7 +58,7 @@ function M.setup(deps)
         return manager
     end
     local operations = require("sodium.agency.operations").new({ client = deps.client, uuid = api.uuid,
-        report = api.notify, new_session = create, confirm_stop = deps.confirm_stop,
+        new_session = create, confirm_stop = deps.confirm_stop,
         roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
@@ -158,7 +158,7 @@ function M.setup(deps)
                 if row.record.version == 3 and row.record.definition.agentId == id then
                     if expected and not vim.deep_equal(tuple(row), tuple(expected)) then err = failure("STALE_PROVIDER")
                     elseif action == "restore" then
-                        operations.restore(id, function(error, manager) report(error); if callback then callback(error, manager) end end,
+                        operations.load(row, function(error, manager) report(error); if callback then callback(error, manager) end end,
                             { tab = tab, buffer = vim.api.nvim_get_current_buf(), cwd = row.record.definition.cwd })
                         return
                     elseif row.live and row.record.phase == "ready" and tuple(row) then

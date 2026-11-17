@@ -630,7 +630,7 @@ function M.open(view, opts)
             or manager._agency_intent and manager._agency_intent.session_id == id) and vim.api.nvim_tabpage_is_valid(tab) then
             if not opts.quiet then vim.api.nvim_set_current_tabpage(tab) end
             require("sodium.agency.layout").cleanup(tab)
-            if manager.session_id == id and target and (opts.force or not vim.deep_equal(manager._agency_binding, target)) then
+            if manager.session_id == id and (opts.force or target and not vim.deep_equal(manager._agency_binding, target)) then
                 local origin = vim.api.nvim_get_current_win()
                 manager._agency_load_cwd = record.definition.cwd
                 local ok, err = pcall(manager.load_acp_session, manager, id, record.definition.backendId)
