@@ -1,7 +1,7 @@
 import type { ProviderView } from "../catalog/service.js"
 import type { Backend } from "./backend-config.js"
 import type { LaunchContract } from "./contracts.js"
-import type { JsonObject } from "./session-config.js"
+import type { JsonObject, RequestedSettings } from "./session-config.js"
 
 export function backendSelection(backend: Backend, contract: LaunchContract, provider?: ProviderView): JsonObject {
   const setting = (id: string, name: string, kind: string, values: string[]): JsonObject => ({ id, name, kind, values: values.map(value => ({ value, name: value })) })
@@ -18,4 +18,12 @@ export function backendSelection(backend: Backend, contract: LaunchContract, pro
   const discovery = !provider ? "unavailable" : provider.freshness === "fresh" && !provider.refreshIssue ? "fresh" : "cached"
   return { id: backend.id, defaults: structuredClone(backend.initial), discovery,
     discoveryError: provider?.error?.message ?? provider?.refreshIssue?.message ?? null, models, settings: modes }
+}
+
+export function namedSettings(contract: LaunchContract, model?: string, mode?: string): RequestedSettings {
+  const native = contract.providerId === "codex-acp" || contract.id === "claude-agent-acp-0.102" && contract.adapterVersion === "0.102.0"
+  const values: Record<string, string> = {}
+  if (model !== undefined && native) values[contract.modelOption] = model
+  if (mode !== undefined && native && contract.modeOption) values[contract.modeOption] = mode
+  return { ...(model !== undefined && !native ? { modelId: model } : {}), ...(mode !== undefined && !(native && contract.modeOption) ? { modeId: mode } : {}), ...(Object.keys(values).length ? { configValues: values } : {}) }
 }

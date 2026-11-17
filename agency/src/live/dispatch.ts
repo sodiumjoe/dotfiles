@@ -1,0 +1,26 @@
+import type { LiveCore } from "./core.js"
+import { liveErrorReply, parseLiveRequest, REQUEST_PROTOCOL, type LiveReply, type LiveRequest, type LiveResult } from "./protocol.js"
+
+export async function dispatchLive(core: LiveCore, raw: unknown): Promise<LiveReply> {
+  let request: LiveRequest
+  try { request = parseLiveRequest(raw) }
+  catch (error) {
+    const requestId = typeof raw === "object" && raw !== null && typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : "00000000-0000-4000-8000-000000000000"
+    core.failed("parse", undefined, error)
+    return liveErrorReply({ requestId }, error)
+  }
+  try {
+    let result: LiveResult
+    switch (request.op) {
+      case "start": { const { protocol: _protocol, requestId: _requestId, op: _op, ...start } = request; result = { state: "agent", agent: await core.start(start) }; break }
+      case "stop": result = { state: "agent", agent: await core.stop(request.agentId) }; break
+      case "cancel": result = { state: "agent", agent: await core.cancel(request.agentId) }; break
+      case "prompt": result = await core.prompt(request.agentId, request.text, request.environment, request.submissionId); break
+      case "agents": result = { state: "agents", handlerGeneration: core.handlerGeneration, agents: await core.agents() }; break
+    }
+    return { protocol: REQUEST_PROTOCOL, requestId: request.requestId, ok: true, result }
+  } catch (error) {
+    core.failed(request.op, "agentId" in request ? request.agentId : undefined, error)
+    return liveErrorReply(request, error)
+  }
+}

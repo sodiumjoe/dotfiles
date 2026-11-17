@@ -21,8 +21,8 @@ export type OwnedAgentProcess = { initialize(signal: AbortSignal): Promise<Provi
 export type AgentProcessSpec = Pick<LaunchSpec, "agentId" | "handlerGeneration" | "providerGeneration" | "launchAttemptId" | "cwd" | "limits">
 export type AgentProcessDependencies = { spawn?: typeof spawn; transitionIO?: LaunchTransitionIO; now?: () => number; onSpawnInputReleased?(): void }
 
-export function createAgentProcess(input: { context: LaunchContext; spec: AgentProcessSpec; agentRecord?: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; revalidate(): Promise<void> }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
-  const { context, spec, contract, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline } = input, { adapter, mutations } = context
+export function createAgentProcess(input: { context: LaunchContext; spec: AgentProcessSpec; agentRecord?: AgentRecordV3; args?: string[]; session?: SessionStart; environment: LaunchEnvironment; contract: ConfiguredLaunchContract; deadline?: number; overallDeadline?: number; isReady?(): boolean; onUpdate?(event: AcpObservation): void; onRequest?(message: JsonObject): void; revalidate(): Promise<void>; awaitExitOnStartupFault?: boolean }, dependencies: AgentProcessDependencies = {}): OwnedAgentProcess {
+  const { context, spec, contract, isReady, revalidate, deadline, overallDeadline: configuredOverallDeadline, awaitExitOnStartupFault } = input, { adapter, mutations } = context
   const now = dependencies.now ?? (() => performance.now()), phases = contract.deadlines
   let overallDeadline = deadline ?? Infinity, spawnDeadline = Infinity
   const directory = join(context.paths.persistentRoot, "launches"), path = join(directory, spec.launchAttemptId + ".json")
@@ -205,7 +205,10 @@ export function createAgentProcess(input: { context: LaunchContext; spec: AgentP
           await bounded(() => prepared, spawnDeadline, "STARTUP_TIMEOUT"); check()
           if (!child?.stdin || !child.stdout) throw new AgentError("STARTUP_FAILED")
           connection = createAcpConnection({ readable: child.stdout, writable: child.stdin, limits: spec.limits, deadline: overallDeadline, ...(configuredOverallDeadline === undefined ? {} : { overallDeadline: configuredOverallDeadline }), ...(start!.onUpdate ? { onUpdate: start!.onUpdate } : {}), ...(start!.onRequest ? { onRequest: start!.onRequest } : {}), now })
-          void connection.fault.then(error => { if (!stopping) fail(new AgentError(error.code, error.diagnostic ?? { boundary: "acp_transport", causeCode: error.code })) })
+          void connection.fault.then(async error => {
+            if (awaitExitOnStartupFault && error.code === "STARTUP_FAILED" && owned) await Promise.race([owned.terminal, new Promise(resolve => setTimeout(resolve, 500))])
+            if (!stopping) fail(new AgentError(error.code, error.diagnostic ?? { boundary: "acp_transport", causeCode: error.code }))
+          })
           const evidence = await connection.initialize(start!.agentRecord ?? { version: 2, ...splitLaunchSpec(spec as LaunchSpec), phase: "starting", session: null, failure: null }, contract, start!.session ?? { kind: "new", params: {} }, controller.signal)
           check(); initialized = true; if (!isReady) overallDeadline = Infinity; return evidence
         } catch (error) {

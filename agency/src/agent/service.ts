@@ -39,25 +39,11 @@ import { createPermissionBroker, type PermissionClient } from "../acp/permission
 import { parseImportInput, type ImportInput } from "./types.js"
 import { backendSelection } from "./backend-selection.js"
 import { historyExcerpt, historySummary, liveExcerpt, type ConversationExcerpt, type ExcerptInput, type ExcerptTurn } from "./excerpt.js"
+import { sessionInputs } from "./session-inputs.js"
+export { sessionInputs }
 type AgentCommand = AgentCommandV2 | AgentCommandV3
 type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: NativeSessionIdentity | null }
 export type CreateSessionInput = { commandId: string; cwd: string; backendId?: ProviderId; selection?: RequestedSettings; environment: LaunchEnvironment; nativeParams: JsonObject }
-
-export function sessionInputs(cwd: string, raw: JsonObject | undefined, required: string[] = []): { params: JsonObject; names: string[] } {
-  const params = withoutAgencyMetadata({ cwd, mcpServers: [], ...raw })
-  if (params.cwd !== cwd || !Array.isArray(params.mcpServers)) throw new AgentError("SESSION_INPUT_REQUIRED")
-  const names = params.mcpServers.map(value => {
-    if (!value || Array.isArray(value) || typeof value !== "object" || typeof value.name !== "string" || !value.name.trim()) throw new AgentError("SESSION_INPUT_REQUIRED")
-    const strings = (values: unknown): boolean => Array.isArray(values) && values.every(value => typeof value === "string")
-    const pairs = (values: unknown): boolean => Array.isArray(values) && values.every(value => value && typeof value === "object" && !Array.isArray(value) && typeof value.name === "string" && typeof value.value === "string")
-    if (value.type === "http" || value.type === "sse") {
-      if (typeof value.url !== "string" || !URL.canParse(value.url) || !["http:", "https:"].includes(new URL(value.url).protocol) || !pairs(value.headers)) throw new AgentError("SESSION_INPUT_REQUIRED")
-    } else if (value.type !== undefined || typeof value.command !== "string" || !value.command.trim() || !strings(value.args) || !pairs(value.env)) throw new AgentError("SESSION_INPUT_REQUIRED")
-    return value.name
-  })
-  if (names.length > 128 || new Set(names).size !== names.length || required.some(name => !names.includes(name))) throw new AgentError("SESSION_INPUT_REQUIRED")
-  return { params, names: names.sort() }
-}
 
 export type AcpSessionObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
 export type AgentService = {
