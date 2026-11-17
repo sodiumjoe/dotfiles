@@ -36,7 +36,15 @@ local function invoke(manager, captured, callback, ...)
     return result
 end
 
+local function settle_load(manager, err)
+    local done = manager._agency_load_done
+    if not done then return end
+    manager._agency_load_done = nil
+    done(err)
+end
+
 local function unavailable(manager)
+    settle_load(manager, { message = "the Agency connection ended before the session loaded" })
     local pending
     if vim.in_fast_event() then pending = Stream.discard(manager) else Stream.flush(manager) end
     manager._agency_admissions, manager._agency_initial_submission = {}, nil
@@ -409,6 +417,7 @@ function M.install()
         local reply = M.guard_callback(manager, captured, function(result, err)
             if err then if self.subscribers[id] == handlers then self.subscribers[id] = nil end
             else attachment(manager, result) end
+            settle_load(manager, err)
             invoke(manager, token(manager, true, false), function()
                 callback(err)
                 vim.schedule(function()

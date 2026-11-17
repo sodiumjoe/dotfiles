@@ -41,6 +41,18 @@ function M.run(views, opts, callback)
         timer:close()
         local Adapter, current = require("sodium.agency.agentic"), vim.api.nvim_get_current_tabpage()
         local listed, managers = pcall(agency_managers)
+        local loading, opened, finished = {}, false, false
+        local load_timer = assert(vim.uv.new_timer())
+        local function finish()
+            if finished or not opened or next(loading) then return end
+            finished = true
+            load_timer:stop()
+            load_timer:close()
+            callback(summary)
+        end
+        local function failed(agent_id, err)
+            summary.failed[#summary.failed + 1] = { agentId = agent_id, error = type(err) == "table" and (err.message or err.code) or tostring(err) }
+        end
         for _, manager in ipairs(listed and managers or {}) do
             local agent_id = manager.session_id:sub(8)
             local view = ready[agent_id]
@@ -50,16 +62,31 @@ function M.run(views, opts, callback)
                 manager._agency_rebind = vim.deepcopy(view)
                 summary.deferred = summary.deferred + 1
             else
+                loading[manager] = agent_id
+                manager._agency_load_done = function(err)
+                    if loading[manager] == nil then return end
+                    loading[manager] = nil
+                    if err then failed(agent_id, err) else summary.rebound = summary.rebound + 1 end
+                    finish()
+                end
                 local ok, err = pcall(Adapter.open, view, { force = true, quiet = true })
-                if ok then
-                    summary.rebound = summary.rebound + 1
-                else
-                    summary.failed[#summary.failed + 1] = { agentId = agent_id, error = tostring(err) }
+                if not ok and loading[manager] ~= nil then
+                    loading[manager], manager._agency_load_done = nil, nil
+                    failed(agent_id, err)
                 end
             end
         end
+        load_timer:start(opts.load_timeout_ms or 30000, 0, vim.schedule_wrap(function()
+            for manager, agent_id in pairs(loading) do
+                manager._agency_load_done = nil
+                failed(agent_id, "the session load did not finish")
+            end
+            loading = {}
+            finish()
+        end))
         if vim.api.nvim_tabpage_is_valid(current) then vim.api.nvim_set_current_tabpage(current) end
-        callback(summary)
+        opened = true
+        finish()
     end))
 end
 
