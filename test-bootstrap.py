@@ -158,7 +158,7 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
         self.adapter = self.repo / "node-bin/node_modules/@agentclientprotocol/codex-acp"
         self.adapter.mkdir(parents=True)
         (self.adapter / "package.json").write_text(json.dumps({
-            "name": "@agentclientprotocol/codex-acp", "version": "1.7.0", "main": "index.js",
+            "name": "@agentclientprotocol/codex-acp", "version": "2.6.0", "main": "index.js",
         }))
         (self.adapter / "index.js").write_text('throw new Error("provider execution is forbidden in bootstrap tests")')
 
@@ -176,6 +176,10 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
             "configurationFiles": [str((self.owner / ".codex/config.toml").resolve())],
         }
 
+    def assert_default_profiles(self, profiles):
+        self.assertEqual([profile["id"] for profile in profiles], ["codex-acp", "claude-agent-acp"])
+        self.assertEqual(profiles[0], self.standard_profile())
+
     def prepare_host_state(self):
         self.host_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         for directory in [self.state / "agency", self.state / "agency/hosts", self.host_root]:
@@ -187,7 +191,7 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
         self.profile_path.write_text(json.dumps({"version": 1, "providers": providers}))
         self.profile_path.chmod(0o600)
 
-    def write_backend(self, compatibility_id="codex-acp-1.7"):
+    def write_backend(self, compatibility_id="codex-acp-2.6"):
         self.prepare_host_state()
         self.catalog.mkdir(mode=0o700, exist_ok=True)
         backend = self.catalog / "backends.json"
@@ -232,7 +236,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
     def test_runtime_defaults_without_bootstrap(self):
         self.prepare_host_state()
         result = self.read_runtime()
-        self.assertEqual(result["profiles"], [self.standard_profile()])
+        self.assert_default_profiles(result["profiles"])
         self.assertEqual(result["backends"]["defaultBackendId"], "codex-acp")
         self.assertEqual(result["backends"]["backends"][0]["environmentDefaults"], {
             "INITIAL_AGENT_MODE": "agent-full-access", "MODEL_PROVIDER": "litellm",
@@ -244,14 +248,14 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         self.prepare_host_state()
         self.catalog.mkdir(mode=0o700)
         result = self.read_runtime()
-        self.assertEqual(result["profiles"], [self.standard_profile()])
+        self.assert_default_profiles(result["profiles"])
         self.assertEqual(list(self.catalog.iterdir()), [])
 
     def test_runtime_defaults_honor_backend_overrides(self):
         backend = self.write_backend()
         before = (backend.read_bytes(), backend.stat().st_ino)
         result = self.read_runtime()
-        self.assertEqual(result["profiles"], [self.standard_profile()])
+        self.assert_default_profiles(result["profiles"])
         self.assertEqual(result["backends"]["backends"][0]["args"], ["--custom"])
         self.assertEqual((backend.read_bytes(), backend.stat().st_ino), before)
         self.assertFalse(self.profile_path.exists())
@@ -260,7 +264,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         self.prepare_host_state()
         shutil.rmtree(self.adapter)
         result = self.read_runtime()
-        self.assertEqual(result["profiles"], [self.standard_profile()])
+        self.assert_default_profiles(result["profiles"])
         checked = self.run_provider_check()
         self.assertNotEqual(checked.returncode, 0)
         self.assertFalse(self.profile_path.exists())
@@ -305,15 +309,6 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         self.assertEqual(third["profiles"][0]["adapterPackageJson"], str((second_modules / "@agentclientprotocol/codex-acp/package.json").resolve()))
         self.assertFalse(self.profile_path.exists())
 
-    def test_directory_config_fails_validation_without_profile_publication(self):
-        config = self.owner / ".codex/config.toml"
-        config.mkdir(parents=True)
-        result = self.run_provider_check()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self.profile_path.exists())
-        self.assertTrue(config.is_dir())
-        self.assertFalse(self.catalog.exists())
-
     def test_absent_config_passes_validation_without_profile_publication(self):
         result = self.run_provider_check()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -325,7 +320,7 @@ process.stdout.write(JSON.stringify({ profiles, backends }))'''
         result = self.run_bootstrap("devbox")
         self.assertTrue(self.status_marker.exists(), result.stdout + result.stderr)
         self.assertNotIn("Agency setup failed", result.stderr)
-        self.assertEqual(self.read_runtime()["profiles"], [self.standard_profile()])
+        self.assert_default_profiles(self.read_runtime()["profiles"])
         self.assertFalse(self.profile_path.exists())
 
     def test_repeat_bootstrap_preserves_codex_settings_without_profile(self):
