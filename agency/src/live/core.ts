@@ -6,7 +6,7 @@ import { readBackendConfig } from "../agent/backend-config.js"
 import type { LaunchContract } from "../agent/contracts.js"
 import { createConversation } from "../agent/conversation.js"
 import type { LaunchEnvironment } from "../agent/environment.js"
-import type { SessionHomes } from "../agent/excerpt.js"
+import type { ConversationExcerpt, SessionHomes } from "../agent/excerpt.js"
 import { underlyingFailureCode } from "../agent/failure-diagnostics.js"
 import { createPermissionArbiter, type PermissionArbiter } from "../agent/permission-arbiter.js"
 import { createAgentProcess } from "../agent/process.js"
@@ -19,7 +19,7 @@ import type { EventLog } from "../handler/event-log.js"
 import type { LaunchContext } from "../handler/launch-transitions.js"
 import { RequestError, requestFailure } from "./errors.js"
 import { launchAgent, type LaunchHooks, type LaunchRequest } from "./launch.js"
-import { liveRow, type RosterRow } from "./roster.js"
+import { createRoster, liveRow, type RosterRow, type Transcript } from "./roster.js"
 import { createLiveTable, type LiveAgent } from "./state.js"
 import { stopAgent } from "./stop.js"
 
@@ -32,10 +32,14 @@ export type LiveCore = {
   readonly permissions: PermissionArbiter
   initialize(): Promise<void>
   start(request: StartRequest): Promise<RosterRow>
+  restore(agentId: string, environment: LaunchEnvironment, nativeParams?: JsonObject): Promise<RosterRow>
   stop(agentId: string): Promise<RosterRow>
   prompt(agentId: string, text: string, environment: LaunchEnvironment, submissionId?: string): Promise<PromptResult>
   cancel(agentId: string): Promise<RosterRow>
+  forget(agentId: string): Promise<{ state: "forgotten"; agentId: string }>
   agents(): Promise<RosterRow[]>
+  excerpt(agentId: string, turns: number): Promise<ConversationExcerpt>
+  transcript(agentId: string): Promise<Transcript>
   failed(op: string, agentId: string | undefined, error: unknown): void
   assertOrdinaryShutdownSafe(): void
   freezeIfIdle(): Promise<void>
@@ -47,7 +51,7 @@ export type LiveCore = {
 
 export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDependencies = {}): LiveCore {
   const { context, events } = input, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
-  const table = createLiveTable(), admissions = new Map<string, Promise<void>>()
+  const table = createLiveTable(), admissions = new Map<string, Promise<void>>(), roster = createRoster({ index: input.index, homes: input.homes })
   const permissions = createPermissionArbiter({ hostId: context.paths.hostKey, handlerGeneration: generation })
   const broker = createPermissionBroker({ routing: permissions, cwd: target => table.get(target.agentId)?.cwd ?? "/", respond(target, requestId, result) {
     const agent = table.get(target.agentId)
@@ -71,7 +75,10 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     if (agent.phase !== "ready") throw new RequestError("UNAVAILABLE", "agent " + agentId + " is stopping")
     return agent
   }
-  const stopping = (agent: LiveAgent, reason: "request" | "failure" | "shutdown"): Promise<void> => stopAgent(agent, { table, permissions: broker, reason, ...(events ? { events } : {}) })
+  const stopping = (agent: LiveAgent, reason: "request" | "failure" | "shutdown"): Promise<void> => {
+    if (agent.session) roster.changed(agent.session.sessionId)
+    return stopAgent(agent, { table, permissions: broker, reason, ...(events ? { events } : {}) })
+  }
   async function exclusive<T>(agentId: string, run: () => Promise<T>): Promise<T> {
     const current = (admissions.get(agentId) ?? Promise.resolve()).then(run), tail = current.then(() => undefined, () => undefined)
     admissions.set(agentId, tail)
@@ -153,13 +160,29 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     table.add(agent)
     return agent
   }
-  const row = async (agent: LiveAgent): Promise<RosterRow> => liveRow(table, agent)
+  async function revive(agentId: string, environment: LaunchEnvironment, nativeParams?: JsonObject): Promise<LiveAgent> {
+    const agent = await exclusive(id(agentId), async () => {
+      available()
+      const current = table.get(agentId)
+      if (current && current.phase !== "stopping") return current
+      await current?.stopped?.catch(() => undefined)
+      const entry = await roster.entry(agentId)
+      if (!entry) throw missing(agentId)
+      if (!await roster.sessionPath(entry)) throw new RequestError("NOT_FOUND", "agent " + agentId + " cannot be restored: its " + entry.backendId + " session file is missing")
+      return admit(agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment, ...(nativeParams ? { nativeParams } : {}), restore: { nativeSessionId: entry.nativeSessionId } }, "restored")
+    })
+    return agent.ready
+  }
+  const row = async (agent: LiveAgent): Promise<RosterRow> => await roster.row(table, agent.agentId) ?? liveRow(table, agent)
   function launch(request: StartRequest): Promise<LiveAgent> {
     return exclusive(id(request.agentId), async () => {
       available()
       const current = table.get(request.agentId)
       if (current && current.phase !== "stopping") return current
       await current?.stopped?.catch(() => undefined)
+      const entry = await roster.entry(request.agentId)
+      if (entry && (request.backendId && entry.backendId !== request.backendId || entry.cwd !== request.cwd)) throw new RequestError("INVALID", "agent " + entry.agentId + " already exists with backend " + entry.backendId + " in " + entry.cwd)
+      if (entry) return admit(entry.agentId, { backendId: entry.backendId, cwd: entry.cwd, origin: entry.origin, createdAt: entry.createdAt, indexed: true }, { backendId: entry.backendId, cwd: entry.cwd, environment: request.environment, restore: { nativeSessionId: entry.nativeSessionId } }, "restored")
       const backendId = request.backendId ?? (await readBackendConfig(root)).defaultBackendId
       return admit(request.agentId, { backendId, cwd: request.cwd, origin: "new", createdAt: new Date().toISOString(), indexed: false }, { ...request, backendId }, "started")
     })
@@ -173,14 +196,19 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
 
   return {
     handlerGeneration: generation, permissions, start,
-    async initialize() {},
+    async initialize() { void roster.rows(table).catch(() => undefined) },
+    async restore(agentId, environment, nativeParams) { return row(await revive(agentId, environment, nativeParams)) },
     async stop(agentId) {
-      const agent = known(agentId)
-      await stopping(agent, "request")
-      return { ...liveRow(table, agent), live: null }
+      const agent = table.get(id(agentId))
+      if (agent) await stopping(agent, "request")
+      const stopped = await roster.row(table, agentId)
+      if (stopped) return stopped
+      if (agent) return { ...liveRow(table, agent), live: null }
+      throw missing(agentId)
     },
-    async prompt(agentId, text, _environment, submissionId = randomUUID()) {
-      const agent = await ready(agentId)
+    async prompt(agentId, text, environment, submissionId = randomUUID()) {
+      const current = table.get(id(agentId))
+      const agent = current && current.phase !== "stopping" ? await ready(agentId) : await revive(agentId, environment)
       await agent.turns!.submit({ submissionId: id(submissionId), text, limits: EDITOR_TURN_LIMITS })
       try {
         const result = await agent.turns!.settled(submissionId)
@@ -192,7 +220,18 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       for (const submissionId of agent.running) await agent.turns!.cancel(submissionId)
       return row(agent)
     },
-    async agents() { return table.all().map(agent => liveRow(table, agent)).sort((a, b) => a.agentId.localeCompare(b.agentId)) },
+    forget(agentId) {
+      return exclusive(id(agentId), async () => {
+        if (table.get(agentId)) throw new RequestError("INVALID", "agent " + agentId + " is live; stop it before forgetting it")
+        if (!await roster.entry(agentId)) throw missing(agentId)
+        await input.index.remove(agentId)
+        events?.append({ type: "agent_forgotten", agentId })
+        return { state: "forgotten" as const, agentId }
+      })
+    },
+    agents: () => roster.rows(table),
+    async excerpt(agentId, turns) { const excerpt = await roster.excerpt(table, id(agentId), turns); if (!excerpt) throw missing(agentId); return excerpt },
+    async transcript(agentId) { const transcript = await roster.transcript(id(agentId)); if (!transcript) throw missing(agentId); return transcript },
     failed(op, agentId, error) { events?.append({ type: "request_failed", op, ...(agentId ? { agentId } : {}), ...requestFailure(error) }) },
     assertOrdinaryShutdownSafe: ordinary,
     async freezeIfIdle() {

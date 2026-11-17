@@ -1,21 +1,25 @@
 import type { Socket } from "node:net"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "../agent/environment.js"
+import type { ConversationExcerpt } from "../agent/excerpt.js"
 import { parseRequestedSettings, type RequestedSettings } from "../agent/session-config.js"
 import { absolutePath, id, keys, object, providerId, type ProviderId } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { PromptResult } from "./core.js"
 import { parseRequestFailure, RequestError, requestFailure, type RequestFailure } from "./errors.js"
-import type { RosterRow } from "./roster.js"
+import type { RosterRow, Transcript } from "./roster.js"
 
 export const REQUEST_PROTOCOL = "agency-request/1" as const
 export type LiveOperation =
   | { op: "start"; agentId: string; backendId?: ProviderId; cwd: string; model?: string; mode?: string; settings?: RequestedSettings; environment: LaunchEnvironment }
-  | { op: "stop" | "cancel"; agentId: string }
+  | { op: "restore"; agentId: string; environment: LaunchEnvironment }
+  | { op: "stop" | "cancel" | "forget" | "transcript"; agentId: string }
   | { op: "prompt"; agentId: string; text: string; environment: LaunchEnvironment; submissionId?: string }
+  | { op: "excerpt"; agentId: string; turns: number }
   | { op: "agents" }
 export type LiveRequest = { protocol: typeof REQUEST_PROTOCOL; requestId: string } & LiveOperation
 export type LiveResult = { state: "agent"; agent: RosterRow } | PromptResult | { state: "agents"; handlerGeneration: string; agents: RosterRow[] }
+  | { state: "forgotten"; agentId: string } | ConversationExcerpt | Transcript
 export type LiveReply = { protocol: typeof REQUEST_PROTOCOL; requestId: string } & ({ ok: true; result: LiveResult } | { ok: false; error: RequestFailure })
 
 const PROMPT_BYTES = 262144
@@ -35,11 +39,17 @@ export function parseLiveRequest(raw: unknown): LiveRequest {
       fields(["agentId", "cwd", "environment"], ["backendId", "model", "mode", "settings"])
       return { ...base, op: "start", agentId: agent(), cwd: absolutePath(v.cwd), environment: parseLaunchEnvironment(v.environment), ...optional(v, "backendId", providerId), ...optional(v, "model", value => name(value, "model")), ...optional(v, "mode", value => name(value, "mode")), ...optional(v, "settings", parseRequestedSettings) } as LiveRequest
     }
-    if (v.op === "stop" || v.op === "cancel") { fields(["agentId"]); return { ...base, op: v.op, agentId: agent() } }
+    if (v.op === "restore") { fields(["agentId", "environment"]); return { ...base, op: "restore", agentId: agent(), environment: parseLaunchEnvironment(v.environment) } }
+    if (v.op === "stop" || v.op === "cancel" || v.op === "forget" || v.op === "transcript") { fields(["agentId"]); return { ...base, op: v.op, agentId: agent() } }
     if (v.op === "prompt") {
       fields(["agentId", "text", "environment"], ["submissionId"])
       if (typeof v.text !== "string" || !v.text.length || Buffer.byteLength(v.text) > PROMPT_BYTES || !v.text.isWellFormed()) invalid("prompt text must be 1 to " + PROMPT_BYTES + " bytes of well-formed text")
       return { ...base, op: "prompt", agentId: agent(), text: v.text, environment: parseLaunchEnvironment(v.environment), ...optional(v, "submissionId", id) }
+    }
+    if (v.op === "excerpt") {
+      fields(["agentId", "turns"])
+      if (typeof v.turns !== "number" || !Number.isInteger(v.turns) || v.turns < 1 || v.turns > 8) invalid("turns must be an integer from 1 to 8")
+      return { ...base, op: "excerpt", agentId: agent(), turns: v.turns }
     }
     if (v.op === "agents") { fields([]); return { ...base, op: "agents" } }
   } catch (error) { if (error instanceof RequestError) throw error; invalid("invalid " + String(v.op) + " request") }

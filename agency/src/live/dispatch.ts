@@ -13,9 +13,13 @@ export async function dispatchLive(core: LiveCore, raw: unknown): Promise<LiveRe
     let result: LiveResult
     switch (request.op) {
       case "start": { const { protocol: _protocol, requestId: _requestId, op: _op, ...start } = request; result = { state: "agent", agent: await core.start(start) }; break }
+      case "restore": result = { state: "agent", agent: await core.restore(request.agentId, request.environment) }; break
       case "stop": result = { state: "agent", agent: await core.stop(request.agentId) }; break
       case "cancel": result = { state: "agent", agent: await core.cancel(request.agentId) }; break
+      case "forget": result = await core.forget(request.agentId); break
+      case "transcript": result = await core.transcript(request.agentId); break
       case "prompt": result = await core.prompt(request.agentId, request.text, request.environment, request.submissionId); break
+      case "excerpt": result = await core.excerpt(request.agentId, request.turns); break
       case "agents": result = { state: "agents", handlerGeneration: core.handlerGeneration, agents: await core.agents() }; break
     }
     return { protocol: REQUEST_PROTOCOL, requestId: request.requestId, ok: true, result }

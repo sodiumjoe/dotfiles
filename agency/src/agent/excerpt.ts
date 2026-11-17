@@ -12,17 +12,17 @@ const TAIL_WINDOWS = [1024 * 1024, 4 * 1024 * 1024, 16 * 1024 * 1024], HEAD_BYTE
 const injected = /<(INSTRUCTIONS|user_instructions|environment_context|environment_info|system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>[\s\S]*?<\/\1>/g
 type Json = Record<string, unknown>
 
-export function cleanTurnText(raw: string): string {
+export function cleanTurnText(raw: string, limit = TURN_CHARS): string {
   const text = raw.replace(injected, " ").replace(/^# AGENTS\.md instructions[^\n]*$/gm, " ").replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim()
   const chars = [...text]
-  return chars.length > TURN_CHARS ? chars.slice(0, TURN_CHARS - 1).join("") + "…" : text
+  return chars.length > limit ? chars.slice(0, limit - 1).join("") + "…" : text
 }
 
-function push(turns: ExcerptTurn[], role: ExcerptTurn["role"], raw: string): void {
-  const text = cleanTurnText(raw)
+function push(turns: ExcerptTurn[], role: ExcerptTurn["role"], raw: string, limit = TURN_CHARS): void {
+  const text = cleanTurnText(raw, limit)
   if (!text) return
   const last = turns[turns.length - 1]
-  if (last && last.role === role) last.text = cleanTurnText(last.text + " " + text)
+  if (last && last.role === role) last.text = cleanTurnText(last.text + " " + text, limit)
   else turns.push({ role, text })
 }
 
@@ -39,24 +39,24 @@ function parse(line: string): Json | null {
   try { const value: unknown = JSON.parse(line); return value && typeof value === "object" && !Array.isArray(value) ? value as Json : null } catch { return null }
 }
 
-export function codexTurns(lines: readonly string[]): ExcerptTurn[] {
+export function codexTurns(lines: readonly string[], limit = TURN_CHARS): ExcerptTurn[] {
   const turns: ExcerptTurn[] = []
   for (const line of lines) {
     const record = parse(line), payload = record?.payload as Json | undefined
     if (record?.type !== "response_item" || !payload || payload.type !== "message") continue
-    if (payload.role === "user") push(turns, "user", texts(payload.content, ["input_text"]))
-    else if (payload.role === "assistant") push(turns, "agent", texts(payload.content, ["output_text"]))
+    if (payload.role === "user") push(turns, "user", texts(payload.content, ["input_text"]), limit)
+    else if (payload.role === "assistant") push(turns, "agent", texts(payload.content, ["output_text"]), limit)
   }
   return turns
 }
 
-export function claudeTurns(lines: readonly string[]): ExcerptTurn[] {
+export function claudeTurns(lines: readonly string[], limit = TURN_CHARS): ExcerptTurn[] {
   const turns: ExcerptTurn[] = []
   for (const line of lines) {
     const record = parse(line), message = record?.message as Json | undefined
     if (!record || record.isMeta === true || !message) continue
-    if (record.type === "user" && message.role === "user") push(turns, "user", texts(message.content, ["text"]))
-    else if (record.type === "assistant") push(turns, "agent", texts(message.content, ["text"]))
+    if (record.type === "user" && message.role === "user") push(turns, "user", texts(message.content, ["text"]), limit)
+    else if (record.type === "assistant") push(turns, "agent", texts(message.content, ["text"]), limit)
   }
   return turns
 }
@@ -181,33 +181,37 @@ function historySession(record: AgentRecordV3): string | null {
   return sessionId && /^[A-Za-z0-9._-]+$/.test(sessionId) ? sessionId : null
 }
 
-async function historyFile(input: HistoryInput, sessionId: string): Promise<string | null> {
-  return input.record.definition.backendId === "codex-acp" ? findCodexFile(join(input.codexHome, "sessions"), sessionId)
-    : join(input.claudeHome, "projects", input.record.definition.cwd.replace(/[^A-Za-z0-9]/g, "-"), sessionId + ".jsonl")
-}
-
-function historyTurns(record: AgentRecordV3, lines: readonly string[]): ExcerptTurn[] {
-  return record.definition.backendId === "codex-acp" ? codexTurns(lines) : claudeTurns(lines)
-}
-
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
+const none = (reason: string): ConversationExcerpt => ({ state: "excerpt", source: "none", turns: [], reason })
 
-export async function historyExcerpt(input: HistoryInput & { turns: number }): Promise<ConversationExcerpt> {
-  const none = (reason: string): ConversationExcerpt => ({ state: "excerpt", source: "none", turns: [], reason })
-  const sessionId = historySession(input.record)
-  if (!sessionId) return none("This session has no provider history yet")
-  const path = await historyFile(input, sessionId)
+export async function sessionExcerpt(ref: SessionRef, homes: SessionHomes, count: number, codexFiles?: Map<string, string>): Promise<ConversationExcerpt> {
+  const path = await sessionFile(ref, homes, codexFiles)
   if (!path) return none("No conversation history file")
   let turns: ExcerptTurn[] = []
   try {
     for (const window of TAIL_WINDOWS) {
       const tail = await readTail(path, window)
-      turns = historyTurns(input.record, tail.lines)
+      turns = ref.backendId === "codex-acp" ? codexTurns(tail.lines) : claudeTurns(tail.lines)
       if (tail.complete || turns.some(turn => turn.role === "user")) break
     }
   } catch (error) { if (missing(error)) return none("No conversation history file"); throw error }
-  turns = turns.slice(-input.turns)
+  turns = turns.slice(-count)
   return { state: "excerpt", source: "history", turns, reason: turns.length ? null : "The history file has no conversation turns yet" }
+}
+
+export async function sessionTranscript(ref: SessionRef, homes: SessionHomes, codexFiles?: Map<string, string>): Promise<{ turns: ExcerptTurn[]; truncated: boolean } | null> {
+  const path = await sessionFile(ref, homes, codexFiles)
+  if (!path) return null
+  try {
+    const tail = await readTail(path, TAIL_WINDOWS[TAIL_WINDOWS.length - 1]! * 4)
+    return { turns: ref.backendId === "codex-acp" ? codexTurns(tail.lines, Infinity) : claudeTurns(tail.lines, Infinity), truncated: !tail.complete }
+  } catch (error) { if (missing(error)) return null; throw error }
+}
+
+export async function historyExcerpt(input: HistoryInput & { turns: number }): Promise<ConversationExcerpt> {
+  const sessionId = historySession(input.record)
+  if (!sessionId) return none("This session has no provider history yet")
+  return sessionExcerpt({ backendId: input.record.definition.backendId, cwd: input.record.definition.cwd, sessionId }, { codexHome: input.codexHome, claudeHome: input.claudeHome }, input.turns)
 }
 
 export async function historySummary(input: HistoryInput): Promise<{ title: string | null; modifiedAt: string | null }> {

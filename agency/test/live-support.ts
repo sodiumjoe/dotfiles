@@ -36,7 +36,7 @@ export async function liveHandlerFixture(t: TestContext) {
   }
   await mkdir(join(f.paths.persistentRoot, "catalog"), { mode: 0o700 })
   await writeFile(join(f.paths.persistentRoot, "catalog/providers.json"), JSON.stringify({ version: 1, providers: profiles }), { mode: 0o600 })
-  await writeFile(join(f.paths.persistentRoot, "catalog/backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: profiles.map(value => ({ id: value.id, args: [], environmentDefaults: { FIXTURE_ROOT: f.root, FIXTURE_BACKEND: value.id, FIXTURE_SELECTION: "true" }, initial: {}, compatibilityId: "fixture-v1" })) }), { mode: 0o600 })
+  await writeFile(join(f.paths.persistentRoot, "catalog/backends.json"), JSON.stringify({ version: 1, defaultBackendId: "codex-acp", backends: profiles.map(value => ({ id: value.id, args: [], environmentDefaults: { FIXTURE_ROOT: f.root, FIXTURE_BACKEND: value.id, FIXTURE_SELECTION: "true", FIXTURE_HISTORY_ROOT: homes }, initial: {}, compatibilityId: "fixture-v1" })) }), { mode: 0o600 })
   const handler = () => readHandlerRecord(join(f.paths.runtimeRoot, "handler.json"))
   const environment = () => ({ ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), FIXTURE_ROOT: f.root, FIXTURE_SCENARIO: "normal" })
   const startHandler = async () => {
@@ -65,11 +65,15 @@ export async function liveHandlerFixture(t: TestContext) {
     for (const item of providers()) if (item.pid) await proveAbsent(item.pid)
   }
   f.beforeCleanup(verifyZeroSurvivors)
-  return { ...f, workspace, otherWorkspace, environment, request, providers,
+  return { ...f, workspace, otherWorkspace, homes, environment, request, providers,
     start: (input: StartInput = {}) => agent({ op: "start", agentId: randomUUID(), cwd: workspace, backendId: "codex-acp", environment: environment(), ...input }),
     stop: (agentId: string) => agent({ op: "stop", agentId }),
     cancel: (agentId: string) => agent({ op: "cancel", agentId }),
+    restore: (agentId: string) => agent({ op: "restore", agentId, environment: environment() }),
     async prompt(agentId: string, text: string, submissionId?: string): Promise<PromptResult> { const result = await request({ op: "prompt", agentId, text, environment: environment(), ...(submissionId ? { submissionId } : {}) }); assert.equal(result.state, "prompt"); return result as PromptResult },
+    forget: (agentId: string) => request({ op: "forget", agentId }),
+    excerpt: (agentId: string, turns = 4) => request({ op: "excerpt", agentId, turns }),
+    transcript: (agentId: string) => request({ op: "transcript", agentId }),
     async agents(): Promise<RosterRow[]> { const result = await request({ op: "agents" }); assert.equal(result.state, "agents"); return (result as { agents: RosterRow[] }).agents },
     async failure(operation: Promise<unknown>): Promise<{ code: string; message: string }> { try { await operation } catch (error) { if (error instanceof RequestError) return { code: error.code, message: error.message }; throw error } throw new Error("expected the request to fail") },
     async events(): Promise<Array<Record<string, unknown>>> {

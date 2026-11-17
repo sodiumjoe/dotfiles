@@ -1,5 +1,6 @@
-import { appendFile, readFile, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { randomUUID } from "node:crypto"
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 
 const root = process.env.FIXTURE_ROOT, backend = process.env.FIXTURE_BACKEND ?? "codex-acp"
@@ -11,13 +12,22 @@ const options = [
   { id: "mode", name: "Mode", type: "select", category: "mode", currentValue: "agent-full-access", options: [{ value: "agent-full-access", name: "Full access" }, { value: "read-only", name: "Read only" }] },
 ]
 if (process.env.FIXTURE_SELECTION) options[0]!.options.push({ value: "model-c", name: "C" })
-let modelId = "legacy-a", modeId = "normal", sessionId = "native-session"
+let modelId = "legacy-a", modeId = "normal", sessionId = process.env.FIXTURE_HISTORY_ROOT ? "native-" + randomUUID() : "native-session"
 const promptIds = new Set<string | number>()
 let permission: (() => void) | undefined, release: (() => void) | undefined
 const send = (frame: unknown) => { process.stdout.write(JSON.stringify(frame) + "\n") }
 const reply = (id: string | number, result: unknown) => send({ jsonrpc: "2.0", id, result })
 const update = (value: unknown) => send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: value } })
 const exists = async (name: string) => { try { await readFile(join(root!, name)); return true } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return false } }
+async function history(user: string, agent: string) {
+  const home = process.env.FIXTURE_HISTORY_ROOT
+  if (!home) return
+  const path = backend === "codex-acp" ? join(home, "codex/sessions/2026/11/14", "rollout-2026-11-14T10-00-00-" + sessionId + ".jsonl") : join(home, "claude/projects", process.cwd().replace(/[^A-Za-z0-9]/g, "-"), sessionId + ".jsonl")
+  const lines = backend === "codex-acp" ? [{ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: user }] } }, { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: agent }] } }]
+    : [{ type: "user", message: { role: "user", content: user } }, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: agent }] } }]
+  await mkdir(dirname(path), { recursive: true })
+  await appendFile(path, lines.map(line => JSON.stringify(line)).join("\n") + "\n", { mode: 0o600 })
+}
 async function barrier(name: string) {
   if (!await exists("pause-" + name)) return
   await writeFile(join(root!, "at-" + name), "ready", { mode: 0o600 })
@@ -120,6 +130,7 @@ async function dispatch(request: { id: string | number; method?: string; params?
     }
     if (text === "history") for (let index = 0; index < 8300; index++) update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: String(index) } })
     update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `answer:${text}` } })
+    await history(text, `answer:${text}`)
     promptIds.delete(request.id)
     reply(request.id, { stopReason: "end_turn" })
     if (text === "permission-after-turn") setTimeout(() => send({ jsonrpc: "2.0", id: "after-turn", method: "session/request_permission", params: { sessionId, toolCall: { toolCallId: "after-turn-tool", title: "Background follow-up", kind: "execute" }, options: [{ optionId: "allow-once", name: "Allow", kind: "allow_once" }, { optionId: "reject-once", name: "Reject", kind: "reject_once" }] } }), 50)

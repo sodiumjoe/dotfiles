@@ -243,14 +243,18 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     checkStartup()
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     const agentIndex = createAgentIndex(root)
+    const migrate = () => migrateIndex({ store: agentStore, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
     if (options.agentLayer === "live") {
+      if (await agentIndex.migrated()) void migrate()
+      else await migrate()
+      checkStartup()
       core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, options.liveDependencies)
       await core.initialize()
     } else {
       agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, index: agentIndex, events })
       await agents.initialize()
+      void migrate()
     }
-    void migrateIndex({ store: agentStore, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
     checkStartup()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     if (termination || closing) await bridge.close()
