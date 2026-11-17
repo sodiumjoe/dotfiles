@@ -47,7 +47,7 @@ local function unavailable(manager)
     settle_load(manager, { message = "the Agency connection ended before the session loaded" })
     local pending
     if vim.in_fast_event() then pending = Stream.discard(manager) else Stream.flush(manager) end
-    manager._agency_admissions, manager._agency_initial_submission = {}, nil
+    manager._agency_admissions = {}
     manager._agency_load_pending, manager._agency_new_pending = nil, nil
     for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
     manager._agency_epoch = manager._agency_epoch + 1
@@ -117,7 +117,7 @@ local function lifecycle(manager, callback, ...)
         manager._agency_binding, manager._agency_turn_id = nil, nil
         manager._agency_local_submission, manager._agency_permissions = nil, {}
         for _, entry in ipairs(manager._agency_pending_context or {}) do entry.submission = nil end
-        manager._agency_running, manager._agency_admissions, manager._agency_initial_submission = false, {}, nil
+        manager._agency_running, manager._agency_admissions = false, {}
     end
     manager._agency_depth = depth + 1
     local args = { n = select("#", ...), ... }
@@ -143,9 +143,7 @@ local function attachment(manager, result)
     local info = result and result._meta and result._meta.agency
     assert(type(info) == "table" and info.version == 1 and type(info.binding) == "table", "Agency attachment metadata missing")
     manager._agency_binding = vim.deepcopy(info.binding)
-    manager._agency_backend_id = info.backendId
     manager._agency_cwd = manager._agency_request_cwd
-    manager._agency_capabilities = info.capabilities
     manager.session_state._provider_name = info.backendId
     manager.message_writer:set_provider_name(info.backendId)
     configuration(manager, info.configuration)
@@ -275,7 +273,7 @@ function M.install()
         self._agency_intent = nil
         if intent and intent.session_id then
             self._agency_load_cwd = intent.cwd
-            return self:load_acp_session(intent.session_id, intent.title, intent.timestamp)
+            return self:load_acp_session(intent.session_id, intent.title)
         end
         self._agency_pending_context = {}
         local previous = self.session_id
@@ -367,14 +365,13 @@ function M.install()
         local manager, captured = handlers._agency_owner, { epoch = handlers._agency_epoch }
         local opts = manager._agency_new_options or {}
         manager._agency_request_cwd = opts.cwd or vim.fn.getcwd()
-        manager._agency_initial_context = opts.initial_context
         local environment = vim.tbl_extend("force", vim.fn.environ(), opts.environment or {})
         environment.NVIM = vim.v.servername
-        local meta = { version = 1, editor = vim.v.servername, commandId = require("sodium.agency.control").uuid(), environment = environment,
+        local meta = { version = 1, editor = vim.v.servername, environment = environment,
             backendId = opts.backend_id, selection = opts.selection, inheritSessionId = opts.inherit_session_id }
         local pending = {}
         manager._agency_new_pending = pending
-        self:_send_request("session/new", { cwd = manager._agency_request_cwd, mcpServers = opts.mcp_servers or {}, _meta = { agency = meta } },
+        self:_send_request("session/new", { cwd = manager._agency_request_cwd, mcpServers = {}, _meta = { agency = meta } },
             function(result, err)
                 if manager._agency_new_pending == pending then manager._agency_new_pending = nil end
                 if manager._agency_destroyed or manager._agency_epoch ~= captured.epoch then
@@ -463,11 +460,6 @@ function M.install()
         manager._agency_local_submission, manager._agency_turn_id = submission, submission
         local captured, input = token(manager, true, false), manager._agency_input
         local context = manager._agency_captured_context
-        local initial = manager._agency_initial_context
-        if initial and not manager._agency_initial_submission then
-            manager._agency_initial_submission = submission
-            vim.list_extend(prompt, vim.deepcopy(initial))
-        end
         local staged = {}
         for _, entry in ipairs(manager._agency_pending_context or {}) do
             if not entry.submission then
@@ -477,14 +469,12 @@ function M.install()
             end
         end
         local admission = { accepted = false, entries = staged }
-        manager._agency_admission = admission
         manager._agency_admissions = manager._agency_admissions or {}
         manager._agency_admissions[submission] = admission
         self:_send_request("session/prompt", { sessionId = id, prompt = prompt, _meta = { agency = { version = 1, submissionId = submission, editor = vim.v.servername } } }, function(result, err)
             vim.schedule(M.guard_callback(manager, captured, function()
                 manager._agency_admissions[submission] = nil
                 if err and not admission.accepted then
-                    if manager._agency_initial_submission == submission then manager._agency_initial_submission = nil end
                     for _, entry in ipairs(staged) do entry.submission = nil end
                     M.guard_callback(manager, token(manager, false, false), function()
                         if manager._agency_epoch ~= captured.epoch or not vim.deep_equal(manager._agency_binding, captured.binding) then return end
@@ -580,7 +570,6 @@ function M.install()
                                 if entry.accepted then entry.accepted(admitted) end
                             end
                         end
-                        if manager._agency_initial_submission == admitted then manager._agency_initial_context = nil end
                     end
                     if params.state == "idle" then
                         Stream.flush(manager)

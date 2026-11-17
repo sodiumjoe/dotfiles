@@ -109,7 +109,7 @@ function M.run(opts)
     local function rebind(defer_busy)
         local api = require("sodium.agency").setup()
         stage("Rebinding tabs")
-        api.page({ allow_issues = true }, guard(function(page_err, page)
+        api.page({}, guard(function(page_err, page)
             if page_err then finish("could not list agents: " .. (page_err.message or page_err.code)); return end
             require("sodium.agency.rebind").run(page.agents, { defer_busy = defer_busy, reconnect = deps.reconnect }, guard(function(summary)
                 if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen tabs with <leader>af"); return end

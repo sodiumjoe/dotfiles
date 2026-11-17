@@ -201,7 +201,7 @@ function M.open(controller)
         picker:find({ refresh = true })
     end
     local function load_local()
-        controller.page({ allow_issues = true, active = true }, function(err, result)
+        controller.page({ active = true }, function(err, result)
             if closed then return end
             if err then local_rows, local_issues = {}, { err }
             else local_rows, local_issues, local_generation = result.agents, result.issues, result.handlerGeneration end

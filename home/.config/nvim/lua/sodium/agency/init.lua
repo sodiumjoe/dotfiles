@@ -38,7 +38,7 @@ function M.setup(deps)
     deps = deps or {}
     Adapter.install()
     local Registry = require("agentic.session_registry")
-    local api = { uuid = Control.uuid, timer_factory = deps.timer_factory,
+    local api = {
         annotations = deps.annotations or Context.annotations, accept_annotations = deps.accept_annotations or Context.accept_annotations,
         notify = deps.notify or function(value, level, opts) vim.notify("Agency: " .. tostring(value), level, opts) end }
     api.deps = deps
@@ -57,7 +57,7 @@ function M.setup(deps)
         ready(manager, callback or function() end)
         return manager
     end
-    local operations = require("sodium.agency.operations").new({ client = deps.client, uuid = api.uuid,
+    local operations = require("sodium.agency.operations").new({ client = deps.client,
         new_session = create, confirm_stop = deps.confirm_stop,
         roster_request = deps.roster_request or (not deps.client and require("sodium.agency.roster").new()) })
     api.operations = operations
@@ -145,7 +145,7 @@ function M.setup(deps)
         local captured, tab = epoch, vim.api.nvim_get_current_tabpage()
         if type(id) ~= "string" or not id:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then report(failure("USAGE")); return end
         if action == "restore" then api.notify("Restoring session " .. id .. "...") end
-        api.page({ allow_issues = true }, function(err, result)
+        api.page({}, function(err, result)
             if captured ~= epoch or not vim.api.nvim_tabpage_is_valid(tab) then
                 if action == "restore" then
                     api.notify("Restore of session " .. id .. " cancelled before it started.")
@@ -178,7 +178,7 @@ function M.setup(deps)
     function api.recover(manager)
         local binding, tab = vim.deepcopy(manager._agency_binding), manager.tab_page_id
         if not binding then return end
-        api.page({ allow_issues = true }, function(err, result)
+        api.page({}, function(err, result)
             if err or not vim.api.nvim_tabpage_is_valid(tab) or not vim.deep_equal(manager._agency_binding, binding) then return end
             for _, row in ipairs(result.agents) do
                 if row.record.version == 3 and row.record.definition.agentId == binding.agentId then

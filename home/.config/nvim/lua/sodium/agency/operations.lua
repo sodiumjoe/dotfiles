@@ -79,7 +79,7 @@ function M.new(deps)
     end
     local inventory
     local function attach(target, callback, operation, origin)
-        inventory({ allow_issues = true }, function(err, result)
+        inventory({}, function(err, result)
             if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
             if err then callback(err); return end
             for _, row in ipairs(result.agents) do
@@ -132,7 +132,7 @@ function M.new(deps)
                 if (not options.cwd or row.cwd == options.cwd) and (not options.active or live) then agents[#agents + 1] = Control.view(row) end
             end
             table.sort(agents, function(a, b) return a.record.definition.agentId < b.record.definition.agentId end)
-            callback(nil, { agents = agents, revision = generation, handlerGeneration = generation, issues = {} })
+            callback(nil, { agents = agents, handlerGeneration = generation, issues = {} })
         end
         if use_roster then
             cancel_request = deps.roster_request(options.cwd and { cwd = options.cwd } or vim.empty_dict(), received)

@@ -57,7 +57,6 @@ describe("Saved conversation picker", function()
     it("opens before sessions load, then lists only stopped sessions by recent activity", function()
         local picker, state = open()
         assert.are.equal("Select session to restore (loading…)", picker.title)
-        assert.is_true(state.pages[1].options.allow_issues)
         local live = stopped("live", { live = true, record = { phase = "ready" } })
         answer(state, { stopped("older", { record = { lastActivityAt = "2026-11-12T00:00:00Z", title = "older chat" } }), live,
             stopped("newer", { record = { lastActivityAt = "2026-11-13T00:00:00Z", title = "newer chat" } }), stopped("untimed") })

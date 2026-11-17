@@ -10,16 +10,13 @@ function M.select(result, valid, callback)
     end
     local items = {}
     for _, backend in ipairs(backends) do
-        local default = backend.discovery == "unavailable" and "Configured default (model discovery unavailable)"
-            or backend.discovery == "cached" and "Configured default (cached; " .. (backend.discoveryError or "discovery is stale") .. ")"
-            or "Configured default"
+        local default = backend.discovery == "unavailable" and "Configured default (model discovery unavailable)" or "Configured default"
         items[#items + 1] = { backend = backend, model = { name = default } }
         for _, model in ipairs(backend.models or {}) do items[#items + 1] = { backend = backend, model = model } end
     end
     vim.ui.select(items, { prompt = "Agency model", format_item = function(item)
         local model = item.model
         return (labels[item.backend.id] or item.backend.id) .. " · " .. (model.name or model.id)
-            .. (item.backend.discovery == "cached" and model.id and " (cached)" or "")
     end }, vim.schedule_wrap(function(item)
         if not item or not valid() then return end
         local model = item.model
