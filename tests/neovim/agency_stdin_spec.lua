@@ -73,9 +73,9 @@ describe("Agency command stdin", function()
     end
     it("leaves ordinary reads without a stdin payload", function()
         local reply = { protocol = "agency-host/1", requestId = f.id(10), hostId = vim.NIL,
-            handlerGeneration = vim.NIL, ok = true, result = { state = "hosts", hosts = {} } }
-        local result = issue({ "host", "list" }, reply)
-        assert.are.same({ "fixture-agy", "host", "list", "--json" }, result.argv)
+            handlerGeneration = vim.NIL, ok = true, result = { state = "roster", localHostId = string.rep("a", 64), hosts = {} } }
+        local result = issue({ "roster", "list" }, reply)
+        assert.are.same({ "fixture-agy", "roster", "list", "--json" }, result.argv)
         assert.is_nil(result.options.stdin); assert.is_nil(result.err)
     end)
     it("actual Neovim process launch delivers long stdin to the CLI parser", function()

@@ -45,8 +45,7 @@ local function human_receipt(value, argv)
     elseif argv[2] == "decide" then error("Missing permission receipt") end
 end
 
-local requests = { start = "agent", restore = "agent", stop = "agent", set = "agent", cancel = "agent", prompt = "prompt", agents = "agents",
-    excerpt = "excerpt", transcript = "transcript", models = "models", forget = "forgotten", log = "log" }
+local requests = { stop = "agent", agents = "agents" }
 local activities = { starting = true, idle = true, working = true, stopping = true }
 
 local function present(value) return value ~= nil and value ~= vim.NIL end
@@ -91,31 +90,9 @@ local function validate_request(value, argv)
     elseif result.state == "excerpt" then M.excerpt(result) end
 end
 
-local function validate_page(result, generation)
-    assert(result.state == "page" and valid_id(result.revision) and type(result.issues) == "table" and vim.islist(result.issues))
-    assert(result.nextCursor == vim.NIL or type(result.nextCursor) == "string" and #result.nextCursor <= 4096 and result.nextCursor:match("^[%w_-]+$"))
-    assert(type(result.agents) == "table" and vim.islist(result.agents) and #result.agents + #result.issues <= 100)
-    for _, view in ipairs(result.agents) do
-        assert(type(view.record) == "table")
-        if view.record.version == 3 then
-            local record = view.record
-            assert(type(view.live) == "boolean" and vim.tbl_contains({ "not_launched", "verified", "unverified", "unknown" }, view.cleanup))
-            assert(valid_id(record.definition.agentId) and type(record.definition.cwd) == "string" and record.definition.cwd:sub(1, 1) == "/")
-            assert(vim.tbl_contains({ "codex-acp", "claude-agent-acp" }, record.definition.backendId) and type(record.settings) == "table")
-            assert(vim.tbl_contains({ "starting", "ready", "recoverable", "restoring", "stopping", "stopped", "failed", "interrupted" }, record.phase))
-            if record.launch == vim.NIL then assert(not view.live)
-            else
-                assert(type(record.launch) == "table" and valid_id(record.launch.handlerGeneration) and valid_id(record.launch.providerGeneration))
-                if view.live then assert(record.launch.handlerGeneration == generation) end
-            end
-        else assert(view.record.version == 1) end
-    end
-end
-
 local function validate(value, argv)
     if requests[argv[1]] then return validate_request(value, argv) end
-    local ordinary = argv[1] == "host" or vim.tbl_contains({ "roster", "permission" }, argv[1])
-        or argv[1] == "entry" and vim.tbl_contains({ "open", "inspect" }, argv[2])
+    local ordinary = vim.tbl_contains({ "roster", "permission" }, argv[1]) or argv[1] == "entry" and argv[2] == "open"
     local protocol = ordinary and "agency-host/1" or "agency-control/2"
     assert(type(value) == "table" and value.protocol == protocol and valid_id(value.requestId))
     assert(value.handlerGeneration == vim.NIL or valid_id(value.handlerGeneration))
@@ -128,8 +105,7 @@ local function validate(value, argv)
     local result = value.result
     assert(type(result) == "table")
     if ordinary then
-        local expected_state = argv[1] == "host" and (argv[2] == "enroll" and "enrolled" or "hosts")
-            or argv[1] == "roster" and (flag(argv, "--host") and (argv[2] == "excerpt" and "excerpt" or "page") or "roster")
+        local expected_state = argv[1] == "roster" and (argv[2] == "excerpt" and "excerpt" or "roster")
             or argv[1] == "permission" and (argv[2] == "list" and "permissions" or "permission")
             or argv[1] == "entry" and "entry"
         assert(result.state == expected_state)
@@ -151,24 +127,16 @@ local function validate(value, argv)
                 else assert(host.state == "unavailable" and type(host.code) == "string") end
             end
         elseif result.state == "permissions" then
-            if result.hosts then
-                assert(value.hostId == vim.NIL and value.handlerGeneration == vim.NIL and type(result.pending) == "table")
-                for _, host in ipairs(result.hosts) do
-                    assert(host_id(host.hostId))
-                    if host.state == "available" then assert(host.value.hostId == host.hostId and valid_id(host.value.handlerGeneration))
-                    else assert(host.state == "unavailable" and type(host.code) == "string") end
-                end
-            else assert(result.snapshot.hostId == value.hostId and result.snapshot.handlerGeneration == value.handlerGeneration) end
+            assert(value.hostId == vim.NIL and value.handlerGeneration == vim.NIL and type(result.hosts) == "table" and type(result.pending) == "table")
+            for _, host in ipairs(result.hosts) do
+                assert(host_id(host.hostId))
+                if host.state == "available" then assert(host.value.hostId == host.hostId and valid_id(host.value.handlerGeneration))
+                else assert(host.state == "unavailable" and type(host.code) == "string") end
+            end
         elseif result.state == "permission" then human_receipt(value, argv)
-        elseif result.state == "page" then
-            validate_page(result, value.handlerGeneration)
-            for _, row in ipairs(result.agents) do assert(row.record.version == 3 and row.record.definition.hostId == value.hostId) end
-        elseif result.state == "hosts" then assert(argv[1] == "host" and type(result.hosts) == "table")
-        elseif result.state == "enrolled" then assert(argv[1] == "host" and host_id(result.enrollment.hostId))
         elseif result.state == "entry" then
             local receipt = result.receipt
-            local raw, expected = flag(argv, "--input-json"), nil
-            if raw then expected = vim.json.decode(raw) else expected = { commandId = argv[3] } end
+            local expected = vim.json.decode(flag(argv, "--input-json"))
             assert(value.commandId == expected.commandId)
             if receipt ~= vim.NIL then
                 assert(type(receipt) == "table" and receipt.commandId == expected.commandId and receipt.ref.hostId == value.hostId)
@@ -204,9 +172,7 @@ function M.new(deps)
     local jobs, api = {}, { uuid = M.uuid }
     function api.command(argv, options, callback)
         options = options or {}
-        local snapshot_read = argv[1] == "host" and argv[2] == "list"
-            or argv[1] == "roster" and argv[2] == "list"
-            or argv[1] == "permission" and argv[2] == "list"
+        local snapshot_read = vim.tbl_contains({ "roster", "permission" }, argv[1]) and argv[2] == "list"
         local args = { deps.executable or "agy" }
         vim.list_extend(args, argv)
         args[#args + 1] = "--json"
@@ -247,7 +213,7 @@ function M.new(deps)
             end)
             if not valid then fail(#raw == 0 and "UNAVAILABLE" or "INVALID_PROTOCOL")
             elseif not value.ok then finish(value.error, value)
-            elseif result.code == 0 or result.code == 75 or result.code == 69 and value.result.state == "page" then finish(nil, value)
+            elseif result.code == 0 or result.code == 75 then finish(nil, value)
             else fail("UNAVAILABLE") end
         end)
         if not ok then fail("UNAVAILABLE"); return end
