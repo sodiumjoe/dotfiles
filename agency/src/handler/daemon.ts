@@ -44,6 +44,7 @@ import { createLiveCore, type LiveCore, type LiveCoreDependencies } from "../liv
 import { dispatchLive } from "../live/dispatch.js"
 import { liveErrorReply, type LiveReply } from "../live/protocol.js"
 import { LEGACY_HANDLER, RequestError } from "../live/errors.js"
+import { createRemoteShapes, dispatchRemoteRequest, type RemoteShapes } from "../live/remote-shapes.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -113,6 +114,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let catalog: CatalogService | undefined
   let agents: AgentService | undefined
   let core: LiveCore | undefined
+  let shapes: RemoteShapes | undefined
   let router: HostRouter | undefined
   let bridge: HandlerBridge | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
@@ -210,7 +212,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       try { return { protocol: CATALOG_PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: request.op === "model_list" ? await catalog.list() : await catalog.refresh(request.commandId, request.handlerGeneration) } }
       catch (error) { return catalogErrorReply(bound, error) }
     }
-    const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => dispatchAgentRequest({ agents, generation: options.generation, ready: () => state.phase === "ready" && !closing && !termination }, request)
+    const ready = () => state.phase === "ready" && !closing && !termination
+    const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => shapes && core ? dispatchRemoteRequest({ shapes, generation: options.generation, ready, failed: core.failed }, request) : dispatchAgentRequest({ agents, generation: options.generation, ready }, request)
     const dispatchRequest = async (raw: unknown): Promise<LiveReply> => core && state.phase === "ready" && !closing && !termination ? dispatchLive(core, raw) : liveErrorReply({ requestId: typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : randomUUID() }, new RequestError("UNAVAILABLE", core ? "the Handler is not ready" : LEGACY_HANDLER))
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
@@ -252,6 +255,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       checkStartup()
       core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, options.liveDependencies)
       await core.initialize()
+      shapes = createRemoteShapes(core, options.paths.hostKey)
     } else {
       agents = (options.agentFactory ?? createAgentService)({ context: launchContext, catalog, contracts: options.launchContracts ?? productionLaunchContracts(), store: agentStore, index: agentIndex, events })
       await agents.initialize()
@@ -262,8 +266,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (termination || closing) await bridge.close()
     checkStartup()
     registerRuntimeEndpoint(bridge, dispatchAgent)
-    const ownerAgents = agents
+    const ownerAgents = agents, ownerCore = core
     const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
+      if (ownerCore) return ownerCore.isLive(target)
       if (!ownerAgents) return false
       try { await ownerAgents.sessionSnapshot(target); return true }
       catch (error) { if (error instanceof AgentError && ["STALE_HANDLER", "STALE_PROVIDER", "SESSION_UNAVAILABLE", "NOT_READY", "UNAVAILABLE"].includes(error.code)) return false; throw error }

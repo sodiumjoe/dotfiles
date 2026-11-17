@@ -39,6 +39,8 @@ export type LiveCore = {
   readonly permissions: PermissionArbiter
   initialize(): Promise<void>
   start(request: StartRequest): Promise<RosterRow>
+  launch(request: StartRequest): Promise<LiveAgent>
+  liveAgents(): LiveAgent[]
   restore(agentId: string, environment: LaunchEnvironment, nativeParams?: JsonObject): Promise<RosterRow>
   stop(agentId: string): Promise<RosterRow>
   prompt(agentId: string, text: string, environment: LaunchEnvironment, submissionId?: string): Promise<PromptResult>
@@ -255,7 +257,8 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   function ordinary(): void { if (table.all().length || admissions.size) throw new ControlError("ACTIVE_AGENTS", "agents are live: " + table.all().map(agent => agent.agentId).join(", ")) }
 
   return {
-    handlerGeneration: generation, permissions, start,
+    handlerGeneration: generation, permissions, start, launch,
+    liveAgents: () => table.all(),
     async initialize() { void roster.rows(table).catch(() => undefined) },
     async restore(agentId, environment, nativeParams) { return row(await revive(agentId, environment, nativeParams)) },
     async stop(agentId) {

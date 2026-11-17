@@ -19,7 +19,7 @@ export function isRuntimeHumanRequest(request: { op: string }): request is Runti
   return ["agent_roster", "agent_permissions", "agent_permission_decide", "agent_permission_inspect", "agent_excerpt"].includes(request.op)
 }
 
-export async function dispatchRuntimeHuman(service: AgentService, request: RuntimeHumanRequest): Promise<RuntimeHumanResult> {
+export async function dispatchRuntimeHuman(service: Pick<AgentService, "roster" | "permissions" | "excerpt">, request: RuntimeHumanRequest): Promise<RuntimeHumanResult> {
   switch (request.op) {
     case "agent_roster": return await service.roster(request.input)
     case "agent_permissions": return { state: "permissions", snapshot: await service.permissions.snapshot() }
