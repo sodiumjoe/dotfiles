@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { rm, writeFile } from "node:fs/promises"
+import { spawn } from "node:child_process"
 import { join } from "node:path"
 import { liveHandlerFixture } from "./live-support.js"
 import { fileExists, until } from "./control-support.js"
@@ -8,6 +9,7 @@ import { runControl, productionControlDependencies, type ControlDependencies } f
 import { runRestart } from "../src/cli/restart.js"
 import { inspectHandlerGeneration } from "../src/platform/singleton.js"
 import { createAgentIndex } from "../src/agent/agent-index.js"
+import { writeHandlerRecord } from "../src/platform/private-state.js"
 import type { JsonObject } from "../src/agent/session-config.js"
 
 type Fixture = Awaited<ReturnType<typeof liveHandlerFixture>>
@@ -132,5 +134,20 @@ test("restart against a Handler that rejects the handoff shutdown names the manu
   assert.notEqual(code, 0)
   assert.equal(reply.error.code, "INVALID_PROTOCOL")
   assert.match(reply.error.message, /agy shutdown --stop-agents/)
+  await f.verifyZeroSurvivors()
+})
+
+test("a Handler record left by a crash whose PID now belongs to another process does not block the next start", async t => {
+  const f = await liveHandlerFixture(t), before = await f.handler()
+  await f.crashHandler()
+  const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" })
+  t.after(() => { other.kill("SIGKILL") })
+  assert.ok(other.pid && await f.observe(other.pid))
+  const birth = before.process!.birth, start = Number(birth.slice(0, birth.indexOf(":")))
+  await writeHandlerRecord(join(f.paths.runtimeRoot, "handler.json"), { ...before, process: { ...before.process!, pid: other.pid, birth: start - 100 + birth.slice(birth.indexOf(":")) } })
+  await f.restart()
+  const after = await f.handler()
+  assert.notEqual(after.generation, before.generation)
+  assert.equal(after.phase, "ready")
   await f.verifyZeroSurvivors()
 })

@@ -9,7 +9,7 @@ import { DarwinObservationUnavailable } from "./darwin.js"
 import { assertPrivateSocket, unlinkStalePrivateSocket } from "./private-socket.js"
 import { assertPrivateDirectory, readHandlerRecord } from "./private-state.js"
 import { launchHandlerGeneration, nativeStartupSpawn, type StartupDependencies, type HandlerCommand, type StartTransition } from "./startup.js"
-import { sameProcess, type HandlerInspection, type PlatformAdapter } from "./types.js"
+import { sameProcess, sameProcessGeneration, type HandlerInspection, type PlatformAdapter } from "./types.js"
 
 export type { HandlerCommand, StartTransition } from "./startup.js"
 
@@ -257,7 +257,7 @@ export async function inspectHandlerGeneration(root: string, adapter: PlatformAd
     if (error instanceof DarwinObservationUnavailable || error instanceof LinuxObservationUnavailable) return { record, disposition: "ambiguous", diagnostic: { reason: observationReason(error), expected: record.process, observed: null } }
     throw error
   }
-  if (observed === null) return { record, disposition: "stale" }
+  if (observed === null || !sameProcessGeneration(record.process, observed)) return { record, disposition: "stale" }
   if (!sameProcess(record.process, observed)) return { record, disposition: "ambiguous", diagnostic: { reason: "observed identity mismatch", expected: record.process, observed } }
   return { record, disposition: "live" }
 }
