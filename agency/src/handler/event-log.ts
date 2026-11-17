@@ -1,5 +1,5 @@
 import { appendFileSync, writeFileSync } from "node:fs"
-import { appendFile, mkdir, open, rename, rm, stat } from "node:fs/promises"
+import { appendFile, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
 
 export type LoggedEvent = { type: string; agentId?: string } & Record<string, unknown>
@@ -52,4 +52,21 @@ export async function consumeCleanShutdown(root: string): Promise<boolean> {
 
 export function markCleanShutdownSync(root: string): void {
   try { writeFileSync(join(root, "clean-shutdown"), new Date().toISOString(), { mode: 0o600 }) } catch {}
+}
+
+export async function readEventLog(root: string, filter: { agentId?: string; since?: string; limit?: number } = {}, keep = 5): Promise<Array<LoggedEvent & { seq: number; at: string; host: string }>> {
+  const events: Array<LoggedEvent & { seq: number; at: string; host: string }> = []
+  for (const name of [...Array.from({ length: keep }, (_, index) => `events.${keep - index}.jsonl`), "events.jsonl"]) {
+    let text: string
+    try { text = await readFile(join(root, name), "utf8") } catch { continue }
+    for (const line of text.split("\n")) {
+      try {
+        const event = JSON.parse(line)
+        if (!Number.isSafeInteger(event?.seq) || typeof event.at !== "string" || typeof event.type !== "string") continue
+        if (filter.agentId && event.agentId !== filter.agentId || filter.since && event.at < filter.since) continue
+        events.push(event)
+      } catch {}
+    }
+  }
+  return events.slice(-(filter.limit ?? 200))
 }

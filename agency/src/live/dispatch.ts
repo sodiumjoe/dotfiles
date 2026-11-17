@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { LiveCore } from "./core.js"
 import { liveErrorReply, parseLiveRequest, REQUEST_PROTOCOL, type LiveReply, type LiveRequest, type LiveResult } from "./protocol.js"
 
@@ -22,6 +23,9 @@ export async function dispatchLive(core: LiveCore, raw: unknown): Promise<LiveRe
       case "set": result = { state: "agent", agent: await core.set(request.agentId, request.setting, request.value) }; break
       case "excerpt": result = await core.excerpt(request.agentId, request.turns); break
       case "agents": result = { state: "agents", handlerGeneration: core.handlerGeneration, agents: await core.agents() }; break
+      case "models": result = await core.models(); break
+      case "permissions": result = { state: "permissions", snapshot: await core.permissions.snapshot() }; break
+      case "decide": result = { state: "permission", receipt: await core.permissions.decide(randomUUID(), request.ref, request.optionId) }; break
     }
     return { protocol: REQUEST_PROTOCOL, requestId: request.requestId, ok: true, result }
   } catch (error) {
