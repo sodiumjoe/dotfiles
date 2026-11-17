@@ -9,6 +9,7 @@ export type ExcerptTurn = { role: "user" | "agent"; text: string }
 export type ConversationExcerpt = { state: "excerpt"; source: "live" | "history" | "none"; turns: ExcerptTurn[]; reason: string | null }
 
 const TAIL_WINDOWS = [1024 * 1024, 4 * 1024 * 1024, 16 * 1024 * 1024], HEAD_BYTES = 1024 * 1024, TURN_CHARS = 600, TITLE_CHARS = 200
+const TRANSCRIPT_TURN_CHARS = 65536, TRANSCRIPT_BYTES = 6 * 1024 * 1024
 const injected = /<(INSTRUCTIONS|user_instructions|environment_context|environment_info|system-reminder|command-name|command-message|command-args|local-command-stdout|local-command-caveat)>[\s\S]*?<\/\1>/g
 type Json = Record<string, unknown>
 
@@ -240,7 +241,10 @@ export async function sessionTranscript(ref: SessionRef, homes: SessionHomes, co
   if (!path) return null
   try {
     const tail = await readTail(path, TAIL_WINDOWS[TAIL_WINDOWS.length - 1]! * 4)
-    return { turns: ref.backendId === "codex-acp" ? codexTurns(tail.lines, Infinity) : claudeTurns(tail.lines, Infinity), truncated: !tail.complete }
+    const turns = ref.backendId === "codex-acp" ? codexTurns(tail.lines, TRANSCRIPT_TURN_CHARS) : claudeTurns(tail.lines, TRANSCRIPT_TURN_CHARS)
+    let first = turns.length, bytes = 0
+    while (first > 0 && (bytes += Buffer.byteLength(JSON.stringify(turns[first - 1]))) <= TRANSCRIPT_BYTES) first--
+    return { turns: turns.slice(first), truncated: !tail.complete || first > 0 }
   } catch (error) { if (missing(error)) return null; throw error }
 }
 

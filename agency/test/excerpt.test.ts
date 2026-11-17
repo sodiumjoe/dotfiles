@@ -3,7 +3,7 @@ import test from "node:test"
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { claudeTurns, codexTurns, historyExcerpt, historySummary, liveExcerpt } from "../src/agent/excerpt.js"
+import { claudeTurns, codexTurns, historyExcerpt, historySummary, liveExcerpt, sessionTranscript } from "../src/agent/excerpt.js"
 import type { AgentRecordV3 } from "../src/agent/types.js"
 
 const codexLine = (role: string, type: string, text: string) => JSON.stringify({ type: "response_item", payload: { type: "message", role, content: [{ type, text }] } })
@@ -81,4 +81,20 @@ test("history summaries take the first real prompt as the title and the file tim
   assert.ok(summary.title?.startsWith("rename the picker y"))
   assert.equal([...summary.title!].length, 200)
   assert.deepEqual(await historySummary({ record: record("claude-agent-acp", "absent", "/work/x"), codexHome, claudeHome }), { title: null, modifiedAt: null })
+})
+
+test("a transcript keeps its newest turns within the reply budget and caps each turn", async t => {
+  const root = await mkdtemp(join(tmpdir(), "agency-transcript-")), codexHome = join(root, "codex"), claudeHome = join(root, "claude")
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const day = join(codexHome, "sessions", "2026", "11", "17")
+  await mkdir(day, { recursive: true })
+  const lines = Array.from({ length: 120 }, (_, index) => codexLine(index % 2 ? "assistant" : "user", index % 2 ? "output_text" : "input_text", index + ":" + "x".repeat(100000)))
+  await writeFile(join(day, "rollout-2026-11-17T10-00-00-codex-2.jsonl"), lines.join("\n"))
+  const read = await sessionTranscript({ backendId: "codex-acp", cwd: "/work/repo", sessionId: "codex-2" }, { codexHome, claudeHome })
+  assert.ok(read && read.truncated)
+  assert.ok(Buffer.byteLength(JSON.stringify(read.turns)) < 8 * 1024 * 1024)
+  assert.ok(read.turns.length < 120)
+  assert.ok(read.turns.at(-1)!.text.startsWith("119:"))
+  assert.ok(read.turns.every(turn => [...turn.text].length <= 65536))
+  assert.ok(read.turns.at(-1)!.text.endsWith("…"))
 })
