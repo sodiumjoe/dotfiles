@@ -6,7 +6,10 @@ import { basename, dirname, isAbsolute, join, normalize } from "node:path"
 import { fileURLToPath } from "node:url"
 import { isDeepStrictEqual } from "node:util"
 import { assertPrivateDirectory } from "../platform/private-state.js"
-import { absolutePath, CatalogError, invalid, keys, object, providerId, text, type ConfigEvidence, type ProviderProfile } from "./types.js"
+import { absolutePath, CatalogError, invalid, keys, object, providerId, text, type ProviderId } from "./validate.js"
+
+export type ProviderProfile = { id: ProviderId; enabled: boolean; executable: string; adapterPackageJson: string; sdkPackageJson: string | null; configurationFiles: string[] }
+export type ConfigEvidence = { fingerprint: string; scope: "declared-config-v1"; providerId: ProviderId; adapterVersion: string; sdkVersion: string | null }
 
 export const digest = (bytes: Uint8Array | string): string => createHash("sha256").update(bytes).digest("hex")
 const missing = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT"
@@ -32,24 +35,6 @@ export async function readBoundedFile(path: string, max: number, privateFile = f
 }
 export function decodeJson(bytes: Buffer): unknown {
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) } catch { return invalid() }
-}
-export async function digestPrivateFile(path: string, max?: number): Promise<string> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-  try {
-    const before = await handle.stat({ bigint: true })
-    if (!before.isFile() || before.nlink !== 1n || before.uid !== BigInt(process.getuid!()) || (before.mode & 0o077n) !== 0n || !Number.isSafeInteger(Number(before.size)) || max !== undefined && before.size > BigInt(max)) invalid()
-    const hash = createHash("sha256"), buffer = Buffer.alloc(65536)
-    let length = 0
-    while (length <= Number(before.size)) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null)
-      if (bytesRead === 0) break
-      length += bytesRead
-      if (length > Number(before.size)) invalid()
-      hash.update(buffer.subarray(0, bytesRead))
-    }
-    if (length !== Number(before.size) || !isDeepStrictEqual(identity(before), identity(await handle.stat({ bigint: true }))) || !isDeepStrictEqual(identity(before), identity(await lstat(path, { bigint: true })))) invalid()
-    return hash.digest("hex")
-  } finally { await handle.close() }
 }
 export function parseProfile(input: unknown): ProviderProfile {
   const v = object(input)
@@ -134,38 +119,4 @@ export async function sdkEntry(profile: ProviderProfile): Promise<string> {
   const entry = join(dirname(profile.sdkPackageJson), main)
   await fileIdentity(entry)
   return entry
-}
-export async function observeConfig(input: ProviderProfile): Promise<ConfigEvidence> {
-  try {
-    const profile = parseProfile(input), evidence: unknown[] = [1, "declared-config-v1", profile]
-    let size = 0
-    const file = async (path: string, absent = false, max = 1024 * 1024, configuration = false): Promise<Buffer | null> => {
-      let before
-      try { before = await fileIdentity(path) } catch (error) {
-        if (absent && missing(error)) { evidence.push([path, null]); return null }
-        throw error
-      }
-      const bytes = await readBoundedFile(path, max)
-      if (bytes === null || !isDeepStrictEqual(before, await fileIdentity(path))) throw new CatalogError("CONFIG_CHANGED")
-      size += bytes.length
-      if (size > 8 * 1024 * 1024) invalid()
-      evidence.push([configuration ? [before[0], before[1].filter((_, index) => index !== 3 && index !== 4)] : before, digest(bytes)])
-      return bytes
-    }
-    evidence.push(await fileIdentity(profile.executable))
-    const adapter = object(decodeJson((await file(profile.adapterPackageJson))!))
-    if (adapter.name !== "@agentclientprotocol/" + profile.id) invalid()
-    const adapterVersion = text(adapter.version)
-    await file(adapterMain(profile, adapter), false, 8 * 1024 * 1024)
-    let sdkVersion: string | null = null
-    if (profile.sdkPackageJson !== null) {
-      const sdk = object(decodeJson((await file(profile.sdkPackageJson))!))
-      if (sdk.name !== "@anthropic-ai/claude-agent-sdk") invalid()
-      if (!["0.3.232", "0.3.321"].includes(text(sdk.version))) throw new CatalogError("UNSUPPORTED_PROVIDER_VERSION")
-      sdkVersion = text(sdk.version)
-      evidence.push(await fileIdentity(await sdkEntry(profile)))
-    }
-    for (const path of profile.configurationFiles) await file(path, true, 1024 * 1024, true)
-    return { fingerprint: digest(JSON.stringify(evidence)), scope: "declared-config-v1", providerId: profile.id, adapterVersion, sdkVersion }
-  } catch (error) { if (error instanceof CatalogError) throw error; return invalid() }
 }

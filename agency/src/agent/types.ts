@@ -1,9 +1,11 @@
 import { parseFailureDiagnostic, type FailureDiagnostic } from "./failure-diagnostics.js"
 import { isDeepStrictEqual } from "node:util"
-import { absolutePath, hash, id, keys, object, parseProviderSnapshot, providerId, text, type ConfigEvidence, type ProviderId, type ProviderSnapshot } from "../catalog/types.js"
+import { absolutePath, hash, id, keys, object, providerId, text, type ProviderId } from "../config/validate.js"
+import { parseProviderSnapshot, type ProviderSnapshot } from "../config/models.js"
+import { type ConfigEvidence } from "../config/providers.js"
 import type { LaunchRecord } from "../platform/types.js"
 import type { LaunchEnvironment } from "./environment.js"
-import { digest } from "../catalog/config.js"
+import { digest } from "../config/providers.js"
 import { canonicalJson, parseRequestedSettings, type JsonObject, type RestorableSettings } from "./session-config.js"
 export type { JsonObject, JsonValue, RequestedSettings, RestorableSettings, SessionConfiguration } from "./session-config.js"
 

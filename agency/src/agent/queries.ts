@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
-import { digest } from "../catalog/config.js"
-import { absolutePath, id, keys, object, type ProviderId } from "../catalog/types.js"
+import { digest } from "../config/providers.js"
+import { absolutePath, id, keys, object, type ProviderId } from "../config/validate.js"
 import { AgentError, type AgentView, type LegacyAgentView, type StartSelection } from "./types.js"
 import type { AgentStateIssue } from "./types.js"
 

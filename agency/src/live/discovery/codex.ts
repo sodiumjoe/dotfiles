@@ -1,7 +1,6 @@
-import { normalizeCodex } from "../normalize.js"
-import { CatalogError, invalid, object, text } from "../types.js"
-import { jsonRpc, type DriverContext, type ProbeResult } from "./transport.js"
-import { DiscoveryError } from "../diagnostics.js"
+import { normalizeCodex } from "../../config/models.js"
+import { CatalogError, invalid, object, text } from "../../config/validate.js"
+import { DiscoveryError, jsonRpc, type DriverContext, type ProbeResult } from "./transport.js"
 
 export async function discoverCodex(context: DriverContext): Promise<ProbeResult> {
   if (context.signal.aborted) throw new CatalogError("PROBE_FAILED")

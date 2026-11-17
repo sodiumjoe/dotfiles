@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
-import { readProfiles } from "../catalog/config.js"
-import { parseModels, type Model, type ProviderId, type ProviderProfile } from "../catalog/types.js"
+import { readProfiles } from "../config/providers.js"
+import { parseModels, type Model } from "../config/models.js"
+import { type ProviderId } from "../config/validate.js"
+import { type ProviderProfile } from "../config/providers.js"
 import type { SessionConfiguration } from "../agent/session-config.js"
 import { RequestError } from "./errors.js"
 

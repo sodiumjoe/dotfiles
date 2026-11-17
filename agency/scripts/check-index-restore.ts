@@ -8,7 +8,7 @@ import { mergeBackendEnvironment, readBackendConfig } from "../src/agent/backend
 import { snapshotLaunchEnvironment } from "../src/agent/environment.js"
 import { defaultHomes } from "../src/agent/excerpt.js"
 import { migrateIndex } from "../src/agent/index-migration.js"
-import { adapterEntry, readProfiles } from "../src/catalog/config.js"
+import { adapterEntry, readProfiles } from "../src/config/providers.js"
 import { productionEnvironment } from "../src/handler/environment.js"
 
 const env = await productionEnvironment(), root = env.paths.persistentRoot

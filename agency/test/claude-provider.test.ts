@@ -6,11 +6,13 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
-import { adapterEntry, observeConfig, readProfiles, sdkEntry } from "../src/catalog/config.js"
+import { adapterEntry, readProfiles, sdkEntry } from "../src/config/providers.js"
+import { providerConfiguration } from "../src/live/launch.js"
 import { readBackendConfig } from "../src/agent/backend-config.js"
 import { backendChoice } from "../src/agent/backend-selection.js"
 import { configureLaunchContract, productionLaunchContracts } from "../src/agent/contracts.js"
-import type { Model, ProviderProfile } from "../src/catalog/types.js"
+import type { Model } from "../src/config/models.js"
+import type { ProviderProfile } from "../src/config/providers.js"
 import type { JsonObject } from "../src/agent/session-config.js"
 import { createAcpConnection } from "../src/agent/acp.js"
 import { AGENT_LIMITS } from "../src/agent/types.js"
@@ -65,7 +67,7 @@ test("an explicit backend configuration preserves its model and permission defau
 test("Claude qualification uses the executable binary and rejects dependency mismatches", async t => {
   const { root, profile, profiles } = await fixture(t)
   await profiles([profile])
-  const evidence = await observeConfig(profile)
+  const evidence = await providerConfiguration(profile)
   const backend = (await readBackendConfig(root)).backends[0]!
   const declaration = productionLaunchContracts().find(contract => contract.id === backend.compatibilityId)!
   const contract = await configureLaunchContract(declaration, profile, evidence)

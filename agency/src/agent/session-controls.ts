@@ -1,4 +1,4 @@
-import { absolutePath, id, keys, object, providerId, type ProviderId } from "../catalog/types.js"
+import { absolutePath, id, keys, object, providerId, type ProviderId } from "../config/validate.js"
 import { AgentError, parseStopInput, parseTuple, type AgentTuple, type AgentView, type CommandView, type StopInput } from "./types.js"
 import { canonicalJson, parseRequestedSettings, type JsonObject, type RequestedSettings } from "./session-config.js"
 import { EDITOR_TURN_LIMITS, validateTurnInput } from "./session-events.js"

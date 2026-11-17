@@ -1,4 +1,4 @@
-import type { Model } from "../catalog/types.js"
+import type { Model } from "../config/models.js"
 import type { Backend } from "./backend-config.js"
 import type { LaunchContract } from "./contracts.js"
 import type { JsonObject, RequestedSettings } from "./session-config.js"

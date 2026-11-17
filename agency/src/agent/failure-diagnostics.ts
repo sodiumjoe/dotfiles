@@ -1,4 +1,4 @@
-import { invalid, keys, object, timestamp } from "../catalog/types.js"
+import { invalid, keys, object, timestamp } from "../config/validate.js"
 
 export const STDERR_TAIL_BYTES = 2048
 const IDENTIFIER = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/

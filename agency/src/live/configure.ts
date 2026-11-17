@@ -1,5 +1,5 @@
 import { withNativeSession } from "../agent/acp.js"
-import { object } from "../catalog/types.js"
+import { object } from "../config/validate.js"
 import { projectRestorableSettings, type JsonObject, type SessionConfiguration } from "../agent/session-config.js"
 import type { EventLog } from "../handler/event-log.js"
 import { RequestError } from "./errors.js"

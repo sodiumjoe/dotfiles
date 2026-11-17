@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { hash, id, keys, object, timestamp } from "../catalog/types.js"
+import { hash, id, keys, object, timestamp } from "../config/validate.js"
 import { bridgeError } from "./protocol.js"
 import type { createBridgePeer, RequestOptions } from "./codec.js"
 

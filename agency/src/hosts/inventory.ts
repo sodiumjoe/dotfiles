@@ -1,4 +1,4 @@
-import { absolutePath, hash, id, keys, object, text } from "../catalog/types.js"
+import { absolutePath, hash, id, keys, object, text } from "../config/validate.js"
 import { createInventoryStore } from "./inventory-store.js"
 
 export type HostEnrollment = { hostId: string; hostname: string }

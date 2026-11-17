@@ -3,7 +3,7 @@ import { parseLaunchEnvironment, type LaunchEnvironment } from "../agent/environ
 import type { ConversationExcerpt } from "../agent/excerpt.js"
 import { parsePermissionRef, type PermissionReceipt, type PermissionRef, type PermissionSnapshot } from "../agent/permission-types.js"
 import { parseRequestedSettings, type RequestedSettings } from "../agent/session-config.js"
-import { absolutePath, id, keys, object, providerId, type ProviderId } from "../catalog/types.js"
+import { absolutePath, id, keys, object, providerId, type ProviderId } from "../config/validate.js"
 import { ControlError } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { HandoffStatus, PromptResult } from "./core.js"

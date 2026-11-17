@@ -7,7 +7,7 @@ import type { OwnedAgentProcess } from "../agent/process.js"
 import type { JsonObject, SessionConfiguration } from "../agent/session-config.js"
 import type { TurnCoordinator } from "../agent/turns.js"
 import type { AgentTuple, OwnedAgentRecord } from "../agent/types.js"
-import type { ProviderId } from "../catalog/types.js"
+import type { ProviderId } from "../config/validate.js"
 import type { EchoFilter } from "./echo.js"
 
 export type Activity = "starting" | "idle" | "working" | "stopping"

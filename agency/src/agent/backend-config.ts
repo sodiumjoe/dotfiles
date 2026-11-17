@@ -1,6 +1,6 @@
 import { join } from "node:path"
-import { decodeJson, digest, readBoundedFile, readProfiles } from "../catalog/config.js"
-import { keys, object, providerId, text, type ProviderId } from "../catalog/types.js"
+import { decodeJson, digest, readBoundedFile, readProfiles } from "../config/providers.js"
+import { keys, object, providerId, text, type ProviderId } from "../config/validate.js"
 import { assertPrivateDirectory } from "../platform/private-state.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "./environment.js"
 import { canonicalJson, parseRequestedSettings, type RequestedSettings } from "./session-config.js"

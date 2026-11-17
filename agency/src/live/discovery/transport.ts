@@ -1,9 +1,23 @@
 import { EventEmitter } from "node:events"
 import type { OwnedChild } from "../../runtime/owned-child.js"
 import { Writable, type Readable } from "node:stream"
-import { CatalogError, invalid, object, type Model, type ProviderProfile } from "../types.js"
-import { DiscoveryError, type ProbeStage } from "../diagnostics.js"
+import { CatalogError, invalid, object } from "../../config/validate.js"
+import type { Model } from "../../config/models.js"
+import type { ProviderProfile } from "../../config/providers.js"
 
+const stages = ["preparation", "worker-launch", "worker-registration", "worker-ipc", "worker-exit", "worker-stream", "worker-config", "native-launch", "native-registration", "native-exit", "native-stream", "discovery", "rpc-rejection", "rpc-decode", "rpc-stream", "rpc-write", "timeout", "cancelled", "cleanup", "configuration", "diagnostic-write"] as const
+export type ProbeStage = typeof stages[number]
+export type ProbeFailureDetail = { stage: ProbeStage; name: string; message: string; code: string | null; syscall: string | null; method: string | null }
+const clipped = (value: unknown): string | null => typeof value === "string" ? value.slice(0, 4096) : null
+export function probeFailureDetail(stage: ProbeStage, cause: unknown, method: string | null = null): ProbeFailureDetail {
+  if (cause instanceof DiscoveryError) return cause.detail
+  const error = cause as { name?: unknown; message?: unknown; code?: unknown; syscall?: unknown } | null
+  return { stage, name: clipped(error?.name) ?? "Error", message: clipped(error?.message) ?? String(cause).slice(0, 4096), code: typeof error?.code === "number" && Number.isFinite(error.code) ? String(error.code) : clipped(error?.code), syscall: clipped(error?.syscall), method }
+}
+export class DiscoveryError extends CatalogError {
+  readonly detail: ProbeFailureDetail
+  constructor(stage: ProbeStage, cause: unknown, method: string | null = null) { super("PROBE_FAILED"); this.detail = probeFailureDetail(stage, cause, method) }
+}
 export type ProbeRequest = { profile: ProviderProfile; workPath: string }
 export type ProbeResult = { models: Model[]; providerVersion: string | null; providerVersionSource: "reported" | "unknown" }
 export type RegisteredChild = { stdin: Writable; stdout: Readable; terminal: Promise<void>; requestCleanup(): void }

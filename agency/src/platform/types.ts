@@ -1,5 +1,5 @@
 export const RUNTIME_RECORD_VERSION = 1 as const
-import type { ProviderId } from "../catalog/types.js"
+import type { ProviderId } from "../config/validate.js"
 
 export type ProcessIdentity = {
   bootId: string

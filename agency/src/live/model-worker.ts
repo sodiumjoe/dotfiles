@@ -4,10 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { parseProfile } from "../catalog/config.js"
-import { DiscoveryError } from "../catalog/diagnostics.js"
-import { NativeFacade, type DriverContext, type RegisteredChild } from "../catalog/drivers/transport.js"
-import type { Model, ProviderProfile } from "../catalog/types.js"
+import { parseProfile } from "../config/providers.js"
+import { DiscoveryError } from "./discovery/transport.js"
+import { NativeFacade, type DriverContext, type RegisteredChild } from "./discovery/transport.js"
+import type { Model } from "../config/models.js"
+import type { ProviderProfile } from "../config/providers.js"
 import { spawnOwnedChild } from "../runtime/owned-child.js"
 
 const environment = (source: NodeJS.ProcessEnv): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(source).filter(([key]) => key !== "NODE_OPTIONS" && key !== "NODE_PATH" && !key.startsWith("AGENCY_") && !key.startsWith("GIT_")))
@@ -23,7 +24,7 @@ export async function listProviderModels(profile: ProviderProfile, signal: Abort
       return child
     }
     const context: DriverContext = { signal, spawnNative, request: { profile, workPath } }
-    const result = profile.id === "claude-agent-acp" ? await (await import("../catalog/drivers/claude.js")).discoverClaude(context) : await (await import("../catalog/drivers/codex.js")).discoverCodex(context)
+    const result = profile.id === "claude-agent-acp" ? await (await import("./discovery/claude.js")).discoverClaude(context) : await (await import("./discovery/codex.js")).discoverCodex(context)
     return result.models
   } finally {
     for (const child of children) child.requestCleanup()

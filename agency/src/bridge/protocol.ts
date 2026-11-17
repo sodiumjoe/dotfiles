@@ -1,4 +1,4 @@
-import { hash, id, keys, object, text } from "../catalog/types.js"
+import { hash, id, keys, object, text } from "../config/validate.js"
 
 export const BRIDGE_PROTOCOL = "agency-bridge/2"
 export const BRIDGE_FRAME_BYTES = 1024 * 1024

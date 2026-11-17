@@ -13,7 +13,7 @@ import { exchangeLive, REQUEST_PROTOCOL, type LiveOperation, type LiveResult } f
 import { RequestError } from "../src/live/errors.js"
 import type { RosterRow } from "../src/live/roster.js"
 import type { HandoffStatus, PromptResult } from "../src/live/core.js"
-import type { ProviderProfile } from "../src/catalog/types.js"
+import type { ProviderProfile } from "../src/config/providers.js"
 import { createAcpPeer, type AcpPeer } from "./acp-peer.js"
 
 export type StartInput = Partial<Extract<LiveOperation, { op: "start" }>>

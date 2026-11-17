@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util"
-import { adapterEntry, digest } from "../catalog/config.js"
-import { absolutePath, hash, keys, object, parseCapability, providerId, type Capability, type ConfigEvidence, type ProviderId, type ProviderProfile, type ProviderSnapshot } from "../catalog/types.js"
+import { adapterEntry, digest } from "../config/providers.js"
+import { absolutePath, hash, keys, object, providerId, type ProviderId } from "../config/validate.js"
+import { parseCapability, type Capability, type ProviderSnapshot } from "../config/models.js"
+import { type ConfigEvidence, type ProviderProfile } from "../config/providers.js"
 import { AGENT_LIMITS, AgentError, agentText, parseLaunchSpec, parsePermissionEvidence, parseSelection, type AgentIds, type LaunchSpec, type PermissionEvidence, type StartSelection } from "./types.js"
 import { staticProductionContracts } from "./production-contracts.js"
 

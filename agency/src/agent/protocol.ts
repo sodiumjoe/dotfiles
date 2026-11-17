@@ -1,6 +1,6 @@
 import type { Socket } from "node:net"
 import { isDeepStrictEqual } from "node:util"
-import { id, keys, object, text } from "../catalog/types.js"
+import { id, keys, object, text } from "../config/validate.js"
 import { CURSOR_BYTES, parsePageInput, QUERY_BYTES, type AgentPage } from "./queries.js"
 import { ControlError, UUID } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
@@ -48,7 +48,7 @@ function launchRecord(input: unknown): LaunchRecord {
   if (owner.kind === "agent") { keys(owner, ["kind", "agentId", "providerGeneration"]); return { version: 2, owner: { kind: "agent", agentId: id(owner.agentId), providerGeneration: id(owner.providerGeneration) }, ...fields } }
   keys(owner, ["kind", "providerId", "commandId"])
   if (owner.kind !== "catalog-probe") invalid()
-  return { version: 2, owner: { kind: "catalog-probe", providerId: agentText(owner.providerId) as import("../catalog/types.js").ProviderId, commandId: id(owner.commandId) }, ...fields }
+  return { version: 2, owner: { kind: "catalog-probe", providerId: agentText(owner.providerId) as import("../config/validate.js").ProviderId, commandId: id(owner.commandId) }, ...fields }
 }
 export function parseAgentView(input: unknown, generation: string | null): AgentView | LegacyAgentView {
   const v = object(input), current = object(v.record)

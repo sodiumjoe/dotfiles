@@ -1,7 +1,7 @@
 import { hostname } from "node:os"
 import { readInputJson } from "../cli/input-json.js"
 import { randomUUID } from "node:crypto"
-import { absolutePath, hash, id, keys, object, text } from "../catalog/types.js"
+import { absolutePath, hash, id, keys, object, text } from "../config/validate.js"
 import { AgentError } from "../agent/types.js"
 import { parsePageInput } from "../agent/queries.js"
 import { parsePermissionRef } from "../agent/permission-types.js"

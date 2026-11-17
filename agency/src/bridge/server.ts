@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { text } from "../catalog/types.js"
+import { text } from "../config/validate.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
 import { createBridgePeer } from "./codec.js"
 import { BRIDGE_PROTOCOL, bridgeError, type BridgeHello } from "./protocol.js"

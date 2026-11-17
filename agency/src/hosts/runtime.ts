@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { hash, id, keys, object } from "../catalog/types.js"
+import { hash, id, keys, object } from "../config/validate.js"
 import { BRIDGE_FRAME_BYTES } from "../bridge/protocol.js"
 import type { AgentTuple, AgentErrorCode } from "../agent/types.js"
 import { isRuntimeSessionRequest, isRuntimeSessionMutation, parseRuntimeSessionOperation, type RuntimeSessionRequest, type RuntimeSessionResult } from "../agent/session-controls.js"

@@ -146,7 +146,7 @@ class AgencyBootstrapTest(DeploymentFixture):
         (self.repo / "agency/dist/src/main.js").write_text('''import assert from "node:assert/strict"
 import { writeFile } from "node:fs/promises"
 import { productionEnvironment } from "./handler/environment.js"
-import { readProfiles } from "./catalog/config.js"
+import { readProfiles } from "./config/providers.js"
 import { readBackendConfig } from "./agent/backend-config.js"
 assert.deepEqual(process.argv.slice(2), ["status", "--json"])
 await writeFile(process.env.DOTFILES_TEST_STATUS_MARKER, "invoked")
@@ -200,19 +200,17 @@ process.stdout.write(JSON.stringify({ defaultBackendId: config.defaultBackendId 
         backend.chmod(0o600)
         return backend
 
-    def read_runtime(self, observe=True, check=True):
-        script = '''const { readProfiles, observeConfig } = await import(process.argv[1])
+    def read_runtime(self, check=True):
+        script = '''const { readProfiles } = await import(process.argv[1])
 const { readBackendConfig } = await import(process.argv[2])
 const profiles = await readProfiles(process.argv[3])
 const backends = await readBackendConfig(process.argv[3])
-const profile = profiles.find(p => p.enabled && p.id === backends.defaultBackendId)
-const evidence = process.argv[4] === "observe" ? await observeConfig(profile) : null
-process.stdout.write(JSON.stringify({ profiles, backends, evidence }))'''
+process.stdout.write(JSON.stringify({ profiles, backends }))'''
         result = subprocess.run(
             [str(self.node), "--input-type=module", "-e", script,
-             (self.repo / "agency/dist/src/catalog/config.js").as_uri(),
+             (self.repo / "agency/dist/src/config/providers.js").as_uri(),
              (self.repo / "agency/dist/src/agent/backend-config.js").as_uri(),
-             str(self.host_root), "observe" if observe else "declare"],
+             str(self.host_root)],
             cwd=self.root, env=self.environment, text=True, capture_output=True, timeout=10,
         )
         if check:
@@ -261,7 +259,7 @@ process.stdout.write(JSON.stringify({ profiles, backends, evidence }))'''
     def test_runtime_declares_missing_adapter_and_validation_rejects_it(self):
         self.prepare_host_state()
         shutil.rmtree(self.adapter)
-        result = self.read_runtime(observe=False)
+        result = self.read_runtime()
         self.assertEqual(result["profiles"], [self.standard_profile()])
         checked = self.run_provider_check()
         self.assertNotEqual(checked.returncode, 0)
@@ -278,19 +276,6 @@ process.stdout.write(JSON.stringify({ profiles, backends, evidence }))'''
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(self.profile_path.is_symlink())
         self.assertEqual(target.read_bytes(), before)
-
-    def test_runtime_default_fingerprint_tracks_config_changes(self):
-        self.prepare_host_state()
-        first = self.read_runtime()["evidence"]["fingerprint"]
-        config = self.owner / ".codex/config.toml"
-        config.parent.mkdir()
-        config.write_text('model = "first-model"')
-        second = self.read_runtime()["evidence"]["fingerprint"]
-        config.write_text('model = "second-model"')
-        third = self.read_runtime()["evidence"]["fingerprint"]
-        self.assertNotEqual(first, second)
-        self.assertNotEqual(second, third)
-        self.assertFalse(self.profile_path.exists())
 
     def test_runtime_defaults_follow_deployed_symlinks(self):
         self.prepare_host_state()
@@ -314,12 +299,10 @@ process.stdout.write(JSON.stringify({ profiles, backends, evidence }))'''
         config.symlink_to(second_config)
         second = self.read_runtime()
         self.assertEqual(second["profiles"][0]["configurationFiles"], [str(second_config.resolve())])
-        self.assertNotEqual(first["evidence"]["fingerprint"], second["evidence"]["fingerprint"])
         modules.unlink()
         modules.symlink_to(second_modules)
         third = self.read_runtime()
         self.assertEqual(third["profiles"][0]["adapterPackageJson"], str((second_modules / "@agentclientprotocol/codex-acp/package.json").resolve()))
-        self.assertNotEqual(second["evidence"]["fingerprint"], third["evidence"]["fingerprint"])
         self.assertFalse(self.profile_path.exists())
 
     def test_directory_config_fails_validation_without_profile_publication(self):

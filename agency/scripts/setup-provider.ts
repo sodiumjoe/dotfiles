@@ -3,7 +3,8 @@ import { access } from "node:fs/promises"
 import { readBackendConfig } from "../src/agent/backend-config.js"
 import { configureLaunchContract } from "../src/agent/contracts.js"
 import { staticProductionContracts } from "../src/agent/production-contracts.js"
-import { observeConfig, readProfiles } from "../src/catalog/config.js"
+import { readProfiles } from "../src/config/providers.js"
+import { providerConfiguration } from "../src/live/launch.js"
 import { productionEnvironment } from "../src/handler/environment.js"
 
 try {
@@ -15,7 +16,7 @@ try {
   const contract = staticProductionContracts().find(value => value.providerId === profile.id && value.id === backend.compatibilityId)
   if (!contract) throw new Error(`unsupported backend compatibility ${backend.compatibilityId}`)
   await access(profile.executable, constants.X_OK)
-  await configureLaunchContract(contract, profile, await observeConfig(profile))
+  await configureLaunchContract(contract, profile, await providerConfiguration(profile))
   process.stdout.write(`Validated Agency default backend ${backend.id}.\n`)
 } catch (error) {
   process.stderr.write(`setup-provider: ${error instanceof Error ? error.message : String(error)}; check the installed provider files and any catalog overrides.\n`)

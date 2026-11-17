@@ -1,4 +1,4 @@
-import { id, object } from "../catalog/types.js"
+import { id, object } from "../config/validate.js"
 import { knownKeys, type StopReason } from "./session-events.js"
 import { AgentError, parseAgentFailure } from "./types.js"
 import type { SubmissionReceipt } from "./turns.js"

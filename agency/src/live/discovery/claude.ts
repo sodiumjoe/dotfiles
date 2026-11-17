@@ -1,9 +1,8 @@
 import { pathToFileURL } from "node:url"
-import { sdkEntry } from "../config.js"
-import { normalizeClaude } from "../normalize.js"
-import { CatalogError, invalid, object } from "../types.js"
-import { aborted, type DriverContext, type ProbeResult, type RegisteredChild } from "./transport.js"
-import { DiscoveryError } from "../diagnostics.js"
+import { sdkEntry } from "../../config/providers.js"
+import { normalizeClaude } from "../../config/models.js"
+import { CatalogError, invalid, object } from "../../config/validate.js"
+import { DiscoveryError, aborted, type DriverContext, type ProbeResult, type RegisteredChild } from "./transport.js"
 
 export async function discoverClaude(context: DriverContext, loadSdk: (entry: string) => Promise<unknown> = entry => import(pathToFileURL(entry).href)): Promise<ProbeResult> {
   let count = 0, cancelled = false

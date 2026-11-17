@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises"
 import type { AgentIndex, IndexEntry } from "../agent/agent-index.js"
 import { codexSessionFiles, liveExcerpt, sessionExcerpt, sessionFile, sessionSettings, sessionSummary, sessionTranscript, type ConversationExcerpt, type RecordedSettings, type ExcerptTurn, type SessionHomes, type SessionRef } from "../agent/excerpt.js"
-import type { ProviderId } from "../catalog/types.js"
+import type { ProviderId } from "../config/validate.js"
 import type { Activity, LiveAgent, LiveTable } from "./state.js"
 
 export type LiveRow = { activity: Activity; handlerGeneration: string; providerGeneration: string; model: string | null; mode: string | null }

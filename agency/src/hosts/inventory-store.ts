@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import { basename, dirname, join } from "node:path"
 import { assertPrivateDirectory } from "../platform/private-state.js"
 import { ensurePrivateChild } from "../handler/environment.js"
-import { decodeJson, readBoundedFile } from "../catalog/config.js"
+import { decodeJson, readBoundedFile } from "../config/providers.js"
 import { canonicalJson } from "../agent/session-config.js"
 
 const RECORD_BYTES = 1024 * 1024

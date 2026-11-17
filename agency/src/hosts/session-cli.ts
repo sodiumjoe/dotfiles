@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { readInputJson } from "../cli/input-json.js"
-import { hash, id, keys, object } from "../catalog/types.js"
+import { hash, id, keys, object } from "../config/validate.js"
 import { AgentError } from "../agent/types.js"
 import { parseRuntimeSessionOperation, type RuntimeSessionRequest, type RuntimeSessionResult } from "../agent/session-controls.js"
 import type { ControlDependencies } from "../cli/control.js"

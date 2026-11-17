@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { absolutePath, hash, id, keys, object, text, timestamp } from "../catalog/types.js"
+import { absolutePath, hash, id, keys, object, text, timestamp } from "../config/validate.js"
 import { canonicalJson, type JsonObject } from "./session-config.js"
 import { AgentError, type AgentTuple } from "./types.js"
 

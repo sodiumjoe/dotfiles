@@ -1,4 +1,4 @@
-import { hash, keys, object, text } from "../catalog/types.js"
+import { hash, keys, object, text } from "../config/validate.js"
 import { bridgeError } from "../bridge/protocol.js"
 import { createPagedReads, requestBridgeRead } from "../bridge/paging.js"
 import type { BridgeTransport } from "../bridge/ssh.js"

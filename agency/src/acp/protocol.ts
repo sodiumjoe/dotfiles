@@ -1,5 +1,5 @@
 import { ProviderRequestError } from "../agent/types.js"
-import { id, keys, object } from "../catalog/types.js"
+import { id, keys, object } from "../config/validate.js"
 import type { JsonObject } from "../agent/session-config.js"
 import { agentFailure } from "../agent/types.js"
 

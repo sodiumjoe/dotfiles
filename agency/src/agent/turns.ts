@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { id } from "../catalog/types.js"
+import { id } from "../config/validate.js"
 import { MutationQueue } from "../handler/mutations.js"
 import type { Conversation, TurnState } from "./conversation.js"
 import { validateTurnInput, type StopReason, type TurnOptions, type TurnResult } from "./session-events.js"

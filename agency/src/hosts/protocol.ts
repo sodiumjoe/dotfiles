@@ -1,6 +1,6 @@
 import { parseRuntimeEntry, type RuntimeEntry } from "../entry/runtime.js"
 import { isDeepStrictEqual } from "node:util"
-import { hash, id, keys, object, text } from "../catalog/types.js"
+import { hash, id, keys, object, text } from "../config/validate.js"
 import { parseTuple } from "../agent/types.js"
 import type { RuntimeSessionResult } from "../agent/session-controls.js"
 import { validateSessionOwner, type SessionMutationReference } from "./runtime.js"

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { cloneWireJson } from "./wire-json.js"
-import { absolutePath, id, object, providerId } from "../catalog/types.js"
+import { absolutePath, id, object, providerId } from "../config/validate.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "../agent/environment.js"
 import { parseRequestedSettings, type JsonObject, type SessionConfiguration } from "../agent/session-config.js"
 import { validateStructuredContent } from "../agent/session-events.js"

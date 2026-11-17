@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { hash, id, object, text } from "../catalog/types.js"
+import { hash, id, object, text } from "../config/validate.js"
 import { MutationQueue } from "../handler/mutations.js"
 import type { JsonObject } from "./session-config.js"
 import { AgentError, type AgentTuple } from "./types.js"

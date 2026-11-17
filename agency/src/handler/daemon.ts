@@ -1,7 +1,7 @@
 import { AgentError } from "../agent/types.js"
 import { createRuntimeEntry, type RuntimeEntryDriver } from "../entry/runtime.js"
 import { createRuntimeEntryDriver } from "../entry/editor.js"
-import { id, keys, object } from "../catalog/types.js"
+import { id, keys, object } from "../config/validate.js"
 import { createHostInventory } from "../hosts/inventory.js"
 import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
 import { connectBridge } from "../bridge/ssh.js"

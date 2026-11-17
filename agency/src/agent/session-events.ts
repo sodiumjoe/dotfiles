@@ -1,4 +1,4 @@
-import { object } from "../catalog/types.js"
+import { object } from "../config/validate.js"
 import { AgentError, agentText } from "./types.js"
 import { validateMetadata, type JsonObject } from "./session-config.js"
 

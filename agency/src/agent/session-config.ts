@@ -1,4 +1,4 @@
-import { object, text } from "../catalog/types.js"
+import { object, text } from "../config/validate.js"
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject
 export type JsonObject = { [key: string]: JsonValue }

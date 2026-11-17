@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util"
-import { absolutePath, hash, id, keys, object, text } from "../catalog/types.js"
+import { absolutePath, hash, id, keys, object, text } from "../config/validate.js"
 import { AgentError, parseTuple, type AgentTuple } from "../agent/types.js"
 
 export type EntryTarget = { hostId: string; target: AgentTuple }

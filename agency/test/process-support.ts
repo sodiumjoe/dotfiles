@@ -1,6 +1,6 @@
 import { launchContractFingerprint, type ConfiguredLaunchContract, type LaunchContract } from "../src/agent/contracts.js"
 import type { AgentRecordV3, LaunchSpec } from "../src/agent/types.js"
-import { digest } from "../src/catalog/config.js"
+import { digest } from "../src/config/providers.js"
 import { canonicalJson } from "../src/agent/session-config.js"
 
 export const agentId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
