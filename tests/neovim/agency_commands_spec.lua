@@ -81,6 +81,28 @@ describe("Agency native commands", function()
 
 
 
+    it("previews a local agent over the editor connection", function()
+        local outcome
+        api.excerpt({ agentId = f.row.record.definition.agentId }, function(err, result) outcome = { err = err, result = result } end)
+        f.flush()
+        local frame = f.request("agency/excerpt")
+        assert.are.same({ agentId = f.row.record.definition.agentId, turns = 4 }, frame.params)
+        f.client:_handle_message({ id = frame.id, result = { state = "excerpt", source = "live", turns = { { role = "user", text = "hello" } } } })
+        assert.is_true(vim.wait(1000, function() return outcome ~= nil end))
+        assert.is_nil(outcome.err)
+        assert.are.equal("hello", outcome.result.turns[1].text)
+    end)
+
+    it("names the request an older Handler does not serve", function()
+        local outcome
+        api.excerpt({ agentId = f.row.record.definition.agentId }, function(err) outcome = err end)
+        f.flush()
+        f.client:_handle_message({ id = f.request("agency/excerpt").id, error = { code = -32601, message = "Method not found" } })
+        assert.is_true(vim.wait(1000, function() return outcome ~= nil end))
+        assert.is_truthy(outcome.message:find("agency/excerpt", 1, true))
+        assert.is_truthy(outcome.message:find(":AgencyReload", 1, true))
+    end)
+
     it("submits through native ACP and accepts annotations only on Handler admission", function()
         local accepted, outcome = 0
         api.annotations = function() return { { text = "annotation" } } end

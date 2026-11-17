@@ -71,7 +71,7 @@ function M.view(row)
     return { record = record, live = live ~= nil, display = live and { title = record.title, activity = live.activity == "working" and "working" or "idle" } or nil }
 end
 
-local function excerpt_result(result)
+function M.excerpt(result)
     assert(result.state == "excerpt" and vim.tbl_contains({ "live", "history", "none" }, result.source) and type(result.turns) == "table" and vim.islist(result.turns))
     for _, turn in ipairs(result.turns) do assert((turn.role == "user" or turn.role == "agent") and type(turn.text) == "string") end
 end
@@ -88,7 +88,7 @@ local function validate_request(value, argv)
     elseif result.state == "agents" then
         assert(type(result.agents) == "table" and vim.islist(result.agents))
         for _, row in ipairs(result.agents) do M.row(row) end
-    elseif result.state == "excerpt" then excerpt_result(result) end
+    elseif result.state == "excerpt" then M.excerpt(result) end
 end
 
 local function validate_page(result, generation)
@@ -182,7 +182,7 @@ local function validate(value, argv)
                         and type(receipt.editor.tmuxSocketPath) == "string" and receipt.editor.tmuxSocketPath:sub(1, 1) == "/")
                 end
             end
-        elseif result.state == "excerpt" then excerpt_result(result)
+        elseif result.state == "excerpt" then M.excerpt(result)
         else error("Unexpected host result") end
         return
     end
