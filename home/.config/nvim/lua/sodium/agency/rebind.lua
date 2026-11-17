@@ -21,11 +21,12 @@ end
 
 function M.run(views, opts, callback)
     opts = opts or {}
-    local ready = {}
+    local ready, known = {}, {}
     for _, view in ipairs(views or {}) do
+        if view.record.version == 3 then known[view.record.definition.agentId] = true end
         if view.record.version == 3 and view.live and view.record.phase == "ready" then ready[view.record.definition.agentId] = view end
     end
-    local summary, settled = { rebound = 0, deferred = 0, missing = {}, failed = {}, timed_out = false }, false
+    local summary, settled = { rebound = 0, deferred = 0, stopped = {}, missing = {}, failed = {}, timed_out = false }, false
     local timer = assert(vim.uv.new_timer())
     timer:start(opts.timeout_ms or 30000, 0, vim.schedule_wrap(function()
         if settled then return end
@@ -57,7 +58,8 @@ function M.run(views, opts, callback)
             local agent_id = manager.session_id:sub(8)
             local view = ready[agent_id]
             if not view then
-                summary.missing[#summary.missing + 1] = agent_id
+                local list = known[agent_id] and summary.stopped or summary.missing
+                list[#list + 1] = agent_id
             elseif opts.defer_busy and manager.is_generating then
                 manager._agency_rebind = vim.deepcopy(view)
                 summary.deferred = summary.deferred + 1

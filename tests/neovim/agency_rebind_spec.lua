@@ -80,6 +80,16 @@ describe("Agency rebind", function()
         assert.are.equal(0, summary.rebound)
     end)
 
+    it("reports a tab whose agent is stopped without loading it", function()
+        local tab, manager, before = f.manager.tab_page_id, f.manager, loads()
+        local row = control.agent(control.target_a)
+        row.live, row.record.launch, row.record.phase = false, vim.NIL, "stopped"
+        local summary = run({ row }, { reconnect = function(done) done() end })
+        assert.are.same({ { control.target_a.agentId }, {} }, { summary.stopped, summary.missing })
+        assert.are.equal(before, loads())
+        assert.are.equal(manager, Registry.sessions[tab])
+    end)
+
     it("keeps a tab whose agent is missing and reports it", function()
         local tab, manager, before = f.manager.tab_page_id, f.manager, loads()
         local summary = run({}, { reconnect = function(done) done() end })

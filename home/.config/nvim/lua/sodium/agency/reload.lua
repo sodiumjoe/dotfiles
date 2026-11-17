@@ -112,6 +112,7 @@ function M.run(opts)
                 if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen tabs with <leader>af"); return end
                 local text = summary.rebound .. " tab" .. (summary.rebound == 1 and "" or "s") .. " rebound"
                 if summary.deferred > 0 then text = text .. ", " .. summary.deferred .. " after their turns" end
+                if #summary.stopped > 0 then text = text .. ", " .. #summary.stopped .. (#summary.stopped == 1 and " tab's agent is" or " tabs' agents are") .. " stopped; reopen with <leader>ar" end
                 if #summary.missing > 0 then text = text .. ", " .. #summary.missing .. " without a known agent" end
                 if #summary.failed > 0 then
                     local reasons = {}
