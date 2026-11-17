@@ -184,6 +184,15 @@ function M.install()
     end
     if not Patch.claim(Manager, "agency", M) then return end
     require("sodium.agency.layout").setup()
+    require("agentic.utils.buf_helpers").is_buffer_empty = function(bufnr)
+        local count = vim.api.nvim_buf_line_count(bufnr)
+        for first = 0, count - 1, 256 do
+            for _, line in ipairs(vim.api.nvim_buf_get_lines(bufnr, first, math.min(first + 256, count), false)) do
+                if line:match("%S") then return false end
+            end
+        end
+        return true
+    end
     local native = {}
     for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = Patch.original(entry[1], name) end end
     local sm, acp = native[Manager], native[Client]
