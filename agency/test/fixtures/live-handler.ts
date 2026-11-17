@@ -22,7 +22,7 @@ const contract: LaunchContract = {
 }
 try {
   await runHandler({ paths: config.paths, adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(), recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!,
-    status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), agentLayer: "live",
+    status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }),
     launchContracts: [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }],
     catalogFactory: context => {
       const service = createCatalogService({ ...context, queue: context.mutations.queue, probes: { verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } })

@@ -250,7 +250,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const launchContext = { paths: options.paths, adapter: options.adapter, state, mutations, shutdownPending: () => termination || shutdown?.pending !== undefined || shutdown?.accepted !== undefined }
     const agentIndex = createAgentIndex(root)
     const migrate = () => migrateIndex({ store: agentStore, index: agentIndex, homes: defaultHomes(), events }).catch(error => events.append({ type: "index_migration_failed", message: String(error).slice(0, 512) }))
-    if (options.agentLayer === "live") {
+    if ((options.agentLayer ?? (options.agentFactory ? "legacy" : "live")) === "live") {
       if (await agentIndex.migrated()) void migrate()
       else await migrate()
       checkStartup()

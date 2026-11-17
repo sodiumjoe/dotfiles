@@ -103,31 +103,32 @@ Closing a tab, destroying a view, switching sessions, exiting Neovim, losing the
 
 ## Reloading after code changes
 
-`:AgencyReload` applies Agency changes from the main checkout without restoring conversations by hand. It runs these steps:
+`:AgencyReload` applies Agency changes from the main checkout. It runs these steps:
 
-1. Finish any restore saved by an interrupted restart.
-2. Build Agency.
-3. Compare the running Handler's `distDigest` in `agy status` with `agency/dist/build-manifest.json`. When they differ, or when the Handler reports no `distDigest`, run `agy restart`.
-4. Reload the editor's Agency Lua, rolling back to the previous modules if the new ones fail to load. If the rollback also fails, the summary says so and Neovim must be restarted.
-5. Rebind each Agency tab to its agent in place.
+1. Build Agency.
+2. Compare the running Handler's `distDigest` in `agy status` with `agency/dist/build-manifest.json`. When they differ, or when the Handler reports no `distDigest`, run `agy restart`.
+3. Reload the editor's Agency Lua, rolling back to the previous modules if the new ones fail to load. If the rollback also fails, the summary says so and Neovim must be restarted.
+4. Rebind each Agency tab to its agent in place. The restart handed the live agents to the new Handler, so their tabs find them live. A tab is counted as rebound only once its session load succeeds; a failed or timed-out load is named in the summary.
 
 `:AgencyReload!` always restarts the Handler. While it restarts the Handler, it hides the editor's expected "Agency Handler connection ended" error. It also names any Lua file in `home/.config/nvim` that bootstrap hasn't linked into the live config yet, because the editor can't load a new file until it is linked. A second `:AgencyReload` while one is running is refused with a notification.
 
-`agy restart [--resume] [--timeout SECONDS]` waits until no agent is running a turn or changing state, for up to 300 seconds by default. It records the live agents in `restart-pending.json` under the persistent state directory, then stops them with `agy shutdown --stop-agents --require-idle`. The Handler refuses that shutdown with `BUSY` if a turn started in the meantime, and `agy restart` goes back to waiting. After the new Handler starts, it restores each recorded agent and deletes the file. The file keeps only agents whose restore can still succeed, meaning their record exists and its phase is not the terminal `failed` or `interrupted`. If the restart is interrupted, `agy restart --resume` restores whatever the file still lists. A plain `agy restart` that finds the file restores those agents first and carries any that are still retryable into its new snapshot. A corrupt file fails with `INVALID_PROTOCOL` naming the file and changes nothing.
+`agy restart [--timeout SECONDS]` hands the live agents to a new Handler. It sends `agy shutdown --stop-agents --require-idle`, which the Handler refuses with `BUSY` while any agent is running a turn, starting, stopping or changing a setting; `agy restart` repeats it every second for up to 300 seconds by default. When the Handler accepts, it writes `handoff.json` in its state directory, listing each prompted live agent with its index fields (backend, native session ID, directory) and its current model and mode, plus the boot ID and the time, then stops the agents and exits. If the shutdown fails after it has begun stopping agents, the file is kept so the next start restores them. The next Handler reads the file at startup and deletes it. It uses the file only when it was written in the same boot and at most ten minutes ago; otherwise it logs `handoff_ignored` with the reason. It drops and logs any entry that is not valid, writes each listed agent's index entry if it is missing, reports ready, and then restores the agents in the background with their model and mode. A request for one of those agents while it is being restored waits for that same restore. An agent that cannot be restored is logged as `handoff_restore_failed` and stays stopped. `agy agents` reports the handoff's progress in `handoff` (`fromGeneration`, `agents`, `pending`, `failed`), and `agy restart` waits on it, up to its timeout, before it replies: the result lists each handed-off agent in `agents` with `outcome` `restored`, `failed` with its failure, or `restoring` if the timeout passed first. This works even when another client started the new Handler first. Running `agy shutdown --stop-agents --require-idle` by hand hands off the same way. An agent that was never prompted has no session file and is not handed off. `--resume` is accepted for editors that predate this behavior and does nothing. A `restart-pending.json` left by an older build is deleted.
 
-A Handler whose status has no `distDigest` key predates `agy restart`. The command then records the live agents in the pending file and stops with instructions, without sending any shutdown. Run `agy shutdown --stop-agents` once while agents are idle, then `agy restart --resume` or `:AgencyReload`.
+The first start against an index that has never been migrated waits for that migration before it reports ready, so the first `agy agents` lists every migrated agent. An agent stopped some other way, for example by a reboot, is restored when an editor loads it or `agy prompt` addresses it. That restore re-applies the last model and mode recorded in the provider's session file: `model` and `permissionMode` in a Claude transcript, and `model` with the approval and sandbox policy in a Codex rollout's `turn_context`. A setting the file does not record comes back as the provider default, and a recorded value the provider no longer offers is logged as `setting_not_restored`.
 
-The first rollout needs two manual steps. A Neovim that was started before this change has the old Agency patches loaded and no `:AgencyReload` command, so restart Neovim once after the change lands. The Handler that is running at that point also predates `agy restart`, so the first Handler restart takes three steps. Run `:AgencyReload`, which records the live agents in `restart-pending.json` and reports `INCOMPLETE` with instructions. Then run `agy shutdown --stop-agents` while agents are idle. Then run `:AgencyReload` again, which starts the new Handler, restores the recorded agents, and rebinds the tabs. Running `agy shutdown --stop-agents` before any agents are recorded stops them without saving the list, and they must be reopened by hand.
+### Upgrading from a Handler that predates live requests
+
+A Handler built before the live requests closes their sockets unanswered, and every new `agy` request against it fails with `UNAVAILABLE` naming this step. Upgrade once: run `:AgencyReload` in one Neovim, then restart any other Neovim windows. The old Handler accepts the same shutdown request, but it writes no handoff, so its agents come back stopped and are restored when an editor loads them or a prompt addresses them.
 
 When `agy restart` fails, the `:AgencyReload` summary names the error. The failures are:
 
-- `BUSY`: an agent was still running a turn when the timeout expired. Nothing was stopped and the editor reloads nothing. Run `:AgencyReload` again after the turn ends.
-- `UNAVAILABLE`: the old Handler stopped but the new one failed to start. The agents remain listed in `restart-pending.json`. Fix the cause, then run `agy restart --resume` or `:AgencyReload` again.
-- `INCOMPLETE`: the shutdown did not complete, so the old Handler is still running and the agents it had already stopped are restored under it. The same code reports a new Handler that runs a different build than `dist`, and an old Handler that predates `agy restart`, as described above.
+- `BUSY`: an agent was still working when the timeout expired. Nothing was stopped and the editor reloads nothing. Run `:AgencyReload` again after the turn ends.
+- `UNAVAILABLE`: the old Handler stopped but the new one failed to start. Fix the cause, then run `agy status` or `:AgencyReload` again.
+- `INCOMPLETE`: the shutdown did not complete and the old Handler is still running, or the new Handler runs a different build than `dist`.
 
-Except for a plain `BUSY`, these failures can leave the Handler or its agents changed, so the editor checks `agy status` again. When the Handler runs the new build, or no Handler answers, the editor reloads its Lua and rebinds each tab to the agents that are running, deferring tabs that are mid-turn. When the old Handler is still running, the editor rebinds the tabs with the Lua it already has and says that the Lua was not reloaded, because new editor code must not talk to an old Handler. The summary ends with the next step, which is to run `:AgencyReload` again once the cause is fixed, or the upgrade steps above for a Handler that predates `agy restart`. A `BUSY` restart after the first step already restarted the Handler to finish a saved restore is treated the same way.
+Except for a plain `BUSY`, these failures can leave the Handler or its agents changed, so the editor checks `agy status` again. When the Handler runs the new build, or no Handler answers, the editor reloads its Lua and rebinds each tab. When the old Handler is still running, the editor rebinds the tabs with the Lua it already has and says that the Lua was not reloaded, because new editor code must not talk to an old Handler.
 
-A rebind redraws the conversation from the Handler's retained history, so the chat loses its scroll position and manual folds. A tab whose agent is missing after the restart keeps its view and is counted in the summary. The digest covers all of `dist`, including compiled tests and scripts, so an edit to Agency tests also triggers a Handler restart. Agency tabs in other Neovim instances reconnect the usual way. Changes in worktrees take effect only after they are merged into `~/.dotfiles`, because `agy` runs from there.
+A rebind redraws the conversation from the Handler's retained history, so the chat loses its scroll position and manual folds. A tab whose agent is no longer known to the Handler keeps its view and is counted in the summary. The digest covers all of `dist`, including compiled tests and scripts, so an edit to Agency tests also triggers a Handler restart. Agency tabs in other Neovim instances reconnect the usual way. Changes in worktrees take effect only after they are merged into `~/.dotfiles`, because `agy` runs from there.
 
 ## Editor RPC routing
 
@@ -155,11 +156,46 @@ Model discovery captures worker and native stderr as private, mode-0600 files in
 
 ## Native history import
 
-The saved-session picker lists only stopped or recoverable logical Agency sessions, with bounded, read-only Codex metadata discovery used to enrich matching entries. Live and transitional agents use the active picker. Unregistered native sessions are excluded and require an explicit CLI import. Selecting an available saved session requires confirmed logical restore. Import records backend, native session ID, and cwd without claiming ownership of an external direct-provider process. Reimporting an existing native identity resolves to its existing logical agent.
+The saved-session picker lists only stopped or recoverable logical Agency sessions, with bounded, read-only Codex metadata discovery used to enrich matching entries. Live and transitional agents use the active picker. Unregistered native sessions are excluded. Selecting an available saved session requires confirmed logical restore.
 
 Restore rows show a shortened conversation title, directory, backend, and update date. The visible preview shows the full title, directory, state, availability, and session identifiers. Untitled Codex logs use the first user request found within the first 1 MiB, skipping injected instructions and environment context; requests beyond that limit retain a directory and short-ID fallback. Matching native metadata fills missing logical-session titles and dates while preserving the logical restore identity.
 
-Import a native session with `agy agent import --provider codex-acp --session <native-id> --cwd <absolute-path>`, followed by `agy agent restore <agent-uuid>`. Native IDs and logical IDs are separate namespaces; ACP uses `agency:<agent-uuid>`. Import does not submit transcript messages or signal an external provider. Provider-native session files are neither deleted nor rewritten. Unsupported backends remain unavailable. Saved-session rows and previews label unavailable entries explicitly. Version-1 stopped records remain visible as unavailable history; selecting them cannot import, load, or restore a provider.
+Native IDs and logical IDs are separate namespaces; ACP uses `agency:<agent-uuid>`. Provider-native session files are neither deleted nor rewritten. Unsupported backends remain unavailable. Saved-session rows and previews label unavailable entries explicitly.
+
+## Requests
+
+`agy start`, `restore`, `stop`, `set`, `prompt` and `cancel` ask the Handler for a state and reply when that state is reached or has failed. Nothing about a request is stored; if a reply is lost, `agy agents` shows the current state. Agent IDs are the only target.
+
+```text
+agy start [--backend ID] [--agent UUID] [--cwd PATH] [--model ID] [--mode ID] [--json]
+agy restore AGENT_UUID [--json]
+agy stop AGENT_UUID [--json]
+agy set AGENT_UUID SETTING VALUE [--json]
+agy prompt AGENT_UUID [--submission-id UUID] [--json] < prompt.txt
+agy cancel AGENT_UUID [--json]
+agy agents [--json]
+agy excerpt AGENT_UUID [--turns N] [--json]
+agy transcript AGENT_UUID [--json]
+agy models [--json]
+agy permissions [--json]
+agy permissions decide --input-json JSON [--json]
+agy forget AGENT_UUID [--json]
+agy log [--agent UUID] [--since ISO_TIME] [--limit N] [--json]
+```
+
+`start` makes a new agent with the given ID, or with a new ID when `--agent` is omitted, and replies when it is ready. Repeating it with the same ID returns the existing agent; a different backend or directory fails with `INVALID`. Concurrent starts of one ID share one launch. An agent is kept in the index once its first prompt is accepted, so an agent that was never prompted is gone after a Handler restart. `restore` makes a stopped agent live with the caller's environment. `prompt` reads the prompt from stdin and restores a stopped agent first. `set` changes `model`, `mode` or a provider option through the live provider, and the reply shows what the provider reports. `forget` deletes a stopped agent's index entry. `agents`, `excerpt`, `transcript`, `stop`, `forget` and `log` work without a running Handler; `start`, `restore`, `prompt` and `models` start it.
+
+Every reply uses the `agency-request/1` envelope. A failure carries `{ code, message }` with one of five codes, and the message is also printed on stderr:
+
+| Code | Meaning | Exit |
+|---|---|---|
+| `NOT_FOUND` | The agent is not known on this host, or its session file is gone so it cannot be restored | 66 |
+| `BUSY` | A turn or a setting change is running | 75 |
+| `INVALID` | The request is malformed or conflicts with the agent | 64 |
+| `UNAVAILABLE` | The Handler, backend or provider is unreachable, with the reason | 69 |
+| `FAILED` | The provider refused or failed, with its message | 70 |
+
+Every failure is also appended to the event log, which `agy log` reads. Remote hosts keep using `agy roster`, `agy session` and `agy permission` with `--host` until cross-host requests change in phase C.
 
 ## CLI and protocol boundaries
 
@@ -169,14 +205,8 @@ Every public `--input-json` flag accepts either inline JSON or `-` to read JSON 
 agy status [--json]
 agy doctor [--json]
 agy acp
-agy shutdown [--stop-agents] [--json]
-agy agent list [--json]
-agy agent current [--json]
-agy agent page --limit 100 [--cursor <cursor>] [--cwd <path>] [--active] [--json]
-agy agent import --provider codex-acp --session <native-id> --cwd <path> [--json]
-agy agent restore <agent-uuid> [--json]
-agy agent stop <agent-uuid> --handler-generation <uuid> --provider-generation <uuid> [--json]
-agy agent command <command-uuid> --handler-generation <uuid> [--json]
+agy shutdown [--stop-agents [--require-idle]] [--json]
+agy restart [--timeout SECONDS] [--json]
 ```
 
 `agy help --json` lists exact flags and compatibility commands, including model catalog operations, explicit-selection start, and scalar prompt. Normal ACP creation does not require catalog qualification. Model discovery runs only through explicit `agy model refresh`; initialization, list, resume and elapsed time never start probes. Cached model offers remain advisory across TTL expiry and Handler generations. Native provider initialization validates the selected model and settings.
