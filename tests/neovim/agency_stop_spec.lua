@@ -26,7 +26,9 @@ describe("Agency stop view cleanup", function()
     end
 
     local function stopped(target)
-        transport.respond(1, transport.receipt(1, target or require("fixtures.agency_control").target_a, "stopped"))
+        local agentId = (target or require("fixtures.agency_control").target_a).agentId
+        assert.is_true(vim.tbl_contains(transport.pending("stop").argv, agentId))
+        transport.answer("stop", transport.reply(target or require("fixtures.agency_control").target_a, false))
         f.flush()
     end
 
@@ -43,7 +45,7 @@ describe("Agency stop view cleanup", function()
         assert.is_nil(f.client.subscribers["agency:" .. f.row.record.definition.agentId])
         for _, frame in ipairs(f.frames) do assert.is_not.equal("session/cancel", frame.method) end
         api.current()
-        transport.respond(2, require("fixtures.agency_control").page({}))
+        transport.answer("agents", require("fixtures.agency_control").roster({}))
         f.flush()
         assert.is_not.equal(f.manager, Registry.sessions[tab])
         assert.is_not_nil(f.request("session/new"))
@@ -69,26 +71,16 @@ describe("Agency stop view cleanup", function()
         stop_key()
         assert.are.equal(f.manager, Registry.sessions[f.manager.tab_page_id])
         assert.is_true(f.manager.widget:is_open())
-        assert.are.equal(0, #transport.calls)
+        assert.is_nil(transport.pending("stop"))
         assert.are.equal(0, #notifications)
     end)
 
     it("keeps the view when stop fails", function()
         stop_key()
-        transport.respond(1, nil, { code = "UNAVAILABLE", message = "unavailable" })
+        transport.answer("stop", nil, { code = "UNAVAILABLE", message = "unavailable" })
         assert.are.equal(f.manager, Registry.sessions[f.manager.tab_page_id])
         assert.is_true(f.manager.widget:is_open())
         assert.are.same({ "unavailable" }, notifications)
-    end)
-
-    it("keeps the view when cleanup is not verified", function()
-        stop_key()
-        local receipt = transport.receipt(1, require("fixtures.agency_control").target_a, "stopped")
-        receipt.durability = "unverified"
-        transport.respond(1, receipt)
-        assert.are.equal(f.manager, Registry.sessions[f.manager.tab_page_id])
-        assert.is_true(f.manager.widget:is_open())
-        assert.are.same({ "incomplete" }, notifications)
     end)
 
     it("keeps the attached view when stopping another roster agent", function()

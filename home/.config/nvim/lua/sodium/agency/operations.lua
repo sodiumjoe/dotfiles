@@ -19,8 +19,8 @@ end
 
 function M.new(deps)
     deps = deps or {}
-    local client = deps.client or require("sodium.agency.control").new()
-    local uuid = deps.uuid or require("sodium.agency.control").uuid
+    local Control = require("sodium.agency.control")
+    local client = deps.client or Control.new()
     local select_agent = deps.select_agent
         or function(agents, callback)
             return require("sodium.agency.picker").current(agents, callback)
@@ -51,7 +51,7 @@ function M.new(deps)
     local report = deps.report or function(value)
         vim.notify("Agency " .. vim.inspect(value))
     end
-    local epoch, active, pending, api = 0, nil, {}, {}
+    local epoch, active, pending, sequence, api = 0, nil, {}, 0, {}
     local current_origin
     local function begin(cwd, origin)
         epoch = epoch + 1
@@ -70,6 +70,15 @@ function M.new(deps)
     end
     local function command(argv, cwd, callback, timeout_ms)
         client.command(argv, { cwd = cwd, timeout_ms = timeout_ms or 5000 }, callback)
+    end
+    local function request(op, agent_id, argv, cwd, callback)
+        sequence = sequence + 1
+        local key = sequence
+        pending[key] = { op = op, agentId = agent_id, cwd = cwd, startedAt = os.date("!%Y-%m-%dT%H:%M:%SZ") }
+        command(argv, cwd, function(error, envelope)
+            pending[key] = nil
+            callback(error, envelope)
+        end, 310000)
     end
     local inventory
     local function attach(target, callback, operation, origin)
@@ -93,124 +102,6 @@ function M.new(deps)
             callback(error_value("UNAVAILABLE"))
         end, operation)
     end
-    local function complete(receipt, envelope, callback, operation)
-        local result = envelope.result
-        if
-            result.state ~= "command"
-            or result.command.commandId ~= receipt.commandId
-            or result.command.handlerGeneration ~= receipt.handlerGeneration
-        then
-            receipt.error = error_value("INVALID_PROTOCOL")
-            callback(receipt.error)
-            return
-        end
-        receipt.view = result
-        if result.durability ~= "verified" or result.command.state == "pending" then
-            callback(error_value("INCOMPLETE"), result)
-            return
-        end
-        pending[receipt.commandId] = nil
-        local outcome = result.command.result
-        if not outcome or outcome == null then
-            callback(error_value("INVALID_PROTOCOL"))
-            return
-        end
-        if outcome.failure ~= null and outcome.failure ~= nil then
-            callback(outcome.failure, result)
-            return
-        end
-        if receipt.op == "stop" then
-            if not vim.deep_equal(outcome.target, receipt.target) or outcome.outcome ~= "stopped" then
-                callback(error_value("INVALID_PROTOCOL"))
-                return
-            end
-            callback(nil, result)
-            return
-        end
-        if
-            outcome.outcome ~= (receipt.op == "start" and "started" or "restored")
-            or not outcome.target
-            or outcome.target == null
-        then
-            callback(error_value("INVALID_PROTOCOL"))
-            return
-        end
-        if receipt.agentId and outcome.target.agentId ~= receipt.agentId then
-            callback(error_value("INVALID_PROTOCOL"))
-            return
-        end
-        local description = "Session " .. outcome.target.agentId .. " " .. outcome.outcome
-        local recovery = " Use :AgencyAttach " .. outcome.target.agentId .. " to open it."
-        local function attached(error, manager)
-            if error and error.code == "CANCELLED" then
-                report(description .. ", but editor attachment was cancelled by a newer action." .. recovery)
-            elseif error and receipt.op == "restore" then
-                error = vim.tbl_extend("force", error, {
-                    message = description .. ", but editor attachment failed: " .. (error.message or error.code) .. "." .. recovery,
-                })
-            elseif not error and receipt.op == "restore" then
-                report(description .. " and attached.")
-            end
-            callback(error, manager)
-        end
-        if not valid_operation(operation) then
-            attached(error_value("CANCELLED"), result)
-            return
-        end
-        if receipt.op == "restore" then report(description .. "; attaching editor...") end
-        attach(outcome.target, attached, operation, receipt.origin)
-    end
-    local function dispatch(op, cwd, generation, argv, callback, operation, agent_id, target)
-        local receipt = {
-            commandId = uuid(),
-            handlerGeneration = generation,
-            op = op,
-            cwd = cwd,
-            agentId = agent_id,
-            target = target and vim.deepcopy(target),
-            epoch = operation,
-            origin = vim.deepcopy(current_origin),
-        }
-        pending[receipt.commandId] = receipt
-        vim.list_extend(
-            argv,
-            {
-                "--command-id",
-                receipt.commandId,
-                op == "stop" and "--handler-generation" or "--expected-handler-generation",
-                generation,
-            }
-        )
-        command(argv, cwd, function(error, envelope)
-            if error then
-                receipt.error = error
-                callback(error, envelope)
-                return
-            end
-            complete(receipt, envelope, callback, operation)
-        end, 50000)
-    end
-    local function status(cwd, operation, callback)
-        command({ "status" }, cwd, function(error, envelope)
-            if operation and not valid_operation(operation) then
-                callback(error_value("CANCELLED"))
-                return
-            end
-            if error then
-                callback(error)
-                return
-            end
-            if
-                envelope.result.phase ~= "ready"
-                or not envelope.handlerGeneration
-                or envelope.handlerGeneration == null
-            then
-                callback(error_value("NOT_READY"))
-                return
-            end
-            callback(nil, envelope.handlerGeneration)
-        end)
-    end
     inventory = function(options, callback, operation, use_roster)
         options = options or {}
         local finished, timer, cancel_request = false, nil, nil
@@ -228,126 +119,52 @@ function M.new(deps)
                 callback(error_value("UNAVAILABLE"))
             end))
         end
-        local ensure = operation or options.ensure_handler
-        local origin = operation and vim.deepcopy(current_origin) or (ensure and { cwd = options.cwd or vim.fn.getcwd() })
-        local function live()
-            return not (operation and not valid_operation(operation)) and not (options.alive and not options.alive())
-        end
-        local ensured, ensured_generation = false, nil
-        local attempts = 0
-        local function traversal()
-            local agents, issues, revision, generation, last_id, cursors = {}, {}, nil, nil, nil, {}
-            local function next_page(cursor)
-                if finished then return end
-                local argv = { "agent", "page", "--limit", "100" }
-                if options.cwd then
-                    vim.list_extend(argv, { "--cwd", options.cwd })
-                end
-                if options.active then
-                    argv[#argv + 1] = "--active"
-                end
-                if cursor then
-                    vim.list_extend(argv, { "--cursor", cursor })
-                end
-                local function request(cb)
-                    if use_roster then
-                        return deps.roster_request({ limit = 100, cwd = options.cwd, cursor = cursor }, cb)
-                    end
-                    return command(argv, options.cwd or (origin and origin.cwd), cb)
-                end
-                cancel_request = request(function(error, envelope)
-                    if finished then return end
-                    cancel_request = nil
-                    if not live() then
-                        callback(error_value("CANCELLED"))
-                        return
-                    end
-                    if error then
-                        if ensure and error.code == "UNAVAILABLE" and not cursor and attempts == 0 and not ensured then
-                            ensured = true
-                            status(origin.cwd, operation, function(ensure_error, handler_generation)
-                                if not live() then
-                                    callback(error_value("CANCELLED"))
-                                    return
-                                end
-                                if ensure_error then
-                                    callback(ensure_error)
-                                    return
-                                end
-                                ensured_generation = handler_generation
-                                traversal()
-                            end)
-                        elseif error.code == "RESYNC_REQUIRED" and attempts == 0 then
-                            attempts = 1
-                            traversal()
-                        else
-                            callback(error)
-                        end
-                        return
-                    end
-                    if ensured_generation and envelope.handlerGeneration ~= ensured_generation then
-                        callback(error_value("STALE_HANDLER"))
-                        return
-                    end
-                    local page = envelope.result
-                    if #page.issues > 0 and not options.allow_issues then
-                        callback(error_value("INCOMPLETE"), page)
-                        return
-                    end
-                    if revision and (page.revision ~= revision or envelope.handlerGeneration ~= generation) then
-                        callback(error_value("INVALID_PROTOCOL"))
-                        return
-                    end
-                    revision, generation = page.revision, envelope.handlerGeneration
-                    vim.list_extend(issues, page.issues)
-                    for _, view in ipairs(page.agents) do
-                        local record = view.record
-                        local agent_id = record.version == 3 and record.definition.agentId or record.spec.agentId
-                        local cwd = record.version == 3 and record.definition.cwd or record.spec.checkout.root.path
-                        if
-                            (last_id and agent_id <= last_id)
-                            or (options.cwd and cwd ~= options.cwd)
-                            or (
-                                options.active
-                                and (
-                                    record.version ~= 3
-                                    or record.launch == null or not record.launch
-                                    or record.launch.handlerGeneration ~= generation
-                                    or not vim.tbl_contains(
-                                        { "ready", "starting", "restoring", "stopping" },
-                                        record.phase
-                                    )
-                                )
-                            )
-                        then
-                            callback(error_value("INVALID_PROTOCOL"))
-                            return
-                        end
-                        agents[#agents + 1] = view
-                        last_id = agent_id
-                    end
-                    if page.nextCursor ~= null and page.nextCursor ~= nil then
-                        if use_roster and #page.agents == 0 and #page.issues == 0 then
-                            callback(error_value("INVALID_PROTOCOL"))
-                            return
-                        end
-                        if cursors[page.nextCursor] then
-                            callback(error_value("INVALID_PROTOCOL"))
-                            return
-                        end
-                        cursors[page.nextCursor] = true
-                        next_page(page.nextCursor)
-                    else
-                        callback(
-                            nil,
-                            { agents = agents, revision = revision, handlerGeneration = generation, issues = issues }
-                        )
-                    end
-                end)
+        local origin = operation and vim.deepcopy(current_origin) or { cwd = options.cwd or vim.fn.getcwd() }
+        local function received(error, envelope)
+            if finished then return end
+            cancel_request = nil
+            if operation and not valid_operation(operation) or options.alive and not options.alive() then
+                callback(error_value("CANCELLED"))
+                return
             end
-            next_page()
+            if error then callback(error); return end
+            local result = envelope.result
+            local generation = result.handlerGeneration ~= null and result.handlerGeneration or nil
+            local agents = {}
+            for _, row in ipairs(result.agents) do
+                local live = row.live ~= nil and row.live ~= null
+                if (not options.cwd or row.cwd == options.cwd) and (not options.active or live) then agents[#agents + 1] = Control.view(row) end
+            end
+            table.sort(agents, function(a, b) return a.record.definition.agentId < b.record.definition.agentId end)
+            callback(nil, { agents = agents, revision = generation, handlerGeneration = generation, issues = {} })
         end
-        traversal()
+        if use_roster then
+            cancel_request = deps.roster_request(options.cwd and { cwd = options.cwd } or vim.empty_dict(), received)
+        else
+            command({ "agents" }, options.cwd or origin.cwd, received, 10000)
+        end
+    end
+    local function attached_after(agent_id, target, callback, operation, origin)
+        local description = "Session " .. agent_id .. " restored"
+        local recovery = " Use :AgencyAttach " .. agent_id .. " to open it."
+        local function attached(error, manager)
+            if error and error.code == "CANCELLED" then
+                report(description .. ", but editor attachment was cancelled by a newer action." .. recovery)
+            elseif error then
+                error = vim.tbl_extend("force", error, {
+                    message = description .. ", but editor attachment failed: " .. (error.message or error.code) .. "." .. recovery,
+                })
+            else
+                report(description .. " and attached.")
+            end
+            callback(error, manager)
+        end
+        if not valid_operation(operation) then
+            attached(error_value("CANCELLED"))
+            return
+        end
+        report(description .. "; attaching editor...")
+        attach(target, attached, operation, origin)
     end
     function api.page(options, callback)
         inventory(options, callback, nil, options and options.active and deps.roster_request)
@@ -405,14 +222,11 @@ function M.new(deps)
     end
     function api.restore(agent_id, callback, origin)
         local operation = begin(nil, origin)
-        local cwd = current_origin.cwd
-        status(cwd, operation, function(error, generation)
-            if error then
-                if error.code == "CANCELLED" then report("Restore of session " .. agent_id .. " cancelled before it started.") end
-                callback(error)
-                return
-            end
-            dispatch("restore", cwd, generation, { "agent", "restore", agent_id }, callback, operation, agent_id)
+        local captured = vim.deepcopy(current_origin)
+        request("restore", agent_id, { "restore", agent_id }, captured.cwd, function(error, envelope)
+            if error then callback(error); return end
+            local live = envelope.result.agent.live
+            attached_after(agent_id, { agentId = agent_id, handlerGeneration = live.handlerGeneration, providerGeneration = live.providerGeneration }, callback, operation, captured)
         end)
     end
     function api.stop(target, callback, detail)
@@ -430,65 +244,28 @@ function M.new(deps)
                 callback(error_value("CANCELLED"))
                 return
             end
-            dispatch(
-                "stop",
-                cwd,
-                exact.handlerGeneration,
-                { "agent", "stop", exact.agentId, "--provider-generation", exact.providerGeneration },
-                callback,
-                operation,
-                exact.agentId,
-                exact
-            )
+            request("stop", exact.agentId, { "stop", exact.agentId }, cwd, function(error, envelope)
+                if error then callback(error, envelope); return end
+                callback(nil, envelope.result)
+            end)
         end)
     end
     function api.inspect_pending(callback)
-        local receipts = {}
+        local requests = {}
         for _, value in pairs(pending) do
-            receipts[#receipts + 1] = value
+            requests[#requests + 1] = vim.deepcopy(value)
         end
-        table.sort(receipts, function(a, b)
-            return a.commandId < b.commandId
+        table.sort(requests, function(a, b)
+            return a.startedAt < b.startedAt
         end)
-        if #receipts == 0 then
-            callback(nil, {})
-            return
-        end
-        local remaining, results = #receipts, {}
-        for _, value in ipairs(receipts) do
-            command(
-                { "agent", "command", value.commandId, "--handler-generation", value.handlerGeneration },
-                value.cwd,
-                function(error, envelope)
-                    if error then
-                        results[#results + 1] = { commandId = value.commandId, error = error }
-                        remaining = remaining - 1
-                        if remaining == 0 then
-                            callback(nil, results)
-                        end
-                        return
-                    end
-                    complete(value, envelope, function(failure, target)
-                        results[#results + 1] = { commandId = value.commandId, error = failure, result = target }
-                        remaining = remaining - 1
-                        if remaining == 0 then
-                            callback(nil, results)
-                        end
-                    end, value.epoch)
-                end
-            )
-        end
+        callback(nil, requests)
     end
     function api.detach()
         begin()
         active = nil
     end
     function api.in_flight()
-        local count = 0
-        for _, receipt in pairs(pending) do
-            if not receipt.error and not receipt.view then count = count + 1 end
-        end
-        return count
+        return vim.tbl_count(pending)
     end
     return api
 end

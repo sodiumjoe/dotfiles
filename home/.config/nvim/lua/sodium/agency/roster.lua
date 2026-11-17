@@ -5,6 +5,12 @@ local function failure(code, message)
     return { code = code, message = message or code:lower():gsub("_", " ") }
 end
 
+function M.validate(result)
+    assert(type(result) == "table" and result.state == "agents" and type(result.agents) == "table" and vim.islist(result.agents))
+    for _, row in ipairs(result.agents) do Control.row(row) end
+    return result
+end
+
 function M.new(deps)
     deps = deps or {}
     return function(options, callback)
@@ -39,7 +45,7 @@ function M.new(deps)
                         finish(failure(code, err.code == -32601 and "Agency roster unavailable; restart the Handler to load the updated endpoint" or err.message))
                         return
                     end
-                    local valid, envelope = pcall(Control.page_envelope, result)
+                    local valid, envelope = pcall(function() return { result = M.validate(result) } end)
                     if not valid then finish(failure("INVALID_PROTOCOL")) else finish(nil, envelope) end
                 end)
                 request_id = client.id_counter + 1

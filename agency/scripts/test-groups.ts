@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import { runTests } from "./test-run.js"
 
 export type TestGroup = "workflows"
-const files = ["models", "live-requests", "live-restore", "live-roster", "live-settings", "live-acp", "live-remote", "live-cli", "live-handoff", "index-roster", "index-migration", "agent-index", "event-log", "session-files", "parent-watch", "live-state", "handler-agents", "agent-startup", "agent-process", "claude-provider", "acp-startup-updates", "acp-router", "acp-endpoint", "acp-permissions", "handler-host-sessions", "input-json", "live-process", "native-sessions", "turns", "build-digest", "shutdown-idle", "restart", "activity", "excerpt"]
+const files = ["models", "live-requests", "live-restore", "live-roster", "live-settings", "live-acp", "live-remote", "live-cli", "live-handoff", "editor-contract", "index-roster", "index-migration", "agent-index", "event-log", "session-files", "parent-watch", "live-state", "handler-agents", "agent-startup", "agent-process", "claude-provider", "acp-startup-updates", "acp-router", "acp-endpoint", "acp-permissions", "handler-host-sessions", "input-json", "live-process", "native-sessions", "turns", "build-digest", "shutdown-idle", "restart", "activity", "excerpt"]
 const workerFiles = files.map(file => "dist/test/" + file + ".test.js")
 const cwd = fileURLToPath(new URL("../../", import.meta.url))
 const manifest = JSON.parse(await readFile(new URL("../build-manifest.json", import.meta.url), "utf8"))

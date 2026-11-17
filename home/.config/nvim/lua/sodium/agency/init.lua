@@ -69,8 +69,7 @@ function M.setup(deps)
         end)
     end
     function api.excerpt(excerpt, callback)
-        local argv = { "roster", "excerpt", excerpt.agentId }
-        if excerpt.hostId then vim.list_extend(argv, { "--host", excerpt.hostId }) else argv[#argv + 1] = "--local" end
+        local argv = excerpt.hostId and { "roster", "excerpt", excerpt.agentId, "--host", excerpt.hostId } or { "excerpt", excerpt.agentId }
         (deps.client or Control).command(argv, { timeout_ms = 10000 }, function(err, envelope) callback(err, envelope and envelope.result) end)
     end
     function api.snapshot()
@@ -143,7 +142,7 @@ function M.setup(deps)
         local captured, tab = epoch, vim.api.nvim_get_current_tabpage()
         if type(id) ~= "string" or not id:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then report(failure("USAGE")); return end
         if action == "restore" then api.notify("Restoring session " .. id .. "...") end
-        api.page({ allow_issues = true, ensure_handler = action == "restore" }, function(err, result)
+        api.page({ allow_issues = true }, function(err, result)
             if captured ~= epoch or not vim.api.nvim_tabpage_is_valid(tab) then
                 if action == "restore" then
                     api.notify("Restore of session " .. id .. " cancelled before it started.")

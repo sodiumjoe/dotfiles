@@ -41,17 +41,18 @@ describe("Agency reload", function()
         end
         error("no pending " .. name .. " call")
     end
-    local function respond_page(rows)
+    local function respond_agents(rows)
         for _, call in ipairs(calls) do
-            if not call.answered and call.argv[1] == "agent" and call.argv[2] == "page" then
+            if not call.answered and call.argv[1] == "agents" then
                 call.answered = true
-                call.callback(nil, { handlerGeneration = control.id(2), result = control.page(rows) })
+                call.callback(nil, { result = control.roster(rows) })
                 f.flush()
                 return
             end
         end
-        error("no pending page call")
+        error("no pending agents call")
     end
+    local function row(target, live) return control.row(target, live, vim.fn.getcwd()) end
     local function answer_load(target)
         local frame = f.request("session/load")
         f.client:_handle_message({ id = frame.id, result = { sessionId = "agency:" .. target.agentId,
@@ -59,21 +60,20 @@ describe("Agency reload", function()
                 configuration = { configOptions = {}, availableCommands = {} } } } } })
         f.flush()
     end
-    local nothing = { state = "restarted", restarted = false, resumed = false, agents = {} }
+    local function restarted(agents) return { state = "restarted", restarted = true, resumed = false, agents = agents or { { agentId = control.target_a.agentId, outcome = "restored", failure = vim.NIL } } } end
 
     it("reloads the Lua twice without stacking patches or moving the tab", function()
         local tab, manager = f.manager.tab_page_id, f.manager
         for _ = 1, 2 do
             require("sodium.agency.reload").run({})
-            respond("restart", nothing)
             f.flush()
             respond("status", { phase = "ready", distDigest = digest })
-            respond_page({ f.row })
+            respond_agents({ row(control.target_a) })
             answer_load(control.target_a)
         end
         assert.are.equal(2, #systems)
         assert.are.equal(manager, Registry.sessions[tab])
-        for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "restart" and call.argv[2] ~= "--resume") end
+        for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "restart") end
         f.client:_handle_message({ method = "session/update", params = { sessionId = manager.session_id,
             update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "reload-marker" } } } })
         vim.wait(100, function() return false end)
@@ -82,21 +82,17 @@ describe("Agency reload", function()
         assert.are.equal(1, count)
     end)
 
-    it("restarts an old Handler without a digest and rebinds the same tab", function()
+    it("restarts a Handler without a digest and rebinds the same tab", function()
         local tab, manager = f.manager.tab_page_id, f.manager
         local moved = vim.deepcopy(control.target_a)
         moved.handlerGeneration, moved.providerGeneration = control.id(20), control.id(21)
-        local row = control.agent(moved)
-        row.record.definition.cwd = vim.fn.getcwd()
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
         f.flush()
         respond("status", { phase = "ready" })
         f.client:_set_state("disconnected")
         f.flush()
-        respond("restart", { state = "restarted", restarted = true, resumed = true,
-            agents = { { agentId = control.target_a.agentId, outcome = "restored", failure = vim.NIL } } })
-        respond_page({ row })
+        respond("restart", restarted())
+        respond_agents({ row(moved) })
         answer_load(moved)
         assert.are.equal(manager, Registry.sessions[tab])
         assert.are.same(moved, manager._agency_binding)
@@ -104,15 +100,27 @@ describe("Agency reload", function()
         assert.is_truthy(table.concat(notifications, "\n"):find("Handler restarted", 1, true))
     end)
 
+    it("names the agents the new Handler could not restore", function()
+        require("sodium.agency.reload").run({ force = true })
+        f.flush()
+        respond("status", { phase = "ready", distDigest = digest })
+        respond("restart", restarted({ { agentId = control.target_b.agentId, outcome = "failed", failure = { code = "NOT_FOUND", message = "its session file is missing" } } }))
+        respond_agents({ row(control.target_a) })
+        answer_load(control.target_a)
+        local text = table.concat(notifications, "\n")
+        assert.is_truthy(text:find("Handler restarted", 1, true))
+        assert.is_truthy(text:find("1 agent not restored (" .. control.target_b.agentId:sub(1, 8) .. ": its session file is missing)", 1, true))
+        assert.is_nil(vim.g.agency_reload_running)
+    end)
+
     it("reloads nothing when running turns keep the Handler busy", function()
         local before = package.loaded["sodium.agency"]
         require("sodium.agency.reload").run({ force = true })
-        respond("restart", nothing)
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
         respond("restart", nil, { code = "BUSY", message = "agents still working: x" })
         assert.are.equal(before, package.loaded["sodium.agency"])
-        for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "agent") end
+        for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "agents") end
         assert.is_truthy(table.concat(notifications, "\n"):find("nothing was reloaded", 1, true))
         assert.is_nil(vim.g.agency_reload_running)
     end)
@@ -120,12 +128,11 @@ describe("Agency reload", function()
     local function failed_restart(failure, status, status_err)
         local before, tab, manager = package.loaded["sodium.agency"], f.manager.tab_page_id, f.manager
         require("sodium.agency.reload").run({ force = true })
-        respond("restart", nothing)
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
         respond("restart", nil, failure)
         respond("status", status, status_err)
-        respond_page({ f.row })
+        respond_agents({ row(control.target_a) })
         answer_load(control.target_a)
         assert.are.equal(manager, Registry.sessions[tab])
         assert.is_nil(vim.g.agency_reload_running)
@@ -134,7 +141,7 @@ describe("Agency reload", function()
 
     for name, status in pairs({ ["no digest"] = { phase = "ready" }, ["a different digest"] = { phase = "ready", distDigest = string.rep("e", 64) } }) do
         it("rebinds without reloading the Lua when a failed restart leaves an old Handler reporting " .. name, function()
-            local before, text = failed_restart({ code = "INCOMPLETE", message = "shutdown did not complete; 1 stopped agents restored" }, status)
+            local before, text = failed_restart({ code = "INCOMPLETE", message = "shutdown did not complete and the Handler is still running" }, status)
             assert.are.equal(before, package.loaded["sodium.agency"])
             assert.is_truthy(text:find("shutdown did not complete", 1, true))
             assert.is_truthy(text:find("Lua was not reloaded because the old Handler is still running", 1, true))
@@ -160,34 +167,9 @@ describe("Agency reload", function()
         assert.is_truthy(text:find("run :AgencyReload again", 1, true))
     end)
 
-    it("leaves the old Handler's upgrade instructions as the next step", function()
-        local before, text = failed_restart({ code = "INCOMPLETE", message = "the running Handler predates agy restart; run agy shutdown --stop-agents once while agents are idle, then agy restart --resume" }, { phase = "ready" })
-        assert.are.equal(before, package.loaded["sodium.agency"])
-        assert.is_truthy(text:find("agy shutdown --stop-agents", 1, true))
-        assert.is_falsy(text:find("run :AgencyReload again", 1, true))
-    end)
-
-    it("still reloads when a resume restarted the Handler and the next restart is busy", function()
-        local before = package.loaded["sodium.agency"]
-        require("sodium.agency.reload").run({ force = true })
-        respond("restart", { state = "restarted", restarted = true, resumed = true, agents = {} })
-        f.flush()
-        respond("status", { phase = "ready", distDigest = digest })
-        respond("restart", nil, { code = "BUSY", message = "agents still working: x" })
-        respond("status", { phase = "ready", distDigest = digest })
-        respond_page({ f.row })
-        answer_load(control.target_a)
-        local text = table.concat(notifications, "\n")
-        assert.are_not.equal(before, package.loaded["sodium.agency"])
-        assert.is_truthy(text:find("agents still working: x", 1, true))
-        assert.is_truthy(text:find("run :AgencyReload again", 1, true))
-        assert.is_falsy(text:find("nothing was reloaded", 1, true))
-    end)
-
     it("stops before reloading when the build fails", function()
         systems.fail = true
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
         f.flush()
         for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "status") end
         assert.is_truthy(table.concat(notifications, "\n"):find("type error", 1, true))
@@ -197,8 +179,6 @@ describe("Agency reload", function()
     it("clears the running flag when npm is missing", function()
         vim.fn.delete(root .. "/node/npm")
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
-        f.flush()
         assert.are.equal(0, #systems)
         assert.is_nil(vim.g.agency_reload_running)
         assert.is_truthy(table.concat(notifications, "\n"):find(root .. "/node/npm is not executable", 1, true))
@@ -207,8 +187,6 @@ describe("Agency reload", function()
     it("clears the running flag when a step raises an error", function()
         systems.raise = "ENOENT: no such file or directory"
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
-        f.flush()
         for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "status") end
         assert.is_nil(vim.g.agency_reload_running)
         assert.is_truthy(table.concat(notifications, "\n"):find("internal error: .*ENOENT"))
@@ -218,7 +196,6 @@ describe("Agency reload", function()
         local before = package.loaded["sodium.agency"]
         package.preload["sodium.agency.stream"] = function() error("broken stream") end
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
         package.preload["sodium.agency.stream"] = nil
@@ -233,7 +210,6 @@ describe("Agency reload", function()
         package.loaded["sodium.agentic_folds"] = { install = function() error("old folds broken") end }
         package.preload["sodium.agency.stream"] = function() error("broken stream") end
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
         f.flush()
         local ok, err = pcall(respond, "status", { phase = "ready", distDigest = digest })
         package.preload["sodium.agency.stream"] = nil
@@ -247,25 +223,21 @@ describe("Agency reload", function()
         assert.is_nil(vim.g.agency_reload_running)
     end)
 
-    local function resumes()
-        local count = 0
-        for _, call in ipairs(calls) do if call.argv[1] == "restart" and call.argv[2] == "--resume" then count = count + 1 end end
-        return count
-    end
 
     it("does not refuse a reload after the client drops an outstanding load", function()
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
-        respond_page({ f.row })
+        respond_agents({ row(control.target_a) })
         f.request("session/load")
         f.client:_set_state("disconnected")
         f.flush()
         notifications = {}
+        local built = #systems
         require("sodium.agency.reload").run({})
+        f.flush()
         assert.is_falsy(table.concat(notifications, "\n"):find("still running", 1, true))
-        assert.are.equal(2, resumes())
+        assert.is_true(#systems > built)
     end)
 
     it("counts a new session as busy only while its request is outstanding", function()
@@ -274,38 +246,35 @@ describe("Agency reload", function()
         local frame = f.request("session/new")
         require("sodium.agency.reload").run({})
         assert.is_truthy(table.concat(notifications, "\n"):find("still running", 1, true))
-        assert.are.equal(0, resumes())
+        assert.are.same({}, systems)
         f.client:_handle_message({ id = frame.id, error = { code = -32000, message = "backend failed" } })
         f.flush()
         notifications = {}
         require("sodium.agency.reload").run({})
+        f.flush()
         assert.is_falsy(table.concat(notifications, "\n"):find("still running", 1, true))
-        assert.are.equal(1, resumes())
+        assert.is_true(#systems > 0)
     end)
 
     it("refuses a second reload while one is running", function()
         require("sodium.agency.reload").run({})
         require("sodium.agency.reload").run({})
+        f.flush()
         assert.is_truthy(table.concat(notifications, "\n"):find("already running", 1, true))
-        local resumes = 0
-        for _, call in ipairs(calls) do if call.argv[1] == "restart" then resumes = resumes + 1 end end
-        assert.are.equal(1, resumes)
+        assert.are.equal(1, #systems)
     end)
     it("hides the expected connection error while it restarts the Handler", function()
         local Logger = require("agentic.utils.logger")
         local original, logged = Logger.notify, {}
         local ended = "ACP agent 'sh' failed (exit code 70):\nError: Agency Handler connection ended"
         Logger.notify = function(message) logged[#logged + 1] = message end
-        local row = control.agent(control.target_a)
-        row.record.definition.cwd = vim.fn.getcwd()
         require("sodium.agency.reload").run({ force = true })
-        respond("restart", nothing)
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
         Logger.notify(ended, vim.log.levels.ERROR)
         Logger.notify("something else", vim.log.levels.ERROR)
-        respond("restart", { state = "restarted", restarted = true, resumed = false, agents = {} })
-        respond_page({ row })
+        respond("restart", restarted())
+        respond_agents({ row(control.target_a) })
         answer_load(control.target_a)
         assert.is_nil(vim.g.agency_reload_running)
         Logger.notify(ended, vim.log.levels.ERROR)
@@ -322,10 +291,9 @@ describe("Agency reload", function()
         vim.fn.writefile({ "return {}" }, config .. "/lua/sodium/linked.lua")
         require("sodium.agency").setup().deps.config = config
         require("sodium.agency.reload").run({})
-        respond("restart", nothing)
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
-        respond_page({ f.row })
+        respond_agents({ row(control.target_a) })
         answer_load(control.target_a)
         local text = table.concat(notifications, "\n")
         vim.fn.delete(config, "rf")

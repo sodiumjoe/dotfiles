@@ -80,13 +80,13 @@ function M.run(opts)
     local root = deps.repository or repository()
     if not root then notify("Cannot locate the Agency checkout from agy"); return end
     vim.g.agency_reload_running = true
-    local parts, failed, changed, retry, restore_notify = {}, {}, false, nil, nil
+    local parts, failed, retry, restore_notify = {}, {}, nil, nil
     local function finish(message)
         vim.g.agency_reload_running = nil
         if restore_notify then restore_notify(); restore_notify = nil end
         if message then parts[#parts + 1] = message end
         if retry then parts[#parts + 1] = retry end
-        if #failed > 0 then parts[#parts + 1] = #failed .. " restore" .. (#failed == 1 and "" or "s") .. " failed (" .. table.concat(failed, ", ") .. ")" end
+        if #failed > 0 then parts[#parts + 1] = #failed .. " agent" .. (#failed == 1 and "" or "s") .. " not restored (" .. table.concat(failed, ", ") .. ")" end
         notify("Agency reload: " .. table.concat(parts, " · "))
     end
     local function guard(fn)
@@ -112,7 +112,7 @@ function M.run(opts)
                 if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen tabs with <leader>af"); return end
                 local text = summary.rebound .. " tab" .. (summary.rebound == 1 and "" or "s") .. " rebound"
                 if summary.deferred > 0 then text = text .. ", " .. summary.deferred .. " after their turns" end
-                if #summary.missing > 0 then text = text .. ", " .. #summary.missing .. " without a running agent" end
+                if #summary.missing > 0 then text = text .. ", " .. #summary.missing .. " without a known agent" end
                 if #summary.failed > 0 then
                     local reasons = {}
                     for _, item in ipairs(summary.failed) do reasons[#reasons + 1] = item.agentId:sub(1, 8) .. ": " .. tostring(item.error) end
@@ -152,7 +152,7 @@ function M.run(opts)
         notify("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
         restore_notify = quiet_disconnect()
         client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
-            if err and err.code == "BUSY" and not changed then
+            if err and err.code == "BUSY" then
                 vim.g.agency_reload_running = nil
                 if restore_notify then restore_notify(); restore_notify = nil end
                 notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded")
@@ -160,7 +160,7 @@ function M.run(opts)
             end
             if err then
                 parts[#parts + 1] = "Handler restart failed: " .. (err.message or err.code)
-                if not (err.message or ""):find("predates agy restart", 1, true) then retry = "run :AgencyReload again to finish the restart" end
+                retry = "run :AgencyReload again to finish the restart"
                 recover()
                 return
             end
@@ -189,14 +189,7 @@ function M.run(opts)
             check()
         end)))
     end
-    guard(function()
-        client.command({ "restart", "--resume" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
-            if err then finish("resuming a saved restore failed: " .. (err.message or err.code)); return end
-            if envelope.result.resumed then parts[#parts + 1] = "resumed a saved restore"; collect(envelope.result) end
-            changed = envelope.result.resumed == true and envelope.result.restarted == true
-            build()
-        end))
-    end)()
+    guard(build)()
 end
 
 return M

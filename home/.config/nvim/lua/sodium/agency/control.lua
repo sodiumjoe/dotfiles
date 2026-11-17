@@ -45,12 +45,54 @@ local function human_receipt(value, argv)
     elseif argv[2] == "decide" then error("Missing permission receipt") end
 end
 
+local requests = { start = "agent", restore = "agent", stop = "agent", set = "agent", cancel = "agent", prompt = "prompt", agents = "agents",
+    excerpt = "excerpt", transcript = "transcript", models = "models", forget = "forgotten", log = "log" }
+local activities = { starting = true, idle = true, working = true, stopping = true }
+
+local function present(value) return value ~= nil and value ~= vim.NIL end
+
+function M.row(row)
+    assert(type(row) == "table" and valid_id(row.agentId) and type(row.cwd) == "string" and row.cwd:sub(1, 1) == "/")
+    assert(vim.tbl_contains({ "codex-acp", "claude-agent-acp" }, row.backendId))
+    if present(row.live) then
+        assert(type(row.live) == "table" and activities[row.live.activity])
+        target({ agentId = row.agentId, handlerGeneration = row.live.handlerGeneration, providerGeneration = row.live.providerGeneration })
+    end
+    return row
+end
+
+function M.view(row)
+    local live = present(row.live) and row.live or nil
+    local phase = live and ({ starting = "starting", stopping = "stopping" })[live.activity] or (live and "ready" or "stopped")
+    local record = { version = 3, definition = { agentId = row.agentId, cwd = row.cwd, backendId = row.backendId }, phase = phase,
+        launch = live and { handlerGeneration = live.handlerGeneration, providerGeneration = live.providerGeneration } or vim.NIL,
+        settings = live and present(live.model) and { configValues = { model = live.model } } or {},
+        title = present(row.title) and row.title or nil, lastActivityAt = present(row.lastActivityAt) and row.lastActivityAt or nil }
+    return { record = record, live = live ~= nil, display = live and { title = record.title, activity = live.activity == "working" and "working" or "idle" } or nil }
+end
+
 local function excerpt_result(result)
     assert(result.state == "excerpt" and vim.tbl_contains({ "live", "history", "none" }, result.source) and type(result.turns) == "table" and vim.islist(result.turns))
     for _, turn in ipairs(result.turns) do assert((turn.role == "user" or turn.role == "agent") and type(turn.text) == "string") end
 end
 
+local function validate_request(value, argv)
+    assert(type(value) == "table" and value.protocol == "agency-request/1" and type(value.ok) == "boolean")
+    if not value.ok then
+        assert(type(value.error) == "table" and type(value.error.code) == "string" and type(value.error.message) == "string")
+        return
+    end
+    local result = value.result
+    assert(type(result) == "table" and result.state == requests[argv[1]])
+    if result.state == "agent" then M.row(result.agent)
+    elseif result.state == "agents" then
+        assert(type(result.agents) == "table" and vim.islist(result.agents))
+        for _, row in ipairs(result.agents) do M.row(row) end
+    elseif result.state == "excerpt" then excerpt_result(result) end
+end
+
 local function validate(value, argv)
+    if requests[argv[1]] then return validate_request(value, argv) end
     local ordinary = argv[1] == "host" or vim.tbl_contains({ "roster", "permission" }, argv[1]) and not vim.tbl_contains(argv, "--local")
         or argv[1] == "entry" and vim.tbl_contains({ "open", "inspect" }, argv[2])
     local protocol = ordinary and "agency-host/1" or vim.tbl_contains(argv, "--local") and "agency-agent/3" or argv[1] == "agent" and "agency-agent/3"
@@ -135,6 +177,10 @@ local function validate(value, argv)
     end
     if argv[1] == "restart" then
         assert(result.state == "restarted" and type(result.agents) == "table" and vim.islist(result.agents))
+        for _, agent in ipairs(result.agents) do
+            assert(valid_id(agent.agentId) and vim.tbl_contains({ "restored", "failed", "restoring" }, agent.outcome))
+            assert(agent.failure == vim.NIL or type(agent.failure) == "table" and type(agent.failure.code) == "string" and type(agent.failure.message) == "string")
+        end
         return
     end
     if argv[1] ~= "agent" then return end
@@ -189,16 +235,7 @@ local function validate(value, argv)
     end
 end
 
-function M.page_envelope(page)
-    assert(type(page) == "table" and valid_id(page.handlerGeneration))
-    local result = vim.deepcopy(page)
-    result.handlerGeneration = nil
-    if result.nextCursor == nil then result.nextCursor = vim.NIL end
-    local envelope = { protocol = "agency-agent/3", requestId = page.handlerGeneration,
-        handlerGeneration = page.handlerGeneration, ok = true, result = result }
-    validate(envelope, { "agent", "page" })
-    return envelope
-end
+M.validate = validate
 
 function M.new(deps)
     deps = deps or {}
