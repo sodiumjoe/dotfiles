@@ -10,6 +10,8 @@ import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
 import { registerRuntimeEndpoint } from "../hosts/runtime.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
+import { createAcpRouter } from "../acp/router.js"
+import { createLiveRouter } from "../acp/live-router.js"
 import { createAgentService, type AgentService } from "../agent/service.js"
 import { createAgentStore } from "../agent/store.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
@@ -273,10 +275,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const coreBridge = bridge
     router = createHostRouter({ hostId: options.paths.hostKey, inventory: createHostInventory(root), local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
     registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
-    if (agents) {
-      acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), service: agents, onError: rejectClosed })
-      if (termination || closing) await acpServer.close()
-    }
+    const service = agents, liveCore = core
+    acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), handlerGeneration: options.generation, onError: rejectClosed,
+      router: connection => liveCore ? createLiveRouter({ core: liveCore, ...connection }) : createAcpRouter({ service: service!, ...connection }) })
+    if (termination || closing) await acpServer.close()
     checkStartup()
     current = { ...current, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 } }
     await writeHandlerRecord(options.recordPath, current)

@@ -1,23 +1,30 @@
 import type { ProviderView } from "../catalog/service.js"
+import type { Model } from "../catalog/types.js"
 import type { Backend } from "./backend-config.js"
 import type { LaunchContract } from "./contracts.js"
 import type { JsonObject, RequestedSettings } from "./session-config.js"
 
 export function backendSelection(backend: Backend, contract: LaunchContract, provider?: ProviderView): JsonObject {
+  return choice(backend, contract, provider?.models ?? [], !provider ? "unavailable" : provider.freshness === "fresh" && !provider.refreshIssue ? "fresh" : "cached", provider?.error?.message ?? provider?.refreshIssue?.message ?? null)
+}
+
+export function backendChoice(backend: Backend, contract: LaunchContract, listing: { models: Model[]; error: string | null }): JsonObject {
+  return choice(backend, contract, listing.models, listing.error ? "unavailable" : "fresh", listing.error)
+}
+
+function choice(backend: Backend, contract: LaunchContract, available: Model[], discovery: string, discoveryError: string | null): JsonObject {
   const setting = (id: string, name: string, kind: string, values: string[]): JsonObject => ({ id, name, kind, values: values.map(value => ({ value, name: value })) })
   const codex = backend.id === "codex-acp"
   const nativeConfiguration = codex || contract.id === "claude-agent-acp-0.102" && contract.adapterVersion === "0.102.0"
   const modes = codex && contract.id === "codex-acp-2.6" && contract.adapterVersion === "2.6.0"
     ? [setting("mode", "Mode", "config", ["read-only", "agent", "agent-full-access"])] : []
-  const models = (provider?.models ?? []).map(model => {
+  const models = available.map(model => {
     const settings: JsonObject[] = []
     if (model.reasoning.state === "values" && contract.reasoningOption) settings.push(setting(codex ? "reasoning_effort" : contract.reasoningOption, "Reasoning effort", "config", model.reasoning.values))
     if (!modes.length && model.modes.state === "values") settings.push(setting(nativeConfiguration ? contract.modeOption ?? "mode" : "modeId", "Mode", nativeConfiguration ? "config" : "field", model.modes.values))
     return { id: model.modelId, name: model.displayName, selection: nativeConfiguration ? { configValues: { [contract.modelOption]: model.modelId } } : { modelId: model.modelId }, settings }
   })
-  const discovery = !provider ? "unavailable" : provider.freshness === "fresh" && !provider.refreshIssue ? "fresh" : "cached"
-  return { id: backend.id, defaults: structuredClone(backend.initial), discovery,
-    discoveryError: provider?.error?.message ?? provider?.refreshIssue?.message ?? null, models, settings: modes }
+  return { id: backend.id, defaults: structuredClone(backend.initial), discovery, discoveryError, models, settings: modes }
 }
 
 export function namedSettings(contract: LaunchContract, model?: string, mode?: string): RequestedSettings {

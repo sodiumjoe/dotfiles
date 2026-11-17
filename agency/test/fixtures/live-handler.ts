@@ -25,7 +25,8 @@ try {
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }), agentLayer: "live",
     launchContracts: [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }],
     catalogFactory: context => createCatalogService({ ...context, queue: context.mutations.queue, probes: { verifyDischarged: async () => undefined, run: async () => { throw new Error("fixture catalog cannot spawn discovery") } } }),
-    liveDependencies: { processFactory: options => createAgentProcess(options, { spawn: ((file, argv, settings) => spawnFixture("agent-provider/" + options.spec.launchAttemptId, file, argv ?? [], settings ?? {})) as typeof spawn }) } })
+    liveDependencies: { processFactory: options => createAgentProcess(options, { spawn: ((file, argv, settings) => spawnFixture("agent-provider/" + options.spec.launchAttemptId, file, argv ?? [], settings ?? {})) as typeof spawn }),
+      modelSource: async profile => [{ providerId: profile.id, modelId: "model-a", resolvedModelId: null, displayName: "Model A", reasoning: { state: "values", values: ["high", "low"] }, modes: { state: "unknown" }, availability: "advertised" }] } })
 } catch (error) {
   await writeFile(join(root, "failure"), (error instanceof Error ? error.stack ?? error.message : String(error)).slice(0, 4096), { mode: 0o600 })
   process.exitCode = 1

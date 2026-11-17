@@ -8,11 +8,12 @@ import type { JsonObject, SessionConfiguration } from "../agent/session-config.j
 import type { TurnCoordinator } from "../agent/turns.js"
 import type { AgentTuple, OwnedAgentRecord } from "../agent/types.js"
 import type { ProviderId } from "../catalog/types.js"
+import type { EchoFilter } from "./echo.js"
 
 export type Activity = "starting" | "idle" | "working" | "stopping"
 export type LiveAgent = {
   agentId: string; backendId: ProviderId; cwd: string; origin: "new" | "import"; createdAt: string; tuple: AgentTuple
-  phase: "starting" | "ready" | "stopping"; launched: Promise<void>; ready: Promise<LiveAgent>; stopped?: Promise<void>; controller: AbortController; conversation: Conversation
+  phase: "starting" | "ready" | "stopping"; launched: Promise<void>; ready: Promise<LiveAgent>; stopped?: Promise<void>; controller: AbortController; conversation: Conversation; echo: EchoFilter
   record?: OwnedAgentRecord; backend?: Backend; contract?: ConfiguredLaunchContract; owner?: OwnedAgentProcess; session?: ProviderSession; turns?: TurnCoordinator; editor?: EditorRouting
   running: Set<string>; prompts: Set<Promise<JsonObject>>; configuring: number; listeners: Set<(snapshot: SessionConfiguration) => void>; indexed: boolean; lastActivityAt: string | null
 }

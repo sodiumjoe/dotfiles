@@ -14,6 +14,7 @@ import { RequestError } from "../src/live/errors.js"
 import type { RosterRow } from "../src/live/roster.js"
 import type { PromptResult } from "../src/live/core.js"
 import type { ProviderProfile } from "../src/catalog/types.js"
+import { createAcpPeer, type AcpPeer } from "./acp-support.js"
 
 export type StartInput = Partial<Extract<LiveOperation, { op: "start" }>>
 
@@ -64,7 +65,8 @@ export async function liveHandlerFixture(t: TestContext) {
     await stopHandler()
     for (const item of providers()) if (item.pid) await proveAbsent(item.pid)
   }
-  f.beforeCleanup(verifyZeroSurvivors)
+  const peers = new Set<AcpPeer>()
+  f.beforeCleanup(async () => { for (const peer of peers) peer.close(); await verifyZeroSurvivors() })
   return { ...f, workspace, otherWorkspace, homes, environment, request, providers,
     start: (input: StartInput = {}) => agent({ op: "start", agentId: randomUUID(), cwd: workspace, backendId: "codex-acp", environment: environment(), ...input }),
     stop: (agentId: string) => agent({ op: "stop", agentId }),
@@ -89,5 +91,10 @@ export async function liveHandlerFixture(t: TestContext) {
     async releasePrompts() { await rm(join(f.root, "pause-prompt"), { force: true }); await writeFile(join(f.root, "release-prompt"), "released", { mode: 0o600 }) },
     async crashHandler() { const current = await handler(); assert.ok(current.process); await f.signal(current.process, "SIGKILL"); await proveAbsent(current.process.pid) },
     stopHandler, restart: startHandler, verifyZeroSurvivors, handler,
+    async connect(extra: Record<string, string> = {}): Promise<AcpPeer> {
+      const socket = createConnection(join(f.paths.runtimeRoot, "acp.sock"))
+      socket.write(JSON.stringify({ jsonrpc: "2.0", method: "agency/connect", params: { handlerGeneration: (await handler()).generation, environment: { ...environment(), ...extra } } }) + "\n")
+      const peer = createAcpPeer(socket, socket); peers.add(peer); return peer
+    },
   }
 }

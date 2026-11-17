@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { basename, dirname } from "node:path"
 import type { Writable } from "node:stream"
-import { parseLaunchEnvironment } from "../agent/environment.js"
-import type { AgentService } from "../agent/service.js"
+import { parseLaunchEnvironment, type LaunchEnvironment } from "../agent/environment.js"
 import type { JsonObject } from "../agent/session-config.js"
 import { bindPrivateSocket } from "../platform/private-socket.js"
 import { createAcpDecoder } from "./protocol.js"
-import { createAcpRouter } from "./router.js"
 import { encodeWireJson } from "./wire-json.js"
 
 export function createAcpWriter(stream: Writable, fail: (error: unknown) => void): { send(frame: JsonObject): void; close(): void } {
@@ -27,21 +25,22 @@ export function createAcpWriter(stream: Writable, fail: (error: unknown) => void
   }
 }
 
-export async function startAcpServer(input: { socketPath: string; service: AgentService; onError?(error: Error): void }): Promise<{ close(): Promise<void> }> {
+export type AcpConnectionRouter = { receive(frame: JsonObject): Promise<void>; close(): void }
+export async function startAcpServer(input: { socketPath: string; handlerGeneration: string; router(connection: { connectionId: string; send(frame: JsonObject): void; environment: LaunchEnvironment }): AcpConnectionRouter; onError?(error: Error): void }): Promise<{ close(): Promise<void> }> {
   const sockets = new Set<import("node:net").Socket>()
   let closing = false
   const server = await bindPrivateSocket(dirname(input.socketPath), basename(input.socketPath), socket => {
     sockets.add(socket)
-    let router: ReturnType<typeof createAcpRouter> | undefined
+    let router: AcpConnectionRouter | undefined
     const fail = () => { router?.close(); socket.destroy() }
     const writer = createAcpWriter(socket, fail), timer = setTimeout(fail, 5000)
     const decoder = createAcpDecoder(frame => {
       if (!router) {
         try {
           const params = frame.params as JsonObject | undefined
-          if (frame.method !== "agency/connect" || Object.hasOwn(frame, "id") || params?.handlerGeneration !== input.service.handlerGeneration) throw new Error("invalid ACP connection")
+          if (frame.method !== "agency/connect" || Object.hasOwn(frame, "id") || params?.handlerGeneration !== input.handlerGeneration) throw new Error("invalid ACP connection")
           const environment = parseLaunchEnvironment(params.environment)
-          router = createAcpRouter({ service: input.service, connectionId: randomUUID(), send: frame => writer.send(frame), environment })
+          router = input.router({ connectionId: randomUUID(), send: frame => writer.send(frame), environment })
           clearTimeout(timer)
         } catch { fail() }
       } else void router.receive(frame).catch(fail)

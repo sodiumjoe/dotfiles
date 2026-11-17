@@ -1,33 +1,39 @@
 import { randomUUID } from "node:crypto"
-import { createPermissionBroker } from "../acp/permissions.js"
-import { withNativeSession } from "../agent/acp.js"
+import { createPermissionBroker, type PermissionClient } from "../acp/permissions.js"
+import { withNativeSession, withoutAgencyMetadata, type ProviderSession } from "../agent/acp.js"
 import type { AgentIndex, IndexEntry } from "../agent/agent-index.js"
 import { readBackendConfig } from "../agent/backend-config.js"
+import { backendChoice } from "../agent/backend-selection.js"
 import type { LaunchContract } from "../agent/contracts.js"
-import { createConversation } from "../agent/conversation.js"
+import { createConversation, type ConversationListener, type ConversationObservation } from "../agent/conversation.js"
 import type { LaunchEnvironment } from "../agent/environment.js"
 import type { ConversationExcerpt, RecordedSettings, SessionHomes } from "../agent/excerpt.js"
 import { underlyingFailureCode } from "../agent/failure-diagnostics.js"
 import { createPermissionArbiter, type PermissionArbiter } from "../agent/permission-arbiter.js"
 import { createAgentProcess } from "../agent/process.js"
-import type { JsonObject, RequestedSettings } from "../agent/session-config.js"
+import type { JsonObject, RequestedSettings, SessionConfiguration } from "../agent/session-config.js"
 import { EDITOR_TURN_LIMITS, type AcpObservation, type StopReason } from "../agent/session-events.js"
-import { AgentError, agentFailure } from "../agent/types.js"
+import type { AcpSubmissionRequest, SubmissionReceipt } from "../agent/turns.js"
+import { AgentError, agentFailure, type AgentTuple } from "../agent/types.js"
+import { readProfiles } from "../catalog/config.js"
 import { id, type ProviderId } from "../catalog/types.js"
 import { ControlError } from "../control/protocol.js"
 import type { EventLog } from "../handler/event-log.js"
 import type { LaunchContext } from "../handler/launch-transitions.js"
-import { configure, settingRequest, unchanged } from "./configure.js"
+import { configure, settingRequest, unchanged, type SettingRequest } from "./configure.js"
+import { createEchoFilter } from "./echo.js"
 import { RequestError, requestFailure } from "./errors.js"
 import { launchAgent, type LaunchHooks, type LaunchRequest } from "./launch.js"
+import { createModelCache, type ModelListing, type ModelSource } from "./models.js"
 import { createRoster, liveRow, type RosterRow, type Transcript } from "./roster.js"
 import { createLiveTable, type LiveAgent } from "./state.js"
 import { stopAgent } from "./stop.js"
 
 export type StartRequest = { agentId: string; backendId?: ProviderId; cwd: string; settings?: RequestedSettings; model?: string; mode?: string; environment: LaunchEnvironment; nativeParams?: JsonObject }
 export type PromptResult = { state: "prompt"; agentId: string; submissionId: string; stopReason: StopReason; text: string }
+export type LiveObservation = ConversationObservation & { native: ProviderSession; backendId: ProviderId }
 export type LiveCoreInput = { context: LaunchContext; contracts: readonly LaunchContract[]; index: AgentIndex; homes: SessionHomes; events?: EventLog }
-export type LiveCoreDependencies = { processFactory?: typeof createAgentProcess }
+export type LiveCoreDependencies = { processFactory?: typeof createAgentProcess; modelSource?: ModelSource }
 export type LiveCore = {
   readonly handlerGeneration: string
   readonly permissions: PermissionArbiter
@@ -42,6 +48,21 @@ export type LiveCore = {
   agents(): Promise<RosterRow[]>
   excerpt(agentId: string, turns: number): Promise<ConversationExcerpt>
   transcript(agentId: string): Promise<Transcript>
+  models(): Promise<{ state: "models"; defaultBackendId: ProviderId; backends: ModelListing[] }>
+  backendChoices(): Promise<JsonObject>
+  acpCapabilities(): Promise<JsonObject>
+  create(request: Omit<StartRequest, "agentId">): Promise<AgentTuple>
+  isLive(target: AgentTuple): boolean
+  observe(target: AgentTuple, listener: ConversationListener, configuration: (snapshot: SessionConfiguration) => void): Promise<LiveObservation>
+  attachEditor(target: AgentTuple, connectionId: string, address: string | null, token: string): void
+  detachEditor(connectionId: string, target?: AgentTuple, token?: string): void
+  attachPermissions(target: AgentTuple, client: PermissionClient, current?: () => boolean): Promise<void>
+  detachPermissions(connectionId: string, target?: AgentTuple): void
+  permissionDecision(connectionId: string, requestId: string | number, result: JsonObject): Promise<boolean>
+  submitAcp(target: AgentTuple, request: AcpSubmissionRequest, beforeAccepted?: () => Promise<void>): Promise<SubmissionReceipt>
+  settledAcp(target: AgentTuple, submissionId: string): Promise<JsonObject>
+  cancelTurn(target: AgentTuple, submissionId: string): Promise<SubmissionReceipt>
+  setNative(target: AgentTuple, method: string, params: JsonObject): Promise<JsonObject>
   failed(op: string, agentId: string | undefined, error: unknown): void
   assertOrdinaryShutdownSafe(): void
   freezeIfIdle(): Promise<void>
@@ -54,12 +75,14 @@ export type LiveCore = {
 export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDependencies = {}): LiveCore {
   const { context, events } = input, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const table = createLiveTable(), admissions = new Map<string, Promise<void>>(), roster = createRoster({ index: input.index, homes: input.homes })
+  const models = createModelCache({ root, ...(dependencies.modelSource ? { source: dependencies.modelSource } : {}) })
   const permissions = createPermissionArbiter({ hostId: context.paths.hostKey, handlerGeneration: generation })
   const broker = createPermissionBroker({ routing: permissions, cwd: target => table.get(target.agentId)?.cwd ?? "/", respond(target, requestId, result) {
     const agent = table.get(target.agentId)
     if (!agent?.owner || agent.phase !== "ready" || agent.tuple.providerGeneration !== target.providerGeneration) throw new AgentError("STALE_ATTACHMENT")
     return agent.owner.respond(requestId, result)
   } })
+  permissions.subscribe(event => { if (event.kind === "receipt" && event.receipt.state === "applied") events?.append({ type: "permission_decided", agentId: event.receipt.ref.target.agentId, optionId: event.receipt.optionId }) })
   let frozen = false, closed = false
 
   const missing = (agentId: string): RequestError => new RequestError("NOT_FOUND", "agent " + agentId + " is not known on this host")
@@ -75,6 +98,11 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   const ready = async (agentId: string): Promise<LiveAgent> => {
     const agent = await known(agentId).ready
     if (agent.phase !== "ready") throw new RequestError("UNAVAILABLE", "agent " + agentId + " is stopping")
+    return agent
+  }
+  const bound = (target: AgentTuple): LiveAgent => {
+    const agent = table.get(target.agentId)
+    if (!agent || agent.phase !== "ready" || target.handlerGeneration !== generation || agent.tuple.providerGeneration !== target.providerGeneration) throw new AgentError("STALE_ATTACHMENT")
     return agent
   }
   const stopping = (agent: LiveAgent, reason: "request" | "failure" | "shutdown"): Promise<void> => {
@@ -109,7 +137,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   }
 
   const hooks: LaunchHooks = {
-    update(agent, event) { retain(agent, event) },
+    update(agent, event) { for (const value of agent.echo.filter(event, agent.phase === "ready")) retain(agent, value) },
     request(agent, message) {
       const params = message.params as JsonObject, toolCall = params.toolCall as JsonObject | undefined
       void Promise.resolve().then(async () => {
@@ -124,9 +152,10 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       if (agent.configuring) throw new RequestError("BUSY", "agent " + agent.agentId + " is changing a setting")
     },
     invoke(agent, params) {
+      const echo = agent.echo.expect(params.prompt as JsonObject[])
       const call = agent.owner!.request("session/prompt", withNativeSession(params, agent.session!.sessionId), agent.controller.signal)
       agent.prompts.add(call)
-      return call.finally(() => { agent.prompts.delete(call) })
+      return call.finally(() => { agent.prompts.delete(call); for (const event of agent.echo.settle(echo)) retain(agent, event) })
     },
     accepted(agent, request) {
       if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
@@ -167,11 +196,12 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   }
   function admit(agentId: string, identity: { backendId: ProviderId; cwd: string; origin: "new" | "import"; createdAt: string; indexed: boolean }, request: LaunchRequest, kind: "started" | "restored", wanted?: Promise<RecordedSettings>): LiveAgent {
     const tuple = { agentId, handlerGeneration: generation, providerGeneration: randomUUID() }
-    const agent: LiveAgent = { agentId, ...identity, tuple, phase: "starting", launched: Promise.resolve(), ready: Promise.resolve(undefined as never), controller: new AbortController(), conversation: createConversation(tuple), running: new Set(), prompts: new Set(), configuring: 0, listeners: new Set(), lastActivityAt: null }
+    const agent: LiveAgent = { agentId, ...identity, tuple, phase: "starting", launched: Promise.resolve(), ready: Promise.resolve(undefined as never), controller: new AbortController(), conversation: createConversation(tuple), echo: createEchoFilter(), running: new Set(), prompts: new Set(), configuring: 0, listeners: new Set(), lastActivityAt: null }
     agent.launched = launchAgent(agent, request, launcher)
     agent.ready = agent.launched.then(async () => {
       if (wanted) await reapply(agent, await wanted)
       if (agent.controller.signal.aborted) throw new RequestError("FAILED", "agent " + agentId + " was stopped before it was ready")
+      models.observe(agent.backendId, agent.contract!.modelOption, agent.session!.configuration)
       events?.append({ type: "agent_" + kind, agentId, backendId: agent.backendId, cwd: agent.cwd })
       return agent
     }).catch(async error => {
@@ -214,6 +244,13 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     const agent = await (await launch(request)).ready
     if (request.backendId && agent.backendId !== request.backendId || agent.cwd !== request.cwd) throw new RequestError("INVALID", "agent " + agent.agentId + " already exists with backend " + agent.backendId + " in " + agent.cwd)
     return row(agent)
+  }
+  async function enabled() {
+    const config = await readBackendConfig(root), profiles = await readProfiles(root)
+    return { config, backends: config.backends.flatMap(backend => {
+      const contract = input.contracts.find(value => value.id === backend.compatibilityId && value.providerId === backend.id)
+      return contract && profiles.some(profile => profile.id === backend.id && profile.enabled) ? [{ backend, contract }] : []
+    }) }
   }
   function ordinary(): void { if (table.all().length || admissions.size) throw new ControlError("ACTIVE_AGENTS", "agents are live: " + table.all().map(agent => agent.agentId).join(", ")) }
 
@@ -260,6 +297,41 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     agents: () => roster.rows(table),
     async excerpt(agentId, turns) { const excerpt = await roster.excerpt(table, id(agentId), turns); if (!excerpt) throw missing(agentId); return excerpt },
     async transcript(agentId) { const transcript = await roster.transcript(id(agentId)); if (!transcript) throw missing(agentId); return transcript },
+    async models() {
+      const { config, backends } = await enabled()
+      return { state: "models", defaultBackendId: config.defaultBackendId, backends: await Promise.all(backends.map(({ backend }) => models.list(backend.id))) }
+    },
+    async backendChoices() {
+      const { config, backends } = await enabled()
+      return { defaultBackendId: config.defaultBackendId, backends: await Promise.all(backends.map(async ({ backend, contract }) => backendChoice(backend, contract, await models.list(backend.id)))) }
+    },
+    async acpCapabilities() {
+      const capabilities = { image: false, audio: false, embeddedContext: false }
+      try { for (const { contract } of (await enabled()).backends) for (const key of ["image", "audio", "embeddedContext"] as const) capabilities[key] ||= contract.promptCapabilities?.[key] === true } catch {}
+      return { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: capabilities }
+    },
+    async create(request) {
+      const created = await start({ ...request, agentId: randomUUID() })
+      return { agentId: created.agentId, handlerGeneration: created.live!.handlerGeneration, providerGeneration: created.live!.providerGeneration }
+    },
+    isLive(target) { try { bound(target); return true } catch { return false } },
+    async observe(target, listener, configuration) {
+      const agent = bound(target), observation = agent.conversation.observe(listener)
+      agent.listeners.add(configuration)
+      return { ...observation, native: { ...structuredClone(agent.session!), configuration: agent.owner!.snapshot() }, backendId: agent.backendId, close() { observation.close(); agent.listeners.delete(configuration) } }
+    },
+    attachEditor(target, connectionId, address, token) { bound(target).editor!.attach(connectionId, address, token) },
+    detachEditor(connectionId, target, token) { for (const agent of table.all()) if (!target || agent.agentId === target.agentId && agent.tuple.providerGeneration === target.providerGeneration) agent.editor?.detach(connectionId, token) },
+    async attachPermissions(target, client, current) { bound(target); if (current && !current()) throw new AgentError("STALE_ATTACHMENT"); broker.attach(target, client) },
+    detachPermissions: (connectionId, target) => broker.detach(connectionId, target),
+    permissionDecision: (connectionId, requestId, result) => broker.decision(connectionId, requestId, result),
+    async submitAcp(target, request, beforeAccepted) { return bound(target).turns!.submitAcp(request, beforeAccepted) },
+    async settledAcp(target, submissionId) { const agent = bound(target); try { return await agent.turns!.settledAcp(submissionId) } catch (error) { throw await faultOf(agent) ?? error } },
+    async cancelTurn(target, submissionId) { return bound(target).turns!.cancel(submissionId) },
+    async setNative(target, method, params) {
+      if (!["session/set_config_option", "session/set_model", "session/set_mode"].includes(method)) throw new RequestError("INVALID", "unsupported setting method " + method)
+      return configure(bound(target), { method: method as SettingRequest["method"], params: withoutAgencyMetadata(params) }, { publish, ...(events ? { events } : {}) })
+    },
     failed(op, agentId, error) { events?.append({ type: "request_failed", op, ...(agentId ? { agentId } : {}), ...requestFailure(error) }) },
     assertOrdinaryShutdownSafe: ordinary,
     async freezeIfIdle() {
