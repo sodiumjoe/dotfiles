@@ -1,6 +1,6 @@
 import { hostname as localHostname } from "node:os"
-import { RequestError } from "../live/errors.js"
-import type { PermissionOffer, PermissionRef, PermissionSnapshot } from "../agent/permission-types.js"
+import { RequestError, parseRequestFailure } from "../live/errors.js"
+import { parsePermissionSnapshot, type PermissionOffer, type PermissionRef, type PermissionSnapshot } from "../agent/permission-types.js"
 import type { AgentTuple } from "../agent/types.js"
 import type { RemoteHost } from "./remote-rosters.js"
 import type { HostRoute } from "./router.js"
@@ -39,7 +39,11 @@ export function createRemoteRequests(input: { hostId: string; hosts(): RemoteHos
   async function live(hostId: string, payload: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
     const reply = await send(hostId, "live-request", payload, timeoutMs) as { ok?: boolean; result?: Record<string, unknown>; error?: { code: string; message: string } }
     if (reply?.ok === true && reply.result) return reply.result
-    if (reply?.ok === false && reply.error) throw new RequestError(reply.error.code as never, reply.error.message)
+    if (reply?.ok === false && reply.error) {
+      let failure: { code: RequestError["code"]; message: string }
+      try { failure = parseRequestFailure(reply.error) } catch { failure = { code: "FAILED", message: typeof reply.error.message === "string" ? reply.error.message.slice(0, 2048) : label(hostId) + " sent an invalid failure" } }
+      throw new RequestError(failure.code, failure.message)
+    }
     throw new RequestError("FAILED", label(hostId) + " sent an invalid reply")
   }
   const codes: Partial<Record<RemoteHost["state"], string>> = { offline: "OFFLINE", outdated: "UPDATE_REQUIRED", connecting: "CONNECTING" }
@@ -48,7 +52,13 @@ export function createRemoteRequests(input: { hostId: string; hosts(): RemoteHos
     decide: (ref: PermissionRef, optionId: string) => live(ref.hostId, { op: "decide", ref, optionId }, timeouts.write),
     async approvals(): Promise<Approvals> {
       const hosts = await Promise.all([input.hostId, ...input.hosts().map(host => host.hostId)].map(async (hostId): Promise<ApprovalHost> => {
-        try { return { hostId, state: "available", value: (await live(hostId, { op: "permissions" }, timeouts.read)).snapshot as PermissionSnapshot } }
+        try {
+          const reply = await live(hostId, { op: "permissions" }, timeouts.read)
+          let value: PermissionSnapshot
+          try { value = parsePermissionSnapshot(reply.snapshot); if (value.hostId !== hostId) throw new Error("INVALID_PERMISSION") }
+          catch { throw new RequestError("FAILED", label(hostId) + " sent an invalid reply") }
+          return { hostId, state: "available", value }
+        }
         catch (error) {
           const failure = translate(hostId, error), state = remote(hostId)?.state
           return { hostId, state: "unavailable", code: (state && codes[state]) ?? failure.code, message: failure.message }

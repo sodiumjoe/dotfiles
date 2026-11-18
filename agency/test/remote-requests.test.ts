@@ -6,7 +6,10 @@ import type { HostRoute } from "../src/hosts/router.js"
 
 const own = "a".repeat(64), devbox = "b".repeat(64)
 const host = (state: RemoteHost["state"], since: number | null = null): RemoteHost => ({ hostId: devbox, hostname: "devbox.example", name: null, state, since, handlerGeneration: null, agents: [], error: null })
-const snapshot = (hostId: string) => ({ hostId, handlerGeneration: "g", throughSeq: 0, pending: [{ ref: { hostId }, title: "t" }], receipts: [] })
+const generation = "00000000-0000-4000-8000-000000000001"
+const snapshot = (hostId: string) => ({ hostId, handlerGeneration: generation, throughSeq: 0, receipts: [], pending: [{
+  ref: { hostId, target: { agentId: "00000000-0000-4000-8000-000000000002", handlerGeneration: generation, providerGeneration: "00000000-0000-4000-8000-000000000003" }, permissionId: "00000000-0000-4000-8000-000000000004", revision: 1 },
+  title: "t", subject: {}, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }], originCwd: "/w", toolCallId: "tool" }] })
 
 function requests(remote: RemoteHost[], answer: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>, timeouts?: { read: number; write: number }) {
   const calls: Array<{ route: HostRoute; signal?: AbortSignal; timeoutMs?: number }> = []
@@ -57,4 +60,19 @@ test("approvals collect every host and keep the others when one fails", async ()
   const result = await api.approvals()
   assert.deepEqual(result.hosts.map(value => [value.hostId.slice(0, 1), value.state, "code" in value ? value.code : null]), [["a", "available", null], ["b", "unavailable", "UNAVAILABLE"], ["c", "unavailable", "OFFLINE"]])
   assert.deepEqual(result.pending.map(offer => offer.ref.hostId), [own])
+})
+
+test("a host whose snapshot is malformed is unavailable on its own", async () => {
+  const other = { ...host("online"), hostId: "c".repeat(64), hostname: "other.example" }
+  const { api } = requests([host("online"), other], async route => ({ ok: true, result: { state: "permissions", snapshot: route.hostId === devbox ? snapshot(own) : snapshot(route.hostId) } }))
+  const result = await api.approvals()
+  assert.deepEqual(result.hosts.map(value => [value.hostId.slice(0, 1), value.state]), [["a", "available"], ["b", "unavailable"], ["c", "available"]])
+  const broken = result.hosts[1]!
+  assert.match(broken.state === "unavailable" ? broken.message : "", /devbox\.example sent an invalid reply/)
+  assert.deepEqual(result.pending.map(offer => offer.ref.hostId.slice(0, 1)), ["a", "c"])
+})
+
+test("an unknown error code from a devbox becomes FAILED", async () => {
+  const { api } = requests([host("online")], async () => ({ ok: false, error: { code: "WEIRD", message: "odd" } }))
+  await assert.rejects(api.excerpt(devbox, "x", 4), (error: { code?: string; message?: string }) => error.code === "FAILED" && error.message === "odd")
 })
