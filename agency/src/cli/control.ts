@@ -7,11 +7,10 @@ import type { createHostInventory } from "../hosts/inventory.js"
 import { randomUUID } from "node:crypto"
 import { runRestart } from "./restart.js"
 import { createConnection } from "node:net"
-import { fileURLToPath } from "node:url"
 import { ControlError, PROTOCOL, UUID, controlError, exitCode, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply, type DoctorDiagnostic } from "../control/protocol.js"
 import { exchange } from "../control/wire.js"
 import { productionEnvironment, type HandlerEnvironment } from "../handler/environment.js"
-import { inspectHandlerGeneration, startOrConnect } from "../platform/singleton.js"
+import { inspectHandlerGeneration, productionHandlerCommand, startOrConnect } from "../platform/singleton.js"
 import { assertPrivateSocket } from "../platform/private-socket.js"
 import { processBirthStart, sameProcess, sameProcessGeneration, type HandlerInspection, type ProcessIdentity } from "../platform/types.js"
 import { DarwinObservationUnavailable } from "../platform/darwin.js"
@@ -41,7 +40,7 @@ export function productionControlDependencies(): ControlDependencies {
   return {
     stdin: process.stdin,
     environment: productionEnvironment,
-    start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }),
+    start: env => startOrConnect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, adapter: env.adapter, handler: productionHandlerCommand() }),
     inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter),
     call: async (env, request) => exchange(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request),
     callLive: async (env, request, timeoutMs) => exchangeLive(createConnection(await assertPrivateSocket(env.paths.runtimeRoot, "handler.sock")), request, timeoutMs),

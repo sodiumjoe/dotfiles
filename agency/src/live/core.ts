@@ -26,7 +26,7 @@ import { RequestError, requestFailure, type RequestFailure } from "./errors.js"
 import { parseHandoffAgent, readHandoff, removeHandoff, staleness, writeHandoff, type HandoffAgent } from "./handoff.js"
 import { launchAgent, type LaunchHooks, type LaunchRequest } from "./launch.js"
 import { createModelCache, type ModelListing, type ModelSource } from "./models.js"
-import { createRoster, currentSettings, liveRow, type RosterRow, type Transcript } from "./roster.js"
+import { createRoster, currentSettings, liveRow, liveRows, type RosterRow, type Transcript } from "./roster.js"
 import { createLiveTable, type LiveAgent } from "./state.js"
 import { stopAgent } from "./stop.js"
 
@@ -50,6 +50,8 @@ export type LiveCore = {
   set(agentId: string, setting: string, value: string | boolean): Promise<RosterRow>
   forget(agentId: string): Promise<{ state: "forgotten"; agentId: string }>
   agents(): Promise<RosterRow[]>
+  liveRows(): RosterRow[]
+  changed(after: string | null, waitMs: number): Promise<string>
   excerpt(agentId: string, turns: number): Promise<ConversationExcerpt>
   transcript(agentId: string): Promise<Transcript>
   models(): Promise<{ state: "models"; defaultBackendId: ProviderId; backends: ModelListing[] }>
@@ -129,13 +131,19 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     void tail.then(() => { if (admissions.get(agentId) === tail) admissions.delete(agentId) })
     return current
   }
+  function configuring<T>(work: Promise<T>): Promise<T> {
+    table.touch()
+    return work.finally(() => table.touch())
+  }
   function publish(agent: LiveAgent): void {
+    table.touch()
     if (agent.phase !== "ready" || !agent.owner) return
     for (const listener of agent.listeners) { try { listener(agent.owner.snapshot()) } catch {} }
   }
   function retain(agent: LiveAgent, event: AcpObservation): void {
     agent.conversation.append({ kind: "update", ...event })
     if (["config_option_update", "current_mode_update"].includes(event.update.sessionUpdate)) publish(agent)
+    else if (event.update.sessionUpdate === "session_info_update") table.touch()
   }
   function indexAgent(agent: LiveAgent): void {
     const sessionId = agent.session?.sessionId
@@ -169,13 +177,15 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       const echo = agent.echo.expect(params.prompt as JsonObject[])
       const call = agent.owner!.request("session/prompt", withNativeSession(params, agent.session!.sessionId), agent.controller.signal)
       agent.prompts.add(call)
-      return call.finally(() => { agent.prompts.delete(call); for (const event of agent.echo.settle(echo)) retain(agent, event) })
+      table.touch()
+      return call.finally(() => { agent.prompts.delete(call); table.touch(); for (const event of agent.echo.settle(echo)) retain(agent, event) })
     },
     accepted(agent, request) {
       if (request.originConnectionId && !request.originAttachment) throw new AgentError("STALE_ATTACHMENT")
       agent.editor!.begin(request.submissionId, request.originConnectionId ? { connectionId: request.originConnectionId, attachment: request.originAttachment!, ...(request.editorAddress === undefined ? {} : { address: request.editorAddress }) } : undefined)
       agent.running.add(request.submissionId)
       agent.lastActivityAt = new Date().toISOString()
+      table.touch()
       indexAgent(agent)
       events?.append({ type: "turn_submitted", agentId: agent.agentId, submissionId: request.submissionId })
     },
@@ -184,6 +194,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       agent.running.delete(submissionId)
       if (!agent.turns?.busy()) broker.invalidate(agent.tuple)
       agent.lastActivityAt = new Date().toISOString()
+      table.touch()
       const receipt = agent.turns?.inspect(submissionId)
       events?.append({ type: "turn_finished", agentId: agent.agentId, submissionId, stopReason: receipt?.stopReason ?? null, ...(receipt?.failure ? { failure: receipt.failure.code } : {}) })
     },
@@ -210,7 +221,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   async function reapply(agent: LiveAgent, wanted: RecordedSettings): Promise<void> {
     const apply = async (setting: "model" | "mode", value: string): Promise<void> => {
       const request = settingRequest(agent, setting, value)
-      if (!unchanged(agent, request)) await configure(agent, request, { publish, ...(events ? { events } : {}) })
+      if (!unchanged(agent, request)) await configuring(configure(agent, request, { publish, ...(events ? { events } : {}) }))
     }
     for (const setting of ["model", "mode"] as const) {
       const value = wanted[setting]
@@ -229,11 +240,13 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     const tuple = { agentId, handlerGeneration: generation, providerGeneration: randomUUID() }
     const agent: LiveAgent = { agentId, ...identity, tuple, phase: "starting", launched: Promise.resolve(), ready: Promise.resolve(undefined as never), controller: new AbortController(), conversation: createConversation(tuple), echo: createEchoFilter(), running: new Set(), prompts: new Set(), configuring: 0, listeners: new Set() }
     agent.launched = launchAgent(agent, request, launcher)
+    void agent.launched.then(() => table.touch(), () => undefined)
     agent.ready = agent.launched.then(async () => {
       if (wanted) await reapply(agent, await wanted)
       if (agent.controller.signal.aborted) throw new RequestError("FAILED", "agent " + agentId + " was stopped before it was ready")
       models.observe(agent.backendId, agent.contract!.modelOption, agent.session!.configuration)
       events?.append({ type: "agent_" + kind, agentId, backendId: agent.backendId, cwd: agent.cwd })
+      table.touch()
       return agent
     }).catch(async error => {
       const failure = agent.controller.signal.aborted && !(error instanceof RequestError) ? new RequestError("FAILED", "agent " + agentId + " was stopped before it was ready") : error
@@ -319,7 +332,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     },
     async set(agentId, setting, value) {
       const agent = await ready(agentId), request = settingRequest(agent, setting, value)
-      if (!unchanged(agent, request)) await configure(agent, request, { publish, ...(events ? { events } : {}) })
+      if (!unchanged(agent, request)) await configuring(configure(agent, request, { publish, ...(events ? { events } : {}) }))
       return row(agent)
     },
     forget(agentId) {
@@ -332,6 +345,11 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
       })
     },
     agents: () => roster.rows(table),
+    liveRows: () => liveRows(table),
+    async changed(after, waitMs) {
+      const prefix = generation + ":", known = after?.startsWith(prefix) ? Number(after.slice(prefix.length)) : null
+      return prefix + await table.changed(known !== null && Number.isSafeInteger(known) ? known : null, waitMs)
+    },
     async excerpt(agentId, turns) { const excerpt = await roster.excerpt(table, id(agentId), turns); if (!excerpt) throw missing(agentId); return excerpt },
     async transcript(agentId) { const transcript = await roster.transcript(id(agentId)); if (!transcript) throw missing(agentId); return transcript },
     async models() {
@@ -367,7 +385,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     async cancelTurn(target, submissionId) { return bound(target).turns!.cancel(submissionId) },
     async setNative(target, method, params) {
       if (!["session/set_config_option", "session/set_model", "session/set_mode"].includes(method)) throw new RequestError("INVALID", "unsupported setting method " + method)
-      return configure(bound(target), { method: method as SettingRequest["method"], params: withoutAgencyMetadata(params) }, { publish, ...(events ? { events } : {}) })
+      return configuring(configure(bound(target), { method: method as SettingRequest["method"], params: withoutAgencyMetadata(params) }, { publish, ...(events ? { events } : {}) }))
     },
     failed(op, agentId, error) { events?.append({ type: "request_failed", op, ...(agentId ? { agentId } : {}), ...requestFailure(error) }) },
     assertOrdinaryShutdownSafe: ordinary,

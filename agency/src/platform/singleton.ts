@@ -4,6 +4,7 @@ import { constants } from "node:fs"
 import { lstat, open, realpath, type FileHandle } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { type Duplex } from "node:stream"
 import { DarwinObservationUnavailable } from "./darwin.js"
 import { assertPrivateSocket, unlinkStalePrivateSocket } from "./private-socket.js"
@@ -295,6 +296,8 @@ async function waitForExisting(root: string, adapter: PlatformAdapter, deadline:
     await new Promise(resolve => setTimeout(resolve, 20))
   }
 }
+
+export function productionHandlerCommand(): HandlerCommand { return { file: process.execPath, args: [fileURLToPath(new URL("../main.js", import.meta.url)), "internal-handler"] } }
 
 export async function startOrConnect(options: StartOrConnectOptions, dependencies: StartupDependencies = {}): Promise<HandlerInspection> {
   const timeoutMs = options.timeoutMs ?? 5000

@@ -1,6 +1,6 @@
 import { createConnection } from "node:net"
 import { assertPrivateSocket } from "../platform/private-socket.js"
-import { inspectHandlerGeneration } from "../platform/singleton.js"
+import { productionHandlerCommand, startOrConnect } from "../platform/singleton.js"
 import { productionEnvironment } from "../handler/environment.js"
 import { createBridgePeer } from "./codec.js"
 import { bridgeError } from "./protocol.js"
@@ -20,7 +20,7 @@ export async function connectHandlerBridge(input: { root: string; hostId: string
   finally { clearTimeout(timer) }
 }
 export async function productionHandlerBridge() {
-  const environment = await productionEnvironment(), inspection = await inspectHandlerGeneration(environment.paths.runtimeRoot, environment.adapter)
-  if (!inspection || inspection.disposition !== "live" || inspection.record.phase !== "ready") bridgeError("HANDLER_UNAVAILABLE")
+  const environment = await productionEnvironment()
+  const inspection = await startOrConnect({ root: environment.paths.runtimeRoot, hostId: environment.paths.hostKey, adapter: environment.adapter, handler: productionHandlerCommand() })
   return connectHandlerBridge({ root: environment.paths.runtimeRoot, hostId: environment.paths.hostKey, handlerGeneration: inspection.record.generation })
 }

@@ -6,6 +6,7 @@ import type { LiveAgent, LiveTable } from "./state.js"
 export function stopAgent(agent: LiveAgent, input: { table: LiveTable; permissions: PermissionBroker; events?: EventLog; reason: "request" | "failure" | "shutdown" }): Promise<void> {
   if (agent.stopped) return agent.stopped
   agent.phase = "stopping"
+  input.table.touch()
   agent.conversation.append({ kind: "lifecycle", phase: "stopping" })
   agent.editor?.revoke()
   input.permissions.invalidate(agent.tuple)

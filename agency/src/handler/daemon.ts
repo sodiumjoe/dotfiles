@@ -5,6 +5,7 @@ import { id, keys, object } from "../config/validate.js"
 import { createHostInventory } from "../hosts/inventory.js"
 import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
 import { connectBridge } from "../bridge/ssh.js"
+import { bridgeError } from "../bridge/protocol.js"
 import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
 import { registerRuntimeEndpoint } from "../hosts/runtime.js"
 import { join } from "node:path"
@@ -225,6 +226,20 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (termination || closing) await bridge.close()
     checkStartup()
     registerRuntimeEndpoint(bridge, dispatchAgent)
+    const servedCore = core
+    bridge.register(["live-read", "live-wait"], async ({ channel, payload }) => {
+      if (!ready()) bridgeError("HANDLER_UNAVAILABLE")
+      const value = object(payload)
+      if (channel === "live-read") {
+        keys(value, ["op"])
+        if (value.op !== "agents") bridgeError("UNSUPPORTED_CAPABILITY")
+        return { handlerGeneration: options.generation, agents: servedCore.liveRows() }
+      }
+      keys(value, ["after", "waitMs"])
+      const after = value.after === null ? null : typeof value.after === "string" && value.after.length <= 128 ? value.after : bridgeError("UNSUPPORTED_CAPABILITY")
+      if (typeof value.waitMs !== "number" || !Number.isInteger(value.waitMs) || value.waitMs < 0 || value.waitMs > 8000) bridgeError("UNSUPPORTED_CAPABILITY")
+      return { revision: await servedCore.changed(after, value.waitMs as number) }
+    })
     const ownerCore = core
     const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
       return ownerCore.isLive(target)

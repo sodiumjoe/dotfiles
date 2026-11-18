@@ -25,6 +25,7 @@ export function liveRow(table: LiveTable, agent: LiveAgent): RosterRow {
     live: { activity: table.activity(agent), handlerGeneration: agent.tuple.handlerGeneration, providerGeneration: agent.tuple.providerGeneration, ...currentSettings(agent) } }
 }
 
+export function liveRows(table: LiveTable): RosterRow[] { return table.all().map(agent => liveRow(table, agent)).sort(order) }
 const order = (a: RosterRow, b: RosterRow): number => (b.lastActivityAt ?? "").localeCompare(a.lastActivityAt ?? "") || b.createdAt.localeCompare(a.createdAt) || a.agentId.localeCompare(b.agentId)
 
 export function createRoster(input: { index: AgentIndex; homes: SessionHomes }): Roster {

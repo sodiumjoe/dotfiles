@@ -72,3 +72,26 @@ test("a remote session receives one exact long Unicode prompt through stdin", { 
   assert.deepEqual((prompts[0]!.params as { prompt: unknown }).prompt, [{ type: "text", text }])
   transport.close(); await transport.closed; await f.verifyZeroSurvivors()
 })
+
+test("a remote serves its live agents and a change doorbell", { timeout: 60000 }, async t => {
+  const { f, transport } = await remote(t), { agentId } = await f.start()
+  assert.ok(transport.hello.capabilities.includes("live-read") && transport.hello.capabilities.includes("live-wait"))
+  const stopped = await f.start()
+  await f.prompt(stopped.agentId, "hello")
+  await f.stop(stopped.agentId)
+  const list = await transport.request("live-read", { op: "agents" }) as { handlerGeneration: string; agents: Array<{ agentId: string }> }
+  assert.equal(list.handlerGeneration, (await f.handler()).generation)
+  assert.deepEqual(list.agents.map(row => row.agentId), [agentId])
+  const wait = (after: string | null, waitMs: number) => transport.request("live-wait", { after, waitMs }, { timeoutMs: waitMs + 5000 }) as Promise<{ revision: string }>
+  const first = (await wait(null, 8000)).revision
+  const started = Date.now()
+  assert.equal((await wait(first, 500)).revision, first)
+  assert.ok(Date.now() - started >= 450)
+  const changing = wait(first, 8000), since = Date.now()
+  await f.start()
+  assert.notEqual((await changing).revision, first)
+  assert.ok(Date.now() - since < 7000)
+  await assert.rejects(transport.request("live-read", { op: "stop", agentId }))
+  await assert.rejects(transport.request("live-wait", { after: null, waitMs: 9000 }))
+  transport.close(); await transport.closed; await f.verifyZeroSurvivors()
+})

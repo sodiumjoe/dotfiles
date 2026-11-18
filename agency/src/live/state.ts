@@ -17,15 +17,32 @@ export type LiveAgent = {
   record?: OwnedAgentRecord; backend?: Backend; contract?: ConfiguredLaunchContract; owner?: OwnedAgentProcess; session?: ProviderSession; turns?: TurnCoordinator; editor?: EditorRouting
   running: Set<string>; prompts: Set<Promise<JsonObject>>; configuring: number; listeners: Set<(snapshot: SessionConfiguration) => void>; indexed: boolean; title: string | null; lastActivityAt: string | null
 }
-export type LiveTable = { get(agentId: string): LiveAgent | undefined; add(agent: LiveAgent): void; remove(agent: LiveAgent): void; all(): LiveAgent[]; activity(agent: LiveAgent): Activity; busy(): string[] }
+export type LiveTable = { get(agentId: string): LiveAgent | undefined; add(agent: LiveAgent): void; remove(agent: LiveAgent): void; all(): LiveAgent[]; version(): number; touch(): void; changed(after: number | null, waitMs: number): Promise<number>; activity(agent: LiveAgent): Activity; busy(): string[] }
 
 export function createLiveTable(): LiveTable {
-  const agents = new Map<string, LiveAgent>()
+  const agents = new Map<string, LiveAgent>(), waiters = new Set<() => void>()
+  let version = 0
+  const touch = (): void => {
+    version++
+    const woken = [...waiters]
+    waiters.clear()
+    for (const wake of woken) wake()
+  }
   const activity = (agent: LiveAgent): Activity => agent.phase === "starting" ? "starting" : agent.phase === "stopping" ? "stopping" : agent.running.size || agent.prompts.size || agent.configuring || agent.turns?.busy() ? "working" : "idle"
   return {
     get: agentId => agents.get(agentId),
-    add(agent) { agents.set(agent.agentId, agent) },
-    remove(agent) { if (agents.get(agent.agentId) === agent) agents.delete(agent.agentId) },
+    add(agent) { agents.set(agent.agentId, agent); touch() },
+    remove(agent) { if (agents.get(agent.agentId) === agent) { agents.delete(agent.agentId); touch() } },
+    version: () => version,
+    touch,
+    changed(after, waitMs) {
+      if (after !== version) return Promise.resolve(version)
+      return new Promise(resolve => {
+        const wake = (): void => { clearTimeout(timer); resolve(version) }
+        const timer = setTimeout(() => { waiters.delete(wake); resolve(version) }, waitMs)
+        waiters.add(wake)
+      })
+    },
     all: () => [...agents.values()],
     activity,
     busy: () => [...agents.values()].filter(agent => activity(agent) !== "idle").map(agent => agent.agentId).sort(),
