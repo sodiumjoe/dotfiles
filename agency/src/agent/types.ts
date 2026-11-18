@@ -3,10 +3,8 @@ import { isDeepStrictEqual } from "node:util"
 import { absolutePath, hash, id, keys, object, providerId, text, type ProviderId } from "../config/validate.js"
 import { type ProviderSnapshot } from "../config/models.js"
 import { type ConfigEvidence } from "../config/providers.js"
-import type { LaunchRecord } from "../platform/types.js"
 import type { LaunchEnvironment } from "./environment.js"
-import { digest } from "../config/providers.js"
-import { canonicalJson, parseRequestedSettings, type JsonObject, type RestorableSettings } from "./session-config.js"
+import { parseRequestedSettings, type JsonObject, type RestorableSettings } from "./session-config.js"
 export type { JsonObject, JsonValue, RequestedSettings, RestorableSettings, SessionConfiguration } from "./session-config.js"
 
 export type Reasoning = { kind: "none" } | { kind: "value"; value: string }
@@ -30,22 +28,11 @@ export type NativeCommandResult = { outcome: "started" | "restored" | "stopped" 
 export type AgentCommandV3 = { version: 3; hostId: string; commandId: string; handlerGeneration: string; op: "start" | "restore" | "stop" | "import" | "configure"; input: JsonObject; agentId: string; target: AgentTuple | null; state: "pending" | "completed" | "interrupted"; result: NativeCommandResult | null }
 export type OwnedAgentRecord = AgentRecordV3 & { launch: AgentLaunchV3 }
 export function ownedRecord(input: AgentRecordV3): OwnedAgentRecord { if (!input.launch) throw new AgentError("NOT_READY"); return input as OwnedAgentRecord }
-export type LegacyAgentRecord = { version: 1; spec: { agentId: string; handlerGeneration: string; providerGeneration: string; launchAttemptId: string; checkout: { root: { path: string } }; [key: string]: unknown }; phase: string; session: unknown; failure: unknown }
 export type StartRequest = { commandId: string; handlerGeneration: string; cwd: string; selection: StartSelection; environment: LaunchEnvironment }
 export type StartInput = StartRequest
-export type StartCommandInput = Omit<StartRequest, "environment"> & { environmentDigest: string }
 export type SessionStart = { kind: "new"; params: JsonObject } | { kind: "load"; sessionId: string; params: JsonObject }
-export type RestoreRequest = { commandId: string; handlerGeneration: string; agentId: string; environment: LaunchEnvironment; nativeParams?: JsonObject }
-export type RestoreCommandInput = Omit<RestoreRequest, "environment" | "nativeParams"> & { environmentDigest: string }
-export type StopInput = AgentTuple & { commandId: string }
-export type AgentCommand = { version: 2; hostId: string; commandId: string; handlerGeneration: string; input: StartCommandInput | RestoreCommandInput | StopInput; op: "start" | "restore" | "stop"; target: AgentTuple | null; state: "pending" | "completed" | "interrupted"; result: CommandResult | null }
-export type CommandResult = { outcome: "started" | "restored" | "stopped" | "failed" | "interrupted"; target: AgentTuple | null; failure: AgentFailure | null; session: SessionEvidence | null }
-export type AgentView = { display?: import("./conversation.js").ConversationDisplay; record: AgentRecordV3; launch: LaunchRecord | null; live: boolean; cleanup: "not_launched" | "unverified" | "verified" | "unknown"; unavailable: AgentStateIssue | null }
-export type LegacyAgentView = { record: LegacyAgentRecord; launch: LaunchRecord | null; live: false; cleanup: "unknown" | "verified" }
-export type CommandView = { state: "command"; command: AgentCommand | AgentCommandV3; durability: "verified" | "unverified" }
 export const AGENT_CODES = ["STALE_ATTACHMENT", "BUSY", "UNSUPPORTED_SESSION_FEATURE", "SESSION_INPUT_REQUIRED", "RESYNC_REQUIRED", "USAGE", "INVALID_PROTOCOL", "INVALID_AGENT_STATE", "STALE_HANDLER", "STALE_PROVIDER", "COMMAND_CONFLICT", "ADAPTER_UNQUALIFIED", "MODEL_UNAVAILABLE", "SELECTION_UNSUPPORTED", "CONFIG_CHANGED", "NOT_READY", "STARTUP_FAILED", "STARTUP_TIMEOUT", "AUTH_REQUIRED", "PERMISSION_UNSUPPORTED", "RESTORE_UNSUPPORTED", "SESSION_UNAVAILABLE", "CLEANUP_UNVERIFIED", "INCOMPLETE", "UNAVAILABLE", "INTERNAL", "INPUT_TOO_LARGE", "OUTPUT_TOO_LARGE", "ACP_FRAME_LIMIT", "ACP_HISTORY_LIMIT"] as const
 export type AgentErrorCode = typeof AGENT_CODES[number]
-export type AgentStateIssue = { kind: "agent" | "command" | "unknown"; id: string | null; path: string; message: string }
 export type AgentFailure = { code: AgentErrorCode; message: string; diagnostic?: FailureDiagnostic }
 export class AgentError extends Error {
   readonly diagnostic?: FailureDiagnostic
@@ -62,16 +49,8 @@ export class ProviderRequestError extends AgentError {
 export function agentFailure(error: unknown): AgentFailure { const code = error instanceof AgentError ? error.code : "INTERNAL"; return { code, message: new AgentError(code).message, ...(error instanceof AgentError && error.diagnostic !== undefined ? { diagnostic: parseFailureDiagnostic(error.diagnostic) } : {}) } }
 function checked<T>(operation: () => T): T { try { return operation() } catch { return invalidAgent() } }
 export function agentText(value: unknown, max = 256): string { return checked(() => { const result = text(value, max); if (!result.trim()) invalidAgent(); return result }) }
-export function parseReasoning(input: unknown): Reasoning { return checked(() => { const v = object(input); if (v.kind === "none") { keys(v, ["kind"]); return { kind: "none" } } keys(v, ["kind", "value"]); if (v.kind !== "value") invalidAgent(); return { kind: "value", value: agentText(v.value) } }) }
-export function parseSelection(input: unknown): StartSelection { return checked(() => { const v = object(input); keys(v, ["providerId", "modelId", "reasoning", "mode", "permissionProfile"]); return { providerId: providerId(v.providerId), modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: v.mode === null ? null : agentText(v.mode), permissionProfile: agentText(v.permissionProfile) } }) }
-export function requestedSettingsDigest(input: unknown): string { return digest(canonicalJson(parseRequestedSettings(input))) }
 export function parseTuple(input: unknown): AgentTuple { return checked(() => { const v = object(input); keys(v, ["agentId", "handlerGeneration", "providerGeneration"]); return { agentId: id(v.agentId), handlerGeneration: id(v.handlerGeneration), providerGeneration: id(v.providerGeneration) } }) }
-export function parseStartCommandInput(input: unknown): StartCommandInput { return checked(() => { const v = object(input); keys(v, ["commandId", "handlerGeneration", "cwd", "selection", "environmentDigest"]); return { commandId: id(v.commandId), handlerGeneration: id(v.handlerGeneration), cwd: absolutePath(v.cwd), selection: parseSelection(v.selection), environmentDigest: hash(v.environmentDigest) } }) }
-export function parseRestoreCommandInput(input: unknown): RestoreCommandInput { return checked(() => { const v = object(input); keys(v, ["commandId", "handlerGeneration", "agentId", "environmentDigest"]); return { commandId: id(v.commandId), handlerGeneration: id(v.handlerGeneration), agentId: id(v.agentId), environmentDigest: hash(v.environmentDigest) } }) }
-export function parseStopInput(input: unknown): StopInput { return checked(() => { const v = object(input); keys(v, ["commandId", "handlerGeneration", "agentId", "providerGeneration"]); return { commandId: id(v.commandId), ...parseTuple({ agentId: v.agentId, handlerGeneration: v.handlerGeneration, providerGeneration: v.providerGeneration }) } }) }
 export function parseAgentFailure(input: unknown): AgentFailure { return checked(() => { const v = object(input); keys(v, ["code", "message", ...(Object.hasOwn(v, "diagnostic") ? ["diagnostic"] : [])]); if (!AGENT_CODES.some(code => code === v.code)) invalidAgent(); const code = v.code as AgentErrorCode; if (v.message !== new AgentError(code).message) invalidAgent(); return { code, message: new AgentError(code).message, ...(Object.hasOwn(v, "diagnostic") ? { diagnostic: parseFailureDiagnostic(v.diagnostic) } : {}) } }) }
-export function parseSession(input: unknown): SessionEvidence { return checked(() => { const v = object(input); keys(v, ["sessionId", "sessionGeneration", "protocolVersion", "modelId", "reasoning", "mode", "permissionProfile", "permissionEvidence"]); if (v.protocolVersion !== 1) invalidAgent(); return { sessionId: agentText(v.sessionId, 1024), sessionGeneration: id(v.sessionGeneration), protocolVersion: 1, modelId: agentText(v.modelId), reasoning: parseReasoning(v.reasoning), mode: agentText(v.mode), permissionProfile: agentText(v.permissionProfile), permissionEvidence: parsePermissionEvidence(v.permissionEvidence) } }) }
-function sessionMatches(session: SessionEvidence, selection: StartSelection): boolean { return session.modelId === selection.modelId && isDeepStrictEqual(session.reasoning, selection.reasoning) && (selection.mode === null || session.mode === selection.mode) && session.permissionProfile === selection.permissionProfile }
 export function parseNativeIdentity(input: unknown): NativeSessionIdentity { return checked(() => { const v = object(input); keys(v, ["sessionId", "protocolVersion"]); if (v.protocolVersion !== 1) invalidAgent(); return { sessionId: agentText(v.sessionId, 1024), protocolVersion: 1 } }) }
 function uniqueStrings(input: unknown): string[] { if (!Array.isArray(input) || input.length > 128) invalidAgent(); const values = input.map(value => agentText(value, 1024)); if (new Set(values).size !== values.length) invalidAgent(); return values }
 export function parseAgentRecordV3(input: unknown): AgentRecordV3 { return checked(() => {
@@ -142,17 +121,4 @@ export function parseAgentCommandV3(input: unknown): AgentCommandV3 { return che
     if (["started", "restored", "imported"].includes(String(result.outcome)) && result.session === null) invalidAgent()
   }
   return { version: 3, hostId: hash(v.hostId), commandId, handlerGeneration, op: v.op as AgentCommandV3["op"], input: structuredClone(request) as JsonObject, agentId, target, state: v.state as AgentCommandV3["state"], result: result === null ? null : structuredClone(result) as NativeCommandResult }
-}) }
-export function parseLegacyAgentRecord(input: unknown): LegacyAgentRecord { return checked(() => { const v = object(input), spec = object(v.spec), checkout = object(spec.checkout), root = object(checkout.root); if (v.version !== 1 || !["starting", "ready", "stopping", "stopped", "failed", "interrupted"].includes(String(v.phase))) invalidAgent(); return { version: 1, spec: { ...spec, agentId: id(spec.agentId), handlerGeneration: id(spec.handlerGeneration), providerGeneration: id(spec.providerGeneration), launchAttemptId: id(spec.launchAttemptId), checkout: { ...checkout, root: { ...root, path: absolutePath(root.path) } } }, phase: v.phase as string, session: v.session, failure: v.failure } }) }
-export function parseAgentCommand(input: unknown): AgentCommand { return checked(() => {
-  const v = object(input); keys(v, ["version", "hostId", "commandId", "handlerGeneration", "input", "op", "target", "state", "result"])
-  if (v.version !== 2 || (v.op !== "start" && v.op !== "restore" && v.op !== "stop") || !["pending", "completed", "interrupted"].includes(String(v.state))) invalidAgent()
-  const commandId = id(v.commandId), handlerGeneration = id(v.handlerGeneration), request = v.op === "start" ? parseStartCommandInput(v.input) : v.op === "restore" ? parseRestoreCommandInput(v.input) : parseStopInput(v.input), target = v.target === null ? null : parseTuple(v.target)
-  if (commandId !== request.commandId || handlerGeneration !== request.handlerGeneration || target !== null && target.handlerGeneration !== handlerGeneration) invalidAgent()
-  if (v.op === "stop" && !isDeepStrictEqual(target, { agentId: (request as StopInput).agentId, handlerGeneration, providerGeneration: (request as StopInput).providerGeneration })) invalidAgent()
-  if (v.op === "restore" && target?.agentId !== (request as RestoreCommandInput).agentId) invalidAgent()
-  let result: CommandResult | null = null
-  if (v.result !== null) { const r = object(v.result); keys(r, ["outcome", "target", "failure", "session"]); if (!["started", "restored", "stopped", "failed", "interrupted"].includes(String(r.outcome))) invalidAgent(); result = { outcome: r.outcome as CommandResult["outcome"], target: r.target === null ? null : parseTuple(r.target), failure: r.failure === null ? null : parseAgentFailure(r.failure), session: r.session === null ? null : parseSession(r.session) }; if (!isDeepStrictEqual(result.target, target) || (result.outcome === "failed" || result.outcome === "interrupted") !== (result.failure !== null)) invalidAgent(); if (result.outcome === "started" && (v.op !== "start" || result.session === null || target === null)) invalidAgent(); if (result.outcome === "restored" && (v.op !== "restore" || result.session === null || target === null)) invalidAgent(); if (result.outcome === "stopped" && (v.op !== "stop" || target === null)) invalidAgent(); if (v.op === "start" && result.session && !sessionMatches(result.session, (request as StartCommandInput).selection)) invalidAgent() }
-  if ((v.state === "pending") !== (result === null) || (v.state === "interrupted") !== (result?.outcome === "interrupted") || v.state === "pending" && target === null) invalidAgent()
-  return { version: 2, hostId: hash(v.hostId), commandId, handlerGeneration, input: request, op: v.op, target, state: v.state as AgentCommand["state"], result }
 }) }

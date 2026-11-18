@@ -22,7 +22,7 @@ Entry point: `home/.config/nvim/init.lua`. Bootstraps lazy.nvim with interleaved
 
 ## Testing
 
-Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run a single file with `./test-nvim.sh tests/neovim/agency_stream_spec.lua`. Install plugins with `:Lazy sync` before running tests. The runner loads the real configuration with plugin installation and update checks disabled, and fails if configured plugins are missing. Runtime state and caches use temporary directories. Set `NODENV_ROOT=$HOME/.nodenv` when running the suite; `test-nvim.sh` replaces `HOME`, and the real-process stdin case needs it to find Node.
+Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run a single file with `./test-nvim.sh tests/neovim/agency_stream_spec.lua`. Install plugins with `:Lazy sync` before running tests. The runner loads the real configuration with plugin installation and update checks disabled, and fails if configured plugins are missing. Runtime state and caches use temporary directories.
 
 The retained tests cover the primary Agency new-session mapping, submission and detach, ordered streaming bursts, tool and permission boundaries, completion, and a reader who scrolls away from the response. They use native Agentic UI classes with a controlled ACP transport. Helper functions, plugin declarations, configuration values and unrelated editor features do not have dedicated tests.
 

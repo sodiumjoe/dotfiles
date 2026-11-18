@@ -1,4 +1,3 @@
-import { AgentError } from "../agent/types.js"
 import { createRuntimeEntry, type RuntimeEntryDriver } from "../entry/runtime.js"
 import { createRuntimeEntryDriver } from "../entry/editor.js"
 import { id, keys, object, text } from "../config/validate.js"
@@ -9,12 +8,10 @@ import { createRemoteRequests } from "../hosts/remote-requests.js"
 import { connectBridge } from "../bridge/ssh.js"
 import { bridgeError } from "../bridge/protocol.js"
 import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
-import { registerRuntimeEndpoint } from "../hosts/runtime.js"
 import { join } from "node:path"
 import { startAcpServer } from "../acp/server.js"
 import { createLiveRouter } from "../acp/live-router.js"
 import { productionLaunchContracts, type LaunchContract } from "../agent/contracts.js"
-import { agentErrorReply, type AgentRequest, type AgentReply } from "../agent/protocol.js"
 import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
 import type { Server, Socket } from "node:net"
@@ -39,7 +36,6 @@ import type { RosterRow } from "../live/roster.js"
 import { dispatchLive } from "../live/dispatch.js"
 import { liveErrorReply, REQUEST_PROTOCOL, type LiveReply } from "../live/protocol.js"
 import { RequestError } from "../live/errors.js"
-import { createRemoteShapes, dispatchRemoteRequest, type RemoteShapes } from "../live/remote-shapes.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -104,7 +100,6 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const sockets = new Set<Socket>()
   let shutdown: ShutdownContext | undefined
   let core: LiveCore | undefined
-  let shapes: RemoteShapes | undefined
   let router: HostRouter | undefined
   let remotes: ReturnType<typeof createRemoteRosters> | undefined
   let bridge: HandlerBridge | undefined
@@ -194,12 +189,11 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone({ ...state, issues: [...(state.issues ?? [])] }) }
     }
     const ready = () => state.phase === "ready" && !closing && !termination
-    const dispatchAgent = (request: AgentRequest): Promise<AgentReply> => shapes && core ? dispatchRemoteRequest({ shapes, generation: options.generation, ready, failed: core.failed }, request) : Promise.resolve(agentErrorReply({ ...request, handlerGeneration: options.generation }, new AgentError("NOT_READY")))
     const dispatchRequest = async (raw: unknown): Promise<LiveReply> => core && state.phase === "ready" && !closing && !termination ? dispatchLive(core, raw) : liveErrorReply({ requestId: typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : randomUUID() }, new RequestError("UNAVAILABLE", "the Handler is not ready"))
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
-      void serveProtocols(socket, dispatch, 5000, dispatchAgent, dispatchRequest).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
+      void serveProtocols(socket, dispatch, 5000, dispatchRequest).then(async () => { if (shutdown?.accepted !== undefined) await shutdown.closeAfterReply() }).catch(rejectClosed)
     })
     if (termination || closing) await new Promise<void>(resolve => server!.close(() => resolve()))
     checkStartup()
@@ -225,12 +219,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     core = createLiveCore({ context: launchContext, contracts: options.launchContracts ?? productionLaunchContracts(), index: agentIndex, homes: defaultHomes(), events }, options.liveDependencies)
     await core.initialize()
     await core.loadHandoff()
-    shapes = createRemoteShapes(core, options.paths.hostKey)
     checkStartup()
     bridge = await createHandlerBridge({ root: options.paths.runtimeRoot, identity: { hostId: options.paths.hostKey, handlerGeneration: options.generation } })
     if (termination || closing) await bridge.close()
     checkStartup()
-    registerRuntimeEndpoint(bridge, dispatchAgent)
     const servedCore = core
     bridge.register(["live-read", "live-wait"], async ({ channel, payload }) => {
       if (!ready()) bridgeError("HANDLER_UNAVAILABLE")
@@ -262,7 +254,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const coreBridge = bridge
     const inventory = createHostInventory(root)
     router = createHostRouter({ hostId: options.paths.hostKey, inventory, local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["live-read", "live-wait"] }) })
-    registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
+    registerHostRouter({ bridge, router })
     const hosts = router
     remotes = createRemoteRosters({
       list: () => inventory.list(),

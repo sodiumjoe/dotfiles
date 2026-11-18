@@ -1,20 +1,11 @@
-import { hostname } from "node:os"
-import { readInputJson } from "../cli/input-json.js"
 import { randomUUID } from "node:crypto"
-import { absolutePath, hash, id, keys, object, text } from "../config/validate.js"
+import { readInputJson } from "../cli/input-json.js"
 import { AgentError } from "../agent/types.js"
-import { parsePageInput } from "../agent/queries.js"
-import { parsePermissionRef } from "../agent/permission-types.js"
-import { connectHandlerBridge } from "../bridge/handler-client.js"
-import { connectBridge } from "../bridge/ssh.js"
 import type { ControlDependencies } from "../cli/control.js"
 import { createHostInventory, parseHostEnrollment } from "./inventory.js"
-import { createHostRouter, isRoutedRead } from "./router.js"
-import { createHostRuntimeClient, RuntimeOutcomeUnknown } from "./runtime.js"
-import { rosterView, permissionView } from "./views.js"
 import { HOST_PROTOCOL, type HostReply, type HostResult } from "./protocol.js"
 
-export function hostArguments(argv: readonly string[]) {
+function hostArguments(argv: readonly string[]) {
   const positional: string[] = [], flags = new Map<string, string>(), seen = new Set<string>()
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!
@@ -22,90 +13,30 @@ export function hostArguments(argv: readonly string[]) {
     if (seen.has(arg)) throw new AgentError("USAGE")
     seen.add(arg)
     if (arg === "--json") continue
-    if (!["--host", "--limit", "--cursor", "--cwd", "--command-id", "--input-json"].includes(arg)) throw new AgentError("USAGE")
+    if (arg !== "--input-json") throw new AgentError("USAGE")
     const value = argv[++index]
     if (value === undefined || value.startsWith("--")) throw new AgentError("USAGE")
     flags.set(arg, value)
   }
-  return { positional, flags, json: seen.has("--json") }
+  return { positional, flags }
 }
 export async function runHostClient(argv: readonly string[], deps: ControlDependencies): Promise<number> {
   const requestId = randomUUID()
   let executing = false
-  let hostId: string | null = null, generation: string | null = null, commandId: string | undefined, close: (() => void) | undefined
-  const emit = (value: { ok: true; result: HostResult } | { ok: false; error: Extract<HostReply, { ok: false }>["error"] }) => deps.stdout(JSON.stringify({ protocol: HOST_PROTOCOL, requestId, hostId, handlerGeneration: generation, ...(commandId ? { commandId } : {}), ...value }) + "\n")
+  const emit = (value: { ok: true; result: HostResult } | { ok: false; error: Extract<HostReply, { ok: false }>["error"] }) => deps.stdout(JSON.stringify({ protocol: HOST_PROTOCOL, requestId, hostId: null, handlerGeneration: null, ...value }) + "\n")
   try {
-    const args = hostArguments(argv), [group, action, argument] = args.positional, flags = args.flags
-    const allow = (allowed: string[]) => { if ([...flags.keys()].some(flag => !allowed.includes(flag))) throw new AgentError("USAGE") }
-    let operation: import("../agent/human-controls.js").RuntimeHumanRequest | undefined
-    const selected = flags.has("--host") ? hash(flags.get("--host")) : undefined
-    if (group === "host") {
-      if (args.positional.length !== 2 || !["list", "enroll"].includes(action!)) throw new AgentError("USAGE")
-      allow(action === "enroll" ? ["--input-json"] : [])
-      const enrollment = action === "enroll" ? parseHostEnrollment(await readInputJson(flags.get("--input-json"), deps)) : undefined
-      const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
-      if (enrollment) { await inventory.enroll(enrollment); emit({ ok: true, result: { state: "enrolled", enrollment } }) }
-      else emit({ ok: true, result: { state: "hosts", hosts: await inventory.list() } })
-      return 0
-    }
-    if (!["roster", "permission"].includes(group!) || !(group === "roster" ? ["list", "excerpt"] : ["list", "decide"]).includes(action!)) throw new AgentError("USAGE")
-    if (group === "roster" && action === "excerpt") {
-      allow(["--host"]); if (args.positional.length !== 3 || !selected) throw new AgentError("USAGE")
-      operation = { op: "agent_excerpt", input: { agentId: id(argument), turns: 4 } }
-    } else if (group === "roster") {
-      if (args.positional.length !== 2) throw new AgentError("USAGE")
-      allow(["--host", "--limit", "--cursor", "--cwd"])
-      if (!selected && (flags.has("--limit") || flags.has("--cursor"))) throw new AgentError("USAGE")
-      if (selected) operation = { op: "agent_roster", input: parsePageInput({ limit: flags.has("--limit") ? Number(flags.get("--limit")) : 100, ...(flags.has("--cursor") ? { cursor: flags.get("--cursor") } : {}), ...(flags.has("--cwd") ? { cwd: flags.get("--cwd") } : {}) }) }
-    } else if (action === "list") { allow(["--host"]); if (args.positional.length !== 2) throw new AgentError("USAGE"); if (selected) operation = { op: "agent_permissions" } }
-    else {
-      allow(["--host", "--input-json", "--command-id"]); if (args.positional.length !== 2) throw new AgentError("USAGE")
-      const selectedCommand = flags.has("--command-id") ? id(flags.get("--command-id")) : undefined
-      const raw = object(await readInputJson(flags.get("--input-json"), deps)); keys(raw, ["ref", "optionId", ...(raw.commandId === undefined ? [] : ["commandId"])])
-      commandId = id(raw.commandId ?? selectedCommand)
-      if (raw.commandId !== undefined && selectedCommand && commandId !== selectedCommand) throw new AgentError("USAGE")
-      const ref = parsePermissionRef(raw.ref)
-      if (selected && selected !== ref.hostId) throw new AgentError("USAGE")
-      operation = { op: "agent_permission_decide", commandId, ref, optionId: text(raw.optionId) }
-    }
+    const { positional, flags } = hostArguments(argv), action = positional[1]
+    if (positional[0] !== "host" || positional.length !== 2 || !["list", "enroll"].includes(action!)) throw new AgentError("USAGE")
+    if (action === "list" && flags.size) throw new AgentError("USAGE")
+    const enrollment = action === "enroll" ? parseHostEnrollment(await readInputJson(flags.get("--input-json"), deps)) : undefined
     executing = true
-    const access = await openHostAccess(deps), { env, inventory } = access
-    close = access.close
-    const client = createHostRuntimeClient({ localHostId: env.paths.hostKey, async route(route, signal) {
-      const result = await access.route(route, signal)
-      if (route.channel === "host-identity" && operation) { const value = object(result); generation = id(value.handlerGeneration) }
-      return result
-    } })
-    let result: HostResult
-    if (operation) {
-      hostId = operation.op === "agent_permission_decide" ? operation.ref.hostId : selected!
-      result = await client.human(hostId, operation)
-    } else {
-      const input = { client, localHostId: env.paths.hostKey, localHostname: hostname(), hosts: await inventory.list(), ...(flags.has("--cwd") ? { cwd: absolutePath(flags.get("--cwd")) } : {}) }
-      result = group === "roster" ? await rosterView(input) : await permissionView(input)
-    }
-    emit({ ok: true, result })
-    return operation?.op === "agent_permission_decide" && (result.state !== "permission" || result.receipt?.state !== "applied") ? 75 : 0
+    const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
+    if (enrollment) { await inventory.enroll(enrollment); emit({ ok: true, result: { state: "enrolled", enrollment } }) }
+    else emit({ ok: true, result: { state: "hosts", hosts: await inventory.list() } })
+    return 0
   } catch (error) {
-    const code = error instanceof RuntimeOutcomeUnknown ? error.code : error instanceof AgentError ? error.code : executing ? "UNAVAILABLE" : "USAGE"
-    emit({ ok: false, error: { code, message: error instanceof Error ? error.message : String(error), ...(error instanceof RuntimeOutcomeUnknown ? { reference: error.reference } : {}) } })
-    return ["USAGE", "INVALID_PROTOCOL", "INPUT_TOO_LARGE"].includes(code) ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
-  } finally { close?.() }
-}
-export async function openHostAccess(deps: ControlDependencies) {
-  const env = await deps.environment(), inventory = deps.hostInventory?.(env) ?? createHostInventory(env.paths.persistentRoot)
-  let local: Promise<Awaited<ReturnType<typeof connectHandlerBridge>>> | undefined
-  const localRequest = async (channel: string, payload: unknown, signal?: AbortSignal) => {
-    local ??= (async () => {
-      const owner = await deps.inspect(env)
-      if (!owner || owner.disposition !== "live" || owner.record.phase !== "ready") throw new AgentError("UNAVAILABLE")
-      return connectHandlerBridge({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, handlerGeneration: owner.record.generation })
-    })()
-    return (await local).request(channel, payload, { timeoutMs: isRoutedRead(channel) || channel === "host-route-read" ? 10000 : 60000, ...(signal ? { signal } : {}) })
+    const code = error instanceof AgentError ? error.code : executing ? "UNAVAILABLE" : "USAGE"
+    emit({ ok: false, error: { code, message: error instanceof Error ? error.message : String(error) } })
+    return ["USAGE", "INVALID_PROTOCOL", "INPUT_TOO_LARGE"].includes(code) ? 64 : 69
   }
-  const router = createHostRouter({ hostId: env.paths.hostKey, inventory, local: localRequest,
-    connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
-  router.setRelay((route, signal) => localRequest(isRoutedRead(route.channel) ? "host-route-read" : "host-route", route, signal))
-  const close = () => { void local?.then(peer => peer.close(), () => undefined); router.close() }
-  return { env, inventory, close, route: (route: import("./router.js").HostRoute, signal?: AbortSignal) => deps.hostRoute ? deps.hostRoute(env, route, signal) : router.request(route, signal) }
 }

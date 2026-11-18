@@ -21,8 +21,8 @@ test("a failed request keeps the host connection", async () => {
   let connects = 0
   const { transport, state } = fakeTransport(async () => { throw new Error("UNSUPPORTED_CAPABILITY") })
   const hosts = router(async () => { connects++; return transport })
-  await assert.rejects(hosts.request({ hostId: remote, channel: "runtime-read", payload: {} }), /UNSUPPORTED_CAPABILITY/)
-  await assert.rejects(hosts.request({ hostId: remote, channel: "runtime-read", payload: {} }), /UNSUPPORTED_CAPABILITY/)
+  await assert.rejects(hosts.request({ hostId: remote, channel: "live-read", payload: {} }), /UNSUPPORTED_CAPABILITY/)
+  await assert.rejects(hosts.request({ hostId: remote, channel: "live-read", payload: {} }), /UNSUPPORTED_CAPABILITY/)
   assert.deepEqual([connects, state.closes], [1, 0])
   hosts.close()
 })
@@ -31,10 +31,10 @@ test("a host whose transport closed is connected again", async () => {
   const transports = [fakeTransport(async () => "first"), fakeTransport(async () => "second")]
   let index = 0
   const hosts = router(async () => transports[index++]!.transport)
-  assert.equal(await hosts.request({ hostId: remote, channel: "runtime-read", payload: {} }), "first")
+  assert.equal(await hosts.request({ hostId: remote, channel: "live-read", payload: {} }), "first")
   transports[0]!.state.end()
   await new Promise(resolve => setImmediate(resolve))
-  assert.equal(await hosts.request({ hostId: remote, channel: "runtime-read", payload: {} }), "second")
+  assert.equal(await hosts.request({ hostId: remote, channel: "live-read", payload: {} }), "second")
   hosts.close()
 })
 
@@ -42,8 +42,8 @@ test("a request can set its own timeout", async () => {
   const seen: Array<number | undefined> = []
   const { transport } = fakeTransport(async (_channel, _payload, options) => { seen.push(options.timeoutMs); return null })
   const hosts = router(async () => transport)
-  await hosts.request({ hostId: remote, channel: "runtime-read", payload: {} }, undefined, 13000)
-  await hosts.request({ hostId: remote, channel: "runtime-read", payload: {} })
+  await hosts.request({ hostId: remote, channel: "live-read", payload: {} }, undefined, 13000)
+  await hosts.request({ hostId: remote, channel: "live-read", payload: {} })
   assert.deepEqual(seen, [13000, 10000])
   hosts.close()
 })
@@ -53,7 +53,7 @@ test("a closed router does not connect", async () => {
   const listed = new Promise<void>(resolve => { release = resolve })
   const { transport } = fakeTransport(async () => null)
   const hosts = router(async () => { connects++; return transport }, async () => { await listed; return [{ hostId: remote, hostname: "devbox" }] })
-  const pending = hosts.request({ hostId: remote, channel: "runtime-read", payload: {} })
+  const pending = hosts.request({ hostId: remote, channel: "live-read", payload: {} })
   hosts.close()
   release()
   await assert.rejects(pending, /BRIDGE_CLOSED/)
@@ -64,7 +64,7 @@ test("the newest bridge owns the relay and the previous one takes over when it c
   let handle!: (input: { context: unknown; channel: string; payload: unknown; signal: AbortSignal }) => Promise<unknown>
   const bridge = { register: (_channels: readonly string[], endpoint: typeof handle) => { handle = endpoint; return () => {} } } as unknown as HandlerBridge
   const hosts = router(async () => { throw new Error("unused") }, async () => [])
-  registerHostRouter({ bridge, router: hosts, hostId: local, handlerGeneration: "g" })
+  registerHostRouter({ bridge, router: hosts })
   const peer = (name: string) => {
     let close!: () => void
     const closed = new Promise<void>(resolve => { close = resolve })
@@ -73,7 +73,7 @@ test("the newest bridge owns the relay and the previous one takes over when it c
   const first = peer("first"), second = peer("second"), signal = new AbortController().signal
   assert.deepEqual(await handle({ context: { source: "peer", peer: first.value }, channel: "relay-register", payload: {}, signal }), { registered: true })
   assert.deepEqual(await handle({ context: { source: "peer", peer: second.value }, channel: "relay-register", payload: {}, signal }), { registered: true })
-  const route = { hostId: unknown, channel: "runtime-read", payload: {} }
+  const route = { hostId: unknown, channel: "live-read", payload: {} }
   assert.equal(await hosts.request(route), "second")
   second.close()
   await new Promise(resolve => setImmediate(resolve))

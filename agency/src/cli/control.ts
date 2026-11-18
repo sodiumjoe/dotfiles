@@ -1,8 +1,5 @@
 import type { Readable } from "node:stream"
-import { runSessionClient } from "../hosts/session-cli.js"
-import { runEntryClient } from "../entry/cli.js"
 import { runHostClient } from "../hosts/cli.js"
-import type { HostRoute } from "../hosts/router.js"
 import type { createHostInventory } from "../hosts/inventory.js"
 import { randomUUID } from "node:crypto"
 import { runRestart } from "./restart.js"
@@ -22,7 +19,6 @@ import type { SessionHomes } from "../agent/excerpt.js"
 export type ControlDependencies = {
   stdin?: Readable & { isTTY?: boolean }
   hostInventory?(env: HandlerEnvironment): Pick<ReturnType<typeof createHostInventory>, "list" | "enroll">
-  hostRoute?(env: HandlerEnvironment, route: HostRoute, signal?: AbortSignal): Promise<unknown>
   environment(): Promise<HandlerEnvironment>
   start(env: HandlerEnvironment): Promise<HandlerInspection>
   inspect(env: HandlerEnvironment): Promise<HandlerInspection | null>
@@ -114,9 +110,7 @@ async function checkedCall(dependencies: ControlDependencies, env: HandlerEnviro
 export async function runControl(argv: readonly string[], dependencies: ControlDependencies): Promise<number> {
   if (argv[0] === "restart") return runRestart(argv, dependencies, runControl)
   if (REQUEST_COMMANDS.includes(argv[0] ?? "")) return runRequests(argv, dependencies)
-  if (argv[0] === "session") return runSessionClient(argv, dependencies)
-  if (argv[0] === "entry") return runEntryClient(argv, dependencies)
-  if (["host", "roster", "permission"].includes(argv[0] ?? "")) return runHostClient(argv, dependencies)
+  if (argv[0] === "host") return runHostClient(argv, dependencies)
   const requestId = randomUUID()
   let generation: string | null = null, commandId: string | undefined
   const json = argv.includes("--json")

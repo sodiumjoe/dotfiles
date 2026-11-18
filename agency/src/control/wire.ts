@@ -1,5 +1,4 @@
 import type { Socket } from "node:net"
-import { AGENT_PROTOCOL, agentErrorReply, parseAgentRequest, type AgentReply, type AgentRequest } from "../agent/protocol.js"
 import { ControlError, MAX_FRAME_BYTES, errorReply, parseRequest, parseReply, validateReplyForRequest, type ControlRequest, type ControlReply } from "./protocol.js"
 import { liveErrorReply, REQUEST_PROTOCOL, type LiveReply } from "../live/protocol.js"
 
@@ -64,10 +63,10 @@ export async function exchange(socket: Socket, request: ControlRequest, timeoutM
   } finally { socket.destroy() }
 }
 
-export function sendReply(socket: Socket, reply: ControlReply | AgentReply | LiveReply, timeoutMs = 1000): Promise<void> {
+export function sendReply(socket: Socket, reply: ControlReply | LiveReply, timeoutMs = 1000): Promise<void> {
   const closed = protectSocketErrors(socket)
   let bytes: Buffer
-  try { bytes = encodeFrame(reply) } catch { bytes = encodeFrame(reply.protocol === REQUEST_PROTOCOL ? liveErrorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit")) : reply.protocol === AGENT_PROTOCOL ? agentErrorReply(reply, new ControlError("INCOMPLETE")) : errorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit"))) }
+  try { bytes = encodeFrame(reply) } catch { bytes = encodeFrame(reply.protocol === REQUEST_PROTOCOL ? liveErrorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit")) : errorReply(reply, new ControlError("INCOMPLETE", "response exceeds frame limit"))) }
   return new Promise<void>(resolve => {
     let settled = false
     const done = (): void => {
@@ -96,17 +95,14 @@ export async function serveControl(socket: Socket, handler: (request: ControlReq
   finally { socket.destroy(); await closed }
 }
 
-export async function serveProtocols(socket: Socket, control: (request: ControlRequest) => Promise<ControlReply>, timeoutMs = 5000, agent?: (request: AgentRequest) => Promise<AgentReply>, live?: (raw: unknown) => Promise<LiveReply>): Promise<void> {
+export async function serveProtocols(socket: Socket, control: (request: ControlRequest) => Promise<ControlReply>, timeoutMs = 5000, live?: (raw: unknown) => Promise<LiveReply>): Promise<void> {
   const closed = protectSocketErrors(socket)
   socket.allowHalfOpen = true
   try {
     const raw = await receiveFrame(socket, timeoutMs)
-    let reply: ControlReply | AgentReply | LiveReply
+    let reply: ControlReply | LiveReply
     if (typeof raw === "object" && raw !== null && "protocol" in raw && raw.protocol === REQUEST_PROTOCOL && live) reply = await live(raw)
-    else if (typeof raw === "object" && raw !== null && "protocol" in raw && raw.protocol === AGENT_PROTOCOL && agent) {
-      const request = parseAgentRequest(raw)
-      try { reply = await agent(request) } catch (error) { reply = agentErrorReply(request, error) }
-    } else {
+    else {
       const request = parseRequest(raw)
       try { reply = await control(request) } catch (error) { reply = errorReply(request, error) }
     }

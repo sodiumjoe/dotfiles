@@ -7,7 +7,7 @@ import { fixtureSpawner, fixtureRuntime, registerFixtureChild, cleanFixtureEnvir
 import { fileURLToPath } from "node:url"
 import { spawn as spawnProcess } from "node:child_process"
 
-const hostId = "a".repeat(64), commandId = "00000000-0000-4000-8000-000000000001"
+const hostId = "a".repeat(64)
 async function refuse(argv: string[], stdin: Readable) {
   let output = "", environments = 0
   const deps = { ...productionControlDependencies(), stdin, environment: async () => { environments++; throw new Error("environment forbidden") }, stdout: (text: string) => { output += text } }
@@ -30,9 +30,6 @@ test("host enrollment receives the exact JSON object from stdin", async () => {
 })
 
 const clients = [
-  { argv: ["session", "submit", "--host", hostId], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
-  { argv: ["entry", "open"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
-  { argv: ["permission", "decide", "--host", hostId], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
   { argv: ["host", "enroll"], malformed: "USAGE", oversized: "INPUT_TOO_LARGE" },
 ]
 for (const client of clients) {
@@ -47,10 +44,8 @@ for (const client of clients) {
 }
 
 for (const argv of [
-  ["session", "inspect", commandId, "--host", hostId],
-  ["session", "command", "invalid", "--host", hostId],
-  ["entry", "open", "--host", "invalid"],
-  ["permission", "decide", "--host", hostId, "--command-id", "invalid"],
+  ["host", "enroll", "extra"],
+  ["host", "list"],
 ]) test("invalid argv refuses without touching unfinished stdin: " + argv.join(" "), async () => {
   const stream = new PassThrough()
   try {
@@ -116,8 +111,8 @@ for (const launcher of ["node", "agy"]) test("actual " + launcher + " accepts lo
   const spawn = await fixtureSpawner(), root = fileURLToPath(new URL("../../../", import.meta.url))
   const runtime = await fixtureRuntime()
   const child = launcher === "node"
-    ? spawn("stdin-cli-node", process.execPath, [fileURLToPath(new URL("../src/main.js", import.meta.url)), "session", "submit", "--host", hostId, "--input-json", "-", "--json"], { stdio: ["pipe", "pipe", "pipe"] })
-    : registerFixtureChild(runtime, runtime.scope.intent("stdin-cli-wrapper"), () => spawnProcess(root + "home/bin/agy", ["session", "submit", "--host", hostId, "--input-json", "-", "--json"], { stdio: ["pipe", "pipe", "pipe"], env: cleanFixtureEnvironment() }), undefined, { observeAfterExec: true })
+    ? spawn("stdin-cli-node", process.execPath, [fileURLToPath(new URL("../src/main.js", import.meta.url)), "host", "enroll", "--input-json", "-", "--json"], { stdio: ["pipe", "pipe", "pipe"] })
+    : registerFixtureChild(runtime, runtime.scope.intent("stdin-cli-wrapper"), () => spawnProcess(root + "home/bin/agy", ["host", "enroll", "--input-json", "-", "--json"], { stdio: ["pipe", "pipe", "pipe"], env: cleanFixtureEnvironment() }), undefined, { observeAfterExec: true })
   let stdout = "", stderr = ""
   const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     child.once("error", reject); child.once("close", (code, signal) => resolve({ code, signal }))

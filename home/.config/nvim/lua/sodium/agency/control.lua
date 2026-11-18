@@ -23,28 +23,6 @@ local function target(value)
     assert(type(value) == "table" and valid_id(value.agentId) and valid_id(value.handlerGeneration) and valid_id(value.providerGeneration))
 end
 
-local function host_id(value)
-    return type(value) == "string" and #value == 64 and value:match("^[a-f0-9]+$")
-end
-local function flag(argv, name)
-    for index, value in ipairs(argv) do if value == name then return argv[index + 1] end end
-end
-local function human_receipt(value, argv)
-    local expected = flag(argv, "--command-id")
-    local raw = flag(argv, "--input-json")
-    local input = raw and vim.json.decode(raw) or nil
-    expected = expected or input and input.commandId or nil
-    if expected and value.protocol == "agency-host/1" then assert(value.commandId == expected) end
-    local receipt = value.result.receipt
-    if receipt and receipt ~= vim.NIL then
-        assert(valid_id(receipt.commandId) and (not expected or receipt.commandId == expected))
-        assert(type(receipt.ref) == "table" and host_id(receipt.ref.hostId)); target(receipt.ref.target)
-        assert(vim.tbl_contains({ "claimed", "applied", "withdrawn", "stale", "uncertain" }, receipt.state))
-        if input then assert(vim.deep_equal(receipt.ref, input.ref) and receipt.optionId == input.optionId) end
-        if value.hostId then assert(value.hostId == receipt.ref.hostId) end
-    elseif argv[2] == "decide" then error("Missing permission receipt") end
-end
-
 local activities = { starting = true, idle = true, working = true, stopping = true }
 
 local function present(value) return value ~= nil and value ~= vim.NIL end
@@ -75,9 +53,7 @@ function M.excerpt(result)
 end
 
 local function validate(value, argv)
-    local ordinary = vim.tbl_contains({ "roster", "permission" }, argv[1]) or argv[1] == "entry" and argv[2] == "open"
-    local protocol = ordinary and "agency-host/1" or "agency-control/2"
-    assert(type(value) == "table" and value.protocol == protocol and valid_id(value.requestId))
+    assert(type(value) == "table" and value.protocol == "agency-control/2" and valid_id(value.requestId))
     assert(value.handlerGeneration == vim.NIL or valid_id(value.handlerGeneration))
     assert(type(value.ok) == "boolean")
     if not value.ok then
@@ -87,56 +63,6 @@ local function validate(value, argv)
     end
     local result = value.result
     assert(type(result) == "table")
-    if ordinary then
-        local expected_state = argv[1] == "roster" and (argv[2] == "excerpt" and "excerpt" or "roster")
-            or argv[1] == "permission" and (argv[2] == "list" and "permissions" or "permission")
-            or argv[1] == "entry" and "entry"
-        assert(result.state == expected_state)
-        assert((value.hostId == vim.NIL) == (value.handlerGeneration == vim.NIL))
-        assert(value.hostId == vim.NIL or host_id(value.hostId))
-        if flag(argv, "--host") then assert(value.hostId == flag(argv, "--host")) end
-        if result.state == "roster" then
-            assert(value.hostId == vim.NIL and value.handlerGeneration == vim.NIL and host_id(result.localHostId) and type(result.hosts) == "table")
-            local seen = {}
-            for _, host in ipairs(result.hosts) do
-                assert(host_id(host.hostId) and not seen[host.hostId] and type(host.hostname) == "string"); seen[host.hostId] = true
-                if host.state == "available" then
-                    assert(valid_id(host.value.handlerGeneration) and type(host.value.agents) == "table" and type(host.value.issues) == "table")
-                    for _, row in ipairs(host.value.agents) do
-                        assert(row.record.version == 3 and row.record.definition.hostId == host.hostId and valid_id(row.record.definition.agentId))
-                        assert(type(row.live) == "boolean")
-                        if row.live then assert(row.record.launch.handlerGeneration == host.value.handlerGeneration); target({ agentId = row.record.definition.agentId, handlerGeneration = row.record.launch.handlerGeneration, providerGeneration = row.record.launch.providerGeneration }) end
-                    end
-                else assert(host.state == "unavailable" and type(host.code) == "string") end
-            end
-        elseif result.state == "permissions" then
-            assert(value.hostId == vim.NIL and value.handlerGeneration == vim.NIL and type(result.hosts) == "table" and type(result.pending) == "table")
-            for _, host in ipairs(result.hosts) do
-                assert(host_id(host.hostId))
-                if host.state == "available" then assert(host.value.hostId == host.hostId and valid_id(host.value.handlerGeneration))
-                else assert(host.state == "unavailable" and type(host.code) == "string") end
-            end
-        elseif result.state == "permission" then human_receipt(value, argv)
-        elseif result.state == "entry" then
-            local receipt = result.receipt
-            local expected = vim.json.decode(flag(argv, "--input-json"))
-            assert(value.commandId == expected.commandId)
-            if receipt ~= vim.NIL then
-                assert(type(receipt) == "table" and receipt.commandId == expected.commandId and receipt.ref.hostId == value.hostId)
-                target(receipt.ref.target); assert(receipt.state == "stale" or receipt.ref.target.handlerGeneration == value.handlerGeneration)
-                if expected.target then assert(vim.deep_equal(receipt.ref, { hostId = expected.hostId, target = expected.target })) end
-                assert(vim.tbl_contains({ "opening", "opened", "uncertain", "stale" }, receipt.state))
-                if receipt.state == "opened" then
-                    assert(type(receipt.editor) == "table" and valid_id(receipt.editor.editorId)
-                        and type(receipt.editor.session) == "string" and receipt.editor.session:match("^[%w_-]+$")
-                        and type(receipt.editor.pane) == "string" and receipt.editor.pane:match("^%%[0-9]+$")
-                        and type(receipt.editor.tmuxSocketPath) == "string" and receipt.editor.tmuxSocketPath:sub(1, 1) == "/")
-                end
-            end
-        elseif result.state == "excerpt" then M.excerpt(result)
-        else error("Unexpected host result") end
-        return
-    end
     if argv[1] == "restart" then
         assert(result.state == "restarted" and type(result.agents) == "table" and vim.islist(result.agents))
         for _, agent in ipairs(result.agents) do
@@ -155,14 +81,9 @@ function M.new(deps)
     local jobs, api = {}, { uuid = M.uuid }
     function api.command(argv, options, callback)
         options = options or {}
-        local snapshot_read = vim.tbl_contains({ "roster", "permission" }, argv[1]) and argv[2] == "list"
         local args = { deps.executable or "agy" }
         vim.list_extend(args, argv)
         args[#args + 1] = "--json"
-        local input
-        for index, value in ipairs(args) do
-            if value == "--input-json" then input = args[index + 1]; args[index + 1] = "-"; break end
-        end
         local environment = vim.fn.environ()
         environment.NVIM = vim.v.servername
         local settled, job, timer, chunks, bytes = false, nil, nil, {}, 0
@@ -177,19 +98,19 @@ function M.new(deps)
             if job then pcall(job.kill, job, 15) end
             finish({ code = code, message = code:lower():gsub("_", " ") })
         end
-        local ok, handle = pcall(system, args, { cwd = options.cwd or vim.fn.getcwd(), env = environment, stdin = input,
+        local ok, handle = pcall(system, args, { cwd = options.cwd or vim.fn.getcwd(), env = environment,
             text = false, stdout = function(err, chunk)
                 if settled then return end
                 if err then fail("UNAVAILABLE"); return end
                 if chunk then
                     bytes = bytes + #chunk
-                    if not snapshot_read and bytes > 8388608 then fail("INVALID_PROTOCOL") else chunks[#chunks + 1] = chunk end
+                    if bytes > 8388608 then fail("INVALID_PROTOCOL") else chunks[#chunks + 1] = chunk end
                 end
             end, stderr = function() end }, function(result)
             if settled then return end
             local raw = #chunks > 0 and table.concat(chunks) or result.stdout or ""
             local valid, value = pcall(function()
-                assert(snapshot_read or #raw <= 8388608)
+                assert(#raw <= 8388608)
                 local decoded = vim.json.decode(raw)
                 validate(decoded, argv)
                 return decoded

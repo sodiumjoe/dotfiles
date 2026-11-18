@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 
 export type LaunchEnvironment = Readonly<Record<string, string>>
 
@@ -26,11 +25,6 @@ export function parseLaunchEnvironment(value: unknown): LaunchEnvironment {
   } catch {
     throw new Error("invalid launch environment")
   }
-}
-
-export function launchEnvironmentDigest(value: LaunchEnvironment): string {
-  const entries = Object.entries(parseLaunchEnvironment(value)).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-  return createHash("sha256").update(JSON.stringify(entries)).digest("hex")
 }
 
 export function destinationEnvironment(source: NodeJS.ProcessEnv) {

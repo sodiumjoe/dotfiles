@@ -12,11 +12,11 @@ export type HostRouter = {
   setRelay(send: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>): () => void
   close(): void
 }
-export function isRoutedRead(channel: string): boolean { return channel === "runtime-read" || channel === "host-identity" || channel === "runtime-entry-inspect" || channel === "live-read" || channel === "live-wait" }
+export function isRoutedRead(channel: string): boolean { return channel === "runtime-entry-inspect" || channel === "live-read" || channel === "live-wait" }
 export function parseHostRoute(raw: unknown): HostRoute {
   const value = object(raw); keys(value, ["hostId", "channel", "payload"])
   const channel = text(value.channel)
-  if (!["runtime-read", "runtime-write", "host-identity", "entry-open", "runtime-entry-inspect", "live-read", "live-wait", "live-request"].includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
+  if (!["entry-open", "runtime-entry-inspect", "live-read", "live-wait", "live-request"].includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
   return { hostId: hash(value.hostId), channel, payload: value.payload }
 }
 export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport> }): HostRouter {
@@ -60,15 +60,14 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
     close() { if (closed) return; closed = true; relay = undefined; for (const flight of connections.values()) void flight.then(transport => transport.close(), () => undefined); connections.clear() }
   }
 }
-export function registerHostRouter(input: { bridge: HandlerBridge; router: HostRouter; hostId: string; handlerGeneration: string }): () => void {
+export function registerHostRouter(input: { bridge: HandlerBridge; router: HostRouter }): () => void {
   const owners: Array<{ peer: object; send(route: HostRoute, signal?: AbortSignal): Promise<unknown> }> = []
   let remove: (() => void) | undefined
   const relay = (route: HostRoute, signal?: AbortSignal) => {
     const owner = owners.at(-1)
     return owner ? owner.send(route, signal) : bridgeError("HOST_UNAVAILABLE")
   }
-  return input.bridge.register(["host-route", "host-route-read", "host-identity", "relay-register"], async ({ context, channel, payload, signal }) => {
-    if (channel === "host-identity") { keys(object(payload), []); return { hostId: input.hostId, handlerGeneration: input.handlerGeneration } }
+  return input.bridge.register(["host-route", "host-route-read", "relay-register"], async ({ context, channel, payload, signal }) => {
     if (channel === "relay-register") {
       keys(object(payload), [])
       if (context.source !== "peer") bridgeError("UNSUPPORTED_CAPABILITY")
