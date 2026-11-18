@@ -95,11 +95,7 @@
       "Bash(kubectl*)",
       "Bash(git push*)",
       "Bash(git pull*)",
-      "Bash(git merge*)",
-      "Bash(git rebase*)",
-      "Bash(git branch -d*)",
-      "Bash(git checkout*)",
-      "Bash(git switch*)"
+      "Bash(git rebase*)"
     ]
   },
   "tui": "fullscreen",
