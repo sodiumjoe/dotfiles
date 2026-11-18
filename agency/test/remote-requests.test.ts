@@ -8,9 +8,9 @@ const own = "a".repeat(64), devbox = "b".repeat(64)
 const host = (state: RemoteHost["state"], since: number | null = null): RemoteHost => ({ hostId: devbox, hostname: "devbox.example", state, since, handlerGeneration: null, agents: [], error: null })
 const snapshot = (hostId: string) => ({ hostId, handlerGeneration: "g", throughSeq: 0, pending: [{ ref: { hostId }, title: "t" }], receipts: [] })
 
-function requests(remote: RemoteHost[], answer: (route: HostRoute, timeoutMs?: number) => Promise<unknown>) {
-  const calls: Array<{ route: HostRoute; timeoutMs?: number }> = []
-  const api = createRemoteRequests({ hostId: own, hosts: () => remote, request: async (route, _signal, timeoutMs) => { calls.push({ route, ...(timeoutMs === undefined ? {} : { timeoutMs }) }); return answer(route, timeoutMs) } })
+function requests(remote: RemoteHost[], answer: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>, timeouts?: { read: number; write: number }) {
+  const calls: Array<{ route: HostRoute; signal?: AbortSignal; timeoutMs?: number }> = []
+  const api = createRemoteRequests({ hostId: own, hosts: () => remote, ...(timeouts ? { timeouts } : {}), request: async (route, signal, timeoutMs) => { calls.push({ route, ...(signal ? { signal } : {}), ...(timeoutMs === undefined ? {} : { timeoutMs }) }); return answer(route, signal) } })
   return { api, calls }
 }
 
@@ -42,7 +42,13 @@ test("requests carry timeouts under the editor's limits, and the laptop's own ho
   await api.excerpt(own, "x", 4)
   await api.decide({ hostId: devbox } as never, "allow")
   await api.entry("c", devbox, {} as never)
-  assert.deepEqual(calls.map(call => [call.route.hostId === own ? "own" : "devbox", call.route.channel, call.timeoutMs]), [["own", "live-request", 8000], ["devbox", "live-request", 13000], ["devbox", "entry-open", 13000]])
+  assert.deepEqual(calls.map(call => [call.route.hostId === own ? "own" : "devbox", call.route.channel, call.timeoutMs, call.signal instanceof AbortSignal]), [["own", "live-request", undefined, true], ["devbox", "live-request", undefined, true], ["devbox", "entry-open", undefined, true]])
+})
+
+test("a host that does not answer in time is cancelled, not timed out on the bridge", async () => {
+  const { api, calls } = requests([host("online")], (_route, signal) => new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true })), { read: 20, write: 20 })
+  await assert.rejects(api.excerpt(devbox, "x", 4), (error: { code?: string; message?: string }) => error.code === "UNAVAILABLE" && /did not answer/.test(String(error.message)))
+  assert.equal(calls[0]!.timeoutMs, undefined)
 })
 
 test("approvals collect every host and keep the others when one fails", async () => {
