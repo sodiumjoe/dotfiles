@@ -16,7 +16,7 @@ export function isRoutedRead(channel: string): boolean { return channel === "run
 export function parseHostRoute(raw: unknown): HostRoute {
   const value = object(raw); keys(value, ["hostId", "channel", "payload"])
   const channel = text(value.channel)
-  if (!["runtime-read", "runtime-write", "host-identity", "entry-open", "runtime-entry-inspect", "live-read", "live-wait"].includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
+  if (!["runtime-read", "runtime-write", "host-identity", "entry-open", "runtime-entry-inspect", "live-read", "live-wait", "live-request"].includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
   return { hostId: hash(value.hostId), channel, payload: value.payload }
 }
 export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport> }): HostRouter {

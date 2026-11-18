@@ -12,7 +12,7 @@ import { parseHostReply } from "../src/hosts/protocol.js"
 
 async function remote(t: import("node:test").TestContext) {
   const f = await liveHandlerFixture(t), record = await f.handler(), hostId = f.paths.hostKey, spawnBridge = await fixtureBridgeSpawner()
-  const transport = await connectBridge({ hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "runtime-write"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
+  const transport = await connectBridge({ hostId, hostname: "fixture" }, { action: "internal-runtime-bridge", requiredCapabilities: ["live-read", "live-wait"], processFactory: () => spawnBridge(process.execPath, [fileURLToPath(new URL("./fixtures/runtime-remote.js", import.meta.url)), JSON.stringify({ root: f.paths.runtimeRoot, hostId, handlerGeneration: record.generation })], { stdio: ["pipe", "pipe", "pipe"] }) })
   t.after(() => transport.close())
   const call = async (args: string[], stdin?: string) => {
     let output = ""
@@ -103,4 +103,23 @@ test("a bridge closes when the Handler behind it stops", { timeout: 60000 }, asy
   assert.ok(closed, "the bridge stayed open after its Handler stopped")
   await f.restart()
   await f.verifyZeroSurvivors()
+})
+
+test("a remote serves excerpts, approvals and decisions on the request channel", { timeout: 60000 }, async t => {
+  const { f, transport } = await remote(t), { agentId } = await f.start()
+  await f.prompt(agentId, "hello")
+  assert.ok(transport.hello.capabilities.includes("live-request"))
+  const excerpt = await transport.request("live-request", { op: "excerpt", agentId, turns: 4 }) as { ok: boolean; result: { turns: unknown[] } }
+  assert.ok(excerpt.ok)
+  assert.deepEqual(excerpt.result.turns, [{ role: "user", text: "hello" }, { role: "agent", text: "answer:hello" }])
+  const permissions = await transport.request("live-request", { op: "permissions" }) as { ok: boolean; result: { state: string; snapshot: { hostId: string } } }
+  assert.ok(permissions.ok)
+  assert.deepEqual([permissions.result.state, permissions.result.snapshot.hostId], ["permissions", f.paths.hostKey])
+  const handler = await f.handler()
+  const ref = { hostId: f.paths.hostKey, target: { agentId, handlerGeneration: handler.generation, providerGeneration: randomUUID() }, permissionId: randomUUID(), revision: 1 }
+  const decided = await transport.request("live-request", { op: "decide", ref, optionId: "allow" }) as { ok: boolean; result: { state: string; receipt: { state: string } } }
+  assert.ok(decided.ok)
+  assert.deepEqual([decided.result.state, decided.result.receipt.state], ["permission", "stale"])
+  await assert.rejects(transport.request("live-request", { op: "stop", agentId }))
+  transport.close(); await transport.closed; await f.verifyZeroSurvivors()
 })

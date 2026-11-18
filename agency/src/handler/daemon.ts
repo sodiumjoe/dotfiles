@@ -36,7 +36,7 @@ import { destinationEnvironment } from "../agent/environment.js"
 import { createLiveCore, type LiveCore, type LiveCoreDependencies } from "../live/core.js"
 import type { RosterRow } from "../live/roster.js"
 import { dispatchLive } from "../live/dispatch.js"
-import { liveErrorReply, type LiveReply } from "../live/protocol.js"
+import { liveErrorReply, REQUEST_PROTOCOL, type LiveReply } from "../live/protocol.js"
 import { RequestError } from "../live/errors.js"
 import { createRemoteShapes, dispatchRemoteRequest, type RemoteShapes } from "../live/remote-shapes.js"
 
@@ -243,6 +243,12 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       const after = value.after === null ? null : typeof value.after === "string" && value.after.length <= 128 ? value.after : bridgeError("UNSUPPORTED_CAPABILITY")
       if (typeof value.waitMs !== "number" || !Number.isInteger(value.waitMs) || value.waitMs < 0 || value.waitMs > 8000) bridgeError("UNSUPPORTED_CAPABILITY")
       return { revision: await servedCore.changed(after, value.waitMs as number) }
+    })
+    bridge.register(["live-request"], async ({ payload }) => {
+      if (!ready()) bridgeError("HANDLER_UNAVAILABLE")
+      const value = object(payload)
+      if (!["excerpt", "permissions", "decide"].includes(String(value.op))) bridgeError("UNSUPPORTED_CAPABILITY")
+      return dispatchRequest({ ...value, protocol: REQUEST_PROTOCOL, requestId: randomUUID() })
     })
     const ownerCore = core
     const entry = createRuntimeEntry({ hostId: options.paths.hostKey, generation: options.generation, driver: options.entryDriver ?? createRuntimeEntryDriver({ runtimeRoot: options.paths.runtimeRoot }), validate: async target => {
