@@ -19,10 +19,11 @@ export function createRemoteRosters(input: {
   maxBackoffMs?: number
   listEveryMs?: number
   listGapMs?: number
+  outdatedRetryMs?: number
 }): { hosts(): RemoteHost[]; close(): void } {
   const intervalMs = input.intervalMs ?? 5000, waitMs = input.waitMs ?? 8000, refreshMs = input.refreshMs ?? 60000
   const backoffMs = input.backoffMs ?? 5000, maxBackoffMs = input.maxBackoffMs ?? 300000
-  const listEveryMs = input.listEveryMs ?? 3600000, listGapMs = input.listGapMs ?? 60000
+  const listEveryMs = input.listEveryMs ?? 3600000, listGapMs = input.listGapMs ?? 60000, outdatedRetryMs = input.outdatedRetryMs ?? 60000
   const entries = new Map<string, Entry>()
   let closed = false, timer: NodeJS.Timeout | undefined
   const sleep = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms).unref() })
@@ -50,7 +51,7 @@ export function createRemoteRosters(input: {
         after = null
         if (message === "UNSUPPORTED_CAPABILITY") {
           entry.host = { ...entry.host, state: "outdated", since: null, error: message }
-          await sleep(maxBackoffMs)
+          await sleep(outdatedRetryMs)
           continue
         }
         failures++

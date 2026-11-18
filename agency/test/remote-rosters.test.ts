@@ -48,9 +48,9 @@ test("a failing host goes offline, keeps its agents and backs off, then comes ba
   assert.equal(back.since, null)
 })
 
-test("an older devbox is marked outdated and retried only after the longest backoff", async t => {
+test("an older devbox is marked outdated and retried after the outdated interval", async t => {
   const calls: number[] = []
-  const rosters = createRemoteRosters({ ...timing, maxBackoffMs: 150, list: async () => [hostA], wait: async () => { calls.push(Date.now()); throw new Error("UNSUPPORTED_CAPABILITY") }, read: async () => ({ handlerGeneration: "g1", agents: [] }) })
+  const rosters = createRemoteRosters({ ...timing, outdatedRetryMs: 150, list: async () => [hostA], wait: async () => { calls.push(Date.now()); throw new Error("UNSUPPORTED_CAPABILITY") }, read: async () => ({ handlerGeneration: "g1", agents: [] }) })
   t.after(() => rosters.close())
   await until(async () => rosters.hosts()[0]?.state === "outdated" ? true : undefined)
   await until(async () => calls.length >= 2 ? true : undefined, 5000)
