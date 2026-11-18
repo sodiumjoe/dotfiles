@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -27,6 +28,9 @@ test("the editor's Lua validation accepts the real ACP roster, excerpt and stop 
     "agency/excerpt": JSON.stringify(await c.request("agency/excerpt", { agentId })),
     "agency/stop": JSON.stringify(await c.request("agency/stop", { agentId: scratch.agentId })),
     "agency/remotes": JSON.stringify(await c.request("agency/remotes", {})),
+    "agency/approvals": JSON.stringify(await c.request("agency/approvals", {})),
+    "agency/decide": JSON.stringify(await c.request("agency/decide", { ref: { hostId: f.paths.hostKey, target: { agentId, handlerGeneration: (await f.handler()).generation, providerGeneration: randomUUID() }, permissionId: randomUUID(), revision: 1 }, optionId: "allow" })),
+    "agency/entry": JSON.stringify(await c.request("agency/entry", { commandId: randomUUID(), hostId: f.paths.hostKey, target: { agentId: scratch.agentId, handlerGeneration: scratch.live!.handlerGeneration, providerGeneration: scratch.live!.providerGeneration } })),
   }
   let restarted = ""
   const restartDeps = { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), cwd: () => f.workspace, stdout: (value: string) => { restarted += value }, stderr: () => {},

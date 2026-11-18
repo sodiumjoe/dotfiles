@@ -70,11 +70,8 @@ function M.setup(deps)
         end, { timeout_ms = 10000 })
     end
     function api.excerpt(excerpt, callback)
-        if excerpt.hostId then
-            (deps.client or Control).command({ "roster", "excerpt", excerpt.agentId, "--host", excerpt.hostId }, { timeout_ms = 10000 }, function(err, envelope) callback(err, envelope and envelope.result) end)
-            return
-        end
-        require("sodium.agency.roster").request("agency/excerpt", { agentId = excerpt.agentId, turns = 4 }, function(err, envelope) callback(err, envelope and envelope.result) end, { timeout_ms = 10000 })
+        local params = { agentId = excerpt.agentId, turns = 4, hostId = excerpt.hostId }
+        ;(deps.request or require("sodium.agency.roster").request)("agency/excerpt", params, function(err, envelope) callback(err, envelope and envelope.result) end, { timeout_ms = 10000 })
     end
     function api.snapshot()
         local manager = local_manager()

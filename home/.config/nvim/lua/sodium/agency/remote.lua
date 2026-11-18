@@ -23,15 +23,15 @@ local function launch(argv, notify)
 end
 function M.new(deps)
     deps = deps or {}
-    local client, uuid = deps.client or Control, deps.uuid or Control.uuid
+    local request, uuid = deps.request or require("sodium.agency.roster").request, deps.uuid or Control.uuid
     local notify = deps.notify or function(value) vim.notify("Agency: " .. tostring(value)) end
     return { enter = function(ref)
         local command_id = uuid()
-        client.command({ "entry", "open", "--input-json", vim.json.encode({ commandId = command_id, hostId = ref.hostId, target = ref.target }) }, { timeout_ms = 15000 }, function(err, response)
-            local inspection = "Inspect entry " .. command_id .. " on host " .. ref.hostId
-            if err then notify((err.message or err.code) .. "; " .. inspection); return end
+        request("agency/entry", { commandId = command_id, hostId = ref.hostId, target = ref.target }, function(err, response)
+            if err then notify("Remote entry failed: " .. (err.message or err.code)); return end
+            local receipt, enrollment = response.result.receipt, response.result.enrollment
+            if receipt.state == "stale" then notify("The agent is no longer running on " .. enrollment.hostname .. "; reopen it from the picker"); return end
             local ok, argv = pcall(function()
-                local receipt, enrollment = response.result.receipt, response.result.enrollment
                 assert(receipt.state == "opened" and receipt.commandId == command_id and vim.deep_equal(receipt.ref, ref) and type(receipt.editor) == "table")
                 assert(enrollment.hostId == ref.hostId)
                 assert(enrollment.hostname:match("^[%w][%w._-]*$"))
@@ -42,10 +42,10 @@ function M.new(deps)
                     "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "-o", "ControlMaster=auto", "-o", "ControlPersist=60",
                     "-o", "ControlPath=" .. (deps.control_path or control_path)(), "--", enrollment.hostname, destination }
             end)
-            if not ok then notify("Remote entry rejected: " .. tostring(argv) .. "; " .. inspection); return end
+            if not ok then notify("Remote entry rejected: " .. tostring(argv)); return end
             local started, failure = pcall(deps.launch or launch, argv, notify)
             if not started then notify("Remote entry failed: " .. tostring(failure)) end
-        end)
+        end, { timeout_ms = 15000 })
     end }
 end
 function M.bind(value)

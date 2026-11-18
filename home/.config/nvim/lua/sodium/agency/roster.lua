@@ -31,6 +31,34 @@ validators["agency/remotes"] = function(result)
     end
     return result
 end
+local function host_id(value) return type(value) == "string" and #value == 64 and value:match("^%x+$") ~= nil end
+validators["agency/approvals"] = function(result)
+    assert(type(result) == "table" and result.state == "permissions" and type(result.hosts) == "table" and type(result.pending) == "table")
+    for _, host in ipairs(result.hosts) do
+        assert(host_id(host.hostId))
+        if host.state == "available" then assert(type(host.value) == "table" and host.value.hostId == host.hostId)
+        else assert(host.state == "unavailable" and type(host.code) == "string") end
+    end
+    for _, offer in ipairs(result.pending) do assert(type(offer.ref) == "table" and host_id(offer.ref.hostId)) end
+    return result
+end
+validators["agency/decide"] = function(result)
+    assert(type(result) == "table" and result.state == "permission" and type(result.receipt) == "table")
+    assert(vim.tbl_contains({ "claimed", "applied", "withdrawn", "stale", "uncertain" }, result.receipt.state))
+    return result
+end
+validators["agency/entry"] = function(result)
+    assert(type(result) == "table" and result.state == "entry" and type(result.receipt) == "table" and type(result.enrollment) == "table")
+    local receipt = result.receipt
+    assert(vim.tbl_contains({ "opening", "opened", "uncertain", "stale" }, receipt.state) and type(receipt.ref) == "table")
+    if receipt.state == "opened" then
+        local editor = receipt.editor
+        assert(type(editor) == "table" and type(editor.session) == "string" and editor.session:match("^[%w_-]+$")
+            and type(editor.pane) == "string" and editor.pane:match("^%%[0-9]+$") and type(editor.tmuxSocketPath) == "string")
+    end
+    assert(host_id(result.enrollment.hostId) and type(result.enrollment.hostname) == "string")
+    return result
+end
 M.validators = validators
 
 local codes = { connecting = "CONNECTING", offline = "OFFLINE", outdated = "UPDATE_REQUIRED" }

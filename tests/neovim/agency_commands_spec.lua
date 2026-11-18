@@ -112,6 +112,53 @@ describe("Agency native commands", function()
         assert.are.same({ "unavailable", "OFFLINE", 1763349120000 }, { offline.state, offline.code, offline.since })
     end)
 
+    local function fake_requests()
+        local calls = {}
+        return calls, function(method, params, callback, opts)
+            calls[#calls + 1] = { method = method, params = params, callback = callback, opts = opts }
+            return function() end
+        end
+    end
+
+    it("previews a remote row through the laptop Handler", function()
+        local calls, request = fake_requests()
+        package.loaded["sodium.agency"] = nil
+        local remote = require("sodium.agency").setup({ request = request, notify = function() end })
+        remote.excerpt({ agentId = "a1", hostId = string.rep("b", 64) }, function() end)
+        assert.are.same({ "agency/excerpt", { agentId = "a1", turns = 4, hostId = string.rep("b", 64) } }, { calls[1].method, calls[1].params })
+    end)
+
+    it("lists and decides routed approvals through the laptop Handler, and says when an outcome is unknown", function()
+        local calls, request = fake_requests()
+        local notices = {}
+        local ref = { hostId = string.rep("b", 64), target = { agentId = "a", handlerGeneration = "h", providerGeneration = "p" }, permissionId = "q", revision = 1 }
+        local offer = { ref = ref, title = "Run", originCwd = "/w", subject = {}, options = { { optionId = "allow", name = "Allow" } } }
+        local approvals = require("sodium.agency.permissions").new({ request = request, notify = function(value) notices[#notices + 1] = value end,
+            select = function(items, _, choose) choose(items[1]) end })
+        approvals.open()
+        assert.are.equal("agency/approvals", calls[1].method)
+        calls[1].callback(nil, { result = { state = "permissions", hosts = { { hostId = ref.hostId, state = "available", value = { hostId = ref.hostId, pending = { offer } } } }, pending = { offer } } })
+        assert.are.same({ "agency/decide", { ref = ref, optionId = "allow" } }, { calls[2].method, calls[2].params })
+        calls[2].callback({ code = "UNAVAILABLE", message = "host b is unreachable (BRIDGE_EOF)" })
+        assert.is_truthy(notices[#notices]:find("Outcome unknown", 1, true))
+    end)
+
+    it("enters a remote agent through the laptop Handler and explains a stale one", function()
+        local calls, request = fake_requests()
+        local notices, launched = {}, nil
+        local ref = { hostId = string.rep("b", 64), target = { agentId = "a", handlerGeneration = "h", providerGeneration = "p" } }
+        local entry = require("sodium.agency.remote").new({ request = request, uuid = function() return "c1" end, launch = function(argv) launched = argv end,
+            control_path = function() return "/tmp/cp" end, notify = function(value) notices[#notices + 1] = value end })
+        entry.enter(ref)
+        assert.are.same({ "agency/entry", { commandId = "c1", hostId = ref.hostId, target = ref.target } }, { calls[1].method, calls[1].params })
+        calls[1].callback(nil, { result = { state = "entry", receipt = { commandId = "c1", ref = ref, state = "opened", editor = { editorId = "e", session = "s", pane = "%1", tmuxSocketPath = "/t" } },
+            enrollment = { hostId = ref.hostId, hostname = "devbox.example" } } })
+        assert.are.equal("devbox.example", launched[#launched - 1])
+        entry.enter(ref)
+        calls[2].callback(nil, { result = { state = "entry", receipt = { commandId = "c1", ref = ref, state = "stale", editor = vim.NIL }, enrollment = { hostId = ref.hostId, hostname = "devbox.example" } } })
+        assert.is_truthy(notices[#notices]:find("no longer running", 1, true))
+    end)
+
     it("names the request an older Handler does not serve", function()
         local outcome
         api.excerpt({ agentId = f.row.record.definition.agentId }, function(err) outcome = err end)

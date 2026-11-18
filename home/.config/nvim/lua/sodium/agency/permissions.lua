@@ -10,7 +10,7 @@ local function key(ref)
 end
 function M.new(deps)
     deps = deps or {}
-    local command = deps.command or require("sodium.agency.control").command
+    local request = deps.request or require("sodium.agency.roster").request
     local select = deps.select or function(items, options, callback)
         if not Snacks or not Snacks.picker then
             options.prompt = options.prompt .. "\n" .. (options.preview and options.preview(items[1]) or "")
@@ -23,7 +23,6 @@ function M.new(deps)
             preview = function(ctx) ctx.preview:reset(); if ctx.item then ctx.preview:set_lines(ctx.item.preview) end end,
             confirm = function(picker, item) picker:close(); vim.schedule(function() callback(item and item.value) end) end })
     end
-    local uuid = deps.uuid or require("sodium.agency.control").uuid
     local notify = deps.notify or function(message) vim.notify("Agency: " .. message) end
     local api, requests, closed, available, epoch, unavailable = {}, {}, false, false, 0, {}
     function api.update(snapshot)
@@ -56,12 +55,12 @@ function M.new(deps)
     end
     function api.refresh(callback)
         if closed then return end
-        command({ "permission", "list" }, { timeout_ms = 10000 }, function(err, envelope)
+        request("agency/approvals", vim.empty_dict(), function(err, envelope)
             if closed then return end
             if err then api.unavailable(); if callback then callback(err) end; return end
             api.update(envelope.result)
             if callback then callback(nil, api.pending()) end
-        end)
+        end, { timeout_ms = 10000 })
     end
     function api.choose(ref)
         if closed or not available then return end
@@ -74,20 +73,18 @@ function M.new(deps)
             for _, value in ipairs(offer.options) do if vim.deep_equal(value, option) then advertised = true end end
             if not advertised then return end
             available = false
-            local command_id = uuid()
-            command({ "permission", "decide", "--command-id", command_id, "--input-json", vim.json.encode({ ref = offer.ref, optionId = option.optionId }) },
-                { timeout_ms = 15000 }, function(err, envelope)
+            request("agency/decide", { ref = offer.ref, optionId = option.optionId }, function(err, envelope)
                     if closed then return end
                     if err then
-                        local outcome = vim.tbl_contains({ "OUTCOME_UNKNOWN", "UNAVAILABLE", "INVALID_PROTOCOL" }, err.code) and "Outcome unknown: " or ""
-                        notify(outcome .. (err.message or err.code) .. " · inspect owner " .. offer.ref.hostId .. " · command " .. command_id)
+                        local outcome = vim.tbl_contains({ "UNAVAILABLE", "INVALID_PROTOCOL" }, err.code) and "Outcome unknown: " or ""
+                        notify(outcome .. (err.message or err.code) .. "; reopen :AgencyPermissions to see whether it was applied")
                         return
                     end
                     local state = envelope.result.receipt.state
                     requests[identity] = nil
                     notify("Approval " .. state .. " on " .. offer.ref.hostId:sub(1, 12))
                     api.refresh()
-                end)
+                end, { timeout_ms = 15000 })
         end)
     end
     function api.open()
