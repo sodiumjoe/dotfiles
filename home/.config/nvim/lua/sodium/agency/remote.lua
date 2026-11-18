@@ -31,6 +31,8 @@ function M.new(deps)
             if err then notify("Remote entry failed: " .. (err.message or err.code)); return end
             local receipt, enrollment = response.result.receipt, response.result.enrollment
             if receipt.state == "stale" then notify("The agent is no longer running on " .. enrollment.hostname .. "; reopen it from the picker"); return end
+            if receipt.state == "uncertain" then notify("Agency could not confirm that the agent's editor opened on " .. enrollment.hostname .. "; try again"); return end
+            if receipt.state == "opening" then notify("The agent's editor is still opening on " .. enrollment.hostname .. "; try again shortly"); return end
             local ok, argv = pcall(function()
                 assert(receipt.state == "opened" and receipt.commandId == command_id and vim.deep_equal(receipt.ref, ref) and type(receipt.editor) == "table")
                 assert(enrollment.hostId == ref.hostId)

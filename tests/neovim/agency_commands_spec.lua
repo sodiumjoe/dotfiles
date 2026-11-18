@@ -111,6 +111,7 @@ describe("Agency native commands", function()
         assert.are.equal(string.rep("b", 64), online.value.agents[1].record.definition.hostId)
         assert.are.same({ "unavailable", "OFFLINE", 1763349120000 }, { offline.state, offline.code, offline.since })
         assert.are.same({ "beta" }, { online.name, offline.name })
+        assert.are.equal("BRIDGE_EOF", offline.error)
     end)
 
     local function fake_requests()
@@ -158,6 +159,14 @@ describe("Agency native commands", function()
         entry.enter(ref)
         calls[2].callback(nil, { result = { state = "entry", receipt = { commandId = "c1", ref = ref, state = "stale", editor = vim.NIL }, enrollment = { hostId = ref.hostId, hostname = "devbox.example" } } })
         assert.is_truthy(notices[#notices]:find("no longer running", 1, true))
+        local count = #notices
+        for index, state in ipairs({ "uncertain", "opening" }) do
+            entry.enter(ref)
+            calls[2 + index].callback(nil, { result = { state = "entry", receipt = { commandId = "c1", ref = ref, state = state, editor = vim.NIL }, enrollment = { hostId = ref.hostId, hostname = "devbox.example" } } })
+        end
+        assert.is_truthy(notices[count + 1]:find("could not confirm", 1, true))
+        assert.is_truthy(notices[count + 2]:find("still opening", 1, true))
+        assert.is_falsy(table.concat(notices, "\n"):find("assertion", 1, true))
     end)
 
     it("names the request an older Handler does not serve", function()

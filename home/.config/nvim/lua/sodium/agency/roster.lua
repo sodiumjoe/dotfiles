@@ -77,7 +77,7 @@ function M.hosts(result)
             hosts[#hosts + 1] = { hostId = host.hostId, hostname = host.hostname, name = type(host.name) == "string" and host.name or nil, state = "available",
                 value = { handlerGeneration = host.handlerGeneration, agents = views, issues = {} } }
         else
-            hosts[#hosts + 1] = { hostId = host.hostId, hostname = host.hostname, name = type(host.name) == "string" and host.name or nil, state = "unavailable", code = codes[host.state],
+            hosts[#hosts + 1] = { hostId = host.hostId, hostname = host.hostname, name = type(host.name) == "string" and host.name or nil, state = "unavailable", code = codes[host.state], error = host.state == "offline" and type(host.error) == "string" and host.error or nil,
                 since = type(host.since) == "number" and host.since or nil }
         end
     end

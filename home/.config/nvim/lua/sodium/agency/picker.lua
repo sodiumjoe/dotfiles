@@ -43,6 +43,7 @@ local function diagnostic_item(name, message, issue, hosts, status)
         for _, host in ipairs(hosts) do
             vim.list_extend(preview, { "Host: " .. host.hostname, "Host ID: " .. host.hostId })
             if host.code then preview[#preview + 1] = "Error: " .. host.code end
+            if host.error then preview[#preview + 1] = "Reason: " .. host.error end
             preview[#preview + 1] = ""
         end
     end

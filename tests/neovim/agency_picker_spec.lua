@@ -187,7 +187,7 @@ describe("Agency active-agent snapshot", function()
         local picker = open(local_controller({
             read_roster = function(callback)
                 callback(nil, { state = "roster", localHostId = "local", hosts = {
-                    { hostId = "remote", hostname = "qa-worker.example", name = "climate", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
+                    { hostId = "remote", hostname = "qa-worker.example", name = "climate", error = "BRIDGE_EOF", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
                     { hostId = "unknown-a", hostname = "unmatched-a.example", state = "unavailable", code = "UPDATE_REQUIRED" },
                     { hostId = "unknown-b", hostname = "qa-mydev--0c3af4af6e78de0a3.northwest.stripe.io", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
                     { hostId = "owner", hostname = "qa-worker.example", state = "available", value = {
@@ -204,6 +204,10 @@ describe("Agency active-agent snapshot", function()
             rows[#rows + 1] = table.concat({ item.label, item.title, item.status }, "|")
         end
         assert.is_true(vim.tbl_contains(rows, "climate|" .. offline .. "|Offline"))
+        for index = 1, picker:count() do
+            local item = picker.list:get(index)
+            if item.label == "climate" then assert.is_truthy(table.concat(item.preview, "\n"):find("Reason: BRIDGE_EOF", 1, true)) end
+        end
         assert.is_true(vim.tbl_contains(rows, "unmatched-a|Update this devbox|Outdated"))
         assert.is_true(vim.tbl_contains(rows, "qa-mydev--0c3af4…|" .. offline .. "|Offline"))
         resize(picker, 80)

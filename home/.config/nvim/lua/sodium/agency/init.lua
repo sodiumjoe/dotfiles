@@ -2,7 +2,6 @@ local M = {}
 local controller
 local Context = require("sodium.agency.context")
 local Adapter = require("sodium.agency.agentic")
-local Control = require("sodium.agency.control")
 
 local function failure(code) return { code = code, message = code:lower():gsub("_", " ") } end
 local function tuple(row)
