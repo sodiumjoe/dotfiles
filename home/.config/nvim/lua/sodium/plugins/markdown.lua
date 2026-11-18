@@ -247,6 +247,8 @@ return {
         },
         opts = {
             legacy_commands = false,
+            footer = { enabled = false },
+            statusline = { enabled = false },
             workspaces = vim.fn.isdirectory(vim.fn.expand("~/stripe/work")) == 1 and {
                 { name = "work", path = "~/stripe/work" },
             } or {},
