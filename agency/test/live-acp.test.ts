@@ -195,3 +195,10 @@ test("the editor stops an agent over its connection", async t => {
   await assert.rejects(c.request("agency/stop", { agentId: "00000000-0000-4000-8000-000000000999" }), (error: { data?: { agency?: { code?: string } } }) => error.data?.agency?.code === "NOT_FOUND")
   await f.verifyZeroSurvivors()
 })
+
+test("the editor reads the laptop's remote rosters over its connection", async t => {
+  const f = await liveHandlerFixture(t), c = await f.connect()
+  await c.request("initialize", initialize)
+  assert.deepEqual(await c.request("agency/remotes", {}), { hosts: [] })
+  await f.verifyZeroSurvivors()
+})

@@ -8,6 +8,7 @@ import type { ConversationNotification, RetainedEvent } from "../agent/conversat
 import { sessionInputs } from "../agent/session-inputs.js"
 import { AgentError, ProviderRequestError, type AgentTuple } from "../agent/types.js"
 import type { LiveCore, LiveObservation } from "../live/core.js"
+import type { RemoteHost } from "../hosts/remote-rosters.js"
 import { RequestError, requestFailure } from "../live/errors.js"
 import { AcpError, parseAcpFrame, parseAgencyMeta, parseLogicalSessionId, type RpcId } from "./protocol.js"
 
@@ -22,7 +23,7 @@ export function liveAcpError(requestId: RpcId | null, error: unknown): JsonObjec
   return { jsonrpc: "2.0", id: requestId, error: { code: -32000, message: failure.message, data: { agency: failure } } }
 }
 
-export function createLiveRouter(input: { core: LiveCore; connectionId: string; send(frame: JsonObject): void; environment?: LaunchEnvironment }): { receive(frame: JsonObject): Promise<void>; close(): void } {
+export function createLiveRouter(input: { core: LiveCore; remotes?: () => RemoteHost[]; connectionId: string; send(frame: JsonObject): void; environment?: LaunchEnvironment }): { receive(frame: JsonObject): Promise<void>; close(): void } {
   const { core } = input, bindings = new Map<string, Binding>(), pending = new Map<RpcId, symbol>(), loads = new Map<string, symbol>()
   let initialized = false, closed = false
   const send = (frame: JsonObject): void => { if (!closed) input.send(frame) }
@@ -124,6 +125,7 @@ export function createLiveRouter(input: { core: LiveCore; connectionId: string; 
       return json({ state: "agents", handlerGeneration: core.handlerGeneration, agents: (await core.agents()).filter(row => !cwd || row.cwd === cwd) })
     }
     if (method === "agency/backends") return core.backendChoices()
+    if (method === "agency/remotes") return json({ hosts: input.remotes?.() ?? [] })
     if (method === "agency/excerpt") {
       const agentId = checked(() => id(params.agentId)), turns = params.turns ?? 4
       if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 1 || turns > 8) throw new RequestError("INVALID", "turns must be an integer from 1 to 8")
