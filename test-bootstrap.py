@@ -487,6 +487,34 @@ class BootstrapTest(DeploymentFixture):
     def test_failed_transition_is_unchanged_on_darwin(self):
         self.assert_failed_transition_is_unchanged("Darwin")
 
+    def npm_caches(self):
+        log = self.root / "npm-cache.log"
+        shim = self.root / "shims/npm"
+        shim.write_text(f'#!/bin/sh\nprintf "%s\\n" "${{npm_config_cache:-default}}" >> "{log}"\nexit 0\n')
+        self.environment.pop("npm_config_cache", None)
+        return log
+
+    def test_dangling_npm_cache_link_uses_a_dedicated_cache(self):
+        log = self.npm_caches()
+        (self.owner / ".npm").mkdir()
+        (self.owner / ".npm/_cacache").symlink_to(self.root / "removed/npm-cacache")
+        result = self.run_bootstrap("work")
+        self.assertEqual(set(log.read_text().split()), {str(self.owner / ".cache/npm-dotfiles")})
+        self.assertIn("points to a missing directory", result.stderr)
+
+    def test_healthy_npm_cache_is_left_alone(self):
+        log = self.npm_caches()
+        self.run_bootstrap("work")
+        self.assertEqual(set(log.read_text().split()), {"default"})
+
+    def test_configured_npm_cache_is_kept(self):
+        log = self.npm_caches()
+        (self.owner / ".npm").mkdir()
+        (self.owner / ".npm/_cacache").symlink_to(self.root / "removed/npm-cacache")
+        self.environment["npm_config_cache"] = str(self.root / "chosen")
+        self.run_bootstrap("work")
+        self.assertEqual(set(log.read_text().split()), {str(self.root / "chosen")})
+
 
     def test_devbox_applies_claude_settings_and_keeps_platform_keys(self):
         runtime = self.owner / ".claude/settings.json"

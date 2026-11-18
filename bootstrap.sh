@@ -110,6 +110,11 @@ fi
 
 # --- Pinned npm tool binaries (ACP providers, language servers, formatters) ---
 
+if [ -z "${npm_config_cache:-}" ] && [ -L "$HOME/.npm/_cacache" ] && [ ! -e "$HOME/.npm/_cacache" ]; then
+  export npm_config_cache="$HOME/.cache/npm-dotfiles"
+  echo "bootstrap.sh: ~/.npm/_cacache points to a missing directory; npm uses $npm_config_cache instead" >&2
+fi
+
 if command -v npm &>/dev/null; then
   echo "Installing node-bin packages..."
   if [ -f node-bin/package-lock.json ]; then
