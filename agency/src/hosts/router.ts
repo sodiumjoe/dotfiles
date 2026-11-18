@@ -8,6 +8,7 @@ import type { HostEnrollment } from "./inventory.js"
 export type HostRoute = { hostId: string; channel: string; payload: unknown }
 export type HostRouter = {
   request(route: HostRoute, signal?: AbortSignal, timeoutMs?: number): Promise<unknown>
+  forget(hostId: string): void
   fromRelay(route: HostRoute, signal?: AbortSignal): Promise<unknown>
   setRelay(send: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>): () => void
   close(): void
@@ -42,6 +43,11 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
     connections.set(enrollment.hostId, flight)
     return flight
   }
+  function forget(hostId: string): void {
+    const flight = connections.get(hostId)
+    connections.delete(hostId)
+    void flight?.then(transport => transport.close(), () => undefined)
+  }
   async function routeTo(raw: HostRoute, allowRelay: boolean, signal?: AbortSignal, timeoutMs?: number): Promise<unknown> {
     if (closed || signal?.aborted) bridgeError("BRIDGE_CLOSED")
     const route = parseHostRoute(raw)
@@ -51,11 +57,13 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
       const transport = await connected(enrollment)
       return await transport.request(route.channel, route.payload, { ...(timeoutMs !== undefined ? { timeoutMs } : isRoutedRead(route.channel) ? { timeoutMs: 10000 } : {}), ...(signal ? { signal } : {}) })
     }
+    forget(route.hostId)
     if (allowRelay && relay) return relay(route, signal)
     return bridgeError("HOST_UNAVAILABLE")
   }
   return {
     request: (route, signal, timeoutMs) => routeTo(route, true, signal, timeoutMs), fromRelay: (route, signal) => routeTo(route, false, signal),
+    forget,
     setRelay(send) { if (relay || closed) bridgeError("RELAY_EXISTS"); relay = send; return () => { if (relay === send) relay = undefined } },
     close() { if (closed) return; closed = true; relay = undefined; for (const flight of connections.values()) void flight.then(transport => transport.close(), () => undefined); connections.clear() }
   }

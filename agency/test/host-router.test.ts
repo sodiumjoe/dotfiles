@@ -83,3 +83,26 @@ test("the newest bridge owns the relay and the previous one takes over when it c
   await assert.rejects(hosts.request(route), /HOST_UNAVAILABLE/)
   hosts.close()
 })
+
+test("a forgotten host's connection is closed", async () => {
+  const { transport, state } = fakeTransport(async () => "ok")
+  const hosts = router(async () => transport)
+  assert.equal(await hosts.request({ hostId: remote, channel: "live-read", payload: {} }), "ok")
+  hosts.forget(remote)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(state.closes, 1)
+  hosts.forget(unknown)
+  hosts.close()
+})
+
+test("a host that leaves the inventory loses its cached connection", async () => {
+  let enrolled = [{ hostId: remote, hostname: "devbox" }]
+  const { transport, state } = fakeTransport(async () => "ok")
+  const hosts = router(async () => transport, async () => enrolled)
+  assert.equal(await hosts.request({ hostId: remote, channel: "live-read", payload: {} }), "ok")
+  enrolled = []
+  await assert.rejects(hosts.request({ hostId: remote, channel: "live-read", payload: {} }), /HOST_UNAVAILABLE/)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(state.closes, 1)
+  hosts.close()
+})

@@ -93,5 +93,12 @@ export function createInventoryStore(root: string, filesystem: { link: typeof li
         if (!(await readBytes(path))?.equals(bytes)) fail("STATE_CHANGED")
       } finally { await handle?.close(); await rm(temporary, { force: true }) }
     },
+    async remove(key: string): Promise<void> {
+      const path = pathFor(key)
+      if (await readBytes(path) === null) return
+      await rm(path)
+      identities.delete(path); accepted.delete(path)
+      await sync(dirname(path))
+    },
   }
 }

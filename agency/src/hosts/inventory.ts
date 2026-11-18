@@ -21,7 +21,7 @@ export function createHostInventory(root: string) {
   const storage = createInventoryStore(root)
   let pending: Promise<unknown> = Promise.resolve()
   const queue = { run<T>(action: () => Promise<T>): Promise<T> { const result = pending.then(action); pending = result.catch(() => undefined); return result } }
-  async function list() {
+  async function read() {
     const hosts = await Promise.all((await storage.names()).map(async name => {
       const host = storedEnrollment(await storage.read(name))
       if (name.length === 69 && name !== `${host.hostId}.json`) throw new Error("HOST_IDENTITY_CHANGED")
@@ -31,13 +31,16 @@ export function createHostInventory(root: string) {
     return hosts
   }
   return {
-    list,
+    list: () => queue.run(read),
     enroll(raw: HostEnrollment) { return queue.run(async () => {
-      const enrollment = parseHostEnrollment(raw), existing = await list(), prior = existing.find(value => value.hostname === enrollment.hostname)
+      const enrollment = parseHostEnrollment(raw), existing = await read(), prior = existing.find(value => value.hostname === enrollment.hostname)
       if (prior && prior.hostId !== enrollment.hostId) throw new Error("HOST_IDENTITY_CHANGED")
       if (existing.some(value => value.hostId === enrollment.hostId && value.hostname !== enrollment.hostname)) throw new Error("HOST_IDENTITY_CONFLICT")
       if (prior) return
       await storage.publish(`${enrollment.hostId}.json`, enrollment)
-    }) }
+    }) },
+    forget(hostId: string) { return queue.run(async () => {
+      for (const name of await storage.names()) if (storedEnrollment(await storage.read(name)).hostId === hostId) await storage.remove(name)
+    }) },
   }
 }
