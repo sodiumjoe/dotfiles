@@ -20,6 +20,11 @@ export function parseHostRoute(raw: unknown): HostRoute {
   if (!["entry-open", "runtime-entry-inspect", "live-read", "live-wait", "live-request"].includes(channel)) bridgeError("UNSUPPORTED_CAPABILITY")
   return { hostId: hash(value.hostId), channel, payload: value.payload }
 }
+export function parsePeerRoute(raw: unknown): HostRoute {
+  const route = parseHostRoute(raw)
+  if (!isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
+  return route
+}
 export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport> }): HostRouter {
   const connections = new Map<string, Promise<BridgeTransport>>()
   let relay: ((route: HostRoute, signal?: AbortSignal) => Promise<unknown>) | undefined, closed = false
@@ -32,7 +37,7 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
       const reads = createPagedReads((channel, payload, signal) => reverse(channel, payload, signal))
       const reverse = async (channel: string, payload: unknown, signal: AbortSignal) => {
         if (channel !== "host-route" && channel !== "host-route-read") bridgeError("UNSUPPORTED_CAPABILITY")
-        const route = parseHostRoute(payload)
+        const route = parsePeerRoute(payload)
         if (channel === "host-route-read" && !isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
         return routeTo(route, false, signal)
       }
@@ -90,7 +95,7 @@ export function registerHostRouter(input: { bridge: HandlerBridge; router: HostR
       })
       return { registered: true }
     }
-    const route = parseHostRoute(payload)
+    const route = parsePeerRoute(payload)
     if (channel === "host-route-read" && !isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
     return input.router.request(route, signal)
   })

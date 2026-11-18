@@ -106,3 +106,20 @@ test("a host that leaves the inventory loses its cached connection", async () =>
   assert.equal(state.closes, 1)
   hosts.close()
 })
+
+test("a devbox can route only reads through the laptop, while the laptop itself can route anything", async () => {
+  let reverse!: (channel: string, payload: unknown, requestId: string, signal: AbortSignal) => Promise<unknown>
+  const { transport } = fakeTransport(async () => "ok")
+  ;(transport.peer as unknown as { onRequest: (handler: typeof reverse) => void }).onRequest = handler => { reverse = handler }
+  const hosts = router(async () => transport)
+  await hosts.request({ hostId: remote, channel: "live-read", payload: {} })
+  const signal = new AbortController().signal
+  await assert.rejects(reverse("host-route", { hostId: local, channel: "live-request", payload: { op: "permissions" } }, "r", signal), /UNSUPPORTED_CAPABILITY/)
+  await assert.rejects(reverse("host-route", { hostId: local, channel: "entry-open", payload: {} }, "r", signal), /UNSUPPORTED_CAPABILITY/)
+  assert.equal(await reverse("host-route", { hostId: local, channel: "live-read", payload: {} }, "r", signal), null)
+  assert.equal(await hosts.request({ hostId: local, channel: "live-request", payload: { op: "permissions" } }), null)
+  let handle!: (input: { context: unknown; channel: string; payload: unknown; signal: AbortSignal }) => Promise<unknown>
+  registerHostRouter({ bridge: { register: (_channels: readonly string[], endpoint: typeof handle) => { handle = endpoint; return () => {} } } as unknown as HandlerBridge, router: hosts })
+  await assert.rejects(handle({ context: { source: "peer", peer: {} }, channel: "host-route", payload: { hostId: local, channel: "live-request", payload: {} }, signal }), /UNSUPPORTED_CAPABILITY/)
+  hosts.close()
+})
