@@ -5,15 +5,16 @@ import { until } from "./control-support.js"
 
 const hostA = { hostId: "a".repeat(64), hostname: "alpha" }, hostB = { hostId: "b".repeat(64), hostname: "beta" }
 const row = (agentId: string) => ({ agentId, backendId: "codex-acp" as const, cwd: "/w", createdAt: "2026-11-17T00:00:00.000Z", title: null, lastActivityAt: null, live: null })
+const one = "00000000-0000-4000-8000-000000000011"
 const timing = { intervalMs: 10, waitMs: 20, refreshMs: 200, backoffMs: 10, maxBackoffMs: 40 }
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 test("a host is read at once, re-read on a new revision, and not re-read while unchanged", async t => {
   let revision = "r1", reads = 0
-  const rosters = createRemoteRosters({ ...timing, list: async () => [hostA], wait: async () => { await pause(5); return revision }, read: async () => { reads++; return { handlerGeneration: "g1", agents: [row("one")] } } })
+  const rosters = createRemoteRosters({ ...timing, list: async () => [hostA], wait: async () => { await pause(5); return revision }, read: async () => { reads++; return { handlerGeneration: "g1", agents: [row(one)] } } })
   t.after(() => rosters.close())
   const online = await until(async () => rosters.hosts()[0]?.state === "online" ? rosters.hosts()[0] : undefined)
-  assert.deepEqual([online.handlerGeneration, online.agents.map(value => value.agentId), online.since, online.error], ["g1", ["one"], null, null])
+  assert.deepEqual([online.handlerGeneration, online.agents.map(value => value.agentId), online.since, online.error], ["g1", [one], null, null])
   await pause(80)
   assert.equal(reads, 1)
   revision = "r2"
@@ -30,12 +31,12 @@ test("an unchanged host is re-read once the refresh interval passes", async t =>
 test("a failing host goes offline, keeps its agents and backs off, then comes back", async t => {
   let failing = false
   const calls: number[] = []
-  const rosters = createRemoteRosters({ ...timing, list: async () => [hostA], wait: async () => { if (failing) { calls.push(Date.now()); throw new Error("BRIDGE_EOF") } await pause(5); return "r1" }, read: async () => ({ handlerGeneration: "g1", agents: [row("one")] }) })
+  const rosters = createRemoteRosters({ ...timing, list: async () => [hostA], wait: async () => { if (failing) { calls.push(Date.now()); throw new Error("BRIDGE_EOF") } await pause(5); return "r1" }, read: async () => ({ handlerGeneration: "g1", agents: [row(one)] }) })
   t.after(() => rosters.close())
   await until(async () => rosters.hosts()[0]?.state === "online" ? true : undefined)
   failing = true
   const offline = await until(async () => rosters.hosts()[0]?.state === "offline" ? rosters.hosts()[0] : undefined)
-  assert.deepEqual([offline.error, offline.agents.map(value => value.agentId)], ["BRIDGE_EOF", ["one"]])
+  assert.deepEqual([offline.error, offline.agents.map(value => value.agentId)], ["BRIDGE_EOF", [one]])
   await until(async () => calls.length >= 6 ? true : undefined, 5000)
   const gaps = calls.slice(1).map((at, index) => at - calls[index]!)
   for (let index = 1; index < gaps.length; index++) assert.ok(gaps[index]! >= gaps[index - 1]! - 5, String(gaps))
@@ -87,4 +88,12 @@ test("nothing is requested after close", async t => {
   await pause(80)
   assert.equal(calls, seen)
   t.diagnostic(String(seen))
+})
+
+test("a host whose reply has an invalid row goes offline without hiding the others", async t => {
+  const rosters = createRemoteRosters({ ...timing, list: async () => [hostA, hostB], wait: async () => { await pause(5); return "r1" },
+    read: async hostId => hostId === hostA.hostId ? { handlerGeneration: "00000000-0000-4000-8000-000000000001", agents: [{ ...row("00000000-0000-4000-8000-000000000002"), backendId: "future-acp" as never }] } : { handlerGeneration: "00000000-0000-4000-8000-000000000001", agents: [row("00000000-0000-4000-8000-000000000003")] } })
+  t.after(() => rosters.close())
+  await until(async () => rosters.hosts().length === 2 && rosters.hosts().every(host => host.state !== "connecting") ? true : undefined)
+  assert.deepEqual(rosters.hosts().map(host => [host.hostname, host.state, host.error, host.agents.length]), [["alpha", "offline", "INVALID_HOST_REPLY", 0], ["beta", "online", null, 1]])
 })

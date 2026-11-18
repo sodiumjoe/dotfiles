@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises"
 import type { AgentIndex, IndexEntry } from "../agent/agent-index.js"
 import { codexSessionFiles, liveExcerpt, sessionExcerpt, sessionFile, sessionSettings, sessionSummary, sessionTranscript, type ConversationExcerpt, type RecordedSettings, type ExcerptTurn, type SessionHomes, type SessionRef } from "../agent/excerpt.js"
-import type { ProviderId } from "../config/validate.js"
+import { absolutePath, id, object, providerId, type ProviderId } from "../config/validate.js"
 import type { Activity, LiveAgent, LiveTable } from "./state.js"
 
 export type LiveRow = { activity: Activity; handlerGeneration: string; providerGeneration: string; model: string | null; mode: string | null }
@@ -23,6 +23,16 @@ export function currentSettings(agent: LiveAgent): { model: string | null; mode:
 export function liveRow(table: LiveTable, agent: LiveAgent): RosterRow {
   return { agentId: agent.agentId, backendId: agent.backendId, cwd: agent.cwd, createdAt: agent.createdAt, title: agent.conversation.display().title ?? agent.title, lastActivityAt: agent.lastActivityAt,
     live: { activity: table.activity(agent), handlerGeneration: agent.tuple.handlerGeneration, providerGeneration: agent.tuple.providerGeneration, ...currentSettings(agent) } }
+}
+
+export function parseRosterRow(raw: unknown): RosterRow {
+  const value = object(raw), text = (field: unknown): string | null => { if (field === null) return null; if (typeof field !== "string") throw new Error("INVALID_HOST_REPLY"); return field }
+  if (typeof value.createdAt !== "string") throw new Error("INVALID_HOST_REPLY")
+  const row = { agentId: id(value.agentId), backendId: providerId(value.backendId), cwd: absolutePath(value.cwd), createdAt: value.createdAt, title: text(value.title), lastActivityAt: text(value.lastActivityAt) }
+  if (value.live === null) return { ...row, live: null }
+  const live = object(value.live)
+  if (!["starting", "idle", "working", "stopping"].includes(String(live.activity))) throw new Error("INVALID_HOST_REPLY")
+  return { ...row, live: { activity: live.activity as Activity, handlerGeneration: id(live.handlerGeneration), providerGeneration: id(live.providerGeneration), model: text(live.model), mode: text(live.mode) } }
 }
 
 export function liveRows(table: LiveTable): RosterRow[] { return table.all().map(agent => liveRow(table, agent)).sort(order) }

@@ -40,6 +40,7 @@ export function createLiveTable(): LiveTable {
       return new Promise(resolve => {
         const wake = (): void => { clearTimeout(timer); resolve(version) }
         const timer = setTimeout(() => { waiters.delete(wake); resolve(version) }, waitMs)
+        timer.unref()
         waiters.add(wake)
       })
     },

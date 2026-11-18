@@ -2,6 +2,9 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { execFile } from "node:child_process"
+import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 import { liveHandlerFixture } from "./live-support.js"
 import { until } from "./control-support.js"
 
@@ -51,4 +54,10 @@ test("a Handler that fails during startup reports why", async t => {
   await rm(join(f.root, "fail-startup"))
   await f.restart()
   await f.verifyZeroSurvivors()
+})
+
+test("a pending doorbell does not keep the Handler process alive", async () => {
+  const state = fileURLToPath(new URL("../src/live/state.js", import.meta.url)), started = Date.now()
+  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", `const { createLiveTable } = await import(${JSON.stringify(state)}); const table = createLiveTable(); void table.changed(table.version(), 60000)`], { timeout: 20000 })
+  assert.ok(Date.now() - started < 10000)
 })

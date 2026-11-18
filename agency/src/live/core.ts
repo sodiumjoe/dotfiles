@@ -456,6 +456,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     async verifyDischarged() { if (table.all().length || admissions.size) throw new AgentError("INCOMPLETE") },
     close() {
       closed = frozen = true
+      table.touch()
       permissions.close()
       for (const agent of table.all()) { agent.controller.abort(); agent.editor?.close(); agent.turns?.close(null); agent.owner?.dispose(); agent.conversation.close() }
     },

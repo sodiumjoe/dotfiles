@@ -1,5 +1,5 @@
 import type { HostEnrollment } from "./inventory.js"
-import type { RosterRow } from "../live/roster.js"
+import { parseRosterRow, type RosterRow } from "../live/roster.js"
 
 export type RemoteHost = { hostId: string; hostname: string; state: "connecting" | "online" | "offline" | "outdated"; since: number | null; handlerGeneration: string | null; agents: RosterRow[]; error: string | null }
 type Entry = { host: RemoteHost; stopped: boolean }
@@ -29,7 +29,9 @@ export function createRemoteRosters(input: {
         if (revision !== after || Date.now() - readAt >= refreshMs) {
           const list = await input.read(entry.host.hostId)
           if (gone(entry)) return
-          entry.host = { ...entry.host, handlerGeneration: list.handlerGeneration, agents: list.agents }
+          let agents: RosterRow[]
+          try { agents = list.agents.map(parseRosterRow) } catch { throw new Error("INVALID_HOST_REPLY") }
+          entry.host = { ...entry.host, handlerGeneration: list.handlerGeneration, agents }
           readAt = Date.now()
         }
         entry.host = { ...entry.host, state: "online", since: null, error: null }
