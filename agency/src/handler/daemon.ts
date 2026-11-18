@@ -4,7 +4,7 @@ import { id, keys, object, text } from "../config/validate.js"
 import { createHostInventory } from "../hosts/inventory.js"
 import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
 import { createRemoteRosters } from "../hosts/remote-rosters.js"
-import { createRemoteListing } from "../hosts/remote-listing.js"
+import { createRemoteListing, runPayListing } from "../hosts/remote-listing.js"
 import { createRemoteRequests } from "../hosts/remote-requests.js"
 import { connectBridge } from "../bridge/ssh.js"
 import { bridgeError } from "../bridge/protocol.js"
@@ -16,8 +16,7 @@ import { productionLaunchContracts, type LaunchContract } from "../agent/contrac
 import { randomUUID } from "node:crypto"
 import type { Duplex } from "node:stream"
 import type { Server, Socket } from "node:net"
-import { isDeepStrictEqual, promisify } from "node:util"
-import { execFile } from "node:child_process"
+import { isDeepStrictEqual } from "node:util"
 import { write } from "node:fs"
 import { createHandlerTermination, formatTerminationFailure } from "./termination.js"
 import { ControlError, PROTOCOL, errorReply, type HandlerStatus, type ControlRequest, type ControlReply } from "../control/protocol.js"
@@ -267,7 +266,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
         return { handlerGeneration: text(reply.handlerGeneration), agents: reply.agents as RosterRow[] }
       },
       listing: createRemoteListing({
-        run: async () => (await promisify(execFile)("pay", ["remote", "list", "-a", "--raw"], { timeout: 20000, killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024 })).stdout,
+        run: () => runPayListing(),
         onFailure: message => events.append({ type: "remote_listing_failed", message: message.slice(0, 512) }),
       }),
       forget: async hostId => { await inventory.forget(hostId); hosts.forget(hostId) },
