@@ -149,10 +149,9 @@ describe("Agency active-agent snapshot", function()
         local remote = row("agent-c")
         remote.display.title = string.rep("Long conversation title ", 8)
         local picker = open(local_controller({
-            read_remote_names = function(callback) callback({ ["qa-worker.example"] = "climate" }) end,
             read_roster = function(callback)
                 callback(nil, { state = "roster", localHostId = "local", hosts = { {
-                    hostId = "remote", hostname = "qa-worker.example", state = "available",
+                    hostId = "remote", hostname = "qa-worker.example", name = "climate", state = "available",
                     value = { agents = { remote }, issues = {}, handlerGeneration = "handler" },
                 } } })
             end,
@@ -186,10 +185,9 @@ describe("Agency active-agent snapshot", function()
 
     it("shows every unavailable host on its own row, labelled by name or short hostname", function()
         local picker = open(local_controller({
-            read_remote_names = function(callback) callback({ ["qa-worker.example"] = "climate" }) end,
             read_roster = function(callback)
                 callback(nil, { state = "roster", localHostId = "local", hosts = {
-                    { hostId = "remote", hostname = "qa-worker.example", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
+                    { hostId = "remote", hostname = "qa-worker.example", name = "climate", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
                     { hostId = "unknown-a", hostname = "unmatched-a.example", state = "unavailable", code = "UPDATE_REQUIRED" },
                     { hostId = "unknown-b", hostname = "qa-mydev--0c3af4af6e78de0a3.northwest.stripe.io", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
                     { hostId = "owner", hostname = "qa-worker.example", state = "available", value = {
@@ -220,11 +218,10 @@ describe("Agency active-agent snapshot", function()
 
     it("tells an outdated devbox from one that is still connecting", function()
         local picker = open(local_controller({
-            read_remote_names = function(callback) callback({ ["old.example"] = "old", ["new.example"] = "new" }) end,
             read_roster = function(callback)
                 callback(nil, { state = "roster", localHostId = vim.NIL, hosts = {
-                    { hostId = "old", hostname = "old.example", state = "unavailable", code = "UPDATE_REQUIRED" },
-                    { hostId = "new", hostname = "new.example", state = "unavailable", code = "CONNECTING" },
+                    { hostId = "old", hostname = "old.example", name = "old", state = "unavailable", code = "UPDATE_REQUIRED" },
+                    { hostId = "new", hostname = "new.example", name = "new", state = "unavailable", code = "CONNECTING" },
                 } })
             end,
         }))
@@ -241,10 +238,9 @@ describe("Agency active-agent snapshot", function()
             remote.record.settings = { configValues = { model = "gpt-6.1-sol" } }
             remote.display = { title = string.rep("界面🙂 long title ", 12) .. "uniquetitlesuffix", activity = "working" }
             local picker = open(local_controller({
-                read_remote_names = function(callback) callback({ ["qa-worker.example"] = "stripelet-loading-migrations-production" }) end,
                 read_roster = function(callback)
                     callback(nil, { state = "roster", localHostId = "local", hosts = { {
-                        hostId = "remote", hostname = "qa-worker.example", state = "available",
+                        hostId = "remote", hostname = "qa-worker.example", name = "stripelet-loading-migrations-production", state = "available",
                         value = { agents = { remote }, issues = {}, handlerGeneration = "handler" },
                     } } })
                 end,
@@ -280,7 +276,6 @@ describe("Agency active-agent snapshot", function()
             local local_read
             local picker = open(local_controller({
                 page = function(_, callback) local_read = callback end,
-                read_remote_names = function(callback) callback({}) end,
                 read_roster = function(callback)
                     callback(nil, { state = "roster", localHostId = "local", hosts = { {
                         hostId = "unknown", hostname = "needle.example", state = "unavailable", code = "BRIDGE_EOF",
@@ -310,7 +305,6 @@ describe("Agency active-agent snapshot", function()
 
     it("labels an unnamed reachable remote with its short hostname and keeps it attachable", function()
         local picker = open(local_controller({
-            read_remote_names = function(callback) callback({}) end,
             read_roster = function(callback)
                 callback(nil, { state = "roster", localHostId = "local", hosts = { {
                     hostId = "unknown", hostname = "unmatched.example", state = "available",
@@ -334,77 +328,53 @@ describe("Agency active-agent snapshot", function()
         assert.is_truthy(current:current().text:find("agent-a · Codex", 1, true))
     end)
 
-    for _, first in ipairs({ "names", "owners" }) do
-        it("adds labeled remotes after showing locals with " .. first .. " first", function()
-            local name_read, owner_read, calls = nil, nil, 0
-            local picker = open(local_controller({
-                read_remote_names = function(callback) calls = calls + 1; name_read = callback end,
-                read_roster = function(callback) owner_read = callback end,
-            }))
-            local owners = { state = "roster", localHostId = "local", hosts = { {
-                hostId = "remote", hostname = "qa-worker.example", state = "available",
-                value = { agents = { row("agent-c") }, issues = {}, handlerGeneration = "handler" },
-            } } }
-            settle(picker, 2)
-            if first == "names" then name_read({ ["qa-worker.example"] = "climate" }) else owner_read(nil, owners) end
-            settle(picker, 2)
-            if first == "names" then owner_read(nil, owners) else name_read({ ["qa-worker.example"] = "climate" }) end
-            settle(picker, 3)
-            assert.is_truthy(picker.list:get(3).text:find("climate", 1, true))
-            assert.are.equal(1, calls)
-        end)
-    end
-
-    it("ignores remote name completion after the picker closes", function()
-        local name_read
+    it("adds labeled remotes after showing locals", function()
+        local owner_read
         local picker = open(local_controller({
-            read_remote_names = function(callback) name_read = callback end,
-            read_roster = function(callback) callback(nil, { state = "roster", localHostId = "local", hosts = {} }) end,
+            read_roster = function(callback) owner_read = callback end,
         }))
         settle(picker, 2)
-        picker:close()
-        assert.is_function(name_read)
-        name_read({ ["qa-worker.example"] = "climate" })
-        assert.are.equal(2, #picker.opts.items)
+        owner_read(nil, { state = "roster", localHostId = "local", hosts = { {
+            hostId = "remote", hostname = "qa-worker.example", name = "climate", state = "available",
+            value = { agents = { row("agent-c") }, issues = {}, handlerGeneration = "handler" },
+        } } })
+        settle(picker, 3)
+        assert.is_truthy(picker.list:get(3).text:find("climate", 1, true))
     end)
 
     local function delayed_roster(remote)
         return { state = "roster", localHostId = "local", hosts = {
-            { hostId = "remote", hostname = "qa-worker.example", state = "available",
+            { hostId = "remote", hostname = "qa-worker.example", name = "climate", state = "available",
                 value = { agents = { remote or row("agent-c") }, issues = {}, handlerGeneration = "handler" } },
             { hostId = "offline", hostname = "unmatched.example", state = "unavailable", code = "BRIDGE_EOF" },
         } }
     end
 
-    for _, order in ipairs({ "local,names,owners", "local,owners,names", "names,local,owners",
-        "owners,local,names", "names,owners,local", "owners,names,local" }) do
+    for _, order in ipairs({ "local,owners", "owners,local" }) do
         it("shows locals promptly and reads each source once with " .. order, function()
             local callbacks, calls, arrived = {}, {}, {}
             local picker = open({
                 page = function(_, callback) callbacks.local_read = callback; calls.local_read = (calls.local_read or 0) + 1 end,
                 read_roster = function(callback) callbacks.owners = callback; calls.owners = (calls.owners or 0) + 1 end,
-                read_remote_names = function(callback) callbacks.names = callback; calls.names = (calls.names or 0) + 1 end,
             })
             for _, name in ipairs(vim.split(order, ",")) do
                 arrived[name] = true
                 if name == "local" then
                     callbacks.local_read(nil, { agents = { row("agent-a"), row("agent-b") }, issues = {}, handlerGeneration = "handler" })
-                elseif name == "names" then callbacks.names({ ["qa-worker.example"] = "climate" })
                 else callbacks.owners(nil, delayed_roster()) end
-                if arrived["local"] then settle(picker, arrived.names and arrived.owners and 4 or 2)
+                if arrived["local"] then settle(picker, arrived.owners and 4 or 2)
                 else assert.are.equal(0, picker:count()) end
             end
-            assert.are.same({ local_read = 1, owners = 1, names = 1 }, calls)
+            assert.are.same({ local_read = 1, owners = 1 }, calls)
             assert.are.equal("climate", picker.list:get(3).label)
             assert.are.equal("remote", picker.list:get(3).remote_ref.hostId)
         end)
     end
 
     it("attaches a local row while remote reads are pending and ignores results after close", function()
-        local owner_read, name_read, attached = nil, nil, {}
+        local owner_read, attached = nil, {}
         local picker = open(local_controller({
             read_roster = function(callback) owner_read = callback end,
-            read_remote_names = function(callback) name_read = callback end,
             attach = function(id, _, selected) attached[#attached + 1] = { id = id, row = selected } end,
         }))
         settle(picker, 2)
@@ -412,7 +382,6 @@ describe("Agency active-agent snapshot", function()
         picker.opts.confirm(picker, picker:current())
         assert.is_true(vim.wait(1000, function() return #attached == 1 end))
         owner_read(nil, delayed_roster())
-        name_read({ ["qa-worker.example"] = "climate" })
         assert.are.equal(2, #picker.opts.items)
         assert.are.equal("agent-b", attached[1].id)
         assert.are.same(row("agent-b"), attached[1].row)
@@ -427,7 +396,6 @@ describe("Agency active-agent snapshot", function()
                 local picker = open(local_controller({
                     page = function(_, callback) local_read = callback end,
                     read_roster = function(callback) owner_read = callback end,
-                    read_remote_names = function(callback) callback({ ["qa-worker.example"] = "climate" }) end,
                     stop = function(selected) stopped[#stopped + 1] = selected end,
                 }))
                 picker.list.reverse = reverse

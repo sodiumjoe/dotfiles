@@ -130,11 +130,10 @@ end
 
 function M.open(controller)
     local base = "Agency active agents"
-    local read_names = controller.read_roster and controller.read_remote_names
     local closed, local_pending, published = false, true, false
-    local remote_pending = (controller.read_roster and 1 or 0) + (read_names and 1 or 0)
+    local remote_pending = controller.read_roster and 1 or 0
     local picker, roster, unavailable, local_generation, publication
-    local local_rows, local_issues, names = {}, {}, {}
+    local local_rows, local_issues = {}, {}
     local function progress() List.loading(picker, base, local_pending or remote_pending > 0) end
     local function render()
         progress()
@@ -156,7 +155,7 @@ function M.open(controller)
         if remote_pending == 0 and roster then
             for _, host in ipairs(roster.hosts) do
                 local is_local = host.hostId == roster.localHostId
-                local name = is_local and "local" or names[host.hostname] or short(host.hostname)
+                local name = is_local and "local" or host.name or short(host.hostname)
                 if host.state == "unavailable" then
                     local message = host.code == "OFFLINE" and host.since and "Offline since " .. os.date("%H:%M", math.floor(host.since / 1000))
                         or ({ UPDATE_REQUIRED = "Update this devbox", CONNECTING = "Connecting" })[host.code] or "Unavailable"
@@ -276,14 +275,6 @@ function M.open(controller)
     progress()
     load_local()
     load_owners()
-    if read_names then
-        read_names(function(result)
-            if closed then return end
-            names = result or {}
-            remote_pending = remote_pending - 1
-            render()
-        end)
-    end
     return picker
 end
 

@@ -61,7 +61,6 @@ function M.setup(deps)
         new_session = create, confirm_stop = deps.confirm_stop })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
-    api.read_remote_names = deps.remote_names or require("sodium.agency.remote_names").read
     api.read_roster = deps.roster or function(callback)
         local Roster = require("sodium.agency.roster")
         ;(deps.request or Roster.request)("agency/remotes", vim.empty_dict(), function(err, envelope)

@@ -101,8 +101,8 @@ describe("Agency native commands", function()
             title = "remote work", lastActivityAt = vim.NIL, live = { activity = "idle", handlerGeneration = "00000000-0000-4000-8000-000000000032",
                 providerGeneration = "00000000-0000-4000-8000-000000000033", model = vim.NIL, mode = vim.NIL } }
         f.client:_handle_message({ id = f.request("agency/remotes").id, result = { hosts = {
-            { hostId = string.rep("b", 64), hostname = "beta.example", state = "online", handlerGeneration = live.live.handlerGeneration, agents = { live } },
-            { hostId = string.rep("c", 64), hostname = "gamma.example", state = "offline", since = 1763349120000, handlerGeneration = vim.NIL, agents = {}, error = "BRIDGE_EOF" },
+            { hostId = string.rep("b", 64), hostname = "beta.example", name = "beta", state = "online", handlerGeneration = live.live.handlerGeneration, agents = { live } },
+            { hostId = string.rep("c", 64), hostname = "gamma.example", name = vim.NIL, state = "offline", since = 1763349120000, handlerGeneration = vim.NIL, agents = {}, error = "BRIDGE_EOF" },
         } } })
         assert.is_true(vim.wait(1000, function() return outcome ~= nil end))
         assert.is_nil(outcome.err)
@@ -110,6 +110,7 @@ describe("Agency native commands", function()
         assert.are.same({ "available", live.live.handlerGeneration, 1 }, { online.state, online.value.handlerGeneration, #online.value.agents })
         assert.are.equal(string.rep("b", 64), online.value.agents[1].record.definition.hostId)
         assert.are.same({ "unavailable", "OFFLINE", 1763349120000 }, { offline.state, offline.code, offline.since })
+        assert.are.same({ "beta" }, { online.name, offline.name })
     end)
 
     local function fake_requests()
