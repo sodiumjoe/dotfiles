@@ -202,3 +202,28 @@ test("the editor reads the laptop's remote rosters over its connection", async t
   assert.deepEqual(await c.request("agency/remotes", {}), { hosts: [] })
   await f.verifyZeroSurvivors()
 })
+
+test("the editor previews, approves and enters through the laptop Handler's own host", async t => {
+  const f = await liveHandlerFixture(t), a = await f.connect(), c = await f.connect()
+  await a.request("initialize", initialize); await c.request("initialize", initialize)
+  const hostId = f.paths.hostKey
+  const created = await a.request("session/new", { cwd: f.workspace, mcpServers: [] }), sessionId = String(created.sessionId), agentId = sessionId.slice(7)
+  await a.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "hello" }] })
+  assert.deepEqual((await c.request("agency/excerpt", { agentId, hostId })).turns, [{ role: "user", text: "hello" }, { role: "agent", text: "answer:hello" }])
+  const pending = a.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "permission" }] })
+  await a.next("session/request_permission")
+  const approvals = await until(async () => { const value = await c.request("agency/approvals", {}); return (value.pending as JsonObject[]).length ? value : undefined })
+  assert.equal(((approvals.hosts as JsonObject[])[0] as JsonObject).state, "available")
+  const offer = (approvals.pending as JsonObject[])[0] as JsonObject, optionId = String(((offer.options as JsonObject[])[0] as JsonObject).optionId)
+  assert.equal(((await c.request("agency/decide", { ref: offer.ref as JsonObject, optionId })).receipt as JsonObject).state, "applied")
+  assert.equal(((await c.request("agency/decide", { ref: offer.ref as JsonObject, optionId })).receipt as JsonObject).state, "withdrawn")
+  await pending
+  const live = (await f.agents()).find(row => row.agentId === agentId)!.live!
+  const target = { agentId, handlerGeneration: live.handlerGeneration, providerGeneration: live.providerGeneration }
+  const entry = await c.request("agency/entry", { commandId: randomUUID(), hostId, target })
+  assert.deepEqual([(entry.receipt as JsonObject).state, (entry.enrollment as JsonObject).hostId], ["opened", hostId])
+  await f.stop(agentId)
+  assert.equal(((await c.request("agency/entry", { commandId: randomUUID(), hostId, target })).receipt as JsonObject).state, "stale")
+  await assert.rejects(c.request("agency/excerpt", { agentId, hostId: "c".repeat(64) }), (error: { data?: { agency?: { code?: string } } }) => error.data?.agency?.code === "UNAVAILABLE")
+  await f.verifyZeroSurvivors()
+})

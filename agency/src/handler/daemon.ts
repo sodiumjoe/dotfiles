@@ -5,6 +5,7 @@ import { id, keys, object, text } from "../config/validate.js"
 import { createHostInventory } from "../hosts/inventory.js"
 import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
 import { createRemoteRosters } from "../hosts/remote-rosters.js"
+import { createRemoteRequests } from "../hosts/remote-requests.js"
 import { connectBridge } from "../bridge/ssh.js"
 import { bridgeError } from "../bridge/protocol.js"
 import { createHandlerBridge, type HandlerBridge } from "../bridge/server.js"
@@ -260,7 +261,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     })
     const coreBridge = bridge
     const inventory = createHostInventory(root)
-    router = createHostRouter({ hostId: options.paths.hostKey, inventory, local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["runtime-read", "host-identity"] }) })
+    router = createHostRouter({ hostId: options.paths.hostKey, inventory, local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["live-read", "live-wait"] }) })
     registerHostRouter({ bridge, router, hostId: options.paths.hostKey, handlerGeneration: options.generation })
     const hosts = router
     remotes = createRemoteRosters({
@@ -273,9 +274,10 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       },
     })
     const remoteHosts = remotes
+    const remoteRequests = createRemoteRequests({ hostId: options.paths.hostKey, hosts: () => remoteHosts.hosts(), request: (route, signal, timeoutMs) => hosts.request(route, signal, timeoutMs) })
     const liveCore = core
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), handlerGeneration: options.generation, onError: rejectClosed,
-      router: connection => createLiveRouter({ core: liveCore, remotes: () => remoteHosts.hosts(), ...connection }) })
+      router: connection => createLiveRouter({ core: liveCore, remotes: () => remoteHosts.hosts(), requests: remoteRequests, ...connection }) })
     if (termination || closing) await acpServer.close()
     checkStartup()
     current = { ...current, phase: "ready", reconciliation: { classified: 0, total: 0, quarantined: 0 } }

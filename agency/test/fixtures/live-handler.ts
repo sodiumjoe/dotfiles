@@ -1,6 +1,7 @@
 import { fixtureSpawner, finishFixtureSource } from "./fixture-spawn.js"
 import type { spawn } from "node:child_process"
 import { readFile, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import { dirname, join } from "node:path"
 import { Socket } from "node:net"
 import { runHandler } from "../../src/handler/daemon.js"
@@ -24,6 +25,7 @@ const unverifiedCleanup = (owner: ReturnType<typeof createAgentProcess>): Return
 try {
   await runHandler({ paths: config.paths, adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(), recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }),
+    entryDriver: (() => { const opened = new Set<string>(), editor = { editorId: randomUUID(), session: "fixture", pane: "%1", tmuxSocketPath: join(root, "tmux.sock") }; return { ensure: async (ref: { target: { agentId: string } }) => { opened.add(ref.target.agentId); return editor }, activate: async () => {}, inspect: async (ref: { target: { agentId: string } }) => opened.has(ref.target.agentId) ? editor : null } })(),
     onPhase: async () => { if (await readFile(join(root, "fail-startup"), "utf8").then(() => true, () => false)) throw new Error("fixture startup failure") },
     launchContracts: [{ ...contract, promptCapabilities: { image: true, audio: false, embeddedContext: true } }, { ...contract, providerId: "claude-agent-acp", adapterPackage: "@agentclientprotocol/claude-agent-acp", sdkVersion: "0.3.232", promptCapabilities: { image: false, audio: false, embeddedContext: true } }],
     liveDependencies: { processFactory: options => unverifiedCleanup(createAgentProcess(options, { spawn: ((file, argv, settings) => spawnFixture("agent-provider/" + options.spec.launchAttemptId, file, argv ?? [], settings ?? {})) as typeof spawn })),

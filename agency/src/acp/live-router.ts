@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto"
 import { cloneWireJson } from "./wire-json.js"
-import { absolutePath, id, object, providerId } from "../config/validate.js"
+import { absolutePath, hash, id, object, providerId } from "../config/validate.js"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "../agent/environment.js"
 import { parseRequestedSettings, type JsonObject, type SessionConfiguration } from "../agent/session-config.js"
 import { validateStructuredContent } from "../agent/session-events.js"
 import type { ConversationNotification, RetainedEvent } from "../agent/conversation.js"
 import { sessionInputs } from "../agent/session-inputs.js"
-import { AgentError, ProviderRequestError, type AgentTuple } from "../agent/types.js"
+import { AgentError, ProviderRequestError, parseTuple, type AgentTuple } from "../agent/types.js"
 import type { LiveCore, LiveObservation } from "../live/core.js"
 import type { RemoteHost } from "../hosts/remote-rosters.js"
+import type { RemoteRequests } from "../hosts/remote-requests.js"
+import { parsePermissionRef } from "../agent/permission-types.js"
 import { RequestError, requestFailure } from "../live/errors.js"
 import { AcpError, parseAcpFrame, parseAgencyMeta, parseLogicalSessionId, type RpcId } from "./protocol.js"
 
@@ -23,7 +25,7 @@ export function liveAcpError(requestId: RpcId | null, error: unknown): JsonObjec
   return { jsonrpc: "2.0", id: requestId, error: { code: -32000, message: failure.message, data: { agency: failure } } }
 }
 
-export function createLiveRouter(input: { core: LiveCore; remotes?: () => RemoteHost[]; connectionId: string; send(frame: JsonObject): void; environment?: LaunchEnvironment }): { receive(frame: JsonObject): Promise<void>; close(): void } {
+export function createLiveRouter(input: { core: LiveCore; remotes?: () => RemoteHost[]; requests?: RemoteRequests; connectionId: string; send(frame: JsonObject): void; environment?: LaunchEnvironment }): { receive(frame: JsonObject): Promise<void>; close(): void } {
   const { core } = input, bindings = new Map<string, Binding>(), pending = new Map<RpcId, symbol>(), loads = new Map<string, symbol>()
   let initialized = false, closed = false
   const send = (frame: JsonObject): void => { if (!closed) input.send(frame) }
@@ -110,6 +112,7 @@ export function createLiveRouter(input: { core: LiveCore; remotes?: () => Remote
       throw error
     }
   }
+  const remote = (): RemoteRequests => input.requests ?? (() => { throw new RequestError("UNAVAILABLE", "remote requests are unavailable") })()
   async function dispatch(method: string, params: JsonObject, pinnedCancel: string | null): Promise<JsonObject> {
     if (method === "initialize") {
       if (initialized) throw new AcpError(-32600, "Already initialized")
@@ -129,7 +132,18 @@ export function createLiveRouter(input: { core: LiveCore; remotes?: () => Remote
     if (method === "agency/excerpt") {
       const agentId = checked(() => id(params.agentId)), turns = params.turns ?? 4
       if (typeof turns !== "number" || !Number.isInteger(turns) || turns < 1 || turns > 8) throw new RequestError("INVALID", "turns must be an integer from 1 to 8")
-      return json(await core.excerpt(agentId, turns))
+      if (params.hostId === undefined) return json(await core.excerpt(agentId, turns))
+      return json(await remote().excerpt(checked(() => hash(params.hostId)), agentId, turns))
+    }
+    if (method === "agency/approvals") return json(await remote().approvals())
+    if (method === "agency/decide") {
+      const ref = checked(() => parsePermissionRef(params.ref))
+      if (typeof params.optionId !== "string" || !params.optionId) throw new AcpError(-32602, "Invalid parameters")
+      return json(await remote().decide(ref, params.optionId))
+    }
+    if (method === "agency/entry") {
+      const commandId = checked(() => id(params.commandId)), hostId = checked(() => hash(params.hostId)), target = checked(() => parseTuple(params.target))
+      return json(await remote().entry(commandId, hostId, target))
     }
     if (method === "agency/stop") return json({ state: "agent", agent: await core.stop(checked(() => id(params.agentId))) })
     if (method === "agency/detach") {
