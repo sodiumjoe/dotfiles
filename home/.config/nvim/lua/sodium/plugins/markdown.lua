@@ -93,8 +93,8 @@ local function attach_wrapped_rows_to_table(buf, rm_ns)
         return a.id < b.id
     end)
     for _, move in ipairs(moves) do
-        vim.api.nvim_buf_del_extmark(buf, rm_ns, move.id)
         vim.api.nvim_buf_set_extmark(buf, rm_ns, move.anchor, 0, {
+            id = move.id,
             virt_lines = move.details.virt_lines,
             virt_lines_leftcol = move.details.virt_lines_leftcol,
             priority = move.details.priority,

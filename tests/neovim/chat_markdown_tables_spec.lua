@@ -28,7 +28,9 @@ describe("Chat tables", function()
     end
     local function row_of(text)
         for index, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
-            if line == text then return index - 1 end
+            if line == text then
+                return index - 1
+            end
         end
         error("missing chat line: " .. text)
     end
@@ -40,7 +42,9 @@ describe("Chat tables", function()
         for _, mark in ipairs(marks(first, last)) do
             for _, line in ipairs(mark[4].virt_lines or {}) do
                 local parts = {}
-                for _, chunk in ipairs(line) do parts[#parts + 1] = chunk[1] end
+                for _, chunk in ipairs(line) do
+                    parts[#parts + 1] = chunk[1]
+                end
                 out[#out + 1] = { row = mark[2], text = table.concat(parts) }
             end
         end
@@ -51,7 +55,9 @@ describe("Chat tables", function()
         say("Notes:\n\n| Key | Notes |\n|---|---|\n" .. long_row .. "\n| short | ok |\n\n")
         render()
         local row = row_of(long_row)
-        local concealed = vim.tbl_filter(function(mark) return mark[4].conceal_lines end, marks(row, row))
+        local concealed = vim.tbl_filter(function(mark)
+            return mark[4].conceal_lines
+        end, marks(row, row))
         assert.are.equal(1, #concealed)
         local text = {}
         for _, line in ipairs(wrapped_lines(row - 1, row)) do
@@ -64,17 +70,44 @@ describe("Chat tables", function()
         assert.is_truthy(table.concat(text, "\n"):find("keeps going", 1, true))
     end)
 
+    it("keeps one copy of a wrapped row after the cursor passes over it", function()
+        say("Notes:\n\n| Key | Notes |\n|---|---|\n| short | ok |\n" .. long_row .. "\n\nAfter the table.\n")
+        render()
+        local row = row_of(long_row)
+        local before = #wrapped_lines(0, -1)
+        vim.api.nvim_set_current_win(win)
+        for _ = 1, 3 do
+            vim.api.nvim_win_set_cursor(win, { row + 1, 0 })
+            require("render-markdown.api").render({ buf = buf, win = win, force = false, event = "CursorMoved" })
+            f.flush()
+            vim.api.nvim_win_set_cursor(win, { row_of("After the table.") + 1, 0 })
+            require("render-markdown.api").render({ buf = buf, win = win, force = false, event = "CursorMoved" })
+            f.flush()
+        end
+        assert.are.equal(before, #wrapped_lines(0, -1))
+    end)
+
     it("leaves a table inside a tool block as raw text", function()
-        writer:write_tool_call_block({ tool_call_id = "table", kind = "execute", argument = "cat table.md", status = "completed",
-            body = { "| a | b |", "|---|---|", "| 1 | 2 |" } })
+        writer:write_tool_call_block({
+            tool_call_id = "table",
+            kind = "execute",
+            argument = "cat table.md",
+            status = "completed",
+            body = { "| a | b |", "|---|---|", "| 1 | 2 |" },
+        })
         render()
         local header = row_of("| a | b |")
         assert.are.same({}, marks(header, header + 2))
     end)
 
     it("folds a thinking block's wrapped last table row with the block", function()
-        writer:write_message_chunk({ sessionUpdate = "agent_thought_chunk", content = { type = "text",
-            text = "Thinking first.\n\n| Key | Notes |\n|---|---|\n" .. long_row .. "\n" } })
+        writer:write_message_chunk({
+            sessionUpdate = "agent_thought_chunk",
+            content = {
+                type = "text",
+                text = "Thinking first.\n\n| Key | Notes |\n|---|---|\n" .. long_row .. "\n",
+            },
+        })
         say("The answer.")
         render()
         local first, row = row_of("🧠 Thinking first."), row_of(long_row)
