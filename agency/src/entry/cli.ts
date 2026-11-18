@@ -9,6 +9,8 @@ import { hostArguments, openHostAccess } from "../hosts/cli.js"
 import { createHostRuntimeClient, RuntimeOutcomeUnknown } from "../hosts/runtime.js"
 import { HOST_PROTOCOL, parseHostReply, type HostResult } from "../hosts/protocol.js"
 import { parseEntryTarget, parseRuntimeEntry } from "./runtime.js"
+import type { PlatformPaths } from "../platform/paths.js"
+import type { HandlerInspection, PlatformAdapter } from "../platform/types.js"
 
 export async function runEntryClient(argv: readonly string[], deps: ControlDependencies): Promise<number> {
   const requestId = randomUUID()
@@ -47,20 +49,26 @@ export async function runEntryClient(argv: readonly string[], deps: ControlDepen
     return code === "USAGE" || code === "INPUT_TOO_LARGE" ? 64 : code === "OUTCOME_UNKNOWN" ? 75 : 69
   } finally { close?.() }
 }
-export async function runRuntimeEntryHelper(argv: readonly string[], deps: ControlDependencies, enter = (file: string, args: string[]) => new Promise<number>((resolve, reject) => {
+export type EntryHelperDependencies = {
+  environment(): Promise<{ paths: PlatformPaths; adapter: PlatformAdapter }>
+  inspect(env: { paths: PlatformPaths; adapter: PlatformAdapter }): Promise<HandlerInspection | null>
+  connect(input: { root: string; hostId: string; handlerGeneration: string }): Promise<{ request(channel: string, payload: unknown): Promise<unknown>; close(): void }>
+  stderr(value: string): void
+}
+export async function runRuntimeEntryHelper(argv: readonly string[], deps: EntryHelperDependencies, enter = (file: string, args: string[]) => new Promise<number>((resolve, reject) => {
   const child = spawn(file, args, { stdio: "inherit" }); child.once("error", reject); child.once("close", code => resolve(code ?? 75))
 })): Promise<number> {
   try {
     if (argv.length !== 3 || argv[1] !== "--target-json") return 64
     const commandId = id(argv[0]), ref = parseEntryTarget(JSON.parse(argv[2]!)), env = await deps.environment()
     if (env.paths.hostKey !== ref.hostId) return 69
-    let output = ""
-    const code = await runEntryClient(["entry", "inspect", commandId, "--host", env.paths.hostKey, "--json"], { ...deps, stdout: value => { output += value } })
-    if (code !== 0) return code
-    const reply = parseHostReply(JSON.parse(output))
-    if (!reply.ok || reply.result.state !== "entry") return 75
-    const receipt = reply.result.receipt
+    const inspection = await deps.inspect(env)
+    if (!inspection || inspection.disposition !== "live" || inspection.record.phase !== "ready") { deps.stderr("The Agency Handler is not running on this host\n"); return 69 }
+    const bridge = await deps.connect({ root: env.paths.runtimeRoot, hostId: env.paths.hostKey, handlerGeneration: inspection.record.generation })
+    let raw: unknown
+    try { raw = await bridge.request("runtime-entry-inspect", { commandId }) } finally { bridge.close() }
+    const receipt = raw === null ? null : parseRuntimeEntry(raw)
     if (!receipt || receipt.state !== "opened" || !receipt.editor || !isDeepStrictEqual(receipt.ref, ref)) return 75
     return await enter("tmux", ["-S", receipt.editor.tmuxSocketPath, "attach-session", "-t", "=" + receipt.editor.session])
-  } catch { deps.stderr("Entry outcome unavailable; inspect its owner and command\n"); return 75 }
+  } catch { deps.stderr("Entry outcome unavailable\n"); return 75 }
 }

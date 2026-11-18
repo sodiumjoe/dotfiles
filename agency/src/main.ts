@@ -5,8 +5,10 @@ if (process.argv[2] === "internal-runtime-bridge") {
   finally { process.exit() }
 } else if (process.argv[2] === "internal-runtime-entry") {
   const { runRuntimeEntryHelper } = await import("./entry/cli.js")
-  const { productionControlDependencies } = await import("./cli/control.js")
-  process.exitCode = await runRuntimeEntryHelper(process.argv.slice(3), productionControlDependencies())
+  const { productionEnvironment } = await import("./handler/environment.js")
+  const { inspectHandlerGeneration } = await import("./platform/singleton.js")
+  const { connectHandlerBridge } = await import("./bridge/handler-client.js")
+  process.exitCode = await runRuntimeEntryHelper(process.argv.slice(3), { environment: productionEnvironment, inspect: env => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter), connect: connectHandlerBridge, stderr: value => { process.stderr.write(value) } })
 } else if (process.argv[2] === "internal-handler") {
   try {
     const { fstatSync } = await import("node:fs")

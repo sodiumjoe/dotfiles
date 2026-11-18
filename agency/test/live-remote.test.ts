@@ -7,6 +7,9 @@ import { randomUUID } from "node:crypto"
 import { liveHandlerFixture } from "./live-support.js"
 import { until } from "./control-support.js"
 import { connectBridge } from "../src/bridge/ssh.js"
+import { connectHandlerBridge } from "../src/bridge/handler-client.js"
+import { runRuntimeEntryHelper } from "../src/entry/cli.js"
+import { inspectHandlerGeneration } from "../src/platform/singleton.js"
 import { runControl, productionControlDependencies } from "../src/cli/control.js"
 import { parseHostReply } from "../src/hosts/protocol.js"
 
@@ -121,5 +124,19 @@ test("a remote serves excerpts, approvals and decisions on the request channel",
   assert.ok(decided.ok)
   assert.deepEqual([decided.result.state, decided.result.receipt.state], ["permission", "stale"])
   await assert.rejects(transport.request("live-request", { op: "stop", agentId }))
+  transport.close(); await transport.closed; await f.verifyZeroSurvivors()
+})
+
+test("the devbox entry helper attaches through its own Handler's bridge", { timeout: 60000 }, async t => {
+  const { f, transport } = await remote(t), started = await f.start(), handler = await f.handler()
+  const ref = { hostId: f.paths.hostKey, target: { agentId: started.agentId, handlerGeneration: handler.generation, providerGeneration: started.live!.providerGeneration } }
+  const commandId = randomUUID()
+  assert.equal((await transport.request("entry-open", { commandId, ref }) as { state: string }).state, "opened")
+  const attached: string[][] = []
+  const deps = { environment: async () => ({ paths: f.paths, adapter: f.adapter }), inspect: (env: { paths: typeof f.paths; adapter: typeof f.adapter }) => inspectHandlerGeneration(env.paths.runtimeRoot, env.adapter), connect: connectHandlerBridge, stderr: () => {} }
+  assert.equal(await runRuntimeEntryHelper([commandId, "--target-json", JSON.stringify(ref)], deps, async (file, args) => { attached.push([file, ...args]); return 0 }), 0)
+  assert.equal(attached[0]?.[0], "tmux")
+  const other = { ...ref, target: { ...ref.target, providerGeneration: randomUUID() } }
+  assert.equal(await runRuntimeEntryHelper([commandId, "--target-json", JSON.stringify(other)], deps, async () => 0), 75)
   transport.close(); await transport.closed; await f.verifyZeroSurvivors()
 })
