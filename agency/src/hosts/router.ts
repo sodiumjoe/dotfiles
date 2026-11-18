@@ -7,7 +7,7 @@ import type { HostEnrollment } from "./inventory.js"
 
 export type HostRoute = { hostId: string; channel: string; payload: unknown }
 export type HostRouter = {
-  request(route: HostRoute, signal?: AbortSignal): Promise<unknown>
+  request(route: HostRoute, signal?: AbortSignal, timeoutMs?: number): Promise<unknown>
   fromRelay(route: HostRoute, signal?: AbortSignal): Promise<unknown>
   setRelay(send: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>): () => void
   close(): void
@@ -25,6 +25,7 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
   function connected(enrollment: HostEnrollment): Promise<BridgeTransport> {
     const prior = connections.get(enrollment.hostId)
     if (prior) return prior
+    if (closed) bridgeError("BRIDGE_CLOSED")
     const flight = input.connect(enrollment).then(transport => {
       if (closed) { transport.close(); bridgeError("BRIDGE_CLOSED") }
       const reads = createPagedReads((channel, payload, signal) => reverse(channel, payload, signal))
@@ -41,37 +42,45 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
     connections.set(enrollment.hostId, flight)
     return flight
   }
-  async function routeTo(raw: HostRoute, allowRelay: boolean, signal?: AbortSignal): Promise<unknown> {
+  async function routeTo(raw: HostRoute, allowRelay: boolean, signal?: AbortSignal, timeoutMs?: number): Promise<unknown> {
     if (closed || signal?.aborted) bridgeError("BRIDGE_CLOSED")
     const route = parseHostRoute(raw)
     if (route.hostId === input.hostId) return input.local(route.channel, route.payload, signal)
     const enrollment = (await input.inventory.list()).find(host => host.hostId === route.hostId)
     if (enrollment) {
       const transport = await connected(enrollment)
-      try { return await transport.request(route.channel, route.payload, { ...(isRoutedRead(route.channel) ? { timeoutMs: 10000 } : {}), ...(signal ? { signal } : {}) }) }
-      catch (error) { transport.close(); throw error }
+      return await transport.request(route.channel, route.payload, { ...(timeoutMs !== undefined ? { timeoutMs } : isRoutedRead(route.channel) ? { timeoutMs: 10000 } : {}), ...(signal ? { signal } : {}) })
     }
     if (allowRelay && relay) return relay(route, signal)
     return bridgeError("HOST_UNAVAILABLE")
   }
   return {
-    request: (route, signal) => routeTo(route, true, signal), fromRelay: (route, signal) => routeTo(route, false, signal),
+    request: (route, signal, timeoutMs) => routeTo(route, true, signal, timeoutMs), fromRelay: (route, signal) => routeTo(route, false, signal),
     setRelay(send) { if (relay || closed) bridgeError("RELAY_EXISTS"); relay = send; return () => { if (relay === send) relay = undefined } },
     close() { if (closed) return; closed = true; relay = undefined; for (const flight of connections.values()) void flight.then(transport => transport.close(), () => undefined); connections.clear() }
   }
 }
 export function registerHostRouter(input: { bridge: HandlerBridge; router: HostRouter; hostId: string; handlerGeneration: string }): () => void {
-  let owner: object | undefined
+  const owners: Array<{ peer: object; send(route: HostRoute, signal?: AbortSignal): Promise<unknown> }> = []
+  let remove: (() => void) | undefined
+  const relay = (route: HostRoute, signal?: AbortSignal) => {
+    const owner = owners.at(-1)
+    return owner ? owner.send(route, signal) : bridgeError("HOST_UNAVAILABLE")
+  }
   return input.bridge.register(["host-route", "host-route-read", "host-identity", "relay-register"], async ({ context, channel, payload, signal }) => {
     if (channel === "host-identity") { keys(object(payload), []); return { hostId: input.hostId, handlerGeneration: input.handlerGeneration } }
     if (channel === "relay-register") {
       keys(object(payload), [])
       if (context.source !== "peer") bridgeError("UNSUPPORTED_CAPABILITY")
-      if (owner) return { registered: false }
       const peer = context.peer
-      const remove = input.router.setRelay((route, signal) => requestBridgeRead(peer, isRoutedRead(route.channel) ? "host-route-read" : "host-route", route, { ...(signal ? { signal } : {}) }))
-      owner = peer
-      void peer.closed.then(() => { if (owner === peer) { owner = undefined; remove() } })
+      if (owners.some(owner => owner.peer === peer)) return { registered: true }
+      const owner = { peer, send: (route: HostRoute, signal?: AbortSignal) => requestBridgeRead(peer, isRoutedRead(route.channel) ? "host-route-read" : "host-route", route, { ...(signal ? { signal } : {}) }) }
+      owners.push(owner)
+      remove ??= input.router.setRelay(relay)
+      void peer.closed.then(() => {
+        owners.splice(owners.indexOf(owner), 1)
+        if (!owners.length) { remove?.(); remove = undefined }
+      })
       return { registered: true }
     }
     const route = parseHostRoute(payload)
