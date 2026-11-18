@@ -5,7 +5,7 @@ import type { RemoteHost } from "../src/hosts/remote-rosters.js"
 import type { HostRoute } from "../src/hosts/router.js"
 
 const own = "a".repeat(64), devbox = "b".repeat(64)
-const host = (state: RemoteHost["state"], since: number | null = null): RemoteHost => ({ hostId: devbox, hostname: "devbox.example", state, since, handlerGeneration: null, agents: [], error: null })
+const host = (state: RemoteHost["state"], since: number | null = null): RemoteHost => ({ hostId: devbox, hostname: "devbox.example", name: null, state, since, handlerGeneration: null, agents: [], error: null })
 const snapshot = (hostId: string) => ({ hostId, handlerGeneration: "g", throughSeq: 0, pending: [{ ref: { hostId }, title: "t" }], receipts: [] })
 
 function requests(remote: RemoteHost[], answer: (route: HostRoute, signal?: AbortSignal) => Promise<unknown>, timeouts?: { read: number; write: number }) {
