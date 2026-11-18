@@ -101,8 +101,12 @@ function M.current(agents, callback)
     })
 end
 
+local function short(hostname)
+    local first = hostname:match("^[^.]+") or hostname
+    return vim.fn.strchars(first) > 16 and vim.fn.strcharpart(first, 0, 16) .. "…" or first
+end
+
 local function owner_item(host, row, local_host, active, name)
-    name = name or "unnamed remote"
     local record, launch = row.record, row.record.launch
     if record.version ~= 3 or not launch or launch == vim.NIL then
         return diagnostic_item(name, "Unavailable session", row, { host })
@@ -112,7 +116,7 @@ local function owner_item(host, row, local_host, active, name)
     item.id = host.hostId .. ":" .. record.definition.agentId
     item.label = name
     item.text = "[" .. name .. "] · " .. item.search_text .. " · " .. item.status .. " · " .. host.hostname
-    if not local_host and name ~= "unnamed remote" then item.preview[#item.preview + 1] = "Remote: " .. name end
+    if not local_host then item.preview[#item.preview + 1] = "Remote: " .. name end
     vim.list_extend(item.preview, { "Host: " .. host.hostname, "Host ID: " .. host.hostId })
     if not local_host then
         item.owner, item.view = vim.deepcopy(row), nil
@@ -135,7 +139,7 @@ function M.open(controller)
     local function render()
         progress()
         if closed or local_pending or not picker or published and remote_pending > 0 then return end
-        local items, diagnostics, unlisted, active = {}, {}, {}, controller.snapshot()
+        local items, diagnostics, active = {}, {}, controller.snapshot()
         for _, row in ipairs(local_rows) do
             if row.record.version == 3
                 and (row.record.phase == "ready" and row.live or vim.tbl_contains({ "starting", "restoring", "stopping" }, row.record.phase))
@@ -152,14 +156,12 @@ function M.open(controller)
         if remote_pending == 0 and roster then
             for _, host in ipairs(roster.hosts) do
                 local is_local = host.hostId == roster.localHostId
-                local name = is_local and "local" or names[host.hostname]
+                local name = is_local and "local" or names[host.hostname] or short(host.hostname)
                 if host.state == "unavailable" then
-                    if not name then unlisted[#unlisted + 1] = host
-                    else
-                        local message = host.code == "OFFLINE" and host.since and "Offline since " .. os.date("%H:%M", math.floor(host.since / 1000))
-                            or ({ UPDATE_REQUIRED = "Update this devbox", CONNECTING = "Connecting" })[host.code] or "Unavailable"
-                        diagnostics[#diagnostics + 1] = diagnostic_item(name, message, host, { host }, "Offline")
-                    end
+                    local message = host.code == "OFFLINE" and host.since and "Offline since " .. os.date("%H:%M", math.floor(host.since / 1000))
+                        or ({ UPDATE_REQUIRED = "Update this devbox", CONNECTING = "Connecting" })[host.code] or "Unavailable"
+                    local status = ({ UPDATE_REQUIRED = "Outdated", CONNECTING = "Connecting" })[host.code] or "Offline"
+                    diagnostics[#diagnostics + 1] = diagnostic_item(name, message, host, { host }, status)
                 else
                     if not is_local or #local_rows == 0 then
                         for _, row in ipairs(host.value.agents) do
@@ -169,17 +171,11 @@ function M.open(controller)
                         end
                     end
                     for _, issue in ipairs(host.value.issues) do
-                        diagnostics[#diagnostics + 1] = diagnostic_item(name or "unnamed remote", issue.message, issue, { host })
+                        diagnostics[#diagnostics + 1] = diagnostic_item(name, issue.message, issue, { host })
                     end
                 end
             end
         elseif remote_pending == 0 and unavailable then diagnostics[#diagnostics + 1] = diagnostic_item("remotes", "Owner reads unavailable", { code = unavailable }) end
-        if #unlisted > 0 then
-            local message = #unlisted .. " saved host" .. (#unlisted == 1 and "" or "s") .. " unavailable"
-            local item = diagnostic_item("unlisted remotes", message, { hosts = unlisted }, unlisted, "Offline")
-            table.insert(item.preview, 4, "No friendly name was resolved for these saved hosts.")
-            diagnostics[#diagnostics + 1] = item
-        end
         List.order(items)
         local first_session = picker.list.reverse and #diagnostics + 1 or 1
         if picker.list.reverse then

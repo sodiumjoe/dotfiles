@@ -184,44 +184,38 @@ describe("Agency active-agent snapshot", function()
         picker.list:update({ force = true })
     end
 
-    it("groups unlisted host failures and retains each host diagnostic in the preview", function()
+    it("shows every unavailable host on its own row, labelled by name or short hostname", function()
         local picker = open(local_controller({
             read_remote_names = function(callback) callback({ ["qa-worker.example"] = "climate" }) end,
             read_roster = function(callback)
                 callback(nil, { state = "roster", localHostId = "local", hosts = {
                     { hostId = "remote", hostname = "qa-worker.example", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
-                    { hostId = "unknown-a", hostname = "unmatched-a.example", state = "unavailable", code = "BRIDGE_EOF" },
-                    { hostId = "unknown-b", hostname = "unmatched-b.example", state = "unavailable", code = "UNAVAILABLE" },
+                    { hostId = "unknown-a", hostname = "unmatched-a.example", state = "unavailable", code = "UPDATE_REQUIRED" },
+                    { hostId = "unknown-b", hostname = "qa-mydev--0c3af4af6e78de0a3.northwest.stripe.io", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
                     { hostId = "owner", hostname = "qa-worker.example", state = "available", value = {
                         agents = {}, issues = { { message = "Owner issue" } }, handlerGeneration = "handler",
                     } },
                 } })
             end,
         }))
-        settle(picker, 5)
-        resize(picker, 80)
-        local lines = rendered(picker)
-        local text = table.concat(lines, "\n")
+        settle(picker, 6)
         local offline = "Offline since " .. os.date("%H:%M", 1763349120)
-        assert.is_truthy(text:find("Offline since", 1, true))
-        assert.is_falsy(text:find("BRIDGE_EOF", 1, true))
-        assert.is_falsy(text:find("unmatched-a.example", 1, true))
-        assert.is_falsy(text:find("unmatched-b.example", 1, true))
-        local group, unavailable
+        local rows = {}
         for index = 1, picker:count() do
             local item = picker.list:get(index)
-            if item.title == offline then unavailable = item end
-            if item.preview and table.concat(item.preview, "\n"):find("unmatched-a.example", 1, true) then group = item end
+            rows[#rows + 1] = table.concat({ item.label, item.title, item.status }, "|")
         end
-        assert.is_table(group)
-        assert.is_table(unavailable)
-        assert.is_truthy(table.concat(unavailable.preview, "\n"):find("[climate]", 1, true))
-        local preview = table.concat(group.preview, "\n")
-        assert.is_truthy(preview:find("unmatched-b.example", 1, true))
-        assert.is_truthy(preview:find("BRIDGE_EOF", 1, true))
-        assert.is_truthy(preview:find("UNAVAILABLE", 1, true))
-        assert.is_nil(group.remote_ref)
-        assert.is_nil(group.view)
+        assert.is_true(vim.tbl_contains(rows, "climate|" .. offline .. "|Offline"))
+        assert.is_true(vim.tbl_contains(rows, "unmatched-a|Update this devbox|Outdated"))
+        assert.is_true(vim.tbl_contains(rows, "qa-mydev--0c3af4…|" .. offline .. "|Offline"))
+        resize(picker, 80)
+        local text = table.concat(rendered(picker), "\n")
+        assert.is_falsy(text:find("unmatched-a.example", 1, true))
+        assert.is_falsy(text:find("saved host", 1, true))
+        for index = 1, picker:count() do
+            local item = picker.list:get(index)
+            if item.label == "unmatched-a" then assert.is_truthy(table.concat(item.preview, "\n"):find("Host: unmatched-a.example", 1, true)) end
+        end
     end)
 
     it("tells an outdated devbox from one that is still connecting", function()
@@ -300,13 +294,13 @@ describe("Agency active-agent snapshot", function()
             settle(picker, 4)
             assert.are.equal("agent-a", picker:current().id)
             resize(picker, 80)
-            assert.is_truthy(rendered(picker)[4]:find("saved host", 1, true))
+            assert.is_truthy(rendered(picker)[4]:find("[needle]", 1, true))
             picker.input:set("'needle")
             picker:find({ refresh = false })
             settle(picker, 3)
             assert.is_true(vim.wait(1000, function() return picker:current().issue == nil end))
             picker.list:update({ force = true })
-            assert.is_truthy(rendered(picker)[3]:find("saved host", 1, true))
+            assert.is_truthy(rendered(picker)[3]:find("[needle]", 1, true))
             picker.input:set("'needle.example")
             picker:find({ refresh = false })
             settle(picker, 1)
@@ -314,7 +308,7 @@ describe("Agency active-agent snapshot", function()
         end)
     end
 
-    it("keeps an unnamed reachable remote attachable without putting its hostname in the rendered list", function()
+    it("labels an unnamed reachable remote with its short hostname and keeps it attachable", function()
         local picker = open(local_controller({
             read_remote_names = function(callback) callback({}) end,
             read_roster = function(callback)
@@ -326,6 +320,7 @@ describe("Agency active-agent snapshot", function()
         }))
         settle(picker, 3)
         assert.is_falsy(table.concat(rendered(picker), "\n"):find("unmatched.example", 1, true))
+        assert.is_truthy(table.concat(rendered(picker), "\n"):find("[unmatched]", 1, true))
         local item = picker.list:get(3)
         assert.is_truthy(table.concat(item.preview, "\n"):find("Host: unmatched.example", 1, true))
         assert.are.equal("unknown", item.remote_ref.hostId)
