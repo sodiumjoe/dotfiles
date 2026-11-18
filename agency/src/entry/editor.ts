@@ -25,7 +25,7 @@ export function createTmuxEditorMechanics(input: { runtimeRoot: string; run?: En
   async function owned(intent: EditorObservation): Promise<EditorReceipt | null> {
     const identity = entryEditorIdentity(intent.ref)
     if (!await exists(identity.session)) return null
-    if ((await tmux("show-options", "-qv", "-t", "=" + identity.session, "@agy-entry-identity")).trim() !== identity.digest) fail("EDITOR_IDENTITY_CHANGED")
+    if ((await tmux("show-options", "-qv", "-t", "=" + identity.session + ":", "@agy-entry-identity")).trim() !== identity.digest) fail("EDITOR_IDENTITY_CHANGED")
     const pane = (await tmux("list-panes", "-t", "=" + identity.session, "-F", "#{pane_id}")).trim()
     if (pane.includes("\n")) fail("EDITOR_IDENTITY_CHANGED")
     return parseEditorReceipt({ editorId: identity.editorId, session: identity.session, pane })
@@ -50,7 +50,7 @@ export function createTmuxEditorMechanics(input: { runtimeRoot: string; run?: En
       if (prior) return prior
       const identity = entryEditorIdentity(intent.ref)
       const pane = (await tmux("new-session", "-d", "-s", identity.session, "-P", "-F", "#{pane_id}", editor, "--listen", join(input.runtimeRoot, identity.socketName))).trim()
-      await tmux("set-option", "-t", "=" + identity.session, "@agy-entry-identity", identity.digest)
+      await tmux("set-option", "-t", "=" + identity.session + ":", "@agy-entry-identity", identity.digest)
       return parseEditorReceipt({ editorId: identity.editorId, session: identity.session, pane })
     },
     async activate(intent, receipt) {
