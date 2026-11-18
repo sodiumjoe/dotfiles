@@ -101,7 +101,7 @@ describe("Agency native commands", function()
             title = "remote work", lastActivityAt = vim.NIL, live = { activity = "idle", handlerGeneration = "00000000-0000-4000-8000-000000000032",
                 providerGeneration = "00000000-0000-4000-8000-000000000033", model = vim.NIL, mode = vim.NIL } }
         f.client:_handle_message({ id = f.request("agency/remotes").id, result = { hosts = {
-            { hostId = string.rep("b", 64), hostname = "beta.example", state = "online", since = vim.NIL, handlerGeneration = live.live.handlerGeneration, agents = { live }, error = vim.NIL },
+            { hostId = string.rep("b", 64), hostname = "beta.example", state = "online", handlerGeneration = live.live.handlerGeneration, agents = { live } },
             { hostId = string.rep("c", 64), hostname = "gamma.example", state = "offline", since = 1763349120000, handlerGeneration = vim.NIL, agents = {}, error = "BRIDGE_EOF" },
         } } })
         assert.is_true(vim.wait(1000, function() return outcome ~= nil end))
