@@ -73,6 +73,7 @@ Only configured, enabled, technically compatible backends are available. Codex a
 | `<leader>aD` | Add buffer diagnostics |
 | `<leader>ai` | Submit annotations |
 | `<leader>ar` | Agency saved-session picker |
+| `<leader>aR` | `AgencyReload` |
 | `<leader>ap` | Project file picker |
 
 Additional commands are `AgencyAttach <agent-id>`, `AgencyRestore <agent-id>`, `AgencyDetach`, `AgencyCancel`, and `AgencyInspect`. Current toggles the current native widget, selects exact-cwd live agents, or creates a default session when there are none. Starting agents and read failures do not count as none. New permits another agent in the same directory. Opening an already displayed logical session focuses its existing native manager; it does not create a competing subscriber. Different sessions can occupy different tabs on the same cached Agency client.

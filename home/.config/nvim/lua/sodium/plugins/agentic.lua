@@ -999,6 +999,12 @@ exec agy acp]] } } }
             desc = "Agency saved sessions",
         },
         {
+            "<leader>aR",
+            "<cmd>AgencyReload<cr>",
+            mode = { "n" },
+            desc = "Agency reload Handler",
+        },
+        {
             "<leader>ad",
             function()
                 require("sodium.agency").add_diagnostics("line")
