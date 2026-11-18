@@ -189,7 +189,7 @@ describe("Agency active-agent snapshot", function()
             read_remote_names = function(callback) callback({ ["qa-worker.example"] = "climate" }) end,
             read_roster = function(callback)
                 callback(nil, { state = "roster", localHostId = "local", hosts = {
-                    { hostId = "remote", hostname = "qa-worker.example", state = "unavailable", code = "BRIDGE_EOF" },
+                    { hostId = "remote", hostname = "qa-worker.example", state = "unavailable", code = "OFFLINE", since = 1763349120000 },
                     { hostId = "unknown-a", hostname = "unmatched-a.example", state = "unavailable", code = "BRIDGE_EOF" },
                     { hostId = "unknown-b", hostname = "unmatched-b.example", state = "unavailable", code = "UNAVAILABLE" },
                     { hostId = "owner", hostname = "qa-worker.example", state = "available", value = {
@@ -202,17 +202,19 @@ describe("Agency active-agent snapshot", function()
         resize(picker, 80)
         local lines = rendered(picker)
         local text = table.concat(lines, "\n")
-        assert.is_truthy(text:find("Connection closed", 1, true))
+        local offline = "Offline since " .. os.date("%H:%M", 1763349120)
+        assert.is_truthy(text:find("Offline since", 1, true))
         assert.is_falsy(text:find("BRIDGE_EOF", 1, true))
         assert.is_falsy(text:find("unmatched-a.example", 1, true))
         assert.is_falsy(text:find("unmatched-b.example", 1, true))
         local group, unavailable
         for index = 1, picker:count() do
             local item = picker.list:get(index)
-            if item.title == "Connection closed" then unavailable = item end
+            if item.title == offline then unavailable = item end
             if item.preview and table.concat(item.preview, "\n"):find("unmatched-a.example", 1, true) then group = item end
         end
         assert.is_table(group)
+        assert.is_table(unavailable)
         assert.is_truthy(table.concat(unavailable.preview, "\n"):find("[climate]", 1, true))
         local preview = table.concat(group.preview, "\n")
         assert.is_truthy(preview:find("unmatched-b.example", 1, true))
@@ -220,6 +222,23 @@ describe("Agency active-agent snapshot", function()
         assert.is_truthy(preview:find("UNAVAILABLE", 1, true))
         assert.is_nil(group.remote_ref)
         assert.is_nil(group.view)
+    end)
+
+    it("tells an outdated devbox from one that is still connecting", function()
+        local picker = open(local_controller({
+            read_remote_names = function(callback) callback({ ["old.example"] = "old", ["new.example"] = "new" }) end,
+            read_roster = function(callback)
+                callback(nil, { state = "roster", localHostId = vim.NIL, hosts = {
+                    { hostId = "old", hostname = "old.example", state = "unavailable", code = "UPDATE_REQUIRED" },
+                    { hostId = "new", hostname = "new.example", state = "unavailable", code = "CONNECTING" },
+                } })
+            end,
+        }))
+        settle(picker, 4)
+        local titles = {}
+        for index = 1, picker:count() do titles[#titles + 1] = picker.list:get(index).title end
+        assert.is_true(vim.tbl_contains(titles, "Update this devbox"))
+        assert.is_true(vim.tbl_contains(titles, "Connecting"))
     end)
 
     for _, width in ipairs({ 40, 80 }) do

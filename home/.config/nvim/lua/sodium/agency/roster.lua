@@ -20,7 +20,40 @@ local validators = {
         return result
     end,
 }
+validators["agency/remotes"] = function(result)
+    assert(type(result) == "table" and type(result.hosts) == "table" and vim.islist(result.hosts))
+    for _, host in ipairs(result.hosts) do
+        assert(type(host.hostId) == "string" and host.hostId:match("^%x+$") and #host.hostId == 64 and type(host.hostname) == "string")
+        assert(vim.tbl_contains({ "connecting", "online", "offline", "outdated" }, host.state))
+        assert(host.since == vim.NIL or type(host.since) == "number")
+        assert(type(host.agents) == "table" and vim.islist(host.agents))
+        for _, row in ipairs(host.agents) do Control.row(row) end
+    end
+    return result
+end
 M.validators = validators
+
+local codes = { connecting = "CONNECTING", offline = "OFFLINE", outdated = "UPDATE_REQUIRED" }
+
+function M.hosts(result)
+    local hosts = {}
+    for _, host in ipairs(result.hosts) do
+        if host.state == "online" then
+            local views = {}
+            for _, row in ipairs(host.agents) do
+                local view = Control.view(row)
+                view.record.definition.hostId = host.hostId
+                views[#views + 1] = view
+            end
+            hosts[#hosts + 1] = { hostId = host.hostId, hostname = host.hostname, state = "available",
+                value = { handlerGeneration = host.handlerGeneration, agents = views, issues = {} } }
+        else
+            hosts[#hosts + 1] = { hostId = host.hostId, hostname = host.hostname, state = "unavailable", code = codes[host.state],
+                since = host.since ~= vim.NIL and host.since or nil }
+        end
+    end
+    return { state = "roster", localHostId = vim.NIL, hosts = hosts }
+end
 
 function M.request(method, params, callback, opts)
     opts = opts or {}

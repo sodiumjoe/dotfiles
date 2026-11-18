@@ -156,7 +156,8 @@ function M.open(controller)
                 if host.state == "unavailable" then
                     if not name then unlisted[#unlisted + 1] = host
                     else
-                        local message = host.code == "BRIDGE_EOF" and "Connection closed" or "Unavailable"
+                        local message = host.code == "OFFLINE" and host.since and "Offline since " .. os.date("%H:%M", math.floor(host.since / 1000))
+                            or ({ UPDATE_REQUIRED = "Update this devbox", CONNECTING = "Connecting" })[host.code] or "Unavailable"
                         diagnostics[#diagnostics + 1] = diagnostic_item(name, message, host, { host }, "Offline")
                     end
                 else

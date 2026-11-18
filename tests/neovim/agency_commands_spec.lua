@@ -93,6 +93,25 @@ describe("Agency native commands", function()
         assert.are.equal("hello", outcome.result.turns[1].text)
     end)
 
+    it("reads remote rosters from the Handler in the picker's host shape", function()
+        local outcome
+        api.read_roster(function(err, roster) outcome = { err = err, roster = roster } end)
+        f.flush()
+        local live = { agentId = "00000000-0000-4000-8000-000000000031", backendId = "codex-acp", cwd = "/work/b", createdAt = "2026-11-17T00:00:00.000Z",
+            title = "remote work", lastActivityAt = vim.NIL, live = { activity = "idle", handlerGeneration = "00000000-0000-4000-8000-000000000032",
+                providerGeneration = "00000000-0000-4000-8000-000000000033", model = vim.NIL, mode = vim.NIL } }
+        f.client:_handle_message({ id = f.request("agency/remotes").id, result = { hosts = {
+            { hostId = string.rep("b", 64), hostname = "beta.example", state = "online", since = vim.NIL, handlerGeneration = live.live.handlerGeneration, agents = { live }, error = vim.NIL },
+            { hostId = string.rep("c", 64), hostname = "gamma.example", state = "offline", since = 1763349120000, handlerGeneration = vim.NIL, agents = {}, error = "BRIDGE_EOF" },
+        } } })
+        assert.is_true(vim.wait(1000, function() return outcome ~= nil end))
+        assert.is_nil(outcome.err)
+        local online, offline = outcome.roster.hosts[1], outcome.roster.hosts[2]
+        assert.are.same({ "available", live.live.handlerGeneration, 1 }, { online.state, online.value.handlerGeneration, #online.value.agents })
+        assert.are.equal(string.rep("b", 64), online.value.agents[1].record.definition.hostId)
+        assert.are.same({ "unavailable", "OFFLINE", 1763349120000 }, { offline.state, offline.code, offline.since })
+    end)
+
     it("names the request an older Handler does not serve", function()
         local outcome
         api.excerpt({ agentId = f.row.record.definition.agentId }, function(err) outcome = err end)

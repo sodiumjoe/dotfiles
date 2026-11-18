@@ -26,6 +26,7 @@ test("the editor's Lua validation accepts the real ACP roster, excerpt and stop 
     "agency/roster": JSON.stringify(await c.request("agency/roster", {})),
     "agency/excerpt": JSON.stringify(await c.request("agency/excerpt", { agentId })),
     "agency/stop": JSON.stringify(await c.request("agency/stop", { agentId: scratch.agentId })),
+    "agency/remotes": JSON.stringify(await c.request("agency/remotes", {})),
   }
   let restarted = ""
   const restartDeps = { ...productionControlDependencies(), environment: async () => ({ paths: f.paths, adapter: f.adapter }), cwd: () => f.workspace, stdout: (value: string) => { restarted += value }, stderr: () => {},

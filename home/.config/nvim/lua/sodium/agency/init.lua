@@ -63,9 +63,11 @@ function M.setup(deps)
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
     api.read_remote_names = deps.remote_names or require("sodium.agency.remote_names").read
     api.read_roster = deps.roster or function(callback)
-        (deps.client or require("sodium.agency.control")).command({ "roster", "list" }, { timeout_ms = 10000 }, function(err, envelope)
-            callback(err, envelope and envelope.result)
-        end)
+        local Roster = require("sodium.agency.roster")
+        ;(deps.request or Roster.request)("agency/remotes", vim.empty_dict(), function(err, envelope)
+            if err then callback(err); return end
+            callback(nil, Roster.hosts(envelope.result))
+        end, { timeout_ms = 10000 })
     end
     function api.excerpt(excerpt, callback)
         if excerpt.hostId then
