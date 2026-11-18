@@ -95,3 +95,12 @@ test("a remote serves its live agents and a change doorbell", { timeout: 60000 }
   await assert.rejects(transport.request("live-wait", { after: null, waitMs: 9000 }))
   transport.close(); await transport.closed; await f.verifyZeroSurvivors()
 })
+
+test("a bridge closes when the Handler behind it stops", { timeout: 60000 }, async t => {
+  const { f, transport } = await remote(t)
+  await f.stopHandler()
+  const closed = await Promise.race([transport.closed.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 10000))])
+  assert.ok(closed, "the bridge stayed open after its Handler stopped")
+  await f.restart()
+  await f.verifyZeroSurvivors()
+})

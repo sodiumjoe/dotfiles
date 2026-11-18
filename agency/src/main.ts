@@ -2,6 +2,7 @@ process.umask(0o077)
 if (process.argv[2] === "internal-runtime-bridge") {
   try { const { runRuntimeBridgeCli, productionRuntimeBridgeDependencies } = await import("./bridge/runtime-remote.js"); await runRuntimeBridgeCli(process.argv.slice(3), productionRuntimeBridgeDependencies()) }
   catch (error) { process.stderr.write(String(error) + "\n"); process.exitCode = 1 }
+  finally { process.exit() }
 } else if (process.argv[2] === "internal-runtime-entry") {
   const { runRuntimeEntryHelper } = await import("./entry/cli.js")
   const { productionControlDependencies } = await import("./cli/control.js")
