@@ -71,6 +71,37 @@ vim.api.nvim_create_autocmd("FileType", {
     end,
 })
 
+local function attach_wrapped_rows_to_table(buf, rm_ns)
+    local marks = vim.api.nvim_buf_get_extmarks(buf, rm_ns, 0, -1, { details = true })
+    local concealed, moves = {}, {}
+    for _, mark in ipairs(marks) do
+        if mark[4].conceal_lines then
+            concealed[mark[2]] = true
+        end
+    end
+    for _, mark in ipairs(marks) do
+        local row, details = mark[2], mark[4]
+        if details.virt_lines and details.virt_lines_above and concealed[row - 1] then
+            local anchor = row - 1
+            while anchor > 0 and concealed[anchor] do
+                anchor = anchor - 1
+            end
+            moves[#moves + 1] = { id = mark[1], anchor = anchor, details = details }
+        end
+    end
+    table.sort(moves, function(a, b)
+        return a.id < b.id
+    end)
+    for _, move in ipairs(moves) do
+        vim.api.nvim_buf_del_extmark(buf, rm_ns, move.id)
+        vim.api.nvim_buf_set_extmark(buf, rm_ns, move.anchor, 0, {
+            virt_lines = move.details.virt_lines,
+            virt_lines_leftcol = move.details.virt_lines_leftcol,
+            priority = move.details.priority,
+        })
+    end
+end
+
 vim.api.nvim_create_user_command("InterviewNote", function()
     local date = os.date("%Y-%m-%d")
     local vault = vim.fn.expand("~/stripe/work")
@@ -91,6 +122,11 @@ return {
         dependencies = { "nvim-treesitter/nvim-treesitter", "nvim-tree/nvim-web-devicons" },
         opts = {
             file_types = { "markdown", "AgenticChat" },
+            overrides = {
+                filetype = {
+                    AgenticChat = { pipe_table = { border_virtual = true } },
+                },
+            },
             ignore = function(buf)
                 local bt = vim.bo[buf].buftype
                 if bt == "" then
@@ -101,11 +137,6 @@ return {
                 end
                 return true
             end,
-            overrides = {
-                filetype = {
-                    AgenticChat = { pipe_table = { enabled = false } },
-                },
-            },
             on = {
                 render = function(ctx)
                     if vim.bo[ctx.buf].filetype ~= "AgenticChat" then
@@ -130,6 +161,9 @@ return {
                                 vim.api.nvim_buf_del_extmark(ctx.buf, rm_ns, mark[1])
                             end
                         end
+                    end
+                    if rm_ns then
+                        attach_wrapped_rows_to_table(ctx.buf, rm_ns)
                     end
                     local diff_ns = all_ns["agentic_diff_highlights"]
                     if diff_ns then

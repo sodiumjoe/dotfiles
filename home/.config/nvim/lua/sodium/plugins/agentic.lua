@@ -924,7 +924,6 @@ exec agy acp]] } } }
         })
 
         require("sodium.agentic_folds").install()
-        require("sodium.chat_tables").setup()
         require("sodium.agency.agentic").install()
         require("sodium.agency").setup()
 
