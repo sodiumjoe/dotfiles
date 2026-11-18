@@ -91,7 +91,7 @@ Native code selections, file references, and diagnostics own context capture. St
 
 Both pickers open at once and show "(loading…)" in the title until their data arrives. `<leader>af` lists running agents on this machine and on enrolled devboxes. `<leader>ar` lists the stopped local agents in the index. When there are none, the restore picker shows an empty list. Each row shows the host, the title, the backend and model, the time since the last activity, and the status, with the most recently active agent first. A live agent's title and last activity come from the Handler's memory, updated when a turn is submitted and when it finishes; a stopped agent's come from its provider session file, where the title is the first real prompt and the time is the file's last modification. Attaching an editor does not change them, so reloading or restarting the editor does not reorder agents. Selecting a stopped agent restores it.
 
-The preview ends with the last few turns of the conversation, at most 8 turns of about 600 characters each, and the editor requests 4. `agy excerpt AGENT_UUID` or `agy roster excerpt AGENT_UUID --host HOST_ID` returns them. A running agent's turns come from the Handler's retained conversation, and a stopped agent's turns come from the provider's history file on the Handler's machine, reading its last 1 MiB, and further back up to 16 MiB when that tail contains no prompt. Codex files are under `CODEX_HOME/sessions` (default `~/.codex/sessions`). Claude files are under `CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`). Injected instruction blocks such as `<system-reminder>` and `<environment_info>` are dropped from the turns. A devbox serves excerpts and activity times only after it is redeployed with this build. Until then, its rows have no age and the preview says "Excerpt unavailable: update this devbox".
+The preview ends with the last few turns of the conversation, at most 8 turns of about 600 characters each, and the editor requests 4. `agy excerpt AGENT_UUID` returns them for a local agent; a remote row's preview comes from the laptop Handler over its bridge. A running agent's turns come from the Handler's retained conversation, and a stopped agent's turns come from the provider's history file on the Handler's machine, reading its last 1 MiB, and further back up to 16 MiB when that tail contains no prompt. Codex files are under `CODEX_HOME/sessions` (default `~/.codex/sessions`). Claude files are under `CLAUDE_CONFIG_DIR/projects` (default `~/.claude/projects`). Injected instruction blocks such as `<system-reminder>` and `<environment_info>` are dropped from the turns. A devbox serves excerpts and activity times only after it is redeployed with this build. Until then, its rows have no age and the preview says "Excerpt unavailable: update this devbox".
 
 Every attached editor may submit ordinary ACP prompts during ongoing work. The Handler forwards each distinct submission once, without automatic cancellation, steering conversion, or a scheduling queue. The provider determines how additional input affects its work and can return a request error without terminating the session. Responses remain associated with their requests; the session stays working until all outstanding prompt requests settle. The legacy bounded text API remains exclusive because the shared output stream does not identify which request produced each chunk. The submitting editor displays its local input once, while other attachments and replay receive the same input. Retained transcript events are never prepended to another prompt. A lost response is not proof of rejection and never causes automatic redispatch.
 
@@ -199,7 +199,7 @@ Every failure is also appended to the event log, which `agy log` reads. Remote h
 
 ## CLI and protocol boundaries
 
-Every public `--input-json` flag accepts either inline JSON or `-` to read JSON from stdin. For example, `agy session submit --host HOST_ID --input-json - --json < submission.json` keeps the payload out of the process command line. Stdin must be noninteractive, contain valid UTF-8 JSON, and reach EOF within five seconds. Raw stdin is limited to 1 MiB; existing operation-specific schemas and limits still apply. Neovim's Agency command client sends its JSON this way while keeping the original payload to validate the reply.
+Every public `--input-json` flag accepts either inline JSON or `-` to read JSON from stdin. For example, `agy host enroll --input-json - --json < host.json` keeps the payload out of the process command line. Stdin must be noninteractive, contain valid UTF-8 JSON, and reach EOF within five seconds. Raw stdin is limited to 1 MiB; existing operation-specific schemas and limits still apply. Neovim's Agency command client sends its JSON this way while keeping the original payload to validate the reply.
 
 ```text
 agy status [--json]
@@ -225,7 +225,7 @@ SIGTERM and SIGINT instead begin one bounded termination attempt, including duri
 
 `agy session command` reads the remote Handler's in-memory record of a start or stop; it never retries one.
 
-Control uses `agency-control/2`, and agent lifecycle uses `agency-agent/3`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
+Control uses `agency-control/2`, and requests use `agency-request/1`. Exit codes are 0 for success, 64 for usage, 65 for invalid protocol, 69 for unavailable/stale targets, 70 for internal failure, and 75 for incomplete operations.
 
 ## Transport bounds and failures
 
@@ -251,7 +251,7 @@ Ordinary real-provider smoke acceptance checks editor/ACP behavior and lifecycle
 
 Before a separately authorized paid diagnostic, preflight the observer against the actual launch shape, including direct, bundled and wrapper app-server invocations as applicable. Verify byte forwarding, callback/return behavior, backpressure and error paths without a paid provider. Bind evidence to the declared launcher and adapter, and record any nested-executable identity limit. A lifecycle smoke alone does not establish native event coverage.
 
-Run `npm test` from `agency/` for seven workflow scenarios. These cover start/stop/restore, ACP prompting and replay, endpoint detach during active work, shared permission decisions, remote session start/prompt/cancel/stop, and refusal to signal a reused PID. Providers and the remote transport use local fixtures; no credentials or live SSH are used.
+Run `npm test` from `agency/` for seven workflow scenarios. These cover start/stop/restore, ACP prompting and replay, endpoint detach during active work, shared permission decisions, remote previews, approvals and entry through the laptop Handler, and refusal to signal a reused PID. Providers and the remote transport use local fixtures; no credentials or live SSH are used.
 
 Run `bash test.sh` from the repository root for all retained repository workflows. It builds Agency once. `npm test` from `node-bin/` checks the installed provider against a fake app-server with overlapping prompts and checks model discovery's partial failure behavior. `bash test-nvim.sh` loads the real configuration and native Agentic classes, then checks the primary Agency new-session mapping, submission/detach and ordered rendering through tool, permission and completion events.
 
@@ -271,52 +271,12 @@ Restart clears pending permissions and receipts. Old refs are stale, and inspect
 
 ## Host controls
 
-The Handler owns the host bridge before it publishes readiness. Ordinary roster and permission commands read the session owner directly. Configure destinations with `agy host enroll --input-json '{"hostname":"devbox","hostId":"HOST_ID"}' --json` and inspect configuration with `agy host list --json`. The host ID is the destination's 64-character lowercase hex identity from `agy status --json`. Enrollment requires only the SSH hostname and expected host ID. Both remote entry and the control bridge invoke bare `agy` using the SSH session's PATH, so `ssh HOST 'agy doctor --json'` must work without an additional login shell.
+Enroll a devbox with `agy host enroll --input-json '{"hostId":"HASH","hostname":"HOST"}'` and list enrollments with `agy host list`; the laptop Handler then keeps one bridge open per enrolled host.
 
 New enrollment records contain those two fields at `<persistentRoot>/bureau/hosts/<hostId>.json`. Existing UUID-named records remain readable and return the same two-field view without rewriting their bytes. The retained `bureau/hosts` directory does not load Bureau settings or workflow state. Repeating the same enrollment is a no-op; a changed identity or a different hostname for an enrolled identity is refused.
 
-`agy roster list --json` and `agy permission list --json` return `agency-host/1` aggregates with an available or unavailable observation per host. Roster aggregation reads every page from each owner; an unavailable observation is not a failed session. Use `--host HOST_ID` for a single owner, where roster limit/cursor filters are supported.
-
-A permission decision uses its exact host, Handler and provider generations. Supply a stable command ID in the JSON or through `--command-id`. `OUTCOME_UNKNOWN` retains the owner and command reference; read `agy permission list --host HOST_ID` before deciding again. Connections do not resend mutations. Ordinary permission/roster watch commands are excluded; the editor refreshes owner views explicitly.
-
-The host client does not mirror permission history or replay previous mutations.
-
 The bridge protocol is `agency-bridge/2`, with hello, request, reply and cancellation frames only. A version-1 peer fails explicitly with `UNSUPPORTED_BRIDGE_PROTOCOL` before any operation is dispatched. Both endpoints require a coordinated upgrade and explicit Handler restart; there is no alternate legacy helper or automatic mutation retry. SSH remains noninteractive and uses the local authentication agent without forwarding its socket path to the destination. The SSH shell and `agy` must reserve stdout for the protocol and write diagnostics to stderr.
 
-## Host sessions
+Remote work goes through the laptop Handler, not through CLI commands. The editor asks the laptop Handler over ACP: `agency/remotes` for each host's live agents, `agency/excerpt` with a `hostId` for a remote preview, `agency/approvals` for pending approvals on every host, `agency/decide` for a decision (routed by the permission's own host), and `agency/entry` to open a remote agent's editor. The laptop Handler sends these over the host's bridge: `live-read` and `live-wait` for agent lists, `live-request` for excerpts, approvals and decisions, and `entry-open` for entry. A host that is offline, still connecting, or on an older build fails these at once with its state ("host X is offline since HH:MM", "update this devbox"), and a failed transport says "host X is unreachable (CODE)"; a decision whose reply is lost shows "Outcome unknown", and repeating it cannot apply twice. The bridge to a host requires only `live-read` and `live-wait`, so a devbox one build behind still shows its agents.
 
-Ordinary session operations use the owning runtime. Select the host with `--host HOST_ID`; the local Handler's own host ID selects it. These commands require an already running Handler and never start one or poll automatically. JSON replies use `agency-host/1`.
-
-```text
-agy session start --host HOST_ID --input-json JSON --json
-agy session inspect AGENT_UUID --host HOST_ID --json
-agy session command COMMAND_UUID --host HOST_ID --input-json '{"commandGeneration":"HANDLER_UUID"}' --json
-agy session submit --host HOST_ID --input-json JSON --json
-agy session submission --host HOST_ID --input-json JSON --json
-agy session cancel --host HOST_ID --input-json JSON --json
-agy session stop --host HOST_ID --input-json JSON --json
-```
-
-Start takes a caller-selected command UUID and expected Handler generation, an absolute destination cwd, an explicit backend, and optional native settings and session parameters:
-
-```json
-{"commandId":"CALLER_COMMAND_UUID","handlerGeneration":"HANDLER_UUID","cwd":"/workspace/project","backendId":"codex-acp","settings":{"modelId":"MODEL_ID"},"nativeParams":{"mcpServers":[]}}
-```
-
-Start returns an admission receipt immediately. Inspect the command until its outcome is `started` to obtain the live `{agentId, handlerGeneration, providerGeneration}` target. `commandGeneration` is the generation of the original start or stop, even when inspection uses a connection to a newer Handler. A used start command ID is rejected, including identical input; choose a new ID for an explicit new attempt. Submit accepts that exact target and a caller-selected submission UUID:
-
-```json
-{"target":{"agentId":"AGENT_UUID","handlerGeneration":"HANDLER_UUID","providerGeneration":"PROVIDER_UUID"},"submissionId":"CALLER_SUBMISSION_UUID","text":"Inspect the current implementation."}
-```
-
-Submission and cancellation inputs use `{target, submissionId}`. Stop takes `{commandId, agentId, handlerGeneration, providerGeneration}`. Submit returns its live receipt immediately. Identical submission ID/content can return the existing live receipt; different content conflicts, and another active turn returns `BUSY`. Submission inspection returns status, stop reason and failure. Existing attachments provide model output.
-
-Admission and cancellation acknowledgements exit 0. Command inspections exit 75 while pending or failed/interrupted, and 0 for a completed successful start/stop. Submission inspection exits 75 while accepted/running or failed, and 0 when completed, including cancellation. Null session/command/submission observations and unavailable or stale owners exit 69. Usage and oversized input exit 64. `BUSY`, command conflicts and unknown mutation outcomes exit 75.
-
-A lost or malformed mutation reply includes the original reference and is never resent automatically. For start/stop, use `session command` with the reference's command ID and original Handler generation. For submit/cancel, use `session submission` with the reference's target and submission ID. A null read or missing live tuple does not prove the earlier operation failed. Live submission state is unavailable after retirement or Handler restart; inspect state manually before choosing another operation.
-
-New starts use the filtered destination Handler process environment plus backend defaults. Caller environment is not transmitted, and a fresh login shell is not run per start. Credentials or shell environment changed after Handler startup require an explicit Handler restart or backend configuration edit. This host path adds no durable routing, mutation replay or automatic supervisor wakeups.
-
-## Entry
-
-`agy entry open --input-json '{"commandId":"UUID","hostId":"HASH","target":{"agentId":"UUID","handlerGeneration":"UUID","providerGeneration":"UUID"}}' --json` opens an editor for an exact live session. `agy entry inspect COMMAND_UUID --host HOST_ID --json` inspects its current attachment. Commands exist only in the owner Handler process. Identical concurrent opens share one action; inspection never creates or activates an editor. A restart clears command observations, so an unknown command leaves a lost open outcome unknown. Uncertain or stale entry does not launch a terminal. Inspect the owner and command before taking another action. Neovim's owner picker uses the same live entry path.
+`agy internal-runtime-entry` is the devbox side of entry: it asks its own Handler's bridge for the entry and attaches to the tmux session.

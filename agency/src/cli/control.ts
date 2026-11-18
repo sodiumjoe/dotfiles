@@ -122,7 +122,7 @@ export async function runControl(argv: readonly string[], dependencies: ControlD
     const args = parseArguments(argv)
     generation = args.generation ?? null
     commandId = args.commandId
-    if (args.command === "help") { emit(true, { commands: [...REQUEST_HELP, "roster list [--host HOST_ID] [--limit 100] [--cursor CURSOR] [--cwd ABSOLUTE_PATH] (agents on enrolled hosts)", "roster excerpt AGENT_UUID --host HOST_ID (last conversation turns)", "permission list [--host HOST_ID]", "permission decide [--host HOST_ID] --input-json JSON (commandId, ref, optionId)", "session start|stop|submit|cancel|inspect|command|submission --host HOST_ID --input-json JSON", "entry open", "host list", "host enroll --input-json JSON", "acp (stdio connection to a ready Handler)", "status", "doctor", "shutdown [--stop-agents [--require-idle]] [--command-id UUID --handler-generation UUID] (with both flags, the next Handler restores the live agents)", "restart [--timeout SECONDS] (wait for running turns, hand the live agents to a new Handler with their model and mode)"], format: "--json" }); return 0 }
+    if (args.command === "help") { emit(true, { commands: [...REQUEST_HELP, "host list", "host enroll --input-json JSON", "acp (stdio connection to a ready Handler)", "status", "doctor", "shutdown [--stop-agents [--require-idle]] [--command-id UUID --handler-generation UUID] (with both flags, the next Handler restores the live agents)", "restart [--timeout SECONDS] (wait for running turns, hand the live agents to a new Handler with their model and mode)"], format: "--json" }); return 0 }
     const env = await dependencies.environment()
     if (args.command === "doctor") {
       const handler = await dependencies.inspect(env)
