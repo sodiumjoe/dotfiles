@@ -33,7 +33,7 @@ class DevboxesUpdateTest(unittest.TestCase):
         self.env = dict(os.environ, HOME=str(self.root), TMPDIR=str(self.root), PATH=f"{self.bin}:/usr/bin:/bin",
                         DEVBOXES_TEST_ROOT=str(self.root), DEVBOXES_AHEAD="0",
                         DEVBOXES_HOSTS=json.dumps([CLIMATE, STRIPELET, OLD, GONE]),
-                        DEVBOXES_PAY=json.dumps([{"name": "climate", "host": CLIMATE}, {"name": "gone-box", "host": None, "status": "scheduledfordeletion"}]))
+                        DEVBOXES_PAY=json.dumps([{"name": "stripelet", "host": STRIPELET}, {"name": "climate", "host": CLIMATE}, {"name": "gone-box", "host": None, "status": "scheduledfordeletion"}]))
         self.executable("agy", r"""
 import json, os, sys
 assert sys.argv[1:] == ["host", "list", "--json"], sys.argv
@@ -86,7 +86,8 @@ sys.exit(reply["exit"])
         self.assertEqual(lines[0], ["devboxes", "will pull origin/master at 0cb5394"])
         summary = {name: text for name, text in lines[1:]}
         self.assertEqual(summary["climate"], "updated 5d9761f → 0cb5394, restarted (2 agents handed over)")
-        self.assertEqual(summary["qa-mydev--bbb"], "already at 0cb5394, restart pending: busy (rerun later)")
+        self.assertEqual(summary["stripelet"], "already at 0cb5394, restart pending: busy (rerun later)")
+        self.assertEqual(sorted(summary), ["climate", "qa-mydev--ccc", "qa-mydev--ddd", "stripelet"])
         self.assertRegex(summary["qa-mydev--ccc"], r"^failed: pull refused \(local changes or diverged\); see .*devboxes-update-qa-mydev--ccc\.log$")
         self.assertRegex(summary["qa-mydev--ddd"], r"^failed: unreachable or timed out \(exit 255\); see .*devboxes-update-qa-mydev--ddd\.log$")
         self.assertIn("ssh: connect to host: timed out", (self.root / "devboxes-update-qa-mydev--ddd.log").read_text())

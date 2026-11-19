@@ -275,7 +275,7 @@ _devbox_sync_loop_stop() {
   rm -f -- "$pidfile" "${pidfile}.${pid}.finish"
 }
 devboxes-update() {
-  local dotfiles="${DOTFILES:-$HOME/.dotfiles}" logdir="${TMPDIR:-/tmp}" ahead hosts names host label log result reply change restart exit_line failed=0
+  local dotfiles="${DOTFILES:-$HOME/.dotfiles}" logdir="${TMPDIR:-/tmp}" ahead hosts names host label line log result reply change restart exit_line failed=0
   local -a words
   local script='set -u
 cd "$HOME/.dotfiles" || { echo "@@ result failed no dotfiles checkout"; exit 0; }
@@ -319,8 +319,10 @@ echo "@@ result ok $before $after"'
 
   for host in ${(f)hosts}; do
     log="$logdir/devboxes-update-${host%%.*}.log"
-    label="${${(M)${(f)names}:#${host}$'\t'*}#*$'\t'}"
-    [[ -n "$label" ]] || label="${host%%.*}"
+    label="${host%%.*}"
+    for line in ${(f)names}; do
+      [[ "$line" == "$host"$'\t'* ]] && label="${line#*$'\t'}"
+    done
     result="$(grep '^@@ result ' "$log" | tail -n 1)"
     result="${result#@@ result }"
     if [[ -z "$result" ]]; then
