@@ -100,6 +100,7 @@ test("deliver submits once into an idle parent, refuses a busy one with BUSY, an
   assert.deepEqual(await call("deliver", request), { state: "delivered" })
   const excerpt = await f.excerpt(parent.agentId) as { turns: Array<{ role: string; text: string }> }
   assert.deepEqual(excerpt.turns.filter(turn => turn.role === "user"), [{ role: "user", text: "[child] the answer" }])
+  await until(async () => (await f.agents()).find(row => row.agentId === parent.agentId)?.live?.activity === "idle" ? true : undefined, 15000)
   const held = f.prompt(parent.agentId, "held")
   await until(async () => (await f.providerRequests()).some(frame => JSON.stringify(frame).includes("held")) ? true : undefined, 15000)
   const refused = await failure(call("deliver", { ...request, childId: randomUUID(), submissionId: randomUUID() }))

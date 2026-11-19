@@ -35,8 +35,7 @@ export function createBox(input: { core: LiveCore; outbox: OutboxStore; roots?: 
   const live = (childId: string): LiveAgent | undefined => core.liveAgents().find(agent => agent.agentId === childId && agent.phase === "ready")
   const idle = (agent: LiveAgent): boolean => core.liveRows().find(row => row.agentId === agent.agentId)?.live?.activity === "idle"
   const fail = async (childId: string, message: string): Promise<void> => {
-    await outbox.append(childId, { submissionId: randomUUID(), state: "failed", stopReason: null, failure: "START_FAILED", text: message })
-    await outbox.update(childId, value => { value.stopped = true })
+    await outbox.append(childId, { submissionId: randomUUID(), state: "failed", stopReason: null, failure: "START_FAILED", text: message }, { stop: true })
     input.changed()
   }
   const run = async (request: ChildStart): Promise<void> => {

@@ -10,7 +10,7 @@ export type OutboxStore = {
   read(childId: string): Promise<Outbox | null>
   list(): Promise<Outbox[]>
   update(childId: string, change: (outbox: Outbox) => void): Promise<Outbox | null>
-  append(childId: string, entry: Omit<OutboxEntry, "delivered" | "at">): Promise<Outbox | null>
+  append(childId: string, entry: Omit<OutboxEntry, "delivered" | "at">, options?: { stop?: boolean }): Promise<Outbox | null>
   flushed(): Promise<void>
 }
 export const TEXT_LIMIT = 65536, UNDELIVERED_LIMIT = 20, DELIVERED_KEPT = 3
@@ -62,10 +62,11 @@ export function createOutboxStore(root: string, now: () => Date = () => new Date
       return values.filter((value): value is Outbox => value !== null)
     },
     update,
-    append: (childId, entry) => update(childId, outbox => {
+    append: (childId, entry, options) => update(childId, outbox => {
       const text = !entry.text ? "(no text)" : entry.text.length > TEXT_LIMIT ? entry.text.slice(0, TEXT_LIMIT) + "\n\n(answer cut at 65536 characters)" : entry.text
       outbox.entries.push({ ...entry, text, delivered: false, at: now().toISOString() })
       if (outbox.open === entry.submissionId) outbox.open = null
+      if (options?.stop) outbox.stopped = true
     }),
     flushed: () => Promise.all([...queues.values()]).then(() => undefined),
   }
