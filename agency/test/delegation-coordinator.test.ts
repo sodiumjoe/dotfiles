@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import test from "node:test"
 import { until } from "./control-support.js"
 import type { JsonObject } from "../src/agent/session-config.js"
-import { createCoordinator } from "../src/delegation/coordinator.js"
+import { acceptUpward, createCoordinator } from "../src/delegation/coordinator.js"
 import type { ChildView } from "../src/delegation/box.js"
 import type { OutboxEntry, ParentLink } from "../src/delegation/outbox.js"
 import { unwrapReply } from "../src/delegation/reply.js"
@@ -166,4 +166,21 @@ test("list shows only the caller's children, and ask or stop for another parent'
   assert.equal(sent("child-ask").length + sent("child-stop").length, 0)
   assert.deepEqual(await coordinator.handle({ op: "ask", parent: parentA, childId: mine, text: "more" }), { state: "accepted", childId: mine })
   assert.deepEqual(sent("child-ask").map(call => [call.hostId, call.payload]), [[boxId(1), { op: "child-ask", childId: mine, text: "more" }]])
+})
+
+test("a devbox may delegate only for its own agents", async () => {
+  const other = "d".repeat(64)
+  const { coordinator, calls } = world([host(devbox, "climate"), host(other, "other"), host(boxId(2), "climate-agency-0002")])
+  for (const payload of [start(parentA), { op: "list", parent: parentA }, { op: "ask", parent: parentA, childId: agent(40), text: "more" }, { op: "stop", parent: parentA, childId: agent(40) }]) {
+    const reply = await acceptUpward(payload, other, coordinator) as { ok: boolean; error?: { code: string; message: string } }
+    assert.equal(reply.ok, false)
+    assert.deepEqual(reply.error, { code: "INVALID", message: "a devbox may only delegate for its own agents" })
+  }
+  assert.equal(calls.length, 0)
+  const malformed = await acceptUpward({ op: "list" }, devbox, coordinator) as { ok: boolean; error?: { code: string } }
+  assert.equal(malformed.ok, false); assert.equal(malformed.error?.code, "INVALID")
+  const unready = await acceptUpward({ op: "list", parent: parentA }, devbox, undefined) as { ok: boolean; error?: { code: string } }
+  assert.equal(unready.error?.code, "UNAVAILABLE")
+  const accepted = await acceptUpward({ op: "list", parent: parentA }, devbox, coordinator) as { protocol: string; ok: boolean; result: JsonObject }
+  assert.deepEqual([accepted.protocol, accepted.ok, accepted.result], [REQUEST_PROTOCOL, true, { state: "children", children: [] }])
 })

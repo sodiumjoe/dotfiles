@@ -25,7 +25,7 @@ export function parsePeerRoute(raw: unknown): HostRoute {
   if (!isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
   return route
 }
-export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport>; upward?(payload: unknown, signal: AbortSignal): Promise<unknown> }): HostRouter {
+export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport>; upward?(payload: unknown, signal: AbortSignal, sourceHostId: string): Promise<unknown> }): HostRouter {
   const connections = new Map<string, Promise<BridgeTransport>>()
   let relay: ((route: HostRoute, signal?: AbortSignal) => Promise<unknown>) | undefined, closed = false
   function connected(enrollment: HostEnrollment): Promise<BridgeTransport> {
@@ -36,7 +36,7 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
       if (closed) { transport.close(); bridgeError("BRIDGE_CLOSED") }
       const reads = createPagedReads((channel, payload, signal) => reverse(channel, payload, signal))
       const reverse = async (channel: string, payload: unknown, signal: AbortSignal) => {
-        if (channel === "delegate") { if (!input.upward) bridgeError("UNSUPPORTED_CAPABILITY"); return input.upward(payload, signal) }
+        if (channel === "delegate") { if (!input.upward) bridgeError("UNSUPPORTED_CAPABILITY"); return input.upward(payload, signal, enrollment.hostId) }
         if (channel !== "host-route" && channel !== "host-route-read") bridgeError("UNSUPPORTED_CAPABILITY")
         const route = parsePeerRoute(payload)
         if (channel === "host-route-read" && !isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")

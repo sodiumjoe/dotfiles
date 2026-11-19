@@ -151,7 +151,7 @@ test("a devbox sends a delegate request upward to the bridge that connected it",
 
 test("the laptop answers a delegate request from a devbox and refuses one it cannot handle", async () => {
   const signal = new AbortController().signal
-  const capture = async (upward?: (payload: unknown, signal: AbortSignal) => Promise<unknown>) => {
+  const capture = async (upward?: (payload: unknown, signal: AbortSignal, sourceHostId: string) => Promise<unknown>) => {
     let reverse!: (channel: string, payload: unknown, requestId: string, signal: AbortSignal) => Promise<unknown>
     const { transport } = fakeTransport(async () => "ok")
     ;(transport.peer as unknown as { onRequest: (handler: typeof reverse) => void }).onRequest = handler => { reverse = handler }
@@ -159,8 +159,8 @@ test("the laptop answers a delegate request from a devbox and refuses one it can
     await hosts.request({ hostId: remote, channel: "live-read", payload: {} })
     return { reverse, hosts }
   }
-  const handled = await capture(async payload => ({ handled: payload }))
-  assert.deepEqual(await handled.reverse("delegate", { op: "list" }, "r", signal), { handled: { op: "list" } })
+  const handled = await capture(async (payload, _signal, sourceHostId) => ({ handled: payload, sourceHostId }))
+  assert.deepEqual(await handled.reverse("delegate", { op: "list" }, "r", signal), { handled: { op: "list" }, sourceHostId: remote })
   handled.hosts.close()
   const refused = await capture()
   await assert.rejects(refused.reverse("delegate", { op: "list" }, "r", signal), /UNSUPPORTED_CAPABILITY/)

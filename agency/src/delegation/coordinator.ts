@@ -3,6 +3,7 @@ import { hash, id, keys, object, providerId, text, type ProviderId } from "../co
 import type { JsonObject } from "../agent/session-config.js"
 import type { RemoteHost } from "../hosts/remote-rosters.js"
 import { RequestError } from "../live/errors.js"
+import { liveErrorReply, REQUEST_PROTOCOL, type LiveReply } from "../live/protocol.js"
 import type { ChildView } from "./box.js"
 import type { ParentLink } from "./outbox.js"
 import { longText, validated } from "./requests.js"
@@ -39,6 +40,16 @@ export function parseDelegateRequest(raw: unknown): DelegateRequest {
     if (value.op === "list") return { op: "list", parent: shape([]) }
     return invalid("unknown delegate operation")
   })
+}
+
+export async function acceptUpward(payload: unknown, sourceHostId: string, coordinator: Coordinator | undefined): Promise<LiveReply> {
+  const requestId = randomUUID()
+  try {
+    const request = parseDelegateRequest(payload)
+    if (request.parent.hostId !== sourceHostId) throw new RequestError("INVALID", "a devbox may only delegate for its own agents")
+    if (!coordinator) throw new RequestError("UNAVAILABLE", "the Handler is not ready")
+    return { protocol: REQUEST_PROTOCOL, requestId, ok: true, result: await coordinator.handle(request) as never }
+  } catch (error) { return liveErrorReply({ requestId }, error) }
 }
 
 export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]; request(hostId: string, payload: JsonObject): Promise<JsonObject>; now?: () => number; idleMs?: number }): Coordinator {

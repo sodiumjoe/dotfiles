@@ -42,7 +42,7 @@ import { createOutboxStore } from "../delegation/outbox.js"
 import { createBox, type Box } from "../delegation/box.js"
 import { DELEGATION_OPS, delegationReply } from "../delegation/requests.js"
 import { DEFAULT_ROOTS } from "../delegation/checkout.js"
-import { createCoordinator, parseDelegateRequest, type Coordinator } from "../delegation/coordinator.js"
+import { acceptUpward, createCoordinator, type Coordinator } from "../delegation/coordinator.js"
 import { unwrapReply } from "../delegation/reply.js"
 
 export type HandlerOptions = {
@@ -275,7 +275,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const coreBridge = bridge
     const inventory = createHostInventory(root)
     router = createHostRouter({ hostId: options.paths.hostKey, inventory, local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["live-read", "live-wait"] }),
-      upward: payload => Promise.resolve().then(() => { if (!coordinator) throw new RequestError("UNAVAILABLE", "the Handler is not ready"); return coordinator.handle(parseDelegateRequest(payload)) }).then(result => ({ protocol: REQUEST_PROTOCOL, requestId: randomUUID(), ok: true, result }), error => liveErrorReply({ requestId: randomUUID() }, error)) })
+      upward: (payload, _signal, sourceHostId) => acceptUpward(payload, sourceHostId, coordinator) })
     const relay = registerHostRouter({ bridge, router })
     const hosts = router
     remotes = createRemoteRosters({
