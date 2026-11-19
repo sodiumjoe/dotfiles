@@ -18,10 +18,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export function createOutboxStore(root: string, now: () => Date = () => new Date()): OutboxStore {
   const dir = join(root, "children"), queues = new Map<string, Promise<unknown>>()
+  const swept = readdir(dir).then(names => Promise.all(names.filter(name => name.startsWith(".") && name.endsWith(".tmp")).map(name => rm(join(dir, name), { force: true }))), () => []).then(() => undefined)
   const file = (childId: string): string => { if (!UUID.test(childId)) throw new Error("invalid child ID"); return join(dir, childId + ".json") }
   const queued = <T>(childId: string, action: () => Promise<T>): Promise<T> => {
-    const result = (queues.get(childId) ?? Promise.resolve()).then(action)
-    queues.set(childId, result.catch(() => undefined))
+    const result = (queues.get(childId) ?? swept).then(action), tail = result.then(() => undefined, () => undefined)
+    queues.set(childId, tail)
+    void tail.then(() => { if (queues.get(childId) === tail) queues.delete(childId) })
     return result
   }
   const load = async (childId: string): Promise<Outbox | null> => { try { return JSON.parse(await readFile(file(childId), "utf8")) as Outbox } catch { return null } }
@@ -57,6 +59,7 @@ export function createOutboxStore(root: string, now: () => Date = () => new Date
     read: async childId => { file(childId); return queued(childId, () => load(childId)) },
     async list() {
       let names: string[]
+      await swept
       try { names = await readdir(dir) } catch { return [] }
       const values = await Promise.all(names.filter(name => name.endsWith(".json") && !name.startsWith(".")).map(name => load(name.slice(0, -5)).catch(() => null)))
       return values.filter((value): value is Outbox => value !== null)
@@ -68,6 +71,6 @@ export function createOutboxStore(root: string, now: () => Date = () => new Date
       if (outbox.open === entry.submissionId) outbox.open = null
       if (options?.stop) outbox.stopped = true
     }),
-    flushed: () => Promise.all([...queues.values()]).then(() => undefined),
+    flushed: () => Promise.all([swept, ...queues.values()]).then(() => undefined),
   }
 }

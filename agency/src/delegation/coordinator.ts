@@ -70,7 +70,7 @@ export async function acceptUpward(payload: unknown, sourceHostId: string, coord
 
 export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]; request(hostId: string, payload: JsonObject): Promise<JsonObject>; now?: () => number; idleMs?: number }): Coordinator {
   const now = input.now ?? Date.now, idleMs = input.idleMs ?? IDLE_MS
-  const reserved = new Set<string>(), failures: Failure[] = [], cache = new Map<string, ChildView[]>(), chains = new Map<string, Promise<void>>(), parents = new Map<string, ParentLink>()
+  const reserved = new Set<string>(), failures: Failure[] = [], cache = new Map<string, ChildView[]>(), chains = new Map<string, Promise<void>>(), parents = new Map<string, ParentLink>(), listed = new Map<string, Set<string>>()
   const queued = new Set<string>(), reads = new Map<string, { again: boolean; done: Promise<void> }>()
   const host = (hostId: string): RemoteHost | undefined => input.hosts().find(value => value.hostId === hostId)
   const pool = (value: RemoteHost): boolean => value.name !== null && POOL_NAME.test(value.name)
@@ -131,6 +131,9 @@ export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]
           state.again = false
           const reply = await input.request(hostId, { op: "children" })
           if (!Array.isArray(reply.children)) throw new RequestError("FAILED", "invalid children reply")
+          const ids = new Set(reply.children.map(value => record(value) && typeof value.childId === "string" ? value.childId : null).filter((value): value is string => value !== null))
+          for (const childId of listed.get(hostId) ?? []) if (!ids.has(childId)) parents.delete(childId)
+          listed.set(hostId, ids)
           const views = reply.children.map(childView).filter((view): view is ChildView => view !== null && pinned(view))
           cache.set(hostId, views)
           for (const view of views) queueOutbox(hostId, view)

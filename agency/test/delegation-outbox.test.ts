@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -21,6 +21,16 @@ test("an outbox is created once, kept private, and listed", async t => {
   assert.equal((await stat(join(root, "children"))).mode & 0o777, 0o700)
   assert.deepEqual((await outbox.list()).map(value => [value.childId, value.ref, value.entries.length]), [[child, "master", 0]])
   await assert.rejects(outbox.create({ childId: "../x", parent, depth: 1, ref: "master" }))
+})
+
+test("a temporary file left by a crashed write is removed when the store starts", async t => {
+  const root = await mkdtemp(join(tmpdir(), "agency-outbox-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(join(root, "children"))
+  await writeFile(join(root, "children", "." + child + ".crashed.tmp"), "{")
+  const outbox = createOutboxStore(root)
+  await outbox.create({ childId: child, parent, depth: 1, ref: "master" })
+  assert.deepEqual(await readdir(join(root, "children")), [child + ".json"])
 })
 
 test("answers are capped, empty answers say so, and the bounds keep undelivered entries", async t => {

@@ -77,6 +77,7 @@ export function createBox(input: { core: LiveCore; outbox: OutboxStore; roots?: 
     for (const [key, recorder] of [...recorders]) {
       if (present.has(key)) continue
       recorders.delete(key)
+      recorder.close()
       if (!stopped && !input.stopping?.() && !core.liveAgents().some(agent => agent.agentId === recorder.childId)) void exited(recorder.childId).catch(() => undefined)
     }
     for (const key of [...unclaimed]) if (!present.has(key)) unclaimed.delete(key)

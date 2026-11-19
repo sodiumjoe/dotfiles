@@ -21,14 +21,14 @@ async function setup(t: { after(fn: () => Promise<void>): void }, limits: { even
   return { outbox, conversation, changes: () => changes, record: (running: string | null = null) => recordTurns({ childId: child, conversation, outbox, running: () => running, changed: () => { changes++ } }) }
 }
 
-test("a finished turn becomes one answer, with a blank line wherever a tool call fell between messages", async t => {
+test("a finished turn becomes one answer holding the turn's last message, even when a tool call came after it", async t => {
   const { outbox, conversation, changes, record } = await setup(t)
   const recorder = record()
   conversation.append({ kind: "submitted", submissionId: submission, text: "task" })
-  conversation.append(chunk("Let me check.")); conversation.append(tool()); conversation.append(chunk("Found it")); conversation.append(chunk(" in foo.ts."))
+  conversation.append(chunk("Let me check.")); conversation.append(tool()); conversation.append(chunk("Found it")); conversation.append(chunk(" in foo.ts.")); conversation.append(tool())
   conversation.append({ kind: "turn", submissionId: submission, state: "completed", stopReason: "end_turn", failure: null })
   const value = await until(async () => { const current = await outbox.read(child); return current?.entries.length ? current : undefined })
-  assert.deepEqual(value.entries.map(entry => [entry.state, entry.stopReason, entry.text]), [["answer", "end_turn", "Let me check.\n\nFound it in foo.ts."]])
+  assert.deepEqual(value.entries.map(entry => [entry.state, entry.stopReason, entry.text]), [["answer", "end_turn", "Found it in foo.ts."]])
   assert.equal(value.open, null)
   await until(async () => changes() >= 1 ? true : undefined)
   recorder.close()
