@@ -95,9 +95,9 @@ export function createBox(input: { core: LiveCore; outbox: OutboxStore; roots?: 
     },
     async stop(childId) {
       if (!await outbox.read(childId)) return { state: "stopped" }
-      if (core.liveAgents().some(agent => agent.agentId === childId)) await core.stop(childId).catch(error => { if (!(error instanceof RequestError && error.code === "NOT_FOUND")) throw error })
       await outbox.update(childId, value => { value.stopped = true })
       input.changed()
+      if (core.liveAgents().some(agent => agent.agentId === childId)) void core.stop(childId).catch(() => undefined)
       return { state: "stopped" }
     },
     async children() {
