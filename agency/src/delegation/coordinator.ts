@@ -9,7 +9,9 @@ import type { ParentLink } from "./outbox.js"
 import { longText, validated } from "./requests.js"
 
 export const POOL_NAME = /^(.+)-agency-[0-9a-f]{4}$/
-const IDLE_MS = 3600000
+const IDLE_MS = 3600000, FAILURE_MS = 3600000, FAILURE_MISSES = 3
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, HOST = /^[0-9a-f]{64}$/
+const ENTRY_STATES = ["answer", "failed", "interrupted"]
 
 export type DelegateRequest =
   | { op: "start"; parent: ParentLink; parentName: string; depth: number; task: string; ref: string; remote: string; path: string; backendId?: ProviderId; model?: string }
@@ -17,9 +19,23 @@ export type DelegateRequest =
   | { op: "stop"; parent: ParentLink; childId: string }
   | { op: "list"; parent: ParentLink }
 export type Coordinator = { handle(request: DelegateRequest): Promise<JsonObject>; changed(hostId: string): void; tick(): void }
-type Failure = { childId: string; parent: ParentLink; box: string | null; submissionId: string; text: string }
+type Failure = { childId: string; parent: ParentLink; box: string | null; submissionId: string; text: string; at: number; misses: number }
 
 function invalid(message: string): never { throw new RequestError("INVALID", message) }
+
+const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
+const nullable = (value: unknown): boolean => value === null || typeof value === "string"
+const count = (value: unknown): boolean => typeof value === "number" && Number.isInteger(value) && value >= 0
+
+export function childView(value: unknown): ChildView | null {
+  if (!record(value) || !record(value.parent) || !Array.isArray(value.entries)) return null
+  const { parent, entries } = value
+  if (typeof value.childId !== "string" || !UUID.test(value.childId) || typeof parent.hostId !== "string" || !HOST.test(parent.hostId) || typeof parent.agentId !== "string" || !UUID.test(parent.agentId)) return null
+  if (!count(value.depth) || !count(value.dropped) || typeof value.stopped !== "boolean" || typeof value.moved !== "boolean" || typeof value.createdAt !== "string" || typeof value.ref !== "string" || !nullable(value.open) || !nullable(value.title)) return null
+  if (value.live !== null && !(record(value.live) && typeof value.live.activity === "string" && typeof value.live.editors === "number")) return null
+  const valid = entries.every(item => record(item) && typeof item.submissionId === "string" && ENTRY_STATES.includes(item.state as string) && nullable(item.stopReason) && nullable(item.failure) && typeof item.text === "string" && typeof item.delivered === "boolean" && typeof item.at === "string")
+  return valid ? value as unknown as ChildView : null
+}
 
 export function parseDelegateRequest(raw: unknown): DelegateRequest {
   return validated(() => {
@@ -54,7 +70,7 @@ export async function acceptUpward(payload: unknown, sourceHostId: string, coord
 
 export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]; request(hostId: string, payload: JsonObject): Promise<JsonObject>; now?: () => number; idleMs?: number }): Coordinator {
   const now = input.now ?? Date.now, idleMs = input.idleMs ?? IDLE_MS
-  const reserved = new Set<string>(), failures: Failure[] = [], cache = new Map<string, ChildView[]>(), chains = new Map<string, Promise<void>>()
+  const reserved = new Set<string>(), failures: Failure[] = [], cache = new Map<string, ChildView[]>(), chains = new Map<string, Promise<void>>(), parents = new Map<string, ParentLink>()
   const queued = new Set<string>(), reads = new Map<string, { again: boolean; done: Promise<void> }>()
   const host = (hostId: string): RemoteHost | undefined => input.hosts().find(value => value.hostId === hostId)
   const pool = (value: RemoteHost): boolean => value.name !== null && POOL_NAME.test(value.name)
@@ -88,12 +104,23 @@ export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]
     latest.dropped = 0
   }
   const queueOutbox = (boxId: string, view: ChildView): void => { if (view.entries.some(entry => !entry.delivered)) enqueue(view.parent, boxId + ":" + view.childId, () => deliverOutbox(boxId, view.childId)) }
-  const queueFailure = (failure: Failure): void => enqueue(failure.parent, "failure:" + failure.childId, async () => {
-    if (!failures.includes(failure)) return
-    await input.request(failure.parent.hostId, { op: "deliver", parentAgentId: failure.parent.agentId, childId: failure.childId, submissionId: failure.submissionId, label: label(failure.childId, failure.box, "failed"), text: failure.text })
-    const index = failures.indexOf(failure)
-    if (index >= 0) failures.splice(index, 1)
-  })
+  const drop = (failure: Failure): void => { const index = failures.indexOf(failure); if (index >= 0) failures.splice(index, 1) }
+  const queueFailure = (failure: Failure): void => {
+    if (now() - failure.at > FAILURE_MS) { drop(failure); return }
+    enqueue(failure.parent, "failure:" + failure.childId, async () => {
+      if (!failures.includes(failure)) return
+      try { await input.request(failure.parent.hostId, { op: "deliver", parentAgentId: failure.parent.agentId, childId: failure.childId, submissionId: failure.submissionId, label: label(failure.childId, failure.box, "failed"), text: failure.text }) } catch (error) {
+        if (error instanceof RequestError && error.code === "NOT_FOUND" && ++failure.misses >= FAILURE_MISSES) drop(failure)
+        throw error
+      }
+      drop(failure)
+    })
+  }
+  const pinned = (view: ChildView): boolean => {
+    const parent = parents.get(view.childId)
+    if (!parent) { parents.set(view.childId, { hostId: view.parent.hostId, agentId: view.parent.agentId }); return true }
+    return same(parent, view.parent)
+  }
   function read(hostId: string): Promise<void> {
     const running = reads.get(hostId)
     if (running) { running.again = true; return running.done }
@@ -104,7 +131,7 @@ export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]
           state.again = false
           const reply = await input.request(hostId, { op: "children" })
           if (!Array.isArray(reply.children)) throw new RequestError("FAILED", "invalid children reply")
-          const views = reply.children as unknown as ChildView[]
+          const views = reply.children.map(childView).filter((view): view is ChildView => view !== null && pinned(view))
           cache.set(hostId, views)
           for (const view of views) queueOutbox(hostId, view)
         } while (state.again)
@@ -129,11 +156,12 @@ export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]
     return "no free pool box"
   }
   const fail = (childId: string, parent: ParentLink, box: string | null, message: string): JsonObject => {
-    failures.push({ childId, parent, box, submissionId: randomUUID(), text: message })
+    failures.push({ childId, parent, box, submissionId: randomUUID(), text: message, at: now(), misses: 0 })
     return { state: "starting", childId, box: null }
   }
   async function start(request: Extract<DelegateRequest, { op: "start" }>): Promise<JsonObject> {
     const childId = randomUUID(), box = await choose(hostName(request.parent.hostId))
+    parents.set(childId, request.parent)
     if (typeof box === "string") return fail(childId, request.parent, null, box)
     const name = boxName(box.hostId)
     try {
@@ -176,10 +204,10 @@ export function createCoordinator(input: { hostId: string; hosts(): RemoteHost[]
       const value = host(hostId)
       if (value && pool(value)) void read(hostId).catch(() => undefined)
       for (const [boxId, views] of cache) for (const view of views) if (view.parent.hostId === hostId) queueOutbox(boxId, view)
-      for (const failure of failures) if (failure.parent.hostId === hostId) queueFailure(failure)
+      for (const failure of [...failures]) if (failure.parent.hostId === hostId) queueFailure(failure)
     },
     tick() {
-      for (const failure of failures) queueFailure(failure)
+      for (const failure of [...failures]) queueFailure(failure)
       const at = now()
       for (const [boxId, views] of cache) {
         const box = host(boxId)

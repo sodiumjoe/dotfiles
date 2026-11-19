@@ -184,3 +184,67 @@ test("a devbox may delegate only for its own agents", async () => {
   const accepted = await acceptUpward({ op: "list", parent: parentA }, devbox, coordinator) as { protocol: string; ok: boolean; result: JsonObject }
   assert.deepEqual([accepted.protocol, accepted.ok, accepted.result], [REQUEST_PROTOCOL, true, { state: "children", children: [] }])
 })
+
+test("a child's parent is pinned when it starts or is first seen, and a box reply that changes it is not delivered", async () => {
+  const seen = agent(60), redirected = entry("to someone else")
+  const { boxes, coordinator, sent } = world([host(devbox, "climate"), host(boxId(1), "climate-agency-0001"), host(boxId(2), "climate-agency-0002")])
+  boxes.set(boxId(1), [view(seen, parentA, [entry("first")])])
+  coordinator.changed(boxId(1))
+  await until(async () => sent("child-mark").length ? true : undefined)
+  assert.deepEqual(sent("deliver").map(call => [call.hostId, call.payload.parentAgentId, call.payload.text]), [[devbox, parentA.agentId, "first"]])
+  boxes.get(boxId(1))![0]!.parent = parentB
+  boxes.get(boxId(1))![0]!.entries.push(redirected)
+  const started = await coordinator.handle(start(parentA))
+  assert.equal(started.box, "climate-agency-0002")
+  boxes.get(boxId(2))![0]!.parent = parentB
+  boxes.get(boxId(2))![0]!.entries.push(entry("also redirected"))
+  coordinator.changed(boxId(1)); coordinator.changed(boxId(2))
+  await until(async () => sent("children").length >= 4 ? true : undefined)
+  await pause(50)
+  assert.equal(sent("deliver").length, 1)
+  assert.deepEqual(await coordinator.handle({ op: "list", parent: parentB }), { state: "children", children: [] })
+  await assert.rejects(coordinator.handle({ op: "ask", parent: parentB, childId: seen, text: "more" }), (error: unknown) => error instanceof RequestError && error.code === "NOT_FOUND")
+})
+
+test("a malformed children entry is dropped and the other children still list and deliver", async () => {
+  const good = agent(61), bad = view(agent(62), parentA, [entry("bad")])
+  const { boxes, coordinator, sent } = world([host(devbox, "climate"), host(boxId(1), "climate-agency-0001")])
+  const malformed = [{ ...bad, parent: { hostId: "laptop", agentId: parentA.agentId } }, { ...bad, childId: "not-a-uuid" }, { ...bad, depth: 1.5 }, { ...bad, stopped: "no" }, { ...bad, entries: [{ ...bad.entries[0]!, delivered: "no" }] }, { ...bad, entries: "none" }]
+  boxes.set(boxId(1), [...malformed as never[], view(good, parentA, [entry("good")]), null as never, "child" as never])
+  coordinator.changed(boxId(1))
+  await until(async () => sent("child-mark").length ? true : undefined)
+  await pause(50)
+  assert.deepEqual(sent("deliver").map(call => [call.payload.childId, call.payload.text]), [[good, "good"]])
+  const listed = await coordinator.handle({ op: "list", parent: parentA })
+  assert.deepEqual((listed.children as JsonObject[]).map(child => child.childId), [good])
+})
+
+test("a start failure whose parent is gone is dropped after three NOT_FOUND replies", async () => {
+  const { coordinator, sent } = world([host(devbox, "climate")], { deliver: async () => { throw new RequestError("NOT_FOUND", "parent agent is not live") } })
+  await coordinator.handle(start(parentA))
+  for (const count of [1, 2, 3]) {
+    coordinator.tick()
+    await until(async () => sent("deliver").length === count ? true : undefined)
+    await pause(20)
+  }
+  coordinator.tick()
+  await pause(50)
+  assert.equal(sent("deliver").length, 3)
+})
+
+test("a start failure older than an hour is dropped even when its parent is only busy", async () => {
+  let clock = Date.parse("2026-11-19T12:00:00.000Z")
+  const { coordinator, sent } = world([host(devbox, "climate")], { now: () => clock, deliver: async () => { throw new RequestError("BUSY", "parent is busy") } })
+  await coordinator.handle(start(parentA))
+  for (const count of [1, 2, 3, 4]) {
+    clock += 900000 - 1000
+    coordinator.tick()
+    await until(async () => sent("deliver").length === count ? true : undefined)
+    await pause(20)
+  }
+  clock += 5000
+  coordinator.tick()
+  coordinator.changed(devbox)
+  await pause(50)
+  assert.equal(sent("deliver").length, 4)
+})
