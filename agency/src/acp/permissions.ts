@@ -8,6 +8,7 @@ export type PermissionClient = { connectionId: string; send(frame: JsonObject): 
 export type PermissionBroker = {
   open(target: AgentTuple, providerId: string | number, params: JsonObject): string | Promise<string>
   attach(target: AgentTuple, client: PermissionClient): void
+  attached(target: AgentTuple): number
   decision(connectionId: string, requestId: string | number, result: JsonObject): Promise<boolean>
   detach(connectionId: string, target?: AgentTuple): void
   invalidate(target: AgentTuple): void
@@ -76,6 +77,7 @@ export function createPermissionBroker(input: { routing?: PermissionArbiter; cwd
       attached.client = client; attached.targets.add(tupleKey(target)); clients.set(client.connectionId, attached)
       for (const request of requests.values()) if ((!input.routing || request.ref) && tupleKey(request.target) === tupleKey(target)) offer(request, client.connectionId)
     },
+    attached(target) { let count = 0; for (const value of clients.values()) if (value.targets.has(tupleKey(target))) count++; return count },
     async decision(connectionId, requestId, result) {
       const attached = clients.get(connectionId), request = attached?.offers.get(String(requestId))
       if (!attached || !request || requests.get(request.key) !== request) return false

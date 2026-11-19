@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createAgentIndex } from "../src/agent/agent-index.js"
-import { createRoster } from "../src/live/roster.js"
+import { createRoster, parseRosterRow } from "../src/live/roster.js"
 import { createLiveTable } from "../src/live/state.js"
 
 test("a missing Codex rollout is looked for again only after its agent stops or when another agent is indexed", async t => {
@@ -42,4 +42,13 @@ test("the roster shows titles, sorts by activity, and tolerates a missing sessio
   await index.ensure({ ...base, agentId: "33333333-3333-4333-8333-333333333333", backendId: "codex-acp", nativeSessionId: "gone" })
   const rows = await roster.rows(createLiveTable())
   assert.deepEqual(rows.map(row => [row.title, row.backendId]), [["newer title", "claude-agent-acp"], ["older title", "claude-agent-acp"], [null, "codex-acp"]])
+})
+
+test("a remote row keeps attention counts and treats rows from older devboxes as zero", () => {
+  const base = { agentId: "00000000-0000-4000-8000-000000000002", backendId: "codex-acp", cwd: "/w", createdAt: "2026-11-18T00:00:00.000Z", title: null, lastActivityAt: null }
+  const live = { activity: "working", handlerGeneration: "00000000-0000-4000-8000-000000000001", providerGeneration: "00000000-0000-4000-8000-000000000003", model: null, mode: null }
+  const current = parseRosterRow({ ...base, live: { ...live, pendingApprovals: 2, editors: 1 } }).live!
+  const older = parseRosterRow({ ...base, live }).live!
+  assert.deepEqual([current.pendingApprovals, current.editors, older.pendingApprovals, older.editors], [2, 1, 0, 0])
+  for (const bad of [-1, 1.5, "1"]) assert.throws(() => parseRosterRow({ ...base, live: { ...live, pendingApprovals: bad } }), /INVALID_HOST_REPLY/)
 })

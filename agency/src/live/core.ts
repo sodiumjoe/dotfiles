@@ -89,12 +89,13 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
   const { context, events } = input, root = context.paths.persistentRoot, generation = context.state.handlerGeneration
   const table = createLiveTable(), admissions = new Map<string, Promise<void>>(), unverified = new Set<string>(), roster = createRoster({ index: input.index, homes: input.homes })
   const models = createModelCache({ root, ...(dependencies.modelSource ? { source: dependencies.modelSource } : {}) })
-  const permissions = createPermissionArbiter({ hostId: context.paths.hostKey, handlerGeneration: generation })
+  const permissions = createPermissionArbiter({ hostId: context.paths.hostKey, handlerGeneration: generation, changed: () => table.touch() })
   const broker = createPermissionBroker({ routing: permissions, cwd: target => table.get(target.agentId)?.cwd ?? "/", respond(target, requestId, result) {
     const agent = table.get(target.agentId)
     if (!agent?.owner || agent.phase !== "ready" || agent.tuple.providerGeneration !== target.providerGeneration) throw new AgentError("STALE_ATTACHMENT")
     return agent.owner.respond(requestId, result)
   } })
+  table.useAttention(agent => ({ pendingApprovals: permissions.pending(agent.agentId), editors: broker.attached(agent.tuple) }))
   permissions.subscribe(event => { if (event.kind === "receipt" && event.receipt.state === "applied") events?.append({ type: "permission_decided", agentId: event.receipt.ref.target.agentId, optionId: event.receipt.optionId }) })
   let frozen = false, closed = false, handingOff = false, handoff: { fromGeneration: string; agents: HandoffAgent[]; pending: Set<string>; failed: Map<string, RequestFailure> } | undefined
 
@@ -377,8 +378,8 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
     },
     attachEditor(target, connectionId, address, token) { bound(target).editor!.attach(connectionId, address, token) },
     detachEditor(connectionId, target, token) { for (const agent of table.all()) if (!target || agent.agentId === target.agentId && agent.tuple.providerGeneration === target.providerGeneration) agent.editor?.detach(connectionId, token) },
-    async attachPermissions(target, client, current) { bound(target); if (current && !current()) throw new AgentError("STALE_ATTACHMENT"); broker.attach(target, client) },
-    detachPermissions: (connectionId, target) => broker.detach(connectionId, target),
+    async attachPermissions(target, client, current) { bound(target); if (current && !current()) throw new AgentError("STALE_ATTACHMENT"); broker.attach(target, client); table.touch() },
+    detachPermissions: (connectionId, target) => { broker.detach(connectionId, target); table.touch() },
     permissionDecision: (connectionId, requestId, result) => broker.decision(connectionId, requestId, result),
     async submitAcp(target, request, beforeAccepted) { return bound(target).turns!.submitAcp(request, beforeAccepted) },
     async settledAcp(target, submissionId) { const agent = bound(target); try { return await agent.turns!.settledAcp(submissionId) } catch (error) { throw await faultOf(agent) ?? error } },

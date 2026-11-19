@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import type { JsonObject } from "../src/agent/session-config.js"
 import { liveHandlerFixture } from "./live-support.js"
+import { createPermissionArbiter } from "../src/agent/permission-arbiter.js"
 
 const selected = (optionId: string): JsonObject => ({ outcome: { outcome: "selected", optionId } })
 const frames = async (f: Awaited<ReturnType<typeof liveHandlerFixture>>) => (await f.providerRequests("codex-acp")) as JsonObject[]
@@ -43,4 +44,39 @@ test("malformed permission requests are declined without failing the session", a
   a.respond((await a.next("session/request_permission")).id, selected("allow-once"))
   assert.equal((await pending).stopReason, "end_turn")
   await f.verifyZeroSurvivors()
+})
+
+test("the roster shows pending approvals and attached editors for a live agent", async t => {
+  const f = await liveHandlerFixture(t), a = await f.connect(), b = await f.connect()
+  await a.request("initialize", { protocolVersion: 1 }); await b.request("initialize", { protocolVersion: 1 })
+  const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [] }), sessionId = String(s.sessionId)
+  await b.request("session/load", { sessionId, cwd: f.workspace, mcpServers: [] })
+  const live = async () => ((await a.request("agency/roster", {})).agents as JsonObject[]).find(row => row.agentId === sessionId.slice(7))!.live as JsonObject
+  assert.deepEqual([(await live()).pendingApprovals, (await live()).editors], [0, 2])
+  const pending = a.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "permission" }] })
+  const request = await a.next("session/request_permission"); await b.next("session/request_permission")
+  assert.equal((await live()).pendingApprovals, 1)
+  a.respond(request.id, selected("allow-once"))
+  assert.equal((await pending).stopReason, "end_turn")
+  assert.equal((await live()).pendingApprovals, 0)
+  await f.verifyZeroSurvivors()
+})
+
+test("the arbiter counts pending requests per agent and reports each change", async () => {
+  let changes = 0
+  const hostId = "a".repeat(64), handlerGeneration = "00000000-0000-4000-8000-000000000001"
+  const arbiter = createPermissionArbiter({ hostId, handlerGeneration, changed: () => { changes++ } })
+  const target = (agentId: string) => ({ agentId, handlerGeneration, providerGeneration: "00000000-0000-4000-8000-000000000009" })
+  const one = "00000000-0000-4000-8000-000000000002", two = "00000000-0000-4000-8000-000000000003"
+  const params = (tool: string): JsonObject => ({ toolCall: { toolCallId: tool, title: "Run" }, options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] })
+  const ref = await arbiter.open(target(one), params("t1"), "/w", async () => {})
+  await arbiter.open(target(one), params("t2"), "/w", async () => {})
+  await arbiter.open(target(two), params("t3"), "/w", async () => {})
+  assert.deepEqual([arbiter.pending(one), arbiter.pending(two), changes], [2, 1, 3])
+  await arbiter.decide("00000000-0000-4000-8000-000000000004", ref, "allow")
+  assert.equal(arbiter.pending(one), 1)
+  assert.ok(changes >= 4)
+  await arbiter.invalidate(target(two))
+  assert.equal(arbiter.pending(two), 0)
+  arbiter.close()
 })

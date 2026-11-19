@@ -4,7 +4,7 @@ import { codexSessionFiles, liveExcerpt, sessionExcerpt, sessionFile, sessionSet
 import { absolutePath, id, object, providerId, type ProviderId } from "../config/validate.js"
 import type { Activity, LiveAgent, LiveTable } from "./state.js"
 
-export type LiveRow = { activity: Activity; handlerGeneration: string; providerGeneration: string; model: string | null; mode: string | null }
+export type LiveRow = { activity: Activity; handlerGeneration: string; providerGeneration: string; model: string | null; mode: string | null; pendingApprovals: number; editors: number }
 export type RosterRow = { agentId: string; backendId: ProviderId; cwd: string; createdAt: string; title: string | null; lastActivityAt: string | null; live: LiveRow | null }
 export type History = { title: string | null; lastActivityAt: string | null }
 export type Transcript = { state: "transcript"; agentId: string; turns: ExcerptTurn[]; truncated: boolean; reason: string | null }
@@ -22,7 +22,7 @@ export function currentSettings(agent: LiveAgent): { model: string | null; mode:
 
 export function liveRow(table: LiveTable, agent: LiveAgent): RosterRow {
   return { agentId: agent.agentId, backendId: agent.backendId, cwd: agent.cwd, createdAt: agent.createdAt, title: agent.conversation.display().title ?? agent.title, lastActivityAt: agent.lastActivityAt,
-    live: { activity: table.activity(agent), handlerGeneration: agent.tuple.handlerGeneration, providerGeneration: agent.tuple.providerGeneration, ...currentSettings(agent) } }
+    live: { activity: table.activity(agent), handlerGeneration: agent.tuple.handlerGeneration, providerGeneration: agent.tuple.providerGeneration, ...currentSettings(agent), ...table.attention(agent) } }
 }
 
 export function parseRosterRow(raw: unknown): RosterRow {
@@ -32,7 +32,8 @@ export function parseRosterRow(raw: unknown): RosterRow {
   if (value.live === null) return { ...row, live: null }
   const live = object(value.live)
   if (!["starting", "idle", "working", "stopping"].includes(String(live.activity))) throw new Error("INVALID_HOST_REPLY")
-  return { ...row, live: { activity: live.activity as Activity, handlerGeneration: id(live.handlerGeneration), providerGeneration: id(live.providerGeneration), model: text(live.model), mode: text(live.mode) } }
+  const count = (field: unknown): number => { if (field === undefined) return 0; if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) throw new Error("INVALID_HOST_REPLY"); return field }
+  return { ...row, live: { activity: live.activity as Activity, handlerGeneration: id(live.handlerGeneration), providerGeneration: id(live.providerGeneration), model: text(live.model), mode: text(live.mode), pendingApprovals: count(live.pendingApprovals), editors: count(live.editors) } }
 }
 
 export function liveRows(table: LiveTable): RosterRow[] { return table.all().map(agent => liveRow(table, agent)).sort(order) }

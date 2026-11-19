@@ -80,3 +80,21 @@ test("the devbox entry helper attaches through its own Handler's bridge", { time
   assert.equal(await runRuntimeEntryHelper([commandId, "--target-json", JSON.stringify(other)], deps, async () => 0), 75)
   transport.close(); await transport.closed; await f.verifyZeroSurvivors()
 })
+
+test("closing an editor rings the doorbell, and the remote rows carry attention counts", { timeout: 60000 }, async t => {
+  const { f, transport } = await remote(t)
+  const a = await f.connect(), b = await f.connect()
+  await a.request("initialize", { protocolVersion: 1 }); await b.request("initialize", { protocolVersion: 1 })
+  const s = await a.request("session/new", { cwd: f.workspace, mcpServers: [] }), sessionId = String(s.sessionId)
+  await b.request("session/load", { sessionId, cwd: f.workspace, mcpServers: [] })
+  const live = async () => ((await transport.request("live-read", { op: "agents" })) as { agents: Array<{ agentId: string; live: { pendingApprovals: number; editors: number } }> }).agents.find(row => row.agentId === sessionId.slice(7))!.live
+  assert.deepEqual([(await live()).pendingApprovals, (await live()).editors], [0, 2])
+  const wait = (after: string | null, waitMs: number) => transport.request("live-wait", { after, waitMs }, { timeoutMs: waitMs + 5000 }) as Promise<{ revision: string }>
+  const before = (await wait(null, 8000)).revision
+  const changing = wait(before, 8000), since = Date.now()
+  b.close()
+  assert.notEqual((await changing).revision, before)
+  assert.ok(Date.now() - since < 7000)
+  assert.equal((await live()).editors, 1)
+  transport.close(); await transport.closed; await f.verifyZeroSurvivors()
+})
