@@ -283,3 +283,48 @@ Remote work goes through the laptop Handler, not through CLI commands. The edito
 Each live agent's row also reports `pendingApprovals` (permission requests awaiting a decision) and `editors` (attached editors), and a change to either wakes the laptop's per-host wait. When an agent nobody has open needs approval, on any enrolled host or on the laptop, the laptop Handler shows a macOS notification naming the agent and host when its pending count rises (after a laptop Handler restart, once per agent still waiting); open `:AgencyPermissions` to answer it. A new approval that follows a decision within about two seconds is not announced separately. Agents open in Neovim notify through the editor's attention hook instead, including for turns another editor or `agy` started.
 
 `agy internal-runtime-entry` is the devbox side of entry: it asks its own Handler's bridge for the entry and attaches to the tmux session.
+
+## Delegation
+
+An Agency agent can hand work to a child agent on another machine with `agy delegate`. The child is an ordinary Agency agent on a pool box, so it appears in the agent picker and can be opened and steered like any other, and its answers come back to the parent as new messages.
+
+```text
+agy delegate start --input-json -     {"task": "...", "ref": "BRANCH_OR_SHA", "backendId"?: "...", "model"?: "..."}
+agy delegate ask CHILD_UUID --input-json -     {"text": "..."}
+agy delegate stop CHILD_UUID
+agy delegate list
+```
+
+Only an Agency agent can use these commands. The command reads `AGENCY_AGENT_ID` from its environment and the Handler requires that ID to belong to a live agent on its own host, so a plain shell is refused with "agy delegate must run inside an Agency agent". The reply uses the same envelope as the other request commands, so the useful part is under `result`. `start` returns `{state: "starting", childId, box}` as soon as a box has accepted the request, without waiting for the child to do anything. `ask` returns `{state: "accepted", childId}` once the child has taken the message, and `stop` returns `{state: "stopped", childId}`. `list` returns `{state: "children", children}` with one row per child of the caller, giving its ID, box, state (`starting`, the live activity, or `stopped`), a count of delivered and undelivered answers, its title, and `moved`. A child can be asked a follow-up only while it is idle; an `ask` to a busy child fails with BUSY and the parent can try again later. `ask`, `stop` and `list` see only the caller's own children, so another agent's child ID is reported as not found.
+
+### Pool boxes
+
+Children run on pool boxes. A pool box is an enrolled devbox whose name is `<origin>-agency-<4 hex>`, for example `climate-agency-0001`. In this step nothing creates boxes. You create each one by hand with `pay remote new`, and enroll it by connecting once with `remotes` like any other host. The Handler picks a box using the names from the remote listing, so if no names are available it refuses with "pool names are unavailable; check pay remote list".
+
+The prefix is the origin, which is the name of the host the parent runs on (`laptop` for the laptop, otherwise the devbox's name). For a start request the laptop Handler looks first for a free box whose prefix matches the origin, and otherwise takes any free box. A box is free when it is online, has no live agent, is not already reserved by another start, and every child it has recorded is stopped. If none qualifies, no child starts and the parent receives a failure answer, described below. A box runs one child at a time, and a start that reaches a box that is already running one is refused with BUSY.
+
+When the box accepts a start, it finds a checkout whose `origin` remote matches the parent's repository. It searches `/pay/src/*`, `$HOME/stripe/*` and `$HOME/.dotfiles`, and compares remote URLs after removing the scheme, user, trailing slash and `.git`. In that checkout it runs `git fetch origin <ref>`. If the working tree has any changes, including untracked files, it runs `git stash push --include-untracked` with the message "agency child <id>", and it then runs `git checkout --detach FETCH_HEAD`. The child therefore starts on a detached head at the fetched commit, and nothing on the box is lost: stashed work stays in the stash under that label. The child's working directory is the same path within the repository that the parent was in, or the repository root if that path does not exist on the ref. A ref that is empty, starts with `-`, contains `..`, or uses characters outside letters, digits and `._/@^~{}-` is refused before git runs. The checkout is left as it is when the child stops, and the next child's start resets it. Because of that, `list` marks a stopped child `moved: true` when a newer child has since started on its box.
+
+### Answers
+
+Each time the child finishes a turn, the box records the text of that turn in the child's outbox. The outbox is a small file at `<persistentRoot>/children/<child-uuid>.json` on the box, and it also holds the parent link, the ref, and whether the child has stopped. The coordinator on the laptop reads each pool box's outbox whenever the box's roster changes, and delivers answers one at a time per parent, in order. Different parents are delivered independently.
+
+Delivery submits a new message to the parent, but only while the parent is idle. The message starts with a label and a blank line, then the answer text: `[Agency child 1a2b3c4d · climate-agency-0001 · answer]`. The label has the first 8 characters of the child's ID, the box name, and the entry's state, which is `answer`, `failed` or `interrupted`. An answer with no text is sent as "(no text)". If the parent is busy, delivery fails with BUSY, the answer stays undelivered, and it is retried the next time the box or the parent's host changes. If the parent is not live, for example because it is stopped or its devbox is offline, the same thing happens and the answers wait until it is live again. A delivered answer is marked in the outbox only after the parent has accepted it. The message carries an ID derived from the child and the entry, and the parent's Handler skips an ID it has already seen, so a delivery that is repeated after a lost reply does not show up twice.
+
+The outbox is bounded. It keeps at most 20 undelivered answers, and when a 21st arrives the oldest undelivered one is dropped and counted. The next delivery to the parent says so in its label, for example `... · answer · 3 earlier answers were dropped]`. It keeps only the last 3 delivered answers. An answer longer than 65536 characters is cut there and ends with "(answer cut at 65536 characters)". Once a child has stopped and every answer has been delivered, its outbox file is removed.
+
+### Failures a parent can receive
+
+A child's failures reach the parent as answers whose label state is `failed` or `interrupted`, so a parent never has to poll. There are three kinds.
+
+- A start that could not be placed or accepted. This covers "no free pool box", pool names being unavailable, and a box that refused or did not answer the request. `start` still returns `starting` with `box: null`, and the reason arrives as a `failed` message. The coordinator holds these only in laptop memory until they are delivered.
+- A start that failed on the box after it accepted. Fetching the ref, a dirty checkout that cannot be stashed, a missing checkout, a failed launch, or a failed first prompt each produce a `failed` answer with the git or launch error, and the child is stopped. If local changes were stashed first, the message adds that they were saved as "agency child <id>".
+- A turn that did not complete. A child turn that failed is recorded as `failed` with its failure code. A turn that was open when the child's Handler closed or restarted is recorded as `interrupted` with no text. If the box's Handler restarts before a child has produced anything, the child is stopped with a `failed` answer saying so.
+
+### Limits and what survives restarts
+
+A child is stopped by `agy delegate stop`, or automatically one hour after its last activity. The hourly check runs once a minute on the laptop and stops a child only while it is idle and no editor has it open, so a child someone is looking at is left alone. Children cannot start children. The Handler records each child's depth in its outbox and refuses `start` from a child with "children cannot start children (depth limit 1)".
+
+A devbox parent can delegate too, but only while the devbox is connected to the laptop. The devbox sends its `agy delegate` request up the bridge it shares with the laptop, and without that connection it fails with "this devbox is not connected to the laptop". The laptop accepts such a request only when the parent's host in the request is the host that sent it, so a devbox can delegate only for its own agents. The Handler decides that it is the laptop by having enrolled hosts, so a Handler with none treats itself as a devbox.
+
+Each fact is kept where it belongs. The child's outbox lives on the box, so it survives a restart of the box's Handler. On start the box's Handler stops any child that was running when it went down, after recording `interrupted` for an open turn, and keeps the answers it already had. The parent link in an outbox is how a restarted laptop rebuilds its view: it reads every pool box again, and undelivered answers are delivered as parents become idle. What a laptop restart loses is the transient state: start failures not yet delivered, a box reservation in progress, and any child whose start had not reached a box. That child is not shown by `list` and produces no message.
