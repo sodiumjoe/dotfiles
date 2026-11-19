@@ -123,3 +123,46 @@ test("a devbox can route only reads through the laptop, while the laptop itself 
   await assert.rejects(handle({ context: { source: "peer", peer: {} }, channel: "host-route", payload: { hostId: local, channel: "live-request", payload: {} }, signal }), /UNSUPPORTED_CAPABILITY/)
   hosts.close()
 })
+
+test("a devbox sends a delegate request upward to the bridge that connected it", async () => {
+  let handle!: (input: { context: unknown; channel: string; payload: unknown; signal: AbortSignal }) => Promise<unknown>
+  const bridge = { register: (_channels: readonly string[], endpoint: typeof handle) => { handle = endpoint; return () => {} } } as unknown as HandlerBridge
+  const hosts = router(async () => { throw new Error("unused") }, async () => [])
+  const relay = registerHostRouter({ bridge, router: hosts })
+  const calls: Array<[string, string, unknown]> = []
+  const peer = (name: string) => {
+    let close!: () => void
+    const closed = new Promise<void>(resolve => { close = resolve })
+    return { value: { ready: Promise.resolve({ capabilities: [] }), request: async (channel: string, payload: unknown) => { calls.push([name, channel, payload]); return "answer" }, closed }, close }
+  }
+  const first = peer("first"), second = peer("second"), signal = new AbortController().signal
+  await handle({ context: { source: "peer", peer: first.value }, channel: "relay-register", payload: {}, signal })
+  await handle({ context: { source: "peer", peer: second.value }, channel: "relay-register", payload: {}, signal })
+  assert.equal(relay.owners(), 2)
+  assert.equal(await relay.upward({ op: "list" }), "answer")
+  assert.deepEqual(calls, [["second", "delegate", { op: "list" }]])
+  first.close()
+  second.close()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(relay.owners(), 0)
+  await assert.rejects(relay.upward({ op: "list" }), /HOST_UNAVAILABLE/)
+  hosts.close()
+})
+
+test("the laptop answers a delegate request from a devbox and refuses one it cannot handle", async () => {
+  const signal = new AbortController().signal
+  const capture = async (upward?: (payload: unknown, signal: AbortSignal) => Promise<unknown>) => {
+    let reverse!: (channel: string, payload: unknown, requestId: string, signal: AbortSignal) => Promise<unknown>
+    const { transport } = fakeTransport(async () => "ok")
+    ;(transport.peer as unknown as { onRequest: (handler: typeof reverse) => void }).onRequest = handler => { reverse = handler }
+    const hosts = createHostRouter({ hostId: local, inventory: { list: async () => [{ hostId: remote, hostname: "devbox" }] }, local: async () => null, connect: async () => transport, ...(upward ? { upward } : {}) })
+    await hosts.request({ hostId: remote, channel: "live-read", payload: {} })
+    return { reverse, hosts }
+  }
+  const handled = await capture(async payload => ({ handled: payload }))
+  assert.deepEqual(await handled.reverse("delegate", { op: "list" }, "r", signal), { handled: { op: "list" } })
+  handled.hosts.close()
+  const refused = await capture()
+  await assert.rejects(refused.reverse("delegate", { op: "list" }, "r", signal), /UNSUPPORTED_CAPABILITY/)
+  refused.hosts.close()
+})

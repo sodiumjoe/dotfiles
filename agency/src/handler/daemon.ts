@@ -269,7 +269,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const coreBridge = bridge
     const inventory = createHostInventory(root)
     router = createHostRouter({ hostId: options.paths.hostKey, inventory, local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["live-read", "live-wait"] }) })
-    registerHostRouter({ bridge, router })
+    const relay = registerHostRouter({ bridge, router })
     const hosts = router
     remotes = createRemoteRosters({
       list: () => inventory.list(),

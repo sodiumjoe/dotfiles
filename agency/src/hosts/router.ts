@@ -25,7 +25,7 @@ export function parsePeerRoute(raw: unknown): HostRoute {
   if (!isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
   return route
 }
-export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport> }): HostRouter {
+export function createHostRouter(input: { hostId: string; inventory: { list(): Promise<HostEnrollment[]> }; local(channel: string, payload: unknown, signal?: AbortSignal): Promise<unknown>; connect(enrollment: HostEnrollment): Promise<BridgeTransport>; upward?(payload: unknown, signal: AbortSignal): Promise<unknown> }): HostRouter {
   const connections = new Map<string, Promise<BridgeTransport>>()
   let relay: ((route: HostRoute, signal?: AbortSignal) => Promise<unknown>) | undefined, closed = false
   function connected(enrollment: HostEnrollment): Promise<BridgeTransport> {
@@ -36,6 +36,7 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
       if (closed) { transport.close(); bridgeError("BRIDGE_CLOSED") }
       const reads = createPagedReads((channel, payload, signal) => reverse(channel, payload, signal))
       const reverse = async (channel: string, payload: unknown, signal: AbortSignal) => {
+        if (channel === "delegate") { if (!input.upward) bridgeError("UNSUPPORTED_CAPABILITY"); return input.upward(payload, signal) }
         if (channel !== "host-route" && channel !== "host-route-read") bridgeError("UNSUPPORTED_CAPABILITY")
         const route = parsePeerRoute(payload)
         if (channel === "host-route-read" && !isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
@@ -73,14 +74,14 @@ export function createHostRouter(input: { hostId: string; inventory: { list(): P
     close() { if (closed) return; closed = true; relay = undefined; for (const flight of connections.values()) void flight.then(transport => transport.close(), () => undefined); connections.clear() }
   }
 }
-export function registerHostRouter(input: { bridge: HandlerBridge; router: HostRouter }): () => void {
+export function registerHostRouter(input: { bridge: HandlerBridge; router: HostRouter }): { unregister(): void; owners(): number; upward(payload: unknown, signal?: AbortSignal): Promise<unknown> } {
   const owners: Array<{ peer: object; send(route: HostRoute, signal?: AbortSignal): Promise<unknown> }> = []
   let remove: (() => void) | undefined
   const relay = (route: HostRoute, signal?: AbortSignal) => {
     const owner = owners.at(-1)
     return owner ? owner.send(route, signal) : bridgeError("HOST_UNAVAILABLE")
   }
-  return input.bridge.register(["host-route", "host-route-read", "relay-register"], async ({ context, channel, payload, signal }) => {
+  const unregister = input.bridge.register(["host-route", "host-route-read", "relay-register"], async ({ context, channel, payload, signal }) => {
     if (channel === "relay-register") {
       keys(object(payload), [])
       if (context.source !== "peer") bridgeError("UNSUPPORTED_CAPABILITY")
@@ -99,4 +100,13 @@ export function registerHostRouter(input: { bridge: HandlerBridge; router: HostR
     if (channel === "host-route-read" && !isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
     return input.router.request(route, signal)
   })
+  return {
+    unregister: () => { unregister() },
+    owners: () => owners.length,
+    upward: async (payload, signal) => {
+      const owner = owners.at(-1)
+      if (!owner) bridgeError("HOST_UNAVAILABLE")
+      return (owner.peer as Parameters<typeof requestBridgeRead>[0]).request("delegate", payload, { ...(signal ? { signal } : {}) })
+    }
+  }
 }

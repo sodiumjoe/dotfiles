@@ -25,7 +25,8 @@ export async function runRuntimeBridgeCli(argv: readonly string[], deps: Runtime
     const peer = publicPeer
     local.onRequest((channel, payload, _requestId, signal) => {
       if (["read-open", "read-page", "read-close"].includes(channel)) return reverse.request(channel, payload, signal)
-      if (channel !== "host-route" && channel !== "host-route-read") bridgeError("UNSUPPORTED_CAPABILITY")
+      if (channel !== "host-route" && channel !== "host-route-read" && channel !== "delegate") bridgeError("UNSUPPORTED_CAPABILITY")
+      if (channel === "delegate") return peer.request("delegate", payload, { signal })
       const route = parseHostRoute(payload)
       if (channel === "host-route-read" && !isRoutedRead(route.channel)) bridgeError("UNSUPPORTED_CAPABILITY")
       return requestBridgeRead(peer, channel, payload, { signal })
