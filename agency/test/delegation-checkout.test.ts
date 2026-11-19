@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
-import { findCheckout, normalizeRemote, prepareCheckout } from "../src/delegation/checkout.js"
+import { findCheckout, gitEnvironment, normalizeRemote, prepareCheckout } from "../src/delegation/checkout.js"
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim()
 async function repos(t: { after(fn: () => Promise<void>): void }) {
@@ -50,4 +50,25 @@ test("a ref that git could read as an option is refused before any git command r
   assert.equal(git(work, "rev-parse", "HEAD"), head)
   assert.equal(git(work, "stash", "list"), stashes)
   assert.equal(git(work, "status", "--porcelain"), "M a.txt")
+})
+
+test("a checkout that fails after local edits were stashed says where the edits went", async t => {
+  const { work } = await repos(t)
+  await writeFile(join(work, ".git", "hooks", "post-checkout"), "#!/bin/sh\necho blocked by hook >&2\nexit 1\n")
+  await chmod(join(work, ".git", "hooks", "post-checkout"), 0o755)
+  git(work, "config", "core.hooksPath", join(work, ".git", "hooks"))
+  await writeFile(join(work, "a.txt"), "local edit")
+  await assert.rejects(prepareCheckout(work, "feature", "agency child 0004"), (error: Error) => {
+    assert.match(error.message, /^checkout failed: blocked by hook/)
+    assert.match(error.message, / \(local changes were stashed as "agency child 0004"\)$/)
+    return true
+  })
+  assert.match(git(work, "stash", "list"), /agency child 0004/)
+  await assert.rejects(prepareCheckout(work, "feature", "agency child 0005"), (error: Error) => error.message === "checkout failed: blocked by hook")
+})
+
+test("box git commands never wait on a credential prompt", () => {
+  const env = gitEnvironment()
+  assert.equal(env.GIT_TERMINAL_PROMPT, "0")
+  assert.equal(env.PATH, process.env.PATH)
 })

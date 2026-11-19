@@ -5,8 +5,10 @@ import { join } from "node:path"
 
 export const DEFAULT_ROOTS = ["/pay/src/*", "$HOME/stripe/*", "$HOME/.dotfiles"]
 
+export function gitEnvironment(): NodeJS.ProcessEnv { return { ...process.env, GIT_TERMINAL_PROMPT: "0" } }
+
 function git(cwd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => execFile("git", args, { cwd, timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+  return new Promise((resolve, reject) => execFile("git", args, { cwd, env: gitEnvironment(), timeout: 300000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
     if (error) reject(new Error(String(stderr).trim().split("\n").at(-1) || error.message)); else resolve(String(stdout).trim())
   }))
 }
@@ -42,6 +44,6 @@ export async function prepareCheckout(dir: string, ref: string, label: string): 
   try {
     if (await git(dir, ["status", "--porcelain"])) { await git(dir, ["stash", "push", "--include-untracked", "--message", label]); stashed = true }
     await git(dir, ["checkout", "--quiet", "--detach", "FETCH_HEAD"])
-  } catch (error) { throw new Error("checkout failed: " + (error as Error).message) }
+  } catch (error) { throw new Error("checkout failed: " + (error as Error).message + (stashed ? " (local changes were stashed as \"" + label + "\")" : "")) }
   return { stashed }
 }
