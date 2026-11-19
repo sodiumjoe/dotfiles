@@ -27,6 +27,7 @@ test("remote URLs of every common form normalize to host and path", () => {
 test("the checkout whose origin matches is found among root patterns", async t => {
   const { root, origin, work } = await repos(t)
   assert.equal(await findCheckout(normalizeRemote(origin), [join(root, "missing"), join(root, "src", "*")]), work)
+  assert.equal(await findCheckout(normalizeRemote(origin), [join(root, "missing"), work]), work)
   assert.equal(await findCheckout("example.com/other", [join(root, "src", "*")]), null)
 })
 

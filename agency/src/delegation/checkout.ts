@@ -3,7 +3,7 @@ import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-export const DEFAULT_ROOTS = ["/pay/src/*", "$HOME/stripe/*", "$HOME/.dotfiles"]
+export const DEFAULT_ROOTS = ["/pay/src", "/pay/src/*", "$HOME/stripe/*", "$HOME/.dotfiles"]
 
 export function gitEnvironment(): NodeJS.ProcessEnv { return { ...process.env, GIT_TERMINAL_PROMPT: "0" } }
 
