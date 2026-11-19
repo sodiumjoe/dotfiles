@@ -18,10 +18,10 @@ import { createAcpPeer, type AcpPeer } from "./acp-peer.js"
 
 export type StartInput = Partial<Extract<LiveOperation, { op: "start" }>>
 
-export async function liveHandlerFixture(t: TestContext) {
+export async function liveHandlerFixture(t: TestContext, options: { delegationRoots?: string[] } = {}) {
   const homes = await mkdtemp(join(tmpdir(), "agency-homes-"))
   t.after(() => rm(homes, { recursive: true, force: true }))
-  const f = await controlFixture(t, {}, fileURLToPath(new URL("./fixtures/live-handler.js", import.meta.url)), { CODEX_HOME: join(homes, "codex"), CLAUDE_CONFIG_DIR: join(homes, "claude") })
+  const f = await controlFixture(t, options.delegationRoots ? { delegationRoots: options.delegationRoots } : {}, fileURLToPath(new URL("./fixtures/live-handler.js", import.meta.url)), { CODEX_HOME: join(homes, "codex"), CLAUDE_CONFIG_DIR: join(homes, "claude") })
   const workspace = join(f.root, "workspace"), otherWorkspace = join(f.root, "other-workspace")
   await mkdir(workspace, { mode: 0o700 }); await mkdir(otherWorkspace, { mode: 0o700 })
   const profiles: ProviderProfile[] = []

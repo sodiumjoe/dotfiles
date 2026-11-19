@@ -50,7 +50,7 @@ export async function shutdownFixtureHandler(current: { generation: string; proc
   await owner.absent()
 }
 
-export type ControlFixtureConfig = { paths: PlatformPaths }
+export type ControlFixtureConfig = { paths: PlatformPaths; delegationRoots?: string[] }
 
 let fixtureBatchFailure: Error | undefined
 export function assertFixtureBatchHealthy(): void {

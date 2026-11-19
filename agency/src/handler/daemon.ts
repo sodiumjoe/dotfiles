@@ -38,6 +38,10 @@ import type { RosterRow } from "../live/roster.js"
 import { dispatchLive } from "../live/dispatch.js"
 import { liveErrorReply, REQUEST_PROTOCOL, type LiveReply } from "../live/protocol.js"
 import { RequestError } from "../live/errors.js"
+import { createOutboxStore } from "../delegation/outbox.js"
+import { createBox, type Box } from "../delegation/box.js"
+import { DELEGATION_OPS, delegationReply } from "../delegation/requests.js"
+import { DEFAULT_ROOTS } from "../delegation/checkout.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -52,6 +56,7 @@ export type HandlerOptions = {
   entryDriver?: RuntimeEntryDriver
   distDigest?: string | null
   attentionNotify?: (title: string, message: string) => void
+  delegationRoots?: string[]
 }
 
 export function receiveStart(gate: Duplex, status: Duplex, timeoutMs = 5000): Promise<void> {
@@ -103,6 +108,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const sockets = new Set<Socket>()
   let shutdown: ShutdownContext | undefined
   let core: LiveCore | undefined
+  let box: Box | undefined
+  let stopWatch: (() => void) | undefined
   let router: HostRouter | undefined
   let remotes: ReturnType<typeof createRemoteRosters> | undefined
   let attentionTimer: NodeJS.Timeout | undefined
@@ -122,6 +129,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       () => router?.close(),
       () => bridge?.close(),
       () => acpServer?.close(),
+      () => stopWatch?.(),
       () => core?.close(),
       () => { options.status.destroy() },
       () => { options.gate.destroy() },
@@ -139,7 +147,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   const terminate = createHandlerTermination({
     async drain() {
       const failures: unknown[] = []
-      try { await core?.freezeAndDrain(true) } catch (error) { failures.push(error) }
+      try { await core?.freezeAndDrain(true); await box?.flushed() } catch (error) { failures.push(error) }
       const verified = await Promise.allSettled([
         Promise.resolve().then(() => core?.verifyDischarged()),
       ])
@@ -229,6 +237,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (termination || closing) await bridge.close()
     checkStartup()
     const servedCore = core
+    const servedBox = box = createBox({ core, outbox: createOutboxStore(root), roots: options.delegationRoots ?? DEFAULT_ROOTS, environment: () => destinationEnvironment(process.env), changed: () => servedCore.touch() })
     bridge.register(["live-read", "live-wait"], async ({ channel, payload }) => {
       if (!ready()) bridgeError("HANDLER_UNAVAILABLE")
       const value = object(payload)
@@ -245,6 +254,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     bridge.register(["live-request"], async ({ payload }) => {
       if (!ready()) bridgeError("HANDLER_UNAVAILABLE")
       const value = object(payload)
+      if (DELEGATION_OPS.includes(String(value.op))) return delegationReply(String(value.op), value, servedBox, servedCore)
       if (!["excerpt", "permissions", "decide"].includes(String(value.op))) bridgeError("UNSUPPORTED_CAPABILITY")
       return dispatchRequest({ ...value, protocol: REQUEST_PROTOCOL, requestId: randomUUID() })
     })
@@ -297,9 +307,11 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     await writeHandlerRecord(options.recordPath, current)
     if (!isDeepStrictEqual(await readHandlerRecord(options.recordPath), current)) throw new Error("Handler readiness record changed")
     checkStartup()
-    shutdown = { record: current, state, closeAfterReply: close, agents: core }
+    shutdown = { record: current, state, closeAfterReply: close, agents: core, flush: () => servedBox.flushed() }
     state.phase = "ready"
     void core?.resumeHandoff(destinationEnvironment(process.env)).catch(() => undefined)
+    stopWatch = servedBox.watch()
+    void servedBox.sweep().catch(() => undefined)
     await sendStatus(options.status, { type: "ready", generation: options.generation }).catch(() => undefined)
     options.status.destroy()
     await closed

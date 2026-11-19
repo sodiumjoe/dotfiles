@@ -14,7 +14,7 @@ import type { PlatformPaths } from "../../src/platform/paths.js"
 
 const spawnFixture = await fixtureSpawner()
 process.umask(0o077)
-const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as { paths: PlatformPaths }
+const config = JSON.parse(await readFile(process.argv[2]!, "utf8")) as { paths: PlatformPaths; delegationRoots?: string[] }
 const root = dirname(config.paths.runtimeRoot)
 const contract: LaunchContract = {
   id: "fixture-v1", sessionLoad: true, providerId: "codex-acp", adapterPackage: "@agentclientprotocol/codex-acp", adapterVersion: "1.0.0",
@@ -23,7 +23,7 @@ const contract: LaunchContract = {
 }
 const unverifiedCleanup = (owner: ReturnType<typeof createAgentProcess>): ReturnType<typeof createAgentProcess> => new Proxy(owner, { get: (target, key) => key === "cleanup" ? async () => { await target.cleanup(); if (await readFile(join(root, "unverified-cleanup")).then(() => true, () => false)) throw new AgentError("CLEANUP_UNVERIFIED") } : Reflect.get(target, key) })
 try {
-  await runHandler({ paths: config.paths, adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(), recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!,
+  await runHandler({ paths: config.paths, ...(config.delegationRoots ? { delegationRoots: config.delegationRoots } : {}), adapter: process.platform === "darwin" ? createDarwinAdapter() : createLinuxAdapter(), recordPath: process.env.AGENCY_HANDLER_RECORD!, generation: process.env.AGENCY_HANDLER_GENERATION!,
     status: new Socket({ fd: 3, readable: true, writable: true }), gate: new Socket({ fd: 4, readable: true, writable: true }),
     entryDriver: (() => { const opened = new Set<string>(), editor = { editorId: randomUUID(), session: "fixture", pane: "%1", tmuxSocketPath: join(root, "tmux.sock") }; return { ensure: async (ref: { target: { agentId: string } }) => { opened.add(ref.target.agentId); return editor }, activate: async () => {}, inspect: async (ref: { target: { agentId: string } }) => opened.has(ref.target.agentId) ? editor : null } })(),
     onPhase: async () => { if (await readFile(join(root, "fail-startup"), "utf8").then(() => true, () => false)) throw new Error("fixture startup failure") },

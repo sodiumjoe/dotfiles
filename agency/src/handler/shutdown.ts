@@ -8,6 +8,7 @@ export type ShutdownContext = {
   record: HandlerGenerationRecord
   state: HandlerStatus
   closeAfterReply(): Promise<void>
+  flush?: () => Promise<void>
   agents?: Pick<LiveCore, "assertOrdinaryShutdownSafe" | "freezeIfIdle" | "freezeAndDrain" | "resume" | "verifyDischarged" | "prepareHandoff">
   accepted?: AcceptedShutdown
   pending?: { request: ShutdownRequest; operation: Promise<AcceptedShutdown>; deadline: number }
@@ -53,6 +54,7 @@ export async function shutdownHandler(request: ShutdownRequest, context: Shutdow
         if (request.requireIdle) await context.agents?.freezeIfIdle()
         if (request.requireIdle && request.stopAgents) await context.agents?.prepareHandoff()
         await context.agents?.freezeAndDrain(request.stopAgents)
+        await context.flush?.()
         check()
         try { await context.agents?.verifyDischarged() } catch { throw new ControlError("INCOMPLETE", "agent cleanup remains unverified") }
         check()

@@ -77,6 +77,7 @@ export type LiveCore = {
   loadHandoff(): Promise<void>
   resumeHandoff(environment: LaunchEnvironment): Promise<void>
   handoffStatus(): HandoffStatus | null
+  touch(): void
   resume(): void
   verifyDischarged(): Promise<void>
   close(): void
@@ -303,6 +304,7 @@ export function createLiveCore(input: LiveCoreInput, dependencies: LiveCoreDepen
 
   return {
     handlerGeneration: generation, permissions, start, launch,
+    touch: () => table.touch(),
     liveAgents: () => table.all(),
     async initialize() { void roster.rows(table).catch(() => undefined) },
     async restore(agentId, environment, nativeParams) { return row(await revive(agentId, environment, nativeParams)) },
