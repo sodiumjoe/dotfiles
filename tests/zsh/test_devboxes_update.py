@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -102,6 +103,35 @@ sys.exit(reply["exit"])
         self.assertTrue(command.startswith("timeout 900 bash -c "), command)
         for step in ("git pull --ff-only", "./bootstrap.sh", "agy restart --timeout 30 --json"):
             self.assertIn(step, command)
+
+    def test_a_detached_checkout_is_put_back_on_master_before_pulling(self):
+        self.update()
+        script = shlex.split(json.loads((self.root / "ssh-qa-mydev--aaa.json").read_text())[-1])[-1]
+        box = self.root / "box"
+        tools = box / "bin"
+        tools.mkdir(parents=True)
+        (tools / "agy").write_text("#!/bin/sh\necho '" + restart_reply(True) + "'\n")
+        (tools / "agy").chmod(0o700)
+        env = dict(os.environ, HOME=str(box), PATH=f"{tools}:/usr/bin:/bin", GIT_CONFIG_GLOBAL="/dev/null",
+                   GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        def git(*args, cwd=box):
+            return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
+        git("init", "-q", "--bare", "-b", "master", "origin.git")
+        git("clone", "-q", "origin.git", ".dotfiles")
+        checkout = box / ".dotfiles"
+        (checkout / "bootstrap.sh").write_text("#!/bin/sh\n")
+        (checkout / "bootstrap.sh").chmod(0o700)
+        git("add", "bootstrap.sh", cwd=checkout)
+        git("commit", "-qm", "one", cwd=checkout)
+        first = git("rev-parse", "--short", "HEAD", cwd=checkout)
+        git("commit", "-q", "--allow-empty", "-m", "two", cwd=checkout)
+        git("push", "-q", "origin", "master", cwd=checkout)
+        latest = git("rev-parse", "--short", "HEAD", cwd=checkout)
+        git("reset", "-q", "--hard", first, cwd=checkout)
+        git("checkout", "-q", "--detach", cwd=checkout)
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+        self.assertIn(f"@@ result ok {first} {latest}", result.stdout, result.stdout + result.stderr)
+        self.assertEqual(git("symbolic-ref", "--short", "HEAD", cwd=checkout), "master")
 
     def test_all_boxes_current_and_idle_succeeds(self):
         for host in self.replies:

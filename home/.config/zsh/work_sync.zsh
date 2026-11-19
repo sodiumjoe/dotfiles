@@ -279,6 +279,7 @@ devboxes-update() {
   local -a words
   local script='set -u
 cd "$HOME/.dotfiles" || { echo "@@ result failed no dotfiles checkout"; exit 0; }
+git symbolic-ref -q HEAD >/dev/null || git checkout -q master || { echo "@@ result failed detached HEAD and master could not be checked out"; exit 0; }
 before=$(git rev-parse --short HEAD)
 if ! git pull --ff-only; then echo "@@ result failed pull refused (local changes or diverged)"; exit 0; fi
 after=$(git rev-parse --short HEAD)
