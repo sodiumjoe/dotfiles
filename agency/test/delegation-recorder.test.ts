@@ -60,6 +60,23 @@ test("an open turn left by a crash is recorded as interrupted when a recorder at
   assert.deepEqual(value.entries.map(entry => [entry.submissionId, entry.state]), [[submission, "interrupted"]])
 })
 
+test("a change callback that throws neither loses the entry nor escapes as an unhandled rejection", async t => {
+  const { outbox, conversation } = await setup(t)
+  const rejections: unknown[] = [], onRejection = (reason: unknown) => { rejections.push(reason) }
+  process.on("unhandledRejection", onRejection)
+  t.after(() => { process.off("unhandledRejection", onRejection) })
+  const recorder = recordTurns({ childId: child, conversation, outbox, running: () => null, changed: () => { throw new Error("changed failed") } })
+  conversation.append({ kind: "submitted", submissionId: submission, text: "task" })
+  conversation.append(chunk("ok"))
+  conversation.append({ kind: "turn", submissionId: submission, state: "completed", stopReason: "end_turn", failure: null })
+  const value = await until(async () => { const current = await outbox.read(child); return current?.entries.length ? current : undefined })
+  assert.deepEqual(value.entries.map(entry => [entry.state, entry.text]), [["answer", "ok"]])
+  await new Promise(resolve => setImmediate(resolve))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(rejections, [])
+  recorder.close()
+})
+
 test("a turn longer than the conversation buffer keeps all its text", async t => {
   const { outbox, conversation, record } = await setup(t, { events: 4 })
   const recorder = record()

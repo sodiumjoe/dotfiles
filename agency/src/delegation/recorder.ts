@@ -9,7 +9,7 @@ export function recordTurns(input: { childId: string; conversation: { observe(li
     const turn = open.get(submissionId)
     if (!turn) return
     open.delete(submissionId)
-    void input.outbox.append(input.childId, { submissionId, state, stopReason, failure, text: turn.parts.filter(part => part.length).join("\n\n") }).then(() => input.changed(), () => undefined)
+    void input.outbox.append(input.childId, { submissionId, state, stopReason, failure, text: turn.parts.filter(part => part.length).join("\n\n") }).then(() => input.changed()).catch(() => undefined)
   }
   void input.outbox.read(input.childId).then(outbox => {
     if (outbox?.open && outbox.open !== input.running()) return input.outbox.append(input.childId, { submissionId: outbox.open, state: "interrupted", stopReason: null, failure: null, text: "" }).then(() => input.changed())
