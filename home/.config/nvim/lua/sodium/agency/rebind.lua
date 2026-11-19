@@ -1,6 +1,6 @@
 local M = {}
 
-local function agency_managers()
+function M.managers()
     local Registry, Config = require("agentic.session_registry"), require("agentic.config")
     local managers = {}
     for tab, manager in pairs(Registry.sessions) do
@@ -17,6 +17,19 @@ local function reconnect(done)
     require("agentic.acp.agent_instance").get_instance("agency", function(client)
         client:when_ready(function() done() end)
     end)
+end
+
+function M.describe(summary)
+    local text = summary.rebound .. " tab" .. (summary.rebound == 1 and "" or "s") .. " rebound"
+    if summary.deferred > 0 then text = text .. ", " .. summary.deferred .. " after their turns" end
+    if #summary.stopped > 0 then text = text .. ", " .. #summary.stopped .. (#summary.stopped == 1 and " tab's agent is" or " tabs' agents are") .. " stopped; reopen with <leader>ar" end
+    if #summary.missing > 0 then text = text .. ", " .. #summary.missing .. " without a known agent" end
+    if #summary.failed > 0 then
+        local reasons = {}
+        for _, item in ipairs(summary.failed) do reasons[#reasons + 1] = item.agentId:sub(1, 8) .. ": " .. tostring(item.error) end
+        text = text .. ", " .. #summary.failed .. " failed to rebind (" .. table.concat(reasons, ", ") .. ")"
+    end
+    return text
 end
 
 function M.run(views, opts, callback)
@@ -41,7 +54,7 @@ function M.run(views, opts, callback)
         timer:stop()
         timer:close()
         local Adapter, current = require("sodium.agency.agentic"), vim.api.nvim_get_current_tabpage()
-        local listed, managers = pcall(agency_managers)
+        local listed, managers = pcall(M.managers)
         local loading, opened, finished = {}, false, false
         local load_timer = assert(vim.uv.new_timer())
         local function finish()

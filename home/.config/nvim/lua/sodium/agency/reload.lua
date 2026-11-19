@@ -47,17 +47,6 @@ function M.reload_modules(deps)
     return false, err, not restored and rollback_err or nil
 end
 
-local function quiet_disconnect()
-    local Logger = require("agentic.utils.logger")
-    local notify = Logger.notify
-    local function filtered(message, ...)
-        if type(message) == "string" and message:find("Agency Handler connection ended", 1, true) then return end
-        return notify(message, ...)
-    end
-    Logger.notify = filtered
-    return function() if Logger.notify == filtered then Logger.notify = notify end end
-end
-
 local function unlinked(root, config)
     local base, missing = root .. "/home/.config/nvim", {}
     if not vim.uv.fs_stat(base) then return missing end
@@ -79,12 +68,11 @@ function M.run(opts)
     local root = deps.repository or repository()
     if not root then notify("Cannot locate the Agency checkout from agy"); return end
     vim.g.agency_reload_running = true
-    local parts, failed, retry, restore_notify = {}, {}, nil, nil
+    local parts, failed, retry = {}, {}, nil
     local progress = { id = "agency_reload", title = "Agency reload" }
     local function stage(text) notify(text .. "…", vim.log.levels.INFO, vim.tbl_extend("force", progress, { timeout = false })) end
     local function finish(message)
         vim.g.agency_reload_running = nil
-        if restore_notify then restore_notify(); restore_notify = nil end
         if message then parts[#parts + 1] = message end
         if retry then parts[#parts + 1] = retry end
         if #failed > 0 then parts[#parts + 1] = #failed .. " agent" .. (#failed == 1 and "" or "s") .. " not restored (" .. table.concat(failed, ", ") .. ")" end
@@ -112,16 +100,7 @@ function M.run(opts)
             if page_err then finish("could not list agents: " .. (page_err.message or page_err.code)); return end
             require("sodium.agency.rebind").run(page.agents, { defer_busy = defer_busy, reconnect = deps.reconnect }, guard(function(summary)
                 if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen tabs with <leader>af"); return end
-                local text = summary.rebound .. " tab" .. (summary.rebound == 1 and "" or "s") .. " rebound"
-                if summary.deferred > 0 then text = text .. ", " .. summary.deferred .. " after their turns" end
-                if #summary.stopped > 0 then text = text .. ", " .. #summary.stopped .. (#summary.stopped == 1 and " tab's agent is" or " tabs' agents are") .. " stopped; reopen with <leader>ar" end
-                if #summary.missing > 0 then text = text .. ", " .. #summary.missing .. " without a known agent" end
-                if #summary.failed > 0 then
-                    local reasons = {}
-                    for _, item in ipairs(summary.failed) do reasons[#reasons + 1] = item.agentId:sub(1, 8) .. ": " .. tostring(item.error) end
-                    text = text .. ", " .. #summary.failed .. " failed to rebind (" .. table.concat(reasons, ", ") .. ")"
-                end
-                finish(text)
+                finish(require("sodium.agency.rebind").describe(summary))
             end))
         end))
     end
@@ -153,11 +132,9 @@ function M.run(opts)
     end
     local function restart()
         stage("Restarting the Agency Handler; it waits up to 5 minutes for running turns")
-        restore_notify = quiet_disconnect()
         client.command({ "restart", "--timeout", "300" }, { timeout_ms = 1800000 }, guard(function(err, envelope)
             if err and (err.code == "BUSY" or err.code == "INVALID_PROTOCOL") then
                 vim.g.agency_reload_running = nil
-                if restore_notify then restore_notify(); restore_notify = nil end
                 notify("Agency reload: " .. (err.message or "agents are busy") .. "; nothing was reloaded", vim.log.levels.INFO, progress)
                 return
             end

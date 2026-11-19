@@ -23,6 +23,8 @@ describe("Agency reload", function()
             repository = root,
             node = root .. "/node",
             reconnect = function(done) f.client:_set_state("ready"); done() end,
+            resume_delay_ms = 0,
+            resume_retry_ms = 10,
         })
     end)
     after_each(function()
@@ -102,6 +104,31 @@ describe("Agency reload", function()
         assert.are.same({ "agency_reload" }, vim.tbl_keys(vim.iter(notified):fold({}, function(ids, opts) ids[opts.id or "none"] = true; return ids end)))
         assert.is_false(notified[#notified - 1].timeout)
         assert.is_nil(notified[#notified].timeout)
+    end)
+
+    it("rebinds the tab on its own after the Handler restarts outside the editor, and rejects a prompt sent before then", function()
+        local tab, manager = f.manager.tab_page_id, f.manager
+        local moved = vim.deepcopy(control.target_a)
+        moved.handlerGeneration, moved.providerGeneration = control.id(20), control.id(21)
+        local before = #f.frames
+        f.client.transport.process = {}
+        f.client:_set_state("disconnected")
+        f.client.transport.process = nil
+        manager:_handle_input_submit("lost question")
+        f.flush()
+        for index = before + 1, #f.frames do assert.are_not.equal("session/prompt", f.frames[index].method) end
+        assert.is_false(manager.is_generating)
+        assert.are.equal("lost question", table.concat(vim.api.nvim_buf_get_lines(manager.widget.buf_nrs.input, 0, -1, false), "\n"))
+        respond_agents({ row(control.target_a, false) })
+        assert.is_true(vim.wait(300, function()
+            for _, call in ipairs(calls) do if not call.answered and call.argv[1] == "agents" then return true end end
+            return false
+        end, 5))
+        respond_agents({ row(moved) })
+        answer_load(moved)
+        assert.are.equal(manager, Registry.sessions[tab])
+        assert.are.same(moved, manager._agency_binding)
+        assert.is_truthy(table.concat(notifications, "\n"):find("Reconnected to the Agency Handler: 1 tab rebound", 1, true))
     end)
 
     it("names the agents the new Handler could not restore", function()
@@ -280,23 +307,15 @@ describe("Agency reload", function()
         assert.is_truthy(table.concat(notifications, "\n"):find("already running", 1, true))
         assert.are.equal(1, #systems)
     end)
-    it("hides the expected connection error while it restarts the Handler", function()
+    it("hides the connection error that the reconnect notice replaces", function()
+        local original, logged = vim.notify, {}
+        vim.notify = function(message) logged[#logged + 1] = message end
         local Logger = require("agentic.utils.logger")
-        local original, logged = Logger.notify, {}
-        local ended = "ACP agent 'sh' failed (exit code 70):\nError: Agency Handler connection ended"
-        Logger.notify = function(message) logged[#logged + 1] = message end
-        require("sodium.agency.reload").run({ force = true })
-        f.flush()
-        respond("status", { phase = "ready", distDigest = digest })
-        Logger.notify(ended, vim.log.levels.ERROR)
+        Logger.notify("ACP agent 'sh' failed (exit code 70):\nError: Agency Handler connection ended", vim.log.levels.ERROR)
         Logger.notify("something else", vim.log.levels.ERROR)
-        respond("restart", restarted())
-        respond_agents({ row(control.target_a) })
-        answer_load(control.target_a)
-        assert.is_nil(vim.g.agency_reload_running)
-        Logger.notify(ended, vim.log.levels.ERROR)
-        Logger.notify = original
-        assert.are.same({ "something else", ended }, logged)
+        f.flush()
+        vim.notify = original
+        assert.are.same({ "something else" }, logged)
     end)
 
     it("names config files that are not linked into the live config", function()

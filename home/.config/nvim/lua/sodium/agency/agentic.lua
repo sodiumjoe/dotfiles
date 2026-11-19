@@ -195,13 +195,22 @@ function M.install()
     for _, entry in ipairs(methods) do for _, name in ipairs(entry[2]) do native[entry[1]] = native[entry[1]] or {}; native[entry[1]][name] = Patch.original(entry[1], name) end end
     local sm, acp = native[Manager], native[Client]
     function Client:_set_state(state)
+        local exited = agency(self) and self.state == "ready" and (state == "error" or state == "disconnected") and self.transport.process ~= nil
         if agency(self) and (state == "error" or state == "disconnected") then
             for _, handlers in pairs(self.subscribers) do
                 local manager = handlers._agency_owner
                 if manager and not manager._agency_destroyed and manager._agency_epoch == handlers._agency_epoch then unavailable(manager) end
             end
         end
-        return acp._set_state(self, state)
+        local result = acp._set_state(self, state)
+        if exited and not vim.g.agency_reload_running then vim.schedule(function() require("sodium.agency").setup().resume() end) end
+        return result
+    end
+    local Logger = require("agentic.utils.logger")
+    local notify = Patch.original(Logger, "notify")
+    Logger.notify = function(message, ...)
+        if type(message) == "string" and message:find("Agency Handler connection ended", 1, true) then return end
+        return notify(message, ...)
     end
     local get_instance = Patch.original(Instances, "get_instance")
     Instances.get_instance = function(name, on_ready)
@@ -401,6 +410,11 @@ function M.install()
     end
 
     function Client:_send_request(method, params, callback)
+        if agency(self) and (self.state == "disconnected" or self.state == "error") then
+            local err = self:__create_error(self.ERROR_CODES.TRANSPORT_ERROR, "the Agency Handler is not connected")
+            vim.schedule(function() callback(nil, err) end)
+            return
+        end
         if agency(self) and method:match("^session/set_") then
             local handlers = self.subscribers[params.sessionId]
             if handlers then

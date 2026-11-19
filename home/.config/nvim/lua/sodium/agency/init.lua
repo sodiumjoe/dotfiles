@@ -41,7 +41,7 @@ function M.setup(deps)
         annotations = deps.annotations or Context.annotations, accept_annotations = deps.accept_annotations or Context.accept_annotations,
         notify = deps.notify or function(value, level, opts) vim.notify("Agency: " .. tostring(value), level, opts) end }
     api.deps = deps
-    local inventory, epoch = {}, 0
+    local inventory, epoch, resuming = {}, 0, false
     local function report(err) if err and err.code ~= "CANCELLED" then api.notify(err.message or err.code) end end
     local function local_manager(tab)
         local manager = Registry.sessions[tab or vim.api.nvim_get_current_tabpage()]
@@ -173,7 +173,7 @@ function M.setup(deps)
     function api.restore(id, callback) selected(id, callback, "restore") end
     function api.recover(manager)
         local binding, tab = vim.deepcopy(manager._agency_binding), manager.tab_page_id
-        if not binding then return end
+        if not binding or resuming then return end
         api.page({}, function(err, result)
             if err or not vim.api.nvim_tabpage_is_valid(tab) or not vim.deep_equal(manager._agency_binding, binding) then return end
             for _, row in ipairs(result.agents) do
@@ -289,6 +289,41 @@ function M.setup(deps)
                 and (manager._agency_load_pending or manager._agency_new_pending or manager._agency_intent) then return true end
         end
         return false
+    end
+    function api.resume()
+        if resuming or vim.g.agency_reload_running then return end
+        local Rebind = require("sodium.agency.rebind")
+        local open = {}
+        for _, manager in ipairs(Rebind.managers()) do open[#open + 1] = manager.session_id:sub(8) end
+        if #open == 0 then return end
+        resuming = true
+        local progress = { id = "agency_resume", title = "Agency" }
+        api.notify("The Agency Handler connection ended; reconnecting…", vim.log.levels.INFO, vim.tbl_extend("force", progress, { timeout = false }))
+        local deadline = vim.uv.now() + (deps.resume_timeout_ms or 30000)
+        local function settled(result)
+            local live = {}
+            for _, row in ipairs(result.agents) do
+                if row.record.version == 3 and row.live and row.record.phase == "ready" then live[row.record.definition.agentId] = true end
+            end
+            for _, id in ipairs(open) do if not live[id] then return false end end
+            return true
+        end
+        local function attempt()
+            api.page({}, function(err, result)
+                if (err or not settled(result)) and vim.uv.now() < deadline then vim.defer_fn(attempt, deps.resume_retry_ms or 1000); return end
+                if err then
+                    resuming = false
+                    api.notify("The Agency Handler is unavailable (" .. (err.message or err.code) .. "); run :AgencyReload", vim.log.levels.WARN, progress)
+                    return
+                end
+                Rebind.run(result.agents, { reconnect = deps.reconnect }, function(summary)
+                    resuming = false
+                    local text = summary.timed_out and "the editor did not reconnect; reopen tabs with <leader>af" or Rebind.describe(summary)
+                    api.notify("Reconnected to the Agency Handler: " .. text, vim.log.levels.INFO, progress)
+                end)
+            end)
+        end
+        vim.defer_fn(attempt, deps.resume_delay_ms or 1000)
     end
     function api.inventory() return inventory end
     controller = api
