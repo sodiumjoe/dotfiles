@@ -274,3 +274,78 @@ _devbox_sync_loop_stop() {
   fi
   rm -f -- "$pidfile" "${pidfile}.${pid}.finish"
 }
+devboxes-update() {
+  local dotfiles="${DOTFILES:-$HOME/.dotfiles}" logdir="${TMPDIR:-/tmp}" ahead hosts names host label log result reply change restart exit_line failed=0
+  local -a words
+  local script='set -u
+cd "$HOME/.dotfiles" || { echo "@@ result failed no dotfiles checkout"; exit 0; }
+before=$(git rev-parse --short HEAD)
+if ! git pull --ff-only; then echo "@@ result failed pull refused (local changes or diverged)"; exit 0; fi
+after=$(git rev-parse --short HEAD)
+if ! ./bootstrap.sh; then echo "@@ result failed bootstrap.sh"; exit 0; fi
+echo "@@ restart $(agy restart --timeout 30 --json 2>/dev/null | tail -n 1)"
+echo "@@ result ok $before $after"'
+
+  if ! git -C "$dotfiles" fetch -q origin master; then
+    print -u2 -- "devboxes-update: could not fetch origin/master"
+    return 1
+  fi
+  ahead="$(git -C "$dotfiles" rev-list --count origin/master..master)" || return 1
+  if (( ahead > 0 )); then
+    print -u2 -- "devboxes-update: local master is $ahead commit(s) ahead of origin/master; push first"
+    return 1
+  fi
+  print -- "devboxes will pull origin/master at $(git -C "$dotfiles" rev-parse --short origin/master)"
+
+  if ! hosts="$(agy host list --json | jq -r '.result.hosts[].hostname')"; then
+    print -u2 -- "devboxes-update: agy host list failed"
+    return 1
+  fi
+  if [[ -z "$hosts" ]]; then
+    print -- "devboxes-update: no enrolled devboxes"
+    return 0
+  fi
+  names="$(pay remote list --raw 2>/dev/null | jq -r '.[] | select(.host) | "\(.host)\t\(.name)"' 2>/dev/null)"
+
+  for host in ${(f)hosts}; do
+    log="$logdir/devboxes-update-${host%%.*}.log"
+    {
+      ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+        -- "$host" "timeout 900 bash -c ${(qq)script}"
+      print -- "@@ exit $?"
+    } >| "$log" 2>&1 &
+  done
+  wait
+
+  for host in ${(f)hosts}; do
+    log="$logdir/devboxes-update-${host%%.*}.log"
+    label="${${(M)${(f)names}:#${host}$'\t'*}#*$'\t'}"
+    [[ -n "$label" ]] || label="${host%%.*}"
+    result="$(grep '^@@ result ' "$log" | tail -n 1)"
+    result="${result#@@ result }"
+    if [[ -z "$result" ]]; then
+      exit_line="$(grep '^@@ exit ' "$log" | tail -n 1)"
+      printf '%-24s %s\n' "$label" "failed: unreachable or timed out (exit ${exit_line#@@ exit }); see $log"
+      failed=1
+      continue
+    fi
+    if [[ "$result" == failed* ]]; then
+      printf '%-24s %s\n' "$label" "failed: ${result#failed }; see $log"
+      failed=1
+      continue
+    fi
+    words=(${=result})
+    if [[ "$words[2]" == "$words[3]" ]]; then change="already at $words[3]"; else change="updated $words[2] → $words[3]"; fi
+    reply="$(grep '^@@ restart ' "$log" | tail -n 1)"
+    reply="${reply#@@ restart }"
+    restart="$(print -r -- "$reply" | jq -r '
+      if .ok then (.result.agents | length) as $n
+        | if $n == 0 then "restarted" else "restarted (\($n) agent\(if $n == 1 then "" else "s" end) handed over)" end
+      elif .error.code == "BUSY" then "restart pending: busy (rerun later)"
+      else "restart failed: \(.error.code): \(.error.message)" end' 2>/dev/null)"
+    if [[ -z "$restart" ]]; then restart="restart failed: no readable reply; see $log"; fi
+    [[ "$restart" == "restart failed"* ]] && failed=1
+    printf '%-24s %s\n' "$label" "$change, $restart"
+  done
+  return $failed
+}
