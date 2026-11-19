@@ -5,6 +5,7 @@ import { createHostInventory } from "../hosts/inventory.js"
 import { createHostRouter, registerHostRouter, type HostRouter } from "../hosts/router.js"
 import { createRemoteRosters } from "../hosts/remote-rosters.js"
 import { createRemoteListing, runPayListing } from "../hosts/remote-listing.js"
+import { createAttentionNotifier } from "../hosts/attention.js"
 import { createRemoteRequests } from "../hosts/remote-requests.js"
 import { connectBridge } from "../bridge/ssh.js"
 import { bridgeError } from "../bridge/protocol.js"
@@ -50,6 +51,7 @@ export type HandlerOptions = {
   launchContracts?: readonly LaunchContract[]
   entryDriver?: RuntimeEntryDriver
   distDigest?: string | null
+  attentionNotify?: (title: string, message: string) => void
 }
 
 export function receiveStart(gate: Duplex, status: Duplex, timeoutMs = 5000): Promise<void> {
@@ -103,6 +105,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let core: LiveCore | undefined
   let router: HostRouter | undefined
   let remotes: ReturnType<typeof createRemoteRosters> | undefined
+  let attentionTimer: NodeJS.Timeout | undefined
   let bridge: HandlerBridge | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"], distDigest: options.distDigest ?? null }
@@ -115,6 +118,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     closing = true
     const attempts = [
       () => remotes?.close(),
+      () => { if (attentionTimer) clearInterval(attentionTimer) },
       () => router?.close(),
       () => bridge?.close(),
       () => acpServer?.close(),
@@ -273,6 +277,16 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       log: event => events.append(event),
     })
     const remoteHosts = remotes
+    if (options.attentionNotify) {
+      const notifier = createAttentionNotifier({ notify: options.attentionNotify }), localCore = core
+      attentionTimer = setInterval(() => {
+        try {
+          notifier.observe([{ hostId: options.paths.hostKey, label: "this laptop", agents: localCore.liveRows() },
+            ...remoteHosts.hosts().map(host => ({ hostId: host.hostId, label: host.name ?? host.hostname.split(".")[0]!, agents: host.agents }))])
+        } catch {}
+      }, 2000)
+      attentionTimer.unref()
+    }
     const remoteRequests = createRemoteRequests({ hostId: options.paths.hostKey, hosts: () => remoteHosts.hosts(), request: (route, signal, timeoutMs) => hosts.request(route, signal, timeoutMs) })
     const liveCore = core
     acpServer = await startAcpServer({ socketPath: acpSocketPath(options.paths), handlerGeneration: options.generation, onError: rejectClosed,
