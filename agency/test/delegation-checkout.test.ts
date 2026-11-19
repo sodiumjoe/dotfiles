@@ -40,3 +40,14 @@ test("a branch is fetched and checked out detached, local edits are stashed with
   assert.deepEqual(await prepareCheckout(work, "master", "agency child 0002"), { stashed: false })
   await assert.rejects(prepareCheckout(work, "no-such-branch", "agency child 0003"), /fetch failed/)
 })
+
+test("a ref that git could read as an option is refused before any git command runs", async t => {
+  const { work } = await repos(t)
+  const head = git(work, "rev-parse", "HEAD")
+  const stashes = git(work, "stash", "list")
+  await writeFile(join(work, "a.txt"), "local edit")
+  await assert.rejects(prepareCheckout(work, "--upload-pack=touch /tmp/x", "label"), /invalid ref/)
+  assert.equal(git(work, "rev-parse", "HEAD"), head)
+  assert.equal(git(work, "stash", "list"), stashes)
+  assert.equal(git(work, "status", "--porcelain"), "M a.txt")
+})

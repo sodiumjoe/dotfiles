@@ -36,6 +36,7 @@ export async function findCheckout(remote: string, roots: string[]): Promise<str
 }
 
 export async function prepareCheckout(dir: string, ref: string, label: string): Promise<{ stashed: boolean }> {
+  if (!ref || ref.startsWith("-") || ref.includes("..") || !/^[A-Za-z0-9._\/@^~{}-]+$/.test(ref)) throw new Error("invalid ref: " + ref)
   try { await git(dir, ["fetch", "--quiet", "origin", ref]) } catch (error) { throw new Error("fetch failed: " + (error as Error).message) }
   let stashed = false
   try {
