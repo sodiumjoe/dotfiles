@@ -2,11 +2,12 @@ import type { Socket } from "node:net"
 import { parseLaunchEnvironment, type LaunchEnvironment } from "../agent/environment.js"
 import type { ConversationExcerpt } from "../agent/excerpt.js"
 import { parsePermissionRef, type PermissionReceipt, type PermissionRef, type PermissionSnapshot } from "../agent/permission-types.js"
-import { parseRequestedSettings, type RequestedSettings } from "../agent/session-config.js"
+import { parseRequestedSettings, type JsonObject, type RequestedSettings } from "../agent/session-config.js"
 import { absolutePath, id, keys, object, providerId, type ProviderId } from "../config/validate.js"
 import { ControlError } from "../control/protocol.js"
 import { encodeFrame, receiveFrame } from "../control/wire.js"
 import type { HandoffStatus, PromptResult } from "./core.js"
+import { longText, validated } from "../delegation/requests.js"
 import { parseRequestFailure, RequestError, requestFailure, type RequestFailure } from "./errors.js"
 import type { ModelListing } from "./models.js"
 import type { RosterRow, Transcript } from "./roster.js"
@@ -21,10 +22,12 @@ export type LiveOperation =
   | { op: "excerpt"; agentId: string; turns: number }
   | { op: "agents" | "models" | "permissions" }
   | { op: "decide"; ref: PermissionRef; optionId: string }
+  | { op: "delegate"; action: "start" | "ask" | "stop" | "list"; callerAgentId: string; cwd: string; task?: string; ref?: string; backendId?: ProviderId; model?: string; childId?: string; text?: string }
 export type LiveRequest = { protocol: typeof REQUEST_PROTOCOL; requestId: string } & LiveOperation
 export type LiveResult = { state: "agent"; agent: RosterRow } | PromptResult | { state: "agents"; handlerGeneration: string; agents: RosterRow[]; handoff?: HandoffStatus }
   | { state: "forgotten"; agentId: string } | ConversationExcerpt | Transcript
   | { state: "models"; defaultBackendId: ProviderId; backends: ModelListing[] } | { state: "permissions"; snapshot: PermissionSnapshot } | { state: "permission"; receipt: PermissionReceipt }
+  | { state: "delegate"; value: JsonObject }
 export type LiveReply = { protocol: typeof REQUEST_PROTOCOL; requestId: string } & ({ ok: true; result: LiveResult } | { ok: false; error: RequestFailure })
 
 const PROMPT_BYTES = 262144
@@ -63,6 +66,19 @@ export function parseLiveRequest(raw: unknown): LiveRequest {
     }
     if (v.op === "agents" || v.op === "models" || v.op === "permissions") { fields([]); return { ...base, op: v.op } }
     if (v.op === "decide") { fields(["ref", "optionId"]); return { ...base, op: "decide", ref: parsePermissionRef(v.ref), optionId: name(v.optionId, "optionId") } }
+    if (v.op === "delegate") {
+      const action = v.action, caller = (): string => { try { return id(v.callerAgentId) } catch { return invalid("callerAgentId must be a canonical UUID") } }
+      const child = (): string => { try { return id(v.childId) } catch { return invalid("childId must be a canonical UUID") } }
+      const common = { ...base, op: "delegate" as const, callerAgentId: caller(), cwd: absolutePath(v.cwd) }
+      if (action === "start") {
+        fields(["action", "callerAgentId", "cwd", "task", "ref"], ["backendId", "model"])
+        return { ...common, action, task: validated(() => longText(v.task, "task")), ref: name(v.ref, "ref"), ...optional(v, "backendId", providerId), ...optional(v, "model", value => name(value, "model")) }
+      }
+      if (action === "ask") { fields(["action", "callerAgentId", "cwd", "childId", "text"]); return { ...common, action, childId: child(), text: validated(() => longText(v.text, "text")) } }
+      if (action === "stop") { fields(["action", "callerAgentId", "cwd", "childId"]); return { ...common, action, childId: child() } }
+      if (action === "list") { fields(["action", "callerAgentId", "cwd"]); return { ...common, action } }
+      invalid("unknown delegate action")
+    }
   } catch (error) { if (error instanceof RequestError) throw error; invalid("invalid " + String(v.op) + " request") }
   return invalid("unknown operation " + String(v.op).slice(0, 64))
 }

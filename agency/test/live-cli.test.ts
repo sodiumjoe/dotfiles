@@ -73,3 +73,11 @@ test("against a Handler that closes request sockets unanswered, the CLI names th
     assert.match(result.errors, /:AgencyReload/)
   }
 })
+
+test("agy delegate outside an Agency agent fails as INVALID", async t => {
+  const saved = process.env.AGENCY_AGENT_ID
+  delete process.env.AGENCY_AGENT_ID
+  t.after(() => { if (saved === undefined) delete process.env.AGENCY_AGENT_ID; else process.env.AGENCY_AGENT_ID = saved })
+  const f = await liveHandlerFixture(t), result = await cli(f)(["delegate", "list"])
+  assert.deepEqual([result.code, result.reply.ok, result.reply.error.code, result.reply.error.message], [64, false, "INVALID", "agy delegate must run inside an Agency agent"])
+})

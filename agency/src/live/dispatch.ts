@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto"
+import type { JsonObject } from "../agent/session-config.js"
 import type { LiveCore } from "./core.js"
+import { RequestError } from "./errors.js"
 import { liveErrorReply, parseLiveRequest, REQUEST_PROTOCOL, type LiveReply, type LiveRequest, type LiveResult } from "./protocol.js"
 
-export async function dispatchLive(core: LiveCore, raw: unknown): Promise<LiveReply> {
+export async function dispatchLive(core: LiveCore, raw: unknown, delegate?: (request: Extract<LiveRequest, { op: "delegate" }>) => Promise<JsonObject>): Promise<LiveReply> {
   let request: LiveRequest
   try { request = parseLiveRequest(raw) }
   catch (error) {
@@ -25,6 +27,7 @@ export async function dispatchLive(core: LiveCore, raw: unknown): Promise<LiveRe
       case "agents": { const handoff = core.handoffStatus(); result = { state: "agents", handlerGeneration: core.handlerGeneration, agents: await core.agents(), ...(handoff ? { handoff } : {}) }; break }
       case "models": result = await core.models(); break
       case "permissions": result = { state: "permissions", snapshot: await core.permissions.snapshot() }; break
+      case "delegate": { if (!delegate) throw new RequestError("UNAVAILABLE", "delegation is unavailable"); result = { state: "delegate", value: await delegate(request) }; break }
       case "decide": result = { state: "permission", receipt: await core.permissions.decide(randomUUID(), request.ref, request.optionId) }; break
     }
     return { protocol: REQUEST_PROTOCOL, requestId: request.requestId, ok: true, result }

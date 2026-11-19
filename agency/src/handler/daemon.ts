@@ -43,6 +43,7 @@ import { createBox, type Box } from "../delegation/box.js"
 import { DELEGATION_OPS, delegationReply } from "../delegation/requests.js"
 import { DEFAULT_ROOTS } from "../delegation/checkout.js"
 import { acceptUpward, createCoordinator, type Coordinator } from "../delegation/coordinator.js"
+import { createDelegateEntry } from "../delegation/entry.js"
 import { unwrapReply } from "../delegation/reply.js"
 
 export type HandlerOptions = {
@@ -117,6 +118,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let attentionTimer: NodeJS.Timeout | undefined
   let coordinatorTimer: NodeJS.Timeout | undefined
   let coordinator: Coordinator | undefined
+  let delegateEntry: ReturnType<typeof createDelegateEntry> | undefined
   let watchingTable = false
   let bridge: HandlerBridge | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
@@ -208,7 +210,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       return { protocol: PROTOCOL, requestId: request.requestId, handlerGeneration: options.generation, ok: true, result: structuredClone({ ...state, issues: [...(state.issues ?? [])] }) }
     }
     const ready = () => state.phase === "ready" && !closing && !termination
-    const dispatchRequest = async (raw: unknown): Promise<LiveReply> => core && state.phase === "ready" && !closing && !termination ? dispatchLive(core, raw) : liveErrorReply({ requestId: typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : randomUUID() }, new RequestError("UNAVAILABLE", "the Handler is not ready"))
+    const dispatchRequest = async (raw: unknown): Promise<LiveReply> => core && state.phase === "ready" && !closing && !termination ? dispatchLive(core, raw, delegateEntry) : liveErrorReply({ requestId: typeof (raw as { requestId?: unknown }).requestId === "string" ? (raw as { requestId: string }).requestId : randomUUID() }, new RequestError("UNAVAILABLE", "the Handler is not ready"))
     server = await bindPrivateSocket(options.paths.runtimeRoot, "handler.sock", socket => {
       sockets.add(socket)
       socket.once("close", () => sockets.delete(socket))
@@ -243,7 +245,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     if (termination || closing) await bridge.close()
     checkStartup()
     const servedCore = core
-    const servedBox = box = createBox({ core, outbox: createOutboxStore(root), roots: options.delegationRoots ?? DEFAULT_ROOTS, environment: () => destinationEnvironment(process.env), changed: () => servedCore.touch() })
+    const outboxes = createOutboxStore(root)
+    const servedBox = box = createBox({ core, outbox: outboxes, roots: options.delegationRoots ?? DEFAULT_ROOTS, environment: () => destinationEnvironment(process.env), changed: () => servedCore.touch() })
     bridge.register(["live-read", "live-wait"], async ({ channel, payload }) => {
       if (!ready()) bridgeError("HANDLER_UNAVAILABLE")
       const value = object(payload)
@@ -296,6 +299,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     })
     const remoteHosts = remotes
     const delegation = coordinator = createCoordinator({ hostId: options.paths.hostKey, hosts: () => remoteHosts.hosts(), request: (hostId, payload) => hosts.request({ hostId, channel: "live-request", payload }, AbortSignal.timeout(10000)).then(unwrapReply) })
+    delegateEntry = createDelegateEntry({ core: servedCore, outbox: outboxes, hostId: options.paths.hostKey, isLaptop: () => remoteHosts.hosts().length > 0, coordinator: delegation, upward: payload => relay.upward(payload), owners: () => relay.owners() })
     coordinatorTimer = setInterval(() => { try { delegation.tick() } catch {} }, 60000)
     coordinatorTimer.unref()
     const tableCore = core

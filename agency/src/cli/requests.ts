@@ -5,7 +5,7 @@ import { snapshotLaunchEnvironment } from "../agent/environment.js"
 import { defaultHomes } from "../agent/excerpt.js"
 import { parsePermissionRef } from "../agent/permission-types.js"
 import { AgentError } from "../agent/types.js"
-import { absolutePath, id, object, providerId } from "../config/validate.js"
+import { absolutePath, id, keys, object, providerId } from "../config/validate.js"
 import { PROTOCOL } from "../control/protocol.js"
 import type { HandlerEnvironment } from "../handler/environment.js"
 import { readEventLog } from "../handler/event-log.js"
@@ -16,13 +16,14 @@ import { createLiveTable } from "../live/state.js"
 import type { ControlDependencies } from "./control.js"
 import { readInputJson, readStdin } from "./input-json.js"
 
-export const REQUEST_COMMANDS = ["start", "restore", "stop", "set", "prompt", "cancel", "agents", "excerpt", "transcript", "models", "permissions", "forget", "log"]
+export const REQUEST_COMMANDS = ["start", "restore", "stop", "set", "prompt", "cancel", "agents", "excerpt", "transcript", "models", "permissions", "forget", "log", "delegate"]
 export const REQUEST_HELP = [
   "start [--backend ID] [--agent UUID] [--cwd PATH] [--model ID] [--mode ID] (start an agent and wait until it is ready)",
   "restore AGENT_UUID (make a stopped agent live)", "stop AGENT_UUID", "set AGENT_UUID SETTING VALUE (model, mode or a provider option)",
   "prompt AGENT_UUID [--submission-id UUID] (prompt text on stdin; restores a stopped agent first)", "cancel AGENT_UUID",
   "agents (indexed and live agents)", "excerpt AGENT_UUID [--turns 1-8]", "transcript AGENT_UUID", "models", "permissions", "permissions decide --input-json JSON (ref, optionId)",
   "forget AGENT_UUID (delete a stopped agent from the index)", "log [--agent UUID] [--since ISO_TIME] [--limit N]",
+  "delegate start --input-json - (task, ref, backendId?, model?) | ask CHILD_UUID --input-json - (text) | stop CHILD_UUID | list (start and manage child agents; runs inside an Agency agent)",
 ]
 const exits: Record<RequestCode, number> = { INVALID: 64, NOT_FOUND: 66, UNAVAILABLE: 69, FAILED: 70, BUSY: 75 }
 
@@ -144,6 +145,29 @@ async function perform(argv: readonly string[], deps: ControlDependencies): Prom
       parse(argv, [], 0, "permissions")
       if (!await live(false)) stopped("no permission is pending")
       return call({ op: "permissions" })
+    }
+    case "delegate": {
+      const action = argv[1], callerAgentId = process.env.AGENCY_AGENT_ID
+      if (!callerAgentId) throw new RequestError("INVALID", "agy delegate must run inside an Agency agent")
+      const cwd = absolutePath(resolve(deps.cwd()))
+      const body = async (usage: string, required: string[], optional: string[], positional: number): Promise<{ input: Record<string, unknown>; child?: string }> => {
+        const parsed = parse(argv.slice(1), ["--input-json"], positional, usage)
+        let input: Record<string, unknown>
+        try { input = object(await readInputJson(parsed.flags.get("--input-json"), deps)); keys(input, [...required, ...optional.filter(key => Object.hasOwn(input, key))]) } catch (error) { if (error instanceof AgentError && error.code === "INPUT_TOO_LARGE") throw error; throw new RequestError("INVALID", "--input-json must be an object with " + required.concat(optional.map(key => key + "?")).join(", ")) }
+        return { input, ...(positional ? { child: agent(parsed.positional[0]) } : {}) }
+      }
+      let operation: LiveOperation
+      if (action === "start") {
+        const { input } = await body("delegate start --input-json -", ["task", "ref"], ["backendId", "model"], 0)
+        operation = { op: "delegate", action, callerAgentId, cwd, task: input.task as string, ref: input.ref as string, ...(Object.hasOwn(input, "backendId") ? { backendId: input.backendId as never } : {}), ...(Object.hasOwn(input, "model") ? { model: input.model as string } : {}) }
+      } else if (action === "ask") {
+        const { input, child } = await body("delegate ask CHILD_UUID --input-json -", ["text"], [], 1)
+        operation = { op: "delegate", action, callerAgentId, cwd, childId: child!, text: input.text as string }
+      } else if (action === "stop") operation = { op: "delegate", action, callerAgentId, cwd, childId: agent(parse(argv.slice(1), [], 1, "delegate stop CHILD_UUID").positional[0]) }
+      else if (action === "list") { parse(argv.slice(1), [], 0, "delegate list"); operation = { op: "delegate", action, callerAgentId, cwd } }
+      else throw new RequestError("INVALID", "use agy delegate start|ask|stop|list")
+      if (!await live(false)) stopped("delegation is unavailable")
+      return call(operation)
     }
     case "log": {
       const { flags } = parse(argv, ["--agent", "--since", "--limit"], 0, "log [--agent UUID] [--since ISO_TIME] [--limit N]"), limit = Number(flags.get("--limit") ?? 200)
