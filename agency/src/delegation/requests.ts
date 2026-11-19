@@ -10,14 +10,14 @@ export const DELEGATION_OPS = ["child-start", "child-ask", "child-stop", "childr
 const LONG_TEXT_BYTES = 262144
 
 function invalid(message: string): never { throw new RequestError("INVALID", message) }
-function longText(value: unknown, label: string): string {
+export function longText(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.length || Buffer.byteLength(value) > LONG_TEXT_BYTES || !value.isWellFormed()) invalid(label + " must be 1 to " + LONG_TEXT_BYTES + " bytes of well-formed text")
   return value
 }
 function shape(value: Record<string, unknown>, required: string[], optional: string[] = []): void {
   keys(value, ["op", ...required, ...optional.filter(key => Object.hasOwn(value, key))])
 }
-function validated<T>(parse: () => T): T {
+export function validated<T>(parse: () => T): T {
   try { return parse() } catch (error) { if (error instanceof CatalogError) return invalid("invalid request payload"); throw error }
 }
 

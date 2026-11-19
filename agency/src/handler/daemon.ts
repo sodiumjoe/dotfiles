@@ -42,6 +42,8 @@ import { createOutboxStore } from "../delegation/outbox.js"
 import { createBox, type Box } from "../delegation/box.js"
 import { DELEGATION_OPS, delegationReply } from "../delegation/requests.js"
 import { DEFAULT_ROOTS } from "../delegation/checkout.js"
+import { createCoordinator, parseDelegateRequest, type Coordinator } from "../delegation/coordinator.js"
+import { unwrapReply } from "../delegation/reply.js"
 
 export type HandlerOptions = {
   paths: PlatformPaths
@@ -113,6 +115,9 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
   let router: HostRouter | undefined
   let remotes: ReturnType<typeof createRemoteRosters> | undefined
   let attentionTimer: NodeJS.Timeout | undefined
+  let coordinatorTimer: NodeJS.Timeout | undefined
+  let coordinator: Coordinator | undefined
+  let watchingTable = false
   let bridge: HandlerBridge | undefined
   let acpServer: Awaited<ReturnType<typeof startAcpServer>> | undefined
   const state: HandlerStatus = { hostId: options.paths.hostKey, handlerGeneration: options.generation, phase: "starting", reconciliation: { classified: 0, total: 0, uncertain: 0 }, launches: [], capabilities: ["status", "doctor", "shutdown"], distDigest: options.distDigest ?? null }
@@ -126,6 +131,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     const attempts = [
       () => remotes?.close(),
       () => { if (attentionTimer) clearInterval(attentionTimer) },
+      () => { if (coordinatorTimer) clearInterval(coordinatorTimer); watchingTable = false },
       () => router?.close(),
       () => bridge?.close(),
       () => acpServer?.close(),
@@ -268,7 +274,8 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     })
     const coreBridge = bridge
     const inventory = createHostInventory(root)
-    router = createHostRouter({ hostId: options.paths.hostKey, inventory, local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["live-read", "live-wait"] }) })
+    router = createHostRouter({ hostId: options.paths.hostKey, inventory, local: (channel, payload, signal) => coreBridge.dispatch(channel, payload, signal ?? new AbortController().signal), connect: enrollment => connectBridge(enrollment, { action: "internal-runtime-bridge", requiredCapabilities: ["live-read", "live-wait"] }),
+      upward: payload => Promise.resolve().then(() => { if (!coordinator) throw new RequestError("UNAVAILABLE", "the Handler is not ready"); return coordinator.handle(parseDelegateRequest(payload)) }).then(result => ({ protocol: REQUEST_PROTOCOL, requestId: randomUUID(), ok: true, result }), error => liveErrorReply({ requestId: randomUUID() }, error)) })
     const relay = registerHostRouter({ bridge, router })
     const hosts = router
     remotes = createRemoteRosters({
@@ -285,8 +292,21 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
       }),
       forget: async hostId => { await inventory.forget(hostId); hosts.forget(hostId) },
       log: event => events.append(event),
+      onChange: hostId => coordinator?.changed(hostId),
     })
     const remoteHosts = remotes
+    const delegation = coordinator = createCoordinator({ hostId: options.paths.hostKey, hosts: () => remoteHosts.hosts(), request: (hostId, payload) => hosts.request({ hostId, channel: "live-request", payload }, AbortSignal.timeout(10000)).then(unwrapReply) })
+    coordinatorTimer = setInterval(() => { try { delegation.tick() } catch {} }, 60000)
+    coordinatorTimer.unref()
+    const tableCore = core
+    watchingTable = true
+    void (async () => {
+      let after: string | null = null
+      while (watchingTable) {
+        after = await tableCore.changed(after, 30000).catch(() => null)
+        if (watchingTable) try { delegation.changed(options.paths.hostKey) } catch {}
+      }
+    })()
     if (options.attentionNotify) {
       const notifier = createAttentionNotifier({ notify: options.attentionNotify }), localCore = core
       attentionTimer = setInterval(() => {

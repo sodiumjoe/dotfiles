@@ -12,6 +12,7 @@ export function createRemoteRosters(input: {
   listing?: RemoteListingSource
   forget?(hostId: string): Promise<void>
   log?(event: { type: string } & Record<string, unknown>): void
+  onChange?(hostId: string): void
   intervalMs?: number
   waitMs?: number
   refreshMs?: number
@@ -43,6 +44,7 @@ export function createRemoteRosters(input: {
           readAt = Date.now()
         }
         entry.host = { ...entry.host, state: "online", since: null, error: null }
+        if (revision !== after) try { input.onChange?.(entry.host.hostId) } catch {}
         after = revision
         failures = 0
       } catch (error) {
