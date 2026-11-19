@@ -585,7 +585,14 @@ function M.install()
                         end)
                     end
                     if params.state == "unavailable" then unavailable(manager) end
+                    local ended = manager._agency_running and params.state == "idle"
+                    local foreign = ended and manager._agency_attention_turn ~= nil and manager._agency_attention_turn ~= manager._agency_local_submission
+                    if params.state == "running" and type(params.turnId) == "string" then manager._agency_attention_turn = params.turnId end
                     manager._agency_running = params.state == "running"
+                    if ended then manager._agency_attention_turn = nil end
+                    if foreign then
+                        require("agentic.utils.hooks").invoke("on_response_complete", { session_id = manager.session_id, tab_page_id = manager.tab_page_id, success = true })
+                    end
                     manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil
                     if params.configuration then configuration(manager, params.configuration) end
                     if manager.is_generating then manager:_start_spinner("generating") else manager.status_animation:stop() end

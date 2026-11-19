@@ -2,7 +2,8 @@ local M = {}
 function M.new()
     local Config, Instances = require("agentic.config"), require("agentic.acp.agent_instance")
     local Registry, ACPClient = require("agentic.session_registry"), require("agentic.acp.acp_client")
-    local saved = { Config.provider, Config.acp_providers.agency, Instances._instances }
+    local saved = { Config.provider, Config.acp_providers.agency, Instances._instances, Config.hooks }
+    Config.hooks = vim.tbl_extend("force", Config.hooks or {}, { on_response_complete = function() end })
     Config.provider = "agency"
     Config.acp_providers.agency = { name = "Agency", command = vim.v.progpath, args = {} }
     local frames = {}
@@ -39,7 +40,7 @@ function M.new()
         close = function()
             for tab in pairs(Registry.sessions) do Registry.destroy_session(tab) end
             flush()
-            Config.provider, Config.acp_providers.agency, Instances._instances = unpack(saved)
+            Config.provider, Config.acp_providers.agency, Instances._instances, Config.hooks = unpack(saved, 1, 4)
             while #vim.api.nvim_list_tabpages() > 1 do vim.cmd("tabclose!") end
             package.loaded["sodium.agency"] = nil
         end }

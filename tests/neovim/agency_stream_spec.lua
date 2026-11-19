@@ -324,4 +324,23 @@ describe("Agency live rendering", function()
         assert.are.equal(2, vim.api.nvim_win_get_cursor(f.manager.widget.win_nrs.chat)[1])
         assert.is_truthy(buffer_text():find("new line", 1, true))
     end)
+
+    it("runs the completion hook when a turn this editor did not start ends, and not for its own turn", function()
+        local calls = {}
+        require("agentic.config").hooks = { on_response_complete = function(data) calls[#calls + 1] = data end }
+        local binding = vim.deepcopy(f.manager._agency_binding)
+        local function state(value, turn)
+            f.client:_handle_message({ method = "agency/session_state", params = {
+                sessionId = f.manager.session_id, binding = binding, state = value, turnId = turn } })
+        end
+        state("running", "00000000-0000-4000-8000-0000000000aa")
+        state("idle", vim.NIL)
+        assert.is_true(vim.wait(1000, function() return #calls == 1 end, 10))
+        assert.are.equal(f.manager.session_id, calls[1].session_id)
+        f.manager._agency_local_submission = "00000000-0000-4000-8000-0000000000bb"
+        state("running", "00000000-0000-4000-8000-0000000000bb")
+        state("idle", vim.NIL)
+        vim.wait(200, function() return false end, 10)
+        assert.are.equal(1, #calls)
+    end)
 end)
