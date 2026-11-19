@@ -246,7 +246,7 @@ export async function runHandler(options: HandlerOptions): Promise<void> {
     checkStartup()
     const servedCore = core
     const outboxes = createOutboxStore(root)
-    const servedBox = box = createBox({ core, outbox: outboxes, roots: options.delegationRoots ?? DEFAULT_ROOTS, environment: () => destinationEnvironment(process.env), changed: () => servedCore.touch() })
+    const servedBox = box = createBox({ core, outbox: outboxes, roots: options.delegationRoots ?? DEFAULT_ROOTS, environment: () => destinationEnvironment(process.env), changed: () => servedCore.touch(), stopping: launchContext.shutdownPending })
     bridge.register(["live-read", "live-wait"], async ({ channel, payload }) => {
       if (!ready()) bridgeError("HANDLER_UNAVAILABLE")
       const value = object(payload)

@@ -23,14 +23,15 @@ export type Box = {
   flushed(): Promise<void>
 }
 
-export function createBox(input: { core: LiveCore; outbox: OutboxStore; roots?: string[]; environment(): LaunchEnvironment; changed(): void }): Box {
-  const { core, outbox } = input, recorders = new Map<string, { close(): void }>(), unclaimed = new Set<string>(), reading = new Set<string>()
+export function createBox(input: { core: LiveCore; outbox: OutboxStore; roots?: string[]; environment(): LaunchEnvironment; changed(): void; stopping?(): boolean }): Box {
+  const { core, outbox } = input, recorders = new Map<string, { childId: string; close(): void }>(), unclaimed = new Set<string>(), reading = new Set<string>()
   const bornAt = Date.now()
   let reserving = false, stopped = false
   const attach = (agent: LiveAgent): void => {
     const generation = agent.tuple.providerGeneration
     if (recorders.has(generation)) return
-    recorders.set(generation, recordTurns({ childId: agent.agentId, conversation: agent.conversation, outbox, running: () => agent.running.size ? [...agent.running].at(-1)! : null, changed: input.changed }))
+    const recorder = recordTurns({ childId: agent.agentId, conversation: agent.conversation, outbox, running: () => agent.running.size ? [...agent.running].at(-1)! : null, changed: input.changed })
+    recorders.set(generation, { childId: agent.agentId, close: () => recorder.close() })
   }
   const live = (childId: string): LiveAgent | undefined => core.liveAgents().find(agent => agent.agentId === childId && agent.phase === "ready")
   const idle = (agent: LiveAgent): boolean => core.liveRows().find(row => row.agentId === agent.agentId)?.live?.activity === "idle"
@@ -60,9 +61,24 @@ export function createBox(input: { core: LiveCore; outbox: OutboxStore; roots?: 
       await fail(request.childId, message).catch(() => undefined)
     }
   }
+  const exited = async (childId: string): Promise<void> => {
+    const at = new Date().toISOString()
+    await outbox.update(childId, value => {
+      if (value.stopped) return
+      if (value.open && !value.entries.some(entry => entry.submissionId === value.open)) value.entries.push({ submissionId: value.open, state: "interrupted", stopReason: null, failure: null, text: "(no text)", delivered: false, at })
+      else if (!value.entries.length) value.entries.push({ submissionId: randomUUID(), state: "failed", stopReason: null, failure: "EXITED", text: "the child agent exited", delivered: false, at })
+      value.open = null
+      value.stopped = true
+    })
+    input.changed()
+  }
   const scan = (): void => {
     const present = new Set(core.liveAgents().map(agent => agent.tuple.providerGeneration))
-    for (const key of [...recorders.keys()]) if (!present.has(key)) { recorders.delete(key) }
+    for (const [key, recorder] of [...recorders]) {
+      if (present.has(key)) continue
+      recorders.delete(key)
+      if (!stopped && !input.stopping?.() && !core.liveAgents().some(agent => agent.agentId === recorder.childId)) void exited(recorder.childId).catch(() => undefined)
+    }
     for (const key of [...unclaimed]) if (!present.has(key)) unclaimed.delete(key)
     for (const agent of core.liveAgents()) {
       const generation = agent.tuple.providerGeneration
