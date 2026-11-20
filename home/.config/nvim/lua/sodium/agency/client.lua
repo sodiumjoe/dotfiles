@@ -263,8 +263,9 @@ local function separate_messages(manager)
         local id, last = update.messageId or false, manager._agency_last_message
         if last and last.id ~= id and last.tick == vim.api.nvim_buf_get_changedtick(self.bufnr) then
             local tail = vim.api.nvim_buf_get_lines(self.bufnr, -3, -1, false)
-            local gap = tail[#tail] ~= "" and "\n\n" or #tail > 1 and tail[#tail - 1] ~= "" and "\n" or ""
-            update = vim.tbl_extend("force", update, { content = vim.tbl_extend("force", content, { text = gap .. content.text }) })
+            local gap = tail[#tail] ~= "" and 2 or #tail > 1 and tail[#tail - 1] ~= "" and 1 or 0
+            gap = math.max(0, gap - #content.text:match("^\n*"))
+            update = vim.tbl_extend("force", update, { content = vim.tbl_extend("force", content, { text = ("\n"):rep(gap) .. content.text }) })
         end
         local result = native(self, update)
         manager._agency_last_message = vim.api.nvim_buf_is_valid(self.bufnr) and { id = id, tick = vim.api.nvim_buf_get_changedtick(self.bufnr) } or nil

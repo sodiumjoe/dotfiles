@@ -266,12 +266,15 @@ describe("Agency session start and release", function()
         vim.notify = function(message)
             if tostring(message):find("Mode changed to", 1, true) then announced[#announced + 1] = message end
         end
-        manager.config_options:handle_change("mode", "default")
-        f.client:_handle_message({ id = since(start, "session/set_config_option")[1].id, result = {} })
-        f.client:_handle_message({ method = "session/update", params = { sessionId = frame.params.sessionId,
-            update = { sessionUpdate = "current_mode_update", currentModeId = "default" } } })
-        f.flush()
+        local ok, failure = pcall(function()
+            manager.config_options:handle_change("mode", "default")
+            f.client:_handle_message({ id = since(start, "session/set_config_option")[1].id, result = {} })
+            f.client:_handle_message({ method = "session/update", params = { sessionId = frame.params.sessionId,
+                update = { sessionUpdate = "current_mode_update", currentModeId = "default" } } })
+            f.flush()
+        end)
         vim.notify = notify
+        assert.is_true(ok, failure)
         assert.are.equal(1, #announced)
     end)
 

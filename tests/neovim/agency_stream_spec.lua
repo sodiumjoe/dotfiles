@@ -412,6 +412,21 @@ describe("Agency live rendering", function()
         assert.are.equal(1, warnings)
     end)
 
+    it("keeps one blank line before a message that brings its own leading newlines", function()
+        local id = f.manager.session_id
+        replayed(id, chunk("ok", { messageId = "m1" }))
+        replayed(id, chunk("\n\n> Notice text\n\n"))
+        replayed(id, chunk("next", { messageId = "m2" }))
+        f.flush()
+        local lines = lines_of(f.manager)
+        local at
+        for index, text in ipairs(lines) do
+            if text == "ok" then at = index end
+        end
+        assert.is_truthy(at)
+        assert.are.same({ "ok", "", "> Notice text", "", "next" }, vim.list_slice(lines, at, at + 4))
+    end)
+
     it("keeps a reader who scrolls away during the batching window", function()
         deliver(chunk(string.rep("older line\n", 100)))
         f.flush()
