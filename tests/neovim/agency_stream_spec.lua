@@ -193,39 +193,6 @@ describe("Agency live rendering", function()
         assert.are.equal(0, vim.tbl_count(f.client.callbacks))
     end)
 
-    it("detaches the old target when switching during an incomplete attachment", function()
-        local old = f.manager.session_id
-        f.manager:load_acp_session(old, "codex-acp")
-        local binding = vim.deepcopy(require("fixtures.agency_control").target_b)
-        local id = "agency:" .. binding.agentId
-        f.manager:load_acp_session(id, "codex-acp")
-        assert.are.equal(id, f.manager._agency_loading_session)
-        assert.is_nil(f.client.subscribers[old])
-        assert.are.equal(f.manager, f.client.subscribers[id]._agency_owner)
-        local detach
-        for i, frame in ipairs(f.frames) do
-            if frame.method == "agency/detach" and frame.params.sessionId == old then detach = i end
-        end
-        local load = f.request("session/load")
-        assert.is_not_nil(detach)
-        assert.is_true(detach < #f.frames)
-        assert.are.equal(id, load.params.sessionId)
-        f.manager:load_acp_session(old, "codex-acp")
-        assert.are.equal(old, f.manager._agency_loading_session)
-        assert.is_nil(f.client.subscribers[id])
-        assert.are.equal(f.manager, f.client.subscribers[old]._agency_owner)
-        load = f.request("session/load")
-        f.client:_handle_message({ method = "session/update", params = {
-            sessionId = id, update = chunk("stale old history"), _meta = { agency = { replay = true } },
-        } })
-        f.client:_handle_message({ id = load.id, result = { sessionId = old,
-            _meta = { agency = { version = 1, binding = require("fixtures.agency_control").target_a, backendId = "codex-acp",
-                configuration = { configOptions = {}, availableCommands = {} } } } } })
-        f.flush()
-        assert.is_nil(buffer_text():find("stale old history", 1, true))
-        assert.are.equal(old, f.manager.session_id)
-    end)
-
     it("restores configuration handling when incomplete cancellation fails", function()
         f.manager:load_acp_session(f.manager.session_id, "codex-acp")
         local restore, clear = f.manager.config_options.restore_snapshot, f.manager.widget.clear

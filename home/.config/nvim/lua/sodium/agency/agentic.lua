@@ -51,7 +51,8 @@ function M.new_session(opts)
     local agent = assert(client(), "Agency is not configured")
     require("sodium.agency.layout").cleanup()
     local cwd = opts.cwd
-    local manager = assert(Registry.create("agency", { kind = "new", cwd = cwd and function() return cwd end }, agent))
+    local meta = { backend_id = opts.backend_id, selection = opts.selection, environment = opts.environment }
+    local manager = assert(Registry.create("agency", { kind = "new", cwd = cwd and function() return cwd end, meta = meta }, agent))
     Registry.show_session(manager.session_key)
     return manager
 end
