@@ -153,7 +153,7 @@ local function configure(manager, snapshot)
     if type(snapshot.models) == "table" then
         options:set_legacy_models(snapshot.models)
     end
-    if type(snapshot.modes) == "table" then
+    if type(snapshot.modes) == "table" and not options.mode then
         options:set_legacy_modes(snapshot.modes)
     end
     require("agentic.acp.slash_commands").setCommands(manager.widget.buf_nrs.input, snapshot.availableCommands or {})

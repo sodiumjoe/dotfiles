@@ -248,6 +248,33 @@ describe("Agency session start and release", function()
         end
     end)
 
+    it("announces one mode change when the backend reports modes both ways", function()
+        local start = #f.frames
+        local manager = adapter.open(control.agent(control.target_b))
+        f.flush()
+        local frame = since(start, "session/load")[1]
+        local modes = { { id = "default", name = "Default" }, { id = "plan", name = "Plan" } }
+        local configuration = {
+            configOptions = { { id = "mode", name = "Mode", category = "mode", type = "select", currentValue = "plan",
+                options = { { value = "default", name = "Default" }, { value = "plan", name = "Plan" } } } },
+            modes = { currentModeId = "plan", availableModes = modes },
+            availableCommands = {},
+        }
+        reply(frame, frame.params.sessionId, control.target_b, { _meta = { agency = { version = 1, binding = control.target_b,
+            backendId = "claude-agent-acp", configuration = configuration } } })
+        local notify, announced = vim.notify, {}
+        vim.notify = function(message)
+            if tostring(message):find("Mode changed to", 1, true) then announced[#announced + 1] = message end
+        end
+        manager.config_options:handle_change("mode", "default")
+        f.client:_handle_message({ id = since(start, "session/set_config_option")[1].id, result = {} })
+        f.client:_handle_message({ method = "session/update", params = { sessionId = frame.params.sessionId,
+            update = { sessionUpdate = "current_mode_update", currentModeId = "default" } } })
+        f.flush()
+        vim.notify = notify
+        assert.are.equal(1, #announced)
+    end)
+
     it("adopts the requested cwd from the attachment", function()
         local start = #f.frames
         local row = control.agent(control.target_b)
