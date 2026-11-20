@@ -64,19 +64,20 @@ function M.setup(deps)
         if not target then return end
         if source then
             Registry.set_most_recent(source.session_key)
-            place(function() Registry.show_session(target.session_key, { focus_prompt = false }) end)
+            place(function() Registry.show_session(target.session_key) end)
         else
             target.widget.size = target.widget.size or {}
             Registry.show_session(target.session_key)
         end
-        target:on_session_ready(function() end, function()
+        function target._agency_restore()
             if not source or Registry.get(source.session_key) ~= source or source.widget:is_open() then return end
             place(function()
                 if Registry.visible_here() then return end
                 Registry.set_most_recent(source.session_key)
                 Registry.show_session(source.session_key, { focus_prompt = false })
             end)
-        end)
+        end
+        target:on_session_ready(function() end, target._agency_restore)
         return target
     end
     local function create(opts, callback)
@@ -255,7 +256,10 @@ function M.setup(deps)
         epoch = epoch + 1
         operations.detach()
         local manager = local_manager(key)
-        if manager then Registry.destroy(manager.session_key) end
+        if not manager then return end
+        local restore = not manager.session_id and manager._agency_restore
+        Registry.destroy(manager.session_key)
+        if restore then restore() end
     end
     function api.cancel()
         epoch = epoch + 1

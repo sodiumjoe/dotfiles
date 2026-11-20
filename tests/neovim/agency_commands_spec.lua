@@ -221,6 +221,8 @@ describe("Agency native commands", function()
         assert.are.equal(manager, Registry.current())
         assert.is_true(manager.widget:is_open())
         assert.are.equal("busy", manager.status_animation._state)
+        assert.are.equal(manager.widget.win_nrs.input, vim.api.nvim_get_current_win())
+        vim.cmd.stopinsert()
         assert.is_false(previous.widget:is_open())
         assert.are.equal(previous, Registry.get(previous.session_key))
         assert.are.equal(1, #vim.api.nvim_list_tabpages())
@@ -248,6 +250,24 @@ describe("Agency native commands", function()
         assert.are.equal(previous, Registry.current())
         assert.is_true(previous.widget:is_open())
         assert.are.equal(1, #logged)
+    end)
+
+    it("puts the previous session back when a session still loading is detached", function()
+        local Registry, original, logged = require("agentic.session_registry"), vim.notify, {}
+        vim.notify = function(message) logged[#logged + 1] = message end
+        local previous = f.manager
+        local manager = api.new(nil, { backend_id = "codex-acp", selection = { configValues = { model = "model-c" } } })
+        f.flush()
+        vim.cmd.stopinsert()
+        assert.are.equal(manager, Registry.current())
+        api.detach()
+        f.flush()
+        vim.notify = original
+        assert.is_true(manager._destroyed)
+        assert.are.equal(previous, Registry.current())
+        assert.is_true(previous.widget:is_open())
+        assert.is_falsy(previous._destroyed)
+        assert.are.same({}, logged)
     end)
 
     it("reports a roster request that times out as unavailable and drops its late reply", function()
