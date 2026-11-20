@@ -28,27 +28,47 @@ local function deliver_now(handlers, fn)
     return ok, err
 end
 
-local function offer(client, id, request, handlers, manager)
+local function failed(what, err)
+    require("agentic.utils.logger").notify("Failed to " .. what .. ": " .. tostring(err))
+end
+
+local function prepare(client, id, request, handlers, manager)
     if manager._destroyed or client.subscribers[request.sessionId] ~= handlers then
-        return client:__send_result(id, cancelled())
+        return "cancel"
     end
     if manager._agency_binding == nil then
         manager._agency_held_permissions = manager._agency_held_permissions or {}
         table.insert(manager._agency_held_permissions, { client = client, id = id, request = request, handlers = handlers })
-        return
+        return "held"
     end
     Stream.flush(manager)
     local meta = type(request._meta) == "table" and request._meta.agency
     if type(meta) ~= "table" or not vim.deep_equal(meta.binding, manager._agency_binding) then
-        return client:__send_result(id, cancelled())
+        return "cancel"
     end
     manager._agency_permissions = manager._agency_permissions or {}
     manager._agency_permissions[request.toolCall.toolCallId] = id
-    local ok, err = deliver_now(handlers, function()
-        ACPClient.__handle_request_permission(client, id, request)
-    end)
+    return "offer"
+end
+
+local function offer(client, id, request, handlers, manager)
+    local ok, verdict = pcall(prepare, client, id, request, handlers, manager)
     if not ok then
-        error(err)
+        failed("dispatch Agency session/request_permission", verdict)
+        verdict = "cancel"
+    end
+    if verdict == "cancel" then
+        local sent, err = pcall(client.__send_result, client, id, cancelled())
+        if not sent then
+            failed("answer Agency session/request_permission", err)
+        end
+    elseif verdict == "offer" then
+        local delivered, err = deliver_now(handlers, function()
+            ACPClient.__handle_request_permission(client, id, request)
+        end)
+        if not delivered then
+            failed("dispatch Agency session/request_permission", err)
+        end
     end
 end
 
@@ -57,7 +77,7 @@ local function settle_held(manager, cancel)
     manager._agency_held_permissions = nil
     for _, entry in ipairs(held or {}) do
         if cancel then
-            entry.client:__send_result(entry.id, cancelled())
+            pcall(entry.client.__send_result, entry.client, entry.id, cancelled())
         else
             offer(entry.client, entry.id, entry.request, entry.handlers, manager)
         end
@@ -115,13 +135,7 @@ local function replay(client, handlers, manager, params)
     batch[#batch + 1] = entry
 end
 
-local function apply_attachment(manager, info, response)
-    if manager._destroyed or not manager.session_id then
-        return settle_held(manager, true)
-    end
-    if manager._agency_attachment ~= info then
-        return
-    end
+local function adopt(manager, info, response)
     manager._agency_binding = vim.deepcopy(info.binding)
     manager._agency_cwd = manager._agency_request_cwd
     manager.session_state._provider_name = info.backendId
@@ -139,7 +153,20 @@ local function apply_attachment(manager, info, response)
     require("sodium.agency.agentic").apply_configuration(manager.config_options, snapshot)
     require("agentic.acp.slash_commands").setCommands(manager.widget.buf_nrs.input, snapshot.availableCommands or {})
     manager.widget:schedule_header_refresh()
-    settle_held(manager)
+end
+
+local function apply_attachment(manager, info, response)
+    if manager._destroyed or not manager.session_id then
+        return settle_held(manager, true)
+    end
+    if manager._agency_attachment ~= info then
+        return
+    end
+    local ok, err = pcall(adopt, manager, info, response)
+    settle_held(manager, manager._agency_binding == nil)
+    if not ok then
+        error(err)
+    end
 end
 
 local function start(handlers, flag, cwd, send, callback)
@@ -261,8 +288,13 @@ function Client:__with_subscriber(id, callback, on_missing)
             return
         end
         local manager = manager_for(subscriber)
-        if manager then
-            Stream.flush(manager)
+        local flushed, err = pcall(function()
+            if manager then
+                Stream.flush(manager)
+            end
+        end)
+        if not flushed then
+            failed("flush Agency streamed text", err)
         end
         callback(subscriber)
     end

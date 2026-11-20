@@ -146,6 +146,72 @@ describe("Agency live rendering", function()
         assert.is_nil(writer.tool_call_blocks["stale-tool"])
     end)
 
+    it("answers cancelled once when the stream flush before a permission throws", function()
+        local Stream, notify, notices = require("sodium.agency.stream"), vim.notify, {}
+        local flush = Stream.flush
+        Stream.flush = function() error("injected flush failure") end
+        vim.notify = function(message) notices[#notices + 1] = message end
+        local ok, err = pcall(function()
+            permission("broken", f.manager.session_id, f.manager._agency_binding, "broken-tool")
+            f.flush()
+        end)
+        Stream.flush, vim.notify = flush, notify
+        assert.is_true(ok, err)
+        assert.are.same({ { outcome = { outcome = "cancelled" } } }, answers("broken"))
+        assert.is_truthy(table.concat(notices, "\n"):find("injected flush failure", 1, true))
+    end)
+
+    it("still shows a permission when the flush before its delivery throws", function()
+        local Stream, notify, calls, shown = require("sodium.agency.stream"), vim.notify, 0, count_requests(f.manager)
+        local flush = Stream.flush
+        Stream.flush = function(...)
+            calls = calls + 1
+            if calls == 2 then error("injected flush failure") end
+            return flush(...)
+        end
+        vim.notify = function() end
+        local ok, err = pcall(function()
+            permission("delivered", f.manager.session_id, f.manager._agency_binding, "delivered-tool")
+            f.flush()
+        end)
+        Stream.flush, vim.notify = flush, notify
+        assert.is_true(ok, err)
+        assert.are.equal(2, calls)
+        assert.are.equal(1, shown.n)
+        assert.are.same({}, answers("delivered"))
+    end)
+
+    it("answers every held permission when one offer fails", function()
+        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        f.flush()
+        local frame, shown = f.request("session/load"), count_requests(manager)
+        permission("first", frame.params.sessionId, control.target_b, "first-tool")
+        permission("second", frame.params.sessionId, control.target_b, "second-tool")
+        f.flush()
+        local Stream, notify, failed = require("sodium.agency.stream"), vim.notify, false
+        local flush = Stream.flush
+        Stream.flush = function(...)
+            if not failed then
+                failed = true
+                error("injected flush failure")
+            end
+            return flush(...)
+        end
+        vim.notify = function() end
+        local ok, err = pcall(function()
+            f.client:_handle_message({ id = frame.id, result = { sessionId = frame.params.sessionId,
+                _meta = { agency = { version = 1, binding = control.target_b, backendId = "codex-acp",
+                    configuration = { configOptions = {}, availableCommands = {} } } } } })
+            f.flush()
+        end)
+        Stream.flush, vim.notify = flush, notify
+        assert.is_true(ok, err)
+        assert.are.same({ { outcome = { outcome = "cancelled" } } }, answers("first"))
+        assert.are.same({}, answers("second"))
+        assert.are.equal(1, shown.n)
+        assert.are.equal("second", manager._agency_permissions["second-tool"])
+    end)
+
     it("drops the live echo of this editor's admitted prompt", function()
         f.manager._agency_admissions = { own = {} }
         local function user(text, submission, replay)
