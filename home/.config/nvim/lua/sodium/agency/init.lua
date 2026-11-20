@@ -53,13 +53,38 @@ function M.setup(deps)
         if manager.session_id then callback(nil, manager)
         else manager:on_session_ready(function() callback(nil, manager) end) end
     end
+    local function start(spec, agent)
+        local source, tab = Registry.visible_here(), vim.api.nvim_get_current_tabpage()
+        local anchor = source and source.widget:find_first_non_widget_window(tab)
+        local function place(fn)
+            if anchor and require("agentic.utils.buf_helpers").is_win_usable(anchor) then vim.api.nvim_win_call(anchor, fn)
+            elseif vim.api.nvim_get_current_tabpage() == tab then fn() end
+        end
+        local target = Registry.create("agency", spec, agent)
+        if not target then return end
+        if source then
+            Registry.set_most_recent(source.session_key)
+            place(function() Registry.show_session(target.session_key, { focus_prompt = false }) end)
+        else
+            target.widget.size = target.widget.size or {}
+            Registry.show_session(target.session_key)
+        end
+        target:on_session_ready(function() end, function()
+            if not source or Registry.get(source.session_key) ~= source or source.widget:is_open() then return end
+            place(function()
+                if Registry.visible_here() then return end
+                Registry.set_most_recent(source.session_key)
+                Registry.show_session(source.session_key, { focus_prompt = false })
+            end)
+        end)
+        return target
+    end
     local function create(opts, callback)
         local agent = assert(client(), "Agency is not configured")
         require("sodium.agency.layout").cleanup()
         local cwd = opts.cwd
         local meta = { backend_id = opts.backend_id, selection = opts.selection, environment = opts.environment }
-        local manager = assert(Registry.replace(Registry.visible_here(), "agency", { kind = "new", cwd = cwd and function() return cwd end, meta = meta },
-            { agent = agent, retain_source = true }))
+        local manager = assert(start({ kind = "new", cwd = cwd and function() return cwd end, meta = meta }, agent))
         ready(manager, callback or function() end)
         return manager
     end
@@ -84,8 +109,7 @@ function M.setup(deps)
         local pending = Registry.find_by_acp_session_id(id, agent)
         if pending then return pending end
         require("sodium.agency.layout").cleanup()
-        return Registry.replace(Registry.visible_here(), "agency",
-            { kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId, meta = { backend_id = record.definition.backendId } }, { agent = agent, retain_source = true })
+        return start({ kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId, meta = { backend_id = record.definition.backendId } }, agent)
     end
     local function start_error(manager) return Rebind.reason(manager._agency_start_error) end
     local operations = require("sodium.agency.operations").new({ request = deps.request,

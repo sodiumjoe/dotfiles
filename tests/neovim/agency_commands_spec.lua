@@ -211,6 +211,45 @@ describe("Agency native commands", function()
         assert.are.equal(0, lookups)
     end)
 
+    it("shows a session it starts at once with the busy spinner and keeps the previous one alive", function()
+        local Registry, control = require("agentic.session_registry"), require("fixtures.agency_control")
+        local previous = f.manager
+        local manager = api.new(nil, { backend_id = "codex-acp", selection = { configValues = { model = "model-c" } } })
+        f.flush()
+        local frame = f.request("session/new")
+        assert.are_not.equal(previous, manager)
+        assert.are.equal(manager, Registry.current())
+        assert.is_true(manager.widget:is_open())
+        assert.are.equal("busy", manager.status_animation._state)
+        assert.is_false(previous.widget:is_open())
+        assert.are.equal(previous, Registry.get(previous.session_key))
+        assert.are.equal(1, #vim.api.nvim_list_tabpages())
+        f.client:_handle_message({ id = frame.id, result = { sessionId = "agency:" .. control.target_b.agentId, _meta = { agency = { version = 1,
+            binding = control.target_b, backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.are.equal(manager, Registry.current())
+        assert.is_true(manager.widget:is_open())
+        assert.are.same(control.target_b, manager._agency_binding)
+        assert.is_falsy(previous._destroyed)
+    end)
+
+    it("puts the previous session back when a session it starts fails", function()
+        local Registry, original, logged = require("agentic.session_registry"), vim.notify, {}
+        vim.notify = function(message) logged[#logged + 1] = message end
+        local previous = f.manager
+        local manager = api.new(nil, { backend_id = "codex-acp", selection = { configValues = { model = "model-c" } } })
+        f.flush()
+        assert.is_true(manager.widget:is_open())
+        f.client:_handle_message({ id = f.request("session/new").id, error = { code = -32000, message = "the provider did not start" } })
+        f.flush()
+        vim.notify = original
+        assert.is_true(manager._destroyed)
+        assert.is_nil(Registry.get(manager.session_key))
+        assert.are.equal(previous, Registry.current())
+        assert.is_true(previous.widget:is_open())
+        assert.are.equal(1, #logged)
+    end)
+
     it("reports a roster request that times out as unavailable and drops its late reply", function()
         local notify, warnings, outcomes = vim.notify, {}, {}
         vim.notify = function(message) warnings[#warnings + 1] = message end
