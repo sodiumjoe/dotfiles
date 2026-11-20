@@ -65,7 +65,8 @@ end
 
 function M.reattach(manager, view)
     return require("agentic.session_registry").replace(manager, "agency", { kind = "load", session_id = manager.session_id,
-        cwd = manager._agency_cwd or view and view.record.definition.cwd, title = manager.chat_history.title },
+        cwd = manager._agency_cwd or view and view.record.definition.cwd, title = manager.chat_history.title,
+        meta = { backend_id = view and view.record.definition.backendId or manager.session_state:get_provider_name() } },
         { agent = manager.agent, reattach = true, prepare = migrate })
 end
 

@@ -85,7 +85,7 @@ function M.setup(deps)
         if pending then return pending end
         require("sodium.agency.layout").cleanup()
         return Registry.replace(Registry.visible_here(), "agency",
-            { kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId }, { agent = agent, retain_source = true })
+            { kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId, meta = { backend_id = record.definition.backendId } }, { agent = agent, retain_source = true })
     end
     local function start_error(manager) return Rebind.reason(manager._agency_start_error) end
     local operations = require("sodium.agency.operations").new({ request = deps.request,

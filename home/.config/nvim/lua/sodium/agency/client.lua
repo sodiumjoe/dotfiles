@@ -247,10 +247,40 @@ local function apply_attachment(manager, info, response)
     end
 end
 
-local function start(handlers, flag, cwd, send, callback)
+local function separate_messages(manager)
+    local writer = manager.message_writer
+    if manager._agency_separated == writer then
+        return
+    end
+    manager._agency_separated = writer
+    local native = writer.write_message_chunk
+    writer.write_message_chunk = function(self, update)
+        local content = update.content
+        if update.sessionUpdate ~= "agent_message_chunk" or type(content) ~= "table" or type(content.text) ~= "string" or content.text == ""
+            or not vim.api.nvim_buf_is_valid(self.bufnr) then
+            return native(self, update)
+        end
+        local id, last = update.messageId or false, manager._agency_last_message
+        if last and last.id ~= id and last.tick == vim.api.nvim_buf_get_changedtick(self.bufnr) then
+            local tail = vim.api.nvim_buf_get_lines(self.bufnr, -3, -1, false)
+            local gap = tail[#tail] ~= "" and "\n\n" or #tail > 1 and tail[#tail - 1] ~= "" and "\n" or ""
+            update = vim.tbl_extend("force", update, { content = vim.tbl_extend("force", content, { text = gap .. content.text }) })
+        end
+        local result = native(self, update)
+        manager._agency_last_message = vim.api.nvim_buf_is_valid(self.bufnr) and { id = id, tick = vim.api.nvim_buf_get_changedtick(self.bufnr) } or nil
+        return result
+    end
+end
+
+local function start(handlers, flag, cwd, send, callback, backend)
     local manager, pending = manager_for(handlers), {}
     if manager then
         handlers._agency_manager, manager[flag], manager._agency_request_cwd = manager, pending, cwd
+        separate_messages(manager)
+        if type(backend) == "string" then
+            manager.session_state._provider_name = backend
+            manager.message_writer:set_provider_name(backend)
+        end
     end
     send(function(result, err)
         if manager and manager[flag] == pending then
@@ -469,18 +499,22 @@ function Client:__request_params(method, params, context)
     return params
 end
 
+local function backend_of(spec)
+    return type(spec) == "table" and type(spec.meta) == "table" and spec.meta.backend_id or nil
+end
+
 function Client:create_session(handlers, callback, cwd_callback, spec)
     start(handlers, "_agency_new_pending", nil, function(reply)
         starting = handlers._agency_manager
         ACPClient.create_session(self, handlers, reply, cwd_callback, spec)
         starting = nil
-    end, callback)
+    end, callback, backend_of(spec))
 end
 
 function Client:load_session(id, cwd, servers, handlers, callback, spec)
     start(handlers, "_agency_load_pending", cwd, function(reply)
         ACPClient.load_session(self, id, cwd, servers, handlers, reply, spec)
-    end, callback)
+    end, callback, backend_of(spec))
 end
 
 function Client:cancel_session(id, handlers)

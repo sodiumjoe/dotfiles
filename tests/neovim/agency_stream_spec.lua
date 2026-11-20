@@ -356,6 +356,62 @@ describe("Agency live rendering", function()
         end)
     end)
 
+    local function replayed(id, update)
+        f.client:_handle_message({ method = "session/update", params = { sessionId = id, update = update, _meta = { agency = { replay = true } } } })
+    end
+    local function lines_of(manager)
+        return vim.api.nvim_buf_get_lines(manager.message_writer.bufnr, 0, -1, false)
+    end
+
+    it("names the backend in replayed headers before the load reply arrives", function()
+        local row = control.agent(control.target_b)
+        row.record.definition.backendId = "claude-agent-acp"
+        local manager = require("sodium.agency").open(row)
+        f.flush()
+        replayed(f.request("session/load").params.sessionId, chunk("restored answer"))
+        f.flush()
+        local text = table.concat(lines_of(manager), "\n")
+        assert.is_truthy(text:find("Agent - claude-agent-acp", 1, true))
+        assert.is_nil(text:find("Agent - Agency", 1, true))
+    end)
+
+    it("names the backend in a reattached session's replayed headers", function()
+        local row = control.agent(control.target_a)
+        row.record.definition.backendId = "claude-agent-acp"
+        local target = require("sodium.agency.rebind").reattach(f.manager, row)
+        f.flush()
+        replayed(f.request("session/load").params.sessionId, chunk("restored answer"))
+        f.flush()
+        local text = table.concat(lines_of(target), "\n")
+        assert.is_truthy(text:find("Agent - claude-agent-acp", 1, true))
+        assert.is_nil(text:find("Agent - Agency", 1, true))
+    end)
+
+    it("separates adjacent agent messages and keeps one message's chunks together", function()
+        local id = f.manager.session_id
+        replayed(id, chunk("ok", { messageId = "m1" }))
+        replayed(id, chunk("Config warning: unknown key\n\n"))
+        replayed(id, chunk("fi", { messageId = "m2" }))
+        replayed(id, chunk("ne", { messageId = "m2" }))
+        f.flush()
+        deliver(chunk("al", { messageId = "m3" }))
+        f.flush()
+        deliver(chunk("pha", { messageId = "m3" }))
+        f.flush()
+        local lines = lines_of(f.manager)
+        local at
+        for index, text in ipairs(lines) do
+            if text == "ok" then at = index end
+        end
+        assert.is_truthy(at)
+        assert.are.same({ "ok", "", "Config warning: unknown key", "", "fine", "", "alpha" }, vim.list_slice(lines, at, at + 6))
+        local warnings = 0
+        for _, text in ipairs(lines) do
+            if text:find("Config warning", 1, true) then warnings = warnings + 1 end
+        end
+        assert.are.equal(1, warnings)
+    end)
+
     it("keeps a reader who scrolls away during the batching window", function()
         deliver(chunk(string.rep("older line\n", 100)))
         f.flush()
