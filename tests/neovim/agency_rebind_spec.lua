@@ -1,13 +1,22 @@
 package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
 
 describe("Agency rebind", function()
-    local f, control, Registry
+    local f, control, Registry, quiet
     before_each(function()
         f = require("fixtures.agency_native").new()
         control = require("fixtures.agency_control")
         Registry = require("agentic.session_registry")
     end)
-    after_each(function() f.close() end)
+    after_each(function()
+        f.close()
+        if quiet then vim.notify, quiet = quiet, nil end
+    end)
+    local function silence()
+        local logged = {}
+        quiet = quiet or vim.notify
+        vim.notify = function(message) logged[#logged + 1] = message end
+        return logged
+    end
 
     local function loads()
         local count = 0
@@ -135,7 +144,7 @@ describe("Agency rebind", function()
     end)
 
     it("reports a session whose reattach load fails and keeps the old view", function()
-        local before = loads()
+        local before, logged = loads(), silence()
         local _, row = moved_row()
         local state = start({ row }, { reconnect = function(done) done() end })
         assert.is_true(vim.wait(300, function() return loads() == before + 1 end, 5))
@@ -146,10 +155,11 @@ describe("Agency rebind", function()
         assert.are.equal(0, state.summary.rebound)
         assert.are.same({ { agentId = control.target_a.agentId, error = "agent is not known on this host" } }, state.summary.failed)
         assert.are.same({ f.manager }, Registry.list())
+        assert.are.same({ "Failed to load session: agent is not known on this host" }, logged)
     end)
 
     it("reports a session whose connection ends before its reattach load answers", function()
-        local before = loads()
+        local before, logged = loads(), silence()
         local _, row = moved_row()
         local again = start({ row }, { reconnect = function(done) done() end })
         assert.is_true(vim.wait(300, function() return loads() == before + 1 end, 5))
@@ -158,6 +168,8 @@ describe("Agency rebind", function()
         assert.is_true(vim.wait(300, function() return again.summary ~= nil end, 5))
         assert.are.equal(0, again.summary.rebound)
         assert.is_truthy(again.summary.failed[1].error:find("connection ended", 1, true))
+        f.flush()
+        assert.are.same({ "Failed to load session: disconnected" }, logged)
     end)
 
     it("reports a load that never answers once the load timeout passes", function()
@@ -220,6 +232,46 @@ describe("Agency rebind", function()
         assert.are.equal(target, Registry.current())
         assert.is_true(target.widget:is_open())
     end)
+
+    for _, order in ipairs({ "first", "last" }) do
+        it("keeps the session that was most recent current after hidden reattaches whose reply for it lands " .. order, function()
+            local a = f.manager
+            local b = require("sodium.agency").open(control.agent(control.target_b))
+            f.flush()
+            answer_load(control.target_b)
+            a.widget:hide()
+            b.widget:hide()
+            Registry.set_most_recent(a.session_key)
+            assert.are.equal(a, Registry.current())
+            local rows, moved = {}, {}
+            for index, target in ipairs({ control.target_a, control.target_b }) do
+                moved[index] = vim.tbl_extend("force", target, { handlerGeneration = control.id(20), providerGeneration = control.id(20 + index) })
+                rows[index] = control.agent(moved[index])
+                rows[index].record.definition.cwd = vim.fn.getcwd()
+            end
+            local before = loads()
+            local state = start(rows, { reconnect = function(done) done() end })
+            assert.is_true(vim.wait(300, function() return loads() == before + 2 end, 5))
+            local frames = {}
+            for index = #f.frames, 1, -1 do
+                local frame = f.frames[index]
+                if frame.method == "session/load" and not frames[frame.params.sessionId] then frames[frame.params.sessionId] = frame end
+            end
+            local function reply(target)
+                local id = "agency:" .. target.agentId
+                f.client:_handle_message({ id = frames[id].id, result = { sessionId = id, _meta = { agency = { version = 1, binding = target,
+                    backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+                f.flush()
+            end
+            local replacement = Registry.find_by_acp_session_id(a.session_id, f.client)
+            if order == "first" then reply(moved[1]); reply(moved[2]) else reply(moved[2]); reply(moved[1]) end
+            assert.is_true(vim.wait(300, function() return state.summary ~= nil end, 5))
+            assert.are.equal(2, state.summary.rebound)
+            assert.is_true(a._destroyed and b._destroyed)
+            assert.are.same(moved[1], replacement._agency_binding)
+            assert.are.equal(replacement, Registry.current())
+        end)
+    end
 
     it("keeps the source's staged context when a reattach rolls back after migrating", function()
         local source = f.manager

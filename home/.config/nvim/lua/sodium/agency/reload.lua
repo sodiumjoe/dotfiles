@@ -59,7 +59,9 @@ function M.run(opts)
     local old = require("sodium.agency").setup()
     local notify = old.notify
     if vim.g.agency_reload_running then notify("A reload is already running"); return end
-    if old.busy and old.busy() then notify("An Agency command or session load is still running; try :AgencyReload again shortly, or close a tab whose session failed to start"); return end
+    local busy = old.busy and old.busy(opts.force)
+    if busy == "stop" then notify("An Agency stop is still running; try :AgencyReload again once it finishes"); return end
+    if busy then notify("A session start is still waiting for the Handler and stays hidden until it answers; try :AgencyReload again shortly, or run :AgencyReload! to reload anyway"); return end
     local deps = old.deps or {}
     local client = deps.client or require("sodium.agency.control")
     local root = deps.repository or repository()

@@ -99,12 +99,16 @@ function M.run(views, opts, callback)
         local Registry = require("agentic.session_registry")
         local listed, managers = pcall(M.managers)
         local loading, opened, finished = {}, false, false
+        local recent, targets = Registry.current(), {}
         local load_timer = assert(vim.uv.new_timer())
+        local function registered(manager) return manager and Registry.get(manager.session_key) == manager and manager or nil end
         local function finish()
             if finished or not opened or next(loading) then return end
             finished = true
             load_timer:stop()
             load_timer:close()
+            local restore, now = registered(targets[recent]) or registered(recent), Registry.list()[1]
+            if restore and now ~= restore and vim.tbl_contains(vim.tbl_values(targets), now) then Registry.set_most_recent(restore.session_key) end
             callback(summary)
         end
         local function failed(agent_id, err)
@@ -133,6 +137,7 @@ function M.run(views, opts, callback)
                     loading[token] = nil
                     failed(agent_id, ok and "the session could not be reattached" or target)
                 else
+                    targets[manager] = target
                     target:on_session_ready(function()
                         settle(token, Registry.get(target.session_key) ~= target and "the session closed before it reattached" or nil)
                     end, function() settle(token, target._agency_start_error or "the session did not start") end)

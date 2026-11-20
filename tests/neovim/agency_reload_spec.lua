@@ -2,7 +2,7 @@ package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.p
 dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agentic.lua").config()
 
 describe("Agency reload", function()
-    local f, control, Registry, calls, systems, notifications, notified, root, digest
+    local f, control, Registry, calls, systems, notifications, notified, root, digest, quiet
     before_each(function()
         f = require("fixtures.agency_native").new()
         control = require("fixtures.agency_control")
@@ -20,6 +20,7 @@ describe("Agency reload", function()
             notify = function(value, _, opts) notifications[#notifications + 1] = value; notified[#notified + 1] = opts or {} end,
             system = function(argv, _, on_exit) if systems.raise then error(systems.raise) end; systems[#systems + 1] = argv; on_exit({ code = systems.fail and 1 or 0, stdout = "", stderr = systems.fail and "type error" or "" }); return {} end,
             request = control.requests(calls),
+            confirm_stop = function(_, callback) callback(true) end,
             repository = root,
             node = root .. "/node",
             reconnect = function(done) f.client:_set_state("ready"); done() end,
@@ -30,6 +31,7 @@ describe("Agency reload", function()
     after_each(function()
         vim.g.agency_reload_running = nil
         f.close()
+        if quiet then vim.notify, quiet = quiet, nil end
         vim.fn.delete(root, "rf")
     end)
 
@@ -62,6 +64,16 @@ describe("Agency reload", function()
             _meta = { agency = { version = 1, binding = target, backendId = "codex-acp",
                 configuration = { configOptions = {}, availableCommands = {} } } } } })
         f.flush()
+    end
+    local function refused()
+        local text = table.concat(notifications, "\n")
+        return text:find("still running", 1, true) ~= nil or text:find("still waiting", 1, true) ~= nil
+    end
+    local function silence()
+        local logged = {}
+        quiet = quiet or vim.notify
+        vim.notify = function(message) logged[#logged + 1] = message end
+        return logged
     end
     local function restarted(agents) return { state = "restarted", restarted = true, resumed = false, agents = agents or { { agentId = control.target_a.agentId, outcome = "restored", failure = vim.NIL } } } end
 
@@ -290,24 +302,51 @@ describe("Agency reload", function()
         local built = #systems
         require("sodium.agency.reload").run({})
         f.flush()
-        assert.is_falsy(table.concat(notifications, "\n"):find("still running", 1, true))
+        assert.is_false(refused())
         assert.is_true(#systems > built)
     end)
 
     it("counts a new session as busy only while its request is outstanding", function()
+        local logged = silence()
         require("sodium.agency").new(nil, { backend_id = "codex-acp" })
         f.flush()
         local frame = f.request("session/new")
         require("sodium.agency.reload").run({})
-        assert.is_truthy(table.concat(notifications, "\n"):find("still running", 1, true))
+        assert.is_true(refused())
         assert.are.same({}, systems)
         f.client:_handle_message({ id = frame.id, error = { code = -32000, message = "backend failed" } })
         f.flush()
+        assert.are.same({ "Failed to create session: backend failed" }, logged)
         notifications = {}
         require("sodium.agency.reload").run({})
         f.flush()
-        assert.is_falsy(table.concat(notifications, "\n"):find("still running", 1, true))
+        assert.is_false(refused())
         assert.is_true(#systems > 0)
+    end)
+
+    it("names a session start the Handler never answers, and reloads past it when forced", function()
+        require("sodium.agency").open(control.agent(control.target_b))
+        f.flush()
+        f.request("session/load")
+        require("sodium.agency.reload").run({})
+        local text = table.concat(notifications, "\n")
+        assert.is_truthy(text:find("session start is still waiting", 1, true))
+        assert.is_truthy(text:find(":AgencyReload!", 1, true))
+        assert.are.same({}, systems)
+        notifications = {}
+        require("sodium.agency.reload").run({ force = true })
+        f.flush()
+        assert.is_false(refused())
+        assert.are.equal(1, #systems)
+    end)
+
+    it("refuses even a forced reload while a stop is running", function()
+        require("sodium.agency").stop()
+        f.flush()
+        assert.is_true(vim.iter(calls):any(function(call) return call.method == "agency/stop" and not call.answered end))
+        require("sodium.agency.reload").run({ force = true })
+        assert.is_truthy(table.concat(notifications, "\n"):find("stop is still running", 1, true))
+        assert.are.same({}, systems)
     end)
 
     it("refuses a second reload while one is running", function()

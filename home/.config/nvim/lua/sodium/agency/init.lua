@@ -310,10 +310,11 @@ function M.setup(deps)
         manager._agency_routed_permissions = manager._agency_routed_permissions or require("sodium.agency.permissions").new({ notify = api.notify })
         manager._agency_routed_permissions.open()
     end
-    function api.busy()
-        if operations.in_flight() > 0 then return true end
+    function api.busy(force)
+        if operations.in_flight() > 0 then return "stop" end
+        if force then return false end
         for _, manager in ipairs(Registry.list()) do
-            if Rebind.agency(manager) and (manager._agency_load_pending or manager._agency_new_pending) then return true end
+            if Rebind.agency(manager) and (manager._agency_load_pending or manager._agency_new_pending) then return "start" end
         end
         return false
     end
