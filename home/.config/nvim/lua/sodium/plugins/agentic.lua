@@ -638,8 +638,9 @@ local function pick_pr_for_review()
 end
 
 return {
-    "carlos-algms/agentic.nvim",
-    dir = vim.env.AGENTIC_NVIM_DIR,
+    "sodiumjoe/agentic.nvim",
+    branch = "sodium",
+    dir = vim.env.AGENTIC_NVIM_DIR ~= "" and vim.env.AGENTIC_NVIM_DIR or nil,
     cmd = { "AgencyPermissions", "Agency", "AgencyCurrent", "AgencyNew", "AgencyOpen", "AgencyAttach", "AgencyRestore",
         "AgencySettings", "AgencyDetach", "AgencyCancel", "AgencyStop", "AgencyInspect", "AgencyReload" },
     config = function()
