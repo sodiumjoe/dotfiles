@@ -633,6 +633,10 @@ function Client:__handle_unknown_method(id, method, params)
 end
 
 function Client:__on_state_change(old, new)
+    local prompts = new == "ready" and type(self.agent_capabilities) == "table" and self.agent_capabilities.promptCapabilities
+    if type(prompts) == "table" then
+        prompts.embeddedContext = false
+    end
     if old ~= "ready" or new ~= "error" and new ~= "disconnected" then
         return
     end

@@ -213,6 +213,41 @@ describe("Agency session start and release", function()
         assert.are.equal(id, f.request("agency/detach").params.sessionId)
     end)
 
+    it("sends a new session's environment as text even when the Handler accepts embedded context", function()
+        local client, start = f.client, #f.frames
+        client.state, client.agent_capabilities, client._on_ready = "disconnected", nil, function() end
+        client.transport.start = function()
+            client.state = "connected"
+        end
+        client:_connect()
+        client:_handle_message({
+            id = since(start, "initialize")[1].id,
+            result = {
+                protocolVersion = 1,
+                authMethods = {},
+                agentCapabilities = { loadSession = true, promptCapabilities = { embeddedContext = true } },
+            },
+        })
+        f.flush()
+        assert.are.equal("ready", client.state)
+        local manager = adapter.new(nil, { cwd = vim.fn.getcwd(), backend_id = "codex-acp" })
+        f.flush()
+        local id = "agency:" .. control.id(6)
+        reply(
+            since(start, "session/new")[1],
+            id,
+            { agentId = control.id(6), handlerGeneration = control.id(2), providerGeneration = control.id(7) }
+        )
+        vim.api.nvim_buf_set_lines(manager.widget.buf_nrs.input, 0, -1, false, { "Reply with exactly: ok" })
+        manager.widget:_submit_input()
+        local prompt = f.request("session/prompt").params.prompt
+        assert.are.same({ type = "text", text = "Reply with exactly: ok" }, prompt[1])
+        assert.are.equal("text", prompt[2].type)
+        for _, block in ipairs(prompt) do
+            assert.are_not.equal("resource", block.type)
+        end
+    end)
+
     it("adopts the requested cwd from the attachment", function()
         local start = #f.frames
         local row = control.agent(control.target_b)
