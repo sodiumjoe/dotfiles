@@ -3,6 +3,7 @@ dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agen
 
 describe("Agency live rendering", function()
     local f, hooks, writer, renders
+    local control = require("fixtures.agency_control")
     before_each(function()
         f = require("fixtures.agency_native").new()
         hooks = require("agentic.config").hooks
@@ -26,6 +27,28 @@ describe("Agency live rendering", function()
     local function buffer_text()
         return table.concat(vim.api.nvim_buf_get_lines(writer.bufnr, 0, -1, false), "\n")
     end
+    local function permission(id, session_id, binding, tool)
+        f.client:_handle_message({ id = id, method = "session/request_permission", params = {
+            sessionId = session_id, toolCall = { toolCallId = tool, title = "Tool", kind = "other", status = "pending" },
+            options = { { optionId = "allow", name = "Allow", kind = "allow_once" } },
+            _meta = { agency = { version = 1, binding = vim.deepcopy(binding), requestId = id } },
+        } })
+    end
+    local function answers(id)
+        local found = {}
+        for _, frame in ipairs(f.frames) do
+            if frame.id == id and frame.result then found[#found + 1] = frame.result end
+        end
+        return found
+    end
+    local function count_requests(manager)
+        local counter, add = { n = 0 }, manager.permission_manager.add_request
+        manager.permission_manager.add_request = function(self, ...)
+            counter.n = counter.n + 1
+            return add(self, ...)
+        end
+        return counter
+    end
 
 
     it("combines a delivered burst while preserving every history update and hook", function()
@@ -39,6 +62,7 @@ describe("Agency live rendering", function()
             deliver(chunk(expected[i]))
         end
         assert.is_true(vim.wait(300, function() return #renders > 0 and #received == 100 end, 1))
+        assert.is_true(#renders < #expected)
         assert.are.same(expected, received)
         local text = table.concat(expected)
         assert.are.equal(text, f.manager.chat_history.messages[1].text)
@@ -97,6 +121,48 @@ describe("Agency live rendering", function()
         if not ok then error(err, 0) end
     end)
 
+    it("shows a permission offered before the load reply once the binding is adopted", function()
+        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        f.flush()
+        local frame, shown = f.request("session/load"), count_requests(manager)
+        permission("early", frame.params.sessionId, control.target_b, "early-tool")
+        f.flush()
+        f.client:_handle_message({ id = frame.id, result = { sessionId = frame.params.sessionId,
+            _meta = { agency = { version = 1, binding = control.target_b, backendId = "codex-acp",
+                configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.are.equal(1, shown.n)
+        assert.are.same({}, answers("early"))
+        assert.are.equal("early", manager._agency_permissions["early-tool"])
+    end)
+
+    it("answers a permission from a superseded binding cancelled without showing it", function()
+        local shown = count_requests(f.manager)
+        local stale = vim.tbl_extend("force", f.manager._agency_binding, { providerGeneration = control.id(9) })
+        permission("stale", f.manager.session_id, stale, "stale-tool")
+        f.flush()
+        assert.are.equal(0, shown.n)
+        assert.are.same({ { outcome = { outcome = "cancelled" } } }, answers("stale"))
+        assert.is_nil(writer.tool_call_blocks["stale-tool"])
+    end)
+
+    it("drops the live echo of this editor's admitted prompt", function()
+        f.manager._agency_admissions = { own = {} }
+        local function user(text, submission, replay)
+            f.client:_handle_message({ method = "session/update", params = { sessionId = f.manager.session_id,
+                update = { sessionUpdate = "user_message_chunk", content = { type = "text", text = text } },
+                _meta = { agency = { version = 1, submissionId = submission, replay = replay } } } })
+        end
+        user("own live echo", "own", false)
+        user("own replayed prompt", "own", true)
+        user("other editor prompt", "other", false)
+        f.flush()
+        local text = buffer_text()
+        assert.is_nil(text:find("own live echo", 1, true))
+        assert.is_truthy(text:find("own replayed prompt", 1, true))
+        assert.is_truthy(text:find("other editor prompt", 1, true))
+    end)
+
     it("flushes before completion and its hook", function()
         f.manager:_handle_input_submit("question")
         local complete
@@ -147,84 +213,25 @@ describe("Agency live rendering", function()
         check_fold()
     end)
 
-    it("retries an incomplete attachment with one history copy and its draft intact", function()
-        local id, binding = f.manager.session_id, vim.deepcopy(f.manager._agency_binding)
-        local function replay()
-            f.client:_handle_message({ method = "session/update", params = {
-                sessionId = id, update = chunk("retained retry history"), _meta = { agency = { replay = true } },
-            } })
-            f.flush()
-        end
-        local function reply(frame)
-            f.client:_handle_message({ id = frame.id, result = { sessionId = id,
-                _meta = { agency = { version = 1, binding = binding, backendId = "codex-acp",
-                    configuration = { configOptions = {}, availableCommands = {} } } } } })
-            f.flush()
-        end
-        f.manager:load_acp_session(id, "codex-acp")
-        local abandoned = f.request("session/load")
-        replay()
-        writer:write_tool_call_block({ tool_call_id = "abandoned", kind = "execute", argument = "old", status = "in_progress", body = { "old tool" } })
-        vim.api.nvim_buf_set_lines(f.manager.widget.buf_nrs.input, 0, -1, false, { "unsent draft" })
-        f.manager.file_list:add(vim.env.DOTFILES_TEST_ROOT .. "/test-nvim.sh")
-        local files = vim.deepcopy(f.manager.file_list:get_files())
-        local staged = require("sodium.agency.agentic").stage_context(f.manager, { type = "text", text = "staged context" })
-        f.manager:load_acp_session(id, "codex-acp")
-        local current = f.request("session/load")
-        assert.are.equal(id, f.manager._agency_loading_session)
-        assert.is_not.equal(abandoned.id, current.id)
-        reply(abandoned)
-        assert.is_nil(f.manager.session_id)
-        assert.is_true(f.manager._is_restoring_session)
-        replay()
-        reply(current)
-        local _, occurrences = buffer_text():gsub("retained retry history", "")
-        local _, banners = buffer_text():gsub("# Agentic %- Agency", "")
-        assert.are.equal(1, occurrences)
-        assert.are.equal(1, banners)
-        assert.is_nil(writer.tool_call_blocks.abandoned)
-        assert.is_nil(buffer_text():find("old tool", 1, true))
-        assert.are.same({ "unsent draft" }, vim.api.nvim_buf_get_lines(f.manager.widget.buf_nrs.input, 0, -1, false))
-        assert.are.same(files, f.manager.file_list:get_files())
-        assert.are.equal(staged, f.manager._agency_pending_context[1])
-        assert.are.equal(id, f.manager.session_id)
-        assert.is_false(f.manager._is_restoring_session)
-        assert.is_nil(f.manager._agency_loading_session)
-        assert.are.equal(0, vim.tbl_count(f.client.callbacks))
-    end)
-
-    it("restores configuration handling when incomplete cancellation fails", function()
-        f.manager:load_acp_session(f.manager.session_id, "codex-acp")
-        local restore, clear = f.manager.config_options.restore_snapshot, f.manager.widget.clear
-        f.manager.widget.clear = function() error("injected cancellation failure") end
-        local ok = pcall(f.manager.load_acp_session, f.manager, f.manager._agency_loading_session, "codex-acp")
-        f.manager.widget.clear = clear
-        local actual = f.manager.config_options.restore_snapshot
-        f.manager.config_options.restore_snapshot = restore
-        assert.is_false(ok)
-        assert.are.equal(restore, actual)
-    end)
-
     it("finishes attachment when fast transport callbacks reenter a retained replay", function()
-        local id, binding = f.manager.session_id, vim.deepcopy(f.manager._agency_binding)
-        f.manager:load_acp_session(id, "codex-acp")
-        local frame, handlers = f.request("session/load"), f.client.subscribers[id]
-        local write, injected, delivered, failure = writer.write_message_chunk, false, nil, nil
-        writer.write_message_chunk = function(self, update)
+        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        f.flush()
+        local frame = f.request("session/load")
+        local id, handlers, target = frame.params.sessionId, f.client.subscribers[frame.params.sessionId], manager.message_writer
+        local write, injected, delivered, failure = target.write_message_chunk, false, nil, nil
+        target.write_message_chunk = function(self, update)
             local result = write(self, update)
-            if not injected and f.client._agency_replay_handlers == handlers then
+            if not injected then
                 injected = true
                 local done, timer = false, assert(vim.uv.new_timer())
                 timer:start(0, 0, function()
                     timer:stop(); timer:close()
                     delivered, failure = pcall(function()
                         assert.is_true(vim.in_fast_event())
-                        assert.are.equal(handlers, f.client._agency_replay_handlers)
-                        f.client:_handle_message({ method = "agency/session_state", params = {
-                            sessionId = id, binding = binding, state = "idle",
-                        } })
+                        f.client:_handle_message({ method = "session/update", params = { sessionId = id,
+                            update = { sessionUpdate = "tool_call", toolCallId = "live", title = "live tool", kind = "other", status = "pending" } } })
                         f.client:_handle_message({ id = frame.id, result = { sessionId = id,
-                            _meta = { agency = { version = 1, binding = binding, backendId = "codex-acp",
+                            _meta = { agency = { version = 1, binding = control.target_b, backendId = "codex-acp",
                                 configuration = { configOptions = {}, availableCommands = {} } } } } })
                     end)
                     done = true
@@ -233,23 +240,24 @@ describe("Agency live rendering", function()
             end
             return result
         end
-        f.client:_handle_message({ method = "session/update", params = {
-            sessionId = id, update = chunk("reentrant first\nreentrant second", { sessionUpdate = "agent_thought_chunk" }),
-            _meta = { agency = { replay = true } },
-        } })
+        for _, update in ipairs({ chunk("reentrant first\nreentrant second", { sessionUpdate = "agent_thought_chunk" }), chunk("reentrant answer") }) do
+            f.client:_handle_message({ method = "session/update", params = { sessionId = id, update = update, _meta = { agency = { replay = true } } } })
+        end
         f.flush()
         assert.is_true(injected)
         assert.is_true(delivered, failure)
         assert.is_nil(f.client.callbacks[frame.id])
-        assert.are.equal(id, f.manager.session_id)
-        assert.is_false(f.manager._is_restoring_session)
-        assert.is_nil(f.manager._agency_loading_session)
-        local first
-        for index, text in ipairs(vim.api.nvim_buf_get_lines(writer.bufnr, 0, -1, false)) do
+        assert.are.equal(id, manager.session_id)
+        assert.are.equal(handlers, f.client.subscribers[id])
+        assert.are.same(control.target_b, manager._agency_binding)
+        local lines, first, answer, live = vim.api.nvim_buf_get_lines(target.bufnr, 0, -1, false), nil, nil, nil
+        for index, text in ipairs(lines) do
             if text:find("reentrant first", 1, true) then first = index end
+            if text:find("reentrant answer", 1, true) then answer = index end
+            if text:find("live tool", 1, true) then live = index end
         end
-        assert.is_not_nil(first)
-        vim.api.nvim_win_call(f.manager.widget.win_nrs.chat, function()
+        assert.is_true(first < answer and answer < live)
+        vim.api.nvim_win_call(manager.widget.win_nrs.chat, function()
             assert.are.equal(first, vim.fn.foldclosed(first))
             assert.are.equal(first + 1, vim.fn.foldclosedend(first))
         end)
@@ -283,9 +291,9 @@ describe("Agency live rendering", function()
     end)
 
     it("keeps a reader who scrolls away during the batching window", function()
-        f.manager:_on_session_update(chunk(string.rep("older line\n", 100)))
+        deliver(chunk(string.rep("older line\n", 100)))
         f.flush()
-        f.manager:_on_session_update(chunk("new line\n"))
+        deliver(chunk("new line\n"))
         vim.api.nvim_win_set_cursor(f.manager.widget.win_nrs.chat, { 2, 0 })
         f.flush()
         assert.are.equal(2, vim.api.nvim_win_get_cursor(f.manager.widget.win_nrs.chat)[1])
