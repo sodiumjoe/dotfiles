@@ -2,15 +2,14 @@ local ACPClient = require("agentic.acp.acp_client")
 local Client = setmetatable({}, { __index = ACPClient })
 Client.__index = Client
 
-local managers = setmetatable({}, { __mode = "k" })
+local starting
 
 local function manager_for(handlers)
-    if managers[handlers] then
-        return managers[handlers]
+    if handlers._agency_manager then
+        return handlers._agency_manager
     end
     for _, session in pairs(require("agentic.session_registry").sessions) do
         if session.handlers == handlers then
-            managers[handlers] = session
             return session
         end
     end
@@ -39,12 +38,11 @@ local function apply_attachment(manager, info, response)
     manager.widget:schedule_header_refresh()
 end
 
-local function start(self, handlers, flag, send, callback)
+local function start(handlers, flag, cwd, send, callback)
     local manager, pending = manager_for(handlers), {}
     if manager then
-        manager[flag] = pending
+        handlers._agency_manager, manager[flag], manager._agency_request_cwd = manager, pending, cwd
     end
-    self._agency_starting = manager
     send(function(result, err)
         if manager and manager[flag] == pending then
             manager[flag] = nil
@@ -63,15 +61,14 @@ local function start(self, handlers, flag, send, callback)
             end)
         end
     end)
-    self._agency_starting = nil
 end
 
 function Client:__request_params(method, params, context)
     if method ~= "session/new" and method ~= "session/load" then
         return params
     end
-    if self._agency_starting then
-        self._agency_starting._agency_request_cwd = params.cwd
+    if method == "session/new" and starting then
+        starting._agency_request_cwd = params.cwd
     end
     local agency = { version = 1, editor = vim.v.servername }
     if method == "session/new" then
@@ -89,13 +86,15 @@ function Client:__request_params(method, params, context)
 end
 
 function Client:create_session(handlers, callback, cwd_callback, spec)
-    start(self, handlers, "_agency_new_pending", function(reply)
+    start(handlers, "_agency_new_pending", nil, function(reply)
+        starting = handlers._agency_manager
         ACPClient.create_session(self, handlers, reply, cwd_callback, spec)
+        starting = nil
     end, callback)
 end
 
 function Client:load_session(id, cwd, servers, handlers, callback, spec)
-    start(self, handlers, "_agency_load_pending", function(reply)
+    start(handlers, "_agency_load_pending", cwd, function(reply)
         ACPClient.load_session(self, id, cwd, servers, handlers, reply, spec)
     end, callback)
 end
@@ -106,7 +105,7 @@ function Client:cancel_session(id, handlers)
     end
     local owner = handlers or self.subscribers[id]
     self.subscribers[id] = nil
-    local manager = owner and managers[owner]
+    local manager = owner and manager_for(owner)
     if manager and manager._agency_routed_permissions then
         manager._agency_routed_permissions.close()
         manager._agency_routed_permissions = nil

@@ -174,4 +174,56 @@ describe("Agency session start and release", function()
         assert.are.equal(f.client.ERROR_CODES.TIMEOUT_ERROR, outcome.code)
         assert.are.same({}, warnings)
     end)
+
+    it("leaves a released manager collectable", function()
+        local start = #f.frames
+        local held = setmetatable({ adapter.open(control.agent(control.target_b)) }, { __mode = "v" })
+        f.flush()
+        local frame = since(start, "session/load")[1]
+        reply(frame, frame.params.sessionId, control.target_b)
+        f.flush()
+        assert.are.same(control.target_b, held[1]._agency_binding)
+        Registry.destroy(held[1].session_key)
+        vim.wait(300, function() return false end)
+        collectgarbage()
+        collectgarbage()
+        assert.is_nil(held[1])
+    end)
+
+    it("inherits the predecessor's backend only when no backend is chosen", function()
+        local start = #f.frames
+        Registry.create("agency", { kind = "new", source_session_id = f.manager.session_id }, f.client)
+        Registry.create("agency", { kind = "new", source_session_id = f.manager.session_id, meta = { backend_id = "codex-acp" } }, f.client)
+        f.flush()
+        local frames = since(start, "session/new")
+        assert.are.equal(f.manager.session_id, frames[1].params._meta.agency.inheritSessionId)
+        assert.is_nil(frames[2].params._meta.agency.inheritSessionId)
+        assert.are.equal("codex-acp", frames[2].params._meta.agency.backendId)
+    end)
+
+    it("closes routed permissions when the session is released", function()
+        local closed = 0
+        f.manager._agency_routed_permissions = { close = function() closed = closed + 1 end }
+        local manager, id = f.manager, f.manager.session_id
+        Registry.destroy(manager.session_key)
+        f.flush()
+        assert.are.equal(1, closed)
+        assert.is_nil(manager._agency_routed_permissions)
+        assert.are.equal(id, f.request("agency/detach").params.sessionId)
+    end)
+
+    it("adopts the requested cwd from the attachment", function()
+        local start = #f.frames
+        local row = control.agent(control.target_b)
+        row.record.definition.cwd = "/work/b"
+        local loaded = adapter.open(row)
+        local created = adapter.new_session({ cwd = "/work/new" })
+        f.flush()
+        local load, new = since(start, "session/load")[1], since(start, "session/new")[1]
+        reply(load, load.params.sessionId, control.target_b)
+        reply(new, "agency:" .. control.id(6), { agentId = control.id(6), handlerGeneration = control.id(2), providerGeneration = control.id(7) })
+        f.flush()
+        assert.are.equal("/work/b", loaded._agency_cwd)
+        assert.are.equal("/work/new", created._agency_cwd)
+    end)
 end)
