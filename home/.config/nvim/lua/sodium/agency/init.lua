@@ -35,7 +35,7 @@ end
 function M.setup(deps)
     if controller then return controller end
     deps = deps or {}
-    Adapter.install()
+    require("sodium.agency.layout").setup()
     local Registry = require("agentic.session_registry")
     local api = {
         annotations = deps.annotations or Context.annotations, accept_annotations = deps.accept_annotations or Context.accept_annotations,
@@ -105,7 +105,7 @@ function M.setup(deps)
         if opts.backend_id then return create(opts, callback) end
         require("agentic.acp.agent_instance").get_instance("agency", function(client)
             client:when_ready(function()
-                client:_send_request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(result, err)
+                client:request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(result, err)
                     if not valid() then return end
                     if err or not result or #result.backends == 0 then report(err or failure("UNAVAILABLE")); return end
                     require("sodium.agency.selection").select(result, valid, function(selection)

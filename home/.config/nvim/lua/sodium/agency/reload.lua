@@ -24,7 +24,6 @@ end
 
 local function install(deps)
     require("sodium.agentic_folds").install()
-    require("sodium.agency.agentic").install()
     return require("sodium.agency").setup(deps)
 end
 

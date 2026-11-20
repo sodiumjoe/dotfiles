@@ -1,22 +1,21 @@
 local M = {}
 function M.new()
     local Config, Instances = require("agentic.config"), require("agentic.acp.agent_instance")
-    local Registry, ACPClient = require("agentic.session_registry"), require("agentic.acp.acp_client")
+    local Registry, Client = require("agentic.session_registry"), require("sodium.agency.client")
     local saved = { Config.provider, Config.acp_providers.agency, Instances._instances, Config.hooks }
     Config.hooks = vim.tbl_extend("force", Config.hooks or {}, { on_response_complete = function() end })
     Config.provider = "agency"
-    Config.acp_providers.agency = { name = "Agency", command = vim.v.progpath, args = {} }
+    Config.acp_providers.agency = { name = "Agency", command = vim.v.progpath, args = {}, client_class = Client, render_live_user_messages = true }
     local frames = {}
     local client = setmetatable({ provider_config = Config.acp_providers.agency, state = "ready", callbacks = {},
         subscribers = {}, id_counter = 0, ready_listeners = {}, agent_capabilities = { loadSession = true },
-        transport = { send = function(_, data) frames[#frames + 1] = vim.json.decode(data) end } }, ACPClient)
+        transport = { send = function(_, data) frames[#frames + 1] = vim.json.decode(data) end } }, Client)
     Instances._instances = { agency = client }
     local adapter = require("sodium.agency.agentic")
-    adapter.install()
     local control = require("fixtures.agency_control")
     local row = control.agent(control.target_a)
     row.record.definition.cwd = vim.fn.getcwd()
-    local manager = adapter.open(row)
+    local key = adapter.open(row).session_key
     local function flush() vim.wait(30, function() return false end) end
     local function request(method)
         for i = #frames, 1, -1 do if frames[i].method == method then return frames[i] end end
@@ -28,17 +27,17 @@ function M.new()
         _meta = { agency = { version = 1, binding = control.target_a, backendId = "codex-acp",
             configuration = { configOptions = {}, availableCommands = {} } } } } })
     flush()
+    local manager = Registry.get(key)
     manager.code_selection:clear()
     manager.file_list:clear()
     manager.diagnostics_list:clear()
-    manager._is_first_message = false
     return { manager = manager, client = client, frames = frames, row = row, request = request, flush = flush,
         state = function(turn, state)
             client:_handle_message({ method = "agency/session_state", params = { sessionId = manager.session_id,
                 binding = control.target_a, turnId = turn, state = state } }); flush()
         end,
         close = function()
-            for tab in pairs(Registry.sessions) do Registry.destroy_session(tab) end
+            for _, session in ipairs(vim.tbl_keys(Registry.sessions)) do Registry.destroy(session) end
             flush()
             Config.provider, Config.acp_providers.agency, Instances._instances, Config.hooks = unpack(saved, 1, 4)
             while #vim.api.nvim_list_tabpages() > 1 do vim.cmd("tabclose!") end

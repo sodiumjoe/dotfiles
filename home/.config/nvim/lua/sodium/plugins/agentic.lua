@@ -874,7 +874,7 @@ return {
         patch_agentic_acp_client()
         patch_agentic_session_restore()
 
-        local providers = { agency = { command = "sh", args = { "-c", [[
+        local providers = { agency = { name = "Agency", render_live_user_messages = true, command = "sh", args = { "-c", [[
 status=$(agy status --json) || {
     printf '%s\n' "$status" >&2
     exit 70
@@ -924,7 +924,7 @@ exec agy acp]] } } }
         })
 
         require("sodium.agentic_folds").install()
-        require("sodium.agency.agentic").install()
+        require("agentic.config").acp_providers.agency.client_class = require("sodium.agency.client")
         require("sodium.agency").setup()
 
         utils.augroup("AgenticChatLinks", { clear = true })("FileType", {
