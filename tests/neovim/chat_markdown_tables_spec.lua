@@ -120,4 +120,17 @@ describe("Chat tables", function()
             end
         end)
     end)
+
+    it("highlights the chat without the whole-line conceal rules that force a full parse on every edit", function()
+        dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/treesitter.lua")[1].config()
+        vim.treesitter.stop(buf)
+        vim.bo[buf].filetype = "AgenticChat"
+        local chat = vim.treesitter.highlighter.active[buf]
+        assert.is_not_nil(chat)
+        assert.is_not_true(chat:get_query("markdown"):query().has_conceal_line)
+        local file = vim.api.nvim_create_buf(true, false)
+        vim.bo[file].filetype = "markdown"
+        assert.is_true(vim.treesitter.highlighter.active[file]:get_query("markdown"):query().has_conceal_line)
+        vim.api.nvim_buf_delete(file, { force = true })
+    end)
 end)

@@ -1,7 +1,6 @@
 local work_bin = vim.env.HOME .. "/bin/work"
 local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
 local agentic_utils = require("sodium.agentic_utils")
-local agentic_tool_call_log = vim.fn.stdpath("state") .. "/agentic-codex-tool-call.log"
 
 local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos", "AgenticDiagnostics" }
 
@@ -23,141 +22,6 @@ local picker_layout_no_preview = {
         },
     },
 }
-
-local function serialize_tool_call_value(value, seen)
-    if value == vim.NIL then
-        return "vim.NIL"
-    end
-
-    local value_type = type(value)
-    if value_type == "userdata" or value_type == "function" or value_type == "thread" then
-        return value_type
-    end
-
-    if value_type ~= "table" then
-        return value
-    end
-
-    seen = seen or {}
-    if seen[value] then
-        return "<cycle>"
-    end
-    seen[value] = true
-
-    local serialized = {}
-    if vim.islist(value) then
-        for i, item in ipairs(value) do
-            serialized[i] = serialize_tool_call_value(item, seen)
-        end
-    else
-        for key, item in pairs(value) do
-            serialized[tostring(key)] = serialize_tool_call_value(item, seen)
-        end
-    end
-
-    seen[value] = nil
-    return serialized
-end
-
-local function append_tool_call_log(entry)
-    local file = io.open(agentic_tool_call_log, "a")
-    if not file then
-        return
-    end
-
-    entry.timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-    local ok, encoded = pcall(vim.json.encode, entry)
-    if ok and type(encoded) == "string" then
-        file:write(encoded)
-    else
-        file:write(vim.inspect(entry))
-    end
-    file:write("\n")
-    file:close()
-end
-
-local function normalize_tool_call_update(update)
-    local normalized = {}
-    local dropped_fields = {}
-
-    if type(update) ~= "table" then
-        dropped_fields._update = type(update)
-        return normalized, dropped_fields
-    end
-
-    local function keep_string(key)
-        local value = update[key]
-        if type(value) == "string" then
-            normalized[key] = value
-        elseif value ~= nil then
-            dropped_fields[key] = type(value)
-        end
-    end
-
-    local function keep_table(key)
-        local value = update[key]
-        if type(value) == "table" then
-            normalized[key] = value
-        elseif value ~= nil then
-            dropped_fields[key] = type(value)
-        end
-    end
-
-    local function keep_list(key)
-        local value = update[key]
-        if type(value) == "table" and vim.islist(value) then
-            normalized[key] = value
-        elseif value ~= nil then
-            dropped_fields[key] = type(value)
-        end
-    end
-
-    keep_string("toolCallId")
-    keep_string("kind")
-    keep_string("status")
-    keep_string("title")
-    keep_list("content")
-    keep_table("rawInput")
-    keep_list("locations")
-
-    return normalized, dropped_fields
-end
-
-local function fallback_tool_call_message(update, normalized)
-    local source = type(update) == "table" and update or {}
-    local message = {
-        tool_call_id = normalized.toolCallId or type(source.toolCallId) == "string" and source.toolCallId or nil,
-    }
-
-    if normalized.kind then
-        message.kind = normalized.kind
-    end
-
-    if normalized.status then
-        message.status = normalized.status
-    end
-
-    if normalized.title and normalized.title ~= "" then
-        message.argument = normalized.title
-    end
-
-    local raw_input = normalized.rawInput
-    if raw_input then
-        local file_path = raw_input.file_path or raw_input.filePath
-        if type(file_path) == "string" then
-            message.file_path = file_path
-        end
-    end
-
-    if not message.file_path and normalized.locations then
-        local first_location = normalized.locations[1]
-        if type(first_location) == "table" and type(first_location.path) == "string" then
-            message.file_path = first_location.path
-        end
-    end
-
-    return message
-end
 
 local function split_line_anchor(ref)
     local path, line = ref:match("^(.+)#L(%d+)%-L%d+$")
@@ -227,7 +91,7 @@ end
 
 local function find_editor_window()
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if vim.w[win].agentic_bufnr == nil and vim.w[win].agency_bufnr == nil and vim.api.nvim_win_get_config(win).relative == "" then
+        if vim.w[win].agentic_bufnr == nil and vim.api.nvim_win_get_config(win).relative == "" then
             return win
         end
     end
@@ -239,7 +103,7 @@ local function open_path_reference()
         return false
     end
 
-    if vim.w.agentic_bufnr ~= nil or vim.w.agency_bufnr ~= nil then
+    if vim.w.agentic_bufnr ~= nil then
         local editor_win = find_editor_window()
         if editor_win then
             vim.api.nvim_set_current_win(editor_win)
@@ -736,11 +600,14 @@ local function pick_pr_for_review()
                         return
                     end
                     picker:close()
-                    require("agentic.session_registry").get_session_for_tab_page(nil, function(session)
-                        session.widget:show()
-                        session:on_session_ready(function()
-                            require("sodium.review_ui").send_agent_command("/neovim-review " .. tostring(item.number), session.tab_page_id)
-                        end)
+                    local Registry = require("agentic.session_registry")
+                    local session = Registry.resolve_or_create()
+                    if not session then
+                        return
+                    end
+                    Registry.show_session(session.session_key)
+                    session:on_session_ready(function()
+                        require("sodium.review_ui").send_agent_command("/neovim-review " .. tostring(item.number), session.session_key)
                     end)
                 end,
                 actions = {
@@ -779,71 +646,6 @@ return {
         local utils = require("sodium.utils")
         local diagnostics = require("sodium.config.diagnostics")
 
-        local function patch_agentic_acp_client()
-            local ok, ACPClient = pcall(require, "agentic.acp.acp_client")
-            if not ok or ACPClient._sodium_null_field_patch then
-                return
-            end
-
-            local build_tool_call_message = ACPClient.__build_tool_call_message
-            ACPClient.__build_tool_call_message = function(self, update)
-                local normalized, dropped_fields = normalize_tool_call_update(update)
-
-                if next(dropped_fields) ~= nil then
-                    append_tool_call_log({
-                        event = "malformed_tool_call_payload",
-                        toolCallId = normalized.toolCallId,
-                        dropped_fields = dropped_fields,
-                        payload = serialize_tool_call_value(update),
-                    })
-                end
-
-                local ok2, message = pcall(build_tool_call_message, self, normalized)
-                if ok2 then
-                    return message
-                end
-
-                append_tool_call_log({
-                    event = "tool_call_render_error",
-                    error = tostring(message),
-                    toolCallId = normalized.toolCallId,
-                    dropped_fields = next(dropped_fields) ~= nil and dropped_fields or nil,
-                    payload = serialize_tool_call_value(update),
-                    normalized = serialize_tool_call_value(normalized),
-                })
-
-                return fallback_tool_call_message(update, normalized)
-            end
-            ACPClient._sodium_null_field_patch = true
-        end
-
-        local function patch_agentic_session_restore()
-            local ok, SessionRestore = pcall(require, "agentic.session_restore")
-            if
-                not ok
-                or SessionRestore._sodium_session_picker_patch
-                or type(SessionRestore.show_picker) ~= "function"
-            then
-                return
-            end
-
-            local show_picker = SessionRestore.show_picker
-            SessionRestore.show_picker = function(...)
-                local args = { ... }
-                local nargs = select("#", ...)
-                local current_session = args[2] or args[1]
-                if
-                    not current_session
-                    or not current_session.agent
-                    or type(current_session.agent.list_sessions) ~= "function"
-                then
-                    return show_picker(unpack(args, 1, nargs))
-                end
-                return require("sodium.agentic_sessions").show_picker(current_session)
-            end
-            SessionRestore._sodium_session_picker_patch = true
-        end
-
         local function noop()
             return ""
         end
@@ -870,9 +672,6 @@ return {
         local function notify_agent_permission_request()
             notify_agent("needs permission")
         end
-
-        patch_agentic_acp_client()
-        patch_agentic_session_restore()
 
         local providers = { agency = { name = "Agency", render_live_user_messages = true, command = "sh", args = { "-c", [[
 status=$(agy status --json) || {
@@ -911,7 +710,13 @@ exec agy acp]] } } }
                 todos = noop,
             },
             folding = {
-                tool_calls = { enabled = true, threshold = 0, fold_on_error = true },
+                tool_calls = { enabled = true, threshold = 0, fold_on_error = true, fold_completed_diffs = true },
+                thinking = { enabled = true },
+            },
+            keymaps = {
+                widget = {
+                    switch_provider = {},
+                },
             },
             hooks = {
                 on_response_complete = notify_agent_response_complete,
@@ -923,8 +728,7 @@ exec agy acp]] } } }
             callback = resize_agentic_split,
         })
 
-        require("sodium.agentic_folds").install()
-        require("agentic.config").acp_providers.agency.client_class = require("sodium.agency.client")
+        require("agentic.config").acp_providers.agency.client_class = require("sodium.agency.client").class
         require("sodium.agency").setup()
 
         utils.augroup("AgenticChatLinks", { clear = true })("FileType", {
@@ -992,7 +796,7 @@ exec agy acp]] } } }
         {
             "<leader>ar",
             function()
-                require("agentic").restore_session()
+                require("sodium.agentic_sessions").show_picker()
             end,
             mode = { "n" },
             desc = "Agency saved sessions",

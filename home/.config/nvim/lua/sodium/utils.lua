@@ -72,7 +72,7 @@ M.spinner_frames = {
 }
 
 local function editing_window(w)
-    return vim.w[w].agency_bufnr == nil and vim.w[w].agentic_bufnr == nil
+    return vim.w[w].agentic_bufnr == nil
         and vim.api.nvim_win_get_config(w).relative == ""
         and not vim.api.nvim_get_option_value("filetype", { buf = vim.api.nvim_win_get_buf(w) }):match("^Agentic")
         and not vim.wo[w].winfixbuf

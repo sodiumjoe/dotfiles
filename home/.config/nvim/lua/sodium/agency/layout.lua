@@ -12,7 +12,7 @@ local function restored_panel(buf, headers)
         local title = header.title
         if type(title) == "string" and title ~= "" and name:sub(1, #title) == title then
             local suffix = name:sub(#title + 1)
-            if suffix == "" or suffix:sub(1, 3) == " | " or suffix:match("^ %(Tab %d+%)")
+            if suffix == "" or suffix:sub(1, 3) == " | " or suffix:match("^ %(Tab %d+%)") or suffix:match("^ %(%d+%)")
                 or suffix:match("^%-old%-%d+$") then return true end
         end
     end
@@ -21,7 +21,7 @@ end
 
 function M.cleanup(tab)
     tab = tab or vim.api.nvim_get_current_tabpage()
-    local headers = require("agentic.ui.window_decoration").get_headers_state(tab)
+    local headers = require("agentic.ui.window_decoration").default_headers()
     local windows, stale, widths = {}, {}, {}
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
         if vim.api.nvim_win_get_config(win).relative == "" then

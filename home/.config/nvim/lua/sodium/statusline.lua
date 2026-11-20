@@ -252,9 +252,6 @@ local theme = {
 function M.get_agentic_title()
     local ft = vim.bo.filetype
     if ft == "AgenticChat" then
-        if vim.b.agency_view then
-            return "Agency Chat"
-        end
         return "󰻞 Agentic Chat"
     elseif ft == "AgenticInput" then
         return "󰦨 Prompt"
@@ -275,8 +272,8 @@ local function get_agentic_session_manager()
     if not ok then
         return nil
     end
-    local tab_page_id = vim.api.nvim_get_current_tabpage()
-    return session_registry.sessions and session_registry.sessions[tab_page_id]
+    local widget = require("agentic.ui.widget_registry").get(vim.api.nvim_get_current_buf())
+    return widget and widget.session_key and session_registry.get(widget.session_key)
 end
 
 local function get_agentic_status()

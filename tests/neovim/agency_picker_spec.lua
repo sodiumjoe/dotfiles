@@ -1,3 +1,4 @@
+package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
 require("snacks").setup({ picker = { enabled = true } })
 local List = require("sodium.agency.session_list")
 
@@ -82,22 +83,43 @@ describe("Agency active-agent snapshot", function()
         end)
     end
 
-    for _, invalidate in ipairs({ "guard", "tab" }) do
-        it("cancels scheduled Stop when the " .. invalidate .. " changes", function()
-            local valid, stopped = true, 0
-            local tab = vim.api.nvim_get_current_tabpage()
-            local picker = open(local_controller({
-                selection_guard = function() return function() return valid end end,
-                stop = function() stopped = stopped + 1 end,
-            }))
+    it("cancels scheduled Stop when the guard changes", function()
+        local valid, stopped = true, 0
+        local picker = open(local_controller({
+            selection_guard = function() return function() return valid end end,
+            stop = function() stopped = stopped + 1 end,
+        }))
+        settle(picker, 2)
+        stop_mapping(picker, "input", "n")()
+        valid = false
+        vim.wait(100, function() return stopped > 0 end)
+        assert.are.equal(0, stopped)
+    end)
+
+    it("cancels scheduled Stop when another session becomes current", function()
+        local f, control, Registry = require("fixtures.agency_native").new(), require("fixtures.agency_control"), require("agentic.session_registry")
+        local ok, failure = pcall(function()
+            package.loaded["sodium.agency"] = nil
+            local api, stopped = require("sodium.agency").setup({ notify = function() end }), 0
+            local other = api.open(control.agent(control.target_b))
+            f.flush()
+            local load = f.request("session/load")
+            f.client:_handle_message({ id = load.id, result = { sessionId = load.params.sessionId, _meta = { agency = { version = 1,
+                binding = control.target_b, backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+            f.flush()
+            Registry.show_session(f.manager.session_key)
+            assert.are.equal(f.manager, Registry.current())
+            local picker = open(local_controller({ selection_guard = api.selection_guard, stop = function() stopped = stopped + 1 end }))
             settle(picker, 2)
             stop_mapping(picker, "input", "n")()
-            if invalidate == "guard" then valid = false else vim.cmd("tabnew") end
+            Registry.show_session(other.session_key)
             vim.wait(100, function() return stopped > 0 end)
-            if invalidate == "tab" then vim.cmd("tabclose"); vim.api.nvim_set_current_tabpage(tab) end
+            assert.are.equal(other, Registry.current())
             assert.are.equal(0, stopped)
         end)
-    end
+        f.close()
+        assert.is_true(ok, failure)
+    end)
 
     it("inspects remote rows without dispatching a local Stop", function()
         local stopped, inspected = 0, {}

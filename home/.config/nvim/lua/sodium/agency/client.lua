@@ -1,6 +1,8 @@
 local ACPClient = require("agentic.acp.acp_client")
 local Client = setmetatable({}, { __index = ACPClient })
 Client.__index = Client
+local function current(_, key) return require("sodium.agency.client")[key] end
+Client.class = setmetatable({ __index = current }, { __index = current })
 
 local Stream = require("sodium.agency.stream")
 local starting, immediate, submitting, cancelling

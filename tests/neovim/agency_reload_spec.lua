@@ -65,28 +65,34 @@ describe("Agency reload", function()
     end
     local function restarted(agents) return { state = "restarted", restarted = true, resumed = false, agents = agents or { { agentId = control.target_a.agentId, outcome = "restored", failure = vim.NIL } } } end
 
-    it("reloads the Lua twice without stacking patches or moving the tab", function()
-        local tab, manager = f.manager.tab_page_id, f.manager
+    it("reloads the Lua twice into the running client without double-rendering or moving the session", function()
+        local key, manager, original = f.manager.session_key, f.manager, package.loaded["sodium.agency.client"]
         for _ = 1, 2 do
             require("sodium.agency.reload").run({})
             f.flush()
             respond("status", { phase = "ready", distDigest = digest })
             respond_agents({ row(control.target_a) })
-            answer_load(control.target_a)
         end
         assert.are.equal(2, #systems)
-        assert.are.equal(manager, Registry.sessions[tab])
+        assert.are.equal(manager, Registry.get(key))
+        assert.are.equal(manager, Registry.current())
         for _, call in ipairs(calls) do assert.is_false(call.argv[1] == "restart") end
+        local reloaded, handled = package.loaded["sodium.agency.client"], 0
+        assert.are_not.equal(original, reloaded)
+        local handle = reloaded.__handle_session_update
+        reloaded.__handle_session_update = function(...) handled = handled + 1; return handle(...) end
         f.client:_handle_message({ method = "session/update", params = { sessionId = manager.session_id,
             update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "reload-marker" } } } })
         vim.wait(100, function() return false end)
+        reloaded.__handle_session_update = handle
+        assert.are.equal(1, handled)
         local text = table.concat(vim.api.nvim_buf_get_lines(manager.message_writer.bufnr, 0, -1, false), "\n")
         local _, count = text:gsub("reload%-marker", "")
         assert.are.equal(1, count)
     end)
 
-    it("restarts a Handler without a digest and rebinds the same tab", function()
-        local tab, manager = f.manager.tab_page_id, f.manager
+    it("restarts a Handler without a digest and reattaches the session to the new run", function()
+        local key, manager = f.manager.session_key, f.manager
         local moved = vim.deepcopy(control.target_a)
         moved.handlerGeneration, moved.providerGeneration = control.id(20), control.id(21)
         require("sodium.agency.reload").run({})
@@ -97,8 +103,11 @@ describe("Agency reload", function()
         respond("restart", restarted())
         respond_agents({ row(moved) })
         answer_load(moved)
-        assert.are.equal(manager, Registry.sessions[tab])
-        assert.are.same(moved, manager._agency_binding)
+        local target = Registry.current()
+        assert.are_not.equal(manager, target)
+        assert.is_true(manager._destroyed)
+        assert.is_nil(Registry.get(key))
+        assert.are.same(moved, target._agency_binding)
         assert.are.equal(1, #vim.api.nvim_list_tabpages())
         assert.is_truthy(table.concat(notifications, "\n"):find("Handler restarted", 1, true))
         assert.are.same({ "agency_reload" }, vim.tbl_keys(vim.iter(notified):fold({}, function(ids, opts) ids[opts.id or "none"] = true; return ids end)))
@@ -106,15 +115,15 @@ describe("Agency reload", function()
         assert.is_nil(notified[#notified].timeout)
     end)
 
-    it("rebinds the tab on its own after the Handler restarts outside the editor, and rejects a prompt sent before then", function()
-        local tab, manager = f.manager.tab_page_id, f.manager
+    it("reattaches the session on its own after the Handler restarts outside the editor, and rejects a prompt sent before then", function()
+        local manager = f.manager
         local moved = vim.deepcopy(control.target_a)
         moved.handlerGeneration, moved.providerGeneration = control.id(20), control.id(21)
         local before = #f.frames
         f.client.transport.process = {}
         f.client:_set_state("disconnected")
         f.client.transport.process = nil
-        manager:_handle_input_submit("lost question")
+        manager.widget.on_submit_input("lost question")
         f.flush()
         for index = before + 1, #f.frames do assert.are_not.equal("session/prompt", f.frames[index].method) end
         assert.is_false(manager.is_generating)
@@ -126,9 +135,11 @@ describe("Agency reload", function()
         end, 5))
         respond_agents({ row(moved) })
         answer_load(moved)
-        assert.are.equal(manager, Registry.sessions[tab])
-        assert.are.same(moved, manager._agency_binding)
-        assert.is_truthy(table.concat(notifications, "\n"):find("Reconnected to the Agency Handler: 1 tab rebound", 1, true))
+        local target = Registry.current()
+        assert.is_true(manager._destroyed)
+        assert.are.same(moved, target._agency_binding)
+        assert.are.equal("lost question", table.concat(vim.api.nvim_buf_get_lines(target.widget.buf_nrs.input, 0, -1, false), "\n"))
+        assert.is_truthy(table.concat(notifications, "\n"):find("Reconnected to the Agency Handler: 1 session rebound", 1, true))
     end)
 
     it("names the agents the new Handler could not restore", function()
@@ -137,7 +148,6 @@ describe("Agency reload", function()
         respond("status", { phase = "ready", distDigest = digest })
         respond("restart", restarted({ { agentId = control.target_b.agentId, outcome = "failed", failure = { code = "NOT_FOUND", message = "its session file is missing" } } }))
         respond_agents({ row(control.target_a) })
-        answer_load(control.target_a)
         local text = table.concat(notifications, "\n")
         assert.is_truthy(text:find("Handler restarted", 1, true))
         assert.is_truthy(text:find("1 agent not restored (" .. control.target_b.agentId:sub(1, 8) .. ": its session file is missing)", 1, true))
@@ -170,15 +180,14 @@ describe("Agency reload", function()
     end)
 
     local function failed_restart(failure, status, status_err)
-        local before, tab, manager = package.loaded["sodium.agency"], f.manager.tab_page_id, f.manager
+        local before, key, manager = package.loaded["sodium.agency"], f.manager.session_key, f.manager
         require("sodium.agency.reload").run({ force = true })
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
         respond("restart", nil, failure)
         respond("status", status, status_err)
         respond_agents({ row(control.target_a) })
-        answer_load(control.target_a)
-        assert.are.equal(manager, Registry.sessions[tab])
+        assert.are.equal(manager, Registry.get(key))
         assert.is_nil(vim.g.agency_reload_running)
         return before, table.concat(notifications, "\n")
     end
@@ -189,7 +198,7 @@ describe("Agency reload", function()
             assert.are.equal(before, package.loaded["sodium.agency"])
             assert.is_truthy(text:find("shutdown did not complete", 1, true))
             assert.is_truthy(text:find("Lua was not reloaded because the old Handler is still running", 1, true))
-            assert.is_truthy(text:find("1 tab rebound", 1, true))
+            assert.is_truthy(text:find("1 session rebound", 1, true))
             assert.is_truthy(text:find("run :AgencyReload again", 1, true))
         end)
     end
@@ -199,7 +208,7 @@ describe("Agency reload", function()
         assert.are_not.equal(before, package.loaded["sodium.agency"])
         assert.is_truthy(text:find("different build than dist", 1, true))
         assert.is_truthy(text:find("reloaded Lua", 1, true))
-        assert.is_truthy(text:find("1 tab rebound", 1, true))
+        assert.is_truthy(text:find("1 session rebound", 1, true))
         assert.is_truthy(text:find("run :AgencyReload again", 1, true))
     end)
 
@@ -207,7 +216,7 @@ describe("Agency reload", function()
         local before, text = failed_restart({ code = "UNAVAILABLE", message = "the new Handler failed to start" }, nil, { code = "UNAVAILABLE", message = "no Handler" })
         assert.are_not.equal(before, package.loaded["sodium.agency"])
         assert.is_truthy(text:find("the new Handler failed to start", 1, true))
-        assert.is_truthy(text:find("1 tab rebound", 1, true))
+        assert.is_truthy(text:find("1 session rebound", 1, true))
         assert.is_truthy(text:find("run :AgencyReload again", 1, true))
     end)
 
@@ -250,18 +259,19 @@ describe("Agency reload", function()
     end)
 
     it("says so when restoring the previous modules also fails", function()
-        local folds = package.loaded["sodium.agentic_folds"]
-        package.loaded["sodium.agentic_folds"] = { install = function() error("old folds broken") end }
+        local old = package.loaded["sodium.agency"]
+        local commands = old.commands
+        old.commands = function() error("old commands broken") end
         package.preload["sodium.agency.stream"] = function() error("broken stream") end
         require("sodium.agency.reload").run({})
         f.flush()
         local ok, err = pcall(respond, "status", { phase = "ready", distDigest = digest })
         package.preload["sodium.agency.stream"] = nil
-        package.loaded["sodium.agentic_folds"] = folds
+        old.commands = commands
         assert.is_true(ok, err)
         local text = table.concat(notifications, "\n")
         assert.is_truthy(text:find("broken stream", 1, true))
-        assert.is_truthy(text:find("old folds broken", 1, true))
+        assert.is_truthy(text:find("old commands broken", 1, true))
         assert.is_falsy(text:find("rolled back", 1, true))
         assert.is_truthy(text:find("restart Neovim", 1, true))
         assert.is_nil(vim.g.agency_reload_running)
@@ -285,7 +295,7 @@ describe("Agency reload", function()
     end)
 
     it("counts a new session as busy only while its request is outstanding", function()
-        f.manager:new_session()
+        require("sodium.agency").new(nil, { backend_id = "codex-acp" })
         f.flush()
         local frame = f.request("session/new")
         require("sodium.agency.reload").run({})
@@ -307,7 +317,9 @@ describe("Agency reload", function()
         assert.is_truthy(table.concat(notifications, "\n"):find("already running", 1, true))
         assert.are.equal(1, #systems)
     end)
-    it("hides the connection error that the reconnect notice replaces", function()
+    it("hides the connection error that the reconnect notice replaces, once, after module reloads", function()
+        assert.is_true(require("sodium.agency.reload").reload_modules({}))
+        assert.is_true(require("sodium.agency.reload").reload_modules({}))
         local original, logged = vim.notify, {}
         vim.notify = function(message) logged[#logged + 1] = message end
         local Logger = require("agentic.utils.logger")
@@ -330,7 +342,6 @@ describe("Agency reload", function()
         f.flush()
         respond("status", { phase = "ready", distDigest = digest })
         respond_agents({ row(control.target_a) })
-        answer_load(control.target_a)
         local text = table.concat(notifications, "\n")
         vim.fn.delete(config, "rf")
         assert.is_truthy(text:find("1 config file is not linked into " .. config .. ": lua/sodium/missing.lua", 1, true))

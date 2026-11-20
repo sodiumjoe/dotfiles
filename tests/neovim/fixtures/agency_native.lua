@@ -5,11 +5,11 @@ function M.new()
     local saved = { Config.provider, Config.acp_providers.agency, Instances._instances, Config.hooks }
     Config.hooks = vim.tbl_extend("force", Config.hooks or {}, { on_response_complete = function() end })
     Config.provider = "agency"
-    Config.acp_providers.agency = { name = "Agency", command = vim.v.progpath, args = {}, client_class = Client, render_live_user_messages = true }
+    Config.acp_providers.agency = { name = "Agency", command = vim.v.progpath, args = {}, client_class = Client.class, render_live_user_messages = true }
     local frames = {}
     local client = setmetatable({ provider_config = Config.acp_providers.agency, state = "ready", callbacks = {},
         subscribers = {}, id_counter = 0, ready_listeners = {}, agent_capabilities = { loadSession = true },
-        transport = { send = function(_, data) frames[#frames + 1] = vim.json.decode(data) end } }, Client)
+        transport = { send = function(_, data) frames[#frames + 1] = vim.json.decode(data) end } }, Client.class)
     Instances._instances = { agency = client }
     local control = require("fixtures.agency_control")
     local row = control.agent(control.target_a)

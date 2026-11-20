@@ -1,9 +1,7 @@
 local M = {}
 
-local extra = { "sodium.agentic_folds", "sodium.agentic_sessions" }
-
 local function owned(name)
-    return name == "sodium.agency" or name:match("^sodium%.agency%.") ~= nil or vim.tbl_contains(extra, name)
+    return name == "sodium.agency" or name:match("^sodium%.agency%.") ~= nil
 end
 
 local function repository()
@@ -23,7 +21,7 @@ local function tail(text)
 end
 
 local function install(deps)
-    require("sodium.agentic_folds").install()
+    require("sodium.agency.client")
     return require("sodium.agency").setup(deps)
 end
 
