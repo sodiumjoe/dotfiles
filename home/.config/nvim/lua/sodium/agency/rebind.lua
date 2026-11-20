@@ -29,7 +29,7 @@ function M.dead(manager, live)
     return manager._agency_unavailable == true or manager._agency_binding ~= nil and not vim.deep_equal(manager._agency_binding, live)
 end
 
-M.GONE = "This session's agent no longer exists — it had not run a turn when the Agency Handler restarted. Start a new session with <leader>an."
+M.GONE = "This session's agent no longer exists. Start a new session with <leader>an."
 
 function M.gone(manager)
     if manager._agency_gone or manager._destroyed then return end

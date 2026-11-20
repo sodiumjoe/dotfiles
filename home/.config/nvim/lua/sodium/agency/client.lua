@@ -192,6 +192,29 @@ local function capture_submissions(manager)
     end
 end
 
+local function rejection(err)
+    local agency = type(err) == "table" and type(err.data) == "table" and err.data.agency
+    if type(agency) == "table" and type(agency.code) == "string" then
+        return tostring(agency.message or err.message or agency.code)
+    end
+end
+
+local function capture_finish(manager)
+    local writer = manager.message_writer
+    if rawget(writer, "write_finish_message") then
+        return
+    end
+    local native = writer.write_finish_message
+    writer.write_finish_message = function(self, response, err)
+        if err == nil or err ~= manager._agency_rejected then
+            return native(self, response, err)
+        end
+        manager._agency_rejected = nil
+        self:write_message(require("agentic.acp.acp_payloads").generate_agent_message(
+            string.format("\n### %s Agency could not send this prompt: %s\n", require("agentic.config").message_icons.error, rejection(err))))
+    end
+end
+
 local function adopt(manager, info, response)
     manager._agency_binding = vim.deepcopy(info.binding)
     manager._agency_cwd = manager._agency_request_cwd
@@ -552,6 +575,7 @@ function Client:send_prompt(id, prompt, callback)
     end
     local draft = manager._agency_submit_snapshot
     manager._agency_submit_snapshot = nil
+    capture_finish(manager)
     local submission = require("sodium.agency.control").uuid()
     manager._agency_local_submission, manager._agency_turn_id = submission, submission
     local staged = {}
@@ -572,6 +596,9 @@ function Client:send_prompt(id, prompt, callback)
                 manager.is_generating = false
             end)
             return
+        end
+        if err and not admission.accepted and rejection(err) then
+            manager._agency_rejected = err
         end
         vim.schedule(function()
             settle_prompt(manager, submission, admission, err)

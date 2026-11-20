@@ -206,19 +206,21 @@ function M.setup(deps)
     function api.attach(id, callback, expected) selected(id, callback, "attach", expected) end
     function api.restore(id, callback) selected(id, callback, "restore") end
     function api.recover(manager)
-        local binding, key = vim.deepcopy(manager._agency_binding), manager.session_key
-        if not binding or resuming then return end
+        local current, key = vim.deepcopy(manager._agency_binding), manager.session_key
+        local id = current and current.agentId or manager._agency_unavailable and type(manager.session_id) == "string" and manager.session_id:match("^agency:(.+)$")
+        if not id or resuming then return end
         api.page({}, function(err, result)
-            if err or Registry.get(key) ~= manager or not vim.deep_equal(manager._agency_binding, binding) then return end
+            if err or Registry.get(key) ~= manager or not vim.deep_equal(manager._agency_binding, current) then return end
             for _, row in ipairs(result.agents) do
-                if row.record.version == 3 and row.record.definition.agentId == binding.agentId then
+                if row.record.version == 3 and row.record.definition.agentId == id then
                     local live = row.live and row.record.phase == "ready" and tuple(row)
-                    if live and vim.deep_equal(live, binding) then return end
-                    if live then api.notify("This session was bound to an earlier run of its agent; reattaching. Send the prompt again once it loads")
+                    if live and vim.deep_equal(live, current) then return end
+                    if live and current then api.notify("This session was bound to an earlier run of its agent; reattaching. Send the prompt again once it loads")
+                    elseif live then api.notify("This session lost its connection to its agent; reattaching. Send the prompt again once it loads")
                     else api.notify("This session's agent is stopped; restoring it. Send the prompt again once it is attached") end
                     local ok, target = pcall(Rebind.reattach, manager, row)
                     if ok and not target then ok, target = false, "the session could not be started" end
-                    if ok then reveal(target) else api.notify("Session " .. binding.agentId .. " was not reattached: " .. tostring(target)) end
+                    if ok then reveal(target) else api.notify("Session " .. id .. " was not reattached: " .. tostring(target)) end
                     return
                 end
             end
