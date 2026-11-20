@@ -27,7 +27,6 @@ function M.capture(bufnr, mode)
     local name = vim.api.nvim_buf_get_name(bufnr)
     local captured = {
         buffer = bufnr,
-        tab = vim.api.nvim_get_current_tabpage(),
         cwd = vim.fn.getcwd(),
         path = name ~= "" and vim.fn.fnamemodify(name, ":p") or nil,
         lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
@@ -113,6 +112,19 @@ function M.add(manager, captured, kind)
             file_type = captured.file_type or "", start_line = 1, end_line = #captured.lines,
             lines = vim.deepcopy(captured.lines) })
     elseif captured.path then manager.file_list:add(captured.path) end
+end
+
+function M.stage(manager, content, accepted, rejected)
+    manager._agency_pending_context = manager._agency_pending_context or {}
+    local entry = { content = vim.deepcopy(content), accepted = accepted, rejected = rejected }
+    table.insert(manager._agency_pending_context, entry)
+    return entry
+end
+
+function M.unstage(manager, entry)
+    for index, value in ipairs(manager._agency_pending_context or {}) do
+        if value == entry then table.remove(manager._agency_pending_context, index); return end
+    end
 end
 
 return M

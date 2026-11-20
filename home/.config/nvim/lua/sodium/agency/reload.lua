@@ -92,18 +92,18 @@ function M.run(opts)
             end
         end
     end
-    local function rebind(defer_busy)
+    local function rebind()
         local api = require("sodium.agency").setup()
-        stage("Rebinding tabs")
+        stage("Rebinding sessions")
         api.page({}, guard(function(page_err, page)
             if page_err then finish("could not list agents: " .. (page_err.message or page_err.code)); return end
-            require("sodium.agency.rebind").run(page.agents, { defer_busy = defer_busy, reconnect = deps.reconnect }, guard(function(summary)
-                if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen tabs with <leader>af"); return end
+            require("sodium.agency.rebind").run(page.agents, { reconnect = deps.reconnect }, guard(function(summary)
+                if summary.timed_out then finish("the editor did not reconnect to the Handler; reopen sessions with <leader>af"); return end
                 finish(require("sodium.agency.rebind").describe(summary))
             end))
         end))
     end
-    local function reload(restarted)
+    local function reload()
         local config = deps.config or vim.fn.stdpath("config")
         local missing = unlinked(root, config)
         if #missing > 0 then
@@ -118,15 +118,15 @@ function M.run(opts)
         end
         if not ok then finish("Lua reload failed and was rolled back: " .. tostring(err)); return end
         parts[#parts + 1] = "reloaded Lua"
-        rebind(not restarted)
+        rebind()
     end
     local function expected_digest() return manifest_digest(root .. "/agency/dist/build-manifest.json") end
     local function recover()
         client.command({ "status" }, {}, guard(function(err, envelope)
             local running = not err and envelope and envelope.result and envelope.result.distDigest
-            if err or type(running) == "string" and running == expected_digest() then reload(false); return end
+            if err or type(running) == "string" and running == expected_digest() then reload(); return end
             parts[#parts + 1] = "Lua was not reloaded because the old Handler is still running"
-            rebind(true)
+            rebind()
         end))
     end
     local function restart()
@@ -145,7 +145,7 @@ function M.run(opts)
             end
             parts[#parts + 1] = "Handler restarted"
             collect(envelope.result)
-            reload(true)
+            reload()
         end))
     end
     local function check()
@@ -153,7 +153,7 @@ function M.run(opts)
             if err then finish("status failed: " .. (err.message or err.code)); return end
             local running = envelope.result.distDigest
             if opts.force or type(running) ~= "string" or running ~= expected_digest() then restart()
-            else parts[#parts + 1] = "Handler unchanged"; reload(false) end
+            else parts[#parts + 1] = "Handler unchanged"; reload() end
         end))
     end
     local function build()

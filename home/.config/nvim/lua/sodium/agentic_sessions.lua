@@ -100,8 +100,7 @@ function M.show_picker(current_session, deps)
     local lifecycle = deps and deps.lifecycle or require("sodium.agency").setup()
     local valid = function() return true end
     if lifecycle.selection_guard then
-        local guard, tab = lifecycle.selection_guard(current_session)
-        valid = function() return guard() and vim.api.nvim_get_current_tabpage() == tab end
+        valid = lifecycle.selection_guard(current_session)
     end
     return agency_picker(lifecycle, valid)
 end

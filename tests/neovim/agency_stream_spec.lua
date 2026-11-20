@@ -122,7 +122,7 @@ describe("Agency live rendering", function()
     end)
 
     it("shows a permission offered before the load reply once the binding is adopted", function()
-        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        local manager = require("sodium.agency").open(control.agent(control.target_b))
         f.flush()
         local frame, shown = f.request("session/load"), count_requests(manager)
         permission("early", frame.params.sessionId, control.target_b, "early-tool")
@@ -182,7 +182,7 @@ describe("Agency live rendering", function()
     end)
 
     it("answers every held permission when one offer fails", function()
-        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        local manager = require("sodium.agency").open(control.agent(control.target_b))
         f.flush()
         local frame, shown = f.request("session/load"), count_requests(manager)
         permission("first", frame.params.sessionId, control.target_b, "first-tool")
@@ -280,7 +280,7 @@ describe("Agency live rendering", function()
     end)
 
     it("finishes attachment when fast transport callbacks reenter a retained replay", function()
-        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        local manager = require("sodium.agency").open(control.agent(control.target_b))
         f.flush()
         local frame = f.request("session/load")
         local id, handlers, target = frame.params.sessionId, f.client.subscribers[frame.params.sessionId], manager.message_writer
@@ -406,7 +406,7 @@ describe("Agency live rendering", function()
     end
 
     it("offers a held permission once a session state adopts the binding", function()
-        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        local manager = require("sodium.agency").open(control.agent(control.target_b))
         f.flush()
         local id, shown = f.request("session/load").params.sessionId, count_requests(manager)
         permission("early", id, control.target_b, "early-tool")
@@ -420,7 +420,7 @@ describe("Agency live rendering", function()
     end)
 
     it("drops a withdrawn permission whether it is held or shown", function()
-        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        local manager = require("sodium.agency").open(control.agent(control.target_b))
         f.flush()
         local frame, shown = f.request("session/load"), count_requests(manager)
         local id = frame.params.sessionId
@@ -457,7 +457,7 @@ describe("Agency live rendering", function()
         local scratch = vim.api.nvim_create_buf(false, true)
         vim.api.nvim_buf_set_lines(scratch, 0, -1, false, { "local x = 1" })
         local diagnostic = { bufnr = scratch, lnum = 0, col = 0, message = "broken", severity = 1, file_path = "/tmp/x.lua" }
-        local entry = require("sodium.agency.agentic").stage_context(f.manager, { { type = "text", text = "staged context" } },
+        local entry = require("sodium.agency.context").stage(f.manager, { { type = "text", text = "staged context" } },
             function() end, function(err) rejected[#rejected + 1] = err end)
         f.manager._is_first_message = true
         f.manager.code_selection:add(selection)
@@ -537,7 +537,7 @@ describe("Agency live rendering", function()
         f.client.transport.process = nil
         f.flush()
         assert.is_true(f.manager._agency_unavailable)
-        require("sodium.agency").setup().submit_text("retry", { tab = f.manager.session_key }, function(value) outcome = value end)
+        require("sodium.agency").setup().submit_text("retry", { session = f.manager.session_key }, function(value) outcome = value end)
         f.flush()
         assert.are.equal(1, finishes)
         assert.is_false(f.manager.is_generating)

@@ -146,7 +146,14 @@ local function replay(client, handlers, manager, params)
 end
 
 local function configure(manager, snapshot)
-    require("sodium.agency.agentic").apply_configuration(manager.config_options, snapshot)
+    local options = manager.config_options
+    options:set_options(snapshot.configOptions or {})
+    if type(snapshot.models) == "table" then
+        options:set_legacy_models(snapshot.models)
+    end
+    if type(snapshot.modes) == "table" then
+        options:set_legacy_modes(snapshot.modes)
+    end
     require("agentic.acp.slash_commands").setCommands(manager.widget.buf_nrs.input, snapshot.availableCommands or {})
     manager.widget:schedule_header_refresh()
 end
@@ -219,6 +226,9 @@ local function start(handlers, flag, cwd, send, callback)
     send(function(result, err)
         if manager and manager[flag] == pending then
             manager[flag] = nil
+        end
+        if manager and err then
+            manager._agency_start_error = err
         end
         local info = not err and result and result._meta and result._meta.agency
         local attach = manager and not manager._destroyed and type(info) == "table" and type(info.binding) == "table"
@@ -362,7 +372,7 @@ local function session_state(manager, params)
     if admission and running and not admission.accepted then
         admission.accepted = true
         for _, entry in ipairs(admission.entries) do
-            require("sodium.agency.agentic").unstage_context(manager, entry)
+            require("sodium.agency.context").unstage(manager, entry)
             if entry.accepted then
                 entry.accepted(admitted)
             end

@@ -11,11 +11,10 @@ function M.new()
         subscribers = {}, id_counter = 0, ready_listeners = {}, agent_capabilities = { loadSession = true },
         transport = { send = function(_, data) frames[#frames + 1] = vim.json.decode(data) end } }, Client)
     Instances._instances = { agency = client }
-    local adapter = require("sodium.agency.agentic")
     local control = require("fixtures.agency_control")
     local row = control.agent(control.target_a)
     row.record.definition.cwd = vim.fn.getcwd()
-    local key = adapter.open(row).session_key
+    local key = require("sodium.agency").open(row).session_key
     local function flush() vim.wait(30, function() return false end) end
     local function request(method)
         for i = #frames, 1, -1 do if frames[i].method == method then return frames[i] end end

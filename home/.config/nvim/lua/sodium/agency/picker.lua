@@ -27,7 +27,7 @@ local function row_item(row, active)
     local status = ({ starting = "Starting", restoring = "Restoring", stopping = "Stopping",
         recoverable = "Needs recovery" })[phase]
         or (activity == "working" and "Working" or activity == "idle" and "Waiting for input" or "Running")
-    local location = same and (active.connected and "Open in this tab" or "Editor disconnected") or "Available to open"
+    local location = same and (active.connected and "Open in this session" or "Editor disconnected") or "Available to open"
     local backend = ({ ["codex-acp"] = "Codex", ["claude-agent-acp"] = "Claude" })[provider] or provider
     local item = List.item(row, { status = status == "Waiting for input" and "Idle" or status, status_detail = status })
     item.preview[#item.preview + 1] = string.format("%-14s%s", "Connection:", location)
@@ -227,9 +227,8 @@ function M.open(controller)
         if not actionable(item) then inspect(item); return end
         if item.remote_ref or row and row.record.version == 3 and row.record.phase == "ready" and row.live then
             local id, selected, ref = row and row.record.definition.agentId, vim.deepcopy(row), vim.deepcopy(item.remote_ref)
-            local tab = vim.api.nvim_get_current_tabpage()
             local valid = controller.selection_guard and controller.selection_guard() or function() return true end
-            after_close(p, function() return valid() and vim.api.nvim_tabpage_is_valid(tab) and vim.api.nvim_get_current_tabpage() == tab end,
+            after_close(p, valid,
                 function() if ref then controller.enter_remote(ref) else controller.attach(id, nil, selected) end end, controller.notify)
         else inspect(item) end
     end
@@ -259,9 +258,9 @@ function M.open(controller)
                 local item = p:current()
                 if actionable(item) and item.view and item.view.record.version == 3 then
                     if publication then return end
-                    local selected, tab = vim.deepcopy(item.view), vim.api.nvim_get_current_tabpage()
+                    local selected = vim.deepcopy(item.view)
                     local valid = controller.selection_guard and controller.selection_guard() or function() return true end
-                    after_close(p, function() return valid() and vim.api.nvim_tabpage_is_valid(tab) and vim.api.nvim_get_current_tabpage() == tab end,
+                    after_close(p, valid,
                         function() controller.stop(selected) end, controller.notify)
                 else inspect(item) end
             end,

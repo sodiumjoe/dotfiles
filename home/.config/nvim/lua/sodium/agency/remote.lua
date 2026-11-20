@@ -52,7 +52,7 @@ function M.new(deps)
 end
 function M.bind(value)
     local Registry = require("agentic.session_registry")
-    local manager = Registry.sessions[vim.api.nvim_get_current_tabpage()]
+    local manager = Registry.current()
     if manager and manager._agency_entry and vim.deep_equal(manager._agency_binding, value.target) then return true end
     if M.binding then return true end
     M.binding = true
@@ -66,7 +66,7 @@ function M.bind(value)
     return true
 end
 function M.status(value)
-    local manager = require("agentic.session_registry").sessions[vim.api.nvim_get_current_tabpage()]
+    local manager = require("agentic.session_registry").current()
     if manager and manager._agency_entry and manager._agency_entry.editorId == value.editorId
         and vim.deep_equal(manager._agency_binding, value.target) then return vim.json.encode(manager._agency_entry) end
     return "null"

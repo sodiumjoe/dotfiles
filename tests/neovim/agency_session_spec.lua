@@ -6,7 +6,7 @@ describe("Agency session start and release", function()
     before_each(function()
         f = require("fixtures.agency_native").new()
         control, Registry, adapter =
-            require("fixtures.agency_control"), require("agentic.session_registry"), require("sodium.agency.agentic")
+            require("fixtures.agency_control"), require("agentic.session_registry"), require("sodium.agency")
     end)
     after_each(function()
         f.close()
@@ -46,7 +46,7 @@ describe("Agency session start and release", function()
 
     it("detaches a created session whose manager was destroyed before the reply", function()
         local start = #f.frames
-        local manager = adapter.new_session({
+        local manager = adapter.new(nil, {
             cwd = vim.fn.getcwd(),
             backend_id = "claude-agent-acp",
             selection = { modeId = "default" },
@@ -146,7 +146,8 @@ describe("Agency session start and release", function()
         assert.are.same(control.target_b, manager._agency_binding)
         assert.are.equal("turn-1", manager._agency_turn_id)
         local words = {}
-        for _, item in ipairs(require("agentic.states").getSlashCommands(manager.widget.buf_nrs.input)) do
+        local commands = vim.api.nvim_buf_call(manager.widget.buf_nrs.input, require("agentic.states").getSlashCommands)
+        for _, item in ipairs(commands) do
             words[#words + 1] = item.word
         end
         assert.are.same({ "review", "new" }, words)
@@ -217,7 +218,7 @@ describe("Agency session start and release", function()
         local row = control.agent(control.target_b)
         row.record.definition.cwd = "/work/b"
         local loaded = adapter.open(row)
-        local created = adapter.new_session({ cwd = "/work/new" })
+        local created = adapter.new(nil, { cwd = "/work/new", backend_id = "codex-acp" })
         f.flush()
         local load, new = since(start, "session/load")[1], since(start, "session/new")[1]
         reply(load, load.params.sessionId, control.target_b)

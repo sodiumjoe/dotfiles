@@ -1,7 +1,6 @@
 local M = {}
 local controller
 local Context = require("sodium.agency.context")
-local Adapter = require("sodium.agency.agentic")
 
 local function failure(code) return { code = code, message = code:lower():gsub("_", " ") } end
 local function tuple(row)
@@ -42,22 +41,47 @@ function M.setup(deps)
         notify = deps.notify or function(value, level, opts) vim.notify("Agency: " .. tostring(value), level, opts) end }
     api.deps = deps
     local inventory, epoch, resuming = {}, 0, false
+    local Rebind = require("sodium.agency.rebind")
     local function report(err) if err and err.code ~= "CANCELLED" then api.notify(err.message or err.code) end end
-    local function local_manager(tab)
-        local manager = Registry.sessions[tab or vim.api.nvim_get_current_tabpage()]
-        if manager and not manager._agency_destroyed and manager.agent.provider_config == require("agentic.config").acp_providers.agency then return manager end
+    local function client() return require("agentic.acp.agent_instance").get_instance("agency") end
+    local function local_manager(key)
+        local manager
+        if key then manager = Registry.get(key) else manager = Registry.current() end
+        if Rebind.agency(manager) then return manager end
     end
     local function ready(manager, callback)
         if manager.session_id then callback(nil, manager)
         else manager:on_session_ready(function() callback(nil, manager) end) end
     end
     local function create(opts, callback)
-        local manager = Adapter.new_session(opts)
+        local agent = assert(client(), "Agency is not configured")
+        require("sodium.agency.layout").cleanup()
+        local cwd = opts.cwd
+        local meta = { backend_id = opts.backend_id, selection = opts.selection, environment = opts.environment }
+        local manager = assert(Registry.replace(Registry.visible_here(), "agency", { kind = "new", cwd = cwd and function() return cwd end, meta = meta },
+            { agent = agent, retain_source = true }))
         ready(manager, callback or function() end)
         return manager
     end
+    local function open(row)
+        local record = assert(row.record)
+        assert(record.version == 3, "Unavailable legacy Agency session")
+        local id, agent = "agency:" .. record.definition.agentId, assert(client(), "Agency is not configured")
+        local manager = Rebind.holder(id, agent)
+        if manager then
+            if Rebind.dead(manager, tuple(row)) then return Rebind.reattach(manager, row) end
+            Registry.show_session(manager.session_key)
+            return manager
+        end
+        local pending = Registry.find_by_acp_session_id(id, agent)
+        if pending then return pending end
+        require("sodium.agency.layout").cleanup()
+        return assert(Registry.replace(Registry.visible_here(), "agency",
+            { kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId }, { agent = agent, retain_source = true }))
+    end
+    local function start_error(manager) return Rebind.reason(manager._agency_start_error) end
     local operations = require("sodium.agency.operations").new({ request = deps.request,
-        new_session = create, confirm_stop = deps.confirm_stop })
+        new_session = create, open = open, confirm_stop = deps.confirm_stop })
     api.operations = operations
     api.enter_remote = deps.enter_remote or require("sodium.agency.remote").new({ client = deps.client, notify = api.notify }).enter
     api.read_roster = deps.roster or function(callback)
@@ -75,13 +99,13 @@ function M.setup(deps)
         local manager = local_manager()
         if not manager or not manager._agency_binding then return end
         return { target = vim.deepcopy(manager._agency_binding), cwd = manager._agency_cwd,
-            connected = not manager._agency_destroyed, busy = manager.is_generating }
+            connected = not manager._agency_unavailable, busy = manager.is_generating }
     end
     function api.current(callback)
         epoch = epoch + 1
         local manager = local_manager()
         if manager then
-            if manager.widget:is_open() then manager.widget:hide() else manager.widget:show() end
+            if manager.widget:is_open() then manager.widget:hide() else Registry.show_session(manager.session_key) end
             if callback then ready(manager, callback) end
             return manager
         end
@@ -90,27 +114,22 @@ function M.setup(deps)
     function api.selection_guard(origin)
         epoch = epoch + 1
         operations.detach()
-        local captured, tab = epoch, vim.api.nvim_get_current_tabpage()
-        origin = origin or Registry.sessions[tab]
-        local origin_epoch = origin and origin._agency_epoch
-        local function valid()
-            return captured == epoch and vim.api.nvim_tabpage_is_valid(tab)
-                and Registry.sessions[tab] == origin and (not origin or not origin._agency_destroyed and origin._agency_epoch == origin_epoch)
-        end
-        return valid, tab
+        local captured = epoch
+        origin = origin or Registry.current()
+        local function valid() return captured == epoch and Registry.current() == origin and not (origin and origin._destroyed) end
+        return valid, origin and origin.session_key
     end
     function api.new(callback, opts)
-        local valid, tab = api.selection_guard()
+        local valid = api.selection_guard()
         opts = vim.tbl_extend("force", { cwd = vim.fn.getcwd() }, opts or {})
         if opts.backend_id then return create(opts, callback) end
-        require("agentic.acp.agent_instance").get_instance("agency", function(client)
-            client:when_ready(function()
-                client:request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(result, err)
+        require("agentic.acp.agent_instance").get_instance("agency", function(agent)
+            agent:when_ready(function()
+                agent:request("agency/backends", vim.empty_dict(), vim.schedule_wrap(function(result, err)
                     if not valid() then return end
                     if err or not result or #result.backends == 0 then report(err or failure("UNAVAILABLE")); return end
                     require("sodium.agency.selection").select(result, valid, function(selection)
                         if not valid() then return end
-                        vim.api.nvim_set_current_tabpage(tab)
                         create(vim.tbl_extend("force", opts, selection), callback)
                     end)
                 end))
@@ -123,10 +142,11 @@ function M.setup(deps)
         local valid = api.selection_guard(manager)
         require("sodium.agency.selection").settings(manager.config_options, valid, api.notify)
     end
-    function api.open()
+    function api.open(row)
+        if row then return open(row) end
         epoch = epoch + 1
         local manager = local_manager()
-        if manager then manager.widget:show(); return manager end
+        if manager then Registry.show_session(manager.session_key); return manager end
         return api.current()
     end
     function api.page(options, callback)
@@ -138,11 +158,11 @@ function M.setup(deps)
     local function selected(id, callback, action, expected)
         epoch = epoch + 1
         operations.detach()
-        local captured, tab = epoch, vim.api.nvim_get_current_tabpage()
+        local captured = epoch
         if type(id) ~= "string" or not id:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then report(failure("USAGE")); return end
         if action == "restore" then api.notify("Restoring session " .. id .. "...") end
         api.page({}, function(err, result)
-            if captured ~= epoch or not vim.api.nvim_tabpage_is_valid(tab) then
+            if captured ~= epoch then
                 if action == "restore" then
                     api.notify("Restore of session " .. id .. " cancelled before it started.")
                     if callback then callback(failure("CANCELLED")) end
@@ -154,13 +174,18 @@ function M.setup(deps)
                 if row.record.version == 3 and row.record.definition.agentId == id then
                     if expected and not vim.deep_equal(tuple(row), tuple(expected)) then err = failure("STALE_PROVIDER")
                     elseif action == "restore" then
-                        vim.api.nvim_set_current_tabpage(tab)
-                        local ok, manager = pcall(Adapter.open, row, { force = true })
-                        if ok then if callback then callback(nil, manager) end; return end
+                        local ok, manager = pcall(open, row)
+                        if ok then
+                            manager:on_session_ready(function() end, function()
+                                api.notify("Session " .. id .. " was not restored: " .. start_error(manager))
+                            end)
+                            if callback then callback(nil, manager) end
+                            return
+                        end
                         err = { code = "FAILED", message = "Session " .. id .. " was not restored: " .. tostring(manager) }
                     elseif row.live and row.record.phase == "ready" and tuple(row) then
                         operations.attach(tuple(row), function(error, manager) report(error); if callback then callback(error, manager) end end,
-                            { tab = tab, buffer = vim.api.nvim_get_current_buf(), cwd = row.record.definition.cwd })
+                            { buffer = vim.api.nvim_get_current_buf(), cwd = row.record.definition.cwd })
                         return
                     else err = failure("NOT_READY") end
                     report(err); if callback then callback(err) end; return
@@ -172,32 +197,28 @@ function M.setup(deps)
     function api.attach(id, callback, expected) selected(id, callback, "attach", expected) end
     function api.restore(id, callback) selected(id, callback, "restore") end
     function api.recover(manager)
-        local binding, tab = vim.deepcopy(manager._agency_binding), manager.tab_page_id
+        local binding, key = vim.deepcopy(manager._agency_binding), manager.session_key
         if not binding or resuming then return end
         api.page({}, function(err, result)
-            if err or not vim.api.nvim_tabpage_is_valid(tab) or not vim.deep_equal(manager._agency_binding, binding) then return end
+            if err or Registry.get(key) ~= manager or manager._destroyed or not vim.deep_equal(manager._agency_binding, binding) then return end
             for _, row in ipairs(result.agents) do
                 if row.record.version == 3 and row.record.definition.agentId == binding.agentId then
                     local live = row.live and row.record.phase == "ready" and tuple(row)
                     if live and vim.deep_equal(live, binding) then return end
-                    vim.api.nvim_set_current_tabpage(tab)
-                    if live then
-                        api.notify("This tab was bound to an earlier run of its agent; reattaching. Send the prompt again once it loads")
-                        api.attach(binding.agentId)
-                    else
-                        api.notify("This tab's agent is stopped; restoring it. Send the prompt again once it is attached")
-                        api.restore(binding.agentId)
-                    end
+                    if live then api.notify("This session was bound to an earlier run of its agent; reattaching. Send the prompt again once it loads")
+                    else api.notify("This session's agent is stopped; restoring it. Send the prompt again once it is attached") end
+                    local ok, failure = pcall(Rebind.reattach, manager, row)
+                    if not ok then api.notify("Session " .. binding.agentId .. " was not reattached: " .. tostring(failure)) end
                     return
                 end
             end
         end)
     end
-    function api.detach(tab)
+    function api.detach(key)
         epoch = epoch + 1
         operations.detach()
-        local manager = local_manager(tab)
-        if manager then Registry.destroy_session(manager.tab_page_id) end
+        local manager = local_manager(key)
+        if manager then Registry.destroy(manager.session_key) end
     end
     function api.cancel()
         epoch = epoch + 1
@@ -210,12 +231,12 @@ function M.setup(deps)
         local exact = row and tuple(row) or snapshot and snapshot.target
         if not exact then report(failure("NOT_READY")); return end
         local manager = local_manager()
-        local tab, lifecycle_epoch = manager and manager.tab_page_id, manager and manager._agency_lifecycle_epoch
+        local key, bound = manager and manager.session_key, manager and vim.deep_equal(manager._agency_binding, exact)
         operations.stop(exact, function(err)
             report(err)
-            if not err and manager and local_manager(tab) == manager
-                and manager._agency_lifecycle_epoch == lifecycle_epoch and vim.deep_equal(manager._agency_binding, exact) then
-                api.detach(tab)
+            if not err and manager and local_manager(key) == manager and (vim.deep_equal(manager._agency_binding, exact)
+                or bound and manager._agency_unavailable and manager._agency_binding == nil) then
+                api.detach(key)
             end
         end, { cwd = row and row.record.definition.cwd or snapshot.cwd })
     end
@@ -227,9 +248,9 @@ function M.setup(deps)
             Context.add(manager, captured, kind)
             manager.widget:show({ focus_prompt = false })
         end
-        local manager = local_manager(captured.tab)
+        local manager = local_manager()
         if manager then add(nil, manager)
-        else operations.current(captured.cwd, add, { tab = captured.tab, buffer = captured.buffer, cwd = captured.cwd }) end
+        else operations.current(captured.cwd, add, { buffer = captured.buffer, cwd = captured.cwd }) end
     end
     function api.add_context() epoch = epoch + 1; with_context(Context.capture(vim.api.nvim_get_current_buf(), vim.fn.mode())) end
     function api.add_diagnostics(scope)
@@ -251,29 +272,27 @@ function M.setup(deps)
             if not manager:can_submit_prompt() then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
             local content = {}
             for _, item in ipairs(annotations) do content[#content + 1] = { type = "text", text = item.text } end
-            local entry = Adapter.stage_context(manager, content, function(submissionId)
+            local entry = Context.stage(manager, content, function(submissionId)
                 api.accept_annotations(annotations)
                 callback({ state = "accepted", submissionId = submissionId })
             end, function(error) callback({ state = "rejected", error = error }) end)
             if not manager.widget.on_submit_input(text) then
-                Adapter.unstage_context(manager, entry)
+                Context.unstage(manager, entry)
                 callback({ state = "rejected", error = failure("NOT_READY") })
                 return false
             end
             return true
         end
-        local manager = local_manager(opts.tab)
+        local manager = local_manager(opts.session)
         if manager and manager.session_id then return send(nil, manager) end
-        if opts.tab then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
+        if opts.session then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
         operations.current(vim.fn.getcwd(), function(err, result) if err then send(err) else ready(result, send) end end)
         return true
     end
     function api.view_for_buffer(buf)
-        for tab, manager in pairs(Registry.sessions) do
-            if vim.api.nvim_tabpage_is_valid(tab) and not manager._agency_destroyed then
-                for _, owned in pairs(manager.widget.buf_nrs) do if owned == buf then return manager end end
-            end
-        end
+        local widget = require("agentic.ui.widget_registry").get(buf)
+        local manager = widget and widget.session_key and Registry.get(widget.session_key)
+        if Rebind.agency(manager) then return manager end
     end
     function api.permissions()
         local manager = local_manager()
@@ -283,19 +302,16 @@ function M.setup(deps)
     end
     function api.busy()
         if operations.in_flight() > 0 then return true end
-        local agency = require("agentic.config").acp_providers.agency
-        for _, manager in pairs(Registry.sessions) do
-            if not manager._agency_destroyed and manager.agent.provider_config == agency
-                and (manager._agency_load_pending or manager._agency_new_pending or manager._agency_intent) then return true end
+        for _, manager in ipairs(Registry.list()) do
+            if Rebind.agency(manager) and (manager._agency_load_pending or manager._agency_new_pending) then return true end
         end
         return false
     end
     function api.resume()
         if resuming or vim.g.agency_reload_running then return end
-        local Rebind = require("sodium.agency.rebind")
-        local open = {}
-        for _, manager in ipairs(Rebind.managers()) do open[#open + 1] = manager.session_id:sub(8) end
-        if #open == 0 then return end
+        local attached = {}
+        for _, manager in ipairs(Rebind.managers()) do attached[#attached + 1] = manager.session_id:sub(8) end
+        if #attached == 0 then return end
         resuming = true
         local progress = { id = "agency_resume", title = "Agency" }
         api.notify("The Agency Handler connection ended; reconnecting…", vim.log.levels.INFO, vim.tbl_extend("force", progress, { timeout = false }))
@@ -305,7 +321,7 @@ function M.setup(deps)
             for _, row in ipairs(result.agents) do
                 if row.record.version == 3 and row.live and row.record.phase == "ready" then live[row.record.definition.agentId] = true end
             end
-            for _, id in ipairs(open) do if not live[id] then return false end end
+            for _, id in ipairs(attached) do if not live[id] then return false end end
             return true
         end
         local function attempt()
@@ -318,7 +334,7 @@ function M.setup(deps)
                 end
                 Rebind.run(result.agents, { reconnect = deps.reconnect }, function(summary)
                     resuming = false
-                    local text = summary.timed_out and "the editor did not reconnect; reopen tabs with <leader>af" or Rebind.describe(summary)
+                    local text = summary.timed_out and "the editor did not reconnect; reopen sessions with <leader>af" or Rebind.describe(summary)
                     api.notify("Reconnected to the Agency Handler: " .. text, vim.log.levels.INFO, progress)
                 end)
             end)

@@ -183,7 +183,7 @@ describe("Agency native commands", function()
         local accepted, outcome = 0
         api.annotations = function() return { { text = "annotation" } } end
         api.accept_annotations = function() accepted = accepted + 1 end
-        assert.is_true(api.submit_text("review", { annotations = true, tab = f.manager.session_key }, function(value) outcome = value end))
+        assert.is_true(api.submit_text("review", { annotations = true, session = f.manager.session_key }, function(value) outcome = value end))
         local prompt = f.request("session/prompt")
         assert.are.equal("annotation", prompt.params.prompt[#prompt.params.prompt].text)
         assert.are.equal(0, accepted)
@@ -192,21 +192,55 @@ describe("Agency native commands", function()
         assert.are.equal("accepted", outcome.state)
     end)
 
-    it("submits to the requested tab after the current tab changes", function()
-        local tab, lookups = vim.api.nvim_get_current_tabpage(), 0
+    it("submits to the requested session after the current session changes", function()
+        local lookups, control = 0, require("fixtures.agency_control")
         api.operations.current = function(_, callback) lookups = lookups + 1; callback({ code = "UNAVAILABLE", message = "unexpected lookup" }) end
-        vim.cmd("tabnew")
-        api.submit_text("review", { tab = tab }, function() end)
+        local other = api.open(control.agent(control.target_b))
+        f.flush()
+        local load = f.request("session/load")
+        f.client:_handle_message({ id = load.id, result = { sessionId = load.params.sessionId, _meta = { agency = { version = 1,
+            binding = control.target_b, backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.are.equal(other, require("agentic.session_registry").current())
+        api.submit_text("review", { session = f.manager.session_key }, function() end)
+        local prompt = f.request("session/prompt")
+        assert.are.equal(f.manager.session_id, prompt.params.sessionId)
         local texts = {}
-        for _, item in ipairs(f.request("session/prompt").params.prompt) do texts[#texts + 1] = item.text end
+        for _, item in ipairs(prompt.params.prompt) do texts[#texts + 1] = item.text end
         assert.is_true(vim.tbl_contains(texts, "review"))
         assert.are.equal(0, lookups)
     end)
 
+    it("reports a roster request that times out as unavailable and drops its late reply", function()
+        local notify, warnings, outcomes = vim.notify, {}, {}
+        vim.notify = function(message) warnings[#warnings + 1] = message end
+        local start = #f.frames
+        require("sodium.agency.roster").request("agency/roster", vim.empty_dict(), function(err) outcomes[#outcomes + 1] = err end, { timeout_ms = 10 })
+        assert.is_true(vim.wait(1000, function() return #outcomes > 0 end, 5))
+        local id = f.frames[start + 1].id
+        assert.are.equal("agency/roster", f.frames[start + 1].method)
+        f.client:_handle_message({ id = id, result = { state = "agents", handlerGeneration = vim.NIL, agents = {} } })
+        f.flush()
+        vim.notify = notify
+        assert.are.equal(1, #outcomes)
+        assert.are.equal("UNAVAILABLE", outcomes[1].code)
+        assert.is_nil(f.client.callbacks[id])
+        assert.are.same({}, warnings)
+    end)
+
     it("detaches native views without cancelling or stopping providers", function()
         f.state("shared-turn", "running")
+        local id = f.manager.session_id
         api.detach()
-        assert.is_true(f.manager._agency_destroyed)
-        for _, frame in ipairs(f.frames) do assert.is_not.equal("session/cancel", frame.method) end
+        f.flush()
+        assert.is_true(f.manager._destroyed)
+        assert.is_nil(require("agentic.session_registry").get(f.manager.session_key))
+        local detached = {}
+        for _, frame in ipairs(f.frames) do
+            assert.is_not.equal("session/cancel", frame.method)
+            assert.is_not.equal("agency/stop", frame.method)
+            if frame.method == "agency/detach" then detached[#detached + 1] = frame.params.sessionId end
+        end
+        assert.are.same({ id }, detached)
     end)
 end)

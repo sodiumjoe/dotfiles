@@ -53,7 +53,6 @@ function M.new(deps)
     local function begin(cwd, origin)
         epoch = epoch + 1
         current_origin = {
-            tab = vim.api.nvim_get_current_tabpage(),
             buffer = vim.api.nvim_get_current_buf(),
             cwd = cwd or vim.fn.getcwd(),
         }
@@ -63,10 +62,10 @@ function M.new(deps)
         return epoch
     end
     local function valid_operation(operation)
-        return operation == epoch and vim.api.nvim_tabpage_is_valid(current_origin.tab)
+        return operation == epoch
     end
     local inventory
-    local function attach(target, callback, operation, origin)
+    local function attach(target, callback, operation)
         inventory({}, function(err, result)
             if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
             if err then callback(err); return end
@@ -74,8 +73,7 @@ function M.new(deps)
                 if row.record.version == 3 and row.record.definition.agentId == target.agentId then
                     if not row.live or row.record.phase ~= "ready" or not tuple_of(row) then callback(error_value("NOT_READY")); return end
                     if not vim.deep_equal(tuple_of(row), target) then callback(error_value("STALE_PROVIDER")); return end
-                    vim.api.nvim_set_current_tabpage(origin.tab)
-                    local manager = (deps.open or require("sodium.agency.agentic").open)(row)
+                    local manager = deps.open(row)
                     manager:on_session_ready(function()
                         if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
                         callback(nil, manager)
@@ -122,10 +120,7 @@ function M.new(deps)
                 return
             end
             if #result.agents == 0 then
-                (deps.new_session or function(opts, done)
-                    local manager = require("sodium.agency.agentic").new_session(opts)
-                    manager:on_session_ready(function() done(nil, manager) end)
-                end)({ cwd = origin.cwd }, callback)
+                deps.new_session({ cwd = origin.cwd }, callback)
                 return
             end
             local function selected(view)
@@ -141,8 +136,7 @@ function M.new(deps)
                     callback(error_value("NOT_READY"), view)
                     return
                 end
-                vim.api.nvim_set_current_tabpage(origin.tab)
-                local manager = (deps.open or require("sodium.agency.agentic").open)(view)
+                local manager = deps.open(view)
                 manager:on_session_ready(function()
                     if valid_operation(operation) then callback(nil, manager) else callback(error_value("CANCELLED")) end
                 end)
@@ -156,7 +150,7 @@ function M.new(deps)
     end
     function api.attach(target, callback, origin)
         local operation = begin(nil, origin)
-        attach(vim.deepcopy(target), callback, operation, vim.deepcopy(current_origin))
+        attach(vim.deepcopy(target), callback, operation)
     end
     function api.stop(target, callback, detail)
         local operation, cwd, exact = begin(), vim.fn.getcwd(), vim.deepcopy(target)
