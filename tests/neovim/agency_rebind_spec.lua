@@ -100,6 +100,18 @@ describe("Agency rebind", function()
         assert.are.equal(0, summary.rebound)
     end)
 
+    local function notices(manager)
+        local text, count = table.concat(vim.api.nvim_buf_get_lines(manager.widget.buf_nrs.chat, 0, -1, false), "\n"), 0
+        local at = text:find("This session's agent no longer exists", 1, true)
+        while at do count, at = count + 1, text:find("This session's agent no longer exists", at + 1, true) end
+        return count
+    end
+    local function prompts()
+        local count = 0
+        for _, frame in ipairs(f.frames) do if frame.method == "session/prompt" then count = count + 1 end end
+        return count
+    end
+
     it("reports a session whose agent is stopped without loading it", function()
         local key, manager, before = f.manager.session_key, f.manager, loads()
         local row = control.agent(control.target_a)
@@ -108,14 +120,40 @@ describe("Agency rebind", function()
         assert.are.same({ { control.target_a.agentId }, {} }, { summary.stopped, summary.missing })
         assert.are.equal(before, loads())
         assert.are.equal(manager, Registry.get(key))
+        assert.is_nil(manager._agency_gone)
+        assert.are.equal(0, notices(manager))
     end)
 
-    it("keeps a session whose agent is missing and reports it", function()
+    it("keeps a session whose agent is missing, reports it, and says once in its chat that the agent is gone", function()
         local key, manager, before = f.manager.session_key, f.manager, loads()
         local summary = run({}, { reconnect = function(done) done() end })
         assert.are.same({ control.target_a.agentId }, summary.missing)
+        assert.is_truthy(require("sodium.agency.rebind").describe(summary):find("1 without a known agent; start a new session", 1, true))
+        run({}, { reconnect = function(done) done() end })
         assert.are.equal(before, loads())
         assert.are.equal(manager, Registry.get(key))
+        assert.is_true(manager._agency_gone)
+        assert.are.equal(1, notices(manager))
+    end)
+
+    it("refuses to send prompts from a session whose agent is gone and keeps the input", function()
+        local manager, logged = f.manager, silence()
+        run({}, { reconnect = function(done) done() end })
+        local before = prompts()
+        vim.api.nvim_buf_set_lines(manager.widget.buf_nrs.input, 0, -1, false, { "hello" })
+        manager.widget:_submit_input()
+        f.flush()
+        assert.are.same({ "hello" }, vim.api.nvim_buf_get_lines(manager.widget.buf_nrs.input, 0, -1, false))
+        assert.is_false(manager.is_generating)
+        assert.is_nil(table.concat(vim.api.nvim_buf_get_lines(manager.widget.buf_nrs.chat, 0, -1, false), "\n"):find("hello", 1, true))
+        local result
+        require("sodium.agency").submit_text("again", { session = manager.session_key }, function(value) result = value end)
+        f.flush()
+        assert.are.equal(before, prompts())
+        assert.are.equal("rejected", result.state)
+        assert.is_truthy(result.error.message:find("no longer exists", 1, true))
+        assert.are.equal(1, notices(manager))
+        assert.is_truthy(logged[1] and logged[1]:find("Start a new session with <leader>an", 1, true))
     end)
 
     it("reports a failing reattach and still calls back once", function()

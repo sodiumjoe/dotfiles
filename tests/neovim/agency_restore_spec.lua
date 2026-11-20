@@ -132,6 +132,7 @@ describe("Agency restore on a rejected prompt", function()
         local before = #f.frames
         transport.answer("agents", control.roster({ control.row(control.target_a, false) }))
         assert.is_truthy(notice("agent is stopped; restoring it"))
+        assert.is_nil(f.manager._agency_gone)
         f.flush()
         assert.is_nil(transport.pending("agents"))
         local frame = f.request("session/load")
@@ -164,6 +165,20 @@ describe("Agency restore on a rejected prompt", function()
         assert.is_true(f.manager._destroyed)
         assert.are.equal(target, Registry.current())
         assert.is_true(target.widget:is_open())
+    end)
+
+    it("says once in the chat that the session's agent is gone when the roster no longer knows it", function()
+        reject_prompt()
+        local before = #f.frames
+        transport.answer("agents", control.roster({}))
+        f.flush()
+        assert.is_true(f.manager._agency_gone)
+        local text = table.concat(vim.api.nvim_buf_get_lines(f.manager.widget.buf_nrs.chat, 0, -1, false), "\n")
+        local first = text:find("This session's agent no longer exists", 1, true)
+        assert.is_truthy(first)
+        assert.is_nil(text:find("This session's agent no longer exists", first + 1, true))
+        for index = before + 1, #f.frames do assert.is_not.equal("session/load", f.frames[index].method) end
+        assert.are.same({ "hello" }, vim.api.nvim_buf_get_lines(f.manager.widget.buf_nrs.input, 0, -1, false))
     end)
 
     it("leaves the session alone when its agent still runs under the same binding", function()

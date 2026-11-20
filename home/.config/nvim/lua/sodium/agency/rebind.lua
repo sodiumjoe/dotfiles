@@ -29,6 +29,18 @@ function M.dead(manager, live)
     return manager._agency_unavailable == true or manager._agency_binding ~= nil and not vim.deep_equal(manager._agency_binding, live)
 end
 
+M.GONE = "This session's agent no longer exists — it had not run a turn when the Agency Handler restarted. Start a new session with <leader>an."
+
+function M.gone(manager)
+    if manager._agency_gone or manager._destroyed then return end
+    manager._agency_gone = true
+    local function write()
+        if manager._destroyed then return end
+        manager.message_writer:write_structural_message(require("agentic.acp.acp_payloads").generate_agent_message({ M.GONE }))
+    end
+    if vim.in_fast_event() then vim.schedule(write) else write() end
+end
+
 function M.reason(err)
     if type(err) ~= "table" then return err and tostring(err) or "the session did not start" end
     if err.code == require("agentic.acp.acp_client").ERROR_CODES.TRANSPORT_ERROR and err.data == nil
@@ -66,7 +78,7 @@ end
 function M.describe(summary)
     local text = summary.rebound .. " session" .. (summary.rebound == 1 and "" or "s") .. " rebound"
     if #summary.stopped > 0 then text = text .. ", " .. #summary.stopped .. (#summary.stopped == 1 and " session's agent is" or " sessions' agents are") .. " stopped; reopen with <leader>ar" end
-    if #summary.missing > 0 then text = text .. ", " .. #summary.missing .. " without a known agent" end
+    if #summary.missing > 0 then text = text .. ", " .. #summary.missing .. " without a known agent; start a new session" end
     if #summary.failed > 0 then
         local reasons = {}
         for _, item in ipairs(summary.failed) do reasons[#reasons + 1] = item.agentId:sub(1, 8) .. ": " .. tostring(item.error) end
@@ -127,6 +139,7 @@ function M.run(views, opts, callback)
             if not view then
                 local list = known[agent_id] and summary.stopped or summary.missing
                 list[#list + 1] = agent_id
+                if not known[agent_id] then M.gone(manager) end
             elseif not M.dead(manager, tuple(view)) then
                 summary.rebound = summary.rebound + 1
             else

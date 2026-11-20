@@ -222,6 +222,7 @@ function M.setup(deps)
                     return
                 end
             end
+            Rebind.gone(manager)
         end)
     end
     function api.detach(key)
@@ -279,6 +280,7 @@ function M.setup(deps)
         if opts.annotations and #annotations == 0 then callback({ state = "rejected", error = failure("EMPTY_INPUT") }); return false end
         local function send(err, manager)
             if err then callback({ state = "rejected", error = err }); return false end
+            if manager._agency_gone then callback({ state = "rejected", error = { code = "GONE", message = Rebind.GONE } }); return false end
             if not manager:can_submit_prompt() then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
             local content = {}
             for _, item in ipairs(annotations) do content[#content + 1] = { type = "text", text = item.text } end

@@ -168,6 +168,10 @@ local function capture_submissions(manager)
     manager._agency_submit_widget = widget
     local original = widget.on_submit_input
     widget.on_submit_input = function(text)
+        if manager._agency_gone then
+            require("sodium.agency").setup().notify(require("sodium.agency.rebind").GONE, vim.log.levels.WARN)
+            return false
+        end
         local flushed, failure = pcall(Stream.flush, manager)
         if not flushed then
             failed("flush Agency streamed text", failure)
