@@ -255,7 +255,7 @@ function M.setup(deps)
                 api.accept_annotations(annotations)
                 callback({ state = "accepted", submissionId = submissionId })
             end, function(error) callback({ state = "rejected", error = error }) end)
-            if not manager:_handle_input_submit(text) then
+            if not manager.widget.on_submit_input(text) then
                 Adapter.unstage_context(manager, entry)
                 callback({ state = "rejected", error = failure("NOT_READY") })
                 return false

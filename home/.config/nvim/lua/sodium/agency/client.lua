@@ -3,7 +3,17 @@ local Client = setmetatable({}, { __index = ACPClient })
 Client.__index = Client
 
 local Stream = require("sodium.agency.stream")
-local starting, immediate
+local starting, immediate, submitting, cancelling
+
+local Logger = require("agentic.utils.logger")
+local notify = rawget(Logger, "_agency_notify") or Logger.notify
+rawset(Logger, "_agency_notify", notify)
+Logger.notify = function(message, ...)
+    if type(message) == "string" and message:find("Agency Handler connection ended", 1, true) then
+        return
+    end
+    return notify(message, ...)
+end
 
 local function manager_for(handlers)
     if handlers._agency_manager then
@@ -135,6 +145,36 @@ local function replay(client, handlers, manager, params)
     batch[#batch + 1] = entry
 end
 
+local function configure(manager, snapshot)
+    require("sodium.agency.agentic").apply_configuration(manager.config_options, snapshot)
+    require("agentic.acp.slash_commands").setCommands(manager.widget.buf_nrs.input, snapshot.availableCommands or {})
+    manager.widget:schedule_header_refresh()
+end
+
+local function capture_submissions(manager)
+    local widget = manager.widget
+    if manager._agency_submit_widget == widget then
+        return
+    end
+    manager._agency_submit_widget = widget
+    local original = widget.on_submit_input
+    widget.on_submit_input = function(text)
+        manager._agency_submit_snapshot = {
+            input = text,
+            selections = manager.code_selection:get_selections(),
+            files = manager.file_list:get_files(),
+            diagnostics = manager.diagnostics_list:get_diagnostics(),
+            first = manager._is_first_message,
+        }
+        local ok, result = pcall(original, text)
+        manager._agency_submit_snapshot = nil
+        if not ok then
+            error(result, 0)
+        end
+        return result
+    end
+end
+
 local function adopt(manager, info, response)
     manager._agency_binding = vim.deepcopy(info.binding)
     manager._agency_cwd = manager._agency_request_cwd
@@ -149,10 +189,8 @@ local function adopt(manager, info, response)
         manager._agency_turn_id = info.turnId
     end
     manager.history_to_send = nil
-    local snapshot = type(info.configuration) == "table" and info.configuration or response
-    require("sodium.agency.agentic").apply_configuration(manager.config_options, snapshot)
-    require("agentic.acp.slash_commands").setCommands(manager.widget.buf_nrs.input, snapshot.availableCommands or {})
-    manager.widget:schedule_header_refresh()
+    capture_submissions(manager)
+    configure(manager, type(info.configuration) == "table" and info.configuration or response)
 end
 
 local function apply_attachment(manager, info, response)
@@ -196,7 +234,176 @@ local function start(handlers, flag, cwd, send, callback)
     end)
 end
 
+local function caller(client, id)
+    for _, session in pairs(require("agentic.session_registry").sessions) do
+        if session.agent == client and session.session_id == id and not session._destroyed then
+            return session
+        end
+    end
+end
+
+local function mark_unavailable(manager)
+    manager._agency_unavailable = true
+    manager._agency_binding, manager._agency_admissions, manager._agency_running = nil, {}, false
+    manager._agency_held_permissions = nil
+    for _, entry in ipairs(manager._agency_pending_context or {}) do
+        entry.submission = nil
+    end
+end
+
+local function show_unavailable(manager)
+    if manager._destroyed then
+        return
+    end
+    Stream.discard(manager)
+    manager.permission_manager:clear()
+    manager.status_animation:stop()
+    manager.is_generating = false
+end
+
+local function restore_draft(manager, draft)
+    local buffer = manager.widget.buf_nrs.input
+    if type(draft.input) == "string" and vim.api.nvim_buf_is_valid(buffer)
+        and table.concat(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), "\n") == "" then
+        vim.api.nvim_buf_set_lines(buffer, 0, -1, false, vim.split(draft.input, "\n", { plain = true }))
+    end
+    local present = manager.code_selection:get_selections()
+    for _, selection in ipairs(draft.selections) do
+        local found = false
+        for _, existing in ipairs(present) do
+            if vim.deep_equal(existing, selection) then
+                found = true
+                break
+            end
+        end
+        if not found then
+            manager.code_selection:add(selection)
+        end
+    end
+    for _, file in ipairs(draft.files) do
+        manager.file_list:add(file)
+    end
+    manager.diagnostics_list:add_many(draft.diagnostics)
+end
+
+local function settle_prompt(manager, submission, admission, err)
+    if manager._agency_admissions then
+        manager._agency_admissions[submission] = nil
+    end
+    local flushed, failure = pcall(Stream.flush, manager)
+    if not flushed then
+        failed("flush Agency streamed text", failure)
+    end
+    if not err or admission.accepted then
+        return
+    end
+    for _, entry in ipairs(admission.entries) do
+        entry.submission = nil
+    end
+    if manager._destroyed or manager._agency_unavailable or not vim.deep_equal(manager._agency_binding, admission.binding) then
+        return
+    end
+    for _, entry in ipairs(admission.entries) do
+        if entry.rejected then
+            entry.rejected(err)
+        end
+    end
+    if admission.draft then
+        restore_draft(manager, admission.draft)
+        if manager._agency_local_submission == submission and admission.draft.first ~= nil then
+            manager._is_first_message = admission.draft.first
+        end
+    end
+    require("sodium.agency").setup().recover(manager)
+end
+
+local function recompute(manager)
+    if manager._destroyed or manager._agency_unavailable then
+        return
+    end
+    if manager._agency_running ~= nil then
+        manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil
+    end
+    if manager.is_generating then
+        manager:_start_spinner("generating")
+    end
+end
+
+local function withdraw(manager, params)
+    local held = manager._agency_held_permissions or {}
+    for index = #held, 1, -1 do
+        if held[index].id == params.requestId and held[index].request.toolCall.toolCallId == params.toolCallId then
+            table.remove(held, index)
+        end
+    end
+    if manager._agency_permissions and manager._agency_permissions[params.toolCallId] == params.requestId then
+        manager._agency_permissions[params.toolCallId] = nil
+        manager.permission_manager:remove_request_by_tool_call_id(params.toolCallId)
+    end
+end
+
+local function session_state(manager, params)
+    if type(params.binding) ~= "table" then
+        return
+    end
+    manager._agency_binding = vim.deepcopy(params.binding)
+    settle_held(manager)
+    if type(params.turnId) == "string" then
+        manager._agency_turn_id = params.turnId
+    end
+    local admitted = params.submissionId or params.turnId
+    local admission = type(admitted) == "string" and manager._agency_admissions and manager._agency_admissions[admitted]
+    local running = params.submissionState == "running" or params.submissionState == nil and params.state == "running"
+    if admission and running and not admission.accepted then
+        admission.accepted = true
+        for _, entry in ipairs(admission.entries) do
+            require("sodium.agency.agentic").unstage_context(manager, entry)
+            if entry.accepted then
+                entry.accepted(admitted)
+            end
+        end
+    end
+    if params.state == "idle" then
+        Stream.flush(manager)
+        manager.message_writer:finish_thinking()
+    end
+    if params.state == "unavailable" then
+        mark_unavailable(manager)
+        return show_unavailable(manager)
+    end
+    local ended = manager._agency_running and params.state == "idle"
+    local foreign = ended and manager._agency_attention_turn ~= nil and manager._agency_attention_turn ~= manager._agency_local_submission
+    if params.state == "running" and type(params.turnId) == "string" then
+        manager._agency_attention_turn = params.turnId
+    end
+    manager._agency_running = params.state == "running"
+    if ended then
+        manager._agency_attention_turn = nil
+    end
+    if foreign then
+        require("agentic.utils.hooks").invoke("on_response_complete",
+            { session_id = manager.session_id, session_key = manager.session_key, success = true })
+    end
+    manager.is_generating = manager._agency_running or next(manager._agency_admissions or {}) ~= nil
+    if type(params.configuration) == "table" then
+        configure(manager, params.configuration)
+    end
+    if manager.is_generating then
+        manager:_start_spinner("generating")
+    else
+        manager.status_animation:stop()
+    end
+end
+
 function Client:__request_params(method, params, context)
+    if method == "session/prompt" and submitting then
+        params._meta = { agency = { version = 1, submissionId = submitting, editor = vim.v.servername } }
+        return params
+    end
+    if method == "session/cancel" and cancelling then
+        params._meta = { agency = { version = 1, turnId = cancelling } }
+        return params
+    end
     if method ~= "session/new" and method ~= "session/load" then
         return params
     end
@@ -314,6 +521,124 @@ function Client:__handle_request_permission(id, request)
     handlers._agency_replay_batch = nil
     vim.schedule(function()
         offer(self, id, request, handlers, manager)
+    end)
+end
+
+function Client:send_prompt(id, prompt, callback)
+    local manager = caller(self, id)
+    if not manager then
+        return ACPClient.send_prompt(self, id, prompt, callback)
+    end
+    local draft = manager._agency_submit_snapshot
+    manager._agency_submit_snapshot = nil
+    local submission = require("sodium.agency.control").uuid()
+    manager._agency_local_submission, manager._agency_turn_id = submission, submission
+    local staged = {}
+    for _, entry in ipairs(manager._agency_pending_context or {}) do
+        if not entry.submission then
+            entry.submission = submission
+            staged[#staged + 1] = entry
+            vim.list_extend(prompt, vim.deepcopy(entry.content))
+        end
+    end
+    local admission = { accepted = false, entries = staged, draft = draft, binding = vim.deepcopy(manager._agency_binding) }
+    manager._agency_admissions = manager._agency_admissions or {}
+    manager._agency_admissions[submission] = admission
+    local function reply(result, err)
+        if manager._agency_unavailable then
+            vim.schedule(function()
+                manager.is_generating = false
+            end)
+            return
+        end
+        vim.schedule(function()
+            settle_prompt(manager, submission, admission, err)
+        end)
+        callback(result, err)
+        vim.schedule(function()
+            recompute(manager)
+        end)
+    end
+    submitting = submission
+    local ok, failure = pcall(ACPClient.send_prompt, self, id, prompt, reply)
+    submitting = nil
+    if not ok then
+        error(failure, 0)
+    end
+end
+
+function Client:stop_generation(id)
+    local manager = caller(self, id)
+    if not manager then
+        return ACPClient.stop_generation(self, id)
+    end
+    local flushed, failure = pcall(Stream.flush, manager)
+    if not flushed then
+        failed("flush Agency streamed text", failure)
+    end
+    if not manager._agency_turn_id then
+        return
+    end
+    cancelling = manager._agency_turn_id
+    local ok, err = pcall(ACPClient.stop_generation, self, id)
+    cancelling = nil
+    if not ok then
+        error(err, 0)
+    end
+end
+
+function Client:__handle_unknown_method(id, method, params)
+    if id ~= nil or method ~= "agency/session_state" and method ~= "agency/permission_withdrawn"
+        or type(params) ~= "table" or type(params.sessionId) ~= "string" then
+        return ACPClient.__handle_unknown_method(self, id, method, params)
+    end
+    local handlers = self.subscribers[params.sessionId]
+    if handlers then
+        handlers._agency_replay_batch = nil
+    end
+    vim.schedule(function()
+        local manager = require("agentic.session_registry").find_by_acp_session_id(params.sessionId, self)
+        if not manager or manager._destroyed or manager._agency_unavailable
+            or manager._agency_binding and not vim.deep_equal(manager._agency_binding, params.binding) then
+            return
+        end
+        if method == "agency/permission_withdrawn" then
+            withdraw(manager, params)
+        else
+            session_state(manager, params)
+        end
+    end)
+end
+
+function Client:__on_state_change(old, new)
+    if old ~= "ready" or new ~= "error" and new ~= "disconnected" then
+        return
+    end
+    if type(self.transport) ~= "table" or self.transport.process == nil then
+        return
+    end
+    local managers = {}
+    for _, session in pairs(require("agentic.session_registry").sessions) do
+        if session.agent == self and not session._destroyed then
+            mark_unavailable(session)
+            managers[#managers + 1] = session
+        end
+    end
+    vim.schedule(function()
+        for _, manager in ipairs(managers) do
+            local ok, err = pcall(show_unavailable, manager)
+            if not ok then
+                failed("mark the Agency session unavailable", err)
+            end
+        end
+        if not vim.g.agency_reload_running then
+            local ok, err = pcall(function()
+                require("sodium.agency").setup().resume()
+            end)
+            if not ok then
+                failed("reconnect Agency sessions", err)
+            end
+        end
     end)
 end
 

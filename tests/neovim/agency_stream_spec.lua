@@ -383,5 +383,136 @@ describe("Agency live rendering", function()
         state("idle", vim.NIL)
         vim.wait(200, function() return false end, 10)
         assert.are.equal(1, #calls)
+        assert.are.equal(f.manager.session_key, calls[1].session_key)
+    end)
+
+    local function withdraw(session_id, binding, id, tool)
+        f.client:_handle_message({ method = "agency/permission_withdrawn", params = {
+            sessionId = session_id, binding = vim.deepcopy(binding), requestId = id, toolCallId = tool } })
+    end
+    local function input_lines()
+        return vim.api.nvim_buf_get_lines(f.manager.widget.buf_nrs.input, 0, -1, false)
+    end
+    local function submit(lines)
+        vim.api.nvim_buf_set_lines(f.manager.widget.buf_nrs.input, 0, -1, false, lines)
+        f.manager.widget:_submit_input()
+        return f.request("session/prompt")
+    end
+    local function controller()
+        local api, calls = require("sodium.agency").setup(), { recovered = {}, resumed = 0 }
+        api.recover = function(manager) calls.recovered[#calls.recovered + 1] = manager end
+        api.resume = function() calls.resumed = calls.resumed + 1 end
+        return calls
+    end
+
+    it("offers a held permission once a session state adopts the binding", function()
+        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        f.flush()
+        local id, shown = f.request("session/load").params.sessionId, count_requests(manager)
+        permission("early", id, control.target_b, "early-tool")
+        f.flush()
+        assert.are.equal(0, shown.n)
+        f.client:_handle_message({ method = "agency/session_state", params = { sessionId = id, binding = control.target_b, state = "idle" } })
+        f.flush()
+        assert.are.equal(1, shown.n)
+        assert.are.same({}, answers("early"))
+        assert.are.same(control.target_b, manager._agency_binding)
+    end)
+
+    it("drops a withdrawn permission whether it is held or shown", function()
+        local manager = require("sodium.agency.agentic").open(control.agent(control.target_b))
+        f.flush()
+        local frame, shown = f.request("session/load"), count_requests(manager)
+        local id = frame.params.sessionId
+        permission("gone", id, control.target_b, "gone-tool")
+        permission("kept", id, control.target_b, "kept-tool")
+        f.flush()
+        withdraw(id, control.target_b, "gone", "gone-tool")
+        f.flush()
+        f.client:_handle_message({ id = frame.id, result = { sessionId = id,
+            _meta = { agency = { version = 1, binding = control.target_b, backendId = "codex-acp",
+                configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.are.equal(1, shown.n)
+        assert.are.same({}, answers("gone"))
+        assert.are.equal("kept", manager._agency_permissions["kept-tool"])
+        withdraw(id, control.target_b, "kept", "kept-tool")
+        f.flush()
+        assert.is_nil(manager.permission_manager.pending["kept-tool"])
+        assert.are.same({ { outcome = { outcome = "cancelled" } } }, answers("kept"))
+    end)
+
+    it("cancels the current turn by its id and sends nothing without one", function()
+        f.manager.agent:stop_generation(f.manager.session_id)
+        assert.has_error(function() f.request("session/cancel") end)
+        f.state("turn-7", "running")
+        f.manager.agent:stop_generation(f.manager.session_id)
+        assert.are.same({ version = 1, turnId = "turn-7" }, f.request("session/cancel").params._meta.agency)
+    end)
+
+    it("restores the draft and context of a prompt rejected before admission", function()
+        local calls, rejected = controller(), {}
+        local file = vim.env.DOTFILES_TEST_ROOT .. "/README.md"
+        local selection = { lines = { "local x = 1" }, start_line = 1, end_line = 1, file_path = "x.lua", file_type = "lua" }
+        local scratch = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(scratch, 0, -1, false, { "local x = 1" })
+        local diagnostic = { bufnr = scratch, lnum = 0, col = 0, message = "broken", severity = 1, file_path = "/tmp/x.lua" }
+        local entry = require("sodium.agency.agentic").stage_context(f.manager, { { type = "text", text = "staged context" } },
+            function() end, function(err) rejected[#rejected + 1] = err end)
+        f.manager._is_first_message = true
+        f.manager.code_selection:add(selection)
+        f.manager.file_list:add(file)
+        f.manager.diagnostics_list:add_many({ diagnostic })
+        local frame = submit({ "first line", "second line" })
+        assert.are.equal(f.manager._agency_local_submission, frame.params._meta.agency.submissionId)
+        assert.are.equal("staged context", frame.params.prompt[#frame.params.prompt].text)
+        assert.are.same({ "" }, input_lines())
+        assert.are.same({}, f.manager.file_list:get_files())
+        f.client:_handle_message({ id = frame.id, error = { code = -32000, message = "refused" } })
+        f.flush()
+        assert.are.same({ "first line", "second line" }, input_lines())
+        assert.are.same({ selection }, f.manager.code_selection:get_selections())
+        assert.are.same({ file }, f.manager.file_list:get_files())
+        assert.are.equal(1, #f.manager.diagnostics_list:get_diagnostics())
+        assert.is_true(f.manager._is_first_message)
+        assert.is_nil(entry.submission)
+        assert.are.equal(1, #rejected)
+        assert.are.same({ f.manager }, calls.recovered)
+        assert.is_false(f.manager.is_generating)
+        vim.api.nvim_buf_delete(scratch, { force = true })
+    end)
+
+    it("leaves the input untouched when a prompt is rejected under a binding it no longer holds", function()
+        local calls = controller()
+        f.manager.file_list:add(vim.env.DOTFILES_TEST_ROOT .. "/README.md")
+        local frame = submit({ "question" })
+        f.manager._agency_binding = vim.tbl_extend("force", f.manager._agency_binding, { providerGeneration = control.id(9) })
+        f.client:_handle_message({ id = frame.id, error = { code = -32000, message = "refused" } })
+        f.flush()
+        assert.are.same({ "" }, input_lines())
+        assert.are.same({}, f.manager.file_list:get_files())
+        assert.are.same({}, calls.recovered)
+    end)
+
+    it("marks the session unavailable without an error message when the Handler disconnects during a prompt", function()
+        local calls, finishes = controller(), 0
+        local finish = writer.write_finish_message
+        writer.write_finish_message = function(...)
+            finishes = finishes + 1
+            return finish(...)
+        end
+        submit({ "question" })
+        assert.is_true(f.manager.is_generating)
+        f.client.transport.process = {}
+        f.client:_set_state("disconnected")
+        f.client.transport.process = nil
+        f.flush()
+        assert.are.equal(0, finishes)
+        assert.are.same({}, calls.recovered)
+        assert.are.equal(1, calls.resumed)
+        assert.is_false(f.manager.is_generating)
+        assert.is_true(f.manager._agency_unavailable)
+        assert.is_nil(f.manager._agency_binding)
+        assert.are.same({ "" }, input_lines())
     end)
 end)

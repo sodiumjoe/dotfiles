@@ -183,7 +183,7 @@ describe("Agency native commands", function()
         local accepted, outcome = 0
         api.annotations = function() return { { text = "annotation" } } end
         api.accept_annotations = function() accepted = accepted + 1 end
-        assert.is_true(api.submit_text("review", { annotations = true }, function(value) outcome = value end))
+        assert.is_true(api.submit_text("review", { annotations = true, tab = f.manager.session_key }, function(value) outcome = value end))
         local prompt = f.request("session/prompt")
         assert.are.equal("annotation", prompt.params.prompt[#prompt.params.prompt].text)
         assert.are.equal(0, accepted)
