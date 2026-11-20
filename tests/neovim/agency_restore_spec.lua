@@ -77,12 +77,16 @@ describe("Agency restore editor handoff", function()
     end)
 
     it("says why a restore failed and leaves no session behind", function()
+        local original, logged = vim.notify, {}
+        vim.notify = function(message) logged[#logged + 1] = message end
         begin_restore()
         local manager = Registry.find_by_acp_session_id("agency:" .. restored.agentId, f.client)
         local frame = f.request("session/load")
         f.client:_handle_message({ id = frame.id, error = { code = -32000, message = "the provider did not start",
             data = { agency = { code = "FAILED", message = "the provider did not start" } } } })
         f.flush()
+        vim.notify = original
+        assert.are.same({ "Failed to load session: the provider did not start" }, logged)
         assert.is_true(manager._destroyed)
         assert.are.same({}, Registry.list())
         assert.is_truthy(notice("was not restored: the provider did not start", restored.agentId))

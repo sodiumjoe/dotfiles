@@ -494,6 +494,62 @@ describe("Agency live rendering", function()
         assert.are.same({}, calls.recovered)
     end)
 
+    local function moved_row()
+        local moved = vim.tbl_extend("force", control.target_a, { handlerGeneration = control.id(20), providerGeneration = control.id(21) })
+        local row = control.agent(moved)
+        row.record.definition.cwd = vim.fn.getcwd()
+        return moved, row
+    end
+    local function answer_load(binding)
+        local frame = f.request("session/load")
+        f.client:_handle_message({ id = frame.id, result = { sessionId = frame.params.sessionId, _meta = { agency = { version = 1, binding = binding,
+            backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+    end
+
+    it("leaves the reattached view untouched when a rejection reaches the source the reattach replaced", function()
+        local calls, source, rejected = controller(), f.manager, {}
+        source.file_list:add(vim.env.DOTFILES_TEST_ROOT .. "/README.md")
+        local entry = require("sodium.agency.context").stage(source, { { type = "text", text = "staged context" } },
+            function() end, function(err) rejected[#rejected + 1] = err end)
+        local frame = submit({ "question" })
+        assert.are.equal(source._agency_local_submission, entry.submission)
+        local moved, row = moved_row()
+        local target = require("sodium.agency.rebind").reattach(source, row)
+        f.flush()
+        answer_load(moved)
+        assert.is_true(source._destroyed)
+        assert.are.same(control.target_a, source._agency_binding)
+        f.client:_handle_message({ id = frame.id, error = { code = -32000, message = "refused" } })
+        f.flush()
+        assert.are.same({ "" }, vim.api.nvim_buf_get_lines(target.widget.buf_nrs.input, 0, -1, false))
+        assert.are.same({}, target.file_list:get_files())
+        assert.are.same({}, rejected)
+        assert.are.same({}, calls.recovered)
+    end)
+
+    it("drops a source's queued replay batch once a reattach target owns the session id", function()
+        local source, id = f.manager, f.manager.session_id
+        local function replay(text)
+            f.client:_handle_message({ method = "session/update", params = { sessionId = id, update = chunk(text), _meta = { agency = { replay = true } } } })
+        end
+        local moved, row = moved_row()
+        local target = require("sodium.agency.rebind").reattach(source, row)
+        replay("meant for the source")
+        assert.are.equal(source.handlers, f.client.subscribers[id])
+        assert.is_not_nil(source.handlers._agency_replay_batch)
+        f.flush()
+        assert.are.equal(target.handlers, f.client.subscribers[id])
+        replay("meant for the target")
+        f.flush()
+        assert.are.same({}, renders)
+        assert.is_falsy(buffer_text():find("meant for", 1, true))
+        answer_load(moved)
+        local shown = table.concat(vim.api.nvim_buf_get_lines(target.message_writer.bufnr, 0, -1, false), "\n")
+        assert.is_truthy(shown:find("meant for the target", 1, true))
+        assert.is_falsy(shown:find("meant for the source", 1, true))
+    end)
+
     it("marks the session unavailable without an error message when the Handler disconnects during a prompt", function()
         local calls, finishes = controller(), 0
         local finish = writer.write_finish_message
