@@ -772,7 +772,7 @@ end
 
 return {
     "carlos-algms/agentic.nvim",
-    -- dir = vim.fn.expand("~/home/agentic.nvim"),
+    dir = vim.env.AGENTIC_NVIM_DIR,
     cmd = { "AgencyPermissions", "Agency", "AgencyCurrent", "AgencyNew", "AgencyOpen", "AgencyAttach", "AgencyRestore",
         "AgencySettings", "AgencyDetach", "AgencyCancel", "AgencyStop", "AgencyInspect", "AgencyReload" },
     config = function()

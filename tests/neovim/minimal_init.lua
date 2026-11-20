@@ -2,9 +2,14 @@ local dotfiles = vim.env.DOTFILES_TEST_ROOT or vim.fn.expand("~/.dotfiles")
 local config = dotfiles .. "/home/.config/nvim"
 vim.o.shadafile = "NONE"
 local lazypath = vim.fn.stdpath("data") .. "/lazy"
+local agentic_dir = vim.env.AGENTIC_NVIM_DIR
+if agentic_dir == "" then agentic_dir = nil end
 for _, plugin in ipairs(vim.fn.globpath(lazypath, "*", false, true)) do
-    vim.opt.rtp:prepend(plugin)
+    if not (agentic_dir and vim.fn.fnamemodify(plugin, ":t") == "agentic.nvim") then
+        vim.opt.rtp:prepend(plugin)
+    end
 end
+if agentic_dir then vim.opt.rtp:prepend(agentic_dir) end
 vim.opt.rtp:prepend(config)
 local ok, err = xpcall(function()
     local lazy = require("lazy")
