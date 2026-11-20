@@ -1,7 +1,7 @@
 local M = {}
 
 function M.agency(manager)
-    return manager ~= nil and not manager._destroyed and manager.agent.provider_config == require("agentic.config").acp_providers.agency
+    return manager ~= nil and manager.agent.provider_config == require("agentic.config").acp_providers.agency
 end
 
 function M.managers()
@@ -14,7 +14,7 @@ end
 
 function M.holder(id, agent)
     for _, manager in ipairs(require("agentic.session_registry").list()) do
-        if manager.agent == agent and manager.session_id == id and not manager._destroyed then return manager end
+        if manager.agent == agent and manager.session_id == id then return manager end
     end
 end
 

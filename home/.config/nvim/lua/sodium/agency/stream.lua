@@ -12,7 +12,7 @@ end
 
 function M.flush(manager, pending)
     pending = pending or M.discard(manager)
-    if not pending or manager._destroyed or pending.client.subscribers[pending.session_id] ~= manager.handlers
+    if not pending or pending.client.subscribers[pending.session_id] ~= manager.handlers
         or manager.message_writer ~= pending.writer or not vim.api.nvim_buf_is_valid(pending.writer.bufnr) then return end
     pending.update.content.text = table.concat(pending.fragments)
     pending.write(pending.writer, pending.update)

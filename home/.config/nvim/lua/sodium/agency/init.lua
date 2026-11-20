@@ -124,7 +124,7 @@ function M.setup(deps)
         operations.detach()
         local captured = epoch
         origin = origin or Registry.current()
-        local function valid() return captured == epoch and Registry.current() == origin and not (origin and origin._destroyed) end
+        local function valid() return captured == epoch and Registry.current() == origin end
         return valid, origin and origin.session_key
     end
     function api.new(callback, opts)
@@ -209,7 +209,7 @@ function M.setup(deps)
         local binding, key = vim.deepcopy(manager._agency_binding), manager.session_key
         if not binding or resuming then return end
         api.page({}, function(err, result)
-            if err or Registry.get(key) ~= manager or manager._destroyed or not vim.deep_equal(manager._agency_binding, binding) then return end
+            if err or Registry.get(key) ~= manager or not vim.deep_equal(manager._agency_binding, binding) then return end
             for _, row in ipairs(result.agents) do
                 if row.record.version == 3 and row.record.definition.agentId == binding.agentId then
                     local live = row.live and row.record.phase == "ready" and tuple(row)

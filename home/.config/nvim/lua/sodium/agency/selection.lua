@@ -31,9 +31,10 @@ function M.settings(config, valid, report)
     local function available()
         local options = vim.deepcopy(config.options or {})
         local legacy = config.legacy_agent_modes
-        if not config.mode and legacy and #legacy._modes > 0 then
+        local modes = legacy and legacy:save().modes or {}
+        if not config.mode and #modes > 0 then
             local values = {}
-            for _, mode in ipairs(legacy._modes) do
+            for _, mode in ipairs(modes) do
                 values[#values + 1] = { value = mode.id, name = mode.name, description = mode.description }
             end
             options[#options + 1] = { id = "mode", name = "Mode", currentValue = legacy.current_mode_id, options = values, legacy = true }
