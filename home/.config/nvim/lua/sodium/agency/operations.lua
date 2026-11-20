@@ -107,7 +107,7 @@ function M.new(deps)
     function api.page(options, callback)
         inventory(options, callback)
     end
-    function api.current(cwd, callback, captured)
+    function api.current(cwd, callback, captured, focus)
         cwd = cwd or vim.fn.getcwd()
         local operation = begin(cwd, captured)
         local origin = vim.deepcopy(current_origin)
@@ -121,7 +121,7 @@ function M.new(deps)
                 return
             end
             if #result.agents == 0 then
-                deps.new_session({ cwd = origin.cwd }, callback)
+                deps.new_session({ cwd = origin.cwd, focus = focus }, callback)
                 return
             end
             local function selected(view)
@@ -137,7 +137,7 @@ function M.new(deps)
                     callback(error_value("NOT_READY"), view)
                     return
                 end
-                local manager = deps.open(view)
+                local manager = deps.open(view, focus)
                 if not manager then callback({ code = "FAILED", message = "the session could not be opened" }); return end
                 manager:on_session_ready(function()
                     if valid_operation(operation) then callback(nil, manager) else callback(error_value("CANCELLED")) end

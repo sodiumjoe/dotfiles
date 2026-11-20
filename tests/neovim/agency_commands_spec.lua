@@ -270,6 +270,47 @@ describe("Agency native commands", function()
         assert.are.same({}, logged)
     end)
 
+    it("keeps the previous session and reports it when a started session cannot be shown", function()
+        local Registry = require("agentic.session_registry")
+        local previous, show, started = f.manager, Registry.show_session, #Registry.list()
+        Registry.show_session = function(key, opts)
+            if key ~= previous.session_key then error("no room for the chat window") end
+            return show(key, opts)
+        end
+        local ok, manager = pcall(api.new, nil, { backend_id = "codex-acp", selection = { configValues = { model = "model-c" } } })
+        Registry.show_session = show
+        f.flush()
+        assert.is_true(ok, manager)
+        assert.is_nil(manager)
+        assert.are.equal(started, #Registry.list())
+        assert.are.equal(previous, Registry.current())
+        assert.is_true(previous.widget:is_open())
+        assert.is_truthy(notifications[#notifications]:find("no room for the chat window", 1, true))
+    end)
+
+    it("leaves the session the user switched to when an earlier start fails", function()
+        local Registry, control, original = require("agentic.session_registry"), require("fixtures.agency_control"), vim.notify
+        vim.notify = function() end
+        local previous = f.manager
+        local failing = api.new(nil, { backend_id = "codex-acp", selection = { configValues = { model = "model-c" } } })
+        f.flush()
+        local new = f.request("session/new")
+        local other = api.open(control.agent(control.target_b))
+        f.flush()
+        local load = f.request("session/load")
+        f.client:_handle_message({ id = load.id, result = { sessionId = load.params.sessionId, _meta = { agency = { version = 1,
+            binding = control.target_b, backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        f.client:_handle_message({ id = new.id, error = { code = -32000, message = "the provider did not start" } })
+        f.flush()
+        vim.cmd.stopinsert()
+        vim.notify = original
+        assert.is_true(failing._destroyed)
+        assert.are.equal(other, Registry.current())
+        assert.is_true(other.widget:is_open())
+        assert.is_false(previous.widget:is_open())
+    end)
+
     it("reports a roster request that times out as unavailable and drops its late reply", function()
         local notify, warnings, outcomes = vim.notify, {}, {}
         vim.notify = function(message) warnings[#warnings + 1] = message end

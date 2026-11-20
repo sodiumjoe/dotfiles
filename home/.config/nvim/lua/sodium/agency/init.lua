@@ -53,29 +53,32 @@ function M.setup(deps)
         if manager.session_id then callback(nil, manager)
         else manager:on_session_ready(function() callback(nil, manager) end) end
     end
-    local function start(spec, agent)
+    local function start(spec, agent, focus)
         local source, tab = Registry.visible_here(), vim.api.nvim_get_current_tabpage()
         local anchor = source and source.widget:find_first_non_widget_window(tab)
         local function place(fn)
-            if anchor and require("agentic.utils.buf_helpers").is_win_usable(anchor) then vim.api.nvim_win_call(anchor, fn)
-            elseif vim.api.nvim_get_current_tabpage() == tab then fn() end
+            if anchor and require("agentic.utils.buf_helpers").is_win_usable(anchor) then return pcall(vim.api.nvim_win_call, anchor, fn) end
+            if vim.api.nvim_get_current_tabpage() == tab then return pcall(fn) end
+            return true
         end
         local target = Registry.create("agency", spec, agent)
         if not target then return end
-        if source then
-            Registry.set_most_recent(source.session_key)
-            place(function() Registry.show_session(target.session_key) end)
-        else
-            target.widget.size = target.widget.size or {}
-            Registry.show_session(target.session_key)
-        end
         function target._agency_restore()
             if not source or Registry.get(source.session_key) ~= source or source.widget:is_open() then return end
-            place(function()
+            local ok, err = place(function()
                 if Registry.visible_here() then return end
                 Registry.set_most_recent(source.session_key)
                 Registry.show_session(source.session_key, { focus_prompt = false })
             end)
+            if not ok then api.notify("The previous session could not be shown again: " .. tostring(err)) end
+        end
+        if source then Registry.set_most_recent(source.session_key) else target.widget.size = target.widget.size or {} end
+        local shown, err = place(function() Registry.show_session(target.session_key, focus == false and { focus_prompt = false } or nil) end)
+        if not shown then
+            Registry.destroy(target.session_key)
+            target._agency_restore()
+            api.notify("The new session could not be shown: " .. tostring(err))
+            return
         end
         target:on_session_ready(function() end, target._agency_restore)
         return target
@@ -85,7 +88,11 @@ function M.setup(deps)
         require("sodium.agency.layout").cleanup()
         local cwd = opts.cwd
         local meta = { backend_id = opts.backend_id, selection = opts.selection, environment = opts.environment }
-        local manager = assert(start({ kind = "new", cwd = cwd and function() return cwd end, meta = meta }, agent))
+        local manager = start({ kind = "new", cwd = cwd and function() return cwd end, meta = meta }, agent, opts.focus)
+        if not manager then
+            if callback then callback({ code = "FAILED", message = "the session could not be shown" }) end
+            return
+        end
         ready(manager, callback or function() end)
         return manager
     end
@@ -97,20 +104,20 @@ function M.setup(deps)
         end
         return target
     end
-    local function open(row)
+    local function open(row, focus)
         local record = assert(row.record)
         assert(record.version == 3, "Unavailable legacy Agency session")
         local id, agent = "agency:" .. record.definition.agentId, assert(client(), "Agency is not configured")
         local manager = Rebind.holder(id, agent)
         if manager then
             if Rebind.dead(manager, tuple(row)) then return reveal(Rebind.reattach(manager, row)) end
-            Registry.show_session(manager.session_key)
+            Registry.show_session(manager.session_key, focus == false and { focus_prompt = false } or nil)
             return manager
         end
         local pending = Registry.find_by_acp_session_id(id, agent)
         if pending then return pending end
         require("sodium.agency.layout").cleanup()
-        return start({ kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId, meta = { backend_id = record.definition.backendId } }, agent)
+        return start({ kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId, meta = { backend_id = record.definition.backendId } }, agent, focus)
     end
     local function start_error(manager) return Rebind.reason(manager._agency_start_error) end
     local operations = require("sodium.agency.operations").new({ request = deps.request,
@@ -291,7 +298,7 @@ function M.setup(deps)
         end
         local manager = local_manager()
         if manager then add(nil, manager)
-        else operations.current(captured.cwd, add, { buffer = captured.buffer, cwd = captured.cwd }) end
+        else operations.current(captured.cwd, add, { buffer = captured.buffer, cwd = captured.cwd }, false) end
     end
     function api.add_context() epoch = epoch + 1; with_context(Context.capture(vim.api.nvim_get_current_buf(), vim.fn.mode())) end
     function api.add_diagnostics(scope)
@@ -328,7 +335,7 @@ function M.setup(deps)
         local manager = local_manager(opts.session)
         if manager and manager.session_id then return send(nil, manager) end
         if opts.session then callback({ state = "rejected", error = failure("NOT_READY") }); return false end
-        operations.current(vim.fn.getcwd(), function(err, result) if err then send(err) else ready(result, send) end end)
+        operations.current(vim.fn.getcwd(), function(err, result) if err then send(err) else ready(result, send) end end, nil, false)
         return true
     end
     function api.view_for_buffer(buf)
