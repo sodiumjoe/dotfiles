@@ -74,6 +74,7 @@ function M.new(deps)
                     if not row.live or row.record.phase ~= "ready" or not tuple_of(row) then callback(error_value("NOT_READY")); return end
                     if not vim.deep_equal(tuple_of(row), target) then callback(error_value("STALE_PROVIDER")); return end
                     local manager = deps.open(row)
+                    if not manager then callback({ code = "FAILED", message = "the session could not be opened" }); return end
                     manager:on_session_ready(function()
                         if not valid_operation(operation) then callback(error_value("CANCELLED")); return end
                         callback(nil, manager)
@@ -137,6 +138,7 @@ function M.new(deps)
                     return
                 end
                 local manager = deps.open(view)
+                if not manager then callback({ code = "FAILED", message = "the session could not be opened" }); return end
                 manager:on_session_ready(function()
                     if valid_operation(operation) then callback(nil, manager) else callback(error_value("CANCELLED")) end
                 end)

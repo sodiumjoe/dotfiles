@@ -63,21 +63,29 @@ function M.setup(deps)
         ready(manager, callback or function() end)
         return manager
     end
+    local function reveal(target)
+        if target then
+            target:on_session_ready(function()
+                if Registry.get(target.session_key) == target and not target.widget:is_open() then Registry.show_session(target.session_key) end
+            end)
+        end
+        return target
+    end
     local function open(row)
         local record = assert(row.record)
         assert(record.version == 3, "Unavailable legacy Agency session")
         local id, agent = "agency:" .. record.definition.agentId, assert(client(), "Agency is not configured")
         local manager = Rebind.holder(id, agent)
         if manager then
-            if Rebind.dead(manager, tuple(row)) then return Rebind.reattach(manager, row) end
+            if Rebind.dead(manager, tuple(row)) then return reveal(Rebind.reattach(manager, row)) end
             Registry.show_session(manager.session_key)
             return manager
         end
         local pending = Registry.find_by_acp_session_id(id, agent)
         if pending then return pending end
         require("sodium.agency.layout").cleanup()
-        return assert(Registry.replace(Registry.visible_here(), "agency",
-            { kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId }, { agent = agent, retain_source = true }))
+        return Registry.replace(Registry.visible_here(), "agency",
+            { kind = "load", session_id = id, cwd = record.definition.cwd, title = record.definition.backendId }, { agent = agent, retain_source = true })
     end
     local function start_error(manager) return Rebind.reason(manager._agency_start_error) end
     local operations = require("sodium.agency.operations").new({ request = deps.request,
@@ -175,6 +183,7 @@ function M.setup(deps)
                     if expected and not vim.deep_equal(tuple(row), tuple(expected)) then err = failure("STALE_PROVIDER")
                     elseif action == "restore" then
                         local ok, manager = pcall(open, row)
+                        if ok and not manager then ok, manager = false, "the session could not be started" end
                         if ok then
                             manager:on_session_ready(function() end, function()
                                 api.notify("Session " .. id .. " was not restored: " .. start_error(manager))
@@ -207,8 +216,9 @@ function M.setup(deps)
                     if live and vim.deep_equal(live, binding) then return end
                     if live then api.notify("This session was bound to an earlier run of its agent; reattaching. Send the prompt again once it loads")
                     else api.notify("This session's agent is stopped; restoring it. Send the prompt again once it is attached") end
-                    local ok, failure = pcall(Rebind.reattach, manager, row)
-                    if not ok then api.notify("Session " .. binding.agentId .. " was not reattached: " .. tostring(failure)) end
+                    local ok, target = pcall(Rebind.reattach, manager, row)
+                    if ok and not target then ok, target = false, "the session could not be started" end
+                    if ok then reveal(target) else api.notify("Session " .. binding.agentId .. " was not reattached: " .. tostring(target)) end
                     return
                 end
             end

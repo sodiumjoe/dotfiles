@@ -146,6 +146,22 @@ describe("Agency restore on a rejected prompt", function()
         for index = before + 1, #f.frames do assert.is_not.equal("agency/detach", f.frames[index].method) end
     end)
 
+    it("shows the reattached session when the rejected prompt came from a hidden view", function()
+        reject_prompt()
+        f.manager.widget:hide()
+        transport.answer("agents", control.roster({ control.row(control.target_a, false) }))
+        f.flush()
+        local frame = f.request("session/load")
+        local target = Registry.find_by_acp_session_id(f.manager.session_id, f.client)
+        f.client:_handle_message({ id = frame.id, result = { sessionId = "agency:" .. restored.agentId,
+            _meta = { agency = { version = 1, binding = restored, backendId = "codex-acp",
+                configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.is_true(f.manager._destroyed)
+        assert.are.equal(target, Registry.current())
+        assert.is_true(target.widget:is_open())
+    end)
+
     it("leaves the session alone when its agent still runs under the same binding", function()
         reject_prompt()
         transport.answer("agents", control.roster({ control.row(control.target_a) }))
