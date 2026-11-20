@@ -515,4 +515,45 @@ describe("Agency live rendering", function()
         assert.is_nil(f.manager._agency_binding)
         assert.are.same({ "" }, input_lines())
     end)
+
+    it("leaves sessions available and does not resume after a deliberate stop", function()
+        local calls = controller()
+        f.client:_set_state("disconnected")
+        f.flush()
+        assert.is_nil(f.manager._agency_unavailable)
+        assert.are.same(require("fixtures.agency_control").target_a, f.manager._agency_binding)
+        assert.are.equal(0, calls.resumed)
+    end)
+
+    it("rejects and restores a prompt sent after the Handler disconnected", function()
+        local calls, finishes, outcome = controller(), 0, nil
+        local finish = writer.write_finish_message
+        writer.write_finish_message = function(...)
+            finishes = finishes + 1
+            return finish(...)
+        end
+        f.client.transport.process = {}
+        f.client:_set_state("disconnected")
+        f.client.transport.process = nil
+        f.flush()
+        assert.is_true(f.manager._agency_unavailable)
+        require("sodium.agency").setup().submit_text("retry", { tab = f.manager.session_key }, function(value) outcome = value end)
+        f.flush()
+        assert.are.equal(1, finishes)
+        assert.is_false(f.manager.is_generating)
+        assert.is_nil(f.manager.status_animation._state)
+        assert.are.same({ "retry" }, input_lines())
+        assert.are.equal("rejected", outcome.state)
+        assert.are.same({}, f.manager._agency_admissions)
+        assert.are.same({ f.manager }, calls.recovered)
+    end)
+
+    it("renders buffered text before the user's own message", function()
+        deliver(chunk("streamed before submit"))
+        assert.is_true(vim.wait(100, function() return f.manager._agency_stream ~= nil end, 1))
+        submit({ "question after" })
+        f.flush()
+        local text = buffer_text()
+        assert.is_true(text:find("streamed before submit", 1, true) < text:find("question after", 1, true))
+    end)
 end)

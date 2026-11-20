@@ -159,6 +159,10 @@ local function capture_submissions(manager)
     manager._agency_submit_widget = widget
     local original = widget.on_submit_input
     widget.on_submit_input = function(text)
+        local flushed, failure = pcall(Stream.flush, manager)
+        if not flushed then
+            failed("flush Agency streamed text", failure)
+        end
         manager._agency_submit_snapshot = {
             input = text,
             selections = manager.code_selection:get_selections(),
@@ -255,7 +259,7 @@ local function show_unavailable(manager)
     if manager._destroyed then
         return
     end
-    Stream.discard(manager)
+    Stream.flush(manager)
     manager.permission_manager:clear()
     manager.status_animation:stop()
     manager.is_generating = false
@@ -300,7 +304,8 @@ local function settle_prompt(manager, submission, admission, err)
     for _, entry in ipairs(admission.entries) do
         entry.submission = nil
     end
-    if manager._destroyed or manager._agency_unavailable or not vim.deep_equal(manager._agency_binding, admission.binding) then
+    if manager._destroyed or manager._agency_unavailable and not admission.unavailable
+        or not vim.deep_equal(manager._agency_binding, admission.binding) then
         return
     end
     for _, entry in ipairs(admission.entries) do
@@ -541,11 +546,12 @@ function Client:send_prompt(id, prompt, callback)
             vim.list_extend(prompt, vim.deepcopy(entry.content))
         end
     end
-    local admission = { accepted = false, entries = staged, draft = draft, binding = vim.deepcopy(manager._agency_binding) }
+    local admission = { accepted = false, entries = staged, draft = draft, binding = vim.deepcopy(manager._agency_binding),
+        unavailable = manager._agency_unavailable == true }
     manager._agency_admissions = manager._agency_admissions or {}
     manager._agency_admissions[submission] = admission
     local function reply(result, err)
-        if manager._agency_unavailable then
+        if manager._agency_unavailable and not admission.unavailable then
             vim.schedule(function()
                 manager.is_generating = false
             end)
