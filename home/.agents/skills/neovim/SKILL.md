@@ -37,7 +37,7 @@ Open a file in the running neovim instance.
 ${CLAUDE_SKILL_DIR}/scripts/nvim-open --editor '<absolute-path>'
 ```
 
-The `--editor` flag targets the first non-agentic window (i.e., skips windows with Agentic* filetypes). Without `--editor`, opens in whichever window is current.
+The `--editor` flag targets the Agency document window, opening one above the chat when only the conversation is shown. Without `--editor`, opens in whichever window is current.
 
 You can also target a specific window by ID:
 

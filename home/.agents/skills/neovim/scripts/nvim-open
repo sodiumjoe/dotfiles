@@ -15,7 +15,7 @@ done
 [[ -z "$file" ]] && exit 1
 
 if [[ "$editor" == true && -z "$win" ]]; then
-  win=$("$(dirname "$0")/nvim-lua" "return require('sodium.utils').editor_window()")
+  win=$("$(dirname "$0")/nvim-lua" "local ok, screen = pcall(require, 'sodium.agency.screen') if ok then return screen.ensure_document() end return require('sodium.utils').editor_window()")
   [[ -z "$win" ]] && exit 0
 fi
 

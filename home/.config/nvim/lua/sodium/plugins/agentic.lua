@@ -56,6 +56,9 @@ local function markdown_link_destination()
 end
 
 local function chat_path(path)
+    if path:match("^[~$]") then
+        path = vim.fn.expand(path)
+    end
     local view = require("sodium.agency").view_for_buffer(vim.api.nvim_get_current_buf())
     local cwd = view and view._agency_cwd
     local absolute = cwd and path:sub(1, 1) ~= "/" and vim.fs.normalize(cwd .. "/" .. path)

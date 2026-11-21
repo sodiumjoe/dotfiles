@@ -3,15 +3,17 @@ dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agen
 require("snacks").setup({ picker = vim.tbl_extend("force", dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/pickers.lua").opts.picker, { enabled = true }) })
 
 describe("Agency screen", function()
-    local f, screen, lines
+    local f, screen, lines, home
     local readme = vim.env.DOTFILES_TEST_ROOT .. "/README.md"
     before_each(function()
+        home = vim.env.HOME
         lines = vim.o.lines
         vim.o.lines = 60
         f = require("fixtures.agency_native").new()
         screen = require("sodium.agency.screen")
     end)
     after_each(function()
+        vim.env.HOME = home
         vim.o.lines = lines
         f.close()
     end)
@@ -163,15 +165,22 @@ describe("Agency screen", function()
         f.flush()
         return chat, buf
     end
-    local function in_document(chat, buf, line)
+    local function in_document(chat, buf, line, file)
         local doc = vim.api.nvim_get_current_win()
         assert.are.equal("split", screen.state())
         assert.is_nil(vim.w[doc].agentic_bufnr)
-        assert.are.equal(vim.fn.bufnr(readme), vim.api.nvim_win_get_buf(doc))
+        assert.are.equal(vim.fn.bufnr(file or readme), vim.api.nvim_win_get_buf(doc))
         if line then assert.are.equal(line, vim.api.nvim_win_get_cursor(doc)[1]) end
         assert.are.equal(buf, vim.api.nvim_win_get_buf(chat))
         assert.are.same({ 1, 5 }, vim.api.nvim_win_get_cursor(chat))
         return doc
+    end
+    local function home_note()
+        vim.env.HOME = vim.fn.tempname()
+        vim.fn.mkdir(vim.env.HOME, "p")
+        local note = vim.env.HOME .. "/note.md"
+        vim.fn.writefile({ "one", "two", "three" }, note)
+        return note
     end
 
     it("opens a chat path reference in a new document window from conversation", function()
@@ -187,6 +196,9 @@ describe("Agency screen", function()
         local chat, buf = chat_key("gf", "README.md:3")
         assert.are.equal(doc, in_document(chat, buf, 3))
         assert.are.equal(count, #vim.api.nvim_tabpage_list_wins(0))
+        local note = home_note()
+        chat_key("gf", "~/note.md:2")
+        assert.are.equal(doc, in_document(chat, buf, 2, note))
     end)
 
     it("opens a bare chat path through the gF fallback in the document window", function()
@@ -195,6 +207,12 @@ describe("Agency screen", function()
         local doc = in_document(chat, buf)
         assert.are.equal(half(), vim.api.nvim_win_get_height(doc))
         assert.is_true(vim.wo[doc].winfixheight)
+        local note = home_note()
+        chat_key("gf", "~/note.md")
+        assert.are.equal(doc, in_document(chat, buf, nil, note))
+        vim.env.D3_NOTE_DIR = vim.env.HOME
+        chat_key("gf", "$D3_NOTE_DIR/note.md:3")
+        assert.are.equal(doc, in_document(chat, buf, 3, note))
     end)
 
     it("opens a picked file from the chat in the document window at its line", function()
