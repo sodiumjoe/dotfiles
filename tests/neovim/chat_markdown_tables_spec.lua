@@ -4,7 +4,7 @@ local markdown_specs = dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/
 require("render-markdown").setup(markdown_specs[1].opts)
 
 describe("Chat tables", function()
-    local f, writer, buf, win
+    local f, writer, buf, win, columns
     local ns = vim.api.nvim_create_namespace("render-markdown.nvim")
     local long_row = "| wrap | breaks long rows across screen lines in narrow windows and keeps going |"
     before_each(function()
@@ -12,10 +12,12 @@ describe("Chat tables", function()
         writer = f.manager.message_writer
         buf = writer.bufnr
         win = f.manager.widget.win_nrs.chat
-        vim.api.nvim_win_set_width(win, vim.fn.getwininfo(win)[1].textoff + 40)
+        columns = vim.o.columns
+        vim.o.columns = vim.fn.getwininfo(win)[1].textoff + 40
     end)
     after_each(function()
         f.close()
+        vim.o.columns = columns
     end)
     local function say(text)
         writer:write_message_chunk({ sessionUpdate = "agent_message_chunk", content = { type = "text", text = text } })

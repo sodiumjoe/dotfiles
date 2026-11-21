@@ -35,6 +35,7 @@ function M.setup(deps)
     if controller then return controller end
     deps = deps or {}
     require("sodium.agency.layout").setup()
+    require("sodium.agency.screen").setup()
     local Registry = require("agentic.session_registry")
     local api = {
         annotations = deps.annotations or Context.annotations, accept_annotations = deps.accept_annotations or Context.accept_annotations,
@@ -80,6 +81,7 @@ function M.setup(deps)
             api.notify("The new session could not be shown: " .. tostring(err))
             return
         end
+        require("sodium.agency.screen").hold()
         target:on_session_ready(function() end, target._agency_restore)
         return target
     end

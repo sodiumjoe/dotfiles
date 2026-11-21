@@ -40,6 +40,9 @@ function M.new()
             flush()
             Config.provider, Config.acp_providers.agency, Instances._instances, Config.hooks = unpack(saved, 1, 4)
             while #vim.api.nvim_list_tabpages() > 1 do vim.cmd("tabclose!") end
+            vim.cmd("silent! only!")
+            vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, false))
+            vim.wo.winfixheight = false
             package.loaded["sodium.agency"] = nil
         end }
 end

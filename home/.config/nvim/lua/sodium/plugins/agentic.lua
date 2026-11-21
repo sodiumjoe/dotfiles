@@ -2,8 +2,6 @@ local work_bin = vim.env.HOME .. "/bin/work"
 local projects_dir = vim.env.HOME .. "/stripe/work/projects/"
 local agentic_utils = require("sodium.agentic_utils")
 
-local agentic_filetypes = { "AgenticChat", "AgenticInput", "AgenticCode", "AgenticFiles", "AgenticTodos", "AgenticDiagnostics" }
-
 local picker_layout_no_preview = {
     reverse = true,
     layout = {
@@ -89,14 +87,6 @@ local function current_path_reference()
     return absolute, line
 end
 
-local function find_editor_window()
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if vim.w[win].agentic_bufnr == nil and vim.api.nvim_win_get_config(win).relative == "" then
-            return win
-        end
-    end
-end
-
 local function open_path_reference()
     local path, line = current_path_reference()
     if not path then
@@ -104,7 +94,7 @@ local function open_path_reference()
     end
 
     if vim.w.agentic_bufnr ~= nil then
-        local editor_win = find_editor_window()
+        local editor_win = require("sodium.agency.screen").document_window()
         if editor_win then
             vim.api.nvim_set_current_win(editor_win)
         end
@@ -112,18 +102,6 @@ local function open_path_reference()
 
     vim.cmd("edit " .. (line and ("+" .. line .. " ") or "") .. vim.fn.fnameescape(path))
     return true
-end
-
-local function resize_agentic_split()
-    local target = math.floor(vim.o.lines * 0.5)
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        local buf = vim.api.nvim_win_get_buf(win)
-        local ft = vim.bo[buf].filetype
-        if vim.tbl_contains(agentic_filetypes, ft) then
-            vim.api.nvim_win_set_height(win, target)
-            return
-        end
-    end
 end
 
 local function start_project_session(proj)
@@ -693,9 +671,7 @@ exec agy acp]] } } }
             acp_providers = providers,
             windows = {
                 height = 0.5,
-                width = 0.4,
-                stack_width_ratio = 0.3,
-                position = "bottom",
+                position = "stacked",
                 code = diagnostics.window_opts,
                 files = diagnostics.window_opts,
                 input = diagnostics.window_opts,
@@ -726,7 +702,9 @@ exec agy acp]] } } }
         })
 
         utils.augroup("AgenticResize", { clear = true })("VimResized", {
-            callback = resize_agentic_split,
+            callback = function()
+                require("sodium.agency.screen").resize()
+            end,
         })
 
         require("agentic.config").acp_providers.agency.client_class = require("sodium.agency.client").class
@@ -856,7 +834,9 @@ exec agy acp]] } } }
         },
         {
             "<leader>a=",
-            resize_agentic_split,
+            function()
+                require("sodium.agency.screen").resize()
+            end,
             mode = { "n" },
             desc = "Rebalance agentic split to 50%",
         },
