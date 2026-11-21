@@ -101,7 +101,10 @@ function M.setup(deps)
     local function reveal(target)
         if target then
             target:on_session_ready(function()
-                if Registry.get(target.session_key) == target and not target.widget:is_open() then Registry.show_session(target.session_key) end
+                if Registry.get(target.session_key) == target and not target.widget:is_open() then
+                    Registry.show_session(target.session_key)
+                    require("sodium.agency.screen").resize()
+                end
             end)
         end
         return target
@@ -114,6 +117,7 @@ function M.setup(deps)
         if manager then
             if Rebind.dead(manager, tuple(row)) then return reveal(Rebind.reattach(manager, row)) end
             Registry.show_session(manager.session_key, focus == false and { focus_prompt = false } or nil)
+            require("sodium.agency.screen").resize()
             return manager
         end
         local pending = Registry.find_by_acp_session_id(id, agent)
@@ -297,6 +301,7 @@ function M.setup(deps)
             if err then report(err); return end
             Context.add(manager, captured, kind)
             Registry.show_session(manager.session_key, { focus_prompt = false })
+            require("sodium.agency.screen").resize()
         end
         local manager = local_manager()
         if manager then add(nil, manager)

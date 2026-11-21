@@ -1,8 +1,5 @@
 local M = {}
 local mru
-local Registry = function()
-    return require("agentic.session_registry")
-end
 local EXCLUDED_BUFTYPES = { quickfix = true, help = true, terminal = true }
 local EXCLUDED_FILETYPES = {}
 for _, filetype in ipairs({
@@ -48,30 +45,37 @@ local function target(win)
         and not filetype:match("^Agentic")
 end
 
-function M.manager(tab)
-    tab = tabpage(tab)
-    local Rebind, manager = require("sodium.agency.rebind"), nil
-    for _, session in pairs(Registry().sessions) do
-        if session.widget:get_visible_tab_id() == tab then
-            manager = session
-        end
-    end
-    manager = manager or Registry().current()
-    if Rebind.agency(manager) then
+function M.manager()
+    local Registry = package.loaded["agentic.session_registry"]
+    local manager = Registry and Registry.current()
+    if manager and require("sodium.agency.rebind").agency(manager) then
         return manager
+    end
+end
+
+local function release(tab)
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabpage(tab))) do
+        if vim.w[win].agency_held then
+            vim.wo[win][0].winfixheight = false
+            vim.w[win].agency_held = nil
+        end
     end
 end
 
 function M.state(tab)
     tab = tabpage(tab)
-    local manager = M.manager(tab)
+    local manager, state = M.manager(), "split"
     if not manager then
-        return "none"
+        state = "none"
+    elseif manager.widget:get_visible_tab_id() ~= tab then
+        state = "document"
+    elseif #documents(tab) == 0 then
+        state = "conversation"
     end
-    if manager.widget:get_visible_tab_id() ~= tab then
-        return "document"
+    if state ~= "split" then
+        release(tab)
     end
-    return #documents(tab) > 0 and "split" or "conversation"
+    return state
 end
 
 function M.document_window(tab)
@@ -95,10 +99,10 @@ end
 local function hold(win)
     if win and M.state() == "split" then
         vim.wo[win][0].winfixheight = true
+        vim.w[win].agency_held = true
     end
     return win
 end
-
 
 local function document_buffer()
     if mru and vim.api.nvim_buf_is_valid(mru) and vim.bo[mru].buflisted then
@@ -113,7 +117,9 @@ local function document_buffer()
             return info.bufnr
         end
     end
-    return vim.api.nvim_create_buf(false, true)
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].bufhidden = "wipe"
+    return buf
 end
 
 function M.ensure_document(buf)
@@ -123,15 +129,11 @@ function M.ensure_document(buf)
     end
     local manager = M.manager()
     local visible = manager and manager.widget:get_visible_tab_id() == vim.api.nvim_get_current_tabpage()
-    win = vim.api.nvim_open_win(
+    return hold(vim.api.nvim_open_win(
         buf or document_buffer(),
         false,
         { split = "above", win = -1, height = visible and half() or nil }
-    )
-    if visible then
-        vim.wo[win][0].winfixheight = true
-    end
-    return win
+    ))
 end
 
 function M.focus_document()
@@ -145,7 +147,25 @@ function M.resize()
         return
     end
     local win = M.document_window() or documents()[1]
-    vim.api.nvim_win_set_height(win, half())
+    local pos, width = vim.fn.win_screenpos(win), vim.api.nvim_win_get_width(win)
+    local top, stack, starts = vim.fn.win_screenpos(M.manager().widget.win_nrs.chat)[1], {}, {}
+    for _, other in ipairs(documents()) do
+        local at, span = vim.fn.win_screenpos(other), vim.api.nvim_win_get_width(other)
+        if other == win or vim.w[other].agency_held or target(other) then
+            vim.wo[other][0].winfixheight = false
+            vim.w[other].agency_held = nil
+        end
+        if other == win or at[1] < top and at[2] < pos[2] + width and pos[2] < at[2] + span then
+            stack[#stack + 1], starts[at[1]] = other, true
+        end
+    end
+    table.sort(stack, function(a, b)
+        return vim.fn.win_screenpos(a)[1] < vim.fn.win_screenpos(b)[1]
+    end)
+    local count = vim.tbl_count(starts)
+    for _, other in ipairs(stack) do
+        vim.api.nvim_win_set_height(other, math.max(1, math.floor((half() - count + 1) / count)))
+    end
     hold(win)
 end
 
@@ -155,12 +175,13 @@ function M.cycle()
         M.focus_document()
     elseif state == "split" then
         manager.widget:hide()
-        for _, win in ipairs(documents()) do
-            vim.wo[win][0].winfixheight = false
-        end
+        release()
     elseif state == "document" then
-        Registry().show_session(manager.session_key)
-        if manager.widget:get_visible_tab_id() == vim.api.nvim_get_current_tabpage() then
+        local elsewhere = manager.widget:is_open()
+        require("agentic.session_registry").show_session(manager.session_key)
+        if elsewhere then
+            M.resize()
+        elseif manager.widget:get_visible_tab_id() == vim.api.nvim_get_current_tabpage() then
             for _, win in ipairs(documents()) do
                 pcall(vim.api.nvim_win_close, win, true)
             end
