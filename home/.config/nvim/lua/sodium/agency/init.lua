@@ -54,9 +54,9 @@ function M.setup(deps)
         if manager.session_id then callback(nil, manager)
         else manager:on_session_ready(function() callback(nil, manager) end) end
     end
-    local function settle(focus)
+    local function settle(focus, here)
         local screen = require("sodium.agency.screen")
-        if focus ~= false then screen.close_empty() end
+        if focus ~= false and not here then screen.close_empty() end
         screen.resize()
     end
     local function start(spec, agent, focus)
@@ -86,7 +86,7 @@ function M.setup(deps)
             api.notify("The new session could not be shown: " .. tostring(err))
             return
         end
-        settle(focus)
+        settle(focus, source)
         target:on_session_ready(function() end, target._agency_restore)
         return target
     end
@@ -107,8 +107,9 @@ function M.setup(deps)
         if target then
             target:on_session_ready(function()
                 if Registry.get(target.session_key) == target and not target.widget:is_open() then
+                    local here = Registry.visible_here()
                     Registry.show_session(target.session_key)
-                    settle()
+                    settle(nil, here)
                 end
             end)
         end
@@ -121,8 +122,9 @@ function M.setup(deps)
         local manager = Rebind.holder(id, agent)
         if manager then
             if Rebind.dead(manager, tuple(row)) then return reveal(Rebind.reattach(manager, row)) end
+            local here = Registry.visible_here()
             Registry.show_session(manager.session_key, focus == false and { focus_prompt = false } or nil)
-            settle(focus)
+            settle(focus, here)
             return manager
         end
         local pending = Registry.find_by_acp_session_id(id, agent)
@@ -197,7 +199,10 @@ function M.setup(deps)
         if row then return open(row) end
         epoch = epoch + 1
         local manager = local_manager()
-        if manager then Registry.show_session(manager.session_key); settle(); return manager end
+        if manager then
+            local here = Registry.visible_here()
+            Registry.show_session(manager.session_key); settle(nil, here); return manager
+        end
         return api.current()
     end
     function api.page(options, callback)

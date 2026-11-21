@@ -182,7 +182,12 @@ function M.close_empty()
         return
     end
     for _, win in ipairs(wins) do
-        pcall(vim.api.nvim_win_close, win, false)
+        local buf = vim.api.nvim_win_get_buf(win)
+        if pcall(vim.api.nvim_win_close, win, false) and vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) == 0
+            and vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified and vim.api.nvim_buf_line_count(buf) == 1
+            and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == "" then
+            pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        end
     end
 end
 
@@ -194,7 +199,7 @@ local function placed(win)
     end
     local chat = manager.widget.win_nrs.chat
     if chat and vim.api.nvim_win_is_valid(chat) and vim.fn.win_screenpos(win)[1] >= vim.fn.win_screenpos(chat)[1] then
-        vim.api.nvim_win_call(win, function() vim.cmd("wincmd K") end)
+        pcall(vim.api.nvim_win_call, win, function() vim.cmd("wincmd K") end)
     end
     M.resize()
 end
