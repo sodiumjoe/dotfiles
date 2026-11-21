@@ -3,8 +3,15 @@ local mru
 local Registry = function()
     return require("agentic.session_registry")
 end
-local EXCLUDED_BUFTYPES, EXCLUDED_FILETYPES =
-    { quickfix = true, help = true, terminal = true }, { qf = true, help = true, man = true, terminal = true }
+local EXCLUDED_BUFTYPES = { quickfix = true, help = true, terminal = true }
+local EXCLUDED_FILETYPES = {}
+for _, filetype in ipairs({
+    "neo-tree", "NvimTree", "oil", "qf", "help", "man", "terminal", "TelescopePrompt", "DiffviewFiles", "DiffviewFileHistory",
+    "fugitive", "fugitiveblame", "gitcommit", "dashboard", "alpha", "starter", "notify", "noice", "aerial", "Outline",
+    "trouble", "spectre_panel", "lazy", "mason",
+}) do
+    EXCLUDED_FILETYPES[filetype] = true
+end
 
 local function widget_win(win)
     return vim.w[win].agentic_bufnr ~= nil
@@ -92,9 +99,6 @@ local function hold(win)
     return win
 end
 
-function M.hold()
-    return hold(M.state() == "split" and M.document_window() or nil)
-end
 
 local function document_buffer()
     if mru and vim.api.nvim_buf_is_valid(mru) and vim.bo[mru].buflisted then

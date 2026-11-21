@@ -44,6 +44,7 @@ function M.new()
             vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, false))
             vim.wo.winfixheight = false
             package.loaded["sodium.agency"] = nil
+            package.loaded["sodium.agency.screen"] = nil
         end }
 end
 return M

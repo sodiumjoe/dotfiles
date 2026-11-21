@@ -81,7 +81,7 @@ function M.setup(deps)
             api.notify("The new session could not be shown: " .. tostring(err))
             return
         end
-        require("sodium.agency.screen").hold()
+        require("sodium.agency.screen").resize()
         target:on_session_ready(function() end, target._agency_restore)
         return target
     end

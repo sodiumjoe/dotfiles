@@ -16,8 +16,8 @@ describe("Chat tables", function()
         vim.o.columns = vim.fn.getwininfo(win)[1].textoff + 40
     end)
     after_each(function()
-        f.close()
         vim.o.columns = columns
+        f.close()
     end)
     local function say(text)
         writer:write_message_chunk({ sessionUpdate = "agent_message_chunk", content = { type = "text", text = text } })
