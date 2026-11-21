@@ -169,6 +169,36 @@ function M.resize()
     hold(win)
 end
 
+local function empty(win)
+    local buf = vim.api.nvim_win_get_buf(win)
+    return vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified
+        and vim.api.nvim_buf_line_count(buf) == 1 and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == ""
+end
+
+function M.close_empty()
+    local manager, wins = M.manager(), documents()
+    if not manager or manager.widget:get_visible_tab_id() ~= vim.api.nvim_get_current_tabpage() or #wins == 0
+        or #vim.tbl_filter(empty, wins) ~= #wins then
+        return
+    end
+    for _, win in ipairs(wins) do
+        pcall(vim.api.nvim_win_close, win, false)
+    end
+end
+
+local function placed(win)
+    local manager, tab = M.manager(), vim.api.nvim_get_current_tabpage()
+    if not manager or manager.widget:get_visible_tab_id() ~= tab or not vim.api.nvim_win_is_valid(win)
+        or vim.api.nvim_win_get_tabpage(win) ~= tab or not split_win(win) then
+        return
+    end
+    local chat = manager.widget.win_nrs.chat
+    if chat and vim.api.nvim_win_is_valid(chat) and vim.fn.win_screenpos(win)[1] >= vim.fn.win_screenpos(chat)[1] then
+        vim.api.nvim_win_call(win, function() vim.cmd("wincmd K") end)
+    end
+    M.resize()
+end
+
 function M.cycle()
     local state, manager = M.state(), M.manager()
     if state == "conversation" then
@@ -190,8 +220,16 @@ function M.cycle()
 end
 
 function M.setup()
+    local group = vim.api.nvim_create_augroup("AgencyScreen", { clear = true })
+    vim.api.nvim_create_autocmd("WinNew", {
+        group = group,
+        callback = function()
+            local win = vim.api.nvim_get_current_win()
+            vim.schedule(function() placed(win) end)
+        end,
+    })
     vim.api.nvim_create_autocmd("BufEnter", {
-        group = vim.api.nvim_create_augroup("AgencyScreen", { clear = true }),
+        group = group,
         callback = function(args)
             local win = vim.api.nvim_get_current_win()
             if

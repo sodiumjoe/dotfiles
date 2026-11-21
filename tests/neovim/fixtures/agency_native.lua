@@ -14,6 +14,7 @@ function M.new()
     local control = require("fixtures.agency_control")
     local row = control.agent(control.target_a)
     row.record.definition.cwd = vim.fn.getcwd()
+    vim.api.nvim_win_set_buf(0, vim.api.nvim_create_buf(true, true))
     local key = require("sodium.agency").open(row).session_key
     local function flush() vim.wait(30, function() return false end) end
     local function request(method)

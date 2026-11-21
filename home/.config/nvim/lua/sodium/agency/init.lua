@@ -54,6 +54,11 @@ function M.setup(deps)
         if manager.session_id then callback(nil, manager)
         else manager:on_session_ready(function() callback(nil, manager) end) end
     end
+    local function settle(focus)
+        local screen = require("sodium.agency.screen")
+        if focus ~= false then screen.close_empty() end
+        screen.resize()
+    end
     local function start(spec, agent, focus)
         local source, tab = Registry.visible_here(), vim.api.nvim_get_current_tabpage()
         local anchor = source and source.widget:find_first_non_widget_window(tab)
@@ -81,7 +86,7 @@ function M.setup(deps)
             api.notify("The new session could not be shown: " .. tostring(err))
             return
         end
-        require("sodium.agency.screen").resize()
+        settle(focus)
         target:on_session_ready(function() end, target._agency_restore)
         return target
     end
@@ -103,7 +108,7 @@ function M.setup(deps)
             target:on_session_ready(function()
                 if Registry.get(target.session_key) == target and not target.widget:is_open() then
                     Registry.show_session(target.session_key)
-                    require("sodium.agency.screen").resize()
+                    settle()
                 end
             end)
         end
@@ -117,7 +122,7 @@ function M.setup(deps)
         if manager then
             if Rebind.dead(manager, tuple(row)) then return reveal(Rebind.reattach(manager, row)) end
             Registry.show_session(manager.session_key, focus == false and { focus_prompt = false } or nil)
-            require("sodium.agency.screen").resize()
+            settle(focus)
             return manager
         end
         local pending = Registry.find_by_acp_session_id(id, agent)
@@ -192,7 +197,7 @@ function M.setup(deps)
         if row then return open(row) end
         epoch = epoch + 1
         local manager = local_manager()
-        if manager then Registry.show_session(manager.session_key); return manager end
+        if manager then Registry.show_session(manager.session_key); settle(); return manager end
         return api.current()
     end
     function api.page(options, callback)
