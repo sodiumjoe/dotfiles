@@ -107,6 +107,7 @@ vim.api.nvim_create_user_command("InterviewNote", function()
     local vault = vim.fn.expand("~/stripe/work")
     local template = vault .. "/Interview template.md"
     local target = vault .. "/" .. date .. "-interview.md"
+    require("sodium.agency.screen").focus_document()
     if vim.fn.filereadable(target) == 1 then
         vim.cmd.edit(target)
         return
@@ -267,6 +268,7 @@ return {
                     for _, file in ipairs(files) do
                         local date = vim.fn.fnamemodify(file, ":t"):match("^(%d%d%d%d%-%d%d%-%d%d)%.md$")
                         if date and date < ref then
+                            require("sodium.agency.screen").focus_document()
                             vim.cmd("edit " .. vim.fn.fnameescape(file))
                             return
                         end

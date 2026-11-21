@@ -55,6 +55,16 @@ local function markdown_link_destination()
     end
 end
 
+local function chat_path(path)
+    local view = require("sodium.agency").view_for_buffer(vim.api.nvim_get_current_buf())
+    local cwd = view and view._agency_cwd
+    local absolute = cwd and path:sub(1, 1) ~= "/" and vim.fs.normalize(cwd .. "/" .. path)
+        or vim.fn.fnamemodify(path, ":p")
+    if vim.uv.fs_stat(absolute) then
+        return absolute
+    end
+end
+
 local function current_path_reference()
     local path, line
     local dest = markdown_link_destination()
@@ -76,15 +86,10 @@ local function current_path_reference()
         end
     end
 
-    local view = require("sodium.agency").view_for_buffer(vim.api.nvim_get_current_buf())
-    local cwd = view and view._agency_cwd
-    local absolute = cwd and path:sub(1, 1) ~= "/" and vim.fs.normalize(cwd .. "/" .. path)
-        or vim.fn.fnamemodify(path, ":p")
-    if not vim.uv.fs_stat(absolute) then
-        return
+    local absolute = chat_path(path)
+    if absolute then
+        return absolute, line
     end
-
-    return absolute, line
 end
 
 local function open_path_reference()
@@ -94,14 +99,24 @@ local function open_path_reference()
     end
 
     if vim.w.agentic_bufnr ~= nil then
-        local editor_win = require("sodium.agency.screen").document_window()
-        if editor_win then
-            vim.api.nvim_set_current_win(editor_win)
-        end
+        require("sodium.agency.screen").focus_document()
     end
 
     vim.cmd("edit " .. (line and ("+" .. line .. " ") or "") .. vim.fn.fnameescape(path))
     return true
+end
+
+local function open_file_under_cursor()
+    if vim.w.agentic_bufnr == nil then
+        return vim.cmd.normal({ args = { "gF" }, bang = true })
+    end
+    local name = vim.fn.expand("<cfile>")
+    local path = name ~= "" and chat_path(name)
+    if not path then
+        return vim.notify(('E447: Can\'t find file "%s" in path'):format(name), vim.log.levels.ERROR)
+    end
+    require("sodium.agency.screen").focus_document()
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
 end
 
 local function start_project_session(proj)
@@ -161,10 +176,7 @@ local function pick_project()
                         return
                     end
                     picker:close()
-                    local editor_win = require("sodium.utils").editor_window()
-                    if editor_win then
-                        vim.api.nvim_set_current_win(editor_win)
-                    end
+                    require("sodium.agency.screen").focus_document()
                     vim.cmd.edit(item.file)
                 end,
             })
@@ -185,6 +197,7 @@ local function new_project()
                     return
                 end
                 local project_file = projects_dir .. slug .. "/project.md"
+                require("sodium.agency.screen").focus_document()
                 vim.cmd.edit(project_file)
                 start_project_session(slug)
             end)
@@ -237,10 +250,7 @@ local function show_task_picker(items, show_project)
                 return
             end
             picker:close()
-            local editor_win = require("sodium.utils").editor_window()
-            if editor_win then
-                vim.api.nvim_set_current_win(editor_win)
-            end
+            require("sodium.agency.screen").focus_document()
             vim.cmd.edit(item.file)
             vim.api.nvim_win_set_cursor(0, { item.line_num, 0 })
         end,
@@ -380,10 +390,7 @@ local function add_task_finish(file, title, description)
                 vim.notify("Failed to add task", vim.log.levels.ERROR)
                 return
             end
-            local editor_win = require("sodium.utils").editor_window()
-            if editor_win then
-                vim.api.nvim_set_current_win(editor_win)
-            end
+            require("sodium.agency.screen").focus_document()
             local bufnr = vim.fn.bufnr(file)
             if bufnr ~= -1 then
                 vim.api.nvim_buf_call(bufnr, function()
@@ -717,7 +724,7 @@ exec agy acp]] } } }
                     if open_path_reference() then
                         return
                     end
-                    vim.cmd.normal({ args = { "gF" }, bang = true })
+                    open_file_under_cursor()
                 end, { buf = ev.buf, silent = true })
 
                 vim.keymap.set("n", "<CR>", function()

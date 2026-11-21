@@ -53,10 +53,7 @@ end
 
 function M.open(opts)
     local utils = require("sodium.utils")
-    local win = utils.editor_window()
-    if win then
-        vim.api.nvim_set_current_win(win)
-    end
+    require("sodium.agency.screen").focus_document()
     utils.close_non_agentic_windows()
 
     if opts.mode == "files" then

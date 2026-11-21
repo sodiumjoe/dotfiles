@@ -1,3 +1,11 @@
+local function document_jump(picker, item, action)
+    local main = picker.main
+    if main and vim.w[main].agentic_bufnr ~= nil then
+        picker.main = require("sodium.agency.screen").ensure_document()
+    end
+    return require("snacks.picker.actions").jump(picker, item, action)
+end
+
 local sources = {}
 for _, source in ipairs({
     "autocmds",
@@ -31,6 +39,7 @@ return {
     opts = {
         picker = {
             sources = sources,
+            actions = { jump = document_jump, confirm = document_jump, edit = document_jump },
             main = {
                 file = false,
                 current = true,

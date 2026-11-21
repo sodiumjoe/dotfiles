@@ -134,6 +134,12 @@ function M.ensure_document(buf)
     return win
 end
 
+function M.focus_document()
+    local win = M.ensure_document()
+    vim.api.nvim_set_current_win(win)
+    return win
+end
+
 function M.resize()
     if M.state() ~= "split" then
         return
@@ -146,7 +152,7 @@ end
 function M.cycle()
     local state, manager = M.state(), M.manager()
     if state == "conversation" then
-        vim.api.nvim_set_current_win(M.ensure_document())
+        M.focus_document()
     elseif state == "split" then
         manager.widget:hide()
         for _, win in ipairs(documents()) do

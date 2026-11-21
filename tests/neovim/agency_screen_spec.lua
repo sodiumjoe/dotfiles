@@ -1,5 +1,6 @@
 package.path = vim.env.DOTFILES_TEST_ROOT .. "/tests/neovim/?.lua;" .. package.path
 dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agentic.lua").config()
+require("snacks").setup({ picker = vim.tbl_extend("force", dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/pickers.lua").opts.picker, { enabled = true }) })
 
 describe("Agency screen", function()
     local f, screen, lines
@@ -148,5 +149,73 @@ describe("Agency screen", function()
         vim.api.nvim_win_close(editor(), true)
         assert.are.equal("conversation", screen.state())
         assert.is_true(vim.api.nvim_win_get_height(chat) > height)
+    end)
+
+    local function chat_key(key, text)
+        f.flush()
+        local chat = f.manager.widget.win_nrs.chat
+        local buf = vim.api.nvim_win_get_buf(chat)
+        vim.bo[buf].modifiable = true
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "see " .. text })
+        vim.api.nvim_set_current_win(chat)
+        vim.api.nvim_win_set_cursor(chat, { 1, 5 })
+        vim.fn.maparg(key, "n", false, true).callback()
+        f.flush()
+        return chat, buf
+    end
+    local function in_document(chat, buf, line)
+        local doc = vim.api.nvim_get_current_win()
+        assert.are.equal("split", screen.state())
+        assert.is_nil(vim.w[doc].agentic_bufnr)
+        assert.are.equal(vim.fn.bufnr(readme), vim.api.nvim_win_get_buf(doc))
+        if line then assert.are.equal(line, vim.api.nvim_win_get_cursor(doc)[1]) end
+        assert.are.equal(buf, vim.api.nvim_win_get_buf(chat))
+        assert.are.same({ 1, 5 }, vim.api.nvim_win_get_cursor(chat))
+        return doc
+    end
+
+    it("opens a chat path reference in a new document window from conversation", function()
+        vim.api.nvim_win_close(editor(), true)
+        assert.are.equal("conversation", screen.state())
+        local chat, buf = chat_key("gf", "README.md:3")
+        local doc = in_document(chat, buf, 3)
+        assert.is_true(vim.fn.win_screenpos(doc)[1] < vim.fn.win_screenpos(chat)[1])
+    end)
+
+    it("opens a chat path reference in the existing document window from split", function()
+        local doc, count = editor(), #vim.api.nvim_tabpage_list_wins(0)
+        local chat, buf = chat_key("gf", "README.md:3")
+        assert.are.equal(doc, in_document(chat, buf, 3))
+        assert.are.equal(count, #vim.api.nvim_tabpage_list_wins(0))
+    end)
+
+    it("opens a bare chat path through the gF fallback in the document window", function()
+        vim.api.nvim_win_close(editor(), true)
+        local chat, buf = chat_key("gf", "README.md")
+        local doc = in_document(chat, buf)
+        assert.are.equal(half(), vim.api.nvim_win_get_height(doc))
+        assert.is_true(vim.wo[doc].winfixheight)
+    end)
+
+    it("opens a picked file from the chat in the document window at its line", function()
+        vim.api.nvim_win_close(editor(), true)
+        f.flush()
+        local chat = f.manager.widget.win_nrs.chat
+        local buf = vim.api.nvim_win_get_buf(chat)
+        vim.api.nvim_set_current_win(chat)
+        local cursor = vim.api.nvim_win_get_cursor(chat)
+        local picker = Snacks.picker({ items = { { file = readme, text = "README.md", pos = { 3, 0 } } } })
+        assert.is_true(vim.wait(2000, function() return picker:current() ~= nil end))
+        assert.are.equal(chat, picker.main)
+        local action = require("snacks.picker.core.actions").resolve("confirm", picker)
+        action.action(picker, picker:current(), action)
+        f.flush()
+        local doc = vim.api.nvim_get_current_win()
+        assert.are.equal("split", screen.state())
+        assert.is_nil(vim.w[doc].agentic_bufnr)
+        assert.are.equal(vim.fn.bufnr(readme), vim.api.nvim_win_get_buf(doc))
+        assert.are.same({ 3, 0 }, vim.api.nvim_win_get_cursor(doc))
+        assert.are.equal(buf, vim.api.nvim_win_get_buf(chat))
+        assert.are.same(cursor, vim.api.nvim_win_get_cursor(chat))
     end)
 end)

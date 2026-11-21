@@ -127,10 +127,7 @@ function M.open_file_picker()
                 end
                 picker:close()
                 vim.schedule(function()
-                    local win = utils.editor_window()
-                    if win then
-                        vim.api.nvim_set_current_win(win)
-                    end
+                    require("sodium.agency.screen").focus_document()
                     utils.close_non_agentic_windows()
                     vim.cmd.edit(item.file)
                 end)
@@ -148,6 +145,7 @@ function M.open_diff_for_item(session, item)
         return
     end
     if item.untracked then
+        require("sodium.agency.screen").focus_document()
         vim.cmd.edit(item.file)
         vim.notify(item.rel .. " is untracked (no base to diff)", vim.log.levels.INFO)
         return
