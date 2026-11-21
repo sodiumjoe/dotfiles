@@ -20,6 +20,14 @@ Entry point: `home/.config/nvim/init.lua`. Bootstraps lazy.nvim with interleaved
 
 **Lockfile**: `home/.config/nvim/lazy-lock.json`
 
+## Agency Layout
+
+Agency uses the plugin's `stacked` widget position (`plugins/agentic.lua`), which puts the chat above the input at full width. The screen has three states, and `sodium/agency/screen.lua` derives them from the live windows in the current tab instead of storing them. In Conversation, the widget is visible and the tab has no other split. In Split, the widget is visible and a document window sits above it at 50% of the editor height, held there with `winfixheight`. In Document, the widget is hidden while its session keeps running.
+
+`<leader>ac` cycles Conversation, then Split, then Document, then back to Conversation. Going from Document to Conversation shows the widget again and closes every non-widget split in the tab, including quickfix, terminal, diff and user splits, so use it when nothing else in the tab needs to stay open. When the tab has no session, `<leader>ac` attaches or creates one as before. New sessions keep the current state, and adding context from Document shows the widget again, which puts the tab in Split. The document stays at 50% on `VimResized` and on `<leader>a=`.
+
+`screen.lua` also owns the document window. Opening a file from the chat with `gf` or `<CR>`, confirming a Snacks picker jump, confirm or edit action, choosing from the project and task pickers, the diff and review flows, and `nvim-open --editor` all go through it, so files open in the document window and never replace the chat. If no document window exists, it creates one above the widget, at 50% when the widget is visible.
+
 ## Testing
 
 Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run a single file with `./test-nvim.sh tests/neovim/agency_stream_spec.lua`. Install plugins with `:Lazy sync` before running tests. The runner loads the real configuration with plugin installation and update checks disabled, and fails if configured plugins are missing. Runtime state and caches use temporary directories.
