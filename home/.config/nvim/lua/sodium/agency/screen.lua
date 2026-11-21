@@ -143,6 +143,25 @@ function M.resize()
     hold(win)
 end
 
+function M.cycle()
+    local state, manager = M.state(), M.manager()
+    if state == "conversation" then
+        vim.api.nvim_set_current_win(M.ensure_document())
+    elseif state == "split" then
+        manager.widget:hide()
+        for _, win in ipairs(documents()) do
+            vim.wo[win][0].winfixheight = false
+        end
+    elseif state == "document" then
+        Registry().show_session(manager.session_key)
+        if manager.widget:get_visible_tab_id() == vim.api.nvim_get_current_tabpage() then
+            for _, win in ipairs(documents()) do
+                pcall(vim.api.nvim_win_close, win, true)
+            end
+        end
+    end
+end
+
 function M.setup()
     vim.api.nvim_create_autocmd("BufEnter", {
         group = vim.api.nvim_create_augroup("AgencyScreen", { clear = true }),

@@ -147,7 +147,7 @@ function M.setup(deps)
         epoch = epoch + 1
         local manager = local_manager()
         if manager then
-            if manager.widget:is_open() then manager.widget:hide() else Registry.show_session(manager.session_key) end
+            require("sodium.agency.screen").cycle()
             if callback then ready(manager, callback) end
             return manager
         end

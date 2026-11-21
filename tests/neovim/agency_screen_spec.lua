@@ -105,4 +105,48 @@ describe("Agency screen", function()
             vim.api.nvim_win_close(win, true)
         end
     end)
+
+    local function cycle()
+        for _, mapping in ipairs(require("sodium.plugins.agentic").keys) do
+            if mapping[1] == "<leader>ac" then return mapping[2]() end
+        end
+        error("missing current mapping")
+    end
+
+    it("cycles split, document and conversation with <leader>ac and keeps the document buffer", function()
+        vim.api.nvim_win_call(editor(), function()
+            vim.cmd("edit " .. vim.fn.fnameescape(readme))
+        end)
+        local buf = vim.fn.bufnr(readme)
+        assert.are.equal("split", screen.state())
+        cycle()
+        assert.are.equal("document", screen.state())
+        assert.are.same({ editor() }, screen.documents())
+        assert.is_false(vim.wo[editor()].winfixheight)
+        cycle()
+        assert.are.equal("conversation", screen.state())
+        assert.are.equal(vim.api.nvim_get_current_tabpage(), f.manager.widget:get_visible_tab_id())
+        cycle()
+        assert.are.equal("split", screen.state())
+        assert.are.equal(buf, vim.api.nvim_win_get_buf(editor()))
+        assert.are.equal(editor(), vim.api.nvim_get_current_win())
+    end)
+
+    it("closes every split beside the chat when the cycle leaves document", function()
+        cycle()
+        vim.cmd("split")
+        vim.cmd("copen")
+        assert.are.equal(3, #screen.documents())
+        cycle()
+        assert.are.equal("conversation", screen.state())
+        assert.are.same({}, screen.documents())
+    end)
+
+    it("gives conversation with a taller chat when the document closes in split", function()
+        local chat = f.manager.widget.win_nrs.chat
+        local height = vim.api.nvim_win_get_height(chat)
+        vim.api.nvim_win_close(editor(), true)
+        assert.are.equal("conversation", screen.state())
+        assert.is_true(vim.api.nvim_win_get_height(chat) > height)
+    end)
 end)
