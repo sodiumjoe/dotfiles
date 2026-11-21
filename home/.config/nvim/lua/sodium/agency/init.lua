@@ -296,7 +296,7 @@ function M.setup(deps)
         local function add(err, manager)
             if err then report(err); return end
             Context.add(manager, captured, kind)
-            manager.widget:show({ focus_prompt = false })
+            Registry.show_session(manager.session_key, { focus_prompt = false })
         end
         local manager = local_manager()
         if manager then add(nil, manager)

@@ -3,17 +3,17 @@ dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/agen
 require("snacks").setup({ picker = vim.tbl_extend("force", dofile(vim.env.DOTFILES_TEST_ROOT .. "/home/.config/nvim/lua/sodium/plugins/pickers.lua").opts.picker, { enabled = true }) })
 
 describe("Agency screen", function()
-    local f, screen, lines, home
+    local f, screen, lines, home, select_ui
     local readme = vim.env.DOTFILES_TEST_ROOT .. "/README.md"
     before_each(function()
-        home = vim.env.HOME
+        home, select_ui = vim.env.HOME, vim.ui.select
         lines = vim.o.lines
         vim.o.lines = 60
         f = require("fixtures.agency_native").new()
         screen = require("sodium.agency.screen")
     end)
     after_each(function()
-        vim.env.HOME = home
+        vim.env.HOME, vim.ui.select = home, select_ui
         vim.o.lines = lines
         f.close()
     end)
@@ -235,5 +235,141 @@ describe("Agency screen", function()
         assert.are.same({ 3, 0 }, vim.api.nvim_win_get_cursor(doc))
         assert.are.equal(buf, vim.api.nvim_win_get_buf(chat))
         assert.are.same(cursor, vim.api.nvim_win_get_cursor(chat))
+    end)
+    local Registry = require("agentic.session_registry")
+    local function add_context()
+        require("sodium.agency").add_context()
+        f.flush()
+    end
+    local function new_session()
+        local previous = f.manager
+        vim.ui.select = function(items, _, callback) callback(items[1]) end
+        for _, mapping in ipairs(require("sodium.plugins.agentic").keys) do
+            if mapping[1] == "<leader>an" then mapping[2]() end
+        end
+        f.flush()
+        f.client:_handle_message({ id = f.request("agency/backends").id, result = { defaultBackendId = "codex-acp", backends = { { id = "codex-acp",
+            discovery = "fresh", defaults = {}, models = { { id = "model-c", name = "C", selection = { configValues = { model = "model-c" } } } } } } } })
+        f.flush()
+        vim.cmd.stopinsert()
+        local manager = Registry.current()
+        assert.are_not.equal(previous, manager)
+        assert.is_true(manager.widget:is_open())
+        assert.are.equal(vim.api.nvim_get_current_tabpage(), manager.widget:get_visible_tab_id())
+        assert.is_false(previous.widget:is_open())
+        assert.are.equal(previous, Registry.get(previous.session_key))
+        local target = require("fixtures.agency_control").target_b
+        f.client:_handle_message({ id = f.request("session/new").id, result = { sessionId = "agency:" .. target.agentId, _meta = { agency = { version = 1,
+            binding = target, backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.are.equal(manager, Registry.current())
+        assert.are.same(target, manager._agency_binding)
+        assert.is_falsy(previous._destroyed)
+        return manager
+    end
+    local function document_with_readme()
+        f.flush()
+        local doc = editor()
+        vim.api.nvim_set_current_win(doc)
+        vim.cmd("edit " .. vim.fn.fnameescape(readme))
+        return doc
+    end
+
+    it("switches document to split when context is added and keeps the document", function()
+        local doc = document_with_readme()
+        f.manager.widget:hide()
+        assert.are.equal("document", screen.state())
+        add_context()
+        assert.are.equal("split", screen.state())
+        assert.are.same({ doc }, screen.documents())
+        assert.are.equal(vim.fn.bufnr(readme), vim.api.nvim_win_get_buf(doc))
+        assert.are.equal(doc, vim.api.nvim_get_current_win())
+        assert.is_true(vim.fn.win_screenpos(doc)[1] < vim.fn.win_screenpos(f.manager.widget.win_nrs.chat)[1])
+        assert.are.same({ vim.fn.fnamemodify(readme, ":p") }, f.manager.file_list:get_files())
+    end)
+
+    it("gives conversation when context is added from a document that is only the untouched scratch fallback", function()
+        vim.api.nvim_win_close(editor(), true)
+        f.manager.widget:hide()
+        assert.are.equal("document", screen.state())
+        local scratch = screen.documents()
+        assert.are.equal(1, #scratch)
+        assert.is_not_nil(vim.w[scratch[1]].agentic_fallback_bufnr)
+        add_context()
+        assert.are.equal("conversation", screen.state())
+        assert.is_false(vim.api.nvim_win_is_valid(scratch[1]))
+        assert.is_false(f.manager.code_selection:is_empty())
+    end)
+
+    for _, from in ipairs({ "conversation", "split" }) do
+        it("moves a session shown in another tab in " .. from .. " into this tab when context is added", function()
+            f.flush()
+            local first, kept = vim.api.nvim_get_current_tabpage(), nil
+            if from == "conversation" then vim.api.nvim_win_close(editor(), true) else kept = document_with_readme() end
+            assert.are.equal(from, screen.state())
+            vim.cmd("tabnew")
+            vim.cmd("edit " .. vim.fn.fnameescape(readme))
+            local doc = vim.api.nvim_get_current_win()
+            assert.are.equal("document", screen.state())
+            add_context()
+            assert.are.equal(vim.api.nvim_get_current_tabpage(), f.manager.widget:get_visible_tab_id())
+            assert.are.equal("split", screen.state())
+            assert.are.same({ doc }, screen.documents())
+            assert.are.equal(doc, vim.api.nvim_get_current_win())
+            assert.are.equal("document", screen.state(first))
+            if kept then assert.are.same({ kept }, screen.documents(first)) end
+            assert.are.equal(2, #vim.api.nvim_list_tabpages())
+        end)
+    end
+
+    it("keeps conversation when a new session starts from conversation", function()
+        vim.api.nvim_win_close(editor(), true)
+        assert.are.equal("conversation", screen.state())
+        new_session()
+        assert.are.equal("conversation", screen.state())
+        assert.are.same({}, screen.documents())
+    end)
+
+    it("keeps split and its document when a new session starts from split", function()
+        local doc = document_with_readme()
+        assert.are.equal("split", screen.state())
+        new_session()
+        assert.are.equal("split", screen.state())
+        assert.are.same({ doc }, screen.documents())
+        assert.are.equal(vim.fn.bufnr(readme), vim.api.nvim_win_get_buf(doc))
+        assert.are.equal(half(), vim.api.nvim_win_get_height(doc))
+    end)
+
+    it("shows a new session started from document as split beside the document", function()
+        local doc = document_with_readme()
+        f.manager.widget:hide()
+        assert.are.equal("document", screen.state())
+        new_session()
+        assert.are.equal("split", screen.state())
+        assert.are.same({ doc }, screen.documents())
+        assert.are.equal(vim.fn.bufnr(readme), vim.api.nvim_win_get_buf(doc))
+        assert.are.equal(half(), vim.api.nvim_win_get_height(doc))
+    end)
+
+    it("commits a reattach from conversation and stays in conversation", function()
+        vim.api.nvim_win_close(editor(), true)
+        assert.are.equal("conversation", screen.state())
+        local control, source = require("fixtures.agency_control"), f.manager
+        local moved = vim.deepcopy(control.target_a)
+        moved.handlerGeneration, moved.providerGeneration = control.id(20), control.id(21)
+        local row = control.agent(moved)
+        row.record.definition.cwd = vim.fn.getcwd()
+        local target = require("sodium.agency.rebind").reattach(source, row)
+        f.flush()
+        local frame = f.request("session/load")
+        f.client:_handle_message({ id = frame.id, result = { sessionId = "agency:" .. moved.agentId, _meta = { agency = { version = 1,
+            binding = moved, backendId = "codex-acp", configuration = { configOptions = {}, availableCommands = {} } } } } })
+        f.flush()
+        assert.is_true(source._destroyed)
+        assert.are.equal(target, Registry.current())
+        assert.are.equal(vim.api.nvim_get_current_tabpage(), target.widget:get_visible_tab_id())
+        assert.are.same(moved, target._agency_binding)
+        assert.are.equal("conversation", screen.state())
+        assert.are.same({}, screen.documents())
     end)
 end)
