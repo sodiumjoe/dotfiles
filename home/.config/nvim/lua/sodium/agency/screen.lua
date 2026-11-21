@@ -164,7 +164,11 @@ function M.resize()
     end)
     local count = vim.tbl_count(starts)
     for _, other in ipairs(stack) do
-        vim.api.nvim_win_set_height(other, math.max(1, math.floor((half() - count + 1) / count)))
+        vim.api.nvim_win_call(other, function()
+            local view = vim.fn.winsaveview()
+            vim.api.nvim_win_set_height(other, math.max(1, math.floor((half() - count + 1) / count)))
+            vim.fn.winrestview(view)
+        end)
     end
     hold(win)
 end
