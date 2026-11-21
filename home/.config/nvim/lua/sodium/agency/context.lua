@@ -32,6 +32,7 @@ function M.capture(bufnr, mode)
         lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
         modified = vim.bo[bufnr].modified or name == "" or vim.fn.filereadable(name) == 0,
         binary = vim.bo[bufnr].binary,
+        buftype = vim.bo[bufnr].buftype,
         file_type = vim.bo[bufnr].filetype,
         diagnostics = {},
     }
@@ -107,6 +108,7 @@ function M.add(manager, captured, kind)
         local selection = vim.deepcopy(captured.selection)
         selection.file_path = selection.file_path or "[buffer:" .. captured.buffer .. "]"
         manager.code_selection:add(selection)
+    elseif not captured.path and captured.buftype == "nofile" and vim.deep_equal(captured.lines, { "" }) then return
     elseif captured.modified then
         manager.code_selection:add({ file_path = captured.path or "[buffer:" .. captured.buffer .. "]",
             file_type = captured.file_type or "", start_line = 1, end_line = #captured.lines,
