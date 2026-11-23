@@ -190,4 +190,112 @@ function M.clear(buf)
     end
 end
 
+function M.edit(buf, first, last)
+    local source_win, cursor = vim.api.nvim_get_current_win(), vim.api.nvim_win_get_cursor(0)
+    local mark = M.at(buf, first)
+    local text = ""
+    if mark then
+        text = notes[buf][mark].text
+        first, last = range(buf, mark)
+    end
+    local lines = vim.split(text, "\n")
+    local fbuf = vim.api.nvim_create_buf(false, true)
+    vim.bo[fbuf].bufhidden = "wipe"
+    vim.bo[fbuf].filetype = "markdown"
+    vim.api.nvim_buf_set_lines(fbuf, 0, -1, false, lines)
+    local config = {
+        relative = "win",
+        win = source_win,
+        bufpos = { last, 0 },
+        row = 1,
+        col = 0,
+        width = math.max(20, vim.api.nvim_win_get_width(source_win) - vim.fn.getwininfo(source_win)[1].textoff - 2),
+        height = math.min(10, math.max(3, #lines)),
+        style = "minimal",
+        border = "rounded",
+        title = " annotation ",
+    }
+    local top = vim.fn.line("w0", source_win)
+    if last + 1 < top or last + 1 > vim.fn.line("w$", source_win) then
+        config.bufpos = nil
+        config.row = math.max(0, math.min(vim.api.nvim_win_get_height(source_win) - 1, last + 2 - top))
+    end
+    local win = vim.api.nvim_open_win(fbuf, true, config)
+    local done = false
+    local function close()
+        vim.cmd("stopinsert")
+        if vim.api.nvim_win_is_valid(win) then
+            vim.api.nvim_win_close(win, true)
+        end
+        if vim.api.nvim_win_is_valid(source_win) then
+            vim.api.nvim_set_current_win(source_win)
+            pcall(vim.api.nvim_win_set_cursor, source_win, cursor)
+        end
+    end
+    local function save()
+        done = true
+        local typed = vim.api.nvim_buf_get_lines(fbuf, 0, -1, false)
+        while #typed > 0 and not typed[#typed]:match("%S") do
+            typed[#typed] = nil
+        end
+        if vim.api.nvim_buf_is_valid(buf) then
+            if mark then
+                first, last = range(buf, mark)
+            end
+            if first then
+                M.set(buf, first, last, table.concat(typed, "\n"), mark)
+            end
+        end
+        close()
+    end
+    local function cancel()
+        done = true
+        close()
+    end
+    vim.keymap.set({ "n", "i" }, "<C-s>", save, { buffer = fbuf })
+    vim.keymap.set("n", "<CR>", save, { buffer = fbuf })
+    vim.keymap.set("n", "q", cancel, { buffer = fbuf })
+    vim.keymap.set("n", "<Esc>", cancel, { buffer = fbuf })
+    vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+        buffer = fbuf,
+        callback = function()
+            if vim.api.nvim_win_is_valid(win) then
+                vim.api.nvim_win_set_height(win, math.min(10, math.max(3, vim.api.nvim_buf_line_count(fbuf))))
+            end
+        end,
+    })
+    vim.api.nvim_create_autocmd({ "WinLeave", "BufWipeout" }, {
+        buffer = fbuf,
+        callback = function()
+            if done then
+                return
+            end
+            done = true
+            vim.schedule(function()
+                if vim.api.nvim_win_is_valid(win) then
+                    vim.api.nvim_win_close(win, true)
+                end
+            end)
+        end,
+    })
+    if mark then
+        vim.api.nvim_win_set_cursor(win, { #lines, #lines[#lines] })
+    else
+        vim.cmd("startinsert")
+    end
+    return win, fbuf
+end
+
+function M.edit_at_cursor()
+    local mode = vim.fn.mode()
+    local first = vim.api.nvim_win_get_cursor(0)[1]
+    local last = first
+    if mode == "v" or mode == "V" or mode == "\22" then
+        first = vim.fn.getpos("v")[2]
+        first, last = math.min(first, last), math.max(first, last)
+        vim.cmd("normal! \27")
+    end
+    return M.edit(vim.api.nvim_get_current_buf(), first - 1, last - 1)
+end
+
 return M
