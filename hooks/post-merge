@@ -26,6 +26,15 @@ if [ "$needs_regen" = true ]; then
   home/bin/dotfiles-generate
 fi
 
+if [ -n "$(git diff-tree -r --name-only --diff-filter=ADR ORIG_HEAD HEAD -- home/ 2>/dev/null || true)" ]; then
+  if [ -z "${DOTFILES_ENV:-}" ] && [ -f ~/.dotfiles-env ]; then
+    . ~/.dotfiles-env
+    export DOTFILES_ENV
+  fi
+  echo "Files under home/ were added or removed, reconciling links..."
+  home/bin/dotfiles-reconcile || echo "post-merge: dotfiles-reconcile failed — run it by hand after resolving the reported conflict" >&2
+fi
+
 if printf '%s\n' "$changed" | grep -Eq '^(node-bin/package(-lock)?\.json|node-bin/sync-direct-bins\.mjs)$'; then
   echo "node-bin changed, refreshing pinned npm tools..."
   if [ -f node-bin/package-lock.json ]; then

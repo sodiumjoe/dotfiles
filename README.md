@@ -99,11 +99,11 @@ The workflow for promoting runtime changes back to source:
 2. Edit the appropriate source file (base or overlay)
 3. Run `dotfiles-generate --reset`
 
-Codex and Karabiner-Elements save their configs by replacing the file, which turns the deployed symlink into an ordinary file. `dotfiles-reconcile` adopts those two paths instead of refusing: when `~/.codex/config.toml` or `~/.config/karabiner/karabiner.json` is an ordinary file, it copies any changed contents into the repository copy, reports the adoption, and relinks the path. Review adopted changes with `git diff` or `dotfiles-diff` and promote them as above. Every other ordinary file at a managed path is still a conflict that stops reconciliation. Links are replaced with a single rename, so a tool watching its config never sees the file disappear.
+Codex and Karabiner-Elements save their configs by replacing the file, which turns the deployed symlink into an ordinary file. `dotfiles-reconcile` adopts those two paths instead of refusing: when `~/.codex/config.toml` or `~/.config/karabiner/karabiner.json` is an ordinary file, it copies any changed contents into the repository copy, reports the adoption, and relinks the path. Review adopted changes with `git diff` or `dotfiles-diff` and promote them as above. Every other ordinary file at a managed path is still a conflict that stops reconciliation. Links are replaced with a single rename, so a tool watching its config never sees the file disappear. A link in a managed directory whose target was inside `home/` and no longer exists is removed; links pointing elsewhere are left alone.
 
 ### Post-merge Hook
 
-`hooks/post-merge` regenerates static files after `git pull` when sources changed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Git does not run `post-merge` for rebases at all, so `git pull --rebase` skips it; run `dotfiles-generate` by hand after one.
+`hooks/post-merge` regenerates static files after `git pull` when sources changed, runs `dotfiles-reconcile` when files under `home/` were added, deleted or renamed, and runs `dotfiles-diff --quiet` to warn about drift in mutable files. Reconcile creates links for new files and prunes links whose source was deleted, so a merge that adds or removes a Neovim module takes effect without a manual relink. Git does not run `post-merge` for rebases at all, so `git pull --rebase` skips it; run `dotfiles-generate` by hand after one.
 
 ### Conditional Symlinks
 

@@ -200,6 +200,24 @@ for relative, source, destination in applies:
 def differs(destination, target_source):
     return not target_source.is_file() or target_source.read_bytes() != destination.read_bytes()
 
+
+def deleted_source(link):
+    target = pathlib.Path(os.path.normpath(link.parent / os.readlink(link)))
+    try:
+        target.relative_to(source_root)
+    except ValueError:
+        return False
+    return not os.path.lexists(target)
+
+
+prunes = []
+for directory in sorted({home, *required_parents}):
+    if directory.is_symlink() or not directory.is_dir():
+        continue
+    for link in sorted(directory.iterdir()):
+        if link.is_symlink() and deleted_source(link):
+            prunes.append(link)
+
 if errors:
     for error in errors:
         print(f"dotfiles-reconcile: {error}", file=sys.stderr)
@@ -211,6 +229,8 @@ if arguments.preflight:
             print(f"dotfiles-reconcile: would adopt changes from {destination} into {target_source}")
     for relative, destination, _ in applications:
         print(f"dotfiles-reconcile: would apply {relative} to {destination}")
+    for link in prunes:
+        print(f"dotfiles-reconcile: would prune {link}")
     print("dotfiles-reconcile: preflight passed")
     raise SystemExit(0)
 
@@ -229,6 +249,11 @@ for parent in sorted(required_parents, key=lambda path: len(path.parts)):
         parent.unlink()
         changed += 1
     parent.mkdir(exist_ok=True)
+
+for link in prunes:
+    link.unlink()
+    print(f"dotfiles-reconcile: pruned {link}")
+    changed += 1
 
 for destination in optional_destinations:
     if destination.is_symlink() and inside_repo(destination):

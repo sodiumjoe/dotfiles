@@ -172,5 +172,19 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("would apply", self.run_reconcile(arguments=["--preflight"]).stdout)
         self.assertEqual(json.loads(live.read_text()), {"model": "sonnet"})
 
+    def test_links_to_deleted_sources_are_pruned(self):
+        self.write(".config/tool/kept.lua")
+        removed = self.write(".config/tool/removed.lua")
+        self.run_reconcile()
+        foreign = self.owner / ".config" / "tool" / "foreign.lua"
+        foreign.symlink_to(self.root / "missing-elsewhere.lua")
+        removed.unlink()
+        self.assertIn("would prune", self.run_reconcile(arguments=["--preflight"]).stdout)
+        self.assertTrue(os.path.lexists(self.owner / ".config" / "tool" / "removed.lua"))
+        self.run_reconcile()
+        self.assertFalse(os.path.lexists(self.owner / ".config" / "tool" / "removed.lua"))
+        self.assertTrue((self.owner / ".config" / "tool" / "kept.lua").exists())
+        self.assertTrue(foreign.is_symlink())
+
 if __name__ == "__main__":
     unittest.main()
