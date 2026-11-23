@@ -356,19 +356,6 @@ describe("Agency reload", function()
         assert.is_truthy(table.concat(notifications, "\n"):find("already running", 1, true))
         assert.are.equal(1, #systems)
     end)
-    it("hides the connection error that the reconnect notice replaces, once, after module reloads", function()
-        assert.is_true(require("sodium.agency.reload").reload_modules({}))
-        assert.is_true(require("sodium.agency.reload").reload_modules({}))
-        local original, logged = vim.notify, {}
-        vim.notify = function(message) logged[#logged + 1] = message end
-        local Logger = require("agentic.utils.logger")
-        Logger.notify("ACP agent 'sh' failed (exit code 70):\nError: Agency Handler connection ended", vim.log.levels.ERROR)
-        Logger.notify("something else", vim.log.levels.ERROR)
-        f.flush()
-        vim.notify = original
-        assert.are.same({ "something else" }, logged)
-    end)
-
     it("names config files that are not linked into the live config", function()
         vim.fn.mkdir(root .. "/home/.config/nvim/lua/sodium", "p")
         vim.fn.writefile({ "return {}" }, root .. "/home/.config/nvim/lua/sodium/linked.lua")

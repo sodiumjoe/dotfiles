@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
-import { lstat } from "node:fs/promises"
+import { lstat, mkdtemp, rm } from "node:fs/promises"
+import { createServer } from "node:net"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
 import test from "node:test"
@@ -21,4 +23,28 @@ test("endpoint stdin EOF detaches while a shared prompt remains live", async t =
   assert.equal((await f.providerRequests("codex-acp")).filter(value => value.method === "session/cancel").length, 0)
   assert.equal((await lstat(join(f.paths.runtimeRoot, "acp.sock"))).mode & 0o777, 0o600)
   await f.verifyZeroSurvivors()
+})
+
+async function endpointAgainst(t: { after(fn: () => Promise<void>): void }, onConnection: (socket: import("node:net").Socket) => void, socketName = "acp.sock") {
+  const dir = await mkdtemp(join(tmpdir(), "agy-acp-")), socketPath = join(dir, socketName)
+  const server = createServer(onConnection)
+  await new Promise<void>(resolve => server.listen(join(dir, "acp.sock"), resolve))
+  t.after(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }) })
+  const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough()
+  let errors = ""
+  stderr.on("data", chunk => { errors += chunk })
+  const code = await runAcpEndpoint([], { stdin, stdout, stderr, environment: {}, discover: async () => ({ socketPath, generation: "g" }) })
+  return { code, errors }
+}
+
+test("endpoint exits cleanly without a message when the Handler ends the connection", async t => {
+  const { code, errors } = await endpointAgainst(t, socket => socket.once("data", () => socket.end()))
+  assert.equal(code, 0)
+  assert.equal(errors, "")
+})
+
+test("endpoint still fails when the Handler socket cannot be reached", async t => {
+  const { code, errors } = await endpointAgainst(t, () => {}, "missing.sock")
+  assert.equal(code, 70)
+  assert.match(errors, /ENOENT/)
 })

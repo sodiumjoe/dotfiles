@@ -7,16 +7,6 @@ Client.class = setmetatable({ __index = current }, { __index = current })
 local Stream = require("sodium.agency.stream")
 local starting, immediate, submitting, cancelling
 
-local Logger = require("agentic.utils.logger")
-local notify = rawget(Logger, "_agency_notify") or Logger.notify
-rawset(Logger, "_agency_notify", notify)
-Logger.notify = function(message, ...)
-    if type(message) == "string" and message:find("Agency Handler connection ended", 1, true) then
-        return
-    end
-    return notify(message, ...)
-end
-
 local function manager_for(handlers)
     if handlers._agency_manager then
         return handlers._agency_manager

@@ -44,7 +44,7 @@ export async function runAcpEndpoint(argv: string[], dependencies: AcpEndpointDe
         if (stdin.readableEnded || stdin.destroyed) end()
       })
       socket.once("error", failed)
-      socket.once("end", () => failed(new Error("Agency Handler connection ended")))
+      socket.once("end", end)
       socket.once("close", () => { if (!finished) failed(new Error("Agency Handler connection closed")) })
       stdout.once("error", failed)
     })
