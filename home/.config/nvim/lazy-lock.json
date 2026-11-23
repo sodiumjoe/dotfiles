@@ -1,5 +1,5 @@
 {
-  "agentic.nvim": { "branch": "sodium", "commit": "1c3e1f809190608812f0155d52db1e50ae941097" },
+  "agentic.nvim": { "branch": "sodium", "commit": "4b60785117b03950a880cd7aeb27cdd698a4740d" },
   "blink.cmp": { "branch": "main", "commit": "78336bc89ee5365633bcf754d93df01678b5c08f" },
   "conflict-marker.vim": { "branch": "master", "commit": "62742b2ffe7a433988759c67b5c5a22eff74a14b" },
   "format-ts-errors.nvim": { "branch": "main", "commit": "4b7418d6689bc0fd3c1db0500c67133422522384" },

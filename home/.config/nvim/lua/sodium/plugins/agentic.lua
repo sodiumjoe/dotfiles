@@ -684,7 +684,7 @@ exec agy acp]] } } }
                 position = "stacked",
                 code = diagnostics.window_opts,
                 files = diagnostics.window_opts,
-                input = diagnostics.window_opts,
+                input = vim.tbl_extend("force", diagnostics.window_opts, { height = 0.25 }),
                 todos = diagnostics.window_opts,
                 chat = vim.tbl_deep_extend("force", diagnostics.window_opts, { win_opts = { foldminlines = 0 } }),
                 diagnostics = diagnostics.window_opts,
