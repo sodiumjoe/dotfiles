@@ -13,7 +13,6 @@
   "mini.move": { "branch": "main", "commit": "b9e452f9c83565a1520e14f7531632160f3b0170" },
   "mini.nvim": { "branch": "main", "commit": "a35f08f63b73f0ffac045cd175fb2a22e167c39c" },
   "nvim-colorizer.lua": { "branch": "master", "commit": "72a05f62c52241bc7441c820eb53946f92b2e6a4" },
-  "nvim-comment-overlay": { "branch": "main", "commit": "e77d124c683a2100e9eeffb0b1794095c241b004" },
   "nvim-retrail": { "branch": "main", "commit": "10609e9ee14cf3b1e7107ea0f7b256b663890797" },
   "nvim-treesitter": { "branch": "main", "commit": "7248feaca45e4d944591497964bc19afa89ad1c6" },
   "nvim-treesitter-context": { "branch": "master", "commit": "b311b30818951d01f7b4bf650521b868b3fece16" },

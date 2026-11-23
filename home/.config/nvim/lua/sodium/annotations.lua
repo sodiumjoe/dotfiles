@@ -298,4 +298,58 @@ function M.edit_at_cursor()
     return M.edit(vim.api.nvim_get_current_buf(), first - 1, last - 1)
 end
 
+local function jump(step)
+    local items = M.list(vim.api.nvim_get_current_buf())
+    if #items == 0 then
+        return
+    end
+    local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local target = step > 0 and items[1] or items[#items]
+    for i = step > 0 and 1 or #items, step > 0 and #items or 1, step do
+        if (step > 0 and items[i].first > row) or (step < 0 and items[i].first < row) then
+            target = items[i]
+            break
+        end
+    end
+    vim.api.nvim_win_set_cursor(0, { target.first + 1, 0 })
+end
+
+function M.next()
+    jump(1)
+end
+
+function M.prev()
+    jump(-1)
+end
+
+function M.delete_at_cursor()
+    local buf = vim.api.nvim_get_current_buf()
+    local mark = M.at(buf, vim.api.nvim_win_get_cursor(0)[1] - 1)
+    if mark then
+        M.delete(buf, mark)
+    end
+end
+
+function M.to_quickfix()
+    local qf = {}
+    for _, item in ipairs(M.list()) do
+        qf[#qf + 1] = {
+            bufnr = item.buf,
+            lnum = item.first + 1,
+            end_lnum = item.last + 1,
+            text = vim.split(item.note, "\n")[1],
+        }
+    end
+    vim.fn.setqflist({}, " ", { title = "Annotations", items = qf })
+    vim.cmd("copen")
+end
+
+function M.setup()
+    vim.keymap.set({ "n", "x" }, "<leader>cc", M.edit_at_cursor, { desc = "Annotate line or selection" })
+    vim.keymap.set("n", "<leader>cn", M.next, { desc = "Next annotation" })
+    vim.keymap.set("n", "<leader>cp", M.prev, { desc = "Previous annotation" })
+    vim.keymap.set("n", "<leader>cd", M.delete_at_cursor, { desc = "Delete annotation" })
+    vim.keymap.set("n", "<leader>cl", M.to_quickfix, { desc = "List annotations" })
+end
+
 return M

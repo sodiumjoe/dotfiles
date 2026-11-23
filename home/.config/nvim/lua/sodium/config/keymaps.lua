@@ -8,3 +8,4 @@ utils.map({
 })
 
 require("sodium.review_ui").setup()
+require("sodium.annotations").setup()
