@@ -113,7 +113,7 @@ local function owner_item(host, row, local_host, active, name)
         return diagnostic_item(name, "Unavailable session", row, { host })
     end
     local item = row_item(row, local_host and active or nil)
-    if not local_host then item.excerpt.hostId = host.hostId end
+    if not local_host then item.excerpt.hostId, item.remote = host.hostId, true end
     item.id = host.hostId .. ":" .. record.definition.agentId
     item.label = name
     item.text = "[" .. name .. "] · " .. item.search_text .. " · " .. item.status .. " · " .. host.hostname

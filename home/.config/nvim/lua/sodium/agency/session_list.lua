@@ -66,6 +66,7 @@ function M.order(items)
     for index, item in ipairs(items) do item._order = index end
     table.sort(items, function(a, b)
         if (a.issue ~= nil) ~= (b.issue ~= nil) then return b.issue ~= nil end
+        if (a.remote == true) ~= (b.remote == true) then return b.remote == true end
         if a.epoch and b.epoch and a.epoch ~= b.epoch then return a.epoch > b.epoch end
         if (a.epoch ~= nil) ~= (b.epoch ~= nil) then return a.epoch ~= nil end
         return a._order < b._order

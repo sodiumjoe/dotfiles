@@ -39,6 +39,21 @@ describe("Agency session list presentation", function()
         assert.are.same({ "new", "old", "none-1", "none-2", "problem" }, order)
     end)
 
+    it("orders local sessions before remote ones, each newest first", function()
+        local remote_new = List.item(view("remote-new", "2026-11-14T00:00:00Z"), { status = "Idle" })
+        local remote_old = List.item(view("remote-old", "2026-11-11T00:00:00Z"), { status = "Idle" })
+        remote_new.remote, remote_old.remote = true, true
+        local items = {
+            remote_old,
+            List.item(view("local-old", "2026-11-12T00:00:00Z"), { status = "Idle" }),
+            remote_new,
+            List.item(view("local-new", "2026-11-13T00:00:00Z"), { status = "Idle" }),
+        }
+        local order = {}
+        for _, item in ipairs(List.order(items)) do order[#order + 1] = item.view.record.definition.agentId end
+        assert.are.same({ "local-new", "local-old", "remote-new", "remote-old" }, order)
+    end)
+
     it("uses the record title for stopped sessions and includes the model in rows", function()
         local item = List.item(view("s", nil, { live = false, display = vim.NIL, record = { phase = "stopped", title = "saved title" } }), { status = "Stopped" })
         assert.are.equal("saved title", item.title)
