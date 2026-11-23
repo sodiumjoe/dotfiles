@@ -488,7 +488,7 @@ local function add_task()
 end
 
 local function send_annotations_to_agentic()
-    require("sodium.agency").submit_text("Address each captured annotation.", { annotations = true })
+    require("sodium.agency").submit_text("Address each captured annotation.", { annotations = true, conversation = true })
 end
 
 local function pick_pr_for_review()

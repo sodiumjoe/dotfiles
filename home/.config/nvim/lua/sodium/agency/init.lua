@@ -330,6 +330,7 @@ function M.setup(deps)
     function api.submit_text(text, opts, callback)
         epoch = epoch + 1
         opts, callback = opts or {}, callback or function(result) report(result.error) end
+        local tab = opts.conversation and vim.api.nvim_get_current_tabpage()
         local annotations = opts.annotations and vim.deepcopy(api.annotations()) or {}
         if opts.annotations and #annotations == 0 then callback({ state = "rejected", error = failure("EMPTY_INPUT") }); return false end
         local function send(err, manager)
@@ -340,6 +341,8 @@ function M.setup(deps)
             for _, item in ipairs(annotations) do content[#content + 1] = { type = "text", text = item.text } end
             local entry = Context.stage(manager, content, function(submissionId)
                 api.accept_annotations(annotations)
+                local screen = require("sodium.agency.screen")
+                if tab and vim.api.nvim_get_current_tabpage() == tab and screen.manager() == manager then screen.conversation(manager) end
                 callback({ state = "accepted", submissionId = submissionId })
             end, function(error) callback({ state = "rejected", error = error }) end)
             if not manager.widget.on_submit_input(text) then

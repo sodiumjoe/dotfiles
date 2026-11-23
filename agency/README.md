@@ -71,7 +71,7 @@ Only configured, enabled, technically compatible backends are available. Codex a
 | `<leader>aa` | Add file or selection |
 | `<leader>ad` | Add line diagnostics |
 | `<leader>aD` | Add buffer diagnostics |
-| `<leader>ai` | Submit annotations |
+| `<leader>ai` | Submit annotations and switch to Conversation |
 | `<leader>ar` | Agency saved-session picker |
 | `<leader>aR` | `AgencyReload` |
 | `<leader>ap` | Project file picker |
@@ -86,7 +86,7 @@ When several active conversations match the current directory, `<leader>ac` show
 
 `/new` inherits the current session's backend and uses its backend defaults for the new conversation. `<leader>ae` / `:AgencySettings` selects a setting and then one of the attached provider’s supported values, with current values shown first. It exposes native configuration options, including effort and permission mode, with legacy mode support when needed. It requires an attached agent and creates no conversation. Cancelled, superseded, or stale selections change nothing. Changes apply to the shared agent, while future sessions continue using backend defaults. Changes propagate to all attached editors and update restorable settings. Live attachment preserves current configuration rather than applying the reconnecting editor's defaults.
 
-Native code selections, file references, and diagnostics own context capture. Structured ACP content is preserved. Annotation submission clears only the exact captured threads after accepted admission; busy or rejected admission leaves them intact, and subsequent annotation edits survive. Pending native context survives live loading. Changing the editor cwd does not retarget an attached session or its relative file links.
+Native code selections, file references, and diagnostics own context capture. Structured ACP content is preserved. Annotations are in-memory editor notes on line ranges (`<leader>cc`), lost on restart. `<leader>ai` sends one block per annotation with the file, lines, quoted text and note. Accepted admission clears only the annotations that were sent and are unchanged since capture, and switches the layout to Conversation when the tab and session are still the ones in use at send time; busy or rejected admission leaves them and the layout intact, and subsequent annotation edits survive. Pending native context survives live loading. Changing the editor cwd does not retarget an attached session or its relative file links.
 
 ## Shared sessions and lifecycle
 

@@ -58,49 +58,9 @@ function M.capture(bufnr, mode)
     return captured
 end
 
-function M.annotations()
-    local ok, store = pcall(require, "comment-overlay.store")
-    if not ok then
-        return {}
-    end
-    store.reload_if_changed()
-    local project, items = store.get_project_root(), {}
-    for _, file in ipairs(store.get_files_with_comments()) do
-        for _, root in ipairs(store.get_for_file(file, { roots_only = true })) do
-            if not root.resolved then
-                local thread = vim.deepcopy(store.get_thread(root.id))
-                local lines =
-                    { "File: " .. project .. "/" .. file, "Line: " .. tostring(root.line_start or root.line or "?") }
-                for _, comment in ipairs(thread) do
-                    lines[#lines + 1] = comment.body
-                end
-                items[#items + 1] = {
-                    id = root.id,
-                    project = project,
-                    path = project .. "/" .. file,
-                    thread = thread,
-                    text = table.concat(lines, "\n"),
-                }
-            end
-        end
-    end
-    return items
-end
+function M.annotations() return require("sodium.annotations").annotations() end
 
-function M.accept_annotations(captured)
-    if #captured == 0 then
-        return
-    end
-    local store = require("comment-overlay.store")
-    store.reload_if_changed()
-    local project = store.get_project_root()
-    for _, item in ipairs(captured) do
-        if project == item.project and vim.deep_equal(store.get_thread(item.id), item.thread) then
-            store.delete(item.id)
-        end
-    end
-    pcall(vim.cmd, "CommentRefresh")
-end
+function M.accept_annotations(captured) require("sodium.annotations").accept_annotations(captured) end
 
 function M.add(manager, captured, kind)
     if kind == "diagnostics" then manager.diagnostics_list:add_many(captured.diagnostics); return end

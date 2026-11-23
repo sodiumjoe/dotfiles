@@ -208,6 +208,12 @@ local function placed(win)
     M.resize()
 end
 
+local function close_documents()
+    for _, win in ipairs(documents()) do
+        pcall(vim.api.nvim_win_close, win, true)
+    end
+end
+
 function M.cycle()
     local state, manager = M.state(), M.manager()
     if state == "conversation" then
@@ -221,10 +227,20 @@ function M.cycle()
         if elsewhere then
             M.resize()
         elseif manager.widget:get_visible_tab_id() == vim.api.nvim_get_current_tabpage() then
-            for _, win in ipairs(documents()) do
-                pcall(vim.api.nvim_win_close, win, true)
-            end
+            close_documents()
         end
+    end
+end
+
+function M.conversation(manager)
+    local state = M.state()
+    if M.manager() ~= manager then return end
+    if state == "split" then
+        close_documents()
+        release()
+    elseif state == "document" then
+        require("agentic.session_registry").show_session(manager.session_key)
+        if manager.widget:get_visible_tab_id() == vim.api.nvim_get_current_tabpage() then close_documents() end
     end
 end
 

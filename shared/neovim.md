@@ -28,6 +28,8 @@ Agency uses the plugin's `stacked` widget position (`plugins/agentic.lua`), whic
 
 `screen.lua` also owns the document window. Opening a file from the chat with `gf` or `<CR>`, confirming a Snacks picker jump, confirm or edit action, choosing from the project and task pickers, the diff and review flows, and `nvim-open --editor` all go through it, so files open in the document window and never replace the chat. If no document window exists, it creates one above the widget, at 50% when the widget is visible.
 
+Annotations (`sodium/annotations.lua`) are in-memory notes on line ranges, shown as virtual lines under the range and lost on restart. `<leader>cc` adds or edits one on the current line or the visual selection, `<leader>cn` and `<leader>cp` jump between them, `<leader>cd` deletes the one under the cursor, and `<leader>cl` lists them in the quickfix list. `<leader>ai` sends them all to the current session with the prompt "Address each captured annotation.". When the Handler accepts the prompt, the sent annotations that have not changed since are cleared, and the layout switches from Split or Document to Conversation if the tab and session are still the ones in use when it was sent. On rejection, the annotations and the layout stay and the error is reported.
+
 ## Testing
 
 Runner: `./test-nvim.sh` (plenary.nvim busted harness, headless). Run a single file with `./test-nvim.sh tests/neovim/agency_stream_spec.lua`. Install plugins with `:Lazy sync` before running tests. The runner loads the real configuration with plugin installation and update checks disabled, and fails if configured plugins are missing. Runtime state and caches use temporary directories.
