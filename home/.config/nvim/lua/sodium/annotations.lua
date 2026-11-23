@@ -26,7 +26,9 @@ end
 local function range(buf, mark)
     local pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, mark, { details = true })
     if #pos == 0 then
-        notes[buf][mark] = nil
+        if notes[buf] then
+            notes[buf][mark] = nil
+        end
         return
     end
     return pos[1], math.max(pos[1], pos[3].end_row)
@@ -51,7 +53,7 @@ local function render(buf)
             for _, line in ipairs(vim.split(note.text, "\n")) do
                 lines[#lines + 1] = { { "▎ " .. line, "AgencyAnnotation" } }
             end
-            note.render = { vim.api.nvim_buf_set_extmark(buf, render_ns, last, 0, { virt_lines = lines }) }
+            vim.api.nvim_buf_set_extmark(buf, render_ns, last, 0, { virt_lines = lines })
         end
     end
 end
@@ -107,7 +109,7 @@ function M.set(buf, first, last, text, mark)
         line_hl_group = "AgencyAnnotationRange",
     })
     seq = seq + 1
-    notes[buf][mark] = { text = text, render = {}, seq = seq }
+    notes[buf][mark] = { text = text, seq = seq }
     render(buf)
     return mark
 end
@@ -239,12 +241,16 @@ function M.edit(buf, first, last)
             typed[#typed] = nil
         end
         if vim.api.nvim_buf_is_valid(buf) then
+            local live_first, live_last
             if mark then
-                first, last = range(buf, mark)
+                live_first, live_last = range(buf, mark)
+                if not live_first then
+                    mark = nil
+                end
             end
-            if first then
-                M.set(buf, first, last, table.concat(typed, "\n"), mark)
-            end
+            local rows = vim.api.nvim_buf_line_count(buf) - 1
+            local save_first, save_last = live_first or first, live_last or last
+            M.set(buf, math.min(save_first, rows), math.min(save_last, rows), table.concat(typed, "\n"), mark)
         end
         close()
     end
