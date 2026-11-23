@@ -5,7 +5,9 @@ local render_ns = vim.api.nvim_create_namespace("sodium_annotations_render")
 local notes, seq = {}, 0
 
 local function highlights()
-    vim.api.nvim_set_hl(0, "AgencyAnnotation", { default = true, link = "DiagnosticVirtualTextInfo" })
+    local comment = vim.api.nvim_get_hl(0, { name = "Comment", link = false })
+    vim.api.nvim_set_hl(0, "AgencyAnnotation", { default = true, fg = comment.fg, italic = true })
+    vim.api.nvim_set_hl(0, "AgencyAnnotationSign", { default = true, fg = comment.fg })
     vim.api.nvim_set_hl(0, "AgencyAnnotationRange", { default = true, link = "CursorLine" })
 end
 highlights()
@@ -107,6 +109,9 @@ function M.set(buf, first, last, text, mark)
         right_gravity = true,
         end_right_gravity = false,
         line_hl_group = "AgencyAnnotationRange",
+        sign_text = "",
+        sign_hl_group = "AgencyAnnotationSign",
+        priority = 5,
     })
     seq = seq + 1
     notes[buf][mark] = { text = text, seq = seq }
@@ -211,7 +216,10 @@ function M.edit(buf, first, last)
         bufpos = { last, 0 },
         row = 1,
         col = 0,
-        width = math.max(20, vim.api.nvim_win_get_width(source_win) - vim.fn.getwininfo(source_win)[1].textoff - 2),
+        width = math.max(
+            20,
+            math.min(60, vim.api.nvim_win_get_width(source_win) - vim.fn.getwininfo(source_win)[1].textoff - 2)
+        ),
         height = math.min(10, math.max(3, #lines)),
         style = "minimal",
         border = "rounded",
@@ -340,18 +348,20 @@ function M.delete_at_cursor()
     end
 end
 
-function M.to_quickfix()
-    local qf = {}
+function M.pick()
+    local items = {}
     for _, item in ipairs(M.list()) do
-        qf[#qf + 1] = {
-            bufnr = item.buf,
-            lnum = item.first + 1,
-            end_lnum = item.last + 1,
-            text = vim.split(item.note, "\n")[1],
+        local name = vim.api.nvim_buf_get_name(item.buf)
+        items[#items + 1] = {
+            text = item.note,
+            line = vim.split(item.note, "\n")[1],
+            buf = item.buf,
+            file = name ~= "" and name or nil,
+            pos = { item.first + 1, 0 },
+            end_pos = { item.last + 1, 0 },
         }
     end
-    vim.fn.setqflist({}, " ", { title = "Annotations", items = qf })
-    vim.cmd("copen")
+    require("snacks").picker({ title = "Annotations", items = items })
 end
 
 function M.setup()
@@ -359,7 +369,7 @@ function M.setup()
     vim.keymap.set("n", "<leader>cn", M.next, { desc = "Next annotation" })
     vim.keymap.set("n", "<leader>cp", M.prev, { desc = "Previous annotation" })
     vim.keymap.set("n", "<leader>cd", M.delete_at_cursor, { desc = "Delete annotation" })
-    vim.keymap.set("n", "<leader>cl", M.to_quickfix, { desc = "List annotations" })
+    vim.keymap.set("n", "<leader>cl", M.pick, { desc = "List annotations" })
 end
 
 return M

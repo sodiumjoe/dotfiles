@@ -41,7 +41,7 @@ return {
                 segments = {
                     {
                         text = { builtin.lnumfunc },
-                        sign = { namespace = { "diagnostic" } },
+                        sign = { namespace = { "diagnostic", "sodium_annotations" } },
                     },
                     { text = { " " } },
                     {
